@@ -9,6 +9,7 @@ __all__ = [
     "build_manifest_env",
     "resolve_template",
     "normalize_profile",
+    "resolve_effective_config",
 ]
 
 from pathlib import Path
@@ -165,6 +166,29 @@ def normalize_profile(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Config resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_effective_config(
+    manifest: dict[str, Any],
+    profile_name: str | None = None,
+    stage_name: str | None = None,
+) -> dict[str, Any]:
+    """Resolve the effective stage config from a manifest.
+
+    When *profile_name* is given, looks up that profile and normalizes it.
+    When *stage_name* is also given, returns that specific stage.
+    Otherwise returns the manifest itself (single-profile shorthand).
+    """
+    if profile_name is not None:
+        prof = manifest["profiles"][profile_name]
+        stages = normalize_profile(prof)
+        return stages[stage_name or "default"]
+    return manifest
+
+
+# ---------------------------------------------------------------------------
 # Environment builder
 # ---------------------------------------------------------------------------
 
@@ -183,13 +207,7 @@ def build_manifest_env(
     cluster_name = manifest["cluster"]
     cluster = clusters[cluster_name]
 
-    # Resolve the effective config (stage within profile, or top-level)
-    if profile_name is not None:
-        prof = manifest["profiles"][profile_name]
-        stages = normalize_profile(prof)
-        effective = stages[stage_name or "default"]
-    else:
-        effective = manifest
+    effective = resolve_effective_config(manifest, profile_name, stage_name)
 
     env_cfg = effective.get("env", {})
 
@@ -224,14 +242,13 @@ def build_manifest_env(
     return result
 
 
-def resolve_template(manifest: dict[str, Any], profile_name: str | None = None, stage_name: str | None = None) -> str:
+def resolve_template(
+    manifest: dict[str, Any],
+    profile_name: str | None = None,
+    stage_name: str | None = None,
+) -> str:
     """Determine job template name from manifest resources."""
-    if profile_name is not None:
-        prof = manifest["profiles"][profile_name]
-        stages = normalize_profile(prof)
-        effective = stages[stage_name or "default"]
-    else:
-        effective = manifest
+    effective = resolve_effective_config(manifest, profile_name, stage_name)
 
     if "gpus" in effective.get("resources", {}):
         return "gpu_array"

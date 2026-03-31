@@ -34,7 +34,8 @@ class HPCBackend(abc.ABC):
     """Minimal interface for HPC job submission backends.
 
     Subclasses implement ``_build_command`` to construct the scheduler-specific
-    command; the chunking loop and subprocess execution are handled here.
+    command.  Override ``_execute_command`` to change how commands are run
+    (e.g. via SSH) and ``_setup_log_dir`` for remote ``mkdir``.
     """
 
     log_dir: str  # subclasses must set this
@@ -48,6 +49,19 @@ class HPCBackend(abc.ABC):
     ) -> list[str]:
         """Return the scheduler command for the given task range."""
         ...
+
+    def _execute_command(
+        self,
+        cmd: list[str],
+        job_env: dict[str, str],
+        cwd: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute a scheduler command.  Override for remote execution."""
+        return subprocess.run(cmd, env=job_env, cwd=cwd, capture_output=True, text=True)
+
+    def _setup_log_dir(self) -> None:
+        """Ensure the log directory exists.  Override for remote ``mkdir``."""
+        os.makedirs(self.log_dir, exist_ok=True)
 
     def submit_array(
         self,
@@ -66,29 +80,7 @@ class HPCBackend(abc.ABC):
             Working directory for the subprocess.  Defaults to the current
             working directory when ``None``.
         """
-        cwd = cwd or Path.cwd()
-        os.makedirs(self.log_dir, exist_ok=True)
-
-        start_task = 1
-        while start_task <= total_chunks:
-            end_task = min(start_task + tasks_per_array - 1, total_chunks)
-            task_range = f"{start_task}-{end_task}"
-            cmd = self._build_command(task_range, job_name, job_env)
-            result = subprocess.run(
-                cmd,
-                env=job_env,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
-                raise RuntimeError(
-                    f"Job submission failed (exit {result.returncode}) for array {task_range}:\n"
-                    f"  command: {' '.join(cmd)}\n"
-                    f"  stderr:  {stderr_msg}"
-                )
-            start_task = end_task + 1
+        self._run_batches(job_name, total_chunks, tasks_per_array, job_env, cwd=cwd)
 
     def submit_array_tracked(
         self,
@@ -107,8 +99,23 @@ class HPCBackend(abc.ABC):
             Working directory for the subprocess.  Defaults to the current
             working directory when ``None``.
         """
+        return self._run_batches(
+            job_name, total_chunks, tasks_per_array, job_env, cwd=cwd, track=True
+        )
+
+    def _run_batches(
+        self,
+        job_name: str,
+        total_chunks: int,
+        tasks_per_array: int,
+        job_env: dict[str, str],
+        *,
+        cwd: Path | None = None,
+        track: bool = False,
+    ) -> list[tuple[str, str]]:
+        """Core batching loop shared by submit_array and submit_array_tracked."""
         cwd = cwd or Path.cwd()
-        os.makedirs(self.log_dir, exist_ok=True)
+        self._setup_log_dir()
         submissions: list[tuple[str, str]] = []
 
         start_task = 1
@@ -116,13 +123,7 @@ class HPCBackend(abc.ABC):
             end_task = min(start_task + tasks_per_array - 1, total_chunks)
             task_range = f"{start_task}-{end_task}"
             cmd = self._build_command(task_range, job_name, job_env)
-            result = subprocess.run(
-                cmd,
-                env=job_env,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-            )
+            result = self._execute_command(cmd, job_env, cwd)
             if result.returncode != 0:
                 stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
                 raise RuntimeError(
@@ -130,10 +131,13 @@ class HPCBackend(abc.ABC):
                     f"  command: {' '.join(cmd)}\n"
                     f"  stderr:  {stderr_msg}"
                 )
-            match = re.search(r"(\d+)", result.stdout)
-            if not match:
-                raise RuntimeError(f"Could not parse job ID from sbatch output: {result.stdout!r}")
-            submissions.append((task_range, match.group(1)))
+            if track:
+                match = re.search(r"(\d+)", result.stdout)
+                if not match:
+                    raise RuntimeError(
+                        f"Could not parse job ID from output: {result.stdout!r}"
+                    )
+                submissions.append((task_range, match.group(1)))
             start_task = end_task + 1
 
         return submissions
