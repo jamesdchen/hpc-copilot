@@ -131,8 +131,6 @@ def deploy_runtime(
 
     Must be called **after** :func:`rsync_push` (which uses ``--delete``).
     """
-    from hpc._config import _PACKAGE_ROOT
-
     target = _target(user, host)
 
     ssh_run(
@@ -141,7 +139,7 @@ def deploy_runtime(
         user=user,
     )
 
-    src = str(_PACKAGE_ROOT / "hpc" / "chunking.py")
+    src = str(Path(__file__).parent / "chunking.py")
     dst = f"{target}:{remote_path}/hpc/chunking.py"
     return subprocess.run(
         ["scp", src, dst],

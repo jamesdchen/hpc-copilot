@@ -6,15 +6,14 @@ to be provided at construction time (no project-specific imports).
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 from hpc.backends import HPCBackend, register
 
 if TYPE_CHECKING:
+    import subprocess
     from collections.abc import Callable
     from pathlib import Path
-    from subprocess import CompletedProcess
 
 
 @register("sge-remote")
@@ -44,7 +43,7 @@ class RemoteSGEBackend(HPCBackend):
     def __init__(
         self,
         script: str | None = None,
-        ssh_run: Callable[[str], CompletedProcess[str]] | None = None,
+        ssh_run: Callable[[str], subprocess.CompletedProcess[str]] | None = None,
         remote_repo: str | None = None,
         log_dir: str | None = None,
         pass_env_keys: tuple[str, ...] = (),
@@ -67,7 +66,7 @@ class RemoteSGEBackend(HPCBackend):
         job_name: str,
         job_env: dict[str, str],
     ) -> list[str]:
-        """Return qsub command as a single string for SSH execution."""
+        """Return qsub command parts for SSH execution."""
         parts = [
             "qsub",
             "-t",
@@ -85,69 +84,17 @@ class RemoteSGEBackend(HPCBackend):
         parts.append(self.script)
         return parts
 
-    def submit_array(
+    def _execute_command(
         self,
-        job_name: str,
-        total_chunks: int,
-        tasks_per_array: int,
+        cmd: list[str],
         job_env: dict[str, str],
-        *,
-        cwd: Path | None = None,
-    ) -> None:
-        """Submit array jobs in batches via SSH."""
+        cwd: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        """Execute a qsub command on the remote host via SSH."""
+        cmd_str = " ".join(cmd)
+        remote_cmd = f"cd {self.remote_repo} && {cmd_str}"
+        return self.ssh_run(remote_cmd)
+
+    def _setup_log_dir(self) -> None:
+        """Create log directory on the remote host."""
         self.ssh_run(f"mkdir -p {self.log_dir}")
-
-        start_task = 1
-        while start_task <= total_chunks:
-            end_task = min(start_task + tasks_per_array - 1, total_chunks)
-            task_range = f"{start_task}-{end_task}"
-            cmd_parts = self._build_command(task_range, job_name, job_env)
-            cmd_str = " ".join(cmd_parts)
-            remote_cmd = f"cd {self.remote_repo} && {cmd_str}"
-            result = self.ssh_run(remote_cmd)
-            if result.returncode != 0:
-                stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
-                raise RuntimeError(
-                    f"Remote job submission failed (exit {result.returncode}) "
-                    f"for array {task_range}:\n"
-                    f"  command: {cmd_str}\n"
-                    f"  stderr:  {stderr_msg}"
-                )
-            start_task = end_task + 1
-
-    def submit_array_tracked(
-        self,
-        job_name: str,
-        total_chunks: int,
-        tasks_per_array: int,
-        job_env: dict[str, str],
-        *,
-        cwd: Path | None = None,
-    ) -> list[tuple[str, str]]:
-        """Like submit_array but returns (task_range, job_id) pairs."""
-        self.ssh_run(f"mkdir -p {self.log_dir}")
-        submissions: list[tuple[str, str]] = []
-
-        start_task = 1
-        while start_task <= total_chunks:
-            end_task = min(start_task + tasks_per_array - 1, total_chunks)
-            task_range = f"{start_task}-{end_task}"
-            cmd_parts = self._build_command(task_range, job_name, job_env)
-            cmd_str = " ".join(cmd_parts)
-            remote_cmd = f"cd {self.remote_repo} && {cmd_str}"
-            result = self.ssh_run(remote_cmd)
-            if result.returncode != 0:
-                stderr_msg = result.stderr.strip() if result.stderr else "(no stderr)"
-                raise RuntimeError(
-                    f"Remote job submission failed (exit {result.returncode}) "
-                    f"for array {task_range}:\n"
-                    f"  command: {cmd_str}\n"
-                    f"  stderr:  {stderr_msg}"
-                )
-            match = re.search(r"(\d+)", result.stdout)
-            if not match:
-                raise RuntimeError(f"Could not parse job ID from qsub output: {result.stdout!r}")
-            submissions.append((task_range, match.group(1)))
-            start_task = end_task + 1
-
-        return submissions
