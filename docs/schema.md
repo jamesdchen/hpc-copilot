@@ -10,8 +10,8 @@ These are shared across all profiles:
 | `cluster` | string | yes | Cluster key matching an entry in `clusters.yaml` |
 | `remote_path` | string | yes | Absolute path on the remote cluster |
 | `rsync_exclude` | list[str] | no | Patterns passed to `rsync --exclude` during sync |
-| `experiment_paths` | list[str] | no | Glob patterns for experiment YAML configs (used by `hpc collect`) |
-| `registries` | map | no | Importable registries in `"module.path:ATTR"` format (used by `hpc collect`) |
+| `experiment_paths` | list[str] | no | Glob patterns for experiment YAML configs |
+| `registries` | map | no | Importable registries in `"module.path:ATTR"` format |
 | `cluster_envs` | map | no | Per-cluster env overrides keyed by cluster name, then env_group name |
 
 ## profiles
@@ -105,20 +105,6 @@ cluster_envs:
     ml: { modules: "python" }
     dl: { modules: "", conda_env: project-cucuringu }
 ```
-
-## collect Fields
-
-`experiment_paths` and `registries` configure `python -m hpc.collect`, which generates a `.hpc/` directory with cached dependency graphs and experiment metadata.
-
-### experiment_paths
-
-List of glob patterns. Each matching YAML is summarized in `.hpc/experiments.yaml`.
-
-### registries
-
-Map of registry names to `"module.path:ATTRIBUTE"` references. Each attribute is imported and stored in `.hpc/experiments.yaml`.
-
----
 
 ## How It Works
 

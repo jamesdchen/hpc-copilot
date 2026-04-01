@@ -18,14 +18,14 @@ Single-quote the remote command so variables expand on the cluster, not locally:
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
 ```
 
-## Step 0: Load Module Graph
+## Step 0: Understand the Executor
 
-If `.hpc/module_graph.yaml` exists, read it. It maps each profile to its dependency tree — every project file the executor imports, nested by call chain. When diagnosing failures:
+Run `python -m <executor_module> --help` (extract the module from the profile's `run` command) to understand the executor's CLI interface. When diagnosing failures:
 
-1. Find the failing file from the traceback in the module graph
-2. Read only that file
-3. If you need upstream context, follow the tree to the caller
-4. Never read files outside the profile's dependency tree
+1. Read the traceback from the error log to find the failing file and line
+2. Read that file directly
+3. If you need upstream context, follow imports from the failing file
+4. Use Glob/Grep to find related files if needed
 
 ## Operating Principles
 
