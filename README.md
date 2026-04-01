@@ -7,10 +7,8 @@ A standalone Claude Code plugin for running any experiment repo on HPC clusters 
 ### 1. Install
 
 ```bash
-bash setup.sh
+pip install -e .
 ```
-
-Installs slash commands globally and the `hpc` Python package.
 
 ### 2. Add `hpc.yaml` to your experiment repo
 
@@ -81,7 +79,6 @@ With chunking, total tasks = grid points × chunks (e.g., 18 × 100 = 1,800).
 | `/submit` | Expand grid, sync code, submit array jobs |
 | `/monitor` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
-| `/sync` | Git fetch, pull with rebase, push — with conflict handling |
 
 ## Configuration
 
@@ -103,14 +100,6 @@ Both formats are supported. If `hpc.yaml` exists, it takes precedence for `/subm
 | GPU array | `templates/sge/gpu_array.sh` | `templates/slurm/gpu_array.slurm` |
 
 Templates are parameterized via environment variables injected at submission time. Auto-selected based on `resources.gpus` in your config.
-
-## Collecting Project Context (Optional)
-
-```bash
-python -m hpc.collect
-```
-
-Generates a `.hpc/` directory with cached CLI help, import graphs, and experiment metadata. Helps the agent debug failures without exploring source code.
 
 ## Supported Clusters
 
