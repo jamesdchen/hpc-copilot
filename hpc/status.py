@@ -141,7 +141,13 @@ def get_err_log_paths(
             if scheduler == "sge":
                 p = os.path.join(scratch_dir, f"{job_name}.o{job_id}.{tid}")
             else:
-                p = os.path.join(log_dir, f"slurm-{job_id}_{tid}.err")
+                # Canonical: {job_name}_{job_id}_{tid}.err
+                p = os.path.join(log_dir, f"{job_name}_{job_id}_{tid}.err")
+                if not os.path.isfile(p):
+                    # Fallback: glob for any prefix matching this job+task
+                    matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
+                    if matches:
+                        p = max(matches, key=os.path.getmtime)
             if os.path.isfile(p):
                 paths[tid] = p
                 break

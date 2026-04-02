@@ -83,7 +83,17 @@ Parse results to determine state:
 
 ## Step 2: Diagnose Failures
 
-Read error logs for failed tasks (tail -50 from the appropriate log path).
+Read error logs for failed tasks. Log files follow the naming convention `{job_name}_{job_id}_{task_id}.{out|err}` where `job_name` is the profile name (the value passed to `--job-name` during submission). For example, profile `patchts` with job ID `7580680` produces `logs/patchts_7580680_1.out` and `logs/patchts_7580680_1.err`.
+
+Read **both** `.out` and `.err` for each failed task (tail -50 each):
+```bash
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && tail -50 logs/<job_name>_<job_id>_<task_id>.err && tail -50 logs/<job_name>_<job_id>_<task_id>.out'
+```
+
+If the expected files don't exist, fall back to globbing:
+```bash
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/logs/*<job_id>_<task_id>.err 2>/dev/null'
+```
 
 Check job accounting (qacct for SGE, sacct for SLURM).
 

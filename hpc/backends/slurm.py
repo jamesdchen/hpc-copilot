@@ -37,9 +37,9 @@ class SlurmBackend(HPCBackend):
             cmd += ["--account", self.account]
         cmd += [
             "--output",
-            f"{self.log_dir}/slurm-%A_%a.out",
+            f"{self.log_dir}/%x_%A_%a.out",
             "--error",
-            f"{self.log_dir}/slurm-%A_%a.err",
+            f"{self.log_dir}/%x_%A_%a.err",
         ]
         if job_env:
             export_str = ",".join(f"{k}={v}" for k, v in job_env.items())

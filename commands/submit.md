@@ -117,6 +117,7 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch \
     --array=1-<total_chunks> \
     --job-name=<job_name> \
     --output=logs/%x_%A_%a.out \
+    --error=logs/%x_%A_%a.err \
     --mem=<mem> --time=<walltime> --cpus-per-task=<cpus> \
     --export=CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,TOTAL_CHUNKS=... \
     <template_path>'
