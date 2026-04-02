@@ -9,6 +9,7 @@ from the ``hpc`` package.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -52,13 +53,32 @@ def main() -> None:
     cmd = task["cmd"]
     result_dir = task["result_dir"]
 
-    # --- Execute ---
+    # --- Execute (atomic output) ---
+    # MapReduce correctness guarantee: write to a temporary work-in-progress
+    # directory, then atomically promote files on success.  If the task
+    # crashes mid-write, partial output stays in _wip_ and never pollutes
+    # the final result directory.
     os.makedirs(result_dir, exist_ok=True)
-    os.environ["RESULT_DIR"] = result_dir
+    wip_dir = os.path.join(result_dir, f"_wip_{chunk_id}")
+    os.makedirs(wip_dir, exist_ok=True)
+    os.environ["RESULT_DIR"] = wip_dir
 
     print(f"[dispatch] task_id={chunk_id} cmd={cmd} result_dir={result_dir}")
 
     result = subprocess.run(cmd, shell=True, env=os.environ)
+
+    if result.returncode == 0:
+        # Promote: atomically move each output file to the final directory.
+        for fname in os.listdir(wip_dir):
+            os.replace(os.path.join(wip_dir, fname), os.path.join(result_dir, fname))
+        shutil.rmtree(wip_dir, ignore_errors=True)
+    else:
+        print(
+            f"[dispatch] FAILED (exit {result.returncode}), "
+            f"partial output preserved in {wip_dir}",
+            file=sys.stderr,
+        )
+
     sys.exit(result.returncode)
 
 

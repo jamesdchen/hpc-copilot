@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "check_results",
+    "aggregate_counters",
     "report_status",
     "get_err_log_paths",
     "detect_scheduler",
@@ -58,6 +59,8 @@ def check_results(
     rdir = Path(result_dir).resolve()
 
     for path_str in glob.glob(str(rdir / file_glob)):
+        if "/_wip_" in path_str:
+            continue
         chunk_id = _extract_chunk_id(os.path.basename(path_str), chunk_pattern)
         if chunk_id is None or chunk_id < 1 or chunk_id > total_chunks:
             continue
@@ -79,6 +82,66 @@ def check_results(
             results[chunk_id] = {"status": "complete", "path": path_str}
 
     return results
+
+
+def aggregate_counters(
+    result_dir: str | Path,
+    total_chunks: int,
+) -> dict:
+    """Read and aggregate map-side counters across all chunks.
+
+    Each running task may write a ``_counters_<N>.json`` file via
+    :meth:`ChunkContext.update_counters`.  This function collects them
+    and produces an aggregated summary.
+
+    Returns
+    -------
+    dict with keys:
+        per_chunk : dict mapping chunk_id (int) to its counter dict
+        totals : dict of counter_name -> sum (numeric counters only)
+        reporting : int, number of chunks that have written counters
+        progress : float or None, estimated 0-1 progress if chunks
+            report ``rows_processed`` and ``total_rows``
+    """
+    rdir = Path(result_dir).resolve()
+    counter_pattern = re.compile(r"_counters_(\d+)\.json$")
+
+    per_chunk: dict[int, dict] = {}
+
+    for path_str in glob.glob(str(rdir / "_counters_*.json")):
+        m = counter_pattern.search(path_str)
+        if m is None:
+            continue
+        chunk_id = int(m.group(1))
+        try:
+            with open(path_str) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        per_chunk[chunk_id] = data
+
+    # Aggregate numeric values across all chunks.
+    totals: dict[str, int | float] = {}
+    for counters in per_chunk.values():
+        for key, value in counters.items():
+            if isinstance(value, (int, float)):
+                totals[key] = totals.get(key, 0) + value
+
+    # Compute progress estimate.
+    progress: float | None = None
+    if "rows_processed" in totals and "total_rows" in totals:
+        total_rows = totals["total_rows"]
+        if total_rows > 0:
+            progress = totals["rows_processed"] / total_rows
+
+    return {
+        "per_chunk": per_chunk,
+        "totals": totals,
+        "reporting": len(per_chunk),
+        "progress": progress,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +239,7 @@ def report_status(
     job_name: str = "",
     slurm_cluster: str | None = None,
     sge_user: str | None = None,
+    include_counters: bool = False,
 ) -> dict:
     """Assemble a full JSON status report.
 
@@ -261,4 +325,6 @@ def report_status(
         report["err_log_paths"] = err_paths
     if query_error:
         report["query_error"] = query_error
+    if include_counters:
+        report["counters"] = aggregate_counters(result_dir, total_chunks)
     return report
