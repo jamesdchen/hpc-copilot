@@ -25,6 +25,9 @@ __all__ = [
     "ChunkContext",
     "chunk_context",
     "collect_chunks",
+    # Chunk result loading
+    "load_and_stitch_chunks",
+    "save_summary",
     # Manifest / grid API
     "load_manifest",
     "manifest_exists",
@@ -40,6 +43,7 @@ __all__ = [
 from pathlib import Path
 
 from hpc.manifest import detect_project_type, load_clusters_config
+from hpc.chunk_loader import load_and_stitch_chunks, save_summary
 from hpc.chunking import ChunkContext, chunk_context, collect_chunks
 from hpc.gpu import pick_gpu
 from hpc.grid import build_task_manifest, expand_grid, total_tasks
