@@ -19,6 +19,7 @@ __all__ = [
     "check_results",
     "report_status",
     "detect_scheduler",
+    "aggregate_counters",
     # GPU selection
     "pick_gpu",
     # Chunking protocol
@@ -42,13 +43,14 @@ __all__ = [
 
 from pathlib import Path
 
-from hpc.manifest import detect_project_type, load_clusters_config
 from hpc.chunk_loader import load_and_stitch_chunks, save_summary
 from hpc.chunking import ChunkContext, chunk_context, collect_chunks
 from hpc.gpu import pick_gpu
 from hpc.grid import build_task_manifest, expand_grid, total_tasks
 from hpc.manifest import (
     build_manifest_env,
+    detect_project_type,
+    load_clusters_config,
     load_manifest,
     manifest_exists,
     resolve_effective_config,
@@ -56,7 +58,7 @@ from hpc.manifest import (
     validate_manifest,
 )
 from hpc.remote import deploy_runtime, rsync_pull, rsync_push, ssh_run
-from hpc.status import check_results, detect_scheduler, report_status
+from hpc.status import aggregate_counters, check_results, detect_scheduler, report_status
 
 
 def get_template_path(scheduler: str, template: str) -> Path:

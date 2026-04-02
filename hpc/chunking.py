@@ -64,6 +64,44 @@ class ChunkContext:
         """Standard chunk output path: ``{result_dir}/{prefix}_{chunk_id+1}.csv``."""
         return self.result_dir / f"{prefix}_{self.chunk_id + 1}.csv"
 
+    def counter_path(self) -> Path:
+        """Path to this chunk's counter JSON file."""
+        return self.result_dir / f"_counters_{self.chunk_id + 1}.json"
+
+    def update_counters(self, **counters: int | float | str) -> None:
+        """Write map-side counters for this chunk.
+
+        Implements the MapReduce map-side counter pattern: each chunk
+        reports progress and diagnostics by writing key/value pairs to a
+        JSON sidecar file.  The reducer (or monitoring tooling) can read
+        these files to track execution progress without polling the main
+        result CSV.
+
+        Writes are atomic — the data is flushed to a temporary file
+        first, then moved into place with :func:`os.replace`.
+        """
+        import json as _json
+
+        path = self.counter_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(_json.dumps(counters))
+        os.replace(tmp, path)
+
+    def read_counters(self) -> dict:
+        """Read map-side counters previously written by :meth:`update_counters`.
+
+        Returns an empty dict if the counter file does not exist or
+        contains corrupt JSON.
+        """
+        import json as _json
+
+        path = self.counter_path()
+        try:
+            return _json.loads(path.read_text())
+        except (OSError, ValueError):
+            return {}
+
 
 def chunk_context() -> ChunkContext:
     """Build a :class:`ChunkContext` from environment variables.

@@ -141,3 +141,42 @@ class TestCollectChunks:
         self._write_csv(tmp_path / "output_1.csv", n=3)
         df = collect_chunks(tmp_path, pattern="output_*.csv")
         assert len(df) == 3
+
+
+class TestCounters:
+    def test_counter_path(self):
+        ctx = ChunkContext(chunk_id=4, total_chunks=10, result_dir=Path("/results"))
+        assert ctx.counter_path() == Path("/results/_counters_5.json")
+
+    def test_update_counters_writes_json(self, tmp_path):
+        ctx = ChunkContext(chunk_id=0, total_chunks=1, result_dir=tmp_path)
+        ctx.update_counters(rows_processed=5000, errors=2)
+        import json
+
+        data = json.loads(ctx.counter_path().read_text())
+        assert data["rows_processed"] == 5000
+        assert data["errors"] == 2
+
+    def test_read_counters(self, tmp_path):
+        ctx = ChunkContext(chunk_id=0, total_chunks=1, result_dir=tmp_path)
+        ctx.update_counters(rows_processed=42, total_rows=100)
+        result = ctx.read_counters()
+        assert result == {"rows_processed": 42, "total_rows": 100}
+
+    def test_read_counters_missing_file(self, tmp_path):
+        ctx = ChunkContext(chunk_id=0, total_chunks=1, result_dir=tmp_path)
+        assert ctx.read_counters() == {}
+
+    def test_update_counters_overwrites(self, tmp_path):
+        ctx = ChunkContext(chunk_id=0, total_chunks=1, result_dir=tmp_path)
+        ctx.update_counters(rows_processed=10, errors=1)
+        ctx.update_counters(rows_processed=50, errors=3)
+        result = ctx.read_counters()
+        assert result == {"rows_processed": 50, "errors": 3}
+
+    def test_update_counters_atomic(self, tmp_path):
+        ctx = ChunkContext(chunk_id=0, total_chunks=1, result_dir=tmp_path)
+        ctx.update_counters(rows_processed=100)
+        tmp_file = ctx.counter_path().with_suffix(".tmp")
+        assert not tmp_file.exists()
+        assert ctx.counter_path().exists()

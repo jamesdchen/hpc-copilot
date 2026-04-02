@@ -81,6 +81,32 @@ Parse results to determine state:
 
 **Stall heuristic**: If ALL tasks have been pending for >15 minutes with zero running, or if the state is unchanged across 2 consecutive checks, treat as a stall. Go to Step 2 with category `queue_stall`.
 
+### Step 1c: Check Map-Side Counters
+
+Check whether running tasks have written counter files to the results directory:
+
+```bash
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<results.dir>/_counters_*.json 2>/dev/null | wc -l'
+```
+
+If counter files exist, read them to estimate real progress:
+
+```bash
+ssh $SSH_TARGET 'cat '"$REMOTE_PATH"'/<results.dir>/_counters_*.json 2>/dev/null'
+```
+
+Parse the JSON and report per-grid-point progress using the counters:
+
+```
+Map progress (from counters):
+  ridge_har:      rows_processed: 450,000/500,000 (90%) across 98 reporting chunks
+  ridge_pca:      rows_processed: 500,000/500,000 (100%) across 100 reporting chunks
+  xgboost_har:    rows_processed: 180,000/500,000 (36%) across 45 reporting chunks
+  xgboost_pca:    no counters yet (all pending)
+```
+
+Counter-based progress provides finer granularity than chunk completion alone. When counters are available, use them for more accurate ETA calculations in Step 5 (adaptive wait interval).
+
 ## Step 2: Diagnose Failures
 
 Read error logs for failed tasks. Log files follow the naming convention `{job_name}_{job_id}_{task_id}.{out|err}` where `job_name` is the profile name (the value passed to `--job-name` during submission). For example, profile `patchts` with job ID `7580680` produces `logs/patchts_7580680_1.out` and `logs/patchts_7580680_1.err`.
