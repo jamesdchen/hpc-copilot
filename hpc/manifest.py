@@ -177,7 +177,7 @@ def normalize_profile(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
     ``{"default": ...}`` stage so all downstream code can work uniformly.
     """
     if "stages" in profile:
-        return profile["stages"]
+        return dict(profile["stages"])
 
     # Single-stage profile — extract stage-level keys
     stage_keys = {
