@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from hpc_mapreduce.reduce.status import check_results, report_status
 
 

@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
-
-import pytest
 
 from hpc_mapreduce.job.grid import run_id
 from hpc_mapreduce.map.combiner import _run_id, _weighted_mean, main

@@ -14,9 +14,13 @@ __all__ = [
 import glob
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
-def reduce_metrics(result_dirs: list[str | Path]) -> dict:
+def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
     """Reduce per-task metrics JSON sidecars into a single summary.
 
     Computes a weighted mean of each metric key across tasks, weighted by

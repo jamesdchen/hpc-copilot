@@ -102,6 +102,8 @@ def expand_backtest(backtest: dict) -> list[dict[str, str]]:
     # Determine if sub-daily precision is needed
     sub_daily = suffix in ("H", "MIN")
 
+    overall_start: date | datetime
+    overall_end: date | datetime
     if sub_daily:
         overall_start = datetime.fromisoformat(backtest["start"])
         overall_end = datetime.fromisoformat(backtest["end"])
