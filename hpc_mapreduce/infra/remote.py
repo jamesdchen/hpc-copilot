@@ -15,6 +15,7 @@ __all__ = [
     "rsync_push",
     "rsync_pull",
     "deploy_runtime",
+    "run_combiner",
 ]
 
 import subprocess
@@ -144,11 +145,55 @@ def deploy_runtime(
 
     src = str(Path(__file__).parent.parent / "map" / "context.py")
     dst = f"{target}:{remote_path}/hpc_mapreduce/map/context.py"
-    return subprocess.run(
+    subprocess.run(
         ["scp", src, dst],
         capture_output=True,
         text=True,
     )
+
+    # Deploy the on-cluster combiner script.
+    combiner_src = str(Path(__file__).parent.parent / "map" / "combiner.py")
+    combiner_dst = f"{target}:{remote_path}/_hpc_combiner.py"
+    return subprocess.run(
+        ["scp", combiner_src, combiner_dst],
+        capture_output=True,
+        text=True,
+    )
+
+
+def run_combiner(
+    *,
+    host: str,
+    user: str,
+    remote_path: str,
+    wave: int,
+    manifest_name: str = "_hpc_dispatch.json",
+) -> subprocess.CompletedProcess[str]:
+    """Run the on-cluster combiner on the login node for a specific wave.
+
+    Executes ``_hpc_combiner.py`` on the remote host via SSH, setting
+    the ``HPC_WAVE`` and ``HPC_MANIFEST`` environment variables so the
+    combiner knows which wave's tasks to aggregate.
+
+    Parameters
+    ----------
+    host:
+        Cluster hostname.
+    user:
+        SSH username on the cluster.
+    remote_path:
+        Absolute path to the project directory on the remote host.
+    wave:
+        Wave number (0-based) to combine.
+    manifest_name:
+        Name of the manifest file (relative to *remote_path*).
+    """
+    cmd = (
+        f"cd {remote_path} && "
+        f"HPC_WAVE={wave} HPC_MANIFEST={manifest_name} "
+        f"python3 _hpc_combiner.py"
+    )
+    return ssh_run(cmd, host=host, user=user)
 
 
 def rsync_pull(

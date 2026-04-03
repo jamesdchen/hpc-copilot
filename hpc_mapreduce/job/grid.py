@@ -17,6 +17,7 @@ __all__ = [
     "build_task_manifest",
     "total_tasks",
     "expand_backtest",
+    "attach_wave_map",
 ]
 
 
@@ -203,6 +204,26 @@ def build_task_manifest(
         "grid_keys": list(grid.keys()),
         "tasks": tasks,
     }
+
+
+def attach_wave_map(
+    manifest: dict,
+    wave_map: dict[int, list[int]],
+) -> dict:
+    """Return a *new* manifest dict with ``wave_map`` embedded.
+
+    Keys in the wave map are converted to strings (JSON compatibility),
+    and task IDs within each wave are also converted to strings so they
+    match the string-keyed ``tasks`` dict in the manifest.
+
+    The original *manifest* dict is **not** mutated.
+    """
+    # Convert int keys/values to strings for JSON round-tripping
+    str_map: dict[str, list[str]] = {
+        str(wave): [str(tid) for tid in tids]
+        for wave, tids in wave_map.items()
+    }
+    return {**manifest, "wave_map": str_map}
 
 
 def total_tasks(grid: dict[str, list], backtest: dict | None = None) -> int:

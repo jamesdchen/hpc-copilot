@@ -155,6 +155,8 @@ Throughput Plan:
   Wave 2:     tasks 177-264, 265-350  (after wave 1)
 ```
 
+5. **Embed wave map**: Call `build_wave_map(plan)` to generate a wave-to-task mapping, then call `attach_wave_map(manifest, wave_map)` to embed it in the manifest before writing `_hpc_dispatch.json`. This allows the on-cluster combiner to know which tasks belong to each wave.
+
 If constraints are not configured for the cluster or profile, skip this step and submit as a single array (existing behavior).
 
 ## Step 5: Confirm Run Plan
@@ -210,6 +212,8 @@ rsync -az --delete \
     # ... add each rsync exclude pattern ...
     . $SSH_TARGET:$REMOTE_PATH/
 ```
+
+Note: `deploy_runtime()` now also deploys `_hpc_combiner.py` alongside the existing dispatch script.
 
 Verify deployment:
 ```bash
