@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hpc_mapreduce.reduce.metrics import reduce_backtest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_metrics(result_dir: Path, metrics: dict) -> None:

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
-from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 from hpc_mapreduce.infra.clusters import load_constraints
+from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 
 
 class TestClusterConstraints:

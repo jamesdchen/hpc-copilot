@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from hpc_mapreduce.job.throughput import JobBatch, SubmissionPlan
+
 
 class HPCBackend(abc.ABC):
     """Minimal interface for HPC job submission backends.
@@ -75,7 +77,7 @@ class HPCBackend(abc.ABC):
 
     def submit_plan(
         self,
-        plan: "SubmissionPlan",  # noqa: F821
+        plan: SubmissionPlan,
         job_name: str,
         job_env: dict[str, str],
         *,
@@ -89,7 +91,7 @@ class HPCBackend(abc.ABC):
         self._setup_log_dir()
 
         # Group batches by wave
-        waves: dict[int, list[object]] = defaultdict(list)
+        waves: dict[int, list[JobBatch]] = defaultdict(list)
         for batch in plan.batches:
             waves[batch.wave].append(batch)
 

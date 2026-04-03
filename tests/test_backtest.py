@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-import pytest
-
 from hpc_mapreduce.job.grid import build_task_manifest, expand_backtest
 
 

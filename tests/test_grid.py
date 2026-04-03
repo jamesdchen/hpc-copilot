@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from hpc_mapreduce.job.grid import build_task_manifest, expand_grid, total_tasks
 
 
