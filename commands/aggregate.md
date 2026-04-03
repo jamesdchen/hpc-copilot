@@ -1,6 +1,6 @@
 Help me aggregate, validate, and analyze experiment results using the project configuration.
 
-Aggregation runs on the cluster to avoid transferring many chunk files. Only summary files are downloaded locally.
+Aggregation runs on the cluster to avoid transferring many result files. Only summary files are downloaded locally.
 
 ## Setup
 
@@ -15,7 +15,7 @@ Determine cluster and connection:
 
 Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
 
-Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to understand the grid structure: task-to-grid-point mapping, result directories per grid point, and chunk counts. This is the **primary source of truth** for what was submitted.
+Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to understand the grid structure: task-to-grid-point mapping and result directories per grid point. This is the **primary source of truth** for what was submitted.
 
 ## SSH Quoting
 
@@ -40,9 +40,8 @@ Read `_hpc_dispatch.json` to understand the submission structure:
 Submission summary (from dispatch manifest):
   Grid keys: [executor, horizon]
   Grid points: 6
-  Chunks per point: 100
-  Total tasks: 600
-  Result directories: results/ml_ridge_1/, results/ml_ridge_5/, ...
+  Total tasks: 60
+  Result directories: results/ml_ridge_h1_2020-01/, results/ml_ridge_h1_2020-07/, ...
 ```
 
 If `$ARGUMENTS` specifies an executor or result directory, use it. Otherwise, present the grid structure from the dispatch manifest and ask what to aggregate.
@@ -55,34 +54,34 @@ Before aggregating, confirm all jobs have finished by checking the queue (qstat 
 
 If jobs are still running for the selected profile/stage, report which ones and wait. Do NOT aggregate partial results unless explicitly asked.
 
-## Step 3: Validate Chunk Completeness
+## Step 3: Validate Task Completeness
 
-Check each grid point's result directory for expected chunks. Use `_hpc_dispatch.json` to determine the result directory and expected chunk count per grid point.
+Check each task's result directory for expected output files. Use `_hpc_dispatch.json` to determine the result directory per task.
 
 ```bash
-# For each grid point, count completed results
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<grid_point_result_dir>/<result_pattern> 2>/dev/null | wc -l'
+# For each task, check if result files exist
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<task_result_dir>/<result_pattern> 2>/dev/null | wc -l'
 ```
 
 Report per-grid-point completeness:
 
 ```
-Chunk completeness:
-  ridge_har:      100/100 complete
-  ridge_pca:      100/100 complete
-  xgboost_har:    95/100 complete — MISSING chunks: 12, 37, 44, 88, 91
-  xgboost_pca:    100/100 complete
+Task completeness:
+  ridge_h1:       10/10 tasks complete
+  ridge_h5:       10/10 tasks complete
+  xgboost_h1:     8/10 tasks complete — MISSING tasks: 3, 7
+  xgboost_h5:     10/10 tasks complete
 ```
 
-**If chunks are missing:**
+**If tasks are missing results:**
 
-1. Identify which chunk IDs are missing by listing what exists and computing the gaps.
+1. Identify which task IDs are missing by cross-referencing the dispatch manifest with existing result directories.
 2. Check job accounting for failure reasons (qacct for SGE, sacct for SLURM).
 3. Check error logs (tail -50).
 4. Report findings and suggest resubmitting via `/submit` or monitoring via `/monitor` for gaps.
 5. Wait for resubmitted jobs, then re-validate before aggregating.
 
-**Partial aggregation:** Only proceed when all expected chunks are present, unless the user explicitly asks to aggregate partial results. If partial, note the missing count and percentage per grid point.
+**Partial aggregation:** Only proceed when all expected task results are present, unless the user explicitly asks to aggregate partial results. If partial, note the missing count and percentage per grid point.
 
 ## Step 4: Aggregate on Cluster
 
@@ -131,7 +130,7 @@ After downloading, read the local summary files and report per-grid-point result
 Aggregation results:
   ridge_har:      complete — QLIKE: 0.342, MSE: 0.0012
   ridge_pca:      complete — QLIKE: 0.298, MSE: 0.0010
-  xgboost_har:    incomplete (95/100 chunks)
+  xgboost_har:    incomplete (8/10 tasks)
   xgboost_pca:    complete — QLIKE: 0.310, MSE: 0.0011
 ```
 

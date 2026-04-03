@@ -8,7 +8,7 @@ the core submission logic.
 Usage:
     from hpc_mapreduce.infra.backends import get_backend
     backend = get_backend("slurm", script="path/to/job.slurm")
-    backend.submit_array(job_name, total_chunks, tasks_per_array, job_env)
+    backend.submit_array(job_name, total_tasks, tasks_per_array, job_env)
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ class HPCBackend(abc.ABC):
     def submit_array(
         self,
         job_name: str,
-        total_chunks: int,
+        total_tasks: int,
         tasks_per_array: int,
         job_env: dict[str, str],
         *,
@@ -80,12 +80,12 @@ class HPCBackend(abc.ABC):
             Working directory for the subprocess.  Defaults to the current
             working directory when ``None``.
         """
-        self._run_batches(job_name, total_chunks, tasks_per_array, job_env, cwd=cwd)
+        self._run_batches(job_name, total_tasks, tasks_per_array, job_env, cwd=cwd)
 
     def submit_array_tracked(
         self,
         job_name: str,
-        total_chunks: int,
+        total_tasks: int,
         tasks_per_array: int,
         job_env: dict[str, str],
         *,
@@ -100,13 +100,13 @@ class HPCBackend(abc.ABC):
             working directory when ``None``.
         """
         return self._run_batches(
-            job_name, total_chunks, tasks_per_array, job_env, cwd=cwd, track=True
+            job_name, total_tasks, tasks_per_array, job_env, cwd=cwd, track=True
         )
 
     def _run_batches(
         self,
         job_name: str,
-        total_chunks: int,
+        total_tasks: int,
         tasks_per_array: int,
         job_env: dict[str, str],
         *,
@@ -119,8 +119,8 @@ class HPCBackend(abc.ABC):
         submissions: list[tuple[str, str]] = []
 
         start_task = 1
-        while start_task <= total_chunks:
-            end_task = min(start_task + tasks_per_array - 1, total_chunks)
+        while start_task <= total_tasks:
+            end_task = min(start_task + tasks_per_array - 1, total_tasks)
             task_range = f"{start_task}-{end_task}"
             cmd = self._build_command(task_range, job_name, job_env)
             result = self._execute_command(cmd, job_env, cwd)

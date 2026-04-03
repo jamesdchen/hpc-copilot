@@ -12,7 +12,6 @@ set -e
 #   $MODULES       — space-separated modules to load
 #   $EXECUTOR      — python command to run (e.g. "python3 -m myproject.cli.run")
 #   $RESULT_DIR    — output directory for results
-#   $TOTAL_CHUNKS  — total number of array tasks (auto-detected from SLURM if unset)
 #   $REPO_DIR      — repository root to cd into
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
 #
@@ -31,16 +30,11 @@ set -e
 #SBATCH --time=6:00:00
 
 # --- Defaults ---
-if [ -n "$SLURM_ARRAY_TASK_COUNT" ]; then
-    TOTAL_CHUNKS="$SLURM_ARRAY_TASK_COUNT"
-else
-    TOTAL_CHUNKS="${TOTAL_CHUNKS:-1}"
-fi
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
-# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based chunk ID
-CHUNK_ID=$((SLURM_ARRAY_TASK_ID - 1))
+# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based task ID
+TASK_ID=$((SLURM_ARRAY_TASK_ID - 1))
 
 # --- Diagnostics ---
 echo "============================================"
@@ -48,7 +42,7 @@ echo "Job ID:       $SLURM_JOB_ID"
 echo "Array Task:   $SLURM_ARRAY_TASK_ID"
 echo "Hostname:     $(hostname)"
 echo "CPUs:         $SLURM_CPUS_PER_TASK"
-echo "Chunk:        $CHUNK_ID / $TOTAL_CHUNKS"
+echo "Task:         $TASK_ID"
 echo "============================================"
 
 # --- Module Setup ---
@@ -83,7 +77,7 @@ echo "Executor:     $EXECUTOR"
 echo "============================================"
 
 # --- Execute ---
-export CHUNK_ID TOTAL_CHUNKS RESULT_DIR
+export TASK_ID RESULT_DIR
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."

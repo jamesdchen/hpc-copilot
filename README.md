@@ -1,6 +1,6 @@
 # claude-hpc
 
-A Claude Code plugin for running experiment repos on HPC clusters (SGE/SLURM). Point Claude at your executors, describe what you want to run, and hpc_mapreduce handles the rest — grid expansion, chunking, dispatch, monitoring, and result aggregation — all via SSH.
+A Claude Code plugin for running experiment repos on HPC clusters (SGE/SLURM). Point Claude at your executors, describe what you want to run, and hpc_mapreduce handles the rest — grid expansion, dispatch, monitoring, and result aggregation — all via SSH.
 
 ## Quick Start
 
@@ -26,7 +26,7 @@ my_experiment/
 └── data/
 ```
 
-Each executor should accept `--chunk-id` and `--total-chunks` for data parallelism, plus any experiment-specific arguments (`--horizon`, `--features`, etc.).
+Each executor accepts experiment-specific arguments (`--horizon`, `--start`, `--end`, `--features`, etc.). No HPC awareness is needed — all parameters arrive as CLI flags.
 
 ### 3. Run
 
@@ -42,19 +42,20 @@ Each executor should accept `--chunk-id` and `--total-chunks` for data paralleli
 You: /submit run ridge and xgboost with horizon=[1, 5, 25]
 
 Claude: I found these executors in src/:
-  ml_ridge.py    — --horizon, --chunk-id, --total-chunks, --output-file
-  ml_xgboost.py  — --horizon, --chunk-id, --total-chunks, --output-file
+  ml_ridge.py    — --horizon, --start, --end, --output-file
+  ml_xgboost.py  — --horizon, --start, --end, --output-file
 
 Proposed plan:
   Cluster: hoffman2 (SGE)
   Grid: executor=[ml_ridge, ml_xgboost] × horizon=[1, 5, 25] → 6 grid points
-  Chunks: 100 per point → 600 total tasks
+  Backtest: 2020-01-01 to 2024-12-31 (6M periods) → 10 periods
+  Total: 6 × 10 = 60 tasks
   Resources: 1 CPU, 16G, 4:00:00
   Confirm?
 
 You: yes
 
-Claude: Submitted job 12345678 (600 tasks). Run /monitor to track progress.
+Claude: Submitted job 12345678 (60 tasks). Run /monitor to track progress.
 ```
 
 No config files required. Claude discovers your executors, detects environment needs from imports, and suggests resources based on executor type.
@@ -68,14 +69,11 @@ No config files required. Claude discovers your executors, detects environment n
 5. The job template runs the dispatch script, which looks up the command for its task ID
 6. Your code runs with the right params — no HPC awareness needed
 
-### Two Layers of Parallelism
+### Parallelism Model
 
-| Layer | What | Who handles it |
-|-------|------|----------------|
-| **Grid** | Different param combos (executor × horizon × features) | hpc_mapreduce (automatic) |
-| **Data chunking** | Splitting one run's data across N workers | Opt-in via `--chunk-id`/`--total-chunks` args |
+Grid parameters (including optional backtest time periods) are expanded via Cartesian product. Each combination becomes one HPC task. Executors receive all parameters as CLI arguments — no HPC awareness needed.
 
-With chunking, total tasks = grid points × chunks (e.g., 6 × 100 = 600).
+With backtest enabled, total tasks = grid points × time periods.
 
 ## Commands
 
@@ -84,8 +82,6 @@ With chunking, total tasks = grid points × chunks (e.g., 6 × 100 = 600).
 | `/submit` | Discover executors, build grid conversationally, sync code, submit array jobs |
 | `/monitor` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
-| `/build-executor` | Generate a new executor from existing templates |
-
 ## Configuration
 
 ### `clusters.yaml` (required)
@@ -130,28 +126,11 @@ Templates are parameterized via environment variables injected at submission tim
 
 Cluster connection details are in `config/clusters.yaml`.
 
-## Map Context Protocol
-
-hpc_mapreduce provides a map context protocol so experiment executors can optionally use structured chunking instead of raw `--chunk-id` args:
-
-```python
-from hpc_mapreduce.map.context import map_context
-
-ctx = map_context()                            # no-op locally (chunk 0 of 1)
-my_range = ctx.split(range(train_win, N))      # full range locally, subset on HPC
-results.to_csv(ctx.output_path())              # ./results_chunk_1.csv locally
-```
-
-- `map_context()` reads `CHUNK_ID`, `TOTAL_CHUNKS`, `RESULT_DIR` from env vars (set by job templates)
-- Defaults to chunk 0 of 1 for local development — executor processes everything
-- `ctx.split()` accepts a `range` or `int` and returns the sub-range for this chunk
-- `ctx.output_path()` generates the standard `results_chunk_{id+1}.csv` filename
-- `collect_outputs(result_dir)` stitches chunk CSVs back into a single sorted DataFrame
-
 ## Python API
 
 ```python
 from hpc_mapreduce import expand_grid, build_task_manifest, total_tasks
+from hpc_mapreduce import expand_backtest, ClusterConstraints, parse_constraints
 from hpc_mapreduce import load_clusters_config, get_template_path, _PACKAGE_ROOT
 from hpc_mapreduce.infra.backends import get_backend
 ```
