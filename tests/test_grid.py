@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from hpc_mapreduce.job.grid import build_task_manifest, expand_grid, total_tasks
+from hpc_mapreduce.job.grid import attach_wave_map, build_task_manifest, expand_grid, total_tasks
 
 
 class TestExpandGrid:
@@ -97,3 +97,25 @@ class TestTotalTasks:
     def test_single_param_single_value(self):
         grid = {"x": [42]}
         assert total_tasks(grid) == 1
+
+
+class TestAttachWaveMap:
+    def test_basic(self):
+        manifest = {"tasks": {"0": {}, "1": {}}, "total_tasks": 2}
+        wave_map = {0: [0, 1]}
+        result = attach_wave_map(manifest, wave_map)
+        assert "wave_map" in result
+        # Keys should be strings
+        assert set(result["wave_map"].keys()) == {"0"}
+        # Task IDs should be strings
+        assert result["wave_map"]["0"] == ["0", "1"]
+
+    def test_preserves_manifest(self):
+        manifest = {"tasks": {"0": {}, "1": {}}, "total_tasks": 2}
+        wave_map = {0: [0, 1]}
+        result = attach_wave_map(manifest, wave_map)
+        # Original should not be mutated
+        assert "wave_map" not in manifest
+        # Original keys preserved in result
+        assert result["tasks"] == manifest["tasks"]
+        assert result["total_tasks"] == 2

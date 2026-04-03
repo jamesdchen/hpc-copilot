@@ -25,11 +25,13 @@ __all__ = [
     # Reduce
     "reduce_metrics",
     "reduce_backtest",
+    "reduce_partials",
     # Grid API
     "expand_grid",
     "expand_backtest",
     "build_task_manifest",
     "total_tasks",
+    "attach_wave_map",
     # Cluster constraints
     "ClusterConstraints",
     "parse_constraints",
@@ -37,15 +39,19 @@ __all__ = [
     "WorkloadSpec",
     "SubmissionPlan",
     "compute_submission_plan",
+    "build_wave_map",
+    # Remote
+    "run_combiner",
 ]
 
 from pathlib import Path
 
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from hpc_mapreduce.infra.gpu import pick_gpu
-from hpc_mapreduce.infra.remote import deploy_runtime, rsync_pull, rsync_push, ssh_run
+from hpc_mapreduce.infra.remote import deploy_runtime, rsync_pull, rsync_push, run_combiner, ssh_run
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 from hpc_mapreduce.job.grid import (
+    attach_wave_map,
     build_task_manifest,
     expand_backtest,
     expand_grid,
@@ -54,9 +60,10 @@ from hpc_mapreduce.job.grid import (
 from hpc_mapreduce.job.throughput import (
     SubmissionPlan,
     WorkloadSpec,
+    build_wave_map,
     compute_submission_plan,
 )
-from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics
+from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics, reduce_partials
 from hpc_mapreduce.reduce.status import (
     check_results,
     detect_scheduler,

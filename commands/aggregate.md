@@ -32,6 +32,32 @@ $ARGUMENTS formats:
 1. **Profile + stage**: `<profile_name>` or `<profile_name>/<stage_name>`
 2. **Empty**: auto-discover which profiles/stages have completed results ready for aggregation
 
+## Step 0: Check for Combiner Partials (Fast Path)
+
+If the `/monitor` command ran combiners during job execution, per-wave partial aggregates may already exist on the cluster in the `_combiner/` directory.
+
+Check for combiner output:
+```bash
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_combiner/wave_*.json 2>/dev/null | wc -l'
+```
+
+Read `_hpc_dispatch.json` to determine how many waves were in the submission plan (from the `wave_map` field).
+
+**If all waves have combiner output:**
+1. Pull only the combiner partials (small files):
+   ```bash
+   rsync -az $SSH_TARGET:$REMOTE_PATH/_combiner/ ./_combiner/
+   ```
+2. Use `reduce_partials("_combiner/")` to merge per-wave aggregates into final metrics
+3. Report results and skip to Step 6 (Interpret Results)
+
+**If combiner output is missing or incomplete:**
+- Optionally run missing combiners on-demand:
+  ```bash
+  ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && HPC_WAVE=<N> HPC_MANIFEST=_hpc_dispatch.json python3 _hpc_combiner.py'
+  ```
+- Or fall through to the standard aggregation flow below
+
 ## Step 1: Identify What to Aggregate
 
 Read `_hpc_dispatch.json` to understand the submission structure:
