@@ -24,7 +24,7 @@ class TestDispatchAtomicOutput:
         result_dir = str(tmp_path / "results")
         manifest_path = self._write_manifest(tmp_path, {
             "1": {
-                "cmd": 'echo hello > "$RESULT_DIR/results_chunk_1.csv"',
+                "cmd": 'echo hello > "$RESULT_DIR/results_task_1.csv"',
                 "result_dir": result_dir,
             },
         })
@@ -38,8 +38,8 @@ class TestDispatchAtomicOutput:
         assert exc_info.value.code == 0
 
         # Output file should be promoted to the final result dir
-        assert (Path(result_dir) / "results_chunk_1.csv").exists()
-        assert (Path(result_dir) / "results_chunk_1.csv").read_text().strip() == "hello"
+        assert (Path(result_dir) / "results_task_1.csv").exists()
+        assert (Path(result_dir) / "results_task_1.csv").read_text().strip() == "hello"
 
         # WIP directory should be cleaned up
         assert not (Path(result_dir) / "_wip_1").exists()
@@ -73,8 +73,8 @@ class TestDispatchAtomicOutput:
     def test_multiple_files_promoted(self, tmp_path, monkeypatch):
         result_dir = str(tmp_path / "results")
         cmd = (
-            'echo "a,b" > "$RESULT_DIR/results_chunk_1.csv" && '
-            'echo "x,y" > "$RESULT_DIR/results_chunk_2.csv"'
+            'echo "a,b" > "$RESULT_DIR/results_task_1.csv" && '
+            'echo "x,y" > "$RESULT_DIR/results_task_2.csv"'
         )
         manifest_path = self._write_manifest(tmp_path, {
             "5": {
@@ -92,10 +92,10 @@ class TestDispatchAtomicOutput:
         assert exc_info.value.code == 0
 
         # Both files should be in the final result dir
-        assert (Path(result_dir) / "results_chunk_1.csv").exists()
-        assert (Path(result_dir) / "results_chunk_2.csv").exists()
-        assert (Path(result_dir) / "results_chunk_1.csv").read_text().strip() == "a,b"
-        assert (Path(result_dir) / "results_chunk_2.csv").read_text().strip() == "x,y"
+        assert (Path(result_dir) / "results_task_1.csv").exists()
+        assert (Path(result_dir) / "results_task_2.csv").exists()
+        assert (Path(result_dir) / "results_task_1.csv").read_text().strip() == "a,b"
+        assert (Path(result_dir) / "results_task_2.csv").read_text().strip() == "x,y"
 
         # WIP directory should be cleaned up
         assert not (Path(result_dir) / "_wip_5").exists()
