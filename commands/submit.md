@@ -9,12 +9,12 @@ Read cluster definitions:
 
 Check for existing context (in priority order):
 
-1. **Previous submission**: If `_hpc_dispatch.json` exists locally, read it. Offer: "Previous submission: [summary of grid, chunks, cluster]. Resubmit same, modify, or start fresh?"
+1. **Previous submission**: If `_hpc_dispatch.json` exists locally, read it. Offer: "Previous submission: [summary of grid, tasks, cluster]. Resubmit same, modify, or start fresh?"
    - **Resubmit same** → skip to Step 5 (sync + submit)
    - **Modify** → pre-populate from dispatch manifest, go to Step 3 (adjust grid/config)
    - **Start fresh** → continue to Step 1
 
-2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `grid`, `chunking`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation.
+2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `grid`, `backtest`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation.
 
 3. **Neither exists**: Continue to Step 1 (full discovery).
 
@@ -39,17 +39,16 @@ Read all `.py` files in that directory. Classify each:
 
 For each executor, run `python3 <script> --help` to map its CLI interface. Parse:
 - Grid-able parameters (model hyperparams, feature types, etc.)
-- Chunking arguments (`--chunk-id`, `--total-chunks`)
-- Data arguments (`--data-path`, `--horizon`)
+- Data arguments (`--data-path`, `--horizon`, `--start`, `--end`)
 - Output arguments (`--output-file`)
 
 Present the inventory:
 
 ```
 Executors found in src/:
-  ml_ridge.py     — args: --horizon, --data-path, --train-window, --chunk-id, --total-chunks, --output-file
-  ml_xgboost.py   — args: --horizon, --data-path, --train-window, --chunk-id, --total-chunks, --output-file
-  dl_patchts.py   — args: --horizon, --data-path, --gpu-count, --chunk-id, --total-chunks, --output-file
+  ml_ridge.py     — args: --horizon, --data-path, --train-window, --start, --end, --output-file
+  ml_xgboost.py   — args: --horizon, --data-path, --train-window, --start, --end, --output-file
+  dl_patchts.py   — args: --horizon, --data-path, --gpu-count, --start, --end, --output-file
 
 Which do you want to run?
 ```
@@ -67,7 +66,7 @@ Parse `$ARGUMENTS` or the user's natural language request:
 
 For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Build a dispatch manifest per job.
 
-## Step 3: Build Grid and Chunking
+## Step 3: Build Grid
 
 From executor CLI args and user intent, propose grid dimensions:
 
@@ -77,18 +76,17 @@ Running ml_ridge.py and ml_xgboost.py.
 Grid parameters (from CLI --help):
   horizon: [1]
 
-Chunking: 100 chunks per grid point
-  (detected --chunk-id/--total-chunks support)
+Backtest: 2020-01-01 to 2024-12-31 (6M periods) → 10 periods
 
 Per executor:
-  ml_ridge.py:    1 grid point × 100 chunks = 100 tasks
-  ml_xgboost.py:  1 grid point × 100 chunks = 100 tasks
-  Total: 200 tasks
+  ml_ridge.py:    1 grid point × 10 periods = 10 tasks
+  ml_xgboost.py:  1 grid point × 10 periods = 10 tasks
+  Total: 20 tasks
 
-Adjust grid, chunking, or confirm?
+Adjust grid, backtest, or confirm?
 ```
 
-The user can add dimensions: "also sweep horizon=[1, 5, 25]" → grid becomes 3 points × 100 chunks = 300 per executor.
+The user can add dimensions: "also sweep horizon=[1, 5, 25]" → grid becomes 3 points × 10 periods = 30 per executor.
 
 When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in --help), flag it: "ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"
 
@@ -138,6 +136,27 @@ Build exclude list from:
 2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`
 3. Result directories (e.g., `results/`)
 
+## Step 4b: Compute Throughput Plan
+
+After grid expansion produces total_tasks, compute an optimized submission plan:
+
+1. **Load constraints**: `from hpc_mapreduce import ClusterConstraints, parse_constraints` — read constraints from `clusters.yaml` for the selected cluster, then overlay any per-profile constraints from `hpc.yaml` (profile-level fields override cluster-level fields).
+
+2. **Build workload**: `from hpc_mapreduce.job.throughput import WorkloadSpec, compute_submission_plan` — construct a `WorkloadSpec` using `total_tasks` from grid expansion, plus `est_task_duration` if configured in the profile.
+
+3. **Compute plan**: Call `compute_submission_plan(constraints, workload)` to get a `SubmissionPlan` with batched waves.
+
+4. **Display the plan** in the confirmation prompt (Step 5), e.g.:
+
+```
+Throughput Plan:
+  Strategy:   4 batches (88 tasks each), 2 concurrent, 2 waves, ~30m est.
+  Wave 1:     tasks 1-88, 89-176  (submit immediately)
+  Wave 2:     tasks 177-264, 265-350  (after wave 1)
+```
+
+If constraints are not configured for the cluster or profile, skip this step and submit as a single array (existing behavior).
+
 ## Step 5: Confirm Run Plan
 
 Present the full submission plan:
@@ -153,18 +172,20 @@ Present the full submission plan:
   Job 1: ml_ridge
     Executor:   python3 src/ml_ridge.py
     Grid:       horizon=[1] → 1 grid point
-    Chunks:     100 per point → 100 tasks
+    Backtest:   2020-01-01 to 2024-12-31 (6M) → 10 periods
+    Tasks:      1 × 10 = 10
     Resources:  1 CPU, 16G, 4:00:00
     Env:        modules=python/3.11.9
 
   Job 2: ml_xgboost
     Executor:   python3 src/ml_xgboost.py
     Grid:       horizon=[1] → 1 grid point
-    Chunks:     100 per point → 100 tasks
+    Backtest:   2020-01-01 to 2024-12-31 (6M) → 10 periods
+    Tasks:      1 × 10 = 10
     Resources:  1 CPU, 16G, 4:00:00
     Env:        modules=python/3.11.9
 
-  Total tasks: 200
+  Total tasks: 20
 
 ═══════════════════════════════════════════════
 
@@ -190,19 +211,16 @@ rsync -az --delete \
     . $SSH_TARGET:$REMOTE_PATH/
 ```
 
-Deploy the `hpc_mapreduce` runtime package so `from hpc_mapreduce.map.context import map_context` works on the cluster. Resolve `claude-hpc` root via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT)'`, then:
-
-```bash
-ssh $SSH_TARGET 'mkdir -p '"$REMOTE_PATH"'/hpc_mapreduce/map && touch '"$REMOTE_PATH"'/hpc_mapreduce/__init__.py && touch '"$REMOTE_PATH"'/hpc_mapreduce/map/__init__.py'
-scp $HPC_ROOT/hpc_mapreduce/map/context.py $SSH_TARGET:$REMOTE_PATH/hpc_mapreduce/map/context.py
-```
-
 Verify deployment:
 ```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_hpc_dispatch.json '"$REMOTE_PATH"'/_hpc_dispatch.py '"$REMOTE_PATH"'/hpc_mapreduce/map/context.py'
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_hpc_dispatch.json '"$REMOTE_PATH"'/_hpc_dispatch.py'
 ```
 
 ## Step 8: Submit
+
+If a throughput plan was computed in Step 4b, use `backend.submit_plan(plan, ...)` instead of `backend.submit_array(...)`. The plan-based submission handles batching tasks into arrays, grouping arrays into waves, and setting up scheduler dependencies between waves (SLURM `--dependency=afterany:...`, SGE `-hold_jid ...`).
+
+If no plan is available (constraints not configured), fall back to the standard single-array submission below.
 
 Determine template from resources (GPU present → `gpu_array`, else `cpu_array`).
 
@@ -213,18 +231,18 @@ Build env vars:
 - `MODULES=<detected modules>`
 - `CONDA_SOURCE=<cluster.conda_source>` (if conda env needed)
 - `CONDA_ENV=<detected/selected conda_env>` (if needed)
-- `TOTAL_CHUNKS=<total_tasks>`
+- `TOTAL_TASKS=<total_tasks>`
 
 ### SGE Submission
 
 ```bash
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && qsub \
-    -t 1-<total_chunks> \
+    -t 1-<total_tasks> \
     -N <job_name> \
     -o logs -j y \
     -l <resource_key>=<resource_val> \
     ... \
-    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,TOTAL_CHUNKS=... \
+    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,TOTAL_TASKS=... \
     <template_path>'
 ```
 
@@ -234,12 +252,12 @@ For GPU jobs: `-l gpu,<gpu_type>,cuda=<count>`.
 
 ```bash
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch \
-    --array=1-<total_chunks> \
+    --array=1-<total_tasks> \
     --job-name=<job_name> \
     --output=logs/%x_%A_%a.out \
     --error=logs/%x_%A_%a.err \
     --mem=<mem> --time=<walltime> --cpus-per-task=<cpus> \
-    --export=CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,TOTAL_CHUNKS=... \
+    --export=CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,TOTAL_TASKS=... \
     <template_path>'
 ```
 
@@ -251,7 +269,7 @@ For GPU jobs: `--gres=gpu:<count>` and appropriate partition.
 Save to Claude Code memory for this project:
 - Executor directory, cluster, remote_path
 - Environment: modules, conda_env per executor type (CPU/GPU)
-- Default resources, chunking config
+- Default resources, backtest config
 
 ### Report
 After submission:

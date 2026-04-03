@@ -24,12 +24,12 @@ class TestDispatchAtomicOutput:
         result_dir = str(tmp_path / "results")
         manifest_path = self._write_manifest(tmp_path, {
             "1": {
-                "cmd": 'echo hello > "$RESULT_DIR/results_chunk_1.csv"',
+                "cmd": 'echo hello > "$RESULT_DIR/results_task_1.csv"',
                 "result_dir": result_dir,
             },
         })
 
-        monkeypatch.setenv("CHUNK_ID", "1")
+        monkeypatch.setenv("TASK_ID", "1")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
 
         with pytest.raises(SystemExit) as exc_info:
@@ -38,8 +38,8 @@ class TestDispatchAtomicOutput:
         assert exc_info.value.code == 0
 
         # Output file should be promoted to the final result dir
-        assert (Path(result_dir) / "results_chunk_1.csv").exists()
-        assert (Path(result_dir) / "results_chunk_1.csv").read_text().strip() == "hello"
+        assert (Path(result_dir) / "results_task_1.csv").exists()
+        assert (Path(result_dir) / "results_task_1.csv").read_text().strip() == "hello"
 
         # WIP directory should be cleaned up
         assert not (Path(result_dir) / "_wip_1").exists()
@@ -53,7 +53,7 @@ class TestDispatchAtomicOutput:
             },
         })
 
-        monkeypatch.setenv("CHUNK_ID", "0")
+        monkeypatch.setenv("TASK_ID", "0")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
 
         with pytest.raises(SystemExit) as exc_info:
@@ -73,8 +73,8 @@ class TestDispatchAtomicOutput:
     def test_multiple_files_promoted(self, tmp_path, monkeypatch):
         result_dir = str(tmp_path / "results")
         cmd = (
-            'echo "a,b" > "$RESULT_DIR/results_chunk_1.csv" && '
-            'echo "x,y" > "$RESULT_DIR/results_chunk_2.csv"'
+            'echo "a,b" > "$RESULT_DIR/results_task_1.csv" && '
+            'echo "x,y" > "$RESULT_DIR/results_task_2.csv"'
         )
         manifest_path = self._write_manifest(tmp_path, {
             "5": {
@@ -83,7 +83,7 @@ class TestDispatchAtomicOutput:
             },
         })
 
-        monkeypatch.setenv("CHUNK_ID", "5")
+        monkeypatch.setenv("TASK_ID", "5")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
 
         with pytest.raises(SystemExit) as exc_info:
@@ -92,10 +92,10 @@ class TestDispatchAtomicOutput:
         assert exc_info.value.code == 0
 
         # Both files should be in the final result dir
-        assert (Path(result_dir) / "results_chunk_1.csv").exists()
-        assert (Path(result_dir) / "results_chunk_2.csv").exists()
-        assert (Path(result_dir) / "results_chunk_1.csv").read_text().strip() == "a,b"
-        assert (Path(result_dir) / "results_chunk_2.csv").read_text().strip() == "x,y"
+        assert (Path(result_dir) / "results_task_1.csv").exists()
+        assert (Path(result_dir) / "results_task_2.csv").exists()
+        assert (Path(result_dir) / "results_task_1.csv").read_text().strip() == "a,b"
+        assert (Path(result_dir) / "results_task_2.csv").read_text().strip() == "x,y"
 
         # WIP directory should be cleaned up
         assert not (Path(result_dir) / "_wip_5").exists()
@@ -107,18 +107,18 @@ class TestCheckResultsIgnoresWip:
         result_dir.mkdir()
 
         # Write a valid CSV in the result dir (header + 1 data row)
-        valid_csv = result_dir / "results_chunk_1.csv"
+        valid_csv = result_dir / "results_task_1.csv"
         valid_csv.write_text("col_a,col_b\n1,2\n")
 
         # Create a _wip_0 subdir with another CSV that should be ignored
         wip_dir = result_dir / "_wip_0"
         wip_dir.mkdir()
-        wip_csv = wip_dir / "results_chunk_2.csv"
+        wip_csv = wip_dir / "results_task_2.csv"
         wip_csv.write_text("col_a,col_b\n3,4\n")
 
-        results = check_results(result_dir, total_chunks=2)
+        results = check_results(result_dir, total_tasks=2)
 
-        # Only chunk 1 should be found; chunk 2 in _wip_ should be skipped
+        # Only task 1 should be found; task 2 in _wip_ should be skipped
         assert 1 in results
         assert 2 not in results
         assert len(results) == 1

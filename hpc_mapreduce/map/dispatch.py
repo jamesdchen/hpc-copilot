@@ -32,20 +32,20 @@ def main() -> None:
         sys.exit(1)
 
     # --- Resolve task ---
-    chunk_id = os.environ.get("CHUNK_ID")
-    if chunk_id is None:
-        print("[dispatch] ERROR: CHUNK_ID env var not set", file=sys.stderr)
+    task_id = os.environ.get("TASK_ID")
+    if task_id is None:
+        print("[dispatch] ERROR: TASK_ID env var not set", file=sys.stderr)
         sys.exit(1)
 
     tasks = manifest.get("tasks", {})
-    task = tasks.get(chunk_id)
+    task = tasks.get(task_id)
     if task is None:
         valid = sorted(tasks.keys(), key=int)
         print(
-            f"[dispatch] ERROR: task_id={chunk_id} not in manifest "
+            f"[dispatch] ERROR: task_id={task_id} not in manifest "
             f"(valid range: {valid[0]}–{valid[-1]})"
             if valid
-            else f"[dispatch] ERROR: task_id={chunk_id} not in manifest (no tasks found)",
+            else f"[dispatch] ERROR: task_id={task_id} not in manifest (no tasks found)",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -59,11 +59,11 @@ def main() -> None:
     # crashes mid-write, partial output stays in _wip_ and never pollutes
     # the final result directory.
     os.makedirs(result_dir, exist_ok=True)
-    wip_dir = os.path.join(result_dir, f"_wip_{chunk_id}")
+    wip_dir = os.path.join(result_dir, f"_wip_{task_id}")
     os.makedirs(wip_dir, exist_ok=True)
     os.environ["RESULT_DIR"] = wip_dir
 
-    print(f"[dispatch] task_id={chunk_id} cmd={cmd} result_dir={result_dir}")
+    print(f"[dispatch] task_id={task_id} cmd={cmd} result_dir={result_dir}")
 
     result = subprocess.run(cmd, shell=True, env=os.environ)
 

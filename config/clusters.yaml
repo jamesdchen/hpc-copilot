@@ -7,6 +7,11 @@ hoffman2:
   conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh
   conda_envs: [harxhar-dl]
   gpu_types: [a100, h200, a6000, h100, v100, rtx2080ti]
+  constraints:
+    max_array_size: 100
+    max_walltime: "2:00:00"
+    max_concurrent_jobs: 2
+    est_spin_up: "5m"
 
 discovery:
   host: discovery2.usc.edu
@@ -19,3 +24,8 @@ discovery:
   conda_envs: [project-cucuringu]
   gpu_types: [a100, a40, v100, l40s]
   gpu_constraint: "a100|a40|v100|l40s"
+  constraints:
+    max_array_size: 100
+    max_walltime: "2:00:00"
+    max_concurrent_jobs: 2
+    est_spin_up: "5m"

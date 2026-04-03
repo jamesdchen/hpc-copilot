@@ -37,7 +37,8 @@ Top-level `project`, `cluster`, `remote_path`, `rsync_exclude` are shared across
 | `env` | map | no | Environment setup (modules, conda_env) |
 | `env_group` | string | no | Key into `cluster_envs[cluster]` for env overrides |
 | `results` | map | no | Result collection config |
-| `chunking` | map | no | Data chunking within each grid point |
+| `backtest` | map | no | Time-based parallelism (date range split into periods) |
+| `constraints` | map | no | Cluster constraints for throughput optimization |
 | `gpu_fallback` | list[str] | no | Ordered GPU types to try |
 | `max_retries` | int | no | Max auto-resubmissions on failure |
 
@@ -53,7 +54,7 @@ Stages without `grid` run as single jobs. Stages with `grid` get fan-out (parall
 
 ## grid
 
-Map of parameter_name → list of values. Cartesian product = one task per combo (or N tasks if chunking).
+Map of parameter_name → list of values. Cartesian product = one task per combo (or multiplied by backtest periods if configured).
 
 ## env
 
@@ -83,17 +84,37 @@ If `gpus` is present, the `gpu_array` template is used; otherwise `cpu_array`.
 | `aggregate_cmd` | string | no | Fan-in command after all tasks complete |
 | `summary_pattern` | string | no | Glob for summary files to download after aggregation |
 
-## chunking
+## backtest
 
-Splits each grid point into N data chunks for additional parallelism.
+Optional time-based parallelism. Splits a date range into periods
+that become additional grid parameters (paired, not cross-producted).
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `total` | int | yes | Chunks per grid point |
-| `chunk_arg` | string | no | CLI flag for chunk index (default: `"--chunk-id"`) |
-| `total_arg` | string | no | CLI flag for total chunks (default: `"--total-chunks"`) |
+| `start` | string | yes | Start date (YYYY-MM-DD) |
+| `end` | string | yes | End date (YYYY-MM-DD) |
+| `chunk_duration` | string | yes | Duration per period (e.g. "6M", "1Y", "30D") |
+| `start_arg` | string | no | CLI flag for period start (default: `"--start"`) |
+| `end_arg` | string | no | CLI flag for period end (default: `"--end"`) |
 
-Total HPC tasks = grid_points × `total`.
+Total HPC tasks = grid_points × time_periods.
+
+## constraints
+
+Declared cluster constraints for throughput optimization. Constraints can be defined in two places:
+
+- **`clusters.yaml`** (cluster-level): applies to all jobs on that cluster
+- **`hpc.yaml` profiles** (profile-level): per-experiment overrides
+
+Profile-level constraints override cluster-level constraints **field-by-field** — any field set in the profile takes precedence, while unset fields fall back to the cluster default.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `max_array_size` | int | no | Max tasks per job array (default: 1000) |
+| `max_walltime` | string | no | Max wall time per job HH:MM:SS (default: "24:00:00") |
+| `max_concurrent_jobs` | int | no | Max jobs running simultaneously (default: 10) |
+| `est_spin_up` | string | no | Estimated spin-up overhead (e.g. "5m", default: "5m") |
+| `est_task_duration` | string | no | Estimated duration per task (e.g. "10m", "1h30m"). Profile-level only. Used by the throughput optimizer to estimate total wall-clock time and plan wave scheduling. |
 
 ## cluster_envs
 
@@ -118,7 +139,7 @@ cluster_envs:
 5. The job template runs `python3 _hpc_dispatch.py` as its executor
 6. The dispatch script reads the manifest and executes the command for its task ID
 
-The experiment author's code receives grid params as normal CLI args — no awareness of HPC, chunking, or task IDs required (unless using `chunking`).
+The experiment author's code receives all params as normal CLI args — no awareness of HPC or task IDs required.
 
 ---
 
@@ -170,7 +191,7 @@ profiles:
       generate:
         depends_on: train
         run: "python scripts/generate.py --checkpoint checkpoints/best.pt"
-        chunking: { total: 10 }
+        backtest: { start: "2020-01-01", end: "2024-12-31", chunk_duration: "6M" }
         env_group: dl
         resources: { cpus: 8, mem: "64G", walltime: "0:30:00", gpus: 1, gpu_type: a100 }
         results:

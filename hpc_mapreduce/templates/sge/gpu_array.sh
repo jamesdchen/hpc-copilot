@@ -12,7 +12,6 @@ set -e
 #   $MODULES       — space-separated modules to load (e.g. "conda cuda/12.3")
 #   $EXECUTOR      — python command to run (e.g. "python3 -m myproject.cli.gpu_run")
 #   $RESULT_DIR    — output directory for results
-#   $TOTAL_CHUNKS  — total number of array tasks
 #   $REPO_DIR      — repository root to cd into
 #   $GPU_COUNT     — number of GPUs per task (default: 2)
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
@@ -31,13 +30,12 @@ set -e
 #$ -pe shared 8
 
 # --- Defaults ---
-TOTAL_CHUNKS="${TOTAL_CHUNKS:-1}"
 GPU_COUNT="${GPU_COUNT:-2}"
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
-# Convert 1-based SGE_TASK_ID to 0-based chunk ID
-CHUNK_ID=$((SGE_TASK_ID - 1))
+# Convert 1-based SGE_TASK_ID to 0-based task ID
+TASK_ID=$((SGE_TASK_ID - 1))
 
 # --- Diagnostics ---
 echo "============================================"
@@ -45,7 +43,7 @@ echo "Job ID:       $JOB_ID"
 echo "Array Task:   $SGE_TASK_ID"
 echo "Hostname:     $(hostname)"
 echo "GPUs:         $GPU_COUNT"
-echo "Chunk:        $CHUNK_ID / $TOTAL_CHUNKS"
+echo "Task:         $TASK_ID"
 echo "============================================"
 
 # --- Module Setup ---
@@ -92,7 +90,7 @@ echo "Executor:     $EXECUTOR"
 echo "============================================"
 
 # --- Execute ---
-export CHUNK_ID TOTAL_CHUNKS RESULT_DIR GPU_COUNT
+export TASK_ID RESULT_DIR GPU_COUNT
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."

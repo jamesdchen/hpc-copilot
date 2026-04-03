@@ -21,7 +21,19 @@ class SlurmBackend(HPCBackend):
         self.cluster = cluster or os.environ.get("SLURM_CLUSTER", "")
         self.log_dir = log_dir or os.environ.get("SLURM_LOG_DIR", "logs")
 
-    def _build_command(self, task_range: str, job_name: str, job_env: dict[str, str]) -> list[str]:
+    def _build_dependency_flag(self, job_ids: list[str]) -> list[str]:
+        if not job_ids:
+            return []
+        return ["--dependency", f"afterany:{':'.join(job_ids)}"]
+
+    def _build_command(
+        self,
+        task_range: str,
+        job_name: str,
+        job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
+    ) -> list[str]:
         cmd = [
             "sbatch",
         ]
@@ -44,5 +56,7 @@ class SlurmBackend(HPCBackend):
         if job_env:
             export_str = ",".join(f"{k}={v}" for k, v in job_env.items())
             cmd += ["--export", f"ALL,{export_str}"]
+        if extra_flags:
+            cmd += extra_flags
         cmd.append(self.script)
         return cmd

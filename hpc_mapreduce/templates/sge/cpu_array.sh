@@ -12,7 +12,6 @@ set -e
 #   $MODULES       — space-separated modules to load (e.g. "python gcc")
 #   $EXECUTOR      — python command to run (e.g. "python3 -m myproject.cli.run")
 #   $RESULT_DIR    — output directory for results
-#   $TOTAL_CHUNKS  — total number of array tasks
 #   $REPO_DIR      — repository root to cd into
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
 #
@@ -33,7 +32,6 @@ echo "Hostname:     $(hostname)"
 echo "============================================"
 
 # --- Defaults ---
-TOTAL_CHUNKS="${TOTAL_CHUNKS:-1}"
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
@@ -63,16 +61,16 @@ cd "$REPO_DIR"
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"
 
-# Convert 1-based SGE_TASK_ID to 0-based chunk ID
-CHUNK_ID=$((SGE_TASK_ID - 1))
+# Convert 1-based SGE_TASK_ID to 0-based task ID
+TASK_ID=$((SGE_TASK_ID - 1))
 
-echo "Chunk:        $CHUNK_ID / $TOTAL_CHUNKS"
+echo "Task:         $TASK_ID"
 echo "Result dir:   $RESULT_DIR"
 echo "Executor:     $EXECUTOR"
 echo "============================================"
 
 # --- Execute ---
-export CHUNK_ID TOTAL_CHUNKS RESULT_DIR
+export TASK_ID RESULT_DIR
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."

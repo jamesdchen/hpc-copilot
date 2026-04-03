@@ -13,7 +13,7 @@ Determine cluster and connection:
 
 Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
 
-Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories. Each task ID maps to a grid point and optional chunk: `grid_point = task_id // chunks_per_point`, `chunk = task_id % chunks_per_point`.
+Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories. Each task ID maps to a grid point with its full command and result directory.
 
 ## SSH Quoting
 
@@ -56,22 +56,22 @@ $ARGUMENTS formats (pick one):
 
 Run the appropriate scheduler query (qstat for SGE, sacct for SLURM) and count completed results per grid point.
 
-Use `_hpc_dispatch.json` to determine result directories per grid point — each task entry has a `result_dir` field. Count result files (default pattern `results_chunk_*.csv`, or discover by listing what exists in the result dirs):
+Use `_hpc_dispatch.json` to determine result directories per grid point -- each task entry has a `result_dir` field. Count result files by listing what exists in the result dirs:
 
 ```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<result_dir>/results_chunk_*.csv 2>/dev/null | wc -l'
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<result_dir>/ 2>/dev/null | wc -l'
 ```
 
-Map each task ID back to its grid point and chunk. Report completion per grid point:
+Map each task ID back to its grid point. Report completion per grid point:
 
 ```
 Grid point status:
-  ridge_har:      98/100 chunks complete
-  ridge_pca:      100/100 chunks complete ✓
-  xgboost_har:    45/100 chunks complete, 2 failed
-  xgboost_pca:    0/100 chunks (all pending)
+  ridge_h1_2020-01:   complete
+  ridge_h1_2020-07:   complete
+  ridge_h5_2020-01:   running
+  xgboost_h1_2020-01: failed
 
-Overall: 243/400 tasks complete, 155 running, 2 failed
+Overall: 3/6 tasks complete, 2 running, 1 failed
 ```
 
 Parse results to determine state:
@@ -86,32 +86,6 @@ Parse results to determine state:
 ### Step 1b: Detect Queue Stalls
 
 **Stall heuristic**: If ALL tasks have been pending for >15 minutes with zero running, or if the state is unchanged across 2 consecutive checks, treat as a stall. Go to Step 2 with category `queue_stall`.
-
-### Step 1c: Check Map-Side Counters
-
-Check whether running tasks have written counter files to the results directory:
-
-```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<results.dir>/_counters_*.json 2>/dev/null | wc -l'
-```
-
-If counter files exist, read them to estimate real progress:
-
-```bash
-ssh $SSH_TARGET 'cat '"$REMOTE_PATH"'/<results.dir>/_counters_*.json 2>/dev/null'
-```
-
-Parse the JSON and report per-grid-point progress using the counters:
-
-```
-Map progress (from counters):
-  ridge_har:      rows_processed: 450,000/500,000 (90%) across 98 reporting chunks
-  ridge_pca:      rows_processed: 500,000/500,000 (100%) across 100 reporting chunks
-  xgboost_har:    rows_processed: 180,000/500,000 (36%) across 45 reporting chunks
-  xgboost_pca:    no counters yet (all pending)
-```
-
-Counter-based progress provides finer granularity than chunk completion alone. When counters are available, use them for more accurate ETA calculations in Step 5 (adaptive wait interval).
 
 ## Step 2: Diagnose Failures
 
