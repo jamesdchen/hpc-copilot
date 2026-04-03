@@ -24,6 +24,7 @@ __all__ = [
     "pick_gpu",
     # Reduce
     "reduce_metrics",
+    "reduce_backtest",
     # Grid API
     "expand_grid",
     "expand_backtest",
@@ -55,7 +56,7 @@ from hpc_mapreduce.job.throughput import (
     WorkloadSpec,
     compute_submission_plan,
 )
-from hpc_mapreduce.reduce.metrics import reduce_metrics
+from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics
 from hpc_mapreduce.reduce.status import (
     check_results,
     detect_scheduler,
