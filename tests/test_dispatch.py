@@ -1,4 +1,4 @@
-"""Tests for hpc.dispatch atomic output pattern."""
+"""Tests for hpc_mapreduce.map.dispatch atomic output pattern."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from hpc import dispatch
-from hpc.status import check_results
+from hpc_mapreduce.map import dispatch
+from hpc_mapreduce.reduce.status import check_results
 
 
 class TestDispatchAtomicOutput:

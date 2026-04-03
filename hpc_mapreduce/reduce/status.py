@@ -4,7 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "check_results",
-    "aggregate_counters",
+    "reduce_counters",
     "report_status",
     "get_err_log_paths",
     "detect_scheduler",
@@ -42,17 +42,7 @@ def check_results(
     chunk_pattern: re.Pattern | None = None,
     validate: bool = True,
 ) -> dict[int, dict]:
-    """Scan *result_dir* for completed result files.
-
-    Parameters
-    ----------
-    result_dir : directory to scan
-    total_chunks : expected number of chunks (IDs 1..total_chunks)
-    file_glob : glob pattern for result files
-    chunk_pattern : regex with group(1) capturing the chunk ID integer.
-        Defaults to matching ``chunk_<N>.csv`` or ``results_chunk_<N>.csv``.
-    validate : if True and files are CSVs, check for header + >=1 data row
-    """
+    """Scan *result_dir* for completed result files."""
     import csv
 
     results: dict[int, dict] = {}
@@ -84,7 +74,7 @@ def check_results(
     return results
 
 
-def aggregate_counters(
+def reduce_counters(
     result_dir: str | Path,
     total_chunks: int,
 ) -> dict:
@@ -150,13 +140,7 @@ def aggregate_counters(
 
 
 def detect_scheduler(result_dir: str | Path | None = None) -> str:
-    """Auto-detect scheduler type.
-
-    Checks (in order):
-    1. experiment_meta.json in result_dir (if provided)
-    2. Probe for sacct (SLURM)
-    3. Fall back to "sge"
-    """
+    """Auto-detect scheduler type."""
     if result_dir is not None:
         meta_path = Path(result_dir) / "experiment_meta.json"
         if meta_path.exists():
@@ -191,23 +175,15 @@ def get_err_log_paths(
     job_name: str = "",
     scratch_dir: str = "",
 ) -> dict[int, str]:
-    """Find the most recent error log path on disk for each chunk.
-
-    Parameters
-    ----------
-    log_dir : directory for SLURM logs (e.g. /path/to/logs)
-    scratch_dir : directory for SGE logs (e.g. $SCRATCH)
-    """
+    """Find the most recent error log path on disk for each chunk."""
     paths: dict[int, str] = {}
     for tid in range(1, total_chunks + 1):
         for job_id in reversed(job_ids):
             if scheduler == "sge":
                 p = os.path.join(scratch_dir, f"{job_name}.o{job_id}.{tid}")
             else:
-                # Canonical: {job_name}_{job_id}_{tid}.err
                 p = os.path.join(log_dir, f"{job_name}_{job_id}_{tid}.err")
                 if not os.path.isfile(p):
-                    # Fallback: glob for any prefix matching this job+task
                     matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
                     if matches:
                         p = max(matches, key=os.path.getmtime)
@@ -241,20 +217,8 @@ def report_status(
     sge_user: str | None = None,
     include_counters: bool = False,
 ) -> dict:
-    """Assemble a full JSON status report.
-
-    Parameters
-    ----------
-    result_dir : directory containing result files
-    job_ids : scheduler job IDs to query
-    total_chunks : expected number of chunks
-    scheduler : "slurm" or "sge" (auto-detected if None)
-    file_glob, chunk_pattern : forwarded to check_results
-    log_dir, scratch_dir, job_name : forwarded to get_err_log_paths
-    slurm_cluster : --clusters flag for sacct
-    sge_user : user for qstat -u
-    """
-    from hpc.backends.query import query_sacct, query_sge
+    """Assemble a full JSON status report."""
+    from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
 
     csv_results = check_results(
         result_dir, total_chunks, file_glob=file_glob, chunk_pattern=chunk_pattern
@@ -297,7 +261,6 @@ def report_status(
             chunks[str(tid)] = {"status": "unknown"}
             summary["unknown"] += 1
 
-    # Error log paths for non-complete chunks
     failed_or_unknown = [tid for tid in range(1, total_chunks + 1) if tid not in complete_ids]
     all_err = (
         get_err_log_paths(
@@ -326,5 +289,5 @@ def report_status(
     if query_error:
         report["query_error"] = query_error
     if include_counters:
-        report["counters"] = aggregate_counters(result_dir, total_chunks)
+        report["counters"] = reduce_counters(result_dir, total_chunks)
     return report

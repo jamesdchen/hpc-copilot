@@ -4,13 +4,18 @@ Aggregation runs on the cluster to avoid transferring many chunk files. Only sum
 
 ## Setup
 
-Read both config files:
-- `hpc.yaml` in the current working directory
-- `clusters.yaml`: resolve path via `python -c 'from hpc._config import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+Read cluster definitions:
+- `clusters.yaml`: resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
-Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from the configs. If `$ARGUMENTS` contains `--cluster <name>`, use that cluster instead of `hpc.yaml`'s `cluster` field.
+Determine cluster and connection:
+- If `$ARGUMENTS` contains `--cluster <name>`, use that cluster
+- Else if `hpc.yaml` exists, read `cluster` field
+- Else check Claude Code memory for cached cluster preference
+- Else ask the user
 
-Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to understand the grid structure: task-to-grid-point mapping, result directories per grid point, and chunk counts.
+Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
+
+Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to understand the grid structure: task-to-grid-point mapping, result directories per grid point, and chunk counts. This is the **primary source of truth** for what was submitted.
 
 ## SSH Quoting
 
@@ -27,20 +32,22 @@ $ARGUMENTS formats:
 1. **Profile + stage**: `<profile_name>` or `<profile_name>/<stage_name>`
 2. **Empty**: auto-discover which profiles/stages have completed results ready for aggregation
 
-## Step 1: Select Profile and Stage
+## Step 1: Identify What to Aggregate
 
-List the profiles defined in `hpc.yaml`:
+Read `_hpc_dispatch.json` to understand the submission structure:
 
-| Profile | Stages | Grid Dimensions | Total Tasks |
-|---------|--------|-----------------|-------------|
+```
+Submission summary (from dispatch manifest):
+  Grid keys: [executor, horizon]
+  Grid points: 6
+  Chunks per point: 100
+  Total tasks: 600
+  Result directories: results/ml_ridge_1/, results/ml_ridge_5/, ...
+```
 
-If `$ARGUMENTS` specifies a profile, use it. Otherwise, ask which profile to aggregate.
+If `$ARGUMENTS` specifies an executor or result directory, use it. Otherwise, present the grid structure from the dispatch manifest and ask what to aggregate.
 
-For profiles with multiple stages (`stages` key):
-- If `$ARGUMENTS` includes a stage name (e.g., `myprofile/train`), use that stage.
-- Otherwise, list the stages and their completion status. If only one stage has `results.aggregate_cmd`, select it automatically.
-
-For single-stage profiles (no `stages` key), proceed directly.
+If `hpc.yaml` exists and has `results.aggregate_cmd` for a matching profile, use it. Otherwise, discover aggregation scripts in the repo or ask the user what aggregation command to run.
 
 ## Step 2: Check Job Status
 
@@ -79,22 +86,25 @@ Chunk completeness:
 
 ## Step 4: Aggregate on Cluster
 
-Run `results.aggregate_cmd` from the selected profile/stage on the cluster. The command may operate per grid point (with `RESULT_DIR` set to each grid point's result directory) or globally if the command handles discovery itself.
+Determine the aggregation command:
+1. If `hpc.yaml` exists and defines `results.aggregate_cmd` for the relevant profile → use it
+2. Else look for aggregation scripts in the repo (e.g., `scripts/aggregate.py`, `src/evaluation.py`)
+3. Else ask the user: "What command should I run to aggregate results?"
+
+Run the aggregation command on the cluster. The command may operate per grid point (with `RESULT_DIR` set to each grid point's result directory) or globally if the command handles discovery itself.
 
 ```bash
 # Per grid point:
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && RESULT_DIR=<grid_point_result_dir> <results.aggregate_cmd>'
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && RESULT_DIR=<grid_point_result_dir> <aggregate_cmd>'
 
 # Or globally:
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <results.aggregate_cmd>'
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <aggregate_cmd>'
 ```
-
-If the profile/stage has no `results.aggregate_cmd` defined, report that and ask the user what to do.
 
 If the aggregate command's options are unclear, invoke it with `--help` to discover available flags:
 
 ```bash
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <results.aggregate_cmd> --help'
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <aggregate_cmd> --help'
 ```
 
 Verify the command succeeds (exit code 0). If it fails, read stderr and report to user.

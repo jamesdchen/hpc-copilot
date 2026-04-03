@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc.backends import HPCBackend, register
+from hpc_mapreduce.infra.backends import HPCBackend, register
 
 if TYPE_CHECKING:
     import subprocess

@@ -4,7 +4,7 @@
 This script is rsynced to the cluster and executed by the SGE job template.
 It reads a JSON manifest to determine which command to run for the current
 array task. It must remain zero-dependency — only Python stdlib, no imports
-from the ``hpc`` package.
+from the ``hpc_mapreduce`` package.
 """
 
 import json
@@ -74,8 +74,7 @@ def main() -> None:
         shutil.rmtree(wip_dir, ignore_errors=True)
     else:
         print(
-            f"[dispatch] FAILED (exit {result.returncode}), "
-            f"partial output preserved in {wip_dir}",
+            f"[dispatch] FAILED (exit {result.returncode}), partial output preserved in {wip_dir}",
             file=sys.stderr,
         )
 

@@ -2,7 +2,7 @@
 
 Usage (programmatic)::
 
-    from hpc.gpu import pick_gpu
+    from hpc_mapreduce.infra.gpu import pick_gpu
 
     # Static fallback — returns first available from preferred list
     gpu = pick_gpu(preferred=["A100", "H200", "A6000", "V100"])

@@ -2,13 +2,18 @@ Monitor running HPC jobs via SSH and take corrective action.
 
 ## Setup
 
-Read both config files:
-- `hpc.yaml` in the current working directory
-- `clusters.yaml`: resolve path via `python -c 'from hpc._config import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+Read cluster definitions:
+- `clusters.yaml`: resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
-Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from the configs. If `$ARGUMENTS` contains `--cluster <name>`, use that cluster instead of the top-level `cluster` field. If `$ARGUMENTS` contains `--profile <name>`, use that profile; otherwise infer from context or ask.
+Determine cluster and connection:
+- If `$ARGUMENTS` contains `--cluster <name>`, use that cluster
+- Else if `hpc.yaml` exists, read `cluster` field
+- Else check Claude Code memory for cached cluster preference
+- Else ask the user
 
-Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to load the task-to-grid-point mapping. Each task ID maps to a grid point and optional chunk: `grid_point = task_id // chunks_per_point`, `chunk = task_id % chunks_per_point`.
+Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
+
+Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories. Each task ID maps to a grid point and optional chunk: `grid_point = task_id // chunks_per_point`, `chunk = task_id % chunks_per_point`.
 
 ## SSH Quoting
 
@@ -37,26 +42,27 @@ Run `python -m <executor_module> --help` (extract the module from the profile's 
 
 $ARGUMENTS formats (pick one):
 
-1. **Profile + monitor** (no job-ids — checks active jobs for the profile):
-   `<profile_name>` or `<profile_name> --cluster <name>`
-   For multi-stage profiles: `<profile_name>.<stage_name>`
+1. **Job name + monitor** (no job-ids — checks active jobs by name):
+   `<job_name>` or `<job_name> --cluster <name>`
 
 2. **Monitor existing** (job-ids provided):
-   `<profile_name> <job_ids> [total_tasks]`
-   Example: `ml 12345678,12345679 1200`
+   `<job_name> <job_ids> [total_tasks]`
+   Example: `ml_ridge 12345678 100`
 
 3. **Auto-discover** (empty):
-   Check for active jobs belonging to the current project via queue status commands. Cross-reference with profile names from `hpc.yaml` to identify which profiles are running.
+   Check for active jobs belonging to the current project via queue status commands. Read `_hpc_dispatch.json` to identify which executors were submitted and their expected task counts.
 
 ## Step 1: Check Status
 
-Run the appropriate scheduler query (qstat for SGE, sacct for SLURM) and count completed results per grid point using `results.dir` and `results.pattern` from the profile:
+Run the appropriate scheduler query (qstat for SGE, sacct for SLURM) and count completed results per grid point.
+
+Use `_hpc_dispatch.json` to determine result directories per grid point — each task entry has a `result_dir` field. Count result files (default pattern `results_chunk_*.csv`, or discover by listing what exists in the result dirs):
 
 ```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<results.dir>/<results.pattern> 2>/dev/null | wc -l'
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<result_dir>/results_chunk_*.csv 2>/dev/null | wc -l'
 ```
 
-Use `_hpc_dispatch.json` to map each task ID back to its grid point and chunk. Report completion per grid point:
+Map each task ID back to its grid point and chunk. Report completion per grid point:
 
 ```
 Grid point status:

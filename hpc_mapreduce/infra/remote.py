@@ -5,7 +5,7 @@ executed from a local machine without paramiko or other dependencies.
 
 All functions require explicit ``host``, ``user``, and ``remote_path``
 parameters — there are no hardcoded defaults.  Callers obtain these
-values from ``clusters.yaml`` + ``project.yaml`` via :mod:`hpc._config`.
+values from ``clusters.yaml`` + ``hpc.yaml`` via :mod:`hpc_mapreduce.job.manifest`.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ DEFAULT_RSYNC_EXCLUDES: list[str] = [
     "*.pyc",
     ".mypy_cache/",
     ".claude/",
-    "hpc/",  # protect deployed runtime stubs from --delete
+    "hpc_mapreduce/",  # protect deployed runtime stubs from --delete
 ]
 
 
@@ -123,24 +123,27 @@ def deploy_runtime(
     user: str,
     remote_path: str,
 ) -> subprocess.CompletedProcess[str]:
-    """Deploy minimal ``hpc`` runtime package to the cluster.
+    """Deploy minimal ``hpc_mapreduce`` runtime package to the cluster.
 
-    Creates ``{remote_path}/hpc/`` with an empty ``__init__.py`` and a
-    copy of ``chunking.py`` so that ``from hpc.chunking import chunk_context``
-    works inside HPC jobs without installing the full claude-hpc package.
+    Creates ``{remote_path}/hpc_mapreduce/map/`` with ``__init__.py`` stubs
+    and a copy of ``context.py`` so that
+    ``from hpc_mapreduce.map.context import map_context`` works inside HPC
+    jobs without installing the full claude-hpc package.
 
     Must be called **after** :func:`rsync_push` (which uses ``--delete``).
     """
     target = _target(user, host)
 
     ssh_run(
-        f"mkdir -p {remote_path}/hpc && touch {remote_path}/hpc/__init__.py",
+        f"mkdir -p {remote_path}/hpc_mapreduce/map"
+        f" && touch {remote_path}/hpc_mapreduce/__init__.py"
+        f" && touch {remote_path}/hpc_mapreduce/map/__init__.py",
         host=host,
         user=user,
     )
 
-    src = str(Path(__file__).parent / "chunking.py")
-    dst = f"{target}:{remote_path}/hpc/chunking.py"
+    src = str(Path(__file__).parent.parent / "map" / "context.py")
+    dst = f"{target}:{remote_path}/hpc_mapreduce/map/context.py"
     return subprocess.run(
         ["scp", src, dst],
         capture_output=True,

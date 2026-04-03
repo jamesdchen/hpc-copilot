@@ -1,14 +1,22 @@
-Help me submit HPC jobs via SSH using the project configuration.
+Help me submit HPC jobs via SSH. Discovers experiment executors, builds submission plans conversationally, and handles all deployment.
 
 All cluster commands run remotely via SSH. Code is synced from the local machine before submission.
 
 ## Setup
 
-Read both config files:
-- `hpc.yaml` in the current working directory
-- `clusters.yaml`: resolve path via `python -c 'from hpc._config import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+Read cluster definitions:
+- `clusters.yaml`: resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
-Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from hpc.yaml + clusters.yaml. If `$ARGUMENTS` contains `--cluster <name>`, use that cluster instead of the default.
+Check for existing context (in priority order):
+
+1. **Previous submission**: If `_hpc_dispatch.json` exists locally, read it. Offer: "Previous submission: [summary of grid, chunks, cluster]. Resubmit same, modify, or start fresh?"
+   - **Resubmit same** → skip to Step 5 (sync + submit)
+   - **Modify** → pre-populate from dispatch manifest, go to Step 3 (adjust grid/config)
+   - **Start fresh** → continue to Step 1
+
+2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `grid`, `chunking`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation.
+
+3. **Neither exists**: Continue to Step 1 (full discovery).
 
 ## SSH Quoting
 
@@ -18,81 +26,193 @@ Single-quote the remote command so variables expand on the cluster, not locally:
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
 ```
 
-## Step 1: Load and Validate
+## Step 1: Discover Executors
 
-1. Read `hpc.yaml` and validate it
-2. If `.hpc/experiments.yaml` exists, read it for experiment context and registries
-3. **Profile selection**: if `profiles` key exists, list available profiles. Accept from `$ARGUMENTS` or ask which to run.
-4. **Stage selection**: if the selected profile has a `stages` key, list stages. Accept from `$ARGUMENTS` or ask which to submit. For single-stage profiles, the stage is implicit.
-5. When CLI argument details are needed, invoke the executor with `--help` directly rather than relying on cached data.
+Ask the user which directory contains their experiment executors. (Cache in Claude Code memory for this project after first ask.)
 
-## Step 2: Expand Grid and Show Run Plan
+Read all `.py` files in that directory. Classify each:
 
-Compute the Cartesian product of the selected stage's `grid` parameters. Display:
+| Category | Detection | Examples |
+|----------|-----------|---------|
+| **Executor** | Has `argparse` + `if __name__ == "__main__"` + does computation | `ml_ridge.py`, `dl_patchts.py` |
+| **Shared utility** | No `if __name__` block, only function/class defs | `loading.py`, `transforms.py` |
+
+For each executor, run `python3 <script> --help` to map its CLI interface. Parse:
+- Grid-able parameters (model hyperparams, feature types, etc.)
+- Chunking arguments (`--chunk-id`, `--total-chunks`)
+- Data arguments (`--data-path`, `--horizon`)
+- Output arguments (`--output-file`)
+
+Present the inventory:
 
 ```
-Profile: ml
-Grid: model=[ridge, xgboost] × features=[har, pca] × seed=[1, 2, 3]
-Grid points: 12
-Chunks per point: 100 (from chunking.total)
-Total HPC tasks: 1200
+Executors found in src/:
+  ml_ridge.py     — args: --horizon, --data-path, --train-window, --chunk-id, --total-chunks, --output-file
+  ml_xgboost.py   — args: --horizon, --data-path, --train-window, --chunk-id, --total-chunks, --output-file
+  dl_patchts.py   — args: --horizon, --data-path, --gpu-count, --chunk-id, --total-chunks, --output-file
 
-Sample commands:
-  Task 0: python3 -m my_experiment.train --model ridge --features har --seed 1 --chunk-id 0 --total-chunks 100
-  Task 1: python3 -m my_experiment.train --model ridge --features har --seed 1 --chunk-id 1 --total-chunks 100
-  ...
+Which do you want to run?
 ```
 
-If no `chunking` section, each grid point is one task.
+## Step 2: Understand User Intent
 
-If no `grid` section (single job stage in a multi-stage profile), show the single command that will run.
+Parse `$ARGUMENTS` or the user's natural language request:
 
-**Multi-stage**: if the stage has `depends_on`, verify the dependency stages completed by checking for their result files on the cluster. If incomplete, report and ask whether to proceed.
+| User says | Interpretation |
+|-----------|---------------|
+| "run ridge" | Select `ml_ridge.py` |
+| "all ML models" | Select all `ml_*.py` executors |
+| "subgroup analysis with ridge and xgboost" | Select `ml_ridge.py` + `ml_xgboost.py`, grid over subgroups |
+| "sweep horizons 1, 5, 25 on lightgbm" | Select `ml_lightgbm.py`, grid: horizon=[1, 5, 25] |
 
-Ask the user to confirm the run plan before proceeding.
+For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Build a dispatch manifest per job.
 
-## Step 3: Generate Dispatch Manifest
+## Step 3: Build Grid and Chunking
 
-Use `hpc.grid.build_task_manifest()` to generate a `_hpc_dispatch.json` file locally. This JSON maps each task ID (0-based) to its full command string and result directory.
+From executor CLI args and user intent, propose grid dimensions:
 
-Also copy `hpc/dispatch.py` to `_hpc_dispatch.py` in the project root.
+```
+Running ml_ridge.py and ml_xgboost.py.
 
-## Step 4: Sync to Cluster
+Grid parameters (from CLI --help):
+  horizon: [1]
+
+Chunking: 100 chunks per grid point
+  (detected --chunk-id/--total-chunks support)
+
+Per executor:
+  ml_ridge.py:    1 grid point × 100 chunks = 100 tasks
+  ml_xgboost.py:  1 grid point × 100 chunks = 100 tasks
+  Total: 200 tasks
+
+Adjust grid, chunking, or confirm?
+```
+
+The user can add dimensions: "also sweep horizon=[1, 5, 25]" → grid becomes 3 points × 100 chunks = 300 per executor.
+
+When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in --help), flag it: "ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"
+
+## Step 4: Auto-Configure Environment
+
+### Cluster Selection
+Ask which cluster to use (present options from `clusters.yaml`). Cache in Claude Code memory.
+
+If `$ARGUMENTS` contains `--cluster <name>`, use that cluster.
+
+Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config.
+
+### Remote Path
+Default: `{cluster.scratch}/{project_dir_name}`
+Or use cached value from Claude Code memory.
+Confirm with user on first submission.
+
+### Environment Detection
+Read executor source code for import statements:
+
+| Imports detected | Classification | Environment |
+|-----------------|----------------|-------------|
+| `torch`, `tensorflow`, `cuda` | GPU / DL | Load CUDA modules, activate conda env |
+| `sklearn`, `xgboost`, `lightgbm` | CPU / ML | Load python modules |
+| `numpy`, `pandas` only | CPU / lightweight | Load python modules |
+
+Look up the cluster's available modules from `clusters.yaml`.
+
+For DL executors:
+- If cluster has `conda_envs` listed → present options: "Available conda envs on hoffman2: [harxhar-dl, base]. Which one?"
+- If no `conda_envs` in config → ask user: "This executor needs a conda environment with PyTorch. What's the env name on {cluster}?"
+
+Cache environment config in Claude Code memory.
+
+### Resource Estimation
+
+| Executor type | Default resources |
+|---------------|-------------------|
+| CPU / ML | `cpus: 1, mem: "16G", walltime: "4:00:00"` |
+| GPU / DL | `cpus: 4, mem: "16G", walltime: "6:00:00", gpus: 2, gpu_type: <first in cluster gpu_types>` |
+
+Present defaults and let user override: "Resources per task: 1 CPU, 16G, 4h. Adjust?"
+
+### Rsync Excludes
+Build exclude list from:
+1. `.gitignore` patterns (if file exists)
+2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`
+3. Result directories (e.g., `results/`)
+
+## Step 5: Confirm Run Plan
+
+Present the full submission plan:
+
+```
+═══════════════════════════════════════════════
+  Submission Plan
+═══════════════════════════════════════════════
+
+  Cluster:    hoffman2 (SGE)
+  Remote:     /u/scratch/j/jamesdc1/harxhar
+  
+  Job 1: ml_ridge
+    Executor:   python3 src/ml_ridge.py
+    Grid:       horizon=[1] → 1 grid point
+    Chunks:     100 per point → 100 tasks
+    Resources:  1 CPU, 16G, 4:00:00
+    Env:        modules=python/3.11.9
+
+  Job 2: ml_xgboost
+    Executor:   python3 src/ml_xgboost.py
+    Grid:       horizon=[1] → 1 grid point
+    Chunks:     100 per point → 100 tasks
+    Resources:  1 CPU, 16G, 4:00:00
+    Env:        modules=python/3.11.9
+
+  Total tasks: 200
+
+═══════════════════════════════════════════════
+
+Confirm?
+```
+
+## Step 6: Generate Dispatch Manifests
+
+For each job, use `hpc_mapreduce.job.grid.build_task_manifest()` to generate a `_hpc_dispatch.json` file locally. This JSON maps each task ID (0-based) to its full command string and result directory.
+
+For multi-executor submissions, generate one manifest per executor. Name them `_hpc_dispatch_{executor_name}.json` or use separate subdirectories.
+
+Also copy `hpc_mapreduce/map/dispatch.py` to `_hpc_dispatch.py` in the project root.
+
+## Step 7: Sync to Cluster
 
 Push local code + dispatch files to the cluster:
 
 ```bash
 rsync -az --delete \
-    --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' --exclude='hpc/' \
-    # ... add each entry from hpc.yaml rsync_exclude as --exclude='<pattern>' ...
+    --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' --exclude='hpc_mapreduce/' \
+    # ... add each rsync exclude pattern ...
     . $SSH_TARGET:$REMOTE_PATH/
 ```
 
-Deploy the `hpc` runtime package so `from hpc.chunking import chunk_context` works on the cluster. Resolve `claude-hpc` root via `python -c 'from hpc._config import _PACKAGE_ROOT; print(_PACKAGE_ROOT)'`, then:
+Deploy the `hpc_mapreduce` runtime package so `from hpc_mapreduce.map.context import map_context` works on the cluster. Resolve `claude-hpc` root via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT)'`, then:
 
 ```bash
-ssh $SSH_TARGET 'mkdir -p '"$REMOTE_PATH"'/hpc && touch '"$REMOTE_PATH"'/hpc/__init__.py'
-scp $HPC_ROOT/hpc/chunking.py $SSH_TARGET:$REMOTE_PATH/hpc/chunking.py
+ssh $SSH_TARGET 'mkdir -p '"$REMOTE_PATH"'/hpc_mapreduce/map && touch '"$REMOTE_PATH"'/hpc_mapreduce/__init__.py && touch '"$REMOTE_PATH"'/hpc_mapreduce/map/__init__.py'
+scp $HPC_ROOT/hpc_mapreduce/map/context.py $SSH_TARGET:$REMOTE_PATH/hpc_mapreduce/map/context.py
 ```
 
 Verify deployment:
 ```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_hpc_dispatch.json '"$REMOTE_PATH"'/_hpc_dispatch.py '"$REMOTE_PATH"'/hpc/chunking.py'
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_hpc_dispatch.json '"$REMOTE_PATH"'/_hpc_dispatch.py '"$REMOTE_PATH"'/hpc_mapreduce/map/context.py'
 ```
 
-## Step 5: Submit
+## Step 8: Submit
 
-Determine the template from resources (GPU present → `gpu_array`, else `cpu_array`).
-
-Resolve environment variables: use profile's `env`, or look up `cluster_envs[cluster][env_group]` if `env_group` is set.
+Determine template from resources (GPU present → `gpu_array`, else `cpu_array`).
 
 Build env vars:
 - `EXECUTOR=python3 _hpc_dispatch.py`
 - `HPC_MANIFEST=_hpc_dispatch.json`
 - `REPO_DIR=<remote_path>`
-- `MODULES=<env.modules>`
-- `CONDA_SOURCE=<cluster.conda_source>` (if conda_env set)
-- `CONDA_ENV=<env.conda_env>` (if set)
+- `MODULES=<detected modules>`
+- `CONDA_SOURCE=<cluster.conda_source>` (if conda env needed)
+- `CONDA_ENV=<detected/selected conda_env>` (if needed)
 - `TOTAL_CHUNKS=<total_tasks>`
 
 ### SGE Submission
@@ -108,7 +228,7 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && qsub \
     <template_path>'
 ```
 
-For GPU stages: `-l gpu,<gpu_type>,cuda=<count>`.
+For GPU jobs: `-l gpu,<gpu_type>,cuda=<count>`.
 
 ### SLURM Submission
 
@@ -123,15 +243,21 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch \
     <template_path>'
 ```
 
-For GPU stages: `--gres=gpu:<count>` and appropriate partition.
+For GPU jobs: `--gres=gpu:<count>` and appropriate partition.
 
-## Step 6: Report
+## Step 9: Cache and Report
 
+### Cache decisions
+Save to Claude Code memory for this project:
+- Executor directory, cluster, remote_path
+- Environment: modules, conda_env per executor type (CPU/GPU)
+- Default resources, chunking config
+
+### Report
 After submission:
 1. Parse the job ID from submission output
-2. Report: job ID, profile, stage (if multi-stage), total tasks, grid dimensions, cluster
-3. **Multi-stage**: note which stages are now unblocked by this completion
-4. Suggest running `/monitor` to track progress
+2. Report: job ID, executor(s), grid dimensions, total tasks, cluster
+3. Suggest running `/monitor` to track progress
 
 ## Common Failure Modes
 
@@ -141,5 +267,6 @@ After submission:
 | `PENDING` (SLURM) for >30min | Resource unavailable | Check `sinfo`, try different partition |
 | Memory exceeded | Exceeded mem limit | Resubmit with higher memory |
 | Walltime exceeded | Exceeded time limit | Resubmit with longer walltime |
-| ModuleNotFoundError | Env not set up | Check modules and conda_env in config |
+| ModuleNotFoundError | Env not set up | Check modules and conda_env |
 | rsync failure | SSH key issue | Check `ssh $SSH_TARGET hostname` first |
+| `--features` not recognized | Executor doesn't support that arg | Check `--help`, update executor |

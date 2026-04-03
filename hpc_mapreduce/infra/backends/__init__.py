@@ -6,7 +6,7 @@ can target any scheduler (SLURM, SGE, PBS, ...) without changing
 the core submission logic.
 
 Usage:
-    from hpc.backends import get_backend
+    from hpc_mapreduce.infra.backends import get_backend
     backend = get_backend("slurm", script="path/to/job.slurm")
     backend.submit_array(job_name, total_chunks, tasks_per_array, job_env)
 """
@@ -134,9 +134,7 @@ class HPCBackend(abc.ABC):
             if track:
                 match = re.search(r"(\d+)", result.stdout)
                 if not match:
-                    raise RuntimeError(
-                        f"Could not parse job ID from output: {result.stdout!r}"
-                    )
+                    raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
                 submissions.append((task_range, match.group(1)))
             start_task = end_task + 1
 
@@ -159,9 +157,9 @@ def register(name: str) -> Callable[[type[HPCBackend]], type[HPCBackend]]:
 def get_backend(name: str = "slurm", **kwargs: object) -> HPCBackend:
     """Instantiate a backend by name.  *kwargs* are forwarded to the constructor."""
     # Lazy imports to populate registry
-    from hpc.backends import sge as _sge  # noqa: F401
-    from hpc.backends import sge_remote as _sge_remote  # noqa: F401
-    from hpc.backends import slurm as _slurm  # noqa: F401
+    from hpc_mapreduce.infra.backends import sge as _sge  # noqa: F401
+    from hpc_mapreduce.infra.backends import sge_remote as _sge_remote  # noqa: F401
+    from hpc_mapreduce.infra.backends import slurm as _slurm  # noqa: F401
 
     if name not in _REGISTRY:
         raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")

@@ -19,7 +19,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["hpc*"]
+include = ["hpc_mapreduce*"]
 
 [tool.ruff]
 target-version = "py310"

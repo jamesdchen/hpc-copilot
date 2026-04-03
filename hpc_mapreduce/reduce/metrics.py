@@ -1,4 +1,4 @@
-"""Aggregate per-chunk metric sidecars.
+"""Reduce per-chunk metric sidecars.
 
 Standalone module — stdlib only, no external dependencies.
 """
@@ -6,15 +6,15 @@ Standalone module — stdlib only, no external dependencies.
 from __future__ import annotations
 
 __all__ = [
-    "aggregate_metrics",
+    "reduce_metrics",
 ]
 
 import json
 from pathlib import Path
 
 
-def aggregate_metrics(result_dir: str | Path, total_chunks: int) -> dict:
-    """Aggregate per-chunk metrics JSON sidecars into a single summary.
+def reduce_metrics(result_dir: str | Path, total_chunks: int) -> dict:
+    """Reduce per-chunk metrics JSON sidecars into a single summary.
 
     Computes a weighted mean of each metric key across chunks, weighted by
     ``n_samples`` when present.  The ``n_samples`` key itself is summed.

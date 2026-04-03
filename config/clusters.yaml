@@ -5,6 +5,7 @@ hoffman2:
   scratch: /u/scratch/j/jamesdc1
   modules: [python/3.11.9]
   conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh
+  conda_envs: [harxhar-dl]
   gpu_types: [a100, h200, a6000, h100, v100, rtx2080ti]
 
 discovery:
@@ -15,5 +16,6 @@ discovery:
   scratch: /scratch1/jc_905
   modules: []
   conda_source: /apps/conda/miniforge3/25.3.0/etc/profile.d/conda.sh
+  conda_envs: [project-cucuringu]
   gpu_types: [a100, a40, v100, l40s]
   gpu_constraint: "a100|a40|v100|l40s"

@@ -2,7 +2,7 @@
 
 import os
 
-from hpc.backends import HPCBackend, register
+from hpc_mapreduce.infra.backends import HPCBackend, register
 
 
 @register("sge")

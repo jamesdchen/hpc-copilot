@@ -1,14 +1,15 @@
-"""claude-hpc: Personal HPC orchestrator for Claude Code.
+"""hpc-mapreduce: MapReduce-style HPC orchestrator for Claude Code.
 
 Provides pluggable HPC backends (SGE, SLURM), remote execution utilities,
-GPU selection, and experiment-agnostic grid dispatch — all configurable
-via clusters.yaml and per-project hpc.yaml files.
+GPU selection, and experiment-agnostic grid dispatch. Cluster infrastructure
+is configured via clusters.yaml; experiment setup is conversational.
 """
 
 __all__ = [
+    # Package root
+    "_PACKAGE_ROOT",
     # Config & discovery
     "load_clusters_config",
-    "detect_project_type",
     "get_template_path",
     # Remote execution
     "ssh_run",
@@ -19,22 +20,16 @@ __all__ = [
     "check_results",
     "report_status",
     "detect_scheduler",
-    "aggregate_counters",
+    "reduce_counters",
     # GPU selection
     "pick_gpu",
-    # Chunking protocol
-    "ChunkContext",
-    "chunk_context",
-    "collect_chunks",
-    # Chunk result loading
-    "aggregate_metrics",
-    # Manifest / grid API
-    "load_manifest",
-    "manifest_exists",
-    "validate_manifest",
-    "build_manifest_env",
-    "resolve_template",
-    "resolve_effective_config",
+    # Map protocol
+    "MapContext",
+    "map_context",
+    "collect_outputs",
+    # Reduce
+    "reduce_metrics",
+    # Grid API
     "expand_grid",
     "build_task_manifest",
     "total_tasks",
@@ -42,22 +37,20 @@ __all__ = [
 
 from pathlib import Path
 
-from hpc.chunk_loader import aggregate_metrics
-from hpc.chunking import ChunkContext, chunk_context, collect_chunks
-from hpc.gpu import pick_gpu
-from hpc.grid import build_task_manifest, expand_grid, total_tasks
-from hpc.manifest import (
-    build_manifest_env,
-    detect_project_type,
-    load_clusters_config,
-    load_manifest,
-    manifest_exists,
-    resolve_effective_config,
-    resolve_template,
-    validate_manifest,
+from hpc_mapreduce.infra.clusters import load_clusters_config
+from hpc_mapreduce.infra.gpu import pick_gpu
+from hpc_mapreduce.infra.remote import deploy_runtime, rsync_pull, rsync_push, ssh_run
+from hpc_mapreduce.job.grid import build_task_manifest, expand_grid, total_tasks
+from hpc_mapreduce.map.context import MapContext, collect_outputs, map_context
+from hpc_mapreduce.reduce.metrics import reduce_metrics
+from hpc_mapreduce.reduce.status import (
+    check_results,
+    detect_scheduler,
+    reduce_counters,
+    report_status,
 )
-from hpc.remote import deploy_runtime, rsync_pull, rsync_push, ssh_run
-from hpc.status import aggregate_counters, check_results, detect_scheduler, report_status
+
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 
 def get_template_path(scheduler: str, template: str) -> Path:
