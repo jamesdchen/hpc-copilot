@@ -7,6 +7,12 @@ from hpc_mapreduce.job.grid import (
     expand_grid,
     total_tasks,
 )
+from hpc_mapreduce.job.throughput import (
+    JobBatch,
+    SubmissionPlan,
+    WorkloadSpec,
+    compute_submission_plan,
+)
 
 __all__ = [
     "ClusterConstraints",
@@ -15,4 +21,8 @@ __all__ = [
     "expand_backtest",
     "build_task_manifest",
     "total_tasks",
+    "WorkloadSpec",
+    "JobBatch",
+    "SubmissionPlan",
+    "compute_submission_plan",
 ]

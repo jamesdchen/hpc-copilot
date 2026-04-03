@@ -1,10 +1,11 @@
-"""Tests for ClusterConstraints and parse_constraints."""
+"""Tests for ClusterConstraints, parse_constraints, and load_constraints."""
 
 from __future__ import annotations
 
 import pytest
 
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
+from hpc_mapreduce.infra.clusters import load_constraints
 
 
 class TestClusterConstraints:
@@ -68,3 +69,39 @@ class TestParseConstraints:
         c = parse_constraints(raw)
         assert c.max_array_size == 100
         # Should not raise, unknown keys are silently ignored
+
+
+class TestLoadConstraints:
+    """Tests for load_constraints merging cluster and profile configs."""
+
+    def test_merge_cluster_and_profile(self):
+        cluster = {"constraints": {"max_array_size": 100}}
+        profile = {"constraints": {"max_walltime": "1:00:00"}}
+        c = load_constraints(cluster, profile)
+        assert c.max_array_size == 100
+        assert c.max_walltime == "1:00:00"
+
+    def test_cluster_only_no_profile(self):
+        cluster = {"constraints": {"max_array_size": 100, "max_concurrent_jobs": 5}}
+        c = load_constraints(cluster)
+        assert c.max_array_size == 100
+        assert c.max_concurrent_jobs == 5
+        # Remaining fields use ClusterConstraints defaults
+        assert c.max_walltime == "24:00:00"
+        assert c.est_spin_up == "5m"
+
+    def test_empty_cluster_constraints(self):
+        cluster = {"constraints": {}}
+        c = load_constraints(cluster)
+        # All fields should be ClusterConstraints defaults
+        assert c.max_array_size == 1000
+        assert c.max_walltime == "24:00:00"
+        assert c.max_concurrent_jobs == 10
+        assert c.est_spin_up == "5m"
+
+    def test_profile_overrides_cluster(self):
+        cluster = {"constraints": {"max_array_size": 100, "max_walltime": "24:00:00"}}
+        profile = {"constraints": {"max_walltime": "1:00:00"}}
+        c = load_constraints(cluster, profile)
+        assert c.max_array_size == 100
+        assert c.max_walltime == "1:00:00"

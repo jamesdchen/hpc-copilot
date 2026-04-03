@@ -19,7 +19,19 @@ class SGEBackend(HPCBackend):
         self.log_dir = log_dir or os.environ.get("SGE_LOG_DIR", "logs")
         self.pass_env_keys = pass_env_keys
 
-    def _build_command(self, task_range: str, job_name: str, job_env: dict[str, str]) -> list[str]:
+    def _build_dependency_flag(self, job_ids: list[str]) -> list[str]:
+        if not job_ids:
+            return []
+        return ["-hold_jid", ",".join(job_ids)]
+
+    def _build_command(
+        self,
+        task_range: str,
+        job_name: str,
+        job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
+    ) -> list[str]:
         cmd = [
             "qsub",
             "-t",
@@ -34,5 +46,7 @@ class SGEBackend(HPCBackend):
         pass_vars = ",".join(f"{k}={v}" for k, v in job_env.items() if k in self.pass_env_keys)
         if pass_vars:
             cmd += ["-v", pass_vars]
+        if extra_flags:
+            cmd += extra_flags
         cmd.append(self.script)
         return cmd

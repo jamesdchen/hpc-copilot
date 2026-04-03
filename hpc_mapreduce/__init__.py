@@ -32,6 +32,10 @@ __all__ = [
     # Cluster constraints
     "ClusterConstraints",
     "parse_constraints",
+    # Throughput optimizer
+    "WorkloadSpec",
+    "SubmissionPlan",
+    "compute_submission_plan",
 ]
 
 from pathlib import Path
@@ -45,6 +49,11 @@ from hpc_mapreduce.job.grid import (
     expand_backtest,
     expand_grid,
     total_tasks,
+)
+from hpc_mapreduce.job.throughput import (
+    SubmissionPlan,
+    WorkloadSpec,
+    compute_submission_plan,
 )
 from hpc_mapreduce.reduce.metrics import reduce_metrics
 from hpc_mapreduce.reduce.status import (

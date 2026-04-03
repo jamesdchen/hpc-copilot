@@ -75,6 +75,17 @@ Grid parameters (including optional backtest time periods) are expanded via Cart
 
 With backtest enabled, total tasks = grid points × time periods.
 
+### Throughput Optimization
+
+claude-hpc automatically optimizes job submissions for cluster constraints. When constraints are configured (max array size, walltime, concurrent job limits), the optimizer packs tasks into batched waves:
+
+- Tasks are split into arrays of ≤max_array_size
+- Arrays are grouped into waves of ≤max_concurrent_jobs
+- Waves are staggered via scheduler dependencies (SLURM `--dependency`, SGE `-hold_jid`)
+- Total wall-clock time is estimated when per-task duration is known
+
+Configure constraints in `clusters.yaml` (cluster-level) or `hpc.yaml` profiles (per-experiment overrides).
+
 ## Commands
 
 | Command | What it does |

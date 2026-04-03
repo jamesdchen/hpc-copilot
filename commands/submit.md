@@ -136,6 +136,27 @@ Build exclude list from:
 2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`
 3. Result directories (e.g., `results/`)
 
+## Step 4b: Compute Throughput Plan
+
+After grid expansion produces total_tasks, compute an optimized submission plan:
+
+1. **Load constraints**: `from hpc_mapreduce import ClusterConstraints, parse_constraints` — read constraints from `clusters.yaml` for the selected cluster, then overlay any per-profile constraints from `hpc.yaml` (profile-level fields override cluster-level fields).
+
+2. **Build workload**: `from hpc_mapreduce.job.throughput import WorkloadSpec, compute_submission_plan` — construct a `WorkloadSpec` using `total_tasks` from grid expansion, plus `est_task_duration` if configured in the profile.
+
+3. **Compute plan**: Call `compute_submission_plan(constraints, workload)` to get a `SubmissionPlan` with batched waves.
+
+4. **Display the plan** in the confirmation prompt (Step 5), e.g.:
+
+```
+Throughput Plan:
+  Strategy:   4 batches (88 tasks each), 2 concurrent, 2 waves, ~30m est.
+  Wave 1:     tasks 1-88, 89-176  (submit immediately)
+  Wave 2:     tasks 177-264, 265-350  (after wave 1)
+```
+
+If constraints are not configured for the cluster or profile, skip this step and submit as a single array (existing behavior).
+
 ## Step 5: Confirm Run Plan
 
 Present the full submission plan:
@@ -196,6 +217,10 @@ ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_hpc_dispatch.json '"$REMOTE_PATH"'/_hpc_di
 ```
 
 ## Step 8: Submit
+
+If a throughput plan was computed in Step 4b, use `backend.submit_plan(plan, ...)` instead of `backend.submit_array(...)`. The plan-based submission handles batching tasks into arrays, grouping arrays into waves, and setting up scheduler dependencies between waves (SLURM `--dependency=afterany:...`, SGE `-hold_jid ...`).
+
+If no plan is available (constraints not configured), fall back to the standard single-array submission below.
 
 Determine template from resources (GPU present → `gpu_array`, else `cpu_array`).
 

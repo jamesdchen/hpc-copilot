@@ -60,11 +60,18 @@ class RemoteSGEBackend(HPCBackend):
         self.log_dir = log_dir or f"{remote_repo}/logs"
         self.pass_env_keys = pass_env_keys
 
+    def _build_dependency_flag(self, job_ids: list[str]) -> list[str]:
+        if not job_ids:
+            return []
+        return ["-hold_jid", ",".join(job_ids)]
+
     def _build_command(
         self,
         task_range: str,
         job_name: str,
         job_env: dict[str, str],
+        *,
+        extra_flags: list[str] | None = None,
     ) -> list[str]:
         """Return qsub command parts for SSH execution."""
         parts = [
@@ -81,6 +88,8 @@ class RemoteSGEBackend(HPCBackend):
         pass_vars = ",".join(f"{k}={v}" for k, v in job_env.items() if k in self.pass_env_keys)
         if pass_vars:
             parts += ["-v", pass_vars]
+        if extra_flags:
+            parts += extra_flags
         parts.append(self.script)
         return parts
 

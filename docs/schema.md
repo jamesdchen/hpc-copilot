@@ -101,7 +101,12 @@ Total HPC tasks = grid_points × time_periods.
 
 ## constraints
 
-Declared cluster constraints for throughput optimization.
+Declared cluster constraints for throughput optimization. Constraints can be defined in two places:
+
+- **`clusters.yaml`** (cluster-level): applies to all jobs on that cluster
+- **`hpc.yaml` profiles** (profile-level): per-experiment overrides
+
+Profile-level constraints override cluster-level constraints **field-by-field** — any field set in the profile takes precedence, while unset fields fall back to the cluster default.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -109,6 +114,7 @@ Declared cluster constraints for throughput optimization.
 | `max_walltime` | string | no | Max wall time per job HH:MM:SS (default: "24:00:00") |
 | `max_concurrent_jobs` | int | no | Max jobs running simultaneously (default: 10) |
 | `est_spin_up` | string | no | Estimated spin-up overhead (e.g. "5m", default: "5m") |
+| `est_task_duration` | string | no | Estimated duration per task (e.g. "10m", "1h30m"). Profile-level only. Used by the throughput optimizer to estimate total wall-clock time and plan wave scheduling. |
 
 ## cluster_envs
 
