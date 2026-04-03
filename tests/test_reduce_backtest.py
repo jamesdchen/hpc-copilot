@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from hpc_mapreduce.reduce.metrics import reduce_backtest
+from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_partials
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -107,3 +107,87 @@ class TestReduceBacktest:
         # Weighted: (0.10*100 + 0.30*300) / 400 = 100/400 = 0.25
         assert abs(result[key]["mse"] - 0.25) < 1e-9
         assert result[key]["n_samples"] == 400
+
+
+def _write_wave(combiner_dir: Path, wave: int, grid_points: dict) -> None:
+    combiner_dir.mkdir(parents=True, exist_ok=True)
+    (combiner_dir / f"wave_{wave}.json").write_text(json.dumps({
+        "wave": wave,
+        "task_ids": [],
+        "grid_points": grid_points,
+        "errors": [],
+    }))
+
+
+class TestReducePartials:
+    def test_single_wave(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave(combiner_dir, 0, {"ridge_1": {"mse": 0.10, "n_samples": 100}})
+        result = reduce_partials(combiner_dir)
+        assert len(result) == 1
+        assert abs(result["ridge_1"]["mse"] - 0.10) < 1e-9
+        assert result["ridge_1"]["n_samples"] == 100
+
+    def test_multi_wave_weighted_merge(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave(combiner_dir, 0, {"ridge_1": {"mse": 0.10, "n_samples": 100}})
+        _write_wave(combiner_dir, 1, {"ridge_1": {"mse": 0.30, "n_samples": 300}})
+        result = reduce_partials(combiner_dir)
+        assert len(result) == 1
+        assert abs(result["ridge_1"]["mse"] - 0.25) < 1e-9
+        assert result["ridge_1"]["n_samples"] == 400
+
+    def test_disjoint_grid_points(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        _write_wave(combiner_dir, 0, {"ridge_1": {"mse": 0.10, "n_samples": 50}})
+        _write_wave(combiner_dir, 1, {"xgb_25": {"mse": 0.30, "n_samples": 50}})
+        result = reduce_partials(combiner_dir)
+        assert len(result) == 2
+        assert "ridge_1" in result
+        assert "xgb_25" in result
+
+    def test_missing_wave_file_returns_empty(self, tmp_path):
+        combiner_dir = tmp_path / "_combiner"
+        combiner_dir.mkdir(parents=True)
+        result = reduce_partials(combiner_dir)
+        assert result == {}
+
+    def test_matches_reduce_backtest(self, tmp_path):
+        """Cross-validation: reduce_partials and reduce_backtest agree."""
+        # Set up result dirs with metrics files
+        r1 = tmp_path / "results" / "ridge_a"
+        r2 = tmp_path / "results" / "ridge_b"
+        _write_metrics(r1, {"mse": 0.10, "n_samples": 100})
+        _write_metrics(r2, {"mse": 0.30, "n_samples": 300})
+
+        # reduce_backtest path
+        manifest = {
+            "tasks": {
+                "0": {
+                    "params": {"model": "ridge"},
+                    "result_dir": str(r1),
+                    "period": {"start": "2020-01-01", "end": "2020-03-31"},
+                },
+                "1": {
+                    "params": {"model": "ridge"},
+                    "result_dir": str(r2),
+                    "period": {"start": "2020-04-01", "end": "2020-12-31"},
+                },
+            }
+        }
+        bt_result = reduce_backtest(manifest)
+
+        # reduce_partials path — simulate combiner output for same data
+        combiner_dir = tmp_path / "_combiner"
+        # Wave 0 has task 0, wave 1 has task 1
+        from hpc_mapreduce.job.grid import run_id
+        grid_key = run_id({"model": "ridge"})
+        _write_wave(combiner_dir, 0, {grid_key: {"mse": 0.10, "n_samples": 100}})
+        _write_wave(combiner_dir, 1, {grid_key: {"mse": 0.30, "n_samples": 300}})
+        pp_result = reduce_partials(combiner_dir)
+
+        # Both should produce the same aggregated metrics
+        assert set(bt_result.keys()) == set(pp_result.keys())
+        for key in bt_result:
+            for metric in bt_result[key]:
+                assert abs(bt_result[key][metric] - pp_result[key][metric]) < 1e-9

@@ -87,6 +87,22 @@ Parse results to determine state:
 
 **Stall heuristic**: If ALL tasks have been pending for >15 minutes with zero running, or if the state is unchanged across 2 consecutive checks, treat as a stall. Go to Step 2 with category `queue_stall`.
 
+### Step 1c: Run Combiners for Completed Waves
+
+If `_hpc_dispatch.json` contains a `wave_map` field, run the on-cluster combiner for each newly-completed wave. This aggregates metrics on the cluster while later waves are still running (pipeline parallelism).
+
+1. Read `wave_map` from the manifest to determine which task IDs belong to each wave
+2. Cross-reference with task status from Step 1: a wave is **complete** when all its task IDs have status `complete`
+3. Check `combined_waves` from the monitor state to skip waves already combined
+4. For each newly-complete wave not yet combined:
+   ```bash
+   ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && HPC_WAVE=<N> HPC_MANIFEST=_hpc_dispatch.json python3 _hpc_combiner.py'
+   ```
+5. If the combiner succeeds (exit 0), add the wave number to `combined_waves`
+6. Report: `"Combiner: wave <N> aggregated — <grid_point>: <key_metric>=<value>, ..."`
+
+If the manifest has no `wave_map` field, skip this step (backward compatibility with older submissions).
+
 ## Step 2: Diagnose Failures
 
 Read error logs for failed tasks. Log files follow the naming convention `{job_name}_{job_id}_{task_id}.{out|err}` where `job_name` is the profile name (the value passed to `--job-name` during submission). For example, profile `patchts` with job ID `7580680` produces `logs/patchts_7580680_1.out` and `logs/patchts_7580680_1.err`.
@@ -137,6 +153,11 @@ Build the resubmission command using the same dispatch mechanism. The task IDs i
 
 ## Step 4: Aggregate (if configured)
 
+If all waves have been combined (check `combined_waves` against total waves in `wave_map`), use the fast path:
+1. `rsync -az $SSH_TARGET:$REMOTE_PATH/_combiner/ ./_combiner/`
+2. Use `reduce_partials("_combiner/")` to merge partials into final aggregated metrics
+3. Skip the standard aggregation command
+
 When all tasks complete and the profile has `results.aggregate_cmd`:
 
 ```bash
@@ -185,7 +206,7 @@ Fallback (no progress data):
 ```
 /monitor <profile_name> <comma_separated_job_ids> <total_tasks>
 
-[Monitor State] profile=<name> | cluster=<cluster> | tasks=X/Y done, Z running, W failed | grid_points: {point: done/total, ...} | retries: {task: count, ...} | jobs: <id_list> | gpu_type: <current_gpu> | last_check: <time> | prev_interval: <minutes> | consecutive_pending: <count>
+[Monitor State] profile=<name> | cluster=<cluster> | tasks=X/Y done, Z running, W failed | grid_points: {point: done/total, ...} | retries: {task: count, ...} | jobs: <id_list> | gpu_type: <current_gpu> | last_check: <time> | prev_interval: <minutes> | consecutive_pending: <count> | combined_waves: 0,1
 ```
 
 4. Report: `Next check in X min (reason). Cron job: <id>`

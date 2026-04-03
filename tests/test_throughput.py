@@ -7,6 +7,7 @@ import pytest
 from hpc_mapreduce.job.constraints import ClusterConstraints
 from hpc_mapreduce.job.throughput import (
     WorkloadSpec,
+    build_wave_map,
     compute_submission_plan,
 )
 
@@ -172,3 +173,63 @@ class TestTaskRangeProperty:
         workload = WorkloadSpec(total_tasks=100)
         plan = compute_submission_plan(constraints, workload)
         assert plan.batches[0].task_range == "1-100"
+
+
+class TestBuildWaveMapSingleWave:
+    """All batches in wave 0 → all task IDs in wave 0."""
+
+    def test_all_tasks_in_wave_zero(self):
+        constraints = ClusterConstraints(max_array_size=100, max_concurrent_jobs=2)
+        workload = WorkloadSpec(total_tasks=200)
+        plan = compute_submission_plan(constraints, workload)
+        wave_map = build_wave_map(plan)
+        assert set(wave_map.keys()) == {0}
+        assert wave_map[0] == list(range(200))
+
+    def test_task_ids_are_zero_based(self):
+        constraints = ClusterConstraints(max_array_size=100, max_concurrent_jobs=2)
+        workload = WorkloadSpec(total_tasks=200)
+        plan = compute_submission_plan(constraints, workload)
+        wave_map = build_wave_map(plan)
+        assert min(wave_map[0]) == 0
+        assert max(wave_map[0]) == 199
+
+
+class TestBuildWaveMapMultiWave:
+    """350 tasks, max_array=100, max_concurrent=2 → 2 waves."""
+
+    def test_correct_wave_keys(self):
+        constraints = ClusterConstraints(max_array_size=100, max_concurrent_jobs=2)
+        workload = WorkloadSpec(total_tasks=350)
+        plan = compute_submission_plan(constraints, workload)
+        wave_map = build_wave_map(plan)
+        assert set(wave_map.keys()) == {0, 1}
+
+    def test_no_overlap(self):
+        constraints = ClusterConstraints(max_array_size=100, max_concurrent_jobs=2)
+        workload = WorkloadSpec(total_tasks=350)
+        plan = compute_submission_plan(constraints, workload)
+        wave_map = build_wave_map(plan)
+        ids_0 = set(wave_map[0])
+        ids_1 = set(wave_map[1])
+        assert ids_0.isdisjoint(ids_1)
+
+    def test_all_tasks_covered(self):
+        constraints = ClusterConstraints(max_array_size=100, max_concurrent_jobs=2)
+        workload = WorkloadSpec(total_tasks=350)
+        plan = compute_submission_plan(constraints, workload)
+        wave_map = build_wave_map(plan)
+        all_ids = sorted(wave_map[0] + wave_map[1])
+        assert all_ids == list(range(350))
+
+
+class TestBuildWaveMapSingleBatch:
+    """Single batch → wave 0 contains all tasks."""
+
+    def test_single_batch_wave_zero(self):
+        constraints = ClusterConstraints(max_array_size=100)
+        workload = WorkloadSpec(total_tasks=50)
+        plan = compute_submission_plan(constraints, workload)
+        wave_map = build_wave_map(plan)
+        assert set(wave_map.keys()) == {0}
+        assert wave_map[0] == list(range(50))
