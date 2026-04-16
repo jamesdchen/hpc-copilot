@@ -16,7 +16,7 @@ set -e
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
 #
 # Submit with:
-#   sbatch --array=1-100 --export=CONDA_SOURCE=...,CONDA_ENV=...,... cpu_array.slurm
+#   sbatch --array=1-100 --export=TASK_OFFSET=0,CONDA_SOURCE=...,CONDA_ENV=...,... cpu_array.slurm
 # ==============================================================
 
 # --- SLURM directives ---
@@ -33,8 +33,8 @@ set -e
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
-# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based task ID
-TASK_ID=$((SLURM_ARRAY_TASK_ID - 1))
+# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based, add offset for batched submission
+TASK_ID=$((SLURM_ARRAY_TASK_ID - 1 + ${TASK_OFFSET:-0}))
 
 # --- Diagnostics ---
 echo "============================================"
@@ -42,12 +42,10 @@ echo "Job ID:       $SLURM_JOB_ID"
 echo "Array Task:   $SLURM_ARRAY_TASK_ID"
 echo "Hostname:     $(hostname)"
 echo "CPUs:         $SLURM_CPUS_PER_TASK"
-echo "Task:         $TASK_ID"
+echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
 echo "============================================"
 
 # --- Module Setup ---
-module purge
-
 if [ -n "$MODULES" ]; then
     for mod in $MODULES; do
         module load "$mod"
@@ -64,6 +62,7 @@ fi
 
 # --- Working Directory ---
 cd "$REPO_DIR"
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 
 # Bind CPU threads to allocated cores
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
