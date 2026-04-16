@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from hpc_mapreduce.job.grid import (
+    MANIFEST_SCHEMA_VERSION,
     build_task_manifest,
     expand_grid,
     total_tasks,
@@ -22,70 +25,67 @@ class TestExpandGrid:
 
 
 class TestBuildTaskManifest:
-    def test_no_chunking(self):
+    def test_grid_only(self):
         m = build_task_manifest(
             "python train.py",
             {"lr": [0.01, 0.1]},
             "results/{run_id}",
         )
         assert m["total_tasks"] == 2
-        assert m["chunks_per_point"] == 1
         assert "--lr 0.01" in m["tasks"]["0"]["cmd"]
         assert "--lr 0.1" in m["tasks"]["1"]["cmd"]
-
-    def test_with_chunking_defaults(self):
-        m = build_task_manifest(
-            "python train.py",
-            {"model": ["ridge"]},
-            "results/{run_id}",
-            chunking={"total": 3},
-        )
-        assert m["total_tasks"] == 3
-        assert "--chunk-id 0 --total-chunks 3" in m["tasks"]["0"]["cmd"]
-        assert "--chunk-id 2 --total-chunks 3" in m["tasks"]["2"]["cmd"]
-        assert m["tasks"]["0"]["chunk_id"] == 0
-        assert m["tasks"]["2"]["chunk_id"] == 2
-
-    def test_custom_chunk_args(self):
-        m = build_task_manifest(
-            "python train.py",
-            {"model": ["xgb"]},
-            "results/{run_id}",
-            chunking={"total": 2, "chunk_arg": "--shard", "total_arg": "--num-shards"},
-        )
-        assert "--shard 0 --num-shards 2" in m["tasks"]["0"]["cmd"]
-        assert "--shard 1 --num-shards 2" in m["tasks"]["1"]["cmd"]
-
-    def test_grid_times_chunks(self):
-        m = build_task_manifest(
-            "python train.py",
-            {"model": ["rf", "xgb"]},
-            "results/{run_id}",
-            chunking={"total": 3},
-        )
-        assert m["total_tasks"] == 6  # 2 models × 3 chunks
-        assert m["grid_size"] == 2
-        assert "--model rf" in m["tasks"]["0"]["cmd"]
-        assert m["tasks"]["0"]["chunk_id"] == 0
-        assert "--model xgb" in m["tasks"]["3"]["cmd"]
-        assert m["tasks"]["3"]["chunk_id"] == 0
 
     def test_result_dir_per_grid_point(self):
         m = build_task_manifest(
             "python train.py",
             {"model": ["rf", "xgb"]},
             "results/{run_id}",
-            chunking={"total": 2},
         )
-        # All chunks of same grid point share a result dir
-        assert m["tasks"]["0"]["result_dir"] == m["tasks"]["1"]["result_dir"]
-        # Different grid points have different result dirs
-        assert m["tasks"]["0"]["result_dir"] != m["tasks"]["2"]["result_dir"]
+        assert m["tasks"]["0"]["result_dir"] != m["tasks"]["1"]["result_dir"]
 
 
 class TestTotalTasks:
     def test_simple(self):
         assert total_tasks({"a": [1, 2], "b": [3, 4, 5]}) == 6
 
-    def test_with_chunks(self):
-        assert total_tasks({"a": [1, 2]}, chunks=10) == 20
+
+class TestBuildTaskManifestMaxTasks:
+    def test_raises_when_grid_exceeds_max_tasks(self):
+        # 6 total tasks, ceiling of 5 -> ValueError before any tasks are materialized.
+        with pytest.raises(ValueError, match=r"max_tasks=5"):
+            build_task_manifest(
+                "python train.py",
+                {"a": [1, 2, 3], "b": [10, 20]},
+                "results/{run_id}",
+                max_tasks=5,
+            )
+
+    def test_disabled_with_none_allows_large_grid(self):
+        # 12 total tasks; with max_tasks=None the check is skipped.
+        m = build_task_manifest(
+            "python train.py",
+            {"a": list(range(4)), "b": list(range(3))},
+            "results/{run_id}",
+            max_tasks=None,
+        )
+        assert m["total_tasks"] == 12
+
+    def test_raised_threshold_allows_large_grid(self):
+        # Same 12 tasks, explicit higher threshold.
+        m = build_task_manifest(
+            "python train.py",
+            {"a": list(range(4)), "b": list(range(3))},
+            "results/{run_id}",
+            max_tasks=100,
+        )
+        assert m["total_tasks"] == 12
+
+
+class TestBuildTaskManifestSchemaVersion:
+    def test_schema_version_embedded(self):
+        m = build_task_manifest(
+            "python train.py",
+            {"lr": [0.01, 0.1]},
+            "results/{run_id}",
+        )
+        assert m["schema_version"] == MANIFEST_SCHEMA_VERSION

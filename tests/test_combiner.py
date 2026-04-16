@@ -145,6 +145,97 @@ class TestMainMissingMetrics:
         assert "metrics.json not found" in data["errors"][0]
 
 
+class TestMainParallelReads:
+    """Parallel metrics reads must produce semantically identical output to serial."""
+
+    @staticmethod
+    def _build_manifest(tmp_path, n_tasks: int, malformed_tid: str | None = None):
+        """Build a manifest with n_tasks across a few grid points.
+
+        If malformed_tid is set, that task's metrics.json is written as
+        invalid JSON so the combiner logs an error but doesn't crash.
+        """
+        tasks: dict = {}
+        task_ids: list = []
+        # Three grid points cycled through so the weighted mean has
+        # something non-trivial to aggregate.
+        grid_params = [
+            {"model": "ridge", "horizon": "1"},
+            {"model": "xgb", "horizon": "1"},
+            {"model": "ridge", "horizon": "25"},
+        ]
+        for i in range(n_tasks):
+            tid = str(i)
+            rdir = tmp_path / "results" / f"task_{i}"
+            rdir.mkdir(parents=True)
+            if tid == malformed_tid:
+                (rdir / "metrics.json").write_text("{not valid json")
+            else:
+                # Varying metric values so averaging isn't degenerate.
+                (rdir / "metrics.json").write_text(
+                    json.dumps({"mse": 0.10 + 0.01 * i, "n_samples": 100 + i})
+                )
+            tasks[tid] = {
+                "params": grid_params[i % len(grid_params)],
+                "result_dir": str(rdir),
+            }
+            task_ids.append(tid)
+
+        manifest = {"tasks": tasks, "wave_map": {"0": task_ids}}
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest))
+        return manifest_path
+
+    def _run(self, tmp_path, monkeypatch, manifest_path, max_workers):
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.chdir(tmp_path)
+        main(max_workers=max_workers)
+        return json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+
+    def test_parallel_matches_serial(self, tmp_path, monkeypatch):
+        # Run serial first in its own tmp subdir, then parallel in another.
+        serial_dir = tmp_path / "serial"
+        parallel_dir = tmp_path / "parallel"
+        serial_dir.mkdir()
+        parallel_dir.mkdir()
+
+        s_manifest = self._build_manifest(serial_dir, n_tasks=20)
+        p_manifest = self._build_manifest(parallel_dir, n_tasks=20)
+
+        serial = self._run(serial_dir, monkeypatch, s_manifest, max_workers=1)
+        parallel = self._run(parallel_dir, monkeypatch, p_manifest, max_workers=8)
+
+        # Same grid-point keys
+        assert set(serial["grid_points"].keys()) == set(parallel["grid_points"].keys())
+
+        # Same weighted-mean values per grid point
+        for key in serial["grid_points"]:
+            s_gp = serial["grid_points"][key]
+            p_gp = parallel["grid_points"][key]
+            assert set(s_gp.keys()) == set(p_gp.keys())
+            for metric in s_gp:
+                assert abs(s_gp[metric] - p_gp[metric]) < 1e-9, f"mismatch on {key}/{metric}"
+
+        # Same error count (both zero here)
+        assert len(serial["errors"]) == len(parallel["errors"]) == 0
+
+    def test_parallel_with_malformed_metrics(self, tmp_path, monkeypatch):
+        manifest_path = self._build_manifest(tmp_path, n_tasks=20, malformed_tid="7")
+        data = self._run(tmp_path, monkeypatch, manifest_path, max_workers=8)
+
+        # Exactly one error, attributed to task 7, and the run didn't crash.
+        assert len(data["errors"]) == 1
+        assert "task 7:" in data["errors"][0]
+        assert "failed to read metrics.json" in data["errors"][0]
+
+        # The other 19 tasks still aggregated into their grid points.
+        total_n = sum(gp["n_samples"] for gp in data["grid_points"].values())
+        # n_samples = sum of (100+i) for i in 0..19 except i=7 -> sum(100..119) - 107
+        expected = sum(100 + i for i in range(20)) - 107
+        assert total_n == expected
+
+
 class TestMainMultipleGridPoints:
     def test_separate_grid_point_entries(self, tmp_path, monkeypatch):
         r0 = tmp_path / "results" / "ridge"
