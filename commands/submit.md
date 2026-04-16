@@ -200,6 +200,26 @@ For each job, use `hpc_mapreduce.job.grid.build_task_manifest()` to generate a `
 
 For multi-executor submissions, generate one manifest per executor. Name them `_hpc_dispatch_{executor_name}.json` or use separate subdirectories.
 
+### Interface mismatch → generate a shim
+
+In Step 1, you ran `--help` on each executor. If an executor doesn't accept `--chunk-id`/`--total-chunks` but does accept some form of data slicing (`--start`/`--end`, file lists, date windows), generate a shim.
+
+Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT.parent / "templates" / "chunking_shim.py")'`). Copy it to the experiment repo as `src/hpc_chunking_shim.py` (or a more specific name like `src/hpc_backtest_shim.py`). Fill in:
+
+- `_compute_total_items()` — read the executor source, replicate its data pipeline up to the point where the array length is known
+- `translate()` — adjust the return args if the executor uses something other than `--start`/`--end`
+- `_CACHE_FILE` — name appropriately or set to `None` to disable
+
+Point the profile's `run` at the shim:
+
+```yaml
+run: "python3 src/hpc_chunking_shim.py -- python3 src/executor.py"
+chunking:
+  total: 100
+```
+
+Only generate the shim on first submission for a given executor interface. On subsequent submissions, reuse the existing shim. If the user has modified the shim, do not overwrite it.
+
 Also copy `hpc_mapreduce/map/dispatch.py` to `_hpc_dispatch.py` in the project root.
 
 ## Step 7: Sync to Cluster
