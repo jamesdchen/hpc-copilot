@@ -4,7 +4,10 @@ from __future__ import annotations
 
 __all__ = [
     "check_results",
+    "check_results_from_manifest",
     "report_status",
+    "report_status_from_manifest",
+    "rollup_by_grid_point",
     "get_err_log_paths",
     "detect_scheduler",
 ]
@@ -248,3 +251,220 @@ def report_status(
     if query_error:
         report["query_error"] = query_error
     return report
+
+
+# ---------------------------------------------------------------------------
+# Manifest-driven variants (per-task result directories)
+# ---------------------------------------------------------------------------
+
+
+def _grid_point_key(params: dict) -> str:
+    """Stable grid-point identifier from a params dict."""
+    if not params:
+        return "_"
+    return "_".join(f"{k}={params[k]}" for k in sorted(params))
+
+
+def check_results_from_manifest(
+    manifest: dict,
+    file_glob: str = "*",
+) -> dict[int, dict]:
+    """Mark tasks complete by checking their per-task ``result_dir`` from a dispatch manifest.
+
+    Manifest task IDs are 0-based; returned dict uses 1-based task IDs to match
+    :func:`report_status`.
+    """
+    results: dict[int, dict] = {}
+    for tid_str, entry in manifest.get("tasks", {}).items():
+        try:
+            tid = int(tid_str) + 1
+        except (TypeError, ValueError):
+            continue
+        result_dir_raw = entry.get("result_dir")
+        if not result_dir_raw:
+            continue
+        rdir = Path(result_dir_raw)
+        if not rdir.is_dir():
+            continue
+        for match in rdir.glob(file_glob):
+            if "_wip_" in str(match):
+                continue
+            results[tid] = {"status": "complete", "path": str(match)}
+            break
+    return results
+
+
+def report_status_from_manifest(
+    manifest: dict,
+    job_ids: list[str],
+    scheduler: str | None = None,
+    *,
+    file_glob: str = "*",
+    log_dir: str = "",
+    scratch_dir: str = "",
+    job_name: str = "",
+    slurm_cluster: str | None = None,
+    sge_user: str | None = None,
+) -> dict:
+    """Like :func:`report_status` but driven by a dispatch manifest.
+
+    Uses the per-task ``result_dir`` recorded in each manifest entry instead of a single
+    shared directory.
+    """
+    from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
+
+    total = int(manifest.get("total_tasks", len(manifest.get("tasks", {}))))
+
+    completed = check_results_from_manifest(manifest, file_glob=file_glob)
+
+    if scheduler is None:
+        scheduler = detect_scheduler()
+
+    if job_ids:
+        if scheduler == "sge":
+            job_info = query_sge(job_ids, user=sge_user)
+        else:
+            job_info = query_sacct(job_ids, cluster=slurm_cluster)
+    else:
+        job_info = {}
+    query_error = job_info.pop("error", None)
+
+    complete_ids = set(completed)
+    tasks: dict[str, dict] = {}
+    summary = {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+
+    for tid in range(1, total + 1):
+        if tid in complete_ids:
+            tasks[str(tid)] = completed[tid]
+            summary["complete"] += 1
+        elif tid in job_info:
+            info = job_info[tid]
+            state = info["state"]
+            if state in _ACTIVE_STATES:
+                cat = "running"
+            elif state in _PENDING_STATES:
+                cat = "pending"
+            elif state in _FAILED_STATES or state.startswith("CANCELLED"):
+                cat = "failed"
+            else:
+                cat = "unknown"
+            tasks[str(tid)] = {"status": cat, **info}
+            summary[cat] += 1
+        else:
+            tasks[str(tid)] = {"status": "unknown"}
+            summary["unknown"] += 1
+
+    failed_or_unknown = [tid for tid in range(1, total + 1) if tid not in complete_ids]
+    all_err = (
+        get_err_log_paths(
+            job_ids,
+            total,
+            scheduler=scheduler,
+            log_dir=log_dir,
+            scratch_dir=scratch_dir,
+            job_name=job_name,
+        )
+        if job_ids
+        else {}
+    )
+    err_paths = {str(tid): all_err[tid] for tid in failed_or_unknown if tid in all_err}
+
+    report: dict = {
+        "total_tasks": total,
+        "scheduler": scheduler,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "tasks": tasks,
+        "summary": summary,
+    }
+    if err_paths:
+        report["err_log_paths"] = err_paths
+    if query_error:
+        report["query_error"] = query_error
+    return report
+
+
+def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
+    """Group per-task statuses in *report* by grid point (from manifest ``params``).
+
+    Manifest task IDs are 0-based strings; report task IDs are 1-based strings.
+    Returned dict maps grid-point key -> ``{complete, running, pending, failed, unknown, total}``.
+    """
+    rollup: dict[str, dict] = {}
+    manifest_tasks = manifest.get("tasks", {})
+    for tid_str, task_info in report.get("tasks", {}).items():
+        try:
+            manifest_key = str(int(tid_str) - 1)
+        except (TypeError, ValueError):
+            continue
+        entry = manifest_tasks.get(manifest_key)
+        if entry is None:
+            continue
+        gp = _grid_point_key(entry.get("params") or {})
+        bucket = rollup.setdefault(
+            gp,
+            {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0, "total": 0},
+        )
+        bucket["total"] += 1
+        status = task_info.get("status", "unknown")
+        if status in bucket:
+            bucket[status] += 1
+        else:
+            bucket["unknown"] += 1
+    return rollup
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point — `python -m hpc_mapreduce.reduce.status`
+# ---------------------------------------------------------------------------
+
+
+def _main() -> int:
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Emit a JSON status report for a dispatch manifest.",
+    )
+    parser.add_argument("--manifest", required=True, help="Path to _hpc_dispatch.json")
+    parser.add_argument(
+        "--job-ids",
+        default="",
+        help="Comma-separated scheduler job IDs (optional)",
+    )
+    parser.add_argument("--job-name", default="", help="Job name for error-log lookup")
+    parser.add_argument("--scheduler", default=None, choices=[None, "sge", "slurm"])
+    parser.add_argument("--file-glob", default="*", help="Glob for per-task result files")
+    parser.add_argument("--log-dir", default="", help="SLURM log directory")
+    parser.add_argument("--scratch-dir", default="", help="SGE scratch log directory")
+    parser.add_argument("--slurm-cluster", default=None)
+    parser.add_argument("--sge-user", default=None)
+    args = parser.parse_args()
+
+    manifest_path = Path(args.manifest)
+    if not manifest_path.is_file():
+        print(f"manifest not found: {manifest_path}", file=sys.stderr)
+        return 2
+
+    manifest = json.loads(manifest_path.read_text())
+    job_ids = [j for j in args.job_ids.split(",") if j.strip()]
+
+    report = report_status_from_manifest(
+        manifest,
+        job_ids,
+        scheduler=args.scheduler,
+        file_glob=args.file_glob,
+        log_dir=args.log_dir,
+        scratch_dir=args.scratch_dir,
+        job_name=args.job_name,
+        slurm_cluster=args.slurm_cluster,
+        sge_user=args.sge_user,
+    )
+    report["rollup"] = rollup_by_grid_point(report, manifest)
+
+    json.dump(report, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

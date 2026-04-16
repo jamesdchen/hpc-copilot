@@ -133,8 +133,10 @@ Present defaults and let user override: "Resources per task: 1 CPU, 16G, 4h. Adj
 ### Rsync Excludes
 Build exclude list from:
 1. `.gitignore` patterns (if file exists)
-2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`
+2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`, `.hpc_cache/`
 3. Result directories (e.g., `results/`)
+
+The `.hpc_cache/` directory holds the content-addressed shim cache (see Step 6). It is local-only — the materialized shim at `src/hpc_chunking_shim.py` is what gets rsynced to the cluster.
 
 ## Step 4b: Compute Throughput Plan
 
@@ -204,7 +206,25 @@ For multi-executor submissions, generate one manifest per executor. Name them `_
 
 In Step 1, you ran `--help` on each executor. If an executor doesn't accept `--chunk-id`/`--total-chunks` but does accept some form of data slicing (`--start`/`--end`, file lists, date windows), generate a shim.
 
-Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT.parent / "templates" / "chunking_shim.py")'`). Copy it to the experiment repo as `src/hpc_chunking_shim.py` (or a more specific name like `src/hpc_backtest_shim.py`). Fill in:
+**Cache-check precondition.** Before generating, check the content-addressed shim cache — re-running for an unchanged executor must produce a byte-identical shim.
+
+```python
+from pathlib import Path
+from hpc_mapreduce import shim_cache_key, load_cached_shim, save_shim
+
+executor_path = Path("src/<executor>.py")
+template_path = Path("<path from _PACKAGE_ROOT.parent / 'templates' / 'chunking_shim.py'>")
+cache_dir = Path(".hpc_cache")
+materialize_at = Path("src/hpc_chunking_shim.py")  # or "src/hpc_<task>_shim.py"
+
+key = shim_cache_key(executor_path, template_path)
+cached = load_cached_shim(cache_dir, key)
+```
+
+- If `cached is not None`: copy `cached` to `materialize_at` (overwriting only if the existing file at `materialize_at` starts with `# hpc-shim-key: <key>` — a matching stamp means the on-disk file is a prior cache copy, so it's safe to overwrite). If the existing file has a different stamp or no stamp, treat it as user-edited and do NOT overwrite. Report "shim cache hit: <key>" and skip to the `run:` configuration below.
+- If `cached is None`: proceed with generation below. After generating the shim source, call `save_shim(cache_dir, key, shim_source, executor_path=executor_path, template_path=template_path, materialize_at=materialize_at)` to persist it. The helper prepends the `# hpc-shim-key:` stamp automatically.
+
+**Generation (cache miss only).** Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT.parent / "templates" / "chunking_shim.py")'`). Fill in:
 
 - `_compute_total_items()` — read the executor source, replicate its data pipeline up to the point where the array length is known
 - `translate()` — adjust the return args if the executor uses something other than `--start`/`--end`
@@ -218,7 +238,7 @@ chunking:
   total: 100
 ```
 
-Only generate the shim on first submission for a given executor interface. On subsequent submissions, reuse the existing shim. If the user has modified the shim, do not overwrite it.
+The cache layer guarantees that repeat submissions for the same executor and template reuse the exact same shim bytes, regardless of which Claude session runs `/submit`. A user-edited shim (stamp mismatch) is never overwritten.
 
 Also copy `hpc_mapreduce/map/dispatch.py` to `_hpc_dispatch.py` in the project root.
 

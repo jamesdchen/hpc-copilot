@@ -54,15 +54,23 @@ $ARGUMENTS formats (pick one):
 
 ## Step 1: Check Status
 
-Run the appropriate scheduler query (qstat for SGE, sacct for SLURM) and count completed results per grid point.
-
-Use `_hpc_dispatch.json` to determine result directories per grid point -- each task entry has a `result_dir` field. Count result files by listing what exists in the result dirs:
+Run the deterministic status reporter on the cluster. It reads `_hpc_dispatch.json`, checks each task's per-task `result_dir` for completion, queries the scheduler (sacct for SLURM, qstat for SGE) for in-flight tasks, and emits a single JSON blob:
 
 ```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<result_dir>/ 2>/dev/null | wc -l'
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m hpc_mapreduce.reduce.status \
+    --manifest _hpc_dispatch.json \
+    --job-ids <comma_separated_job_ids> \
+    --job-name <profile_name> \
+    --log-dir logs \
+    --file-glob "<results.summary_pattern or *>"'
 ```
 
-Map each task ID back to its grid point. Report completion per grid point:
+The returned JSON has:
+- `summary`: `{complete, running, pending, failed, unknown}` counts across all tasks
+- `tasks`: per-task `{status, ...}` with 1-based task IDs
+- `rollup`: per-grid-point counts (grouped by the manifest's `params` dict), keyed by a stable `k=v` string
+
+Format the `rollup` and `summary` into the user-facing table:
 
 ```
 Grid point status:
@@ -74,7 +82,9 @@ Grid point status:
 Overall: 3/6 tasks complete, 2 running, 1 failed
 ```
 
-Parse results to determine state:
+Do NOT re-count result files via `ls | wc -l`; the reporter already does this deterministically and the LLM's role here is presentation, not counting.
+
+Parse the `summary` to determine state:
 
 | Condition | State | Action |
 |-----------|-------|--------|
@@ -92,7 +102,7 @@ Parse results to determine state:
 If `_hpc_dispatch.json` contains a `wave_map` field, run the on-cluster combiner for each newly-completed wave. This aggregates metrics on the cluster while later waves are still running (pipeline parallelism).
 
 1. Read `wave_map` from the manifest to determine which task IDs belong to each wave
-2. Cross-reference with task status from Step 1: a wave is **complete** when all its task IDs have status `complete`
+2. Cross-reference with the Step 1 reporter's `tasks` dict: a wave is **complete** when every task ID in the wave has `status == "complete"` in the `tasks` dict (no separate re-count needed)
 3. Check `combined_waves` from the monitor state to skip waves already combined
 4. For each newly-complete wave not yet combined:
    ```bash
