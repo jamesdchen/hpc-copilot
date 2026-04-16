@@ -18,8 +18,15 @@ __all__ = [
     "deploy_runtime",
     # Job status & results
     "check_results",
+    "check_results_from_manifest",
     "report_status",
+    "report_status_from_manifest",
+    "rollup_by_grid_point",
     "detect_scheduler",
+    # Shim cache
+    "shim_cache_key",
+    "load_cached_shim",
+    "save_shim",
     # GPU selection
     "pick_gpu",
     # Reduce
@@ -63,11 +70,15 @@ from hpc_mapreduce.job.throughput import (
     build_wave_map,
     compute_submission_plan,
 )
+from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
 from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics, reduce_partials
 from hpc_mapreduce.reduce.status import (
     check_results,
+    check_results_from_manifest,
     detect_scheduler,
     report_status,
+    report_status_from_manifest,
+    rollup_by_grid_point,
 )
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
