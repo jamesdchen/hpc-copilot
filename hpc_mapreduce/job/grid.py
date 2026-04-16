@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 from math import prod
 
 __all__ = [
+    "MANIFEST_SCHEMA_VERSION",
     "expand_grid",
     "run_id",
     "build_task_manifest",
@@ -19,6 +20,12 @@ __all__ = [
     "expand_backtest",
     "attach_wave_map",
 ]
+
+# Version marker embedded in every manifest produced by ``build_task_manifest``.
+# Bump whenever the manifest shape changes in a way that on-cluster dispatch
+# code must reject.  The dispatcher (hpc_mapreduce/map/dispatch.py) hardcodes
+# its own expected value as a literal; keep the two in sync.
+MANIFEST_SCHEMA_VERSION = 1
 
 
 def expand_grid(grid: dict[str, list]) -> list[dict[str, str]]:
@@ -151,6 +158,7 @@ def build_task_manifest(
     grid: dict[str, list],
     result_dir_template: str,
     backtest: dict | None = None,
+    max_tasks: int | None = 10_000,
 ) -> dict:
     """Build a task manifest from a grid and optional backtest config.
 
@@ -164,7 +172,28 @@ def build_task_manifest(
         String with ``{run_id}`` placeholder.
     backtest:
         Optional backtest config dict. See :func:`expand_backtest`.
+    max_tasks:
+        Pre-flight ceiling on the number of tasks that will be materialized.
+        If the computed total exceeds this value, a :class:`ValueError` is
+        raised before any tasks are built.  Pass ``None`` to disable the
+        check.  Defaults to ``10_000`` — large enough for typical grids but
+        small enough to catch accidental explosion (e.g. a 10-year
+        hour-chunked backtest that would produce ~87k tasks).
+
+    Raises
+    ------
+    ValueError
+        If ``max_tasks`` is not ``None`` and the computed total exceeds it.
     """
+    if max_tasks is not None:
+        projected = total_tasks(grid, backtest)
+        if projected > max_tasks:
+            raise ValueError(
+                f"build_task_manifest would produce {projected} tasks "
+                f"(> max_tasks={max_tasks}). Pass max_tasks=None to disable "
+                f"or raise the threshold."
+            )
+
     points = expand_grid(grid)
 
     if backtest:
@@ -201,6 +230,7 @@ def build_task_manifest(
     n_tasks = len(tasks)
 
     return {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "total_tasks": n_tasks,
         "grid_size": len(points),
         "grid_keys": list(grid.keys()),

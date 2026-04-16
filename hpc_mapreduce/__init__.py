@@ -33,12 +33,14 @@ __all__ = [
     "reduce_metrics",
     "reduce_backtest",
     "reduce_partials",
+    "classify_failure",
     # Grid API
     "expand_grid",
     "expand_backtest",
     "build_task_manifest",
     "total_tasks",
     "attach_wave_map",
+    "MANIFEST_SCHEMA_VERSION",
     # Cluster constraints
     "ClusterConstraints",
     "parse_constraints",
@@ -47,6 +49,11 @@ __all__ = [
     "SubmissionPlan",
     "compute_submission_plan",
     "build_wave_map",
+    # Resubmit
+    "compact_task_ids",
+    "ResubmitBatch",
+    "ResubmitPlan",
+    "resubmit_plan",
     # Remote
     "run_combiner",
 ]
@@ -58,11 +65,18 @@ from hpc_mapreduce.infra.gpu import pick_gpu
 from hpc_mapreduce.infra.remote import deploy_runtime, rsync_pull, rsync_push, run_combiner, ssh_run
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 from hpc_mapreduce.job.grid import (
+    MANIFEST_SCHEMA_VERSION,
     attach_wave_map,
     build_task_manifest,
     expand_backtest,
     expand_grid,
     total_tasks,
+)
+from hpc_mapreduce.job.resubmit import (
+    ResubmitBatch,
+    ResubmitPlan,
+    compact_task_ids,
+    resubmit_plan,
 )
 from hpc_mapreduce.job.throughput import (
     SubmissionPlan,
@@ -71,6 +85,7 @@ from hpc_mapreduce.job.throughput import (
     compute_submission_plan,
 )
 from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
+from hpc_mapreduce.reduce.classify import classify_failure
 from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics, reduce_partials
 from hpc_mapreduce.reduce.status import (
     check_results,
