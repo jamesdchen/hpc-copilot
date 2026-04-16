@@ -116,6 +116,23 @@ Profile-level constraints override cluster-level constraints **field-by-field** 
 | `est_spin_up` | string | no | Estimated spin-up overhead (e.g. "5m", default: "5m") |
 | `est_task_duration` | string | no | Estimated duration per task (e.g. "10m", "1h30m"). Profile-level only. Used by the throughput optimizer to estimate total wall-clock time and plan wave scheduling. |
 
+## Interface mismatches (shims)
+
+When the framework's parallelism interface (grid params, backtest date periods) doesn't match what an executor expects (e.g. row-index ranges, file lists, GPU device IDs), the solution is a **shim** — a thin script in the experiment repo that translates between the two.
+
+The shim:
+1. Receives the framework's arguments (grid params, date periods, etc.)
+2. Translates to the executor's native interface (e.g. computes row ranges from data length)
+3. Forwards to the executor with the translated arguments
+
+The LLM generates the shim once at first submission. It lives in the experiment repo, is versioned, and is fully inspectable by the user. The `run` command in the profile targets the shim:
+
+```yaml
+run: "python3 src/hpc_backtest_shim.py -- python3 src/executor.py"
+```
+
+See `templates/chunking_shim.py` for a starting template. This keeps the framework fully agnostic, the executor fully agnostic, and the translation visible and editable.
+
 ## cluster_envs
 
 Optional per-cluster environment overrides. Keyed by cluster name, then by env_group name. Profiles reference these via `env_group`.
