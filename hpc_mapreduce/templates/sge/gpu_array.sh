@@ -34,8 +34,8 @@ GPU_COUNT="${GPU_COUNT:-2}"
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
-# Convert 1-based SGE_TASK_ID to 0-based task ID
-TASK_ID=$((SGE_TASK_ID - 1))
+# Convert 1-based SGE_TASK_ID to 0-based, add offset for batched submission
+TASK_ID=$((SGE_TASK_ID - 1 + ${TASK_OFFSET:-0}))
 
 # --- Diagnostics ---
 echo "============================================"
@@ -43,7 +43,7 @@ echo "Job ID:       $JOB_ID"
 echo "Array Task:   $SGE_TASK_ID"
 echo "Hostname:     $(hostname)"
 echo "GPUs:         $GPU_COUNT"
-echo "Task:         $TASK_ID"
+echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
 echo "============================================"
 
 # --- Module Setup ---
@@ -67,6 +67,7 @@ fi
 
 # --- Working Directory ---
 cd "$REPO_DIR"
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 
 # --- GPU Setup ---
 # CUDA_VISIBLE_DEVICES is typically set by SGE, but enforce if needed

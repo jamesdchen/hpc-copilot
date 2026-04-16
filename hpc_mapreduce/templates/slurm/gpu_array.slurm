@@ -38,8 +38,8 @@ GPU_COUNT="${GPU_COUNT:-2}"
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
-# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based task ID
-TASK_ID=$((SLURM_ARRAY_TASK_ID - 1))
+# Convert 1-based SLURM_ARRAY_TASK_ID to 0-based, add offset for batched submission
+TASK_ID=$((SLURM_ARRAY_TASK_ID - 1 + ${TASK_OFFSET:-0}))
 
 # --- Diagnostics ---
 echo "============================================"
@@ -48,12 +48,10 @@ echo "Array Task:   $SLURM_ARRAY_TASK_ID"
 echo "Hostname:     $(hostname)"
 echo "GPUs:         $GPU_COUNT"
 echo "CPUs:         $SLURM_CPUS_PER_TASK"
-echo "Task:         $TASK_ID"
+echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
 echo "============================================"
 
 # --- Module Setup ---
-module purge
-
 if [ -n "$MODULES" ]; then
     for mod in $MODULES; do
         module load "$mod"
@@ -70,6 +68,7 @@ fi
 
 # --- Working Directory ---
 cd "$REPO_DIR"
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 
 # --- GPU Setup ---
 # CUDA_VISIBLE_DEVICES is set by SLURM via --gres allocation

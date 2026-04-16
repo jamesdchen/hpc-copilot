@@ -16,7 +16,7 @@ set -e
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
 #
 # Submit with:
-#   qsub -t 1-100 -v CONDA_SOURCE=...,CONDA_ENV=...,EXECUTOR=...,... cpu_array.sh
+#   qsub -t 1-100 -v TASK_OFFSET=0,CONDA_SOURCE=...,CONDA_ENV=...,EXECUTOR=...,... cpu_array.sh
 # ==============================================================
 
 # --- SGE directives ---
@@ -57,14 +57,15 @@ fi
 
 # --- Working Directory ---
 cd "$REPO_DIR"
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"
 
-# Convert 1-based SGE_TASK_ID to 0-based task ID
-TASK_ID=$((SGE_TASK_ID - 1))
+# Convert 1-based SGE_TASK_ID to 0-based, add offset for batched submission
+TASK_ID=$((SGE_TASK_ID - 1 + ${TASK_OFFSET:-0}))
 
-echo "Task:         $TASK_ID"
+echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
 echo "Result dir:   $RESULT_DIR"
 echo "Executor:     $EXECUTOR"
 echo "============================================"
