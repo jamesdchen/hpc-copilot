@@ -12,8 +12,26 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 __all__ = ["main"]
+
+
+def _default_max_workers() -> int:
+    """Default thread-pool size: 2x CPU count, capped at 32 to spare NFS."""
+    return min(32, (os.cpu_count() or 4) * 2)
+
+
+def _read_metrics(metrics_path: str) -> dict:
+    """Read and parse one ``metrics.json`` file.
+
+    Raises ``FileNotFoundError`` if missing, ``json.JSONDecodeError`` /
+    ``OSError`` on read/parse failure — the caller translates these into
+    per-task error strings.
+    """
+    with open(metrics_path) as f:
+        data: dict = json.load(f)
+    return data
 
 
 # Duplicated from hpc_mapreduce.job.grid.run_id — this script cannot import
@@ -51,7 +69,7 @@ def _weighted_mean(entries: list, errors: list) -> dict:
     return result
 
 
-def main() -> None:
+def main(max_workers: int | None = None) -> None:
     # --- Read env vars ---
     wave_str = os.environ.get("HPC_WAVE")
     if wave_str is None:
@@ -94,11 +112,15 @@ def main() -> None:
 
     print(f"[combiner] wave={wave} tasks={len(task_ids)}")
 
-    # --- Read metrics per task ---
+    # --- Read metrics per task (parallelized — I/O-bound over NFS) ---
     errors: list = []
     # grid_point -> list of metric dicts
     groups: dict = {}
 
+    # Pre-resolve tasks into (tid, task, metrics_path) triples.  Tasks with
+    # no manifest entry or no metrics.json are short-circuited into errors
+    # here so the thread pool only handles genuine file reads.
+    readable: list = []  # list of (tid, grid_key, metrics_path)
     for tid in task_ids:
         task = tasks.get(str(tid))
         if task is None:
@@ -112,15 +134,33 @@ def main() -> None:
             errors.append(f"task {tid}: metrics.json not found")
             continue
 
-        try:
-            with open(metrics_path) as f:
-                metrics = json.load(f)
-        except (json.JSONDecodeError, OSError) as exc:
-            errors.append(f"task {tid}: failed to read metrics.json: {exc}")
-            continue
-
         grid_key = _run_id(task.get("params", {}))
-        groups.setdefault(grid_key, []).append(metrics)
+        readable.append((tid, grid_key, metrics_path))
+
+    workers = max_workers if max_workers is not None else _default_max_workers()
+    # Don't spin up more threads than there is work to do.
+    workers = max(1, min(workers, len(readable))) if readable else 1
+
+    if readable:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # Submit in task_id order; map future -> (tid, grid_key) so we
+            # can still attribute errors to the right task.
+            future_to_info = {
+                pool.submit(_read_metrics, metrics_path): (tid, grid_key)
+                for tid, grid_key, metrics_path in readable
+            }
+            # Iterate in submission order so error messages / appended
+            # metrics are in a deterministic order (task_id order).  The
+            # weighted-mean aggregate is order-independent, but deterministic
+            # order makes logs easier to read.
+            for future in future_to_info:
+                tid, grid_key = future_to_info[future]
+                try:
+                    metrics = future.result()
+                except (json.JSONDecodeError, OSError) as exc:
+                    errors.append(f"task {tid}: failed to read metrics.json: {exc}")
+                    continue
+                groups.setdefault(grid_key, []).append(metrics)
 
     # --- Aggregate per grid point ---
     grid_points: dict = {}

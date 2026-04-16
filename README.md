@@ -58,7 +58,7 @@ You: yes
 Claude: Submitted job 12345678 (60 tasks). Run /monitor to track progress.
 ```
 
-No config files required. Claude discovers your executors, detects environment needs from imports, and suggests resources based on executor type.
+No config files required. Claude discovers your executors by reading their source and `--help`, then suggests resources conversationally based on the executor and your input.
 
 ## How It Works
 
@@ -123,10 +123,10 @@ Claude remembers your preferences (cluster, executor directory, environment, res
 
 | Template | SGE | SLURM |
 |----------|-----|-------|
-| CPU array | `templates/sge/cpu_array.sh` | `templates/slurm/cpu_array.slurm` |
-| GPU array | `templates/sge/gpu_array.sh` | `templates/slurm/gpu_array.slurm` |
+| CPU array | `hpc_mapreduce/templates/sge/cpu_array.sh` | `hpc_mapreduce/templates/slurm/cpu_array.slurm` |
+| GPU array | `hpc_mapreduce/templates/sge/gpu_array.sh` | `hpc_mapreduce/templates/slurm/gpu_array.slurm` |
 
-Templates are parameterized via environment variables injected at submission time. Auto-selected based on detected GPU requirements.
+Templates are parameterized via environment variables injected at submission time. Resolve paths via `hpc_mapreduce.get_template_path(scheduler, template)`. The GPU template is used when the configured resources include `gpus`; otherwise the CPU template is used.
 
 ## Supported Clusters
 
