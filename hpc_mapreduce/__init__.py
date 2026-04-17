@@ -42,6 +42,10 @@ __all__ = [
     "total_tasks",
     "attach_wave_map",
     "MANIFEST_SCHEMA_VERSION",
+    # Executor discovery
+    "ExecutorInfo",
+    "discover_executors",
+    "is_executor_source",
     # Cluster constraints
     "ClusterConstraints",
     "parse_constraints",
@@ -73,6 +77,11 @@ from hpc_mapreduce.infra.remote import (
     ssh_run,
 )
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
+from hpc_mapreduce.job.discover import (
+    ExecutorInfo,
+    discover_executors,
+    is_executor_source,
+)
 from hpc_mapreduce.job.grid import (
     MANIFEST_SCHEMA_VERSION,
     attach_wave_map,
