@@ -1,5 +1,7 @@
 Scan the experiment repo's source directory and generate a self-contained executor Python file for HPC jobs.
 
+CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+
 ## Setup
 
 Read `hpc.yaml` in the current working directory. Identify the source directory by checking (in order):

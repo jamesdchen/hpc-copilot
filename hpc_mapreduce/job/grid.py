@@ -1,11 +1,23 @@
 """Grid expansion and task manifest generation.
 
 Pure computation — no I/O, only stdlib imports.
+
+Manifest schema history:
+
+* v1: initial format — ``schema_version``, ``total_tasks``, ``grid_size``,
+  ``grid_keys``, and per-task ``cmd`` / ``result_dir`` / ``params`` /
+  (optional) ``period``.
+* v2: adds ``cmd_sha`` on every task (first 16 hex chars of the SHA-256 of
+  the task's ``cmd`` string).  Provides a stable identifier for each task's
+  command that observers (``/monitor``, status tools) can use to detect
+  drift between the manifest and what actually ran.  The on-cluster
+  dispatcher accepts both v1 and v2 for back-compat.
 """
 
 from __future__ import annotations
 
 import calendar
+import hashlib
 import itertools
 import re
 from datetime import date, datetime, timedelta
@@ -25,7 +37,7 @@ __all__ = [
 # Bump whenever the manifest shape changes in a way that on-cluster dispatch
 # code must reject.  The dispatcher (hpc_mapreduce/map/dispatch.py) hardcodes
 # its own expected value as a literal; keep the two in sync.
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 
 
 def expand_grid(grid: dict[str, list]) -> list[dict[str, str]]:
@@ -143,10 +155,12 @@ def expand_backtest(backtest: dict) -> list[dict[str, str]]:
             # End of this period is day before next period starts
             period_end = min(next_cursor - timedelta(days=1), overall_end)
 
-        periods.append({
-            start_key: cursor.isoformat(),
-            end_key: period_end.isoformat(),
-        })
+        periods.append(
+            {
+                start_key: cursor.isoformat(),
+                end_key: period_end.isoformat(),
+            }
+        )
 
         cursor = next_cursor
 
@@ -221,6 +235,7 @@ def build_task_manifest(
                 "result_dir": result_dir_template.format(run_id=run_id(params)),
                 "params": dict(params),
             }
+            entry["cmd_sha"] = hashlib.sha256(entry["cmd"].encode()).hexdigest()[:16]
             if period:
                 entry["period"] = dict(period)
 
@@ -252,8 +267,7 @@ def attach_wave_map(
     """
     # Convert int keys/values to strings for JSON round-tripping
     str_map: dict[str, list[str]] = {
-        str(wave): [str(tid) for tid in tids]
-        for wave, tids in wave_map.items()
+        str(wave): [str(tid) for tid in tids] for wave, tids in wave_map.items()
     }
     return {**manifest, "wave_map": str_map}
 

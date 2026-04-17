@@ -21,6 +21,10 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["hpc_mapreduce*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100

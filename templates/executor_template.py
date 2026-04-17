@@ -1,14 +1,17 @@
 """<Model name> <type> backtest executor.
 
 Self-contained <description>. No imports from core/ or projects/.
+
+This is a scaffold — the body is intentionally commented so users fill it
+in per-experiment. Ruff F401/E501 are suppressed for that reason.
 """
+# ruff: noqa: F401, E501
 
 import argparse
 import os
 
 import numpy as np
 import pandas as pd
-
 from src.loading import load_raw_data
 from src.transforms import robust_transform
 
@@ -80,7 +83,9 @@ def main() -> None:
     df = load_raw_data(args.data_path, allow_missing=True)
 
     # 2. Robust transform on RV
-    adj_rv, baseline = robust_transform(df, "RV", is_target=True, use_diurnal=True, winsor_window=240)
+    adj_rv, baseline = robust_transform(
+        df, "RV", is_target=True, use_diurnal=True, winsor_window=240
+    )
     df["adj_RV"] = adj_rv
     df["baseline"] = baseline
 

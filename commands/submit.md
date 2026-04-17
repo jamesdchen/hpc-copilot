@@ -1,5 +1,7 @@
 Help me submit HPC jobs via SSH. Discovers experiment executors, builds submission plans conversationally, and handles all deployment.
 
+CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+
 All cluster commands run remotely via SSH. Code is synced from the local machine before submission.
 
 ## Setup
@@ -68,6 +70,12 @@ For multi-executor submissions: submit as **separate array jobs** (independent m
 
 ## Step 3: Build Grid
 
+Before materializing the manifest, check the projected task count:
+
+1. Compute `total_tasks(grid, backtest)` from `hpc_mapreduce.job.grid` on the proposed grid.
+2. If the count exceeds the cluster's `constraints.max_tasks` advisory (when set) or a common-sense threshold of 1000, surface it and ask: `"This will produce N tasks. Confirm? [y/N]"`.
+3. When building the manifest, pass `max_tasks=None` to `build_task_manifest` if the user has confirmed a count above 10_000; otherwise leave the default so `build_task_manifest` raises on accidental explosion.
+
 From executor CLI args and user intent, propose grid dimensions:
 
 ```
@@ -116,7 +124,7 @@ Read executor source code for import statements:
 Look up the cluster's available modules from `clusters.yaml`.
 
 For DL executors:
-- If cluster has `conda_envs` listed → present options: "Available conda envs on hoffman2: [harxhar-dl, base]. Which one?"
+- If cluster has `conda_envs` listed → present options: "Available conda envs on hoffman2: [<your_env>, base]. Which one?"
 - If no `conda_envs` in config → ask user: "This executor needs a conda environment with PyTorch. What's the env name on {cluster}?"
 
 Cache environment config in Claude Code memory.
@@ -171,7 +179,7 @@ Present the full submission plan:
 ═══════════════════════════════════════════════
 
   Cluster:    hoffman2 (SGE)
-  Remote:     /u/scratch/j/jamesdc1/harxhar
+  Remote:     <remote_path>
   
   Job 1: ml_ridge
     Executor:   python3 src/ml_ridge.py
@@ -199,6 +207,8 @@ Confirm?
 ## Step 6: Generate Dispatch Manifests
 
 For each job, use `hpc_mapreduce.job.grid.build_task_manifest()` to generate a `_hpc_dispatch.json` file locally. This JSON maps each task ID (0-based) to its full command string and result directory.
+
+`_hpc_dispatch.json` is the recoverable artifact for `/monitor` and `/aggregate`; it must persist between waves and across resubmissions (both locally and on the cluster).
 
 For multi-executor submissions, generate one manifest per executor. Name them `_hpc_dispatch_{executor_name}.json` or use separate subdirectories.
 

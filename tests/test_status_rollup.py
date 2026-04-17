@@ -71,8 +71,8 @@ def test_rollup_groups_by_grid_point(tmp_path):
         "tasks": {
             "1": {"status": "complete"},  # manifest 0: horizon=1, period 1
             "2": {"status": "complete"},  # manifest 1: horizon=1, period 2
-            "3": {"status": "running"},   # manifest 2: horizon=5, period 1
-            "4": {"status": "failed"},    # manifest 3: horizon=5, period 2
+            "3": {"status": "running"},  # manifest 2: horizon=5, period 1
+            "4": {"status": "failed"},  # manifest 3: horizon=5, period 2
         },
     }
 
@@ -110,10 +110,9 @@ def test_report_status_from_manifest_integrates(tmp_path):
     rdir.mkdir(parents=True)
     (rdir / "done.json").write_text("{}")
 
-    with patch(
-        "hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"
-    ), patch(
-        "hpc_mapreduce.infra.backends.query.query_sacct", return_value={}
+    with (
+        patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
+        patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}),
     ):
         report = report_status_from_manifest(
             manifest,

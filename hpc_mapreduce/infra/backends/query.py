@@ -3,7 +3,18 @@
 Batched-poll variant: each call to :func:`query_sacct` / :func:`query_sge`
 spawns **at most one** subprocess per scheduler tool rather than one per
 job ID.  This drastically reduces the number of SSH round-trips the
-/monitor loop incurs when many waves × batches are in flight.
+/monitor loop incurs when many waves x batches are in flight.
+
+Return shape (uniform across happy / error paths)::
+
+    {
+        "tasks": {task_id: {"state": str, "exit_code": str | None, "job_id": str}, ...},
+        "errors": [{"code": str, "detail": str}, ...],
+    }
+
+- Happy path: ``errors`` is ``[]``.
+- Tool missing / timeout: ``tasks`` is ``{}`` and ``errors`` has one entry.
+- Partial failures: both populated.
 """
 
 from __future__ import annotations
@@ -28,12 +39,14 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
     Issues a single ``sacct`` call with a comma-joined ``-j`` list and maps
     each resulting row back to its originating job ID.
 
-    Returns {task_id: {state, exit_code, job_id}} or {"error": ...}.
+    Returns ``{"tasks": {task_id: {state, exit_code, job_id}, ...},
+    "errors": [{code, detail}, ...]}``.
     """
     if not job_ids:
-        return {}
+        return {"tasks": {}, "errors": []}
 
     task_info: dict[int, dict] = {}
+    errors: list[dict] = []
     job_id_set = {str(j) for j in job_ids}
     joined = ",".join(str(j) for j in job_ids)
 
@@ -43,15 +56,38 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return {"error": "sacct_unavailable"}
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "tasks": {},
+            "errors": [{"code": "sacct_unavailable", "detail": f"timeout: {exc}"}],
+        }
+    except FileNotFoundError as exc:
+        return {
+            "tasks": {},
+            "errors": [{"code": "sacct_unavailable", "detail": f"binary not found: {exc}"}],
+        }
 
-    if result.returncode != 0 or not result.stdout.strip():
-        return {"error": "sacct_unavailable"}
+    if result.returncode != 0:
+        return {
+            "tasks": {},
+            "errors": [
+                {
+                    "code": "sacct_unavailable",
+                    "detail": f"sacct exit {result.returncode}: {result.stderr.strip()}",
+                }
+            ],
+        }
+
+    if not result.stdout.strip():
+        return {
+            "tasks": {},
+            "errors": [{"code": "sacct_unavailable", "detail": "empty sacct output"}],
+        }
 
     for line in result.stdout.strip().splitlines():
         parts = line.split("|")
         if len(parts) < 3:
+            errors.append({"code": "malformed_row", "detail": f"expected >=3 fields: {line!r}"})
             continue
         job_field, state, exit_code = parts[0], parts[1], parts[2]
         if "_" not in job_field:
@@ -66,15 +102,14 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
         try:
             tid = int(tail)
         except ValueError:
+            errors.append({"code": "malformed_row", "detail": f"non-integer task id: {line!r}"})
             continue
-        # First occurrence wins — main record comes before .batch/.extern steps.
+        # First occurrence wins - main record comes before .batch/.extern steps.
         if tid in task_info:
             continue
         task_info[tid] = {"state": state, "exit_code": exit_code, "job_id": base_job}
 
-    if not task_info:
-        return {"error": "sacct_unavailable"}
-    return task_info
+    return {"tasks": task_info, "errors": errors}
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +154,7 @@ def _process_qacct_block(
     block: dict[str, str],
     job_id: str,
     task_info: dict[int, dict],
+    errors: list[dict],
 ) -> None:
     """Extract task status from a single qacct block."""
     tid_str = block.get("taskid", "")
@@ -127,6 +163,7 @@ def _process_qacct_block(
     try:
         tid = int(tid_str)
     except ValueError:
+        errors.append({"code": "malformed_row", "detail": f"qacct non-integer taskid: {tid_str!r}"})
         return
     if tid in task_info:
         return  # qstat data takes precedence
@@ -137,6 +174,12 @@ def _process_qacct_block(
         exit_int = int(exit_status)
         failed_int = int(failed.split()[0]) if failed else 0
     except ValueError:
+        errors.append(
+            {
+                "code": "malformed_row",
+                "detail": f"qacct non-integer exit/failed for job {job_id}",
+            }
+        )
         exit_int, failed_int = -1, -1
 
     if exit_int == 0 and failed_int == 0:
@@ -151,20 +194,25 @@ def _process_qacct_block(
     task_info[tid] = {"state": state, "exit_code": exit_status, "job_id": job_id}
 
 
-def _parse_qacct_output(text: str, job_id: str, task_info: dict[int, dict]) -> None:
+def _parse_qacct_output(
+    text: str,
+    job_id: str,
+    task_info: dict[int, dict],
+    errors: list[dict],
+) -> None:
     """Parse a full qacct stdout buffer, feeding each block to the processor."""
     current: dict[str, str] = {}
     for raw_line in text.splitlines():
         if raw_line.startswith("====="):
             if current:
-                _process_qacct_block(current, job_id, task_info)
+                _process_qacct_block(current, job_id, task_info, errors)
                 current = {}
             continue
         parts = raw_line.split(None, 1)
         if len(parts) == 2:
             current[parts[0]] = parts[1].strip()
     if current:
-        _process_qacct_block(current, job_id, task_info)
+        _process_qacct_block(current, job_id, task_info, errors)
 
 
 def query_sge(job_ids: list[str], user: str | None = None) -> dict:
@@ -175,15 +223,18 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
     deduplicate and memoize so the same job ID is never polled twice in
     one tick.
 
-    Returns {task_id: {state, exit_code, job_id}} or {"error": ...}.
+    Returns ``{"tasks": {task_id: {state, exit_code, job_id}, ...},
+    "errors": [{code, detail}, ...]}``.
     """
     if not job_ids:
-        return {}
+        return {"tasks": {}, "errors": []}
 
     task_info: dict[int, dict] = {}
+    errors: list[dict] = []
     sge_user = user or os.environ.get("USER", os.environ.get("USERNAME", ""))
 
     # Phase 1: single qstat call for running/pending tasks across all jobs.
+    qstat_ok = False
     try:
         result = subprocess.run(
             ["qstat", "-u", sge_user],
@@ -191,9 +242,23 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
             text=True,
             timeout=30,
         )
-        qstat_out = result.stdout if result.returncode == 0 else ""
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        if result.returncode == 0:
+            qstat_out = result.stdout
+            qstat_ok = True
+        else:
+            qstat_out = ""
+            errors.append(
+                {
+                    "code": "qstat_failed",
+                    "detail": f"qstat exit {result.returncode}: {result.stderr.strip()}",
+                }
+            )
+    except subprocess.TimeoutExpired as exc:
         qstat_out = ""
+        errors.append({"code": "qstat_unavailable", "detail": f"timeout: {exc}"})
+    except FileNotFoundError as exc:
+        qstat_out = ""
+        errors.append({"code": "qstat_unavailable", "detail": f"binary not found: {exc}"})
 
     job_id_set = {str(j) for j in job_ids}
     for line in qstat_out.strip().splitlines():
@@ -209,8 +274,9 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
         for tid in _expand_task_range(task_spec):
             task_info[tid] = {"state": normalized, "exit_code": None, "job_id": jid}
 
-    # Phase 2: qacct for finished tasks — dedupe job_ids to avoid repeat
+    # Phase 2: qacct for finished tasks - dedupe job_ids to avoid repeat
     # subprocess calls for the same ID within a single poll.
+    qacct_any_ok = False
     seen: set[str] = set()
     for job_id in job_ids:
         key = str(job_id)
@@ -224,12 +290,29 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
                 text=True,
                 timeout=30,
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
+        except subprocess.TimeoutExpired as exc:
+            errors.append({"code": "qacct_unavailable", "detail": f"job {key} timeout: {exc}"})
             continue
+        except FileNotFoundError as exc:
+            errors.append({"code": "qacct_unavailable", "detail": f"binary not found: {exc}"})
+            # No point trying more job IDs if the binary is missing.
+            break
         if result.returncode != 0:
+            # qacct often exits nonzero for still-running jobs -- that's expected;
+            # we don't record this as an error, but note it for diagnostics only
+            # if no qacct call ever succeeds.
             continue
-        _parse_qacct_output(result.stdout, key, task_info)
+        qacct_any_ok = True
+        _parse_qacct_output(result.stdout, key, task_info, errors)
 
-    if not task_info:
-        return {"error": "sge_unavailable"}
-    return task_info
+    # If both qstat failed and no qacct call succeeded, surface as sge_unavailable
+    # in addition to the individual tool errors.
+    if not qstat_ok and not qacct_any_ok and not task_info:
+        errors.append(
+            {
+                "code": "sge_unavailable",
+                "detail": "both qstat and qacct failed or returned no data",
+            }
+        )
+
+    return {"tasks": task_info, "errors": errors}
