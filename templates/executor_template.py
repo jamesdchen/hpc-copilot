@@ -1,138 +1,138 @@
-"""<Model name> <type> backtest executor.
+"""Minimal HPC executor scaffold.
 
-Self-contained <description>. No imports from core/ or projects/.
+Copied into an experiment repo by ``/build-executor``. Every ``# TODO:`` marker
+is a point the LLM (or the user) is expected to fill in when customising for a
+specific model, metric, or data source. The file as-written is runnable —
+``python executor_template.py --help`` and ``python executor_template.py
+--output-file /tmp/out.csv`` both exit cleanly — so the smoke test in
+``/build-executor`` Step 4 can succeed on a freshly-scaffolded copy.
 
-This is a scaffold — the body is intentionally commented so users fill it
-in per-experiment. Ruff F401/E501 are suppressed for that reason.
+Contract (same as every other hpc_mapreduce executor):
+
+* Exposes an ``argparse`` CLI with ``if __name__ == "__main__":``.
+* Accepts the standard grid-param flags: ``--data-path``, ``--horizon``,
+  ``--start``, ``--end``, ``--output-file``. Additional flags are free-form.
+* Writes its result as a single file to ``--output-file`` (CSV by default;
+  swap for Parquet/JSON as needed).
+* Has no knowledge of the scheduler; all parallelism is expressed via grid
+  params handed in by ``_hpc_dispatch.py``.
 """
-# ruff: noqa: F401, E501
+
+# ruff: noqa: E501  (LLM-facing scaffolds read better with long lines)
+
+from __future__ import annotations
 
 import argparse
+import csv
 import os
-
-import numpy as np
-import pandas as pd
-from src.loading import load_raw_data
-from src.transforms import robust_transform
+from typing import Any
 
 # ── Constants ─────────────────────────────────────────────────────────────
+# TODO: adjust or delete constants that do not apply to your experiment.
 PERIODS_PER_DAY = 48
 
+
+# ── Data loading ──────────────────────────────────────────────────────────
+def load_data(data_path: str) -> list[dict[str, Any]]:
+    """Return the full input dataset as a list of row dicts.
+
+    TODO: replace with your real loader — e.g.
+        ``from lib.loading import load_raw_data``
+        ``return load_raw_data(data_path)``
+
+    The default stub returns an empty list so the scaffold runs without a
+    real dataset.
+    """
+    _ = data_path
+    return []
+
+
 # ── Feature engineering ───────────────────────────────────────────────────
-# --- EDIT: choose feature engineering approach ---
-# HAR lags:     generate_har_features(df, target_col="adj_RV")
-# PCA lags:     generate_raw_lag_features(df, target_col="adj_RV")
-# Calendar:     add_calendar_features(df)
-# Univariate:   no feature engineering (DL models)
+def build_features(rows: list[dict[str, Any]], horizon: int) -> list[dict[str, Any]]:
+    """Apply feature engineering and horizon-shift the target.
+
+    TODO: implement — HAR lags, calendar features, rolling stats, etc.
+    """
+    _ = horizon
+    return rows
 
 
-# ── Horizon shift ─────────────────────────────────────────────────────────
-# def apply_horizon_shift(...): ...
-# --- EDIT: copy from src/transforms.py or import ---
+# ── Model ─────────────────────────────────────────────────────────────────
+def fit_and_predict(
+    train_rows: list[dict[str, Any]],
+    test_rows: list[dict[str, Any]],
+) -> list[float]:
+    """Fit on train, predict on test. Return one prediction per test row.
+
+    TODO: instantiate your model (Ridge, XGBRegressor, torch.nn.Module, ...),
+    fit it, and return predictions aligned with ``test_rows``.
+    """
+    _ = train_rows
+    return [0.0 for _ in test_rows]
 
 
-# ── [Scaling classes if linear model] ─────────────────────────────────────
-# --- EDIT: include RollingRobustScaler + RollingBuffer + numba kernels
-#     for linear models (Ridge, ElasticNet, PCR).
-#     Omit for tree models (XGBoost, LightGBM). ---
+# ── Metric ────────────────────────────────────────────────────────────────
+def compute_metric(y_true: list[float], y_pred: list[float]) -> float:
+    """Return a scalar summarising prediction quality.
 
-
-# ── [Model definition if DL] ─────────────────────────────────────────────
-# --- EDIT: torch.nn.Module subclass for DL models ---
-
-
-# ── Duan smearing ─────────────────────────────────────────────────────────
-# def apply_duan_smearing(...): ...
-# --- EDIT: copy from src/evaluation.py or import ---
-
-
-# ── Walk-forward backtest ─────────────────────────────────────────────────
-# def run_backtest(...): ...
-# --- EDIT: copy from src/scaling.py or import ---
-# OR for DL:
-# ── GPU backtest ──────────────────────────────────────────────────────────
-# def _gpu_worker(...): ...
+    TODO: replace with your metric — QLIKE, MSE, MAE, accuracy, AUC, ...
+    """
+    if not y_true:
+        return 0.0
+    return sum((t - p) ** 2 for t, p in zip(y_true, y_pred, strict=True)) / len(y_true)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────
-def main() -> None:
-    parser = argparse.ArgumentParser(description="...")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
 
-    # Standard HPC args (always included)
-    parser.add_argument("--data-path", default="all30min")
-    parser.add_argument("--horizon", type=int, default=1)
-    parser.add_argument("--start", type=int, default=0)
-    parser.add_argument("--end", type=int, default=-1)
-    parser.add_argument("--output-file", required=True)
+    # Standard grid-param flags. Keep these.
+    parser.add_argument("--data-path", default="data/", help="dataset root or URI")
+    parser.add_argument("--horizon", type=int, default=1, help="forecast horizon")
+    parser.add_argument("--start", type=int, default=0, help="inclusive row-index lower bound")
+    parser.add_argument("--end", type=int, default=-1, help="exclusive upper bound (-1 = end)")
+    parser.add_argument("--output-file", required=True, help="where to write results")
 
-    # ML-specific
-    parser.add_argument("--train-window", type=int, default=500, help="training window in days")
-    parser.add_argument("--params-file", default=None, help="JSON file with tuned hyperparams")
+    # TODO: add model-specific flags (e.g. --alpha, --n-estimators, --epochs).
+    # parser.add_argument("--alpha", type=float, default=1.0)
 
-    # DL-specific (uncomment if GPU executor)
-    # parser.add_argument("--gpu-count", type=int, default=1)
-    # parser.add_argument("--epochs", type=int, default=None)
-    # parser.add_argument("--batch-size", type=int, default=None)
-    # parser.add_argument("--learning-rate", type=float, default=None)
+    return parser
 
-    # --- EDIT: add model-specific args ---
 
-    args = parser.parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
-    # 1. Load data
-    df = load_raw_data(args.data_path, allow_missing=True)
+    # 1. Load.
+    rows = load_data(args.data_path)
 
-    # 2. Robust transform on RV
-    adj_rv, baseline = robust_transform(
-        df, "RV", is_target=True, use_diurnal=True, winsor_window=240
-    )
-    df["adj_RV"] = adj_rv
-    df["baseline"] = baseline
+    # 2. Slice to this task's chunk.
+    end = len(rows) if args.end == -1 else args.end
+    rows = rows[args.start : end]
 
-    # 3. Feature engineering
-    # --- EDIT: model-specific ---
-    # df, har_names = generate_har_features(df, target_col="adj_RV")
-    # cal_names = add_calendar_features(df)
-    # feature_names = har_names + cal_names
+    # 3. Feature engineering + horizon shift.
+    rows = build_features(rows, args.horizon)
 
-    # 4. Drop initial NaN rows
-    # max_lag = resolve_har_lags()[-1]
-    # df = df.iloc[max_lag:].reset_index(drop=True)
+    # 4. TODO: split rows into train/test as your backtest requires.
+    train_rows: list[dict[str, Any]] = rows[:-1] if len(rows) > 1 else []
+    test_rows: list[dict[str, Any]] = rows[-1:] if rows else []
 
-    # 5. Extract numpy arrays
-    # X = df[feature_names].values.astype(np.float64)
-    # y = df["adj_RV"].values.astype(np.float64)
-    # dates = df["t"]
-    # baselines = df["baseline"].values.astype(np.float64)
+    # 5. Fit + predict.
+    y_pred = fit_and_predict(train_rows, test_rows)
 
-    # 6. Horizon shift
-    # X, y, dates, baselines = apply_horizon_shift(X, y, dates, baselines, args.horizon)
+    # 6. TODO: extract your ground-truth column from test_rows.
+    y_true = [float(r.get("y", 0.0)) for r in test_rows]
+    metric = compute_metric(y_true, y_pred)
 
-    # 7. Data slice
-    # start = args.start
-    # end = len(X) if args.end == -1 else args.end
-    # X_chunk, y_chunk = X[start:end], y[start:end]
-    # dates_chunk = dates.iloc[start:end].reset_index(drop=True)
-    # baselines_chunk = baselines[start:end]
+    # 7. Persist results. Replace with pandas/pyarrow if preferred.
+    os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
+    with open(args.output_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["horizon", "n_rows", "metric"])
+        writer.writerow([args.horizon, len(test_rows), metric])
 
-    # 8. Run model
-    # --- EDIT: walk-forward backtest or GPU backtest ---
-
-    # 9. Duan smearing + save
-    # pred_raw, true_raw = apply_duan_smearing(preds, y_oos, baselines_oos)
-    # results = pd.DataFrame({
-    #     "date": dates_oos,
-    #     "horizon": args.horizon,
-    #     "true_adj": y_oos,
-    #     "pred_adj": preds,
-    #     "true_raw": true_raw,
-    #     "pred_raw": pred_raw,
-    # })
-    # os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
-    # results.to_csv(args.output_file, index=False)
-    # print(f"Saved {len(results)} rows -> {args.output_file}")
-    pass
+    print(f"[executor_template] wrote {args.output_file} metric={metric:.6f}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

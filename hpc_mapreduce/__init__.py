@@ -33,6 +33,7 @@ __all__ = [
     "reduce_metrics",
     "reduce_backtest",
     "reduce_partials",
+    "reduce_resource_usage",
     "classify_failure",
     # Grid API
     "expand_grid",
@@ -41,6 +42,22 @@ __all__ = [
     "total_tasks",
     "attach_wave_map",
     "MANIFEST_SCHEMA_VERSION",
+    "resolve_git_sha",
+    "validate_result_dir_template",
+    # Manifest filenames & resume
+    "MAX_MANIFESTS",
+    "MANIFEST_ALIAS",
+    "manifest_filename_for_sha",
+    "aggregate_cmd_sha",
+    "write_manifest",
+    "find_existing_manifests",
+    "find_manifest_by_cmd_sha",
+    "prune_old_manifests",
+    "build_manifest_with_resume",
+    # Executor discovery
+    "ExecutorInfo",
+    "discover_executors",
+    "is_executor_source",
     # Cluster constraints
     "ClusterConstraints",
     "parse_constraints",
@@ -72,13 +89,31 @@ from hpc_mapreduce.infra.remote import (
     ssh_run,
 )
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
+from hpc_mapreduce.job.discover import (
+    ExecutorInfo,
+    discover_executors,
+    is_executor_source,
+)
 from hpc_mapreduce.job.grid import (
     MANIFEST_SCHEMA_VERSION,
     attach_wave_map,
     build_task_manifest,
     expand_backtest,
     expand_grid,
+    resolve_git_sha,
     total_tasks,
+    validate_result_dir_template,
+)
+from hpc_mapreduce.job.manifest import (
+    MANIFEST_ALIAS,
+    MAX_MANIFESTS,
+    aggregate_cmd_sha,
+    build_manifest_with_resume,
+    find_existing_manifests,
+    find_manifest_by_cmd_sha,
+    manifest_filename_for_sha,
+    prune_old_manifests,
+    write_manifest,
 )
 from hpc_mapreduce.job.resubmit import (
     ResubmitBatch,
@@ -94,7 +129,12 @@ from hpc_mapreduce.job.throughput import (
 )
 from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
 from hpc_mapreduce.reduce.classify import classify_failure
-from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics, reduce_partials
+from hpc_mapreduce.reduce.metrics import (
+    reduce_backtest,
+    reduce_metrics,
+    reduce_partials,
+    reduce_resource_usage,
+)
 from hpc_mapreduce.reduce.status import (
     check_results,
     check_results_from_manifest,

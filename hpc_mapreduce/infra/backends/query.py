@@ -8,9 +8,15 @@ job ID.  This drastically reduces the number of SSH round-trips the
 Return shape (uniform across happy / error paths)::
 
     {
-        "tasks": {task_id: {"state": str, "exit_code": str | None, "job_id": str}, ...},
+        "tasks": {task_id: {"state": str, "exit_code": str | None, "job_id": str,
+                             "elapsed_s": int, "cpu_s": int, "gpu_s": int}, ...},
         "errors": [{"code": str, "detail": str}, ...],
     }
+
+The three resource-usage keys (``elapsed_s``, ``cpu_s``, ``gpu_s``) are
+**always present** on every task dict so callers can sum them without
+defensively checking for missing keys.  Values are 0 when the scheduler
+does not yet know (e.g. still-running task reported by qstat).
 
 - Happy path: ``errors`` is ``[]``.
 - Tool missing / timeout: ``tasks`` is ``{}`` and ``errors`` has one entry.
@@ -22,11 +28,84 @@ from __future__ import annotations
 __all__ = [
     "query_sacct",
     "query_sge",
+    "parse_gpu_count_from_tres",
+    "parse_gpu_count_from_sge_resources",
 ]
 
 import os
 import re
 import subprocess
+
+# ---------------------------------------------------------------------------
+# Resource-usage parsing helpers
+# ---------------------------------------------------------------------------
+
+
+def parse_gpu_count_from_tres(tres: str) -> int:
+    """Parse GPU count from a SLURM TRES-style string.
+
+    Accepts values like ``"cpu=4,mem=16G,gres/gpu=2"`` or
+    ``"gres/gpu:a100=1,cpu=8"``.  Permissive: returns 0 on unrecognized
+    input rather than raising.  Only ``gres/gpu`` entries are counted.
+    """
+    if not tres:
+        return 0
+    total = 0
+    for part in tres.split(","):
+        part = part.strip()
+        if not part.startswith("gres/gpu"):
+            continue
+        # accepted forms: gres/gpu=N, gres/gpu:type=N
+        _, _, rhs = part.partition("=")
+        rhs = rhs.strip()
+        if not rhs:
+            continue
+        # strip trailing unit-ish suffix (rare for gpu but defensive)
+        m = re.match(r"(\d+)", rhs)
+        if not m:
+            continue
+        try:
+            total += int(m.group(1))
+        except ValueError:
+            continue
+    return total
+
+
+def parse_gpu_count_from_sge_resources(text: str) -> int:
+    """Parse GPU count from SGE-style resource / complex text.
+
+    Handles snippets like ``hard resource_list: h_rt=3600,gpu=2`` or
+    ``qsub_arg_list: -l gpu=1``.  Permissive: returns 0 on unrecognized
+    input.  Matches ``gpu=N`` case-insensitively, anywhere in the string.
+    """
+    if not text:
+        return 0
+    total = 0
+    # gpu=N (also matches num_gpu=N, cuda_gpu=N -- keep narrow to avoid FPs)
+    for m in re.finditer(r"(?<![A-Za-z_])gpu\s*=\s*(\d+)", text, flags=re.IGNORECASE):
+        try:
+            total += int(m.group(1))
+        except ValueError:
+            continue
+    return total
+
+
+def _to_int(value: str | None, default: int = 0) -> int:
+    """Best-effort int parse.  Returns *default* on any failure."""
+    if value is None:
+        return default
+    value = value.strip()
+    if not value:
+        return default
+    # tolerate trailing ".0" from some sacct formats
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return int(float(value))
+        except ValueError:
+            return default
+
 
 # ---------------------------------------------------------------------------
 # SLURM
@@ -50,7 +129,14 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
     job_id_set = {str(j) for j in job_ids}
     joined = ",".join(str(j) for j in job_ids)
 
-    cmd = ["sacct", "-j", joined, "--format=JobID,State,ExitCode", "--noheader", "--parsable2"]
+    cmd = [
+        "sacct",
+        "-j",
+        joined,
+        "--format=JobID,State,ExitCode,ElapsedRaw,ReqCPUS,AllocTRES",
+        "--noheader",
+        "--parsable2",
+    ]
     if cluster:
         cmd.insert(1, f"--clusters={cluster}")
 
@@ -90,6 +176,11 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
             errors.append({"code": "malformed_row", "detail": f"expected >=3 fields: {line!r}"})
             continue
         job_field, state, exit_code = parts[0], parts[1], parts[2]
+        # Optional trailing fields (only present when sacct was invoked with the
+        # extended --format we request above).  Older fixtures/tests still pass.
+        elapsed_raw = parts[3] if len(parts) > 3 else ""
+        req_cpus = parts[4] if len(parts) > 4 else ""
+        alloc_tres = parts[5] if len(parts) > 5 else ""
         if "_" not in job_field:
             continue
         # job_field looks like "12345_7" or "12345_7.batch"; strip trailing step.
@@ -107,7 +198,17 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
         # First occurrence wins - main record comes before .batch/.extern steps.
         if tid in task_info:
             continue
-        task_info[tid] = {"state": state, "exit_code": exit_code, "job_id": base_job}
+        elapsed_s = _to_int(elapsed_raw)
+        cpus = _to_int(req_cpus)
+        gpus = parse_gpu_count_from_tres(alloc_tres)
+        task_info[tid] = {
+            "state": state,
+            "exit_code": exit_code,
+            "job_id": base_job,
+            "elapsed_s": elapsed_s,
+            "cpu_s": cpus * elapsed_s,
+            "gpu_s": gpus * elapsed_s,
+        }
 
     return {"tasks": task_info, "errors": errors}
 
@@ -191,7 +292,23 @@ def _process_qacct_block(
     else:
         state = "FAILED"
 
-    task_info[tid] = {"state": state, "exit_code": exit_status, "job_id": job_id}
+    # ru_wallclock is seconds (can be float); slots is the CPU count.
+    elapsed_s = _to_int(block.get("ru_wallclock", ""))
+    slots = _to_int(block.get("slots", ""), default=1) or 1
+    # GPUs may appear on "hard resource_list" or "qsub_arg_list" lines.
+    gpu_text = " ".join(
+        v for k, v in block.items() if k in ("hard", "resource_list", "qsub_arg_list", "granted_pe")
+    )
+    gpus = parse_gpu_count_from_sge_resources(gpu_text)
+
+    task_info[tid] = {
+        "state": state,
+        "exit_code": exit_status,
+        "job_id": job_id,
+        "elapsed_s": elapsed_s,
+        "cpu_s": slots * elapsed_s,
+        "gpu_s": gpus * elapsed_s,
+    }
 
 
 def _parse_qacct_output(
@@ -272,7 +389,16 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
         normalized = _SGE_STATE_MAP.get(state_code, "UNKNOWN")
         task_spec = cols[-1].strip() if len(cols) >= 9 else ""
         for tid in _expand_task_range(task_spec):
-            task_info[tid] = {"state": normalized, "exit_code": None, "job_id": jid}
+            task_info[tid] = {
+                "state": normalized,
+                "exit_code": None,
+                "job_id": jid,
+                # qstat does not report resource usage for live tasks; leave 0
+                # so the per-task dict shape is uniform with qacct results.
+                "elapsed_s": 0,
+                "cpu_s": 0,
+                "gpu_s": 0,
+            }
 
     # Phase 2: qacct for finished tasks - dedupe job_ids to avoid repeat
     # subprocess calls for the same ID within a single poll.

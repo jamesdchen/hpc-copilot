@@ -160,7 +160,23 @@ Aggregation results:
   ridge_pca:      complete — QLIKE: 0.298, MSE: 0.0010
   xgboost_har:    incomplete (8/10 tasks)
   xgboost_pca:    complete — QLIKE: 0.310, MSE: 0.0011
+
+Cluster cost: 47.2 CPU-hours, 3.1 GPU-hours (60 tasks counted)
 ```
+
+### Cluster cost rollup
+
+`/monitor`'s status report exposes a top-level `resource_usage` key:
+
+```json
+{"cpu_hours": 47.2, "gpu_hours": 3.1, "elapsed_hours": 12.4, "tasks_counted": 60}
+```
+
+Values are derived from `sacct` (`ElapsedRaw * ReqCPUS`, `gres/gpu` in
+`AllocTRES`) or `qacct` (`ru_wallclock * slots`, `gpu=N` in the hard
+resource list).  Surface these numbers after the per-grid-point metrics
+so the user knows what a given sweep cost in cluster time — no dollar
+conversion, just hours.
 
 When interpreting:
 - Lead with the most important metric or finding

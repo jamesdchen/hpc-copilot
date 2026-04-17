@@ -51,6 +51,38 @@ class TestReportStatus:
         assert "total_tasks" in result
         assert result["total_tasks"] == 1
         assert "summary" in result
+        # resource_usage is additive & always present with the canonical shape.
+        assert "resource_usage" in result
+        ru = result["resource_usage"]
+        for k in ("cpu_hours", "gpu_hours", "elapsed_hours", "tasks_counted"):
+            assert k in ru
+
+
+class TestReportStatusResourceUsage:
+    def test_resource_usage_sums_from_query(self, tmp_path):
+        # Fake query returns two running tasks with usage data so we can
+        # verify the report-level rollup wires through correctly.
+        fake_query = {
+            "tasks": {
+                1: {"state": "RUNNING", "elapsed_s": 3600, "cpu_s": 4 * 3600, "gpu_s": 3600},
+                2: {"state": "RUNNING", "elapsed_s": 1800, "cpu_s": 4 * 1800, "gpu_s": 0},
+            },
+            "errors": [],
+        }
+        with (
+            patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
+            patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value=fake_query),
+        ):
+            result = report_status(
+                result_dir=tmp_path,
+                job_ids=["12345"],
+                total_tasks=2,
+                scheduler="slurm",
+            )
+        ru = result["resource_usage"]
+        assert ru["cpu_hours"] == round((4 * 3600 + 4 * 1800) / 3600.0, 4)
+        assert ru["gpu_hours"] == 1.0
+        assert ru["tasks_counted"] == 2
 
 
 class TestHeaderOnlyCsv:
