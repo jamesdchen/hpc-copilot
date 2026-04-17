@@ -9,6 +9,7 @@ __all__ = [
     "reduce_metrics",
     "reduce_backtest",
     "reduce_partials",
+    "reduce_resource_usage",
 ]
 
 import glob
@@ -162,3 +163,43 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
         results[run_id] = agg
 
     return results
+
+
+def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:
+    """Sum per-task cpu_s / gpu_s / elapsed_s into a run-level cost rollup.
+
+    Accepts the ``tasks`` map from a status report (string-keyed, 1-based task
+    IDs) or the raw ``tasks`` dict from :func:`query_sacct` / :func:`query_sge`
+    (int-keyed).  Missing keys are treated as 0 so partial/unknown tasks do
+    not crash the rollup.
+
+    Returns a dict with stable keys::
+
+        {
+            "cpu_hours": float,   # sum(cpu_s) / 3600
+            "gpu_hours": float,   # sum(gpu_s) / 3600
+            "elapsed_hours": float,  # sum(elapsed_s) / 3600 -- i.e. wall-time summed across tasks
+            "tasks_counted": int, # number of tasks that contributed nonzero elapsed_s
+        }
+    """
+    total_cpu_s = 0
+    total_gpu_s = 0
+    total_elapsed_s = 0
+    counted = 0
+    for info in (tasks or {}).values():
+        if not isinstance(info, dict):
+            continue
+        elapsed = int(info.get("elapsed_s", 0) or 0)
+        cpu = int(info.get("cpu_s", 0) or 0)
+        gpu = int(info.get("gpu_s", 0) or 0)
+        total_elapsed_s += elapsed
+        total_cpu_s += cpu
+        total_gpu_s += gpu
+        if elapsed > 0:
+            counted += 1
+    return {
+        "cpu_hours": round(total_cpu_s / 3600.0, 4),
+        "gpu_hours": round(total_gpu_s / 3600.0, 4),
+        "elapsed_hours": round(total_elapsed_s / 3600.0, 4),
+        "tasks_counted": counted,
+    }

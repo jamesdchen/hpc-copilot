@@ -33,6 +33,7 @@ __all__ = [
     "reduce_metrics",
     "reduce_backtest",
     "reduce_partials",
+    "reduce_resource_usage",
     "classify_failure",
     # Grid API
     "expand_grid",
@@ -94,7 +95,12 @@ from hpc_mapreduce.job.throughput import (
 )
 from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
 from hpc_mapreduce.reduce.classify import classify_failure
-from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics, reduce_partials
+from hpc_mapreduce.reduce.metrics import (
+    reduce_backtest,
+    reduce_metrics,
+    reduce_partials,
+    reduce_resource_usage,
+)
 from hpc_mapreduce.reduce.status import (
     check_results,
     check_results_from_manifest,
