@@ -20,8 +20,13 @@ import calendar
 import hashlib
 import itertools
 import re
-from datetime import date, datetime, timedelta
+import subprocess
+from datetime import date, datetime, timedelta, timezone
 from math import prod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 __all__ = [
     "MANIFEST_SCHEMA_VERSION",
@@ -31,7 +36,19 @@ __all__ = [
     "total_tasks",
     "expand_backtest",
     "attach_wave_map",
+    "resolve_git_sha",
+    "validate_result_dir_template",
 ]
+
+# Placeholder names in ``result_dir`` templates that are resolved per-run
+# (constant across every task in a manifest).  Grid-point keys vary per task.
+_RUN_LEVEL_PLACEHOLDERS: frozenset[str] = frozenset({"run_id", "date", "git_sha"})
+
+# Regex used to extract ``{name}`` placeholders from ``result_dir`` templates.
+# Matches simple ``{identifier}`` — no format specs, no nested braces.  This is
+# deliberately strict so users get a clear error for unsupported template
+# features rather than silent behaviour.
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 # Version marker embedded in every manifest produced by ``build_task_manifest``.
 # Bump whenever the manifest shape changes in a way that on-cluster dispatch
@@ -167,12 +184,92 @@ def expand_backtest(backtest: dict) -> list[dict[str, str]]:
     return periods
 
 
+def resolve_git_sha(repo_path: str | Path | None = None) -> str:
+    """Return the short (7-char) git SHA of ``HEAD`` in *repo_path*.
+
+    Falls back to the literal string ``"nogit"`` when ``git`` is unavailable,
+    the path is not a git repository, or the subprocess fails for any other
+    reason.  This is intentionally permissive — ``result_dir`` templating
+    should never hard-fail because the experiment lives outside a git repo.
+
+    Parameters
+    ----------
+    repo_path:
+        Directory in which to run ``git rev-parse HEAD``.  Defaults to the
+        current working directory.
+    """
+    cwd = str(repo_path) if repo_path is not None else None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return "nogit"
+    if result.returncode != 0:
+        return "nogit"
+    sha = result.stdout.strip()
+    if not sha:
+        return "nogit"
+    return sha[:7]
+
+
+def _extract_placeholders(template: str) -> list[str]:
+    """Return the names of every ``{name}`` placeholder in *template*.
+
+    Preserves source order and keeps duplicates; callers that need a unique
+    set can wrap the result in :class:`set`.
+    """
+    return _PLACEHOLDER_RE.findall(template)
+
+
+def validate_result_dir_template(
+    template: str,
+    grid: dict[str, list],
+) -> None:
+    """Validate that every ``{name}`` in *template* can be resolved per-task.
+
+    A placeholder is valid iff it is one of the run-level names
+    (``run_id``, ``date``, ``git_sha``) or a grid key that appears in every
+    grid point.  Since :func:`expand_grid` produces grid points with keys
+    equal to ``grid.keys()``, this reduces to membership in ``grid``.
+
+    Raises
+    ------
+    ValueError
+        If any referenced placeholder is missing from both the run-level
+        set and *grid*.  The error message lists the valid names and the
+        missing one.
+    """
+    referenced = _extract_placeholders(template)
+    valid_grid_keys = set(grid.keys())
+    missing: list[str] = []
+    for name in referenced:
+        if name in _RUN_LEVEL_PLACEHOLDERS:
+            continue
+        if name in valid_grid_keys:
+            continue
+        if name not in missing:
+            missing.append(name)
+    if missing:
+        valid = sorted(_RUN_LEVEL_PLACEHOLDERS | valid_grid_keys)
+        raise ValueError(
+            f"result_dir template {template!r} references unknown "
+            f"placeholder(s) {missing!r}. Valid placeholders are: {valid}"
+        )
+
+
 def build_task_manifest(
     run_cmd: str,
     grid: dict[str, list],
     result_dir_template: str,
     backtest: dict | None = None,
     max_tasks: int | None = 10_000,
+    repo_path: str | Path | None = None,
 ) -> dict:
     """Build a task manifest from a grid and optional backtest config.
 
@@ -183,7 +280,12 @@ def build_task_manifest(
     grid:
         ``param_name -> list_of_values``.
     result_dir_template:
-        String with ``{run_id}`` placeholder.
+        Template string for the per-task ``result_dir``.  Supports the
+        run-level placeholders ``{run_id}`` (deterministic ID derived from
+        a task's grid-point values), ``{date}`` (UTC ``YYYY-MM-DD`` at
+        manifest-build time), ``{git_sha}`` (7-char ``HEAD`` SHA of the
+        experiment repo, or ``"nogit"`` on failure), plus any grid key
+        (e.g. ``{model}``, ``{dataset}``) present in *grid*.
     backtest:
         Optional backtest config dict. See :func:`expand_backtest`.
     max_tasks:
@@ -193,12 +295,18 @@ def build_task_manifest(
         check.  Defaults to ``10_000`` — large enough for typical grids but
         small enough to catch accidental explosion (e.g. a 10-year
         hour-chunked backtest that would produce ~87k tasks).
+    repo_path:
+        Directory used to resolve ``{git_sha}``.  Defaults to the current
+        working directory.
 
     Raises
     ------
     ValueError
-        If ``max_tasks`` is not ``None`` and the computed total exceeds it.
+        If ``max_tasks`` is not ``None`` and the computed total exceeds it,
+        or if ``result_dir_template`` references an unknown placeholder.
     """
+    validate_result_dir_template(result_dir_template, grid)
+
     if max_tasks is not None:
         projected = total_tasks(grid, backtest)
         if projected > max_tasks:
@@ -219,6 +327,11 @@ def build_task_manifest(
     else:
         periods = [{}]
 
+    # Resolve run-level placeholders once — they are constant for every
+    # task in this manifest.
+    run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    git_sha = resolve_git_sha(repo_path)
+
     tasks: dict[str, dict] = {}
     task_idx = 0
     for period in periods:
@@ -230,9 +343,15 @@ def build_task_manifest(
                 parts.append(f"{start_arg} {period[start_key]}")
                 parts.append(f"{end_arg} {period[end_key]}")
 
+            format_kwargs: dict[str, str] = {
+                "run_id": run_id(params),
+                "date": run_date,
+                "git_sha": git_sha,
+                **params,
+            }
             entry: dict = {
                 "cmd": " ".join(parts),
-                "result_dir": result_dir_template.format(run_id=run_id(params)),
+                "result_dir": result_dir_template.format(**format_kwargs),
                 "params": dict(params),
             }
             entry["cmd_sha"] = hashlib.sha256(entry["cmd"].encode()).hexdigest()[:16]

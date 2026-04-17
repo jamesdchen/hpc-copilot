@@ -5,7 +5,9 @@ from hpc_mapreduce.job.grid import (
     build_task_manifest,
     expand_backtest,
     expand_grid,
+    resolve_git_sha,
     total_tasks,
+    validate_result_dir_template,
 )
 from hpc_mapreduce.job.throughput import (
     JobBatch,
@@ -21,6 +23,8 @@ __all__ = [
     "expand_backtest",
     "build_task_manifest",
     "total_tasks",
+    "resolve_git_sha",
+    "validate_result_dir_template",
     "WorkloadSpec",
     "JobBatch",
     "SubmissionPlan",

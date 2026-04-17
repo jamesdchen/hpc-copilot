@@ -41,6 +41,8 @@ __all__ = [
     "total_tasks",
     "attach_wave_map",
     "MANIFEST_SCHEMA_VERSION",
+    "resolve_git_sha",
+    "validate_result_dir_template",
     # Cluster constraints
     "ClusterConstraints",
     "parse_constraints",
@@ -78,7 +80,9 @@ from hpc_mapreduce.job.grid import (
     build_task_manifest,
     expand_backtest,
     expand_grid,
+    resolve_git_sha,
     total_tasks,
+    validate_result_dir_template,
 )
 from hpc_mapreduce.job.resubmit import (
     ResubmitBatch,
