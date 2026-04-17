@@ -79,10 +79,37 @@ If `gpus` is present, the `gpu_array` template is used; otherwise `cpu_array`.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `dir` | string | no | Result directory template. Supports `{run_id}` placeholder |
+| `dir` | string | no | Result directory template. See *Result directory templating* below |
 | `pattern` | string | no | Glob pattern for result files |
 | `aggregate_cmd` | string | no | Fan-in command after all tasks complete |
 | `summary_pattern` | string | no | Glob for summary files to download after aggregation |
+
+### Result directory templating
+
+`results.dir` accepts `{name}` placeholders that are resolved per-task when the
+dispatch manifest is built. Supported names:
+
+| Placeholder | Scope | Resolution |
+|---|---|---|
+| `{run_id}` | per-task | Deterministic ID derived from the task's grid-point values (see `run_id()` in `hpc_mapreduce.job.grid`). Existing behaviour; back-compat guaranteed. |
+| `{date}` | run-level | UTC `YYYY-MM-DD` at manifest-build time. Constant across every task in the run. |
+| `{git_sha}` | run-level | First 7 chars of `git rev-parse HEAD` in the experiment repo. Falls back to the literal `"nogit"` when git is unavailable or the repo has no commits. |
+| `{<grid_key>}` | per-task | Any key present in the `grid` block (e.g. `{model}`, `{dataset}`). Varies per task. |
+
+Validation runs at manifest-build time: every `{name}` referenced by the
+template must resolve to either a run-level placeholder or a grid key that
+exists in every task's grid point. Unknown names raise `ValueError` with a
+message listing the valid names.
+
+Examples:
+
+```yaml
+results:
+  dir: "results/{run_id}"              # back-compat, unchanged
+  dir: "results/{date}/{run_id}"       # per-day partition
+  dir: "runs/{git_sha}/{run_id}"       # per-commit partition
+  dir: "out/{model}/{dataset}/{run_id}"  # per-grid-key partition
+```
 
 ## backtest
 
