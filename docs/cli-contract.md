@@ -54,7 +54,8 @@ Emit a full status report for a dispatch manifest.
 | `--sge-user` | no | `qstat -u` value |
 | `--min-rows` | no | CSV min-row threshold (default 0) |
 
-**Stdout JSON schema** — all four top-level keys always present:
+**Stdout JSON schema** — four top-level keys always present, plus
+`resource_usage` when scheduler accounting data is available:
 
 ```json
 {
@@ -63,12 +64,17 @@ Emit a full status report for a dispatch manifest.
                         "cmd_sha": "<16-hex>|null", "...": "..."}},
   "rollup":  {"<grid_point_key>": {"complete": 0, "running": 0, "pending": 0,
                                    "failed": 0, "unknown": 0, "total": 0}},
-  "errors":  [{"code": "...", "detail": "..."}]
+  "errors":  [{"code": "...", "detail": "..."}],
+  "resource_usage": {"cpu_hours": 0.0, "gpu_hours": 0.0, "tasks_counted": 0}
 }
 ```
 
 - `tasks[tid].cmd_sha` echoes the manifest v2 per-task `cmd_sha` (first 16 hex
   chars of SHA-256 of the task's `cmd`) so observers can detect drift.
+- `resource_usage` is additive and backwards-compatible: derived from
+  `sacct`/`qstat` accounting fields (`ElapsedRaw`, `ReqCPUS`, `AllocTRES` for
+  SLURM; `ru_wallclock`, `slots`, `gpu` for SGE). Sums across completed tasks
+  only. Absent or zeroed when the scheduler query returns no accounting data.
 - Exit code: `0` on success, `2` if the manifest is missing or unparseable.
 
 ## `python3 _hpc_dispatch.py` (on cluster)
