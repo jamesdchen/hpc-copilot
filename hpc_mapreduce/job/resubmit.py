@@ -67,10 +67,7 @@ def compact_task_ids(ids: list[int]) -> str:
             run_end = tid
     runs.append((run_start, run_end))
 
-    parts = [
-        f"{s}" if s == e else f"{s}-{e}"
-        for s, e in runs
-    ]
+    parts = [f"{s}" if s == e else f"{s}-{e}" for s, e in runs]
     return ",".join(parts)
 
 
@@ -85,7 +82,7 @@ class ResubmitBatch:
     """
 
     batch_index: int
-    task_ids: tuple[int, ...]    # 1-based, sorted
+    task_ids: tuple[int, ...]  # 1-based, sorted
     wave: int
 
     @property
@@ -109,10 +106,10 @@ class ResubmitPlan:
     """
 
     batches: list[ResubmitBatch]
-    total_tasks: int            # == number of failed task IDs
+    total_tasks: int  # == number of failed task IDs
     total_batches: int
     max_concurrent: int
-    overrides: dict             # scheduler/template overrides; empty dict if none
+    overrides: dict  # scheduler/template overrides; empty dict if none
 
 
 def resubmit_plan(
@@ -179,9 +176,7 @@ def resubmit_plan(
         if str(tid) not in tasks:
             unknown.append(tid)
     if unknown:
-        raise ValueError(
-            f"failed_task_ids not present in manifest: {unknown}"
-        )
+        raise ValueError(f"failed_task_ids not present in manifest: {unknown}")
 
     sorted_ids = sorted(failed_task_ids)
     if constraints is None:
@@ -200,11 +195,13 @@ def resubmit_plan(
         # jb.task_start/task_end are 1-based inclusive indexes into the
         # *sorted failed list* — not into the original manifest.
         slice_ids = tuple(sorted_ids[jb.task_start - 1 : jb.task_end])
-        batches.append(ResubmitBatch(
-            batch_index=jb.batch_index,
-            task_ids=slice_ids,
-            wave=jb.wave,
-        ))
+        batches.append(
+            ResubmitBatch(
+                batch_index=jb.batch_index,
+                task_ids=slice_ids,
+                wave=jb.wave,
+            )
+        )
 
     return ResubmitPlan(
         batches=batches,

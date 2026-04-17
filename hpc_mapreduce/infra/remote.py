@@ -4,7 +4,7 @@ Provides thin wrappers around ssh/rsync so cluster commands can be
 executed from a local machine without paramiko or other dependencies.
 
 All functions require explicit ``host``, ``user``, and ``remote_path``
-parameters — there are no hardcoded defaults.  Callers obtain these
+parameters - there are no hardcoded defaults.  Callers obtain these
 values from ``clusters.yaml`` + ``hpc.yaml`` via :mod:`hpc_mapreduce.job.manifest`.
 """
 
@@ -16,6 +16,7 @@ __all__ = [
     "rsync_pull",
     "deploy_runtime",
     "run_combiner",
+    "run_combiner_checked",
 ]
 
 import subprocess
@@ -168,12 +169,14 @@ def run_combiner(
     remote_path: str,
     wave: int,
     manifest_name: str = "_hpc_dispatch.json",
+    force: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run the on-cluster combiner on the login node for a specific wave.
 
-    Executes ``_hpc_combiner.py`` on the remote host via SSH, setting
-    the ``HPC_WAVE`` and ``HPC_MANIFEST`` environment variables so the
-    combiner knows which wave's tasks to aggregate.
+    Executes ``_hpc_combiner.py`` on the remote host via SSH.  The combiner
+    accepts both CLI flags (preferred) and ``HPC_WAVE`` / ``HPC_MANIFEST``
+    env vars (for back-compat with older deployed copies); we pass both
+    so the same helper works against either version.
 
     Parameters
     ----------
@@ -187,13 +190,49 @@ def run_combiner(
         Wave number (0-based) to combine.
     manifest_name:
         Name of the manifest file (relative to *remote_path*).
+    force:
+        If True, append ``--force`` so the combiner overwrites any existing
+        ``_combiner/wave_N.json`` output.
     """
+    force_flag = " --force" if force else ""
     cmd = (
         f"cd {remote_path} && "
         f"HPC_WAVE={wave} HPC_MANIFEST={manifest_name} "
-        f"python3 _hpc_combiner.py"
+        f"python3 _hpc_combiner.py --wave {wave} --manifest {manifest_name}{force_flag}"
     )
     return ssh_run(cmd, host=host, user=user)
+
+
+def run_combiner_checked(
+    *,
+    host: str,
+    user: str,
+    remote_path: str,
+    wave: int,
+    manifest_name: str = "_hpc_dispatch.json",
+    force: bool = False,
+) -> tuple[bool, str, str]:
+    """Run the combiner and return ``(ok, stdout, stderr)``.
+
+    Thin wrapper around :func:`run_combiner` that collapses
+    ``CompletedProcess`` into a simple tuple, saving callers (especially
+    the LLM orchestrator) from having to know the subprocess API.
+
+    ``ok`` is ``True`` iff the remote combiner exited with returncode ``0``.
+    """
+    result = run_combiner(
+        host=host,
+        user=user,
+        remote_path=remote_path,
+        wave=wave,
+        manifest_name=manifest_name,
+        force=force,
+    )
+    return (
+        result.returncode == 0,
+        result.stdout or "",
+        result.stderr or "",
+    )
 
 
 def rsync_pull(

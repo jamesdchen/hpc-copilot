@@ -46,11 +46,7 @@ def test_queue_stall():
 
 
 def test_code_bug_plain_traceback():
-    log = (
-        "Traceback (most recent call last):\n"
-        "  File 'x.py', line 1\n"
-        "KeyError: 'missing'\n"
-    )
+    log = "Traceback (most recent call last):\n  File 'x.py', line 1\nKeyError: 'missing'\n"
     assert classify_failure(log) == "code_bug"
 
 

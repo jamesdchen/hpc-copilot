@@ -26,12 +26,15 @@ class TestDispatchAtomicOutput:
 
     def test_successful_task_promotes_output(self, tmp_path, monkeypatch):
         result_dir = str(tmp_path / "results")
-        manifest_path = self._write_manifest(tmp_path, {
-            "1": {
-                "cmd": 'echo hello > "$RESULT_DIR/results_task_1.csv"',
-                "result_dir": result_dir,
+        manifest_path = self._write_manifest(
+            tmp_path,
+            {
+                "1": {
+                    "cmd": 'echo hello > "$RESULT_DIR/results_task_1.csv"',
+                    "result_dir": result_dir,
+                },
             },
-        })
+        )
 
         monkeypatch.setenv("TASK_ID", "1")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
@@ -50,12 +53,15 @@ class TestDispatchAtomicOutput:
 
     def test_failed_task_preserves_wip(self, tmp_path, monkeypatch):
         result_dir = str(tmp_path / "results")
-        manifest_path = self._write_manifest(tmp_path, {
-            "0": {
-                "cmd": 'echo partial > "$RESULT_DIR/out.csv" && exit 1',
-                "result_dir": result_dir,
+        manifest_path = self._write_manifest(
+            tmp_path,
+            {
+                "0": {
+                    "cmd": 'echo partial > "$RESULT_DIR/out.csv" && exit 1',
+                    "result_dir": result_dir,
+                },
             },
-        })
+        )
 
         monkeypatch.setenv("TASK_ID", "0")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
@@ -80,12 +86,15 @@ class TestDispatchAtomicOutput:
             'echo "a,b" > "$RESULT_DIR/results_task_1.csv" && '
             'echo "x,y" > "$RESULT_DIR/results_task_2.csv"'
         )
-        manifest_path = self._write_manifest(tmp_path, {
-            "5": {
-                "cmd": cmd,
-                "result_dir": result_dir,
+        manifest_path = self._write_manifest(
+            tmp_path,
+            {
+                "5": {
+                    "cmd": cmd,
+                    "result_dir": result_dir,
+                },
             },
-        })
+        )
 
         monkeypatch.setenv("TASK_ID", "5")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
@@ -126,12 +135,15 @@ class TestDispatchStaleWipRetry:
         stale_wip.mkdir()
         (stale_wip / "partial.csv").write_text("stale partial\n")
 
-        manifest_path = self._write_manifest(tmp_path, {
-            "1": {
-                "cmd": 'echo fresh > "$RESULT_DIR/results_task_1.csv"',
-                "result_dir": str(result_dir),
+        manifest_path = self._write_manifest(
+            tmp_path,
+            {
+                "1": {
+                    "cmd": 'echo fresh > "$RESULT_DIR/results_task_1.csv"',
+                    "result_dir": str(result_dir),
+                },
             },
-        })
+        )
 
         monkeypatch.setenv("TASK_ID", "1")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
@@ -142,10 +154,7 @@ class TestDispatchStaleWipRetry:
         assert exc_info.value.code == 0
 
         # Stale WIP was renamed to _wip_1_failed_<unix_ts>/ and its content preserved.
-        renamed = [
-            p for p in result_dir.iterdir()
-            if re.match(r"^_wip_1_failed_\d+$", p.name)
-        ]
+        renamed = [p for p in result_dir.iterdir() if re.match(r"^_wip_1_failed_\d+$", p.name)]
         assert len(renamed) == 1, (
             f"expected exactly one renamed stale WIP, got {list(result_dir.iterdir())}"
         )
@@ -165,11 +174,14 @@ class TestDispatchSchemaVersion:
         manifest_path = str(tmp_path / "manifest.json")
         # Deliberately omit schema_version.
         with open(manifest_path, "w") as f:
-            json.dump({
-                "tasks": {
-                    "0": {"cmd": "true", "result_dir": result_dir},
+            json.dump(
+                {
+                    "tasks": {
+                        "0": {"cmd": "true", "result_dir": result_dir},
+                    },
                 },
-            }, f)
+                f,
+            )
 
         monkeypatch.setenv("TASK_ID", "0")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)
@@ -182,12 +194,15 @@ class TestDispatchSchemaVersion:
         result_dir = str(tmp_path / "results")
         manifest_path = str(tmp_path / "manifest.json")
         with open(manifest_path, "w") as f:
-            json.dump({
-                "schema_version": dispatch.EXPECTED_SCHEMA_VERSION + 99,
-                "tasks": {
-                    "0": {"cmd": "true", "result_dir": result_dir},
+            json.dump(
+                {
+                    "schema_version": dispatch.EXPECTED_SCHEMA_VERSION + 99,
+                    "tasks": {
+                        "0": {"cmd": "true", "result_dir": result_dir},
+                    },
                 },
-            }, f)
+                f,
+            )
 
         monkeypatch.setenv("TASK_ID", "0")
         monkeypatch.setenv("HPC_MANIFEST", manifest_path)

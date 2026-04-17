@@ -1,5 +1,7 @@
 Help me aggregate, validate, and analyze experiment results using the project configuration.
 
+CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+
 Aggregation runs on the cluster to avoid transferring many result files. Only summary files are downloaded locally.
 
 ## Setup

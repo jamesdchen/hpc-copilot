@@ -37,8 +37,10 @@ class TestCheckResultsIgnoresWip:
 class TestReportStatus:
     def test_report_status_basic(self, tmp_path):
         # Patch scheduler query functions to avoid real subprocess calls.
-        with patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"), \
-             patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}):
+        with (
+            patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
+            patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}),
+        ):
             result = report_status(
                 result_dir=tmp_path,
                 job_ids=["12345"],
