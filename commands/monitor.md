@@ -1,5 +1,7 @@
 Monitor running HPC jobs via SSH and take corrective action.
 
+CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+
 ## Setup
 
 Read cluster definitions:
@@ -13,7 +15,15 @@ Determine cluster and connection:
 
 Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
 
-Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories. Each task ID maps to a grid point with its full command and result directory.
+Read `_hpc_dispatch.json` to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories. Each task ID maps to a grid point with its full command and result directory.
+
+Recovery order if the local copy is missing:
+
+1. Pull from the cluster:
+   ```bash
+   rsync -az $SSH_TARGET:$REMOTE_PATH/_hpc_dispatch.json ./_hpc_dispatch.json
+   ```
+2. If also missing on the cluster, fall back to reading `logs/<job_name>_<job_id>_<task_id>.out` for each task as the last-resort artifact and surface the gap to the user — monitoring can only be partial without the manifest.
 
 ## SSH Quoting
 
@@ -104,12 +114,21 @@ If `_hpc_dispatch.json` contains a `wave_map` field, run the on-cluster combiner
 1. Read `wave_map` from the manifest to determine which task IDs belong to each wave
 2. Cross-reference with the Step 1 reporter's `tasks` dict: a wave is **complete** when every task ID in the wave has `status == "complete"` in the `tasks` dict (no separate re-count needed)
 3. Check `combined_waves` from the monitor state to skip waves already combined
-4. For each newly-complete wave not yet combined:
+4. For each newly-complete wave not yet combined, invoke via `run_combiner_checked` (from `hpc_mapreduce.infra.remote`), which wraps the SSH call and returns `(ok, stdout, stderr)`:
    ```bash
-   ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && HPC_WAVE=<N> HPC_MANIFEST=_hpc_dispatch.json python3 _hpc_combiner.py'
+   ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python3 _hpc_combiner.py --wave <N> --manifest _hpc_dispatch.json'
    ```
-5. If the combiner succeeds (exit 0), add the wave number to `combined_waves`
-6. Report: `"Combiner: wave <N> aggregated — <grid_point>: <key_metric>=<value>, ..."`
+   To force-retry a wave (e.g. after fixing a reducer bug), add `--force`:
+   ```bash
+   ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python3 _hpc_combiner.py --wave <N> --manifest _hpc_dispatch.json --force'
+   ```
+5. On `ok=True`, add the wave number to `combined_waves` and report:
+   `"Combiner: wave <N> aggregated — <grid_point>: <key_metric>=<value>, ..."`
+6. On `ok=False`, record the wave in `failed_waves` inside the state blob with a short stderr excerpt. **Never** mark a failed wave as combined.
+
+**Failure policy:**
+- 1st failure: retry automatically on the next monitoring tick with `--force`.
+- 2nd failure: surface to the user with the stderr excerpt and stop retrying until the user intervenes.
 
 If the manifest has no `wave_map` field, skip this step (backward compatibility with older submissions).
 

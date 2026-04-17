@@ -4,17 +4,25 @@ Usage (programmatic)::
 
     from hpc_mapreduce.infra.gpu import pick_gpu
 
-    # Static fallback — returns first available from preferred list
-    gpu = pick_gpu(preferred=["A100", "H200", "A6000", "V100"])
+    # Static fallback - returns first available from preferred list
+    result = pick_gpu(preferred=["A100", "H200", "A6000", "V100"])
 
     # Live scoring via local qstat
-    gpu = pick_gpu(preferred=["A100", "H200"], live=True, slots_needed=4)
+    result = pick_gpu(preferred=["A100", "H200"], live=True, slots_needed=4)
 
     # Live scoring via SSH to a remote cluster
-    gpu = pick_gpu(preferred=["A100", "H200"], live=True, ssh_host="user@cluster")
+    result = pick_gpu(preferred=["A100", "H200"], live=True, ssh_host="user@cluster")
 
-Returns a dict with at minimum ``{"gpu": "<type>"}`` for static mode,
-or full scoring details when ``live=True``.
+Return shape (uniform)::
+
+    {
+        "gpus": [ {"gpu": "<name>", ...}, ... ],   # ordered best-first
+        "errors": [ {"code": str, "detail": str}, ... ],
+    }
+
+The first entry of ``gpus`` is the top pick; the remainder gives the
+LLM-orchestrator visibility into alternatives.  When no GPU qualifies,
+``gpus`` is ``[]`` and ``errors`` describes why.
 """
 
 from __future__ import annotations
@@ -51,35 +59,44 @@ def pick_gpu(
 
     Returns
     -------
-    dict with ``"gpu"`` key. In live mode, also includes ``"free_slots"``,
-    ``"utilization"``, ``"score"``, and ``"all_scores"``.
-    Static mode returns ``{"gpu": "<name>", "source": "fallback"}``.
+    ``{"gpus": [{"gpu": ..., ...}, ...], "errors": [{"code": ..., "detail": ...}, ...]}``.
+    The first element of ``gpus`` is the top recommendation; subsequent entries
+    are alternatives ordered by score.  Empty ``gpus`` means no candidate
+    qualified and ``errors`` will explain why.
     """
     exclude = {e.upper() for e in (exclude or set())}
     candidates = [g for g in preferred if g.upper() not in exclude]
 
     if not candidates:
-        return {"error": "no candidates after exclusions"}
+        return {
+            "gpus": [],
+            "errors": [{"code": "no_candidates", "detail": "no candidates after exclusions"}],
+        }
 
     if not live:
-        return {"gpu": candidates[0], "source": "fallback"}
+        return {
+            "gpus": [{"gpu": candidates[0], "source": "fallback"}],
+            "errors": [],
+        }
 
     # Live mode: query qstat
     qstat_text = _run_qstat(ssh_host)
     if qstat_text is None:
-        # qstat failed — fall back to static order
-        return {"gpu": candidates[0], "source": "fallback", "warning": "qstat unavailable"}
+        # qstat failed - fall back to static order
+        return {
+            "gpus": [{"gpu": candidates[0], "source": "fallback"}],
+            "errors": [{"code": "qstat_unavailable", "detail": "qstat could not be run"}],
+        }
 
     cfg = gpu_config or _DEFAULT_GPU_CONFIG
     agg = parse_qstat_f(qstat_text, gpu_config=cfg)
-    result = score_gpus(
+    return score_gpus(
         agg,
         gpu_config=cfg,
         exclude=exclude,
         slots_needed=slots_needed,
         preferred_order=candidates,
     )
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -202,10 +219,12 @@ def score_gpus(
 
     Returns
     -------
-    dict with "gpu" and scoring details, or "error" key.
+    ``{"gpus": [...], "errors": [...]}`` - ``gpus`` ordered by score (best first),
+    or empty with an error describing why no GPU was eligible.
     """
     cfg = gpu_config or _DEFAULT_GPU_CONFIG
     exclude = {e.upper() for e in (exclude or set())}
+    errors: list[dict] = []
 
     scored: list[dict] = []
     for key, gpu_cfg in cfg.items():
@@ -231,6 +250,7 @@ def score_gpus(
                 "utilization": round(util, 3),
                 "score": round(free * gpu_cfg.get("perf", 1.0), 1),
                 "active_nodes": stats.get("active_nodes", 0),
+                "source": "live",
                 **extra,
             }
         )
@@ -238,10 +258,7 @@ def score_gpus(
     scored.sort(key=lambda x: x["score"], reverse=True)
 
     if scored:
-        best = dict(scored[0])
-        best["all_scores"] = scored
-        best["source"] = "live"
-        return best
+        return {"gpus": scored, "errors": errors}
 
     # Fallback: lowest utilization
     fallback: list[dict] = []
@@ -260,24 +277,33 @@ def score_gpus(
                 "free_slots": stats["total"] - stats["used"],
                 "utilization": round(util, 3),
                 "score": 0,
+                "source": "live",
                 **extra,
             }
         )
     fallback.sort(key=lambda x: x["utilization"])
 
     if fallback:
-        best_fb = dict(fallback[0])
-        best_fb["all_scores"] = fallback
-        best_fb["source"] = "live"
-        best_fb["warning"] = "no GPU had enough free slots; scheduling may be delayed"
-        return best_fb
+        errors.append(
+            {
+                "code": "insufficient_free_slots",
+                "detail": "no GPU had enough free slots; scheduling may be delayed",
+            }
+        )
+        return {"gpus": fallback, "errors": errors}
 
-    # Nothing from live data — use preferred order
+    # Nothing from live data - use preferred order
     if preferred_order:
+        errors.append(
+            {
+                "code": "no_live_gpus",
+                "detail": "no eligible GPU queues in qstat output",
+            }
+        )
         return {
-            "gpu": preferred_order[0],
-            "source": "fallback",
-            "warning": "no eligible GPU queues in qstat output",
+            "gpus": [{"gpu": preferred_order[0], "source": "fallback"}],
+            "errors": errors,
         }
 
-    return {"error": "no eligible GPU queues found", "all_scores": []}
+    errors.append({"code": "no_eligible_gpus", "detail": "no eligible GPU queues found"})
+    return {"gpus": [], "errors": errors}

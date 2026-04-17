@@ -103,7 +103,7 @@ class TestWalltimeExceeded:
         constraints = ClusterConstraints(
             max_array_size=100,
             max_walltime="0:10:00",  # 600s
-            est_spin_up="5m",        # 300s
+            est_spin_up="5m",  # 300s
         )
         # 400s task + 300s spin-up = 700s > 600s limit
         workload = WorkloadSpec(total_tasks=50, est_task_duration_s=400)

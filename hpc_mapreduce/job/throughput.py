@@ -26,6 +26,7 @@ __all__ = [
 @dataclasses.dataclass(frozen=True)
 class WorkloadSpec:
     """Describes the work to be submitted."""
+
     total_tasks: int
     est_task_duration_s: int | None = None  # user-provided or from calibration; None = unknown
 
@@ -33,12 +34,13 @@ class WorkloadSpec:
 @dataclasses.dataclass(frozen=True)
 class JobBatch:
     """One batch within a submission plan."""
+
     batch_index: int
-    task_start: int          # 1-based inclusive
-    task_end: int            # 1-based inclusive
-    array_size: int          # task_end - task_start + 1
-    est_wall_s: int | None   # estimated wall-clock time, or None if unknown
-    wave: int                # which wave this batch belongs to (0-based)
+    task_start: int  # 1-based inclusive
+    task_end: int  # 1-based inclusive
+    array_size: int  # task_end - task_start + 1
+    est_wall_s: int | None  # estimated wall-clock time, or None if unknown
+    wave: int  # which wave this batch belongs to (0-based)
 
     @property
     def task_range(self) -> str:
@@ -49,12 +51,13 @@ class JobBatch:
 @dataclasses.dataclass(frozen=True)
 class SubmissionPlan:
     """Complete plan for submitting a workload."""
+
     batches: list[JobBatch]
     total_tasks: int
     total_batches: int
-    max_concurrent: int      # how many batches run in parallel per wave
+    max_concurrent: int  # how many batches run in parallel per wave
     est_total_wall_s: int | None  # estimated total wall-clock time
-    strategy: str            # human-readable summary
+    strategy: str  # human-readable summary
 
 
 def compute_submission_plan(
@@ -103,14 +106,16 @@ def compute_submission_plan(
         task_end = task_start + size - 1
         wave = i // constraints.max_concurrent_jobs
 
-        batches.append(JobBatch(
-            batch_index=i,
-            task_start=task_start,
-            task_end=task_end,
-            array_size=size,
-            est_wall_s=effective_time,
-            wave=wave,
-        ))
+        batches.append(
+            JobBatch(
+                batch_index=i,
+                task_start=task_start,
+                task_end=task_end,
+                array_size=size,
+                est_wall_s=effective_time,
+                wave=wave,
+            )
+        )
         assigned += size
 
     # 4. Wave grouping (already computed per-batch above)
