@@ -212,6 +212,69 @@ For each job, use `hpc_mapreduce.job.grid.build_task_manifest()` to generate a `
 
 For multi-executor submissions, generate one manifest per executor. Name them `_hpc_dispatch_{executor_name}.json` or use separate subdirectories.
 
+### Step 6a: Resume-vs-fresh check (content-hashed manifest)
+
+Before writing the manifest to disk, guard against silently overwriting a prior identical run:
+
+1. Compute the run-level `cmd_sha` from the freshly-built manifest via
+   `hpc_mapreduce.job.manifest.aggregate_cmd_sha(manifest)`.
+2. Look for an existing content-addressed manifest with the matching prefix
+   in the experiment directory:
+
+   ```python
+   from hpc_mapreduce.job.manifest import (
+       aggregate_cmd_sha,
+       find_manifest_by_cmd_sha,
+       write_manifest,
+       build_manifest_with_resume,
+   )
+
+   cmd_sha = aggregate_cmd_sha(manifest)
+   prior = find_manifest_by_cmd_sha(experiment_dir, cmd_sha)
+   ```
+
+3. If `prior is not None`, **stop and ask the user**:
+
+   ```
+   I found an existing run with matching cmd_sha: <prior.name>.
+   Resume (re-dispatch only failed tasks) or fresh (new run_id)?
+   ```
+
+   - **Resume**: call `/monitor` (or `hpc_mapreduce.report_status_from_manifest`)
+     against `prior` to get the list of failing task IDs, then call
+     `build_manifest_with_resume(manifest, resume_from=prior, failed_task_ids=[...])`
+     which delegates to `hpc_mapreduce.job.resubmit.resubmit_plan` on the
+     prior manifest. Submit the returned `ResubmitPlan` via
+     `backend.submit_plan(...)` with the failing IDs.
+   - **Fresh**: regenerate a new run_id (e.g. incorporate `{date}` /
+     `{git_sha}` / a timestamp suffix into `result_dir`), then continue with
+     a new `cmd_sha` so the manifest filename is distinct. The prior
+     manifest is untouched; retention (default N=10) will age it out over
+     time.
+
+4. If `prior is None`, proceed normally.
+
+The Python layer never prompts interactively — this step is the LLM's
+responsibility. Once a choice is made, pass it into subsequent calls:
+
+```python
+# Fresh path (no prior, or user chose "fresh")
+path = write_manifest(experiment_dir, manifest, cmd_sha=cmd_sha)
+
+# Resume path (user chose "resume")
+plan = build_manifest_with_resume(
+    manifest,
+    resume_from=prior,
+    failed_task_ids=<from /monitor status>,
+    overrides=<optional resource bumps>,
+)
+# plan is a ResubmitPlan — submit via backend.submit_plan(plan, ...)
+```
+
+`write_manifest` also keeps a `manifest.json` symlink/alias pointing at the
+most recent file (for back-compat with anything that opens `manifest.json`
+directly) and prunes old manifests past `MAX_MANIFESTS` (default 10).
+
 ### Interface mismatch → generate a shim
 
 In Step 1, you ran `--help` on each executor. If an executor doesn't accept `--chunk-id`/`--total-chunks` but does accept some form of data slicing (`--start`/`--end`, file lists, date windows), generate a shim.
