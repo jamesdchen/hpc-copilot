@@ -10,6 +10,31 @@ Conventions
 - Structured return shapes use `{<data_key>, errors}` where `errors` is a list
   of `{code: str, detail: str}` objects (empty list means success).
 
+Manifest filenames
+------------------
+Dispatch manifests are written with a content-addressed filename inside the
+experiment directory:
+
+- Canonical form: `manifest.<cmd_sha_short>.json` where `cmd_sha_short` is
+  the first 8 chars of the run-level `cmd_sha`. The run-level `cmd_sha` is
+  computed by `hpc_mapreduce.job.manifest.aggregate_cmd_sha` as
+  `SHA-256(join("\n", sorted per-task cmd_sha values))`.
+- Alias: `manifest.json` is kept in sync with the most recent
+  content-addressed manifest (symlink where supported, copy-fallback
+  otherwise). Tools that previously opened `manifest.json` continue to
+  work unchanged.
+- Retention: at most `hpc_mapreduce.job.manifest.MAX_MANIFESTS` (default 10)
+  content-addressed manifests are kept per experiment directory. Oldest by
+  mtime are evicted on every write.
+- The manifest *contents* are unchanged — `schema_version`, `total_tasks`,
+  `tasks.<tid>.cmd`, `tasks.<tid>.cmd_sha`, etc. still match the existing
+  shape. Only the on-disk filename convention is additive.
+
+When resuming a prior run, `/submit` picks up an existing
+`manifest.<cmd_sha_short>.json` and delegates to
+`hpc_mapreduce.job.resubmit.resubmit_plan` for the failing task IDs; see
+`commands/submit.md` for the interactive resume-vs-fresh prompt.
+
 ---
 
 ## `python -m hpc_mapreduce.reduce.status`
