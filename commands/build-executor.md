@@ -1,190 +1,143 @@
-Scan the experiment repo's source directory and generate a self-contained executor Python file for HPC jobs.
+Help the user scaffold a new HPC executor for their experiment repo. The command is conversational: discover what's already there, ask what they want to build, produce the file, smoke-test it, and tell them the exact `/submit` command that will now work.
 
 CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
-## Setup
+## Scope
 
-Read `hpc.yaml` in the current working directory. Identify the source directory by checking (in order):
-1. `src/` directory at repo root
-2. Directory referenced in existing profile `run` commands
-3. Ask the user
+Files produced by this command land in the **experiment repo** — the user's current working directory when they invoked `/build-executor`. They do NOT land in the `claude-hpc` framework repo. The templates under `templates/` in the framework repo are *sources* to copy from; never edit them in place.
 
-If `$ARGUMENTS` specifies a profile name, use it. Otherwise list profiles from `hpc.yaml` and ask which one to build an executor for.
+Discovery uses the same contract as `/submit`: a file is an executor iff it parses and has (a) an `if __name__ == "__main__":` guard and (b) a CLI import (`argparse`, `click`, `typer`, or `fire`). No ABCs, no registry, no plugin protocol — `--help` is the interface.
 
 ## Arguments
 
-$ARGUMENTS formats:
+`$ARGUMENTS` is free-form. Common forms:
 
-1. **For existing profile**: `<profile_name>` -- generate executor for this profile
-2. **From template**: `<profile_name> --from <existing_executor>` -- copy and modify an existing executor (e.g., `ml_elasticnet --from ml_ridge`)
-3. **With description**: `<profile_name> <model_description>` -- generate from scratch (e.g., `ml_elasticnet "ElasticNet with L1+L2 regularization"`)
+| User says | Interpretation |
+|-----------|---------------|
+| (empty) | Start from Step 1, ask the user what to build |
+| `"ml_elasticnet from ml_ridge"` | Mode (a): clone `ml_ridge.py` to `ml_elasticnet.py`, modify |
+| `"scaffold ml_lasso"` | Mode (b): start from `templates/executor_template.py` |
+| `"wrap scripts/my_train.py"` | Mode (c): generate a shim for the given user script |
 
-## Step 1: Scan Source Directory
+Parse `$ARGUMENTS` before Step 1; skip ahead if intent is already clear.
 
-Read every `.py` file in the source directory. Classify each file:
+## Step 1: Discover Existing Executors
 
-| Category | Detection | Examples |
-|----------|-----------|---------|
-| **Shared utility** | No `if __name__` block, no argparse, only function/class defs | `loading.py`, `transforms.py`, `evaluation.py` |
-| **Executor** | Has argparse + `if __name__ == "__main__"` + imports from shared utilities | `ml_ridge.py`, `dl_patchts.py` |
+Determine the experiment-repo root (the user's CWD). Then call the shared discovery helper — identical to what `/submit` uses so both commands see the same set of executors:
 
-For shared utilities, catalog public functions/classes with their signatures.
-
-For executors, extract:
-- Imports (stdlib, third-party, and from `src/`)
-- CLI arguments (from argparse definitions)
-- Pipeline steps (the numbered comments in `main()`)
-- Model type: ML (sklearn/xgboost/lightgbm) vs DL (torch)
-- Whether it uses RollingRobustScaler (linear models) or not (tree models)
-- Feature engineering approach (HAR lags, PCA, calendar features, univariate)
-
-Present the inventory:
-
-```
-Source directory: src/
-
-Shared utilities:
-  loading.py      — load_raw_data(data_path) -> DataFrame
-  transforms.py   — robust_transform(df, col, is_target) -> (array, baseline)
-  evaluation.py   — calculate_metrics(pred, true), apply_duan_smearing(...)
-
-Executors:
-  ml_ridge.py     — Ridge, HAR features, RollingRobustScaler, refit=1
-  ml_xgboost.py   — XGBRegressor, HAR+calendar, no scaling, refit=5
-  dl_patchts.py   — PatchTST, univariate, multi-GPU, torch.mp
-  ...
-```
-
-## Step 2: Determine Executor Type
-
-If `--from` was provided, use that executor as the template — the new executor inherits its type.
-
-Otherwise, classify from the profile's resources:
-
-| Signal | Type | Base template |
-|--------|------|---------------|
-| Profile has `gpus` in resources | DL (GPU) | Closest existing DL executor |
-| Profile has `env_group: dl` | DL (GPU) | Closest existing DL executor |
-| No GPU resources | ML (CPU) | Closest existing ML executor |
-| User mentions torch/transformer/LSTM/CNN | DL (GPU) | Auto-detect |
-| User mentions sklearn/ridge/xgboost/tree | ML (CPU) | Auto-detect |
-
-For ML executors, further determine:
-- **Linear model** (Ridge, ElasticNet, Lasso) → needs RollingRobustScaler, refit_frequency=1
-- **Tree model** (XGBoost, LightGBM) → no scaling needed, refit_frequency=5
-- **Baseline** → no model fitting
-
-## Step 3: Select Building Blocks
-
-Determine which blocks the new executor needs. Every executor uses these:
-
-| Block | Source | Always/Conditional |
-|-------|--------|--------------------|
-| Data loading | `from src.loading import load_raw_data` | Always |
-| Robust transform | `from src.transforms import robust_transform` | Always |
-| Horizon shift | `apply_horizon_shift()` | Always (inline) |
-| Chunk split | Standard chunk logic | Always (inline) |
-| Duan smearing | `apply_duan_smearing()` | Always (inline) |
-| Result serialization | DataFrame + `to_csv` | Always (inline) |
-
-Conditional blocks:
-
-| Block | When needed | Source |
-|-------|-------------|--------|
-| HAR lag features | Linear/tree ML models | `generate_har_features()` inline |
-| Calendar features | Tree models (XGB, LGBM) | `add_calendar_features()` inline |
-| PCA lag features | PCR model | `generate_raw_lag_features()` inline |
-| RollingRobustScaler + numba kernels | Linear models (Ridge, ElasticNet, PCR) | Inline classes |
-| RollingBuffer | ML models with scaling | Inline class |
-| Walk-forward backtest | All ML models | `run_backtest()` inline |
-| GPU worker + torch.mp | DL models | Inline functions |
-| Model class definition | DL models | Inline class |
-
-Copy the needed blocks from the template executor (the `--from` source or the closest match).
-
-## Step 4: Build CLI Arguments
-
-**Standard HPC args** (always included):
 ```python
-parser.add_argument("--data-path", default="all30min")
-parser.add_argument("--horizon", type=int, default=1)
-parser.add_argument("--chunk-id", type=int, default=0)
-parser.add_argument("--total-chunks", type=int, default=1)
-parser.add_argument("--output-file", required=True)
+from hpc_mapreduce import discover_executors
+execs = discover_executors(".")   # returns list[ExecutorInfo]
 ```
 
-**ML-specific** (add for CPU executors):
-```python
-parser.add_argument("--train-window", type=int, default=500, help="training window in days")
+`discover_executors` scans `executors/`, `scripts/`, and `src/` (in that order, collecting from every one that exists) and falls back to the repo root if none are present. Each returned `ExecutorInfo` has `path`, `name`, `cli_framework`, `imports`, and `docstring`.
+
+For each executor, run `python <path> --help` to capture its concrete flag set (the helper only parses the source — it does not execute it). Present the inventory to the user:
+
+```
+Executors found in src/:
+  ml_ridge.py    — argparse; uses sklearn — --horizon, --start, --end, --output-file
+  ml_xgboost.py  — argparse; uses xgboost — --horizon, --start, --end, --output-file
+
+What do you want to build?
+  (a) Copy and modify one of the above
+  (b) Scaffold a fresh executor from the hpc-mapreduce template
+  (c) Wrap an already-written script (generate a shim only)
 ```
 
-**DL-specific** (add for GPU executors):
-```python
-parser.add_argument("--gpu-count", type=int, default=1)
-parser.add_argument("--epochs", type=int, default=None)
-parser.add_argument("--batch-size", type=int, default=None)
-parser.add_argument("--learning-rate", type=float, default=None)
+If `discover_executors` returns an empty list, skip the (a) option and note the directory was empty.
+
+## Step 2: Ask What to Build
+
+Based on the user's choice, branch to Step 3a, 3b, or 3c.
+
+If the user is ambiguous ("make a ridge executor"), infer: existing `ml_ridge.py` matches → propose (a), propose a target filename, confirm.
+
+## Step 3a: Copy and Modify an Existing Executor
+
+1. Ask the user which source executor and what target path/name they want.
+2. Copy the chosen file to the new path using the stdlib (`shutil.copyfile`, or read+write). The destination is always **under the user's experiment repo**, not the framework repo.
+3. Read the destination file, then perform the user-described edits (model class, hyperparameters, features, etc.). Preserve the docstring style and section-header comments of the source.
+4. Jump to Step 4 (verify).
+
+## Step 3b: Scaffold From `executor_template.py`
+
+1. Resolve the template path:
+   ```bash
+   python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "executor_template.py")'
+   ```
+2. Ask the user for the target path (e.g. `src/my_executor.py` or `executors/foo.py`).
+3. Copy the template into the experiment repo at that path.
+4. Walk the file and fill in every `# TODO:` marker based on what the user described — model type, data source, feature engineering, metric, etc. Keep the standard CLI args (`--data-path`, `--horizon`, `--start`, `--end`, `--output-file`) unless the user explicitly wants different flags.
+5. Jump to Step 4 (verify).
+
+## Step 3c: Wrap an Existing User Script (Shim Only)
+
+Use this when the user already has a working script that does not match the grid-param CLI conventions. You will generate only a shim — the user's script is untouched.
+
+1. Ask for the path to the user's script if not already given. Run `python <script> --help` and record its flags.
+2. Resolve the shim template:
+   ```bash
+   python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "shim_template.py")'
+   ```
+   (`chunking_shim.py` next to it is a concrete chunking example; pattern-match off it for data-length splits. For simpler translations, start from `shim_template.py`.)
+3. Ask the user where the shim should live (default: `shims/<script_stem>_shim.py` in the experiment repo).
+4. Copy the template to that path, then customize `translate()` to map `--chunk-id`/`--total-chunks` onto the user-script flags discovered in step 1.
+5. The shim contract (see `hpc_mapreduce/map/shim.py` for the cache side — do not modify it here):
+   - The shim script itself is a normal `.py` file that accepts `--chunk-id`, `--total-chunks`, then `--` and the downstream command.
+   - Its `translate(chunk_id, total_chunks)` returns extra CLI args to append.
+   - It invokes the downstream command via `subprocess.run` and forwards the return code.
+6. Jump to Step 4 (verify).
+
+## Step 4: Smoke-Test
+
+Run `python <new_executor> --help` (or `python <new_shim> --chunk-id 0 --total-chunks 1 -- echo test` for a shim). Capture stdout. Report:
+
+- `Smoke test OK: <path> --help returned <N> flags.`
+- Echo the discovered flags back to the user so they can confirm the CLI matches their intent.
+
+If the smoke test fails (ImportError, SyntaxError, `--help` non-zero exit), read the file you just wrote, fix the issue, and re-run. Do not finish with a broken file.
+
+## Step 5: Tell the User How to Submit
+
+Print the exact `/submit` invocation that will now work with the new executor. Examples:
+
+```
+Ready. Try:
+  /submit run <new_name>
+or with grid overrides:
+  /submit run <new_name> horizon=[1,5,25]
 ```
 
-**Grid-derived args**: If the profile has a `grid` section, each grid key becomes a CLI argument with the appropriate type.
+For a shim, make the instruction explicit:
 
-**Model-specific args**: Add any hyperparameters specific to the model (e.g., `--alpha` for Ridge, `--n-estimators` for tree models).
-
-## Step 5: Generate Executor File
-
-Read the template at `templates/executor_template.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT.parent / "templates" / "executor_template.py")'`). Copy it to `src/<profile_name>.py`. Fill in all `--- EDIT ---` sections by reading the building blocks selected in Step 3 from the existing executors.
-
-**Critical rules:**
-- Results DataFrame columns must be exactly: `date, horizon, true_adj, pred_adj, true_raw, pred_raw`
-- Use `# ── Section Name ──...` comment headers with box-drawing characters
-- First docstring line: model name. Third line: "No imports from core/ or projects/."
-- File name matches profile name: profile `ml_elasticnet` → `src/ml_elasticnet.py`
-
-## Step 6: Update hpc.yaml
-
-Set the profile's `run` field:
-```yaml
-run: "python3 src/<profile_name>.py"
+```
+Shim generated at shims/<script>_shim.py. /submit will auto-detect it when
+the profile's run command is set to:
+  run: "python3 shims/<script>_shim.py -- python3 <user_script>"
 ```
 
-If the profile doesn't exist yet, add it using the nearest existing profile as a template. Set appropriate resources based on executor type (ML defaults: 1 cpu, 16G, 4h; DL defaults: 4 cpus, 16G, 6h, 2 GPUs).
+## Step 6: Cache and Report
 
-Ensure `chunking` is configured:
-```yaml
-chunking:
-  total: 100       # ML default
-  chunk_arg: "--chunk-id"
-  total_arg: "--total-chunks"
-```
-(DL default: total 10)
+Save to Claude Code memory for this project:
 
-## Step 7: Validate
+- The directory where the new executor landed (so `/submit`'s discovery finds it next time).
+- If (c): the mapping from downstream script -> shim path.
 
-1. Run `python src/<profile_name>.py --help` to verify the CLI parses
-2. Check that `from src.loading import load_raw_data` resolves (run from repo root)
-3. Verify the output format matches `results.pattern` in the profile
-4. If validation fails, fix and re-validate
-
-## Common Patterns Reference
-
-Existing executors and their characteristics — use this to pick the closest template:
-
-| Executor | Model | Features | Scaling | Refit | GPU |
-|----------|-------|----------|---------|-------|-----|
-| `ml_ridge` | `Ridge(alpha=1.0)` | HAR lags | RollingRobustScaler (numba) | 1 | No |
-| `ml_xgboost` | `XGBRegressor` | HAR + calendar | None (tree) | 5 | No |
-| `ml_lightgbm` | `LGBMRegressor` | HAR + calendar | None (tree) | 5 | No |
-| `ml_pcr` | PCA + Ridge | Log-spaced lags | RollingRobustScaler (numba) | 1 | No |
-| `ml_baseline` | Naive (lag 125) | HAR lags | None | N/A | No |
-| `dl_patchts` | PatchTST (HuggingFace) | Univariate adj_RV | Instance norm | Every window | Yes (multi-GPU, torch.mp) |
-| `dl_ae_ridge` | Autoencoder + Ridge | Multi-lag features | Instance norm | Every window | Yes (multi-GPU, torch.mp) |
+End with a concise report: what was created, where, and the `/submit` command that exercises it.
 
 ## Edge Cases
 
 | Situation | Handling |
 |-----------|----------|
-| `src/` doesn't exist | Check for alternatives, ask user for source directory |
-| No `hpc.yaml` | Error: "Run from a directory with hpc.yaml" |
-| Profile `run` already points to existing file | Warn and ask whether to overwrite or create alongside |
-| Model not in any existing executor | Ask for model import path and hyperparameters, use closest template |
-| `--from` executor not found | List available executors, ask user to pick |
+| Target path already exists | Ask before overwriting; offer a dated suffix |
+| `executors/`, `scripts/`, and `src/` all missing | Ask the user where executors should live; create that dir |
+| User script has no `--help` | Wrap it anyway, but warn the smoke test is a plain run — skip `--help` |
+| `discover_executors` returns 0 entries and user asked for (a) | Fall back to (b) and inform the user |
+| Framework-repo path accidentally used as CWD | Detect via presence of `hpc_mapreduce/` and `commands/build-executor.md`; refuse and ask the user to `cd` into their experiment repo first |
+
+## Do Not
+
+- Do not create or edit files under the `hpc_mapreduce/` package, the `templates/` directory, or the `commands/` directory of the framework repo. Those are framework sources.
+- Do not invent new protocols, ABCs, or required helper functions for the generated executor. The contract remains `argparse --help` + optional shim.
+- Do not run the downstream training loop during smoke-testing — `--help` only.

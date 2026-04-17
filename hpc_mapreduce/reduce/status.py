@@ -17,8 +17,16 @@ present, never ``None``)::
 ``cmd_sha`` is passed through from the manifest (schema v2); absent on v1
 manifests -> serialized as ``null`` for each task.  Additional top-level
 keys (``total_tasks``, ``scheduler``, ``timestamp``, ``result_dir``,
-``err_log_paths``) may appear but are informational only; the four keys
-above are the parse contract.
+``err_log_paths``, ``resource_usage``) may appear but are informational
+only; the four keys above are the parse contract.
+
+``resource_usage`` is additive and shaped like::
+
+    {"cpu_hours": float, "gpu_hours": float,
+     "elapsed_hours": float, "tasks_counted": int}
+
+Values are summed across all tasks in the status report (not just
+completed ones) using whatever the scheduler has reported so far.
 """
 
 from __future__ import annotations
@@ -284,6 +292,8 @@ def report_status(
     )
     err_paths = {str(tid): all_err[tid] for tid in failed_or_unknown if tid in all_err}
 
+    from hpc_mapreduce.reduce.metrics import reduce_resource_usage
+
     report: dict = {
         "result_dir": str(Path(result_dir).resolve()),
         "total_tasks": total_tasks,
@@ -292,6 +302,7 @@ def report_status(
         "tasks": tasks,
         "summary": summary,
         "errors": errors,
+        "resource_usage": reduce_resource_usage(tasks),
     }
     if err_paths:
         report["err_log_paths"] = err_paths
@@ -461,6 +472,8 @@ def report_status_from_manifest(
     )
     err_paths = {str(tid): all_err[tid] for tid in failed_or_unknown if tid in all_err}
 
+    from hpc_mapreduce.reduce.metrics import reduce_resource_usage
+
     report: dict = {
         "total_tasks": total,
         "scheduler": scheduler,
@@ -468,6 +481,7 @@ def report_status_from_manifest(
         "tasks": tasks,
         "summary": summary,
         "errors": errors,
+        "resource_usage": reduce_resource_usage(tasks),
     }
     if err_paths:
         report["err_log_paths"] = err_paths

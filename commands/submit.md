@@ -30,21 +30,23 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
 
 ## Step 1: Discover Executors
 
-Ask the user which directory contains their experiment executors. (Cache in Claude Code memory for this project after first ask.)
+Call the shared discovery helper — identical to what `/build-executor` uses so both commands see the same set of executors:
 
-Read all `.py` files in that directory. Classify each:
+```python
+from hpc_mapreduce import discover_executors
+execs = discover_executors(".")   # returns list[ExecutorInfo]
+```
 
-| Category | Detection | Examples |
-|----------|-----------|---------|
-| **Executor** | Has `argparse` + `if __name__ == "__main__"` + does computation | `ml_ridge.py`, `dl_patchts.py` |
-| **Shared utility** | No `if __name__` block, only function/class defs | `loading.py`, `transforms.py` |
+`discover_executors` scans `executors/`, `scripts/`, and `src/` (in that order, collecting from every one that exists) and falls back to the repo root if none are present. The contract is: a file is an executor iff it parses and has both an `if __name__ == "__main__":` guard and a CLI import (`argparse`, `click`, `typer`, or `fire`) — utilities, `__init__.py`, and reserved HPC filenames are filtered out automatically. Each returned `ExecutorInfo` has `path`, `name`, `cli_framework`, `imports`, and `docstring`.
 
-For each executor, run `python3 <script> --help` to map its CLI interface. Parse:
+Cache the resolved directory in Claude Code memory for this project. If the cached directory differs from the defaults, pass it through `search_dirs=(...)`. If the user explicitly names a different directory, honor it the same way.
+
+For each executor, run `python3 <info.path> --help` to map its CLI interface (the helper parses source but does not execute it). Parse:
 - Grid-able parameters (model hyperparams, feature types, etc.)
 - Data arguments (`--data-path`, `--horizon`, `--start`, `--end`)
 - Output arguments (`--output-file`)
 
-Present the inventory:
+Present the inventory (use `info.name` and `info.path` as the identifiers; `info.docstring` is handy for the one-line summary):
 
 ```
 Executors found in src/:
@@ -54,6 +56,8 @@ Executors found in src/:
 
 Which do you want to run?
 ```
+
+If `discover_executors` returns an empty list, tell the user no executors were found and point them at `/build-executor` to scaffold one.
 
 ## Step 2: Understand User Intent
 
@@ -113,7 +117,7 @@ Or use cached value from Claude Code memory.
 Confirm with user on first submission.
 
 ### Environment Detection
-Read executor source code for import statements:
+Use `info.imports` from the `ExecutorInfo` captured in Step 1 (fall back to reading the source only if that tuple is empty):
 
 | Imports detected | Classification | Environment |
 |-----------------|----------------|-------------|
@@ -212,6 +216,69 @@ For each job, use `hpc_mapreduce.job.grid.build_task_manifest()` to generate a `
 
 For multi-executor submissions, generate one manifest per executor. Name them `_hpc_dispatch_{executor_name}.json` or use separate subdirectories.
 
+### Step 6a: Resume-vs-fresh check (content-hashed manifest)
+
+Before writing the manifest to disk, guard against silently overwriting a prior identical run:
+
+1. Compute the run-level `cmd_sha` from the freshly-built manifest via
+   `hpc_mapreduce.job.manifest.aggregate_cmd_sha(manifest)`.
+2. Look for an existing content-addressed manifest with the matching prefix
+   in the experiment directory:
+
+   ```python
+   from hpc_mapreduce.job.manifest import (
+       aggregate_cmd_sha,
+       find_manifest_by_cmd_sha,
+       write_manifest,
+       build_manifest_with_resume,
+   )
+
+   cmd_sha = aggregate_cmd_sha(manifest)
+   prior = find_manifest_by_cmd_sha(experiment_dir, cmd_sha)
+   ```
+
+3. If `prior is not None`, **stop and ask the user**:
+
+   ```
+   I found an existing run with matching cmd_sha: <prior.name>.
+   Resume (re-dispatch only failed tasks) or fresh (new run_id)?
+   ```
+
+   - **Resume**: call `/monitor` (or `hpc_mapreduce.report_status_from_manifest`)
+     against `prior` to get the list of failing task IDs, then call
+     `build_manifest_with_resume(manifest, resume_from=prior, failed_task_ids=[...])`
+     which delegates to `hpc_mapreduce.job.resubmit.resubmit_plan` on the
+     prior manifest. Submit the returned `ResubmitPlan` via
+     `backend.submit_plan(...)` with the failing IDs.
+   - **Fresh**: regenerate a new run_id (e.g. incorporate `{date}` /
+     `{git_sha}` / a timestamp suffix into `result_dir`), then continue with
+     a new `cmd_sha` so the manifest filename is distinct. The prior
+     manifest is untouched; retention (default N=10) will age it out over
+     time.
+
+4. If `prior is None`, proceed normally.
+
+The Python layer never prompts interactively — this step is the LLM's
+responsibility. Once a choice is made, pass it into subsequent calls:
+
+```python
+# Fresh path (no prior, or user chose "fresh")
+path = write_manifest(experiment_dir, manifest, cmd_sha=cmd_sha)
+
+# Resume path (user chose "resume")
+plan = build_manifest_with_resume(
+    manifest,
+    resume_from=prior,
+    failed_task_ids=<from /monitor status>,
+    overrides=<optional resource bumps>,
+)
+# plan is a ResubmitPlan — submit via backend.submit_plan(plan, ...)
+```
+
+`write_manifest` also keeps a `manifest.json` symlink/alias pointing at the
+most recent file (for back-compat with anything that opens `manifest.json`
+directly) and prunes old manifests past `MAX_MANIFESTS` (default 10).
+
 ### Interface mismatch → generate a shim
 
 In Step 1, you ran `--help` on each executor. If an executor doesn't accept `--chunk-id`/`--total-chunks` but does accept some form of data slicing (`--start`/`--end`, file lists, date windows), generate a shim.
@@ -223,7 +290,7 @@ from pathlib import Path
 from hpc_mapreduce import shim_cache_key, load_cached_shim, save_shim
 
 executor_path = Path("src/<executor>.py")
-template_path = Path("<path from _PACKAGE_ROOT.parent / 'templates' / 'chunking_shim.py'>")
+template_path = Path("<path from _PACKAGE_ROOT / 'templates' / 'chunking_shim.py'>")
 cache_dir = Path(".hpc_cache")
 materialize_at = Path("src/hpc_chunking_shim.py")  # or "src/hpc_<task>_shim.py"
 
@@ -234,7 +301,7 @@ cached = load_cached_shim(cache_dir, key)
 - If `cached is not None`: copy `cached` to `materialize_at` (overwriting only if the existing file at `materialize_at` starts with `# hpc-shim-key: <key>` — a matching stamp means the on-disk file is a prior cache copy, so it's safe to overwrite). If the existing file has a different stamp or no stamp, treat it as user-edited and do NOT overwrite. Report "shim cache hit: <key>" and skip to the `run:` configuration below.
 - If `cached is None`: proceed with generation below. After generating the shim source, call `save_shim(cache_dir, key, shim_source, executor_path=executor_path, template_path=template_path, materialize_at=materialize_at)` to persist it. The helper prepends the `# hpc-shim-key:` stamp automatically.
 
-**Generation (cache miss only).** Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT.parent / "templates" / "chunking_shim.py")'`). Fill in:
+**Generation (cache miss only).** Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "chunking_shim.py")'`). Fill in:
 
 - `_compute_total_items()` — read the executor source, replicate its data pipeline up to the point where the array length is known
 - `translate()` — adjust the return args if the executor uses something other than `--start`/`--end`

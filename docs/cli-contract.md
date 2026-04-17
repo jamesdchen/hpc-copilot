@@ -10,6 +10,31 @@ Conventions
 - Structured return shapes use `{<data_key>, errors}` where `errors` is a list
   of `{code: str, detail: str}` objects (empty list means success).
 
+Manifest filenames
+------------------
+Dispatch manifests are written with a content-addressed filename inside the
+experiment directory:
+
+- Canonical form: `manifest.<cmd_sha_short>.json` where `cmd_sha_short` is
+  the first 8 chars of the run-level `cmd_sha`. The run-level `cmd_sha` is
+  computed by `hpc_mapreduce.job.manifest.aggregate_cmd_sha` as
+  `SHA-256(join("\n", sorted per-task cmd_sha values))`.
+- Alias: `manifest.json` is kept in sync with the most recent
+  content-addressed manifest (symlink where supported, copy-fallback
+  otherwise). Tools that previously opened `manifest.json` continue to
+  work unchanged.
+- Retention: at most `hpc_mapreduce.job.manifest.MAX_MANIFESTS` (default 10)
+  content-addressed manifests are kept per experiment directory. Oldest by
+  mtime are evicted on every write.
+- The manifest *contents* are unchanged — `schema_version`, `total_tasks`,
+  `tasks.<tid>.cmd`, `tasks.<tid>.cmd_sha`, etc. still match the existing
+  shape. Only the on-disk filename convention is additive.
+
+When resuming a prior run, `/submit` picks up an existing
+`manifest.<cmd_sha_short>.json` and delegates to
+`hpc_mapreduce.job.resubmit.resubmit_plan` for the failing task IDs; see
+`commands/submit.md` for the interactive resume-vs-fresh prompt.
+
 ---
 
 ## `python -m hpc_mapreduce.reduce.status`
@@ -29,7 +54,8 @@ Emit a full status report for a dispatch manifest.
 | `--sge-user` | no | `qstat -u` value |
 | `--min-rows` | no | CSV min-row threshold (default 0) |
 
-**Stdout JSON schema** — all four top-level keys always present:
+**Stdout JSON schema** — four top-level keys always present, plus
+`resource_usage` when scheduler accounting data is available:
 
 ```json
 {
@@ -38,12 +64,17 @@ Emit a full status report for a dispatch manifest.
                         "cmd_sha": "<16-hex>|null", "...": "..."}},
   "rollup":  {"<grid_point_key>": {"complete": 0, "running": 0, "pending": 0,
                                    "failed": 0, "unknown": 0, "total": 0}},
-  "errors":  [{"code": "...", "detail": "..."}]
+  "errors":  [{"code": "...", "detail": "..."}],
+  "resource_usage": {"cpu_hours": 0.0, "gpu_hours": 0.0, "tasks_counted": 0}
 }
 ```
 
 - `tasks[tid].cmd_sha` echoes the manifest v2 per-task `cmd_sha` (first 16 hex
   chars of SHA-256 of the task's `cmd`) so observers can detect drift.
+- `resource_usage` is additive and backwards-compatible: derived from
+  `sacct`/`qstat` accounting fields (`ElapsedRaw`, `ReqCPUS`, `AllocTRES` for
+  SLURM; `ru_wallclock`, `slots`, `gpu` for SGE). Sums across completed tasks
+  only. Absent or zeroed when the scheduler query returns no accounting data.
 - Exit code: `0` on success, `2` if the manifest is missing or unparseable.
 
 ## `python3 _hpc_dispatch.py` (on cluster)
