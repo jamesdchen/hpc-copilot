@@ -1,0 +1,18 @@
+# Normalize all text files to LF on commit; check out with native EOL.
+# Prevents CRLF from Windows checkouts breaking shell scripts executed on Linux clusters.
+* text=auto eol=lf
+
+# Scripts executed on remote Linux clusters — MUST be LF or shebang breaks.
+*.sh    text eol=lf
+*.slurm text eol=lf
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+
+# Binary files (explicit to avoid accidental normalization)
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.gz   binary
+*.zip  binary
