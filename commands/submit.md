@@ -30,21 +30,23 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
 
 ## Step 1: Discover Executors
 
-Ask the user which directory contains their experiment executors. (Cache in Claude Code memory for this project after first ask.)
+Call the shared discovery helper — identical to what `/build-executor` uses so both commands see the same set of executors:
 
-Read all `.py` files in that directory. Classify each:
+```python
+from hpc_mapreduce import discover_executors
+execs = discover_executors(".")   # returns list[ExecutorInfo]
+```
 
-| Category | Detection | Examples |
-|----------|-----------|---------|
-| **Executor** | Has `argparse` + `if __name__ == "__main__"` + does computation | `ml_ridge.py`, `dl_patchts.py` |
-| **Shared utility** | No `if __name__` block, only function/class defs | `loading.py`, `transforms.py` |
+`discover_executors` scans `executors/`, `scripts/`, and `src/` (in that order, collecting from every one that exists) and falls back to the repo root if none are present. The contract is: a file is an executor iff it parses and has both an `if __name__ == "__main__":` guard and a CLI import (`argparse`, `click`, `typer`, or `fire`) — utilities, `__init__.py`, and reserved HPC filenames are filtered out automatically. Each returned `ExecutorInfo` has `path`, `name`, `cli_framework`, `imports`, and `docstring`.
 
-For each executor, run `python3 <script> --help` to map its CLI interface. Parse:
+Cache the resolved directory in Claude Code memory for this project. If the cached directory differs from the defaults, pass it through `search_dirs=(...)`. If the user explicitly names a different directory, honor it the same way.
+
+For each executor, run `python3 <info.path> --help` to map its CLI interface (the helper parses source but does not execute it). Parse:
 - Grid-able parameters (model hyperparams, feature types, etc.)
 - Data arguments (`--data-path`, `--horizon`, `--start`, `--end`)
 - Output arguments (`--output-file`)
 
-Present the inventory:
+Present the inventory (use `info.name` and `info.path` as the identifiers; `info.docstring` is handy for the one-line summary):
 
 ```
 Executors found in src/:
@@ -54,6 +56,8 @@ Executors found in src/:
 
 Which do you want to run?
 ```
+
+If `discover_executors` returns an empty list, tell the user no executors were found and point them at `/build-executor` to scaffold one.
 
 ## Step 2: Understand User Intent
 
@@ -113,7 +117,7 @@ Or use cached value from Claude Code memory.
 Confirm with user on first submission.
 
 ### Environment Detection
-Read executor source code for import statements:
+Use `info.imports` from the `ExecutorInfo` captured in Step 1 (fall back to reading the source only if that tuple is empty):
 
 | Imports detected | Classification | Environment |
 |-----------------|----------------|-------------|
