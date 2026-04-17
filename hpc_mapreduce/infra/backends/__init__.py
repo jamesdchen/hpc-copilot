@@ -117,9 +117,7 @@ class HPCBackend(abc.ABC):
                     )
                 match = re.search(r"(\d+)", result.stdout)
                 if not match:
-                    raise RuntimeError(
-                        f"Could not parse job ID from output: {result.stdout!r}"
-                    )
+                    raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
                 job_id = match.group(1)
                 current_wave_ids.append(job_id)
                 submissions.append((batch.task_range, job_id))

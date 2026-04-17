@@ -1,4 +1,25 @@
-"""Job status checking, result validation, and status reporting."""
+"""Job status checking, result validation, and status reporting.
+
+This module drives the LLM-orchestrator's ``/monitor`` loop.  The CLI entry
+point (``python -m hpc_mapreduce.reduce.status --manifest ...``) emits JSON
+to stdout.  **Schema contract** (pinned; all four top-level keys ALWAYS
+present, never ``None``)::
+
+    {
+        "summary": {"complete": int, "running": int, "pending": int,
+                    "failed": int, "unknown": int},
+        "tasks": {task_id: {"status": str, "cmd_sha": str | null, ...}, ...},
+        "rollup": {grid_key: {"complete": int, "running": int, "pending": int,
+                              "failed": int, "unknown": int, "total": int}, ...},
+        "errors": [{"code": str, "detail": str}, ...],
+    }
+
+``cmd_sha`` is passed through from the manifest (schema v2); absent on v1
+manifests -> serialized as ``null`` for each task.  Additional top-level
+keys (``total_tasks``, ``scheduler``, ``timestamp``, ``result_dir``,
+``err_log_paths``) may appear but are informational only; the four keys
+above are the parse contract.
+"""
 
 from __future__ import annotations
 
@@ -42,7 +63,7 @@ def check_results(
 
     A CSV is considered complete when it exists and is non-zero byte (i.e. at
     least a header has been written).  Pass ``min_rows > 0`` to additionally
-    require that many data rows beyond the header — useful for tasks where an
+    require that many data rows beyond the header - useful for tasks where an
     empty result is genuinely a failure.  When ``min_rows == 0`` (the default),
     legitimately-empty outputs (e.g. zero-trade backtest periods) still count
     as complete and will not trigger auto-resubmit.
@@ -177,6 +198,22 @@ _PENDING_STATES = {"PENDING"}
 _FAILED_STATES = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"}
 
 
+def _empty_summary() -> dict[str, int]:
+    """Return the canonical zeroed summary dict (5 int keys, always present)."""
+    return {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+
+
+def _categorize(state: str) -> str:
+    """Map a scheduler state string to a summary bucket name."""
+    if state in _ACTIVE_STATES:
+        return "running"
+    if state in _PENDING_STATES:
+        return "pending"
+    if state in _FAILED_STATES or state.startswith("CANCELLED"):
+        return "failed"
+    return "unknown"
+
+
 def report_status(
     result_dir: str | Path,
     job_ids: list[str],
@@ -198,25 +235,25 @@ def report_status(
     """
     from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
 
-    csv_results = check_results(
-        result_dir, total_tasks, file_glob=file_glob, min_rows=min_rows
-    )
+    csv_results = check_results(result_dir, total_tasks, file_glob=file_glob, min_rows=min_rows)
 
     if scheduler is None:
         scheduler = detect_scheduler(result_dir)
 
+    errors: list[dict] = []
     if job_ids:
         if scheduler == "sge":
-            job_info = query_sge(job_ids, user=sge_user)
+            query_result = query_sge(job_ids, user=sge_user)
         else:
-            job_info = query_sacct(job_ids, cluster=slurm_cluster)
+            query_result = query_sacct(job_ids, cluster=slurm_cluster)
+        job_info = query_result.get("tasks", {}) or {}
+        errors.extend(query_result.get("errors", []) or [])
     else:
         job_info = {}
-    query_error = job_info.pop("error", None)
 
     complete_ids = set(csv_results)
     tasks: dict[str, dict] = {}
-    summary = {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+    summary = _empty_summary()
 
     for tid in range(1, total_tasks + 1):
         if tid in complete_ids:
@@ -225,14 +262,7 @@ def report_status(
         elif tid in job_info:
             info = job_info[tid]
             state = info["state"]
-            if state in _ACTIVE_STATES:
-                cat = "running"
-            elif state in _PENDING_STATES:
-                cat = "pending"
-            elif state in _FAILED_STATES or state.startswith("CANCELLED"):
-                cat = "failed"
-            else:
-                cat = "unknown"
+            cat = _categorize(state)
             tasks[str(tid)] = {"status": cat, **info}
             summary[cat] += 1
         else:
@@ -261,11 +291,10 @@ def report_status(
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "tasks": tasks,
         "summary": summary,
+        "errors": errors,
     }
     if err_paths:
         report["err_log_paths"] = err_paths
-    if query_error:
-        report["query_error"] = query_error
     return report
 
 
@@ -363,48 +392,58 @@ def report_status_from_manifest(
     shared directory.  ``min_rows`` is forwarded to
     :func:`check_results_from_manifest`; see its docstring for the CSV
     completion semantics.
+
+    Each task's per-task dict includes ``cmd_sha`` pulled from the manifest
+    entry when present (manifest schema v2+); ``null`` otherwise (v1 back-compat).
     """
     from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
 
     total = int(manifest.get("total_tasks", len(manifest.get("tasks", {}))))
+    manifest_tasks = manifest.get("tasks", {}) or {}
 
     completed = check_results_from_manifest(manifest, file_glob=file_glob, min_rows=min_rows)
 
     if scheduler is None:
         scheduler = detect_scheduler()
 
+    errors: list[dict] = []
     if job_ids:
         if scheduler == "sge":
-            job_info = query_sge(job_ids, user=sge_user)
+            query_result = query_sge(job_ids, user=sge_user)
         else:
-            job_info = query_sacct(job_ids, cluster=slurm_cluster)
+            query_result = query_sacct(job_ids, cluster=slurm_cluster)
+        job_info = query_result.get("tasks", {}) or {}
+        errors.extend(query_result.get("errors", []) or [])
     else:
         job_info = {}
-    query_error = job_info.pop("error", None)
+
+    def _cmd_sha_for(one_based_tid: int) -> str | None:
+        """Look up cmd_sha on the manifest entry for a 1-based task id."""
+        entry = manifest_tasks.get(str(one_based_tid - 1))
+        if not entry:
+            return None
+        sha = entry.get("cmd_sha")
+        return sha if isinstance(sha, str) else None
 
     complete_ids = set(completed)
     tasks: dict[str, dict] = {}
-    summary = {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+    summary = _empty_summary()
 
     for tid in range(1, total + 1):
+        cmd_sha = _cmd_sha_for(tid)
         if tid in complete_ids:
-            tasks[str(tid)] = completed[tid]
+            entry = dict(completed[tid])
+            entry["cmd_sha"] = cmd_sha
+            tasks[str(tid)] = entry
             summary["complete"] += 1
         elif tid in job_info:
             info = job_info[tid]
             state = info["state"]
-            if state in _ACTIVE_STATES:
-                cat = "running"
-            elif state in _PENDING_STATES:
-                cat = "pending"
-            elif state in _FAILED_STATES or state.startswith("CANCELLED"):
-                cat = "failed"
-            else:
-                cat = "unknown"
-            tasks[str(tid)] = {"status": cat, **info}
+            cat = _categorize(state)
+            tasks[str(tid)] = {"status": cat, "cmd_sha": cmd_sha, **info}
             summary[cat] += 1
         else:
-            tasks[str(tid)] = {"status": "unknown"}
+            tasks[str(tid)] = {"status": "unknown", "cmd_sha": cmd_sha}
             summary["unknown"] += 1
 
     failed_or_unknown = [tid for tid in range(1, total + 1) if tid not in complete_ids]
@@ -428,11 +467,10 @@ def report_status_from_manifest(
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "tasks": tasks,
         "summary": summary,
+        "errors": errors,
     }
     if err_paths:
         report["err_log_paths"] = err_paths
-    if query_error:
-        report["query_error"] = query_error
     return report
 
 
@@ -467,7 +505,7 @@ def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point — `python -m hpc_mapreduce.reduce.status`
+# CLI entry point - `python -m hpc_mapreduce.reduce.status`
 # ---------------------------------------------------------------------------
 
 
@@ -502,10 +540,36 @@ def _main() -> int:
 
     manifest_path = Path(args.manifest)
     if not manifest_path.is_file():
+        # Even on error, emit the pinned 4-key shape so the LLM orchestrator
+        # can parse stdout unconditionally.
+        err_doc = {
+            "summary": _empty_summary(),
+            "tasks": {},
+            "rollup": {},
+            "errors": [
+                {"code": "manifest_not_found", "detail": str(manifest_path)},
+            ],
+        }
+        json.dump(err_doc, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
         print(f"manifest not found: {manifest_path}", file=sys.stderr)
         return 2
 
-    manifest = json.loads(manifest_path.read_text())
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        err_doc = {
+            "summary": _empty_summary(),
+            "tasks": {},
+            "rollup": {},
+            "errors": [
+                {"code": "manifest_parse_error", "detail": f"{manifest_path}: {exc}"},
+            ],
+        }
+        json.dump(err_doc, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+        return 2
+
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
 
     report = report_status_from_manifest(
@@ -521,6 +585,12 @@ def _main() -> int:
         min_rows=args.min_rows,
     )
     report["rollup"] = rollup_by_grid_point(report, manifest)
+
+    # Pin all four top-level keys, even if upstream forgot one.
+    report.setdefault("summary", _empty_summary())
+    report.setdefault("tasks", {})
+    report.setdefault("rollup", {})
+    report.setdefault("errors", [])
 
     json.dump(report, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

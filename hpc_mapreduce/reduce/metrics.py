@@ -153,11 +153,7 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
             if key == "n_samples":
                 agg["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
                 continue
-            pairs = [
-                (e[key], w)
-                for e, w in zip(entries, weights, strict=True)
-                if key in e
-            ]
+            pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
             if not pairs:
                 continue
             w_total = sum(w for _, w in pairs)

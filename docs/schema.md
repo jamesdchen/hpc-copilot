@@ -141,10 +141,10 @@ Optional per-cluster environment overrides. Keyed by cluster name, then by env_g
 cluster_envs:
   hoffman2:
     ml: { modules: "python gcc" }
-    dl: { modules: "conda cuda/12.3", conda_env: harxhar-dl }
+    dl: { modules: "conda cuda/12.3", conda_env: <your_env> }
   discovery:
     ml: { modules: "python" }
-    dl: { modules: "", conda_env: project-cucuringu }
+    dl: { modules: "", conda_env: <your_env> }
 ```
 
 ## How It Works
@@ -167,7 +167,7 @@ The experiment author's code receives all params as normal CLI args — no aware
 ```yaml
 project: my_experiment
 cluster: hoffman2
-remote_path: /u/home/j/jamesdc1/my_experiment
+remote_path: /u/home/<your_user>/my_experiment
 
 profiles:
   sweep:
@@ -187,13 +187,13 @@ profiles:
 ### Multi-Stage Profile (train → test pipeline)
 
 ```yaml
-project: vol_cfm
+project: myexp_b
 cluster: discovery
-remote_path: /home1/jc_905/vol_cfm
+remote_path: /home1/<your_user>/myexp_b
 
 cluster_envs:
   discovery:
-    dl: { conda_env: project-cucuringu }
+    dl: { conda_env: <your_env> }
 
 profiles:
   cfm:
@@ -231,9 +231,9 @@ rsync_exclude: [.git/, samples/, __pycache__, "*.pyc", .mypy_cache/, data/]
 For the simplest case, `run`/`grid`/`resources` can live at the top level without a `profiles` wrapper:
 
 ```yaml
-project: quick_sweep
+project: myexp_a
 cluster: hoffman2
-remote_path: /u/home/j/jamesdc1/quick_sweep
+remote_path: /u/home/<your_user>/myexp_a
 
 run: "python3 train.py"
 grid:

@@ -25,19 +25,25 @@ def _make_plan() -> SubmissionPlan:
     """Build a concrete 2-wave x 3-batch plan with distinct task ranges."""
     batches = [
         # Wave 0 (submitted first).
-        JobBatch(batch_index=0, task_start=1,   task_end=100, array_size=100,
-                 est_wall_s=None, wave=0),
-        JobBatch(batch_index=1, task_start=101, task_end=200, array_size=100,
-                 est_wall_s=None, wave=0),
-        JobBatch(batch_index=2, task_start=201, task_end=300, array_size=100,
-                 est_wall_s=None, wave=0),
+        JobBatch(
+            batch_index=0, task_start=1, task_end=100, array_size=100, est_wall_s=None, wave=0
+        ),
+        JobBatch(
+            batch_index=1, task_start=101, task_end=200, array_size=100, est_wall_s=None, wave=0
+        ),
+        JobBatch(
+            batch_index=2, task_start=201, task_end=300, array_size=100, est_wall_s=None, wave=0
+        ),
         # Wave 1 (depends on wave 0 completing).
-        JobBatch(batch_index=3, task_start=301, task_end=400, array_size=100,
-                 est_wall_s=None, wave=1),
-        JobBatch(batch_index=4, task_start=401, task_end=500, array_size=100,
-                 est_wall_s=None, wave=1),
-        JobBatch(batch_index=5, task_start=501, task_end=600, array_size=100,
-                 est_wall_s=None, wave=1),
+        JobBatch(
+            batch_index=3, task_start=301, task_end=400, array_size=100, est_wall_s=None, wave=1
+        ),
+        JobBatch(
+            batch_index=4, task_start=401, task_end=500, array_size=100, est_wall_s=None, wave=1
+        ),
+        JobBatch(
+            batch_index=5, task_start=501, task_end=600, array_size=100, est_wall_s=None, wave=1
+        ),
     ]
     return SubmissionPlan(
         batches=batches,
@@ -81,15 +87,15 @@ class TestSubmitPlanSlurm:
 
         recorder = _Recorder(responder)
         # Patch subprocess.run at the source used by HPCBackend._execute_command.
-        monkeypatch.setattr(
-            "hpc_mapreduce.infra.backends.subprocess.run", recorder
-        )
+        monkeypatch.setattr("hpc_mapreduce.infra.backends.subprocess.run", recorder)
 
-        backend = SlurmBackend(script=str(tmp_path / "job.slurm"),
-                               log_dir=str(tmp_path / "logs"))
+        backend = SlurmBackend(script=str(tmp_path / "job.slurm"), log_dir=str(tmp_path / "logs"))
 
         submissions = backend.submit_plan(
-            plan, job_name="probe", job_env={"FOO": "bar"}, cwd=tmp_path,
+            plan,
+            job_name="probe",
+            job_env={"FOO": "bar"},
+            cwd=tmp_path,
         )
 
         # 2 waves * 3 batches = 6 subprocess invocations.
@@ -155,20 +161,19 @@ class TestSubmitPlanSge:
             counter["n"] += 1
             # Mimic qsub array-job stdout.
             return _cp(
-                stdout=f"Your job-array {counter['n']}.1-100:1 "
-                       "(\"probe\") has been submitted\n"
+                stdout=f'Your job-array {counter["n"]}.1-100:1 ("probe") has been submitted\n'
             )
 
         recorder = _Recorder(responder)
-        monkeypatch.setattr(
-            "hpc_mapreduce.infra.backends.subprocess.run", recorder
-        )
+        monkeypatch.setattr("hpc_mapreduce.infra.backends.subprocess.run", recorder)
 
-        backend = SGEBackend(script=str(tmp_path / "job.sh"),
-                             log_dir=str(tmp_path / "logs"))
+        backend = SGEBackend(script=str(tmp_path / "job.sh"), log_dir=str(tmp_path / "logs"))
 
         submissions = backend.submit_plan(
-            plan, job_name="probe", job_env={"FOO": "bar"}, cwd=tmp_path,
+            plan,
+            job_name="probe",
+            job_env={"FOO": "bar"},
+            cwd=tmp_path,
         )
 
         assert len(recorder.calls) == 6

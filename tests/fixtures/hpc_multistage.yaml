@@ -1,0 +1,25 @@
+cluster: testcluster
+remote_path: /remote/path/to/myexp
+results:
+  dir: results/{run_id}
+  summary_pattern: "*.csv"
+  aggregate_cmd: "python -m myexp.aggregate"
+profiles:
+  train:
+    run: "python -m myexp.train"
+    grid:
+      model: [ridge, lasso]
+      alpha: [0.1, 1.0]
+    resources:
+      cpus: 1
+      memory: 8G
+      walltime: "1:00:00"
+  stages:
+    prepare:
+      run: "python -m myexp.prepare"
+    fit:
+      run: "python -m myexp.fit"
+      depends_on: [prepare]
+    eval:
+      run: "python -m myexp.eval"
+      depends_on: [fit]

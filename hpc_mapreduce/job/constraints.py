@@ -14,11 +14,30 @@ class ClusterConstraints:
 
     These constraints describe scheduler limits and overhead that a
     throughput optimizer can use to plan job submissions.
+
+    Fields
+    ------
+    max_array_size:
+        Maximum task count per scheduler array (hard scheduler limit).
+    max_walltime:
+        Maximum wall-clock time allowed per job (``HH:MM:SS``).
+    max_concurrent_jobs:
+        Maximum number of arrays that may run simultaneously.
+    est_spin_up:
+        Estimated per-array queue spin-up overhead (e.g. ``"5m"``).
+    max_tasks:
+        Optional *advisory* ceiling on total tasks for a single submission.
+        Surfaced by ``/submit`` to confirm large grids with the user.  This
+        is **not** enforced by the throughput optimizer — it is a soft hint.
+        ``None`` disables the advisory (no prompt before the built-in
+        ``build_task_manifest`` default ceiling of 10_000).
     """
+
     max_array_size: int = 1000
     max_walltime: str = "24:00:00"
     max_concurrent_jobs: int = 10
     est_spin_up: str = "5m"
+    max_tasks: int | None = None
 
     def walltime_seconds(self) -> int:
         """Parse max_walltime HH:MM:SS to total seconds."""

@@ -4,10 +4,22 @@
 This script is rsynced to the cluster and executed on the login node after
 each wave completes.  It reads per-task ``metrics.json`` sidecars and
 aggregates them into per-wave partial results grouped by grid point.
-It must remain zero-dependency — only Python stdlib, no imports from the
+It must remain zero-dependency -- only Python stdlib, no imports from the
 ``hpc_mapreduce`` package.
+
+CLI (preferred):
+
+    python3 _hpc_combiner.py --wave 0 --manifest _hpc_dispatch.json [--force]
+
+Environment variables (``HPC_WAVE`` / ``HPC_MANIFEST``) remain the fallback
+for already-deployed copies on clusters that invoke the combiner via env.
+
+Exit codes:
+    0  - success
+    1  - bad input (missing wave, malformed manifest, output already exists)
 """
 
+import argparse
 import json
 import os
 import re
@@ -22,27 +34,27 @@ def _default_max_workers() -> int:
     return min(32, (os.cpu_count() or 4) * 2)
 
 
-def _read_metrics(metrics_path: str) -> dict:
+def _read_metrics(metrics_path):
     """Read and parse one ``metrics.json`` file.
 
     Raises ``FileNotFoundError`` if missing, ``json.JSONDecodeError`` /
-    ``OSError`` on read/parse failure — the caller translates these into
+    ``OSError`` on read/parse failure -- the caller translates these into
     per-task error strings.
     """
     with open(metrics_path) as f:
-        data: dict = json.load(f)
+        data = json.load(f)
     return data
 
 
-# Duplicated from hpc_mapreduce.job.grid.run_id — this script cannot import
+# Duplicated from hpc_mapreduce.job.grid.run_id -- this script cannot import
 # from the package because it runs standalone on the cluster.
-def _run_id(params: dict) -> str:
+def _run_id(params):
     """Deterministic string ID from param values, joined by ``_``."""
     raw = "_".join(params.values())
     return re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
 
-def _weighted_mean(entries: list, errors: list) -> dict:
+def _weighted_mean(entries, errors):
     """Compute weighted-mean metrics across *entries*.
 
     Mirrors the algorithm in ``hpc_mapreduce.reduce.metrics.reduce_metrics``:
@@ -52,9 +64,11 @@ def _weighted_mean(entries: list, errors: list) -> dict:
     if not entries:
         return {}
 
-    all_keys = {k for e in entries for k in e}
+    all_keys = set()
+    for e in entries:
+        all_keys.update(e.keys())
     weights = [e.get("n_samples", 1) for e in entries]
-    result: dict = {}
+    result = {}
 
     for key in sorted(all_keys):
         if key == "n_samples":
@@ -69,20 +83,61 @@ def _weighted_mean(entries: list, errors: list) -> dict:
     return result
 
 
-def main(max_workers: int | None = None) -> None:
-    # --- Read env vars ---
-    wave_str = os.environ.get("HPC_WAVE")
-    if wave_str is None:
-        print("[combiner] ERROR: HPC_WAVE env var not set", file=sys.stderr)
-        sys.exit(1)
+def _parse_args(argv):
+    """Parse CLI args.  Falls back to env vars for unset flags (back-compat)."""
+    parser = argparse.ArgumentParser(
+        description="Per-wave combiner: aggregate metrics.json into wave_N.json.",
+    )
+    parser.add_argument(
+        "--wave",
+        type=int,
+        default=None,
+        help="Wave number (0-based). Falls back to $HPC_WAVE.",
+    )
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        help="Path to the dispatch manifest. Falls back to $HPC_MANIFEST or '_hpc_dispatch.json'.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing _combiner/wave_N.json output.",
+    )
+    return parser.parse_args(argv)
 
-    try:
-        wave = int(wave_str)
-    except ValueError:
-        print(f"[combiner] ERROR: HPC_WAVE is not an integer: {wave_str!r}", file=sys.stderr)
-        sys.exit(1)
 
-    manifest_path = os.environ.get("HPC_MANIFEST", "_hpc_dispatch.json")
+def main(max_workers=None, argv=None):
+    # When invoked from __main__ the entry block passes sys.argv[1:] explicitly;
+    # when called programmatically (e.g. tests) with argv=None we default to []
+    # so argparse doesn't inherit the host process's argv.
+    args = _parse_args(argv if argv is not None else [])
+
+    # --- Resolve wave: CLI first, env var fallback ---
+    if args.wave is not None:
+        wave = args.wave
+    else:
+        wave_str = os.environ.get("HPC_WAVE")
+        if wave_str is None:
+            print(
+                "[combiner] ERROR: --wave not given and HPC_WAVE env var not set",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            wave = int(wave_str)
+        except ValueError:
+            print(
+                f"[combiner] ERROR: HPC_WAVE is not an integer: {wave_str!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    # --- Resolve manifest path: CLI first, then env, then default ---
+    if args.manifest is not None:
+        manifest_path = args.manifest
+    else:
+        manifest_path = os.environ.get("HPC_MANIFEST", "_hpc_dispatch.json")
 
     # --- Load manifest ---
     if not os.path.isfile(manifest_path):
@@ -110,17 +165,27 @@ def main(max_workers: int | None = None) -> None:
     task_ids = wave_map[wave_key]
     tasks = manifest.get("tasks", {})
 
+    # --- Output path & --force handling (check BEFORE doing any work) ---
+    out_dir = "_combiner"
+    out_path = os.path.join(out_dir, f"wave_{wave}.json")
+    if os.path.exists(out_path) and not args.force:
+        print(
+            f"[combiner] ERROR: output already exists: {out_path} (use --force to overwrite)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     print(f"[combiner] wave={wave} tasks={len(task_ids)}")
 
-    # --- Read metrics per task (parallelized — I/O-bound over NFS) ---
-    errors: list = []
+    # --- Read metrics per task (parallelized -- I/O-bound over NFS) ---
+    errors = []
     # grid_point -> list of metric dicts
-    groups: dict = {}
+    groups = {}
 
     # Pre-resolve tasks into (tid, task, metrics_path) triples.  Tasks with
     # no manifest entry or no metrics.json are short-circuited into errors
     # here so the thread pool only handles genuine file reads.
-    readable: list = []  # list of (tid, grid_key, metrics_path)
+    readable = []  # list of (tid, grid_key, metrics_path)
     for tid in task_ids:
         task = tasks.get(str(tid))
         if task is None:
@@ -163,16 +228,14 @@ def main(max_workers: int | None = None) -> None:
                 groups.setdefault(grid_key, []).append(metrics)
 
     # --- Aggregate per grid point ---
-    grid_points: dict = {}
+    grid_points = {}
     for grid_key in sorted(groups):
         grid_points[grid_key] = _weighted_mean(groups[grid_key], errors)
 
     print(f"[combiner] grid_points={len(grid_points)} errors={len(errors)}")
 
     # --- Write output ---
-    out_dir = "_combiner"
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"wave_{wave}.json")
 
     output = {
         "wave": wave,
@@ -188,4 +251,4 @@ def main(max_workers: int | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(argv=sys.argv[1:])

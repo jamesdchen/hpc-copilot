@@ -102,12 +102,12 @@ Cluster infrastructure definitions. Ships with claude-hpc in `config/clusters.ya
 ```yaml
 hoffman2:
   host: hoffman2.idre.ucla.edu
-  user: jamesdc1
+  user: <your_user>
   scheduler: sge
-  scratch: /u/scratch/j/jamesdc1
+  scratch: <your_scratch>
   modules: [python/3.11.9]
   conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh
-  conda_envs: [harxhar-dl]          # optional — Claude presents these as options
+  conda_envs: [<your_env>]          # optional — Claude presents these as options
   gpu_types: [a100, h200, a6000]
 ```
 

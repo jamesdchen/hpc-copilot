@@ -56,13 +56,21 @@ __all__ = [
     "resubmit_plan",
     # Remote
     "run_combiner",
+    "run_combiner_checked",
 ]
 
 from pathlib import Path
 
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from hpc_mapreduce.infra.gpu import pick_gpu
-from hpc_mapreduce.infra.remote import deploy_runtime, rsync_pull, rsync_push, run_combiner, ssh_run
+from hpc_mapreduce.infra.remote import (
+    deploy_runtime,
+    rsync_pull,
+    rsync_push,
+    run_combiner,
+    run_combiner_checked,
+    ssh_run,
+)
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 from hpc_mapreduce.job.grid import (
     MANIFEST_SCHEMA_VERSION,

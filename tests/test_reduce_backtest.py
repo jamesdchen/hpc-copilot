@@ -111,12 +111,16 @@ class TestReduceBacktest:
 
 def _write_wave(combiner_dir: Path, wave: int, grid_points: dict) -> None:
     combiner_dir.mkdir(parents=True, exist_ok=True)
-    (combiner_dir / f"wave_{wave}.json").write_text(json.dumps({
-        "wave": wave,
-        "task_ids": [],
-        "grid_points": grid_points,
-        "errors": [],
-    }))
+    (combiner_dir / f"wave_{wave}.json").write_text(
+        json.dumps(
+            {
+                "wave": wave,
+                "task_ids": [],
+                "grid_points": grid_points,
+                "errors": [],
+            }
+        )
+    )
 
 
 class TestReducePartials:
@@ -181,6 +185,7 @@ class TestReducePartials:
         combiner_dir = tmp_path / "_combiner"
         # Wave 0 has task 0, wave 1 has task 1
         from hpc_mapreduce.job.grid import run_id
+
         grid_key = run_id({"model": "ridge"})
         _write_wave(combiner_dir, 0, {grid_key: {"mse": 0.10, "n_samples": 100}})
         _write_wave(combiner_dir, 1, {grid_key: {"mse": 0.30, "n_samples": 300}})

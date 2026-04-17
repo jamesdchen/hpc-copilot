@@ -16,11 +16,18 @@ import time
 
 __all__ = ["main"]
 
-# Expected manifest schema version.  Kept in sync with
+# Manifest schema versions this dispatcher accepts.  Kept in sync with
 # ``MANIFEST_SCHEMA_VERSION`` in ``hpc_mapreduce/job/grid.py``.  Hardcoded
 # here because this module must stay stdlib-only (it runs on cluster
 # compute nodes without the ``hpc_mapreduce`` package installed).
-EXPECTED_SCHEMA_VERSION = 1
+#
+# v1 and v2 are accepted: v2 adds per-task ``cmd_sha`` which the dispatcher
+# does not need to consume — it's purely observational metadata for callers
+# like ``/monitor``.  ``EXPECTED_SCHEMA_VERSION`` is kept as a module-level
+# alias for the *current* canonical version (the one ``build_task_manifest``
+# emits today) for existing tests that reference it.
+SUPPORTED_SCHEMA_VERSIONS = (1, 2)
+EXPECTED_SCHEMA_VERSION = SUPPORTED_SCHEMA_VERSIONS[-1]
 
 
 def main() -> None:
@@ -40,11 +47,11 @@ def main() -> None:
 
     # --- Schema version check ---
     schema_version = manifest.get("schema_version")
-    if schema_version != EXPECTED_SCHEMA_VERSION:
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         print(
             f"[dispatch] ERROR: manifest schema_version={schema_version}, "
-            f"expected={EXPECTED_SCHEMA_VERSION}. Regenerate with current "
-            f"hpc_mapreduce.",
+            f"supported={list(SUPPORTED_SCHEMA_VERSIONS)}. Regenerate with "
+            f"current hpc_mapreduce.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -84,20 +91,15 @@ def main() -> None:
     # Rename it aside so the new attempt starts from a clean slate, without
     # losing the prior partial output for forensic inspection.
     if os.path.isdir(wip_dir):
-        stale_target = os.path.join(
-            result_dir, f"_wip_{task_id}_failed_{int(time.time())}"
-        )
+        stale_target = os.path.join(result_dir, f"_wip_{task_id}_failed_{int(time.time())}")
         try:
             os.rename(wip_dir, stale_target)
-            print(
-                f"[dispatch] preserved prior failed WIP at {stale_target}/"
-            )
+            print(f"[dispatch] preserved prior failed WIP at {stale_target}/")
         except OSError as exc:
             # Don't block the retry on a rename failure (permissions,
             # cross-device, etc.) — just continue.
             print(
-                f"[dispatch] WARN: could not preserve stale WIP {wip_dir}: "
-                f"{exc}",
+                f"[dispatch] WARN: could not preserve stale WIP {wip_dir}: {exc}",
                 file=sys.stderr,
             )
 

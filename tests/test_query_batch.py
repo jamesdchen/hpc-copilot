@@ -3,6 +3,8 @@
 Verify that polling N job IDs issues exactly ONE subprocess call per
 scheduler tool (sacct / qstat), that the argv carries the full job list,
 and that states map back to the right job IDs.
+
+Asserts the uniform ``{"tasks": ..., "errors": ...}`` return shape.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ class TestQuerySacctBatched:
         monkeypatch.setattr(subprocess, "run", recorder)
 
         out = qmod.query_sacct([])
-        assert out == {}
+        assert out == {"tasks": {}, "errors": []}
         assert recorder.calls == []
 
     def test_six_job_ids_single_subprocess_call(self, monkeypatch):
@@ -58,14 +60,14 @@ class TestQuerySacctBatched:
             # Use a unique task id per job so they don't clash on the map.
             tid = idx + 1
             lines.append(f"{jid}_{tid}|COMPLETED|0:0")
-            # Extra step rows — these should be ignored/merged.
+            # Extra step rows - these should be ignored/merged.
             lines.append(f"{jid}_{tid}.batch|COMPLETED|0:0")
         stdout = "\n".join(lines) + "\n"
 
         recorder = _Recorder(lambda cmd: _cp(stdout=stdout))
         monkeypatch.setattr(subprocess, "run", recorder)
 
-        result = qmod.query_sacct(job_ids)
+        out = qmod.query_sacct(job_ids)
 
         # Exactly one subprocess invocation.
         assert len(recorder.calls) == 1, recorder.calls
@@ -80,7 +82,12 @@ class TestQuerySacctBatched:
         assert "," in joined
         assert joined.count(",") == len(job_ids) - 1
 
+        # Uniform return shape.
+        assert set(out.keys()) == {"tasks", "errors"}
+        assert out["errors"] == []
+
         # States mapped back correctly: tid -> job_id.
+        result = out["tasks"]
         for idx, jid in enumerate(job_ids):
             tid = idx + 1
             assert tid in result
@@ -89,11 +96,12 @@ class TestQuerySacctBatched:
             assert result[tid]["exit_code"] == "0:0"
 
     def test_sacct_failure_returns_error_dict(self, monkeypatch):
-        recorder = _Recorder(lambda cmd: _cp(stdout="", returncode=1))
+        recorder = _Recorder(lambda cmd: _cp(stdout="", returncode=1, stderr="boom"))
         monkeypatch.setattr(subprocess, "run", recorder)
 
         out = qmod.query_sacct(["111", "222"])
-        assert out == {"error": "sacct_unavailable"}
+        assert out["tasks"] == {}
+        assert out["errors"] and out["errors"][0]["code"] == "sacct_unavailable"
         # Still exactly one batched call (no per-job fallback fan-out).
         assert len(recorder.calls) == 1
 
@@ -103,7 +111,8 @@ class TestQuerySacctBatched:
 
         monkeypatch.setattr(subprocess, "run", raiser)
         out = qmod.query_sacct(["111", "222"])
-        assert out == {"error": "sacct_unavailable"}
+        assert out["tasks"] == {}
+        assert out["errors"] and out["errors"][0]["code"] == "sacct_unavailable"
 
     def test_sacct_cluster_flag_prepended(self, monkeypatch):
         recorder = _Recorder(lambda cmd: _cp(stdout="999_1|COMPLETED|0:0\n"))
@@ -124,7 +133,7 @@ class TestQuerySgeBatched:
         monkeypatch.setattr(subprocess, "run", recorder)
 
         out = qmod.query_sge([])
-        assert out == {}
+        assert out == {"tasks": {}, "errors": []}
         assert recorder.calls == []
 
     def test_single_qstat_call_for_multiple_jobs(self, monkeypatch):
@@ -163,7 +172,9 @@ class TestQuerySgeBatched:
         recorder = _Recorder(responder)
         monkeypatch.setattr(subprocess, "run", recorder)
 
-        result = qmod.query_sge(job_ids, user="user")
+        out = qmod.query_sge(job_ids, user="user")
+        assert set(out.keys()) == {"tasks", "errors"}
+        result = out["tasks"]
 
         # Exactly ONE qstat call, no matter how many jobs were requested.
         qstat_calls = [c for c in recorder.calls if c[0] == "qstat"]
@@ -174,7 +185,7 @@ class TestQuerySgeBatched:
         # One qacct call per unique job ID (qacct can't multi-query).
         qacct_calls = [c for c in recorder.calls if c[0] == "qacct"]
         assert len(qacct_calls) == len(set(job_ids))
-        # Collect every -j argument — each input job ID must appear exactly once.
+        # Collect every -j argument - each input job ID must appear exactly once.
         qacct_jids = [c[c.index("-j") + 1] for c in qacct_calls]
         assert sorted(qacct_jids) == sorted(job_ids)
 
@@ -195,6 +206,7 @@ class TestQuerySgeBatched:
 
     def test_qacct_dedupes_repeated_job_ids(self, monkeypatch):
         """Repeat IDs within a tick should not trigger repeat qacct calls."""
+
         def responder(cmd):
             if cmd[0] == "qstat":
                 return _cp(stdout="")
@@ -226,4 +238,7 @@ class TestQuerySgeBatched:
         monkeypatch.setattr(subprocess, "run", recorder)
 
         out = qmod.query_sge(["111"], user="user")
-        assert out == {"error": "sge_unavailable"}
+        assert out["tasks"] == {}
+        # At least one error with code 'sge_unavailable' should be present.
+        codes = [e["code"] for e in out["errors"]]
+        assert "sge_unavailable" in codes
