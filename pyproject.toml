@@ -17,6 +17,9 @@ dev = [
     "mypy>=1.10",
     "pytest>=8.0",
 ]
+tui = [
+    "rich>=13.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["hpc_mapreduce*"]

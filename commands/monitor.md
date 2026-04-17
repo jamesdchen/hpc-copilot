@@ -62,6 +62,46 @@ $ARGUMENTS formats (pick one):
 3. **Auto-discover** (empty):
    Check for active jobs belonging to the current project via queue status commands. Read `_hpc_dispatch.json` to identify which executors were submitted and their expected task counts.
 
+### Optional: `--tui`
+
+Append `--tui` to any of the above formats to launch a live terminal dashboard
+instead of running the one-shot JSON poll. This is for **interactive, attended**
+monitoring only — the default cron / self-scheduling path stays JSON. Do not
+schedule a TUI session via `CronCreate`.
+
+The TUI reuses the same `report_status_from_manifest` code path, so the JSON
+contract described below is unchanged. Rich is an optional dep
+(`pip install 'claude-hpc[tui]'`); if it's missing, `--tui` prints a short
+install hint and exits 2, and plain `/monitor` continues to work.
+
+Keybinds:
+
+| Key | Action |
+|-----|--------|
+| `r` | Force an immediate refresh (skips the poll interval) |
+| `f` | Toggle focus on the failing-tasks panel |
+| `l` | Open the currently focused task's error log via `ssh <host> less <log>` |
+| `q` | Quit the TUI |
+
+Invoke the module directly:
+
+```bash
+python -m hpc_mapreduce.reduce.tui \
+    --manifest _hpc_dispatch.json \
+    --job-ids <csv_job_ids> \
+    --job-name <profile> \
+    --log-dir logs \
+    --poll-interval 30 \
+    --ssh-target <user>@<host>
+```
+
+The TUI surfaces four panels: header (run_id / cluster / scheduler /
+wall-clock), per-grid-point rollup (queued / running / done / failed),
+wave progress bars sourced from the manifest's `wave_map`, failure
+classification counts (via `classify_failure`), plus a tail of the 10
+most recent failing tasks with one-line diagnostics. The footer shows
+live CPU-hour / GPU-hour totals from `resource_usage`.
+
 ## Step 1: Check Status
 
 Run the deterministic status reporter on the cluster. It reads `_hpc_dispatch.json`, checks each task's per-task `result_dir` for completion, queries the scheduler (sacct for SLURM, qstat for SGE) for in-flight tasks, and emits a single JSON blob:
