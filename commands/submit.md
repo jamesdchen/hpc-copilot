@@ -286,7 +286,7 @@ from pathlib import Path
 from hpc_mapreduce import shim_cache_key, load_cached_shim, save_shim
 
 executor_path = Path("src/<executor>.py")
-template_path = Path("<path from _PACKAGE_ROOT.parent / 'templates' / 'chunking_shim.py'>")
+template_path = Path("<path from _PACKAGE_ROOT / 'templates' / 'chunking_shim.py'>")
 cache_dir = Path(".hpc_cache")
 materialize_at = Path("src/hpc_chunking_shim.py")  # or "src/hpc_<task>_shim.py"
 
@@ -297,7 +297,7 @@ cached = load_cached_shim(cache_dir, key)
 - If `cached is not None`: copy `cached` to `materialize_at` (overwriting only if the existing file at `materialize_at` starts with `# hpc-shim-key: <key>` — a matching stamp means the on-disk file is a prior cache copy, so it's safe to overwrite). If the existing file has a different stamp or no stamp, treat it as user-edited and do NOT overwrite. Report "shim cache hit: <key>" and skip to the `run:` configuration below.
 - If `cached is None`: proceed with generation below. After generating the shim source, call `save_shim(cache_dir, key, shim_source, executor_path=executor_path, template_path=template_path, materialize_at=materialize_at)` to persist it. The helper prepends the `# hpc-shim-key:` stamp automatically.
 
-**Generation (cache miss only).** Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT.parent / "templates" / "chunking_shim.py")'`). Fill in:
+**Generation (cache miss only).** Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "chunking_shim.py")'`). Fill in:
 
 - `_compute_total_items()` — read the executor source, replicate its data pipeline up to the point where the array length is known
 - `translate()` — adjust the return args if the executor uses something other than `--start`/`--end`
