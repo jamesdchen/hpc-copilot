@@ -4,6 +4,20 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
 Aggregation runs on the cluster to avoid transferring many result files. Only summary files are downloaded locally.
 
+## Core Principle: Reduce Where the Data Lives
+
+**Never move bulk result files to reach a Python env.** If the reduction is trivial (pandas concat, `optuna.tell()`, JSON dump) but the host with the data lacks the deps, install the deps on that host — a 30s `pip install` beats minutes of small-file scp/rsync.
+
+Decision rule before any `scp`/`rsync` of results:
+
+1. **Is the compute genuinely HPC-scale?** (GPU, >1 node, hours of CPU) → run on cluster, aggregate on cluster, pull summaries.
+2. **Is the compute trivial?** (pandas, sqlite, scalar output) → run it wherever the data already sits. Install missing deps in place.
+3. **Must data actually move?** → move the *small* side (params/code down, reduced output up). Never bulk-push raw chunks between clusters to reach an env.
+
+Anti-pattern: `scp -r results/tune/*_chunk_*.csv cluster-B:...` because cluster-B has the conda env and cluster-A doesn't. Fix the env, not the data location.
+
+Small-file scp/rsync over SSH is especially slow (per-file TCP/SSH handshake). If bulk movement is truly unavoidable, `tar` first.
+
 ## Setup
 
 Read cluster definitions:
