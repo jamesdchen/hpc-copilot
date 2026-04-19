@@ -104,6 +104,8 @@ live CPU-hour / GPU-hour totals from `resource_usage`.
 
 ## Step 1: Check Status
 
+> **Anti-pattern (critical):** Do NOT use `ls logs/ | wc -l` or `find results/ -name '*.csv' | wc -l` as a success proxy. **Failed tasks produce logs and partial output too** — an `ImportError` still leaves an `.o*` file; a mid-run crash still leaves a `_wip_*` directory. Counting these as "progress" has led to hours of wasted cluster time discovering 100% failure rates after submission. Always either (a) invoke the status reporter below, or (b) `grep -clE 'Error|Traceback|ImportError' logs/*` and compute error-rate alongside any file count. **File existence is not success.**
+
 Run the deterministic status reporter on the cluster. It reads `_hpc_dispatch.json`, checks each task's per-task `result_dir` for completion, queries the scheduler (sacct for SLURM, qstat for SGE) for in-flight tasks, and emits a single JSON blob:
 
 ```bash

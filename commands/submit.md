@@ -70,6 +70,9 @@ Parse `$ARGUMENTS` or the user's natural language request:
 | "subgroup analysis with ridge and xgboost" | Select `ml_ridge.py` + `ml_xgboost.py`, grid over subgroups |
 | "sweep horizons 1, 5, 25 on lightgbm" | Select `ml_lightgbm.py`, grid: horizon=[1, 5, 25] |
 
+**Flags:**
+- `--no-canary` — skip the Step 7b 1-task canary submission. Default behavior is canary-on; only skip when the user has already smoke-tested the pipeline within the last session or is deliberately re-submitting a known-good pipeline.
+
 For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Build a dispatch manifest per job.
 
 ## Step 3: Build Grid
@@ -332,10 +335,47 @@ rsync -az --delete \
 
 Note: `deploy_runtime()` now also deploys `_hpc_combiner.py` alongside the existing dispatch script.
 
-Verify deployment:
+Verify deployment — existence check:
 ```bash
 ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_hpc_dispatch.json '"$REMOTE_PATH"'/_hpc_dispatch.py'
 ```
+
+**Verify content, not just existence.** `rsync` exit 0 is necessary but not sufficient: a WSL/DNS hiccup or stale SSH config can cause rsync to silently transfer nothing while still returning success. Before submitting a full array, spot-check the hash of 2–3 files that *should* have just changed (e.g., a source file and the manifest):
+
+```bash
+# Local hashes
+md5sum _hpc_dispatch.json src/<changed_file>.py
+# Remote hashes
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && md5sum _hpc_dispatch.json src/<changed_file>.py'
+```
+
+If any hash differs, STOP — re-run rsync with verbose flags (`-avz`) and investigate DNS/ssh-config issues before submitting.
+
+## Step 7b: Canary Submission
+
+**Before submitting the full `-t 1-<total_tasks>` array, submit a 1-task canary** to validate the end-to-end pipeline on the cluster:
+
+```bash
+# SGE canary
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && qsub -t 1-1 -N <job_name>_canary -o logs -j y \
+    -l <resource_key>=<resource_val> ... \
+    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,HPC_MANIFEST=...,TOTAL_TASKS=1,TASK_OFFSET=0 \
+    <template_path>'
+
+# SLURM canary
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch --array=1-1 --job-name=<job_name>_canary ... \
+    --export=...,TOTAL_TASKS=1,TASK_OFFSET=0 <template_path>'
+```
+
+Wait for the canary to reach a terminal state (`sacct -j <jobid>` / `qacct -j <jobid>`), then verify:
+
+1. **Exit code 0** in the log tail (`[dispatch] FAILED` or `ImportError` / `Traceback` = fail).
+2. **Expected output artifacts** exist in the task's `result_dir` (whichever of `results.summary_pattern`, `*_reduce.json`, or `metrics_chunk_*.json` the profile declares).
+3. **Output is well-shaped** — if prior runs exist, compare CSV header/row count to a known-good file.
+
+**Only if all three pass, proceed to Step 8 (full array submission).** If the canary fails, the fix cost is 1 task; skipping the canary and discovering a bad pipeline after 5000 tasks wastes hours of cluster time and poisons the queue for other users.
+
+To opt out (e.g., already smoke-tested in the last 10 minutes or single-task submission anyway), pass `--no-canary` to `/submit`. Default is canary-on.
 
 ## Step 8: Submit
 
