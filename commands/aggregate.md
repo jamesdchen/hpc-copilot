@@ -125,6 +125,8 @@ Task completeness:
 
 **Partial aggregation:** Only proceed when all expected task results are present, unless the user explicitly asks to aggregate partial results. If partial, note the missing count and percentage per grid point.
 
+**No partial-bucket leaderboards.** For tuning/sweep workflows (e.g., optuna studies, trial-id grids), **do not** compute or report a "best QLIKE / best score / ranking" until every trial in the bucket is 100% complete. A "best so far" reorders as more trials land — showing it invites premature conclusions and contaminates downstream analysis. If the user explicitly asks for a partial leaderboard, label every number as provisional and list the trials still outstanding.
+
 ## Step 4: Aggregate on Cluster
 
 Determine the aggregation command:
