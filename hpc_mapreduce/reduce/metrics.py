@@ -18,7 +18,27 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
+
+
+def _neumaier_sum(values: Iterable[float]) -> float:
+    """Neumaier-compensated summation (improved Kahan).
+
+    Keeps reductions order-invariant within one ULP across task counts and
+    dynamic ranges that would drift under plain ``sum``. Kept in sync with
+    the copy in ``hpc_mapreduce/map/combiner.py``; the combiner runs
+    standalone on the cluster and cannot import from this package.
+    """
+    s = 0.0
+    c = 0.0
+    for v in values:
+        t = s + v
+        if abs(s) >= abs(v):
+            c += (s - t) + v
+        else:
+            c += (v - t) + s
+        s = t
+    return s + c
 
 
 def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
@@ -64,8 +84,9 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
         pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
         if not pairs:
             continue
-        w_total = sum(w for _, w in pairs)
-        result[key] = sum(v * w for v, w in pairs) / w_total if w_total else 0.0
+        w_total = _neumaier_sum(w for _, w in pairs)
+        numerator = _neumaier_sum(v * w for v, w in pairs)
+        result[key] = numerator / w_total if w_total else 0.0
 
     return result
 
@@ -157,8 +178,9 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
             pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
             if not pairs:
                 continue
-            w_total = sum(w for _, w in pairs)
-            agg[key] = sum(v * w for v, w in pairs) / w_total if w_total else 0.0
+            w_total = _neumaier_sum(w for _, w in pairs)
+            numerator = _neumaier_sum(v * w for v, w in pairs)
+            agg[key] = numerator / w_total if w_total else 0.0
 
         results[run_id] = agg
 
