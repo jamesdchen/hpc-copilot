@@ -48,14 +48,13 @@ Claude: I found these executors in src/:
 Proposed plan:
   Cluster: hoffman2 (SGE)
   Grid: executor=[ml_ridge, ml_xgboost] × horizon=[1, 5, 25] → 6 grid points
-  Backtest: 2020-01-01 to 2024-12-31 (6M periods) → 10 periods
-  Total: 6 × 10 = 60 tasks
+  Total: 6 tasks
   Resources: 1 CPU, 16G, 4:00:00
   Confirm?
 
 You: yes
 
-Claude: Submitted job 12345678 (60 tasks). Run /monitor to track progress.
+Claude: Submitted job 12345678 (6 tasks). Run /monitor to track progress.
 ```
 
 No config files required. Claude discovers your executors by reading their source and `--help`, then suggests resources conversationally based on the executor and your input.
@@ -71,9 +70,7 @@ No config files required. Claude discovers your executors by reading their sourc
 
 ### Parallelism Model
 
-Grid parameters (including optional backtest time periods) are expanded via Cartesian product. Each combination becomes one HPC task. Executors receive all parameters as CLI arguments — no HPC awareness needed.
-
-With backtest enabled, total tasks = grid points × time periods.
+Grid parameters are expanded via Cartesian product. Each combination becomes one HPC task. Executors receive all parameters as CLI arguments — no HPC awareness needed.
 
 ### Throughput Optimization
 
@@ -141,7 +138,7 @@ Cluster connection details are in `config/clusters.yaml`.
 
 ```python
 from hpc_mapreduce import expand_grid, build_task_manifest, total_tasks
-from hpc_mapreduce import expand_backtest, ClusterConstraints, parse_constraints
+from hpc_mapreduce import ClusterConstraints, parse_constraints
 from hpc_mapreduce import load_clusters_config, get_template_path, _PACKAGE_ROOT
 from hpc_mapreduce.infra.backends import get_backend
 ```

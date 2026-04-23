@@ -31,13 +31,13 @@ __all__ = [
     "pick_gpu",
     # Reduce
     "reduce_metrics",
+    "reduce_by_grid_point",
     "reduce_backtest",
     "reduce_partials",
     "reduce_resource_usage",
     "classify_failure",
     # Grid API
     "expand_grid",
-    "expand_backtest",
     "build_task_manifest",
     "total_tasks",
     "attach_wave_map",
@@ -100,7 +100,6 @@ from hpc_mapreduce.job.grid import (
     MANIFEST_SCHEMA_VERSION,
     attach_wave_map,
     build_task_manifest,
-    expand_backtest,
     expand_grid,
     resolve_git_sha,
     total_tasks,
@@ -134,6 +133,7 @@ from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
 from hpc_mapreduce.reduce.classify import classify_failure
 from hpc_mapreduce.reduce.metrics import (
     reduce_backtest,
+    reduce_by_grid_point,
     reduce_metrics,
     reduce_partials,
     reduce_resource_usage,

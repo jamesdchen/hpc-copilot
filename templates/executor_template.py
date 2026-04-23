@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     # 3. Feature engineering + horizon shift.
     rows = build_features(rows, args.horizon)
 
-    # 4. TODO: split rows into train/test as your backtest requires.
+    # 4. TODO: split rows into train/test (or otherwise slice) as your experiment requires.
     train_rows: list[dict[str, Any]] = rows[:-1] if len(rows) > 1 else []
     test_rows: list[dict[str, Any]] = rows[-1:] if rows else []
 

@@ -37,7 +37,7 @@ Top-level `project`, `cluster`, `remote_path`, `rsync_exclude` are shared across
 | `env` | map | no | Environment setup (modules, conda_env) |
 | `env_group` | string | no | Key into `cluster_envs[cluster]` for env overrides |
 | `results` | map | no | Result collection config |
-| `backtest` | map | no | Time-based parallelism (date range split into periods) |
+| `backtest` | map | no | Time-based parallelism (convenience shortcut — /submit translates to a generated date-window shim + chunk-id grid dimension; framework core has no backtest awareness) |
 | `constraints` | map | no | Cluster constraints for throughput optimization |
 | `gpu_fallback` | list[str] | no | Ordered GPU types to try |
 | `max_retries` | int | no | Max auto-resubmissions on failure |
@@ -54,7 +54,7 @@ Stages without `grid` run as single jobs. Stages with `grid` get fan-out (parall
 
 ## grid
 
-Map of parameter_name → list of values. Cartesian product = one task per combo (or multiplied by backtest periods if configured).
+Map of parameter_name → list of values. Cartesian product = one task per combo.
 
 ## env
 
@@ -113,8 +113,7 @@ results:
 
 ## backtest
 
-Optional time-based parallelism. Splits a date range into periods
-that become additional grid parameters (paired, not cross-producted).
+Optional time-based parallelism. /submit translates this block into a generated `date_window_shim.py` in your experiment repo + a chunk-id grid dimension at submission time. The framework core has no backtest awareness — this keyword is a convenience shortcut into the general shim pattern.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -123,8 +122,6 @@ that become additional grid parameters (paired, not cross-producted).
 | `chunk_duration` | string | yes | Duration per period (e.g. "6M", "1Y", "30D") |
 | `start_arg` | string | no | CLI flag for period start (default: `"--start"`) |
 | `end_arg` | string | no | CLI flag for period end (default: `"--end"`) |
-
-Total HPC tasks = grid_points × time_periods.
 
 ## constraints
 
@@ -145,20 +142,20 @@ Profile-level constraints override cluster-level constraints **field-by-field** 
 
 ## Interface mismatches (shims)
 
-When the framework's parallelism interface (grid params, backtest date periods) doesn't match what an executor expects (e.g. row-index ranges, file lists, GPU device IDs), the solution is a **shim** — a thin script in the experiment repo that translates between the two.
+When the framework's parallelism interface (grid params, chunk indices) doesn't match what an executor expects (e.g. row-index ranges, file lists, GPU device IDs), the solution is a **shim** — a thin script in the experiment repo that translates between the two.
 
 The shim:
-1. Receives the framework's arguments (grid params, date periods, etc.)
+1. Receives the framework's arguments (grid params, chunk indices, etc.)
 2. Translates to the executor's native interface (e.g. computes row ranges from data length)
 3. Forwards to the executor with the translated arguments
 
 The LLM generates the shim once at first submission. It lives in the experiment repo, is versioned, and is fully inspectable by the user. The `run` command in the profile targets the shim:
 
 ```yaml
-run: "python3 src/hpc_backtest_shim.py -- python3 src/executor.py"
+run: "python3 src/date_window_shim.py -- python3 src/executor.py"
 ```
 
-See `templates/chunking_shim.py` for a starting template. This keeps the framework fully agnostic, the executor fully agnostic, and the translation visible and editable.
+See `templates/chunking_shim.py` (row-index chunking) and `templates/date_window_shim.py` (date-window parallelism) for starting templates. This keeps the framework fully agnostic, the executor fully agnostic, and the translation visible and editable.
 
 ## cluster_envs
 

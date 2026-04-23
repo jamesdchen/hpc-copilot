@@ -1,4 +1,4 @@
-"""Tests for reduce_backtest — reduction along the backtest time-period axis."""
+"""Tests for reduce_by_grid_point — group tasks by ``params`` and reduce each group."""
 
 from __future__ import annotations
 
@@ -9,13 +9,18 @@ from typing import TYPE_CHECKING
 
 from hpc_mapreduce.reduce.metrics import (
     _neumaier_sum,
-    reduce_backtest,
+    reduce_by_grid_point,
     reduce_metrics,
     reduce_partials,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_alias_is_identity():
+    from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_by_grid_point
+    assert reduce_backtest is reduce_by_grid_point
 
 
 def _write_metrics(result_dir: Path, metrics: dict) -> None:
@@ -47,7 +52,7 @@ class TestReduceBacktest:
             }
         }
 
-        result = reduce_backtest(manifest)
+        result = reduce_by_grid_point(manifest)
         assert len(result) == 1
         key = list(result.keys())[0]
         # Weighted average of 0.10 and 0.20 with equal weights
@@ -69,7 +74,7 @@ class TestReduceBacktest:
             }
         }
 
-        result = reduce_backtest(manifest)
+        result = reduce_by_grid_point(manifest)
         assert len(result) == 2
 
     def test_missing_metrics_returns_empty(self, tmp_path):
@@ -82,7 +87,7 @@ class TestReduceBacktest:
                 },
             }
         }
-        result = reduce_backtest(manifest)
+        result = reduce_by_grid_point(manifest)
         assert len(result) == 1
         assert result[list(result.keys())[0]] == {}
 
@@ -109,7 +114,7 @@ class TestReduceBacktest:
             }
         }
 
-        result = reduce_backtest(manifest)
+        result = reduce_by_grid_point(manifest)
         key = list(result.keys())[0]
         # Weighted: (0.10*100 + 0.30*300) / 400 = 100/400 = 0.25
         assert abs(result[key]["mse"] - 0.25) < 1e-9
@@ -163,15 +168,15 @@ class TestReducePartials:
         result = reduce_partials(combiner_dir)
         assert result == {}
 
-    def test_matches_reduce_backtest(self, tmp_path):
-        """Cross-validation: reduce_partials and reduce_backtest agree."""
+    def test_matches_reduce_by_grid_point(self, tmp_path):
+        """Cross-validation: reduce_partials and reduce_by_grid_point agree."""
         # Set up result dirs with metrics files
         r1 = tmp_path / "results" / "ridge_a"
         r2 = tmp_path / "results" / "ridge_b"
         _write_metrics(r1, {"mse": 0.10, "n_samples": 100})
         _write_metrics(r2, {"mse": 0.30, "n_samples": 300})
 
-        # reduce_backtest path
+        # reduce_by_grid_point path
         manifest = {
             "tasks": {
                 "0": {
@@ -186,7 +191,7 @@ class TestReducePartials:
                 },
             }
         }
-        bt_result = reduce_backtest(manifest)
+        bt_result = reduce_by_grid_point(manifest)
 
         # reduce_partials path — simulate combiner output for same data
         combiner_dir = tmp_path / "_combiner"
