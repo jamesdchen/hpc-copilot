@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
+import random
 
 from hpc_mapreduce.job.grid import run_id
-from hpc_mapreduce.map.combiner import _run_id, _weighted_mean, main
+from hpc_mapreduce.map.combiner import _neumaier_sum, _run_id, _weighted_mean, main
 
 
 class TestRunIdMatchesGrid:
@@ -53,6 +55,63 @@ class TestWeightedMeanUnequalWeights:
         # (0.10*100 + 0.30*300) / 400 = 100/400 = 0.25
         assert abs(result["mse"] - 0.25) < 1e-9
         assert result["n_samples"] == 400
+
+
+class TestNeumaierSum:
+    """The compensated sum is what makes cluster-side reductions reliable."""
+
+    def test_benign_input_matches_plain_sum(self):
+        values = [0.1, 0.2, 0.3, 0.4]
+        assert abs(_neumaier_sum(values) - sum(values)) < 1e-12
+
+    def test_pathological_cancellation_matches_fsum(self):
+        # Classic Kahan regression: huge term, tiny term, huge negative term,
+        # repeated many times.  Plain sum drifts; Neumaier tracks fsum.
+        seq = [1.0, 1e100, 1.0, -1e100] * 1000
+        got = _neumaier_sum(seq)
+        want = math.fsum(seq)  # 2000.0 exactly
+        assert abs(got - want) < 1e-6
+        assert want == 2000.0
+        # And demonstrate that plain sum really would have been wrong --
+        # guard against someone re-introducing plain sum later.
+        assert sum(seq) != want
+
+    def test_empty_sequence_is_zero(self):
+        assert _neumaier_sum([]) == 0.0
+
+
+class TestWeightedMeanOrderInvariant:
+    """Running the same entries in a different order must produce the
+    same aggregate -- this is the reliability guarantee users care about
+    when tasks complete in nondeterministic order on the cluster."""
+
+    def test_order_invariant_on_large_input(self):
+        # 500 tasks with varying metric magnitudes and n_samples counts.
+        rng = random.Random(42)
+        entries_forward = [
+            {"mse": rng.uniform(1e-8, 1e4), "n_samples": rng.randint(1, 10_000)}
+            for _ in range(500)
+        ]
+        entries_shuffled = list(entries_forward)
+        rng.shuffle(entries_shuffled)
+
+        a = _weighted_mean(entries_forward, [])
+        b = _weighted_mean(entries_shuffled, [])
+
+        assert a["n_samples"] == b["n_samples"]
+        assert abs(a["mse"] - b["mse"]) < 1e-12
+
+    def test_order_invariant_on_wide_dynamic_range(self):
+        # Deliberately extreme magnitudes so plain sum would diverge.
+        entries = [
+            {"v": 1e12, "n_samples": 1},
+            {"v": 1.0, "n_samples": 1},
+            {"v": -1e12, "n_samples": 1},
+            {"v": 1.0, "n_samples": 1},
+        ]
+        forward = _weighted_mean(entries, [])
+        reverse = _weighted_mean(list(reversed(entries)), [])
+        assert abs(forward["v"] - reverse["v"]) < 1e-12
 
 
 class TestMainEndToEnd:

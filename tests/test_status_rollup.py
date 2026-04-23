@@ -12,18 +12,17 @@ from hpc_mapreduce.reduce.status import (
 
 
 def _manifest(tmp_path):
-    """Three grid points x two periods = 6 tasks. Each task has its own result_dir."""
+    """Two grid points x two chunks = 4 tasks. Each task has its own result_dir."""
     tasks = {}
     idx = 0
     for horizon in ("1", "5"):
-        for period in ("2020-01", "2020-07"):
+        for chunk in ("a", "b"):
             for model in ("ridge",):
-                rdir = tmp_path / f"results_{model}_h{horizon}_{period}"
+                rdir = tmp_path / f"results_{model}_h{horizon}_{chunk}"
                 tasks[str(idx)] = {
                     "cmd": f"python src/{model}.py --horizon {horizon}",
                     "result_dir": str(rdir),
                     "params": {"model": model, "horizon": horizon},
-                    "period": {"start": f"{period}-01", "end": f"{period}-30"},
                 }
                 idx += 1
     return {
@@ -66,13 +65,13 @@ def test_check_results_ignores_wip(tmp_path):
 
 def test_rollup_groups_by_grid_point(tmp_path):
     manifest = _manifest(tmp_path)
-    # 4 tasks total (horizon=1 and horizon=5, each x 2 periods)
+    # 4 tasks total (horizon=1 and horizon=5, each x 2 chunks)
     report = {
         "tasks": {
-            "1": {"status": "complete"},  # manifest 0: horizon=1, period 1
-            "2": {"status": "complete"},  # manifest 1: horizon=1, period 2
-            "3": {"status": "running"},  # manifest 2: horizon=5, period 1
-            "4": {"status": "failed"},  # manifest 3: horizon=5, period 2
+            "1": {"status": "complete"},  # manifest 0: horizon=1, chunk a
+            "2": {"status": "complete"},  # manifest 1: horizon=1, chunk b
+            "3": {"status": "running"},  # manifest 2: horizon=5, chunk a
+            "4": {"status": "failed"},  # manifest 3: horizon=5, chunk b
         },
     }
 

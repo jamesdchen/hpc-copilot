@@ -8,7 +8,6 @@ from hpc_mapreduce.job.discover import (
 )
 from hpc_mapreduce.job.grid import (
     build_task_manifest,
-    expand_backtest,
     expand_grid,
     resolve_git_sha,
     total_tasks,
@@ -36,7 +35,6 @@ __all__ = [
     "ClusterConstraints",
     "parse_constraints",
     "expand_grid",
-    "expand_backtest",
     "build_task_manifest",
     "total_tasks",
     "resolve_git_sha",

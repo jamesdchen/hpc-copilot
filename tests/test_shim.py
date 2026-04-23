@@ -144,3 +144,19 @@ def test_user_edited_shim_is_detectable_via_stamp(tmp_path):
     assert cached.read_text().startswith(stamp_for_key)
     # User-edited file does not
     assert not user_edited.read_text().startswith(stamp_for_key)
+
+
+def test_date_window_template_has_distinct_cache_key(tmp_path):
+    """shim_cache_key must distinguish the two checked-in templates."""
+    from pathlib import Path
+
+    from hpc_mapreduce import shim_cache_key
+
+    repo_root = Path(__file__).parent.parent
+    executor = repo_root / "templates" / "executor_template.py"
+    chunking = repo_root / "templates" / "chunking_shim.py"
+    date_window = repo_root / "templates" / "date_window_shim.py"
+
+    key_chunking = shim_cache_key(executor, chunking)
+    key_date_window = shim_cache_key(executor, date_window)
+    assert key_chunking != key_date_window

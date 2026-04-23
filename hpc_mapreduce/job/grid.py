@@ -5,8 +5,7 @@ Pure computation — no I/O, only stdlib imports.
 Manifest schema history:
 
 * v1: initial format — ``schema_version``, ``total_tasks``, ``grid_size``,
-  ``grid_keys``, and per-task ``cmd`` / ``result_dir`` / ``params`` /
-  (optional) ``period``.
+  ``grid_keys``, and per-task ``cmd`` / ``result_dir`` / ``params``.
 * v2: adds ``cmd_sha`` on every task (first 16 hex chars of the SHA-256 of
   the task's ``cmd`` string).  Provides a stable identifier for each task's
   command that observers (``/monitor``, status tools) can use to detect
@@ -16,12 +15,11 @@ Manifest schema history:
 
 from __future__ import annotations
 
-import calendar
 import hashlib
 import itertools
 import re
 import subprocess
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from math import prod
 from typing import TYPE_CHECKING
 
@@ -34,7 +32,6 @@ __all__ = [
     "run_id",
     "build_task_manifest",
     "total_tasks",
-    "expand_backtest",
     "attach_wave_map",
     "resolve_git_sha",
     "validate_result_dir_template",
@@ -71,117 +68,6 @@ def run_id(params: dict[str, str]) -> str:
     """Deterministic string ID from param values, joined by ``_``."""
     raw = "_".join(params.values())
     return re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
-
-
-def _add_months(d: date | datetime, months: int) -> date | datetime:
-    """Add *months* calendar months to *d*, clamping to valid day."""
-    month = d.month - 1 + months
-    year = d.year + month // 12
-    month = month % 12 + 1
-    day = min(d.day, calendar.monthrange(year, month)[1])
-    if isinstance(d, datetime):
-        return datetime(year, month, day, d.hour, d.minute, d.second)
-    return date(year, month, day)
-
-
-def _parse_duration(duration_str: str) -> tuple[int, str]:
-    """Parse a duration string like '6M', '30D', '2h', '30m' into (amount, suffix).
-
-    Case-sensitive: 'M' = months, 'm' = minutes, 'h'/'H' = hours,
-    'D'/'d' = days, 'Y'/'y' = years.
-    """
-    raw_suffix = duration_str[-1]
-    amount = int(duration_str[:-1])
-    if raw_suffix == "m":
-        return amount, "MIN"
-    if raw_suffix in ("h", "H"):
-        return amount, "H"
-    if raw_suffix in ("d", "D"):
-        return amount, "D"
-    if raw_suffix == "M":
-        return amount, "M"
-    if raw_suffix in ("y", "Y"):
-        return amount, "Y"
-    raise ValueError(f"Unsupported duration suffix: {raw_suffix!r}")
-
-
-def expand_backtest(backtest: dict) -> list[dict[str, str]]:
-    """Convert a backtest config to a list of period dicts.
-
-    Parameters
-    ----------
-    backtest:
-        Dict with: start (str), end (str),
-        chunk_duration (str like "6M", "1Y", "30D", "2h", "30m"),
-        start_arg (str, default "--start"),
-        end_arg (str, default "--end").
-
-        Dates can be YYYY-MM-DD (date-only) or ISO datetime strings.
-        Sub-daily durations (h, m) produce datetime boundaries;
-        day-or-larger durations (D, M, Y) produce date boundaries.
-
-    Returns
-    -------
-    List of dicts, each with keys from start_arg/end_arg stripped of dashes.
-    E.g., [{"start": "2020-01-01", "end": "2020-06-30"}, ...]
-    """
-    duration_str = backtest["chunk_duration"]
-    amount, suffix = _parse_duration(duration_str)
-
-    start_arg = backtest.get("start_arg", "--start")
-    end_arg = backtest.get("end_arg", "--end")
-
-    # Strip leading dashes to get dict key names
-    start_key = start_arg.lstrip("-")
-    end_key = end_arg.lstrip("-")
-
-    # Determine if sub-daily precision is needed
-    sub_daily = suffix in ("H", "MIN")
-
-    overall_start: date | datetime
-    overall_end: date | datetime
-    if sub_daily:
-        overall_start = datetime.fromisoformat(backtest["start"])
-        overall_end = datetime.fromisoformat(backtest["end"])
-    else:
-        overall_start = date.fromisoformat(backtest["start"])
-        overall_end = date.fromisoformat(backtest["end"])
-
-    periods: list[dict[str, str]] = []
-    cursor = overall_start
-
-    while cursor <= overall_end:
-        # Compute next period start
-        if suffix == "MIN":
-            next_cursor = cursor + timedelta(minutes=amount)
-        elif suffix == "H":
-            next_cursor = cursor + timedelta(hours=amount)
-        elif suffix == "D":
-            next_cursor = cursor + timedelta(days=amount)
-        elif suffix == "M":
-            next_cursor = _add_months(cursor, amount)
-        elif suffix == "Y":
-            next_cursor = _add_months(cursor, amount * 12)
-        else:
-            raise ValueError(f"Unsupported duration suffix: {suffix!r}")
-
-        if sub_daily:
-            # End of this period is one second before next period starts
-            period_end = min(next_cursor - timedelta(seconds=1), overall_end)
-        else:
-            # End of this period is day before next period starts
-            period_end = min(next_cursor - timedelta(days=1), overall_end)
-
-        periods.append(
-            {
-                start_key: cursor.isoformat(),
-                end_key: period_end.isoformat(),
-            }
-        )
-
-        cursor = next_cursor
-
-    return periods
 
 
 def resolve_git_sha(repo_path: str | Path | None = None) -> str:
@@ -267,11 +153,10 @@ def build_task_manifest(
     run_cmd: str,
     grid: dict[str, list],
     result_dir_template: str,
-    backtest: dict | None = None,
     max_tasks: int | None = 10_000,
     repo_path: str | Path | None = None,
 ) -> dict:
-    """Build a task manifest from a grid and optional backtest config.
+    """Build a task manifest from a grid.
 
     Parameters
     ----------
@@ -286,15 +171,12 @@ def build_task_manifest(
         manifest-build time), ``{git_sha}`` (7-char ``HEAD`` SHA of the
         experiment repo, or ``"nogit"`` on failure), plus any grid key
         (e.g. ``{model}``, ``{dataset}``) present in *grid*.
-    backtest:
-        Optional backtest config dict. See :func:`expand_backtest`.
     max_tasks:
         Pre-flight ceiling on the number of tasks that will be materialized.
         If the computed total exceeds this value, a :class:`ValueError` is
         raised before any tasks are built.  Pass ``None`` to disable the
         check.  Defaults to ``10_000`` — large enough for typical grids but
-        small enough to catch accidental explosion (e.g. a 10-year
-        hour-chunked backtest that would produce ~87k tasks).
+        small enough to catch accidental explosion.
     repo_path:
         Directory used to resolve ``{git_sha}``.  Defaults to the current
         working directory.
@@ -308,7 +190,7 @@ def build_task_manifest(
     validate_result_dir_template(result_dir_template, grid)
 
     if max_tasks is not None:
-        projected = total_tasks(grid, backtest)
+        projected = total_tasks(grid)
         if projected > max_tasks:
             raise ValueError(
                 f"build_task_manifest would produce {projected} tasks "
@@ -318,48 +200,31 @@ def build_task_manifest(
 
     points = expand_grid(grid)
 
-    if backtest:
-        periods = expand_backtest(backtest)
-        start_arg = backtest.get("start_arg", "--start")
-        end_arg = backtest.get("end_arg", "--end")
-        start_key = start_arg.lstrip("-")
-        end_key = end_arg.lstrip("-")
-    else:
-        periods = [{}]
-
     # Resolve run-level placeholders once — they are constant for every
     # task in this manifest.
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     git_sha = resolve_git_sha(repo_path)
 
     tasks: dict[str, dict] = {}
-    task_idx = 0
-    for period in periods:
-        for params in points:
-            parts = [run_cmd]
-            for k, v in params.items():
-                parts.append(f"--{k} {v}")
-            if period:
-                parts.append(f"{start_arg} {period[start_key]}")
-                parts.append(f"{end_arg} {period[end_key]}")
+    for task_idx, params in enumerate(points):
+        parts = [run_cmd]
+        for k, v in params.items():
+            parts.append(f"--{k} {v}")
 
-            format_kwargs: dict[str, str] = {
-                "run_id": run_id(params),
-                "date": run_date,
-                "git_sha": git_sha,
-                **params,
-            }
-            entry: dict = {
-                "cmd": " ".join(parts),
-                "result_dir": result_dir_template.format(**format_kwargs),
-                "params": dict(params),
-            }
-            entry["cmd_sha"] = hashlib.sha256(entry["cmd"].encode()).hexdigest()[:16]
-            if period:
-                entry["period"] = dict(period)
+        format_kwargs: dict[str, str] = {
+            "run_id": run_id(params),
+            "date": run_date,
+            "git_sha": git_sha,
+            **params,
+        }
+        entry: dict = {
+            "cmd": " ".join(parts),
+            "result_dir": result_dir_template.format(**format_kwargs),
+            "params": dict(params),
+        }
+        entry["cmd_sha"] = hashlib.sha256(entry["cmd"].encode()).hexdigest()[:16]
 
-            tasks[str(task_idx)] = entry
-            task_idx += 1
+        tasks[str(task_idx)] = entry
 
     n_tasks = len(tasks)
 
@@ -391,9 +256,6 @@ def attach_wave_map(
     return {**manifest, "wave_map": str_map}
 
 
-def total_tasks(grid: dict[str, list], backtest: dict | None = None) -> int:
-    """Product of all grid dimension sizes times number of backtest periods."""
-    grid_size = prod(len(v) for v in grid.values())
-    if backtest:
-        return grid_size * len(expand_backtest(backtest))
-    return grid_size
+def total_tasks(grid: dict[str, list]) -> int:
+    """Product of all grid dimension sizes."""
+    return prod(len(v) for v in grid.values()) if grid else 1
