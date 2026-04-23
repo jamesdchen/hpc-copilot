@@ -135,37 +135,41 @@ class TestRsyncPull:
 class TestDeployRuntime:
     """Verify call order: 1 ssh (mkdir), then 1 scp per source file.
 
-    The current code scp's context.py then combiner.py in that order.  If
-    context.py doesn't exist on disk we still test the call sequence that
-    the function emits (per task instructions).
+    The current code scp's context.py, metrics_io.py, then combiner.py in
+    that order.  If context.py doesn't exist on disk we still test the call
+    sequence that the function emits.
     """
 
-    def test_ssh_mkdir_then_two_scps_in_order(self):
+    def test_ssh_mkdir_then_scps_in_order(self):
         # subprocess.run is used both inside ssh_run (first call) and for each scp.
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.deploy_runtime(host="c", user="u", remote_path="/p")
 
         all_calls = mock_run.call_args_list
-        # Expect at least 3 subprocess.run invocations: ssh (mkdir), scp (context), scp (combiner)
-        assert len(all_calls) >= 3
+        # Expect 4 subprocess.run invocations: ssh (mkdir), scp x3
+        # (context.py, metrics_io.py, combiner.py).
+        assert len(all_calls) >= 4
 
         first_argv = all_calls[0][0][0]
         second_argv = all_calls[1][0][0]
         third_argv = all_calls[2][0][0]
+        fourth_argv = all_calls[3][0][0]
 
         assert first_argv[0] == "ssh"
         assert "mkdir -p" in first_argv[-1]
 
         assert second_argv[0] == "scp"
-        # Second scp source ends with context.py
         assert second_argv[1].endswith("context.py")
-        # Destination is the remote map/context.py location
         assert second_argv[2].endswith(":/p/hpc_mapreduce/map/context.py")
 
         assert third_argv[0] == "scp"
-        assert third_argv[1].endswith("combiner.py")
-        assert third_argv[2].endswith(":/p/_hpc_combiner.py")
+        assert third_argv[1].endswith("metrics_io.py")
+        assert third_argv[2].endswith(":/p/hpc_mapreduce/map/metrics_io.py")
+
+        assert fourth_argv[0] == "scp"
+        assert fourth_argv[1].endswith("combiner.py")
+        assert fourth_argv[2].endswith(":/p/_hpc_combiner.py")
 
 
 # ---------------------------------------------------------------------------

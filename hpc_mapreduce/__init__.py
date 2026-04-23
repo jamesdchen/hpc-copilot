@@ -74,6 +74,8 @@ __all__ = [
     # Remote
     "run_combiner",
     "run_combiner_checked",
+    # Per-task metrics sidecar
+    "write_metrics",
 ]
 
 from pathlib import Path
@@ -127,6 +129,7 @@ from hpc_mapreduce.job.throughput import (
     build_wave_map,
     compute_submission_plan,
 )
+from hpc_mapreduce.map.metrics_io import write_metrics
 from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
 from hpc_mapreduce.reduce.classify import classify_failure
 from hpc_mapreduce.reduce.metrics import (

@@ -130,6 +130,18 @@ def main(argv: list[str] | None = None) -> int:
         writer.writerow(["horizon", "n_rows", "metric"])
         writer.writerow([args.horizon, len(test_rows), metric])
 
+    # 8. Emit metrics.json alongside raw outputs so the cluster-side combiner
+    #    can aggregate per grid point. Skipped silently when running outside
+    #    the HPC dispatcher (no $RESULT_DIR) so the scaffold stays runnable
+    #    standalone for smoke tests.
+    # TODO: extend the metrics dict with any other scalar summaries you want
+    #    rolled up (mse, qlike, auc, ...). ``n_samples`` becomes the weight
+    #    in the combiner's weighted mean.
+    if os.environ.get("RESULT_DIR"):
+        from hpc_mapreduce.map.metrics_io import write_metrics
+
+        write_metrics({"metric": metric, "n_samples": len(test_rows)})
+
     print(f"[executor_template] wrote {args.output_file} metric={metric:.6f}")
     return 0
 
