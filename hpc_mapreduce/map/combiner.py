@@ -54,12 +54,38 @@ def _run_id(params):
     return re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
 
+def _neumaier_sum(values):
+    """Neumaier-compensated summation (improved Kahan).
+
+    Reduces accumulated float rounding error over long or wide-dynamic-range
+    sequences, so cross-task aggregates in the combiner are order-invariant
+    within one ULP. Handles the case where the running sum is smaller than
+    the incoming term -- which classic Kahan does not.
+
+    Duplicated verbatim in ``hpc_mapreduce/reduce/metrics.py``; keep them in
+    sync. Not imported from there because this module is deployed standalone
+    to the cluster (no package available).
+    """
+    s = 0.0
+    c = 0.0
+    for v in values:
+        t = s + v
+        if abs(s) >= abs(v):
+            c += (s - t) + v
+        else:
+            c += (v - t) + s
+        s = t
+    return s + c
+
+
 def _weighted_mean(entries, errors):
     """Compute weighted-mean metrics across *entries*.
 
     Mirrors the algorithm in ``hpc_mapreduce.reduce.metrics.reduce_metrics``:
     every metric key is averaged weighted by ``n_samples`` (defaulting to 1),
-    while ``n_samples`` itself is summed.
+    while ``n_samples`` itself is summed.  Uses Neumaier-compensated
+    summation for numerator and denominator so the aggregate is stable
+    regardless of task arrival order.
     """
     if not entries:
         return {}
@@ -72,13 +98,15 @@ def _weighted_mean(entries, errors):
 
     for key in sorted(all_keys):
         if key == "n_samples":
+            # n_samples is an integer count -- plain sum is exact.
             result["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
             continue
         pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
         if not pairs:
             continue
-        w_total = sum(w for _, w in pairs)
-        result[key] = sum(v * w for v, w in pairs) / w_total if w_total else 0.0
+        w_total = _neumaier_sum(w for _, w in pairs)
+        numerator = _neumaier_sum(v * w for v, w in pairs)
+        result[key] = numerator / w_total if w_total else 0.0
 
     return result
 

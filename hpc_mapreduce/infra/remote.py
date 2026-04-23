@@ -128,9 +128,10 @@ def deploy_runtime(
     """Deploy minimal ``hpc_mapreduce`` runtime package to the cluster.
 
     Creates ``{remote_path}/hpc_mapreduce/map/`` with ``__init__.py`` stubs
-    and a copy of ``context.py`` so that
-    ``from hpc_mapreduce.map.context import map_context`` works inside HPC
-    jobs without installing the full claude-hpc package.
+    and copies of ``context.py`` and ``metrics_io.py`` so that
+    ``from hpc_mapreduce.map.context import map_context`` and
+    ``from hpc_mapreduce.map.metrics_io import write_metrics`` both work
+    inside HPC jobs without installing the full claude-hpc package.
 
     Must be called **after** :func:`rsync_push` (which uses ``--delete``).
     """
@@ -148,6 +149,16 @@ def deploy_runtime(
     dst = f"{target}:{remote_path}/hpc_mapreduce/map/context.py"
     subprocess.run(
         ["scp", src, dst],
+        capture_output=True,
+        text=True,
+    )
+
+    # Deploy the per-task metrics sidecar writer so executors can `from
+    # hpc_mapreduce.map.metrics_io import write_metrics` on compute nodes.
+    metrics_io_src = str(Path(__file__).parent.parent / "map" / "metrics_io.py")
+    metrics_io_dst = f"{target}:{remote_path}/hpc_mapreduce/map/metrics_io.py"
+    subprocess.run(
+        ["scp", metrics_io_src, metrics_io_dst],
         capture_output=True,
         text=True,
     )

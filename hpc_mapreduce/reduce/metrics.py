@@ -7,6 +7,7 @@ from __future__ import annotations
 
 __all__ = [
     "reduce_metrics",
+    "reduce_by_grid_point",
     "reduce_backtest",
     "reduce_partials",
     "reduce_resource_usage",
@@ -18,7 +19,27 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
+
+
+def _neumaier_sum(values: Iterable[float]) -> float:
+    """Neumaier-compensated summation (improved Kahan).
+
+    Keeps reductions order-invariant within one ULP across task counts and
+    dynamic ranges that would drift under plain ``sum``. Kept in sync with
+    the copy in ``hpc_mapreduce/map/combiner.py``; the combiner runs
+    standalone on the cluster and cannot import from this package.
+    """
+    s = 0.0
+    c = 0.0
+    for v in values:
+        t = s + v
+        if abs(s) >= abs(v):
+            c += (s - t) + v
+        else:
+            c += (v - t) + s
+        s = t
+    return s + c
 
 
 def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
@@ -64,26 +85,25 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
         pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
         if not pairs:
             continue
-        w_total = sum(w for _, w in pairs)
-        result[key] = sum(v * w for v, w in pairs) / w_total if w_total else 0.0
+        w_total = _neumaier_sum(w for _, w in pairs)
+        numerator = _neumaier_sum(v * w for v, w in pairs)
+        result[key] = numerator / w_total if w_total else 0.0
 
     return result
 
 
-def reduce_backtest(manifest: dict) -> dict[str, dict]:
-    """Reduce metrics along the backtest time-period axis.
+def reduce_by_grid_point(manifest: dict) -> dict[str, dict]:
+    """Group tasks by grid point, then reduce each group via :func:`reduce_metrics`.
 
-    Groups tasks by grid point (same ``params``), computes per-period
-    metrics from each task's ``metrics.json`` sidecar, then averages
-    across periods per grid point (weighted by ``n_samples`` when present).
+    Tasks sharing the same ``params`` dict are treated as one grid point.
 
     Parameters
     ----------
     manifest : dict
         The task manifest (from :func:`build_task_manifest`).  Each task
-        entry must have ``params`` and ``result_dir``.  Tasks with a
-        ``period`` key are grouped; tasks without periods are treated
-        as single-period grid points.
+        entry must have ``params`` and ``result_dir``.  Tasks are grouped
+        by their ``params`` dict (via :func:`run_id`); any additional
+        task-level keys are ignored.
 
     Returns
     -------
@@ -92,7 +112,7 @@ def reduce_backtest(manifest: dict) -> dict[str, dict]:
     """
     from hpc_mapreduce.job.grid import run_id as _run_id
 
-    # Group tasks by grid point (params without period)
+    # Group tasks by grid point (via run_id over params)
     groups: dict[str, list[Path]] = {}
     for task in manifest["tasks"].values():
         key = _run_id(task["params"])
@@ -103,6 +123,10 @@ def reduce_backtest(manifest: dict) -> dict[str, dict]:
         results[grid_key] = reduce_metrics(result_dirs)
 
     return results
+
+
+# Back-compat alias; remove in the next PR.
+reduce_backtest = reduce_by_grid_point
 
 
 def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
@@ -157,8 +181,9 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
             pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
             if not pairs:
                 continue
-            w_total = sum(w for _, w in pairs)
-            agg[key] = sum(v * w for v, w in pairs) / w_total if w_total else 0.0
+            w_total = _neumaier_sum(w for _, w in pairs)
+            numerator = _neumaier_sum(v * w for v, w in pairs)
+            agg[key] = numerator / w_total if w_total else 0.0
 
         results[run_id] = agg
 
