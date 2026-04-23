@@ -73,7 +73,7 @@ def check_results(
     least a header has been written).  Pass ``min_rows > 0`` to additionally
     require that many data rows beyond the header - useful for tasks where an
     empty result is genuinely a failure.  When ``min_rows == 0`` (the default),
-    legitimately-empty outputs (e.g. zero-trade backtest periods) still count
+    legitimately-empty outputs (e.g. zero-result CSVs) still count
     as complete and will not trigger auto-resubmit.
     """
     import csv
@@ -333,8 +333,8 @@ def check_results_from_manifest(
     :func:`report_status`.
 
     Completion semantics: a result file is considered complete when it exists and
-    is non-zero byte.  CSVs with only a header (e.g. a backtest period with zero
-    trades) are therefore accepted by default and will not trigger auto-resubmit
+    is non-zero byte.  CSVs with only a header (e.g. a zero-result task) are
+    therefore accepted by default and will not trigger auto-resubmit
     in ``/monitor``.  Set ``min_rows > 0`` to opt into the stricter check that
     requires at least that many CSV data rows beyond the header.
     """
@@ -548,7 +548,7 @@ def _main() -> int:
         type=int,
         default=0,
         help="Require CSV results to have at least N data rows beyond the header. "
-        "Default 0 accepts header-only CSVs (e.g. zero-trade backtest periods).",
+        "Default 0 accepts header-only CSVs (e.g. zero-result CSVs).",
     )
     args = parser.parse_args()
 

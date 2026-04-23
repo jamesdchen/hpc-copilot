@@ -1,4 +1,4 @@
-"""Tests for backtest range-splitting arithmetic.
+"""Tests for row-index range-split arithmetic for chunking shims, per submit.md Step 6.
 
 The range computation is performed by the LLM at submission time (see
 submit.md Step 6) and baked into manifest commands.  These tests verify

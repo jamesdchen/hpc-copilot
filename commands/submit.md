@@ -16,7 +16,7 @@ Check for existing context (in priority order):
    - **Modify** → pre-populate from dispatch manifest, go to Step 3 (adjust grid/config)
    - **Start fresh** → continue to Step 1
 
-2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `grid`, `backtest`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation.
+2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `grid`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation (a `backtest:` block, if present, is translated to a generated date-window shim at Step 3 — see below).
 
 3. **Neither exists**: Continue to Step 1 (full discovery).
 
@@ -79,7 +79,7 @@ For multi-executor submissions: submit as **separate array jobs** (independent m
 
 Before materializing the manifest, check the projected task count:
 
-1. Compute `total_tasks(grid, backtest)` from `hpc_mapreduce.job.grid` on the proposed grid.
+1. Compute `total_tasks(grid)` from `hpc_mapreduce.job.grid` on the proposed grid.
 2. If the count exceeds the cluster's `constraints.max_tasks` advisory (when set) or a common-sense threshold of 1000, surface it and ask: `"This will produce N tasks. Confirm? [y/N]"`.
 3. When building the manifest, pass `max_tasks=None` to `build_task_manifest` if the user has confirmed a count above 10_000; otherwise leave the default so `build_task_manifest` raises on accidental explosion.
 
@@ -91,17 +91,27 @@ Running ml_ridge.py and ml_xgboost.py.
 Grid parameters (from CLI --help):
   horizon: [1]
 
-Backtest: 2020-01-01 to 2024-12-31 (6M periods) → 10 periods
+Date windows: 10 periods via date_window_shim.py (chunk-id grid dim).
 
 Per executor:
-  ml_ridge.py:    1 grid point × 10 periods = 10 tasks
-  ml_xgboost.py:  1 grid point × 10 periods = 10 tasks
+  ml_ridge.py:    10 tasks
+  ml_xgboost.py:  10 tasks
   Total: 20 tasks
 
-Adjust grid, backtest, or confirm?
+Adjust grid, or confirm?
 ```
 
-The user can add dimensions: "also sweep horizon=[1, 5, 25]" → grid becomes 3 points × 10 periods = 30 per executor.
+The user can add dimensions: "also sweep horizon=[1, 5, 25]" → grid becomes 30 tasks per executor (3 horizons × 10 chunk-ids).
+
+### Backtest (date-window) handling
+
+When the selected profile has a `backtest:` block (`start`, `end`, `chunk_duration`, optional `start_arg`/`end_arg`), translate it into a generated shim instead of passing the block into the framework core:
+
+1. Instantiate `templates/date_window_shim.py` (resolve via `_PACKAGE_ROOT / "templates" / "date_window_shim.py"`), filling in the five module-level constants (`START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG`) from the yaml block.
+2. Route the shim through the existing Step 6 shim-cache machinery (`shim_cache_key` / `load_cached_shim` / `save_shim`) — reuse that block; do NOT duplicate the code here.
+3. Prepend `python3 <materialized_shim_path> --` to the profile's `run` command.
+4. Add `chunk-id: [0..N-1]` as a grid dimension where `N` is the period count computed from the `backtest` block (same arithmetic as `date_window_shim._periods()`).
+5. Call `build_task_manifest(run, grid, result_dir_template)` — no `backtest=` kwarg. Periods are now simply grid-chunk-id cardinality and are already counted in the grid total.
 
 When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in --help), flag it: "ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"
 
@@ -189,18 +199,18 @@ Present the full submission plan:
   Remote:     <remote_path>
   
   Job 1: ml_ridge
-    Executor:   python3 src/ml_ridge.py
-    Grid:       horizon=[1] → 1 grid point
-    Backtest:   2020-01-01 to 2024-12-31 (6M) → 10 periods
-    Tasks:      1 × 10 = 10
+    Executor:   python3 src/date_window_shim.py -- python3 src/ml_ridge.py
+    Grid:       horizon=[1], chunk-id=[0..9] → 10 grid points
+    Date windows: 10 periods via date_window_shim.py (chunk-id grid dim).
+    Tasks:      10
     Resources:  1 CPU, 16G, 4:00:00
     Env:        modules=python/3.11.9
 
   Job 2: ml_xgboost
-    Executor:   python3 src/ml_xgboost.py
-    Grid:       horizon=[1] → 1 grid point
-    Backtest:   2020-01-01 to 2024-12-31 (6M) → 10 periods
-    Tasks:      1 × 10 = 10
+    Executor:   python3 src/date_window_shim.py -- python3 src/ml_xgboost.py
+    Grid:       horizon=[1], chunk-id=[0..9] → 10 grid points
+    Date windows: 10 periods via date_window_shim.py (chunk-id grid dim).
+    Tasks:      10
     Resources:  1 CPU, 16G, 4:00:00
     Env:        modules=python/3.11.9
 
@@ -285,6 +295,12 @@ directly) and prunes old manifests past `MAX_MANIFESTS` (default 10).
 ### Interface mismatch → generate a shim
 
 In Step 1, you ran `--help` on each executor. If an executor doesn't accept `--chunk-id`/`--total-chunks` but does accept some form of data slicing (`--start`/`--end`, file lists, date windows), generate a shim.
+
+**Shim template selection.** Pick the starting template based on the kind of parallelism the user wants:
+
+- **Date-window parallelism** (yaml has a `backtest:` block, or the user asked for "split by date range", "6M/1Y periods", etc.) → `templates/date_window_shim.py`. Fill in the `START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG` module-level constants from the yaml block (or the user's described date range + chunk duration).
+- **Row-index chunking** (executor accepts `--start`/`--end` as row indices, or the user wants "split by N chunks of data") → `templates/chunking_shim.py`. Fill in `_compute_total_items()` and `translate()`.
+- **Anything else** (file lists, GPU device IDs, task-specific seeds, ad-hoc fan-out axes) → start from the blank `templates/shim_template.py` and hand-write the translation.
 
 **Cache-check precondition.** Before generating, check the content-addressed shim cache — re-running for an unchanged executor must produce a byte-identical shim.
 
@@ -430,7 +446,7 @@ For GPU jobs: `--gres=gpu:<count>` and appropriate partition.
 Save to Claude Code memory for this project:
 - Executor directory, cluster, remote_path
 - Environment: modules, conda_env per executor type (CPU/GPU)
-- Default resources, backtest config
+- Default resources, generated shim path
 
 ### Report
 After submission:

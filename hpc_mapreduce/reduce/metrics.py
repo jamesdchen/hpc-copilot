@@ -7,6 +7,7 @@ from __future__ import annotations
 
 __all__ = [
     "reduce_metrics",
+    "reduce_by_grid_point",
     "reduce_backtest",
     "reduce_partials",
     "reduce_resource_usage",
@@ -91,20 +92,18 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
     return result
 
 
-def reduce_backtest(manifest: dict) -> dict[str, dict]:
-    """Reduce metrics along the backtest time-period axis.
+def reduce_by_grid_point(manifest: dict) -> dict[str, dict]:
+    """Group tasks by grid point, then reduce each group via :func:`reduce_metrics`.
 
-    Groups tasks by grid point (same ``params``), computes per-period
-    metrics from each task's ``metrics.json`` sidecar, then averages
-    across periods per grid point (weighted by ``n_samples`` when present).
+    Tasks sharing the same ``params`` dict are treated as one grid point.
 
     Parameters
     ----------
     manifest : dict
         The task manifest (from :func:`build_task_manifest`).  Each task
-        entry must have ``params`` and ``result_dir``.  Tasks with a
-        ``period`` key are grouped; tasks without periods are treated
-        as single-period grid points.
+        entry must have ``params`` and ``result_dir``.  Tasks are grouped
+        by their ``params`` dict (via :func:`run_id`); any additional
+        task-level keys are ignored.
 
     Returns
     -------
@@ -113,7 +112,7 @@ def reduce_backtest(manifest: dict) -> dict[str, dict]:
     """
     from hpc_mapreduce.job.grid import run_id as _run_id
 
-    # Group tasks by grid point (params without period)
+    # Group tasks by grid point (via run_id over params)
     groups: dict[str, list[Path]] = {}
     for task in manifest["tasks"].values():
         key = _run_id(task["params"])
@@ -124,6 +123,10 @@ def reduce_backtest(manifest: dict) -> dict[str, dict]:
         results[grid_key] = reduce_metrics(result_dirs)
 
     return results
+
+
+# Back-compat alias; remove in the next PR.
+reduce_backtest = reduce_by_grid_point
 
 
 def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:

@@ -88,7 +88,7 @@ class TestReportStatusResourceUsage:
 class TestHeaderOnlyCsv:
     """Header-only CSVs should count as complete by default (P1.4 bug fix).
 
-    A legitimately-empty result (e.g. a backtest period with zero trades) used
+    A legitimately-empty result (e.g. a zero-result task) used
     to be marked failed and trigger infinite auto-resubmit in ``/monitor``.
     The default is now non-zero byte = complete; callers opt into the stricter
     check with ``min_rows>0``.

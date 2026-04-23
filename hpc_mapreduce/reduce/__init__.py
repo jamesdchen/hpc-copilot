@@ -1,6 +1,11 @@
 """Reduce-phase modules: metrics aggregation and status reporting."""
 
-from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_metrics, reduce_partials
+from hpc_mapreduce.reduce.metrics import (
+    reduce_backtest,
+    reduce_by_grid_point,
+    reduce_metrics,
+    reduce_partials,
+)
 from hpc_mapreduce.reduce.status import (
     check_results,
     detect_scheduler,
@@ -10,6 +15,7 @@ from hpc_mapreduce.reduce.status import (
 
 __all__ = [
     "reduce_metrics",
+    "reduce_by_grid_point",
     "reduce_backtest",
     "reduce_partials",
     "check_results",
