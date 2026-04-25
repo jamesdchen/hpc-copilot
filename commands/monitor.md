@@ -44,9 +44,9 @@ Run `python -m <executor_module> --help` (extract the module from the profile's 
 
 ## Operating Principles
 
-1. **Act autonomously on known failures.** For OOM, walltime, and node failures, immediately resubmit with appropriate resource overrides. Do NOT ask for permission. Only pause for code bugs or unrecognized errors.
-2. **Compact context each iteration.** Summarize all prior monitoring output into a single state block before scheduling the next check.
-3. **Self-loop.** After each monitoring cycle, schedule the next check using `CronCreate` with an adaptive interval.
+1. **Sanity-check before and after.** Run Step 0.5 pre-flight before arming the Monitor; run Step 4a post-flight before aggregating in Step 4b. File counts lie and stale job IDs waste hours — never skip these gates.
+2. **Act autonomously on known failures.** For OOM, walltime, and node failures, immediately resubmit with appropriate resource overrides. Do NOT ask for permission. Only pause for code bugs or unrecognized errors.
+3. **Stream, don't poll-loop.** Arm the Claude Code `Monitor` tool once (Step 5) with a script that emits one stdout line per state change. React to events as they arrive in chat — do **not** re-run `/monitor` from cron.
 
 ## Arguments
 
@@ -102,6 +102,55 @@ classification counts (via `classify_failure`), plus a tail of the 10
 most recent failing tasks with one-line diagnostics. The footer shows
 live CPU-hour / GPU-hour totals from `resource_usage`.
 
+## Step 0.5: Pre-flight Sanity Checks
+
+Run **once** per `/monitor` invocation, immediately after Step 0 and **before** Step 1. If any check fails, report the specific failure and stop — do NOT proceed to Step 1 and do NOT arm the Monitor in Step 5.
+
+Emit a single line `pre-flight: OK` on success, or `pre-flight FAILED: <which check>` on the first failure.
+
+### 0.5a — Job IDs are real
+
+Every job ID the user passed must be known to the scheduler. Stale IDs from a prior run lead to nonsense status reports.
+
+```bash
+# SLURM
+ssh $SSH_TARGET 'squeue -j '"$JOB_IDS"' -h -o "%i %T" 2>&1; sacct -j '"$JOB_IDS"' -n -P -o JobID,State 2>&1 | head'
+
+# SGE
+ssh $SSH_TARGET 'qstat -j '"$JOB_IDS"' 2>&1 | head'
+```
+
+A job that is neither in the queue nor in the accounting DB → abort.
+
+### 0.5b — Manifest is consistent
+
+```bash
+rsync -az $SSH_TARGET:$REMOTE_PATH/_hpc_dispatch.json ./_hpc_dispatch.json
+python -c 'import json; m=json.load(open("_hpc_dispatch.json")); print(m["schema_version"], m["total_tasks"])'
+```
+
+Verify `schema_version >= 2` and `total_tasks` matches the value the user passed (or the sum of array sizes from squeue/qstat). A mismatch suggests manifest corruption — see `failure_manifest_corruption.md`. Abort and tell the user to re-run `pre_sync_check.py` before re-syncing.
+
+### 0.5c — Executor imports cleanly
+
+Catches Python import errors that would otherwise produce 100 identical task failures before anyone notices.
+
+```bash
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m '"$EXECUTOR_MODULE"' --help 2>&1 | tail -20'
+```
+
+Non-zero exit, `ImportError`, or `ModuleNotFoundError` → abort. The executor module was extracted from the profile's `run` command in Step 0.
+
+### 0.5d — Result-dir parent is writable
+
+Spot-check one task's `result_dir` parent. Read the path from `_hpc_dispatch.json`'s first task entry.
+
+```bash
+ssh $SSH_TARGET 'parent=$(dirname '"$RESULT_DIR"'); [ -d "$parent" ] && [ -w "$parent" ] && echo OK || echo "NOT_WRITABLE: $parent"'
+```
+
+Anything other than `OK` → abort.
+
 ## Step 1: Check Status
 
 > **Anti-pattern (critical):** Do NOT use `ls logs/ | wc -l` or `find results/ -name '*.csv' | wc -l` as a success proxy. **Failed tasks produce logs and partial output too** — an `ImportError` still leaves an `.o*` file; a mid-run crash still leaves a `_wip_*` directory. Counting these as "progress" has led to hours of wasted cluster time discovering 100% failure rates after submission. Always either (a) invoke the status reporter below, or (b) `grep -clE 'Error|Traceback|ImportError' logs/*` and compute error-rate alongside any file count. **File existence is not success.**
@@ -140,7 +189,7 @@ Parse the `summary` to determine state:
 
 | Condition | State | Action |
 |-----------|-------|--------|
-| completed == total_tasks | `all_complete` | Go to Step 4 |
+| completed == total_tasks | `all_complete` | Go to Step 4a |
 | running > 0 or pending > 0 | `still_running` | Check for stalls (Step 1b), then Step 5 |
 | failed > 0 and running == 0 | `has_failures` | Go to Step 2 |
 | completed == 0 and running == 0 | `all_failed` | Go to Step 2 (triage carefully) |
@@ -222,7 +271,64 @@ Build the resubmission command using the same dispatch mechanism. The task IDs i
 
 **Update your job-ids list** for subsequent status checks.
 
-## Step 4: Aggregate (if configured)
+## Step 4a: Post-flight Verification
+
+Run **once** when Step 1 reports `all_complete`, **before** any aggregation in Step 4b. If any check fails, emit `post-flight FAILED: <which check>` and stop — do NOT invoke `results.aggregate_cmd`, do NOT auto-claim completion. The job may have produced files but not real results.
+
+This guards against the "file count lies" failure mode (see anti-pattern at Step 1) — `summary.complete == total_tasks` from the status reporter is a necessary but not sufficient condition for success.
+
+### 4a.1 — Non-empty rows
+
+Re-run the status reporter with `--min-rows N` (the existing CLI flag — see `docs/cli-contract.md`) where `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count).
+
+```bash
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m hpc_mapreduce.reduce.status \
+    --manifest _hpc_dispatch.json \
+    --job-ids '"$JOB_IDS"' --job-name '"$NAME"' --log-dir logs \
+    --file-glob "'"$SUMMARY_PATTERN"'" \
+    --min-rows '"$MIN_ROWS"
+```
+
+Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
+
+### 4a.2 — Spot-check 3 tasks
+
+Pick the first, middle, and last task IDs from the manifest. For each, read the head of its result file and verify:
+
+- The file exists and is non-empty.
+- Expected columns are present (use `results.summary_pattern` and the executor's known schema).
+- Key metric column has at least one non-NaN value.
+
+```bash
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && for tid in '"$FIRST $MID $LAST"'; do
+  rd=$(jq -r --arg t "$tid" ".tasks[\$t].result_dir" _hpc_dispatch.json)
+  echo "=== tid=$tid rd=$rd ==="
+  ls -la "$rd" 2>&1 | head -5
+  for f in "$rd"/'"$SUMMARY_PATTERN"'; do head -3 "$f"; done
+done'
+```
+
+### 4a.3 — File count cross-check
+
+Confirm the count of result files on disk equals `summary.complete` from the status reporter. If they disagree, a task is reporting `complete` without an artifact (or vice versa) — abort and surface the count.
+
+```bash
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && find results/ -name "'"$SUMMARY_PATTERN"'" 2>/dev/null | wc -l'
+```
+
+### 4a.4 — Late-stage error grep
+
+Some tasks exit 0 after printing an error (cleanup ran successfully). Catch them.
+
+```bash
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && grep -lE "Traceback|Error|Killed|OOM|assert" logs/'"$NAME"'_'"$JOB_ID"'_*.{out,err} 2>/dev/null | head'
+```
+
+Any hits → report the task IDs to the user before aggregating; let them decide whether to proceed or re-run.
+
+If all four checks pass → emit `post-flight: OK` and continue to Step 4b.
+
+## Step 4b: Aggregate (if configured)
 
 If all waves have been combined (check `combined_waves` against total waves in `wave_map`), use the fast path:
 1. `rsync -az $SSH_TARGET:$REMOTE_PATH/_combiner/ ./_combiner/`
@@ -244,43 +350,100 @@ After aggregation:
 
 If the current stage completes and another stage has `depends_on` pointing to this stage, check the `depends_on` graph for newly unblocked stages. For each unblocked stage, prompt: "Stage `<next_stage>` is now unblocked (depends on `<this_stage>`). Submit it? (`/submit <profile_name>.<next_stage>`)"
 
-## Step 5: Schedule Next Check
+## Step 5: Arm the Monitor
 
-**Skip if `all_complete` or fully abandoned.** Report done and stop.
+**Skip if state is `all_complete` (Step 4b done) or fully abandoned.** Report done and stop.
 
-### Adaptive wait interval
+Otherwise, arm the Claude Code `Monitor` tool **once** with a poll script that streams state changes back to chat. Do **not** re-run `/monitor` from cron — react to events as they arrive.
 
-| Condition | Interval | Reason |
-|-----------|----------|--------|
-| < 10% complete | 3 min | pace still settling |
-| ETA < 10 min | 3 min | finishing soon |
-| ETA 10-30 min, stable pace | 10 min | stable, moderate time |
-| ETA 10-30 min, unstable pace | 5 min | fluctuating, moderate time |
-| ETA > 30 min, stable pace | 15 min | stable, long run |
-| ETA > 30 min, unstable pace | 10 min | fluctuating, long run |
+### When to (re)arm
 
-Fallback (no progress data):
+- After Step 1 baseline if state is `still_running`.
+- After every Step 3 resubmission (job IDs change → call `TaskStop` on the prior monitor first, then arm a fresh one with the new `$JOB_IDS`).
+- After Step 1c combiner runs (wave list updated, but job IDs unchanged → reuse the existing monitor; only restart if it has already exited).
 
-| State | Interval |
-|-------|----------|
-| All pending, none running | 5 min |
-| Some running, no progress yet | 3 min |
-| Just resubmitted failed tasks | 3 min |
-| Unchanged from previous check | double previous interval (cap 15 min) |
+### Adaptive poll interval
 
-### Schedule via CronCreate
+Pick the `sleep` value baked into the script using Step 1's baseline:
 
-1. Cancel any existing monitor cron job.
-2. Create a one-shot cron at current time + interval.
-3. The prompt must include full state for the next iteration:
+| Condition | Interval |
+|-----------|----------|
+| < 10% complete | 60s |
+| ETA < 10 min | 60s |
+| ETA 10–30 min, stable pace | 180s |
+| ETA 10–30 min, unstable pace | 90s |
+| ETA > 30 min, stable pace | 300s |
+| ETA > 30 min, unstable pace | 180s |
 
+Fallback (no progress data): 90s if anything is running, 180s if all pending.
+
+### Monitor script
+
+Fill in `$SSH_TARGET`, `$REMOTE_PATH`, `$JOB_IDS`, `$NAME`, `$INTERVAL` at arm-time, then pass the resulting command to the `Monitor` tool with `persistent: true` and `description: "HPC <profile> state changes"`.
+
+The script emits one stdout line **only when state changes** — task transitions, new failures, newly-complete waves, terminal state, or a status-query failure. Silence means "no change since last tick," not "still running with nothing happening."
+
+```bash
+prev=""
+prev_failed=0
+prev_complete=0
+while true; do
+  raw=$(ssh -o IdentitiesOnly=yes "$SSH_TARGET" "cd $REMOTE_PATH && \
+    python -m hpc_mapreduce.reduce.status \
+      --manifest _hpc_dispatch.json \
+      --job-ids $JOB_IDS --job-name $NAME --log-dir logs" 2>&1) \
+    || { echo "STATUS_QUERY_FAILED $(printf %s "$raw" | head -1)"; sleep "$INTERVAL"; continue; }
+
+  cur=$(jq -rc '.summary | "c=\(.complete) r=\(.running) p=\(.pending) f=\(.failed)"' <<<"$raw" 2>/dev/null) \
+    || { echo "STATUS_PARSE_FAILED"; sleep "$INTERVAL"; continue; }
+
+  if [ "$cur" != "$prev" ]; then
+    echo "STATE $cur"
+
+    new_failed=$(jq '.summary.failed' <<<"$raw")
+    if [ "$new_failed" -gt "$prev_failed" ]; then
+      jq -r '.tasks | to_entries[] | select(.value.status=="failed") | .key' <<<"$raw" \
+        | tail -$(( new_failed - prev_failed )) \
+        | sed 's/^/NEW_FAILURE tid=/'
+    fi
+
+    jq -r '.rollup | to_entries[]
+        | select(.value.complete == .value.total and .value.total > 0)
+        | "WAVE_READY \(.key)"' <<<"$raw"
+
+    prev=$cur
+    prev_failed=$new_failed
+    prev_complete=$(jq '.summary.complete' <<<"$raw")
+  fi
+
+  total=$(jq '.summary | (.complete+.running+.pending+.failed+.unknown)' <<<"$raw")
+  done=$(jq  '.summary.complete' <<<"$raw")
+  run=$(jq   '.summary.running'  <<<"$raw")
+  fail=$(jq  '.summary.failed'   <<<"$raw")
+
+  [ "$done" = "$total" ]               && { echo "TERMINAL all_complete"; break; }
+  [ "$fail" -gt 0 ] && [ "$run" = 0 ]  && { echo "TERMINAL has_failures"; break; }
+
+  sleep "$INTERVAL"
+done
 ```
-/monitor <profile_name> <comma_separated_job_ids> <total_tasks>
 
-[Monitor State] profile=<name> | cluster=<cluster> | tasks=X/Y done, Z running, W failed | grid_points: {point: done/total, ...} | retries: {task: count, ...} | jobs: <id_list> | gpu_type: <current_gpu> | last_check: <time> | prev_interval: <minutes> | consecutive_pending: <count> | combined_waves: 0,1
-```
+### Reacting to events
 
-4. Report: `Next check in X min (reason). Cron job: <id>`
+When a notification arrives:
+
+| Event | Action |
+|-------|--------|
+| `STATE c=… r=… p=… f=…` | Update internal counters; no action unless paired with another event below. |
+| `NEW_FAILURE tid=<n>` | Read `.err`/`.out` for that task (Step 2), classify with `classify_failure`, and resubmit per Step 3 if the category is auto-handled. After resubmit, `TaskStop` this monitor and re-arm with new `$JOB_IDS`. |
+| `WAVE_READY <grid_point_key>` | Run the on-cluster combiner (Step 1c). Update `combined_waves`. |
+| `TERMINAL all_complete` | Go to Step 4a (post-flight verification), then Step 4b (aggregate), then Step 6 (report). |
+| `TERMINAL has_failures` | Go to Step 2 (diagnose), then Step 3 (resubmit) or escalate. |
+| `STATUS_QUERY_FAILED …` / `STATUS_PARSE_FAILED` | Transient — first occurrence: ignore. Second consecutive: investigate (SSH dead? cluster down?) before re-arming. |
+
+### Stall detection
+
+The Monitor's silence is now meaningful: if no event arrives for **15 × `$INTERVAL`** (or 15 minutes, whichever is greater) AND Step 1 baseline showed all-pending/zero-running, treat as queue stall (existing Step 2 category). Use a `ScheduleWakeup` to check back at that horizon if you have other work to do meanwhile.
 
 ## Step 6: Report
 
@@ -292,6 +455,8 @@ Always end with a concise summary:
 
 ## Context Management
 
-1. **Within a conversation**: Avoid re-reading data already in context. Summarize before scheduling.
-2. **Cron handoff**: Each CronCreate starts fresh. The prompt must carry all state.
-3. **Minimize tool output**: Use `tail -20` for logs. Prefer compact status commands over verbose output.
+1. **Single in-session loop**: One `/monitor` invocation arms one Monitor and stays in the same conversation until `TERMINAL`. There is no cron handoff and no fresh-context replay — the Monitor stream IS the loop.
+2. **Don't re-poll on a tick.** The Monitor script is the only thing polling. The agent reacts to events; it does not run its own status reporter on a timer.
+3. **Compact event log**: When summarizing for the user, collapse repeated `STATE …` lines into deltas; surface only `NEW_FAILURE`, `WAVE_READY`, and `TERMINAL` lines verbatim.
+4. **Minimize tool output**: Use `tail -20` for logs. Prefer compact status commands over verbose output.
+5. **If the session ends**: monitoring stops. Re-run `/monitor <profile> <job_ids>` to resume — Step 0.5 + Step 1 will re-establish baseline before re-arming.
