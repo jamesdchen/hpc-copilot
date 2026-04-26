@@ -78,7 +78,7 @@ def _neumaier_sum(values):
     return s + c
 
 
-def _weighted_mean(entries, errors):
+def _weighted_mean(entries):
     """Compute weighted-mean metrics across *entries*.
 
     Mirrors the algorithm in ``hpc_mapreduce.reduce.metrics.reduce_metrics``:
@@ -258,7 +258,7 @@ def main(max_workers=None, argv=None):
     # --- Aggregate per grid point ---
     grid_points = {}
     for grid_key in sorted(groups):
-        grid_points[grid_key] = _weighted_mean(groups[grid_key], errors)
+        grid_points[grid_key] = _weighted_mean(groups[grid_key])
 
     print(f"[combiner] grid_points={len(grid_points)} errors={len(errors)}")
 

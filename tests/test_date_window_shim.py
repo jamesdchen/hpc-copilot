@@ -92,6 +92,23 @@ def test_translate_total_chunks_mismatch_raises(shim):
     assert str(expected) in msg
 
 
+def test_add_months_preserves_tzinfo_and_microsecond(shim):
+    """_add_months must round-trip tzinfo and sub-second precision.
+
+    Stripping either silently corrupts schedules whose START is timezone-aware
+    or has microsecond resolution: subsequent comparisons mix naive/aware
+    datetimes (TypeError) or drift by microseconds across every step.
+    """
+    from datetime import datetime, timezone
+
+    src = datetime(2020, 1, 31, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    out = shim._add_months(src, 1)
+    assert out.tzinfo is timezone.utc
+    assert out.microsecond == 123456
+    assert (out.year, out.month, out.day) == (2020, 2, 29)
+    assert (out.hour, out.minute, out.second) == (12, 30, 45)
+
+
 def test_translate_respects_custom_arg_names(shim, monkeypatch):
     """Custom START_ARG/END_ARG propagate into the returned list."""
     monkeypatch.setattr(shim, "START_ARG", "--from")

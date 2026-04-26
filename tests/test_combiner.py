@@ -29,7 +29,7 @@ class TestRunIdMatchesGrid:
 class TestWeightedMeanSingleEntry:
     def test_single_entry_returned_as_is(self):
         entries = [{"mse": 0.5, "n_samples": 100}]
-        result = _weighted_mean(entries, [])
+        result = _weighted_mean(entries)
         assert abs(result["mse"] - 0.5) < 1e-9
         assert result["n_samples"] == 100
 
@@ -40,7 +40,7 @@ class TestWeightedMeanEqualWeights:
             {"mse": 0.10, "n_samples": 100},
             {"mse": 0.20, "n_samples": 100},
         ]
-        result = _weighted_mean(entries, [])
+        result = _weighted_mean(entries)
         assert abs(result["mse"] - 0.15) < 1e-9
         assert result["n_samples"] == 200
 
@@ -51,7 +51,7 @@ class TestWeightedMeanUnequalWeights:
             {"mse": 0.10, "n_samples": 100},
             {"mse": 0.30, "n_samples": 300},
         ]
-        result = _weighted_mean(entries, [])
+        result = _weighted_mean(entries)
         # (0.10*100 + 0.30*300) / 400 = 100/400 = 0.25
         assert abs(result["mse"] - 0.25) < 1e-9
         assert result["n_samples"] == 400
@@ -95,8 +95,8 @@ class TestWeightedMeanOrderInvariant:
         entries_shuffled = list(entries_forward)
         rng.shuffle(entries_shuffled)
 
-        a = _weighted_mean(entries_forward, [])
-        b = _weighted_mean(entries_shuffled, [])
+        a = _weighted_mean(entries_forward)
+        b = _weighted_mean(entries_shuffled)
 
         assert a["n_samples"] == b["n_samples"]
         assert abs(a["mse"] - b["mse"]) < 1e-12
@@ -109,8 +109,8 @@ class TestWeightedMeanOrderInvariant:
             {"v": -1e12, "n_samples": 1},
             {"v": 1.0, "n_samples": 1},
         ]
-        forward = _weighted_mean(entries, [])
-        reverse = _weighted_mean(list(reversed(entries)), [])
+        forward = _weighted_mean(entries)
+        reverse = _weighted_mean(list(reversed(entries)))
         assert abs(forward["v"] - reverse["v"]) < 1e-12
 
 

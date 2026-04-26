@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from datetime import datetime, timezone
 
@@ -76,6 +77,24 @@ class TestBuildTaskManifest:
             "results/{run_id}",
         )
         assert m["tasks"]["0"]["result_dir"] != m["tasks"]["1"]["result_dir"]
+
+
+def test_build_task_manifest_shell_quotes_grid_values_with_spaces():
+    """Grid values containing spaces/shell metachars must round-trip through
+    shlex.split — the remote dispatcher runs cmd with shell=True, so naive
+    interpolation would word-split values like a date range."""
+    m = build_task_manifest(
+        "python -m foo",
+        {"range": ["2024-01-01 to 2024-12-31"]},
+        "results/{run_id}",
+    )
+    assert shlex.split(m["tasks"]["0"]["cmd"]) == [
+        "python",
+        "-m",
+        "foo",
+        "--range",
+        "2024-01-01 to 2024-12-31",
+    ]
 
 
 class TestTotalTasks:

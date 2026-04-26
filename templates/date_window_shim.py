@@ -48,7 +48,9 @@ def _add_months(d: date | datetime, months: int) -> date | datetime:
     month = month % 12 + 1
     day = min(d.day, calendar.monthrange(year, month)[1])
     if isinstance(d, datetime):
-        return datetime(year, month, day, d.hour, d.minute, d.second)
+        return datetime(
+            year, month, day, d.hour, d.minute, d.second, d.microsecond, tzinfo=d.tzinfo
+        )
     return date(year, month, day)
 
 
