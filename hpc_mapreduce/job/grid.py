@@ -36,11 +36,17 @@ __all__ = [
     "attach_wave_map",
     "resolve_git_sha",
     "validate_result_dir_template",
+    "validate_grid_keys",
 ]
 
 # Placeholder names in ``result_dir`` templates that are resolved per-run
 # (constant across every task in a manifest).  Grid-point keys vary per task.
 _RUN_LEVEL_PLACEHOLDERS: frozenset[str] = frozenset({"run_id", "date", "git_sha"})
+
+# Shape of a valid Python-style identifier.  Grid keys must match this so they
+# render as well-formed CLI flags (``--{key} <value>``); ``result_dir`` template
+# placeholders use the same shape so the two stay aligned.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Regex used to extract ``{name}`` placeholders from ``result_dir`` templates.
 # Matches simple ``{identifier}`` — no format specs, no nested braces.  This is
@@ -112,6 +118,31 @@ def _extract_placeholders(template: str) -> list[str]:
     set can wrap the result in :class:`set`.
     """
     return _PLACEHOLDER_RE.findall(template)
+
+
+def validate_grid_keys(grid: dict[str, list]) -> None:
+    """Validate that every key in *grid* is a well-formed identifier.
+
+    Grid keys become CLI flags (``--{key} <value>``) in each task's command,
+    so a key like ``"foo-bar"`` or ``"123key"`` would produce a malformed flag
+    that fails only at runtime on the cluster.  This check rejects such keys
+    at manifest-build time, where the error is actionable.
+
+    An empty grid is a no-op: there are no keys to check.
+
+    Raises
+    ------
+    ValueError
+        If any key fails to match ``^[A-Za-z_][A-Za-z0-9_]*$``.  The error
+        message lists every offending key and shows the required pattern.
+    """
+    invalid = [k for k in grid if not _IDENTIFIER_RE.match(k)]
+    if invalid:
+        raise ValueError(
+            f"grid contains invalid key(s) {invalid!r}; grid keys must match "
+            f"the regex ^[A-Za-z_][A-Za-z0-9_]*$ so they render as well-formed "
+            f"CLI flags (--key <value>)."
+        )
 
 
 def validate_result_dir_template(
@@ -188,6 +219,7 @@ def build_task_manifest(
         If ``max_tasks`` is not ``None`` and the computed total exceeds it,
         or if ``result_dir_template`` references an unknown placeholder.
     """
+    validate_grid_keys(grid)
     validate_result_dir_template(result_dir_template, grid)
 
     if max_tasks is not None:

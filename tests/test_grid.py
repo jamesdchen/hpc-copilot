@@ -15,6 +15,7 @@ from hpc_mapreduce.job.grid import (
     expand_grid,
     resolve_git_sha,
     total_tasks,
+    validate_grid_keys,
     validate_result_dir_template,
 )
 
@@ -254,6 +255,49 @@ class TestValidateResultDirTemplate:
             validate_result_dir_template("{a}/{b}/{run_id}", {"model": ["x"]})
         msg = str(exc.value)
         assert "'a'" in msg and "'b'" in msg
+
+
+class TestValidateGridKeys:
+    def test_valid_keys_no_raise(self):
+        validate_grid_keys({"horizon": [1], "model": ["a"]})
+
+    def test_empty_grid(self):
+        validate_grid_keys({})
+
+    def test_underscore_keys_ok(self):
+        validate_grid_keys({"_foo": [1], "bar_baz": [2]})
+
+    def test_leading_digit_raises(self):
+        with pytest.raises(ValueError, match=r"1bad"):
+            validate_grid_keys({"1bad": [1]})
+
+    def test_hyphen_raises(self):
+        with pytest.raises(ValueError, match=r"foo-bar"):
+            validate_grid_keys({"foo-bar": [1]})
+
+    def test_dot_raises(self):
+        with pytest.raises(ValueError, match=r"a\.b"):
+            validate_grid_keys({"a.b": [1]})
+
+    def test_space_raises(self):
+        with pytest.raises(ValueError):
+            validate_grid_keys({"k k": [1]})
+
+    def test_multiple_invalid_listed(self):
+        with pytest.raises(ValueError) as exc:
+            validate_grid_keys({"1x": [1], "y-z": [2]})
+        msg = str(exc.value)
+        assert "1x" in msg and "y-z" in msg
+
+
+def test_build_task_manifest_rejects_invalid_grid_key():
+    """build_task_manifest must reject malformed grid keys before doing other work."""
+    with pytest.raises(ValueError):
+        build_task_manifest(
+            "python train.py",
+            {"1bad": [1]},
+            "results/{run_id}",
+        )
 
 
 class TestResolveGitSha:
