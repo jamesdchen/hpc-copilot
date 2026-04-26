@@ -24,7 +24,9 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
 
         path = _PACKAGE_ROOT / "config" / "clusters.yaml"
     with open(path) as f:
-        result: dict[str, Any] = yaml.safe_load(f)
+        # yaml.safe_load returns None for an empty file; coerce to {} so
+        # downstream `.get(...)` calls on the result don't AttributeError.
+        result: dict[str, Any] = yaml.safe_load(f) or {}
         return result
 
 
