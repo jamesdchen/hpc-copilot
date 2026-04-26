@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 _CACHE_FILE = "_shim_cache.json"
 
@@ -60,10 +61,20 @@ def _cached_total_items() -> int:
             with open(_CACHE_FILE) as f:
                 cache = json.load(f)
         cache["total_items"] = total
-        tmp = _CACHE_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(cache, f)
-        os.replace(tmp, _CACHE_FILE)
+        # Use a per-process tempfile so concurrent array tasks on a shared
+        # filesystem don't race on the same `_shim_cache.json.tmp` name.
+        cache_dir = os.path.dirname(_CACHE_FILE) or "."
+        fd, tmp = tempfile.mkstemp(prefix="_shim_cache.", suffix=".tmp", dir=cache_dir)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(cache, f)
+            os.replace(tmp, _CACHE_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     return total
 
 

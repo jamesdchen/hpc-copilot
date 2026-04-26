@@ -6,6 +6,7 @@ to be provided at construction time (no project-specific imports).
 
 from __future__ import annotations
 
+import shlex
 from typing import TYPE_CHECKING
 
 from hpc_mapreduce.infra.backends import HPCBackend, register
@@ -100,10 +101,10 @@ class RemoteSGEBackend(HPCBackend):
         cwd: Path,
     ) -> subprocess.CompletedProcess[str]:
         """Execute a qsub command on the remote host via SSH."""
-        cmd_str = " ".join(cmd)
-        remote_cmd = f"cd {self.remote_repo} && {cmd_str}"
+        cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
+        remote_cmd = f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
         return self.ssh_run(remote_cmd)
 
     def _setup_log_dir(self) -> None:
         """Create log directory on the remote host."""
-        self.ssh_run(f"mkdir -p {self.log_dir}")
+        self.ssh_run(f"mkdir -p {shlex.quote(self.log_dir)}")
