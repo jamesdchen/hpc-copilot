@@ -1,4 +1,4 @@
-"""Smoke test for the manifest-recovery recipe documented in ``commands/monitor.md``.
+"""Smoke test for the manifest-recovery recipe documented in ``agent/commands/monitor.md``.
 
 The recipe — "if the local manifest is lost, pull it back from the cluster" —
 is driven entirely from the slash-command prompt; there is no dedicated CLI.
