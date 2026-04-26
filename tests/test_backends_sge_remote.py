@@ -251,6 +251,43 @@ class TestErrors:
                 cwd=tmp_path,
             )
 
+    def test_remote_repo_with_space_is_quoted(self, tmp_path):
+        """Regression: remote_repo containing a space must be shell-quoted in
+        both the ``cd`` prefix and the ``mkdir -p`` log-dir setup so the
+        remote shell does not word-split the command."""
+
+        def responder(cmd):
+            if "qsub" not in cmd:
+                return _cp()
+            return _cp(
+                stdout='Your job-array 42.1-5:1 ("probe") has been submitted\n',
+                returncode=0,
+            )
+
+        recorder = _SSHRecorder(responder)
+        backend = RemoteSGEBackend(
+            script="/remote/path with space/job.sh",
+            ssh_run=recorder,
+            remote_repo="/remote/path with space",
+            log_dir="/remote/path with space/logs",
+        )
+        backend.submit_array_tracked(
+            "probe",
+            total_tasks=5,
+            tasks_per_array=5,
+            job_env={},
+            cwd=tmp_path,
+        )
+
+        mkdir_calls = [c for c in recorder.calls if c.startswith("mkdir -p")]
+        assert mkdir_calls
+        assert "mkdir -p '/remote/path with space/logs'" in mkdir_calls[0]
+
+        qsub_calls = [c for c in recorder.calls if "qsub" in c]
+        assert len(qsub_calls) == 1
+        assert "cd '/remote/path with space'" in qsub_calls[0]
+        assert "'/remote/path with space/job.sh'" in qsub_calls[0]
+
     def test_unparseable_stdout_raises(self, tmp_path):
         def responder(cmd):
             if "qsub" not in cmd:

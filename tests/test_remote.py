@@ -241,3 +241,20 @@ class TestRunCombinerChecked:
             remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, force=True)
         cmd_str = mock_run.call_args[0][0][-1]
         assert "--force" in cmd_str
+
+
+class TestRunCombinerShellQuoting:
+    def test_remote_path_with_space_is_quoted(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.run_combiner(
+                host="c",
+                user="u",
+                remote_path="/path with space",
+                wave=1,
+                manifest_name="my manifest.json",
+            )
+        cmd_str = mock_run.call_args[0][0][-1]
+        assert "cd '/path with space'" in cmd_str
+        assert "HPC_MANIFEST='my manifest.json'" in cmd_str
+        assert "--manifest 'my manifest.json'" in cmd_str

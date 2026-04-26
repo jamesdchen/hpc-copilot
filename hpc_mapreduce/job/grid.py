@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import re
+import shlex
 import subprocess
 from datetime import datetime, timezone
 from math import prod
@@ -209,7 +210,7 @@ def build_task_manifest(
     for task_idx, params in enumerate(points):
         parts = [run_cmd]
         for k, v in params.items():
-            parts.append(f"--{k} {v}")
+            parts.append(f"--{k} {shlex.quote(str(v))}")
 
         format_kwargs: dict[str, str] = {
             "run_id": run_id(params),
