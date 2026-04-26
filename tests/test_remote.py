@@ -7,8 +7,11 @@ run_combiner / run_combiner_checked return-shape contract.
 
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from hpc_mapreduce.infra import remote
 
@@ -258,3 +261,239 @@ class TestRunCombinerShellQuoting:
         assert "cd '/path with space'" in cmd_str
         assert "HPC_MANIFEST='my manifest.json'" in cmd_str
         assert "--manifest 'my manifest.json'" in cmd_str
+
+
+# ---------------------------------------------------------------------------
+# Subprocess timeout enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestModuleTimeoutConstants:
+    """The module exposes two named timeout defaults — verify their
+    presence and types so downstream consumers (and the boundary
+    contract) have something stable to import.
+    """
+
+    def test_ssh_timeout_is_positive_int(self):
+        assert isinstance(remote.SSH_TIMEOUT_SEC, int)
+        assert remote.SSH_TIMEOUT_SEC > 0
+
+    def test_rsync_timeout_is_positive_int(self):
+        assert isinstance(remote.RSYNC_TIMEOUT_SEC, int)
+        assert remote.RSYNC_TIMEOUT_SEC > 0
+
+    def test_constants_exported_in_all(self):
+        assert "SSH_TIMEOUT_SEC" in remote.__all__
+        assert "RSYNC_TIMEOUT_SEC" in remote.__all__
+
+
+class TestSshRunTimeout:
+    def test_default_timeout_applied_when_omitted(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.ssh_run("ls", host="c", user="u")
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
+
+    def test_explicit_timeout_overrides_default(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.ssh_run("ls", host="c", user="u", timeout=7.5)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == 7.5
+
+    def test_explicit_none_disables_enforcement(self):
+        """Passing ``timeout=None`` is the documented escape hatch and
+        must propagate as a literal ``None`` to ``subprocess.run``.
+        """
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.ssh_run("ls", host="c", user="u", timeout=None)
+        kwargs = mock_run.call_args.kwargs
+        assert "timeout" in kwargs
+        assert kwargs["timeout"] is None
+
+    def test_timeout_expired_reraised_as_timeout_error(self):
+        cmd = "sleep 9999"
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=cmd, timeout=1.0)
+            with pytest.raises(TimeoutError) as exc_info:
+                remote.ssh_run(cmd, host="cluster.example", user="alice")
+        msg = str(exc_info.value)
+        # Host (user@host) and a snippet of the command must appear.
+        assert "alice@cluster.example" in msg
+        assert "sleep 9999" in msg
+
+    def test_timeout_message_truncates_long_command(self):
+        long_cmd = "echo " + ("x" * 500)
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd=long_cmd, timeout=1.0)
+            with pytest.raises(TimeoutError) as exc_info:
+                remote.ssh_run(long_cmd, host="c", user="u")
+        msg = str(exc_info.value)
+        # The message must not embed the entire 500+ char command verbatim.
+        assert long_cmd not in msg
+        # But should contain the leading prefix.
+        assert "echo " in msg
+
+    def test_timeout_applies_when_capture_false(self):
+        """``capture=False`` and ``timeout`` are orthogonal — the timeout
+        still applies in streaming mode unless the caller opts out.
+        """
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.ssh_run("tail -f log", host="c", user="u", capture=False)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("capture_output") is False
+        assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
+
+
+class TestRsyncPushTimeout:
+    def test_default_timeout_applied_when_omitted(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.rsync_push(
+                host="c",
+                user="u",
+                remote_path="/p",
+                local_path="/tmp/x",
+            )
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == remote.RSYNC_TIMEOUT_SEC
+
+    def test_explicit_timeout_overrides_default(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.rsync_push(
+                host="c",
+                user="u",
+                remote_path="/p",
+                local_path="/tmp/x",
+                timeout=42,
+            )
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == 42
+
+    def test_explicit_none_disables_enforcement(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.rsync_push(
+                host="c",
+                user="u",
+                remote_path="/p",
+                local_path="/tmp/x",
+                timeout=None,
+            )
+        kwargs = mock_run.call_args.kwargs
+        assert "timeout" in kwargs
+        assert kwargs["timeout"] is None
+
+    def test_timeout_expired_reraised_as_timeout_error(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="rsync ...", timeout=1.0)
+            with pytest.raises(TimeoutError) as exc_info:
+                remote.rsync_push(
+                    host="cluster.example",
+                    user="alice",
+                    remote_path="/u/home/alice/proj",
+                    local_path="/tmp/local_src",
+                )
+        msg = str(exc_info.value)
+        # Host must appear in the message.
+        assert "cluster.example" in msg
+        # And the src->dst arrow form (truncated) should be visible.
+        assert "->" in msg
+        assert "/tmp/local_src" in msg
+
+
+class TestRsyncPullTimeout:
+    def test_default_timeout_applied_when_omitted(self, tmp_path):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.rsync_pull(
+                host="c",
+                user="u",
+                remote_path="/p",
+                remote_subdir="results",
+                local_dir=tmp_path / "out",
+            )
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == remote.RSYNC_TIMEOUT_SEC
+
+    def test_explicit_none_disables_enforcement(self, tmp_path):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.rsync_pull(
+                host="c",
+                user="u",
+                remote_path="/p",
+                remote_subdir="results",
+                local_dir=tmp_path / "out",
+                timeout=None,
+            )
+        kwargs = mock_run.call_args.kwargs
+        assert "timeout" in kwargs
+        assert kwargs["timeout"] is None
+
+
+class TestDeployRuntimeTimeout:
+    """deploy_runtime emits one ssh + three scp calls, each of which
+    must carry the SSH timeout so a stuck cluster cannot block submit.
+    """
+
+    def test_each_subprocess_call_has_ssh_timeout(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.deploy_runtime(host="c", user="u", remote_path="/p")
+        for call in mock_run.call_args_list:
+            assert call.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
+
+
+class TestRunCombinerTimeout:
+    def test_default_timeout_threaded_through_to_ssh_run(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
+
+    def test_explicit_timeout_threaded_through_to_ssh_run(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, timeout=15)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == 15
+
+    def test_explicit_none_threaded_through_to_ssh_run(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, timeout=None)
+        kwargs = mock_run.call_args.kwargs
+        assert "timeout" in kwargs
+        assert kwargs["timeout"] is None
+
+
+class TestRunCombinerCheckedTimeout:
+    def test_default_timeout_threaded_through(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
+
+    def test_explicit_timeout_threaded_through(self):
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = _cp()
+            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, timeout=21)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("timeout") == 21
+
+    def test_timeout_propagates_as_timeout_error_not_ok_false(self):
+        """A genuine cluster hang must surface as TimeoutError so
+        callers can distinguish "remote returned non-zero" from "we
+        never heard back".
+        """
+        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with pytest.raises(TimeoutError):
+                remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0)
