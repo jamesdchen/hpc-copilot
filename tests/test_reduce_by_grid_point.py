@@ -18,17 +18,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_alias_is_identity():
-    from hpc_mapreduce.reduce.metrics import reduce_backtest, reduce_by_grid_point
-    assert reduce_backtest is reduce_by_grid_point
-
-
 def _write_metrics(result_dir: Path, metrics: dict) -> None:
     result_dir.mkdir(parents=True, exist_ok=True)
     (result_dir / "metrics.json").write_text(json.dumps(metrics))
 
 
-class TestReduceBacktest:
+class TestReduceByGridPoint:
     def test_groups_by_grid_point(self, tmp_path):
         """Tasks with same params are grouped; metrics averaged across periods."""
         r1 = tmp_path / "results" / "ridge_1"
