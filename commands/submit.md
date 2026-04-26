@@ -46,10 +46,10 @@ For each executor, run `python3 <info.path> --help` to map its CLI interface (th
 - Data arguments (`--data-path`, `--horizon`, `--start`, `--end`)
 - Output arguments (`--output-file`)
 
-Present the inventory (use `info.name` and `info.path` as the identifiers; `info.docstring` is handy for the one-line summary):
+Present the inventory (use `info.name` and `info.path` as the identifiers; `info.docstring` is handy for the one-line summary). Examples are illustrative — `/submit` works with any executor that accepts grid-shaped CLI flags.
 
 ```
-Executors found in src/:
+Executors found in src/ (illustrative — names, flags, and domain are per-experiment):
   ml_ridge.py     — args: --horizon, --data-path, --train-window, --start, --end, --output-file
   ml_xgboost.py   — args: --horizon, --data-path, --train-window, --start, --end, --output-file
   dl_patchts.py   — args: --horizon, --data-path, --gpu-count, --start, --end, --output-file
