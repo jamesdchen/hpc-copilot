@@ -126,6 +126,41 @@ Save to Claude Code memory for this project:
 
 End with a concise report: what was created, where, and the `/submit` command that exercises it.
 
+## Common executor patterns
+
+`templates/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit`'s grid expansion treats any of these flags as grid-able when their values are passed as lists.
+
+**(a) ML training executor** — fit on a date/index window, score against a horizon, write a metric.
+
+```python
+parser.add_argument("--horizon", type=int, default=1)
+parser.add_argument("--start", type=str)        # e.g. "2020-01-01"
+parser.add_argument("--end", type=str)
+parser.add_argument("--alpha", type=float, default=1.0)
+parser.add_argument("--output-file", required=True)
+# def compute(args): fit model on [start, end], score on horizon, write metric
+```
+
+**(b) Simulation / parameter sweep executor** — one task per (seed, config) cell; summarize the trajectory into a few scalars.
+
+```python
+parser.add_argument("--seed", type=int, required=True)
+parser.add_argument("--steps", type=int, default=10_000)
+parser.add_argument("--config", type=str)       # path or JSON literal
+parser.add_argument("--output-file", required=True)
+# def compute(args): run simulation, summarize trajectory, write scalar(s)
+```
+
+**(c) Data-processing / sharded executor** — partition the input by shard id, transform, write a per-shard output file.
+
+```python
+parser.add_argument("--shard-id", type=int, required=True)
+parser.add_argument("--n-shards", type=int, required=True)
+parser.add_argument("--input-glob", type=str, required=True)
+parser.add_argument("--output-file", required=True)
+# def compute(args): read shard, transform, write parquet/csv
+```
+
 ## Edge Cases
 
 | Situation | Handling |

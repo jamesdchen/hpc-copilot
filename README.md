@@ -61,6 +61,8 @@ No config files required. Claude discovers your executors by reading their sourc
 
 ## How It Works
 
+The boundary between claude-hpc and your experiment repo is documented in [`docs/boundary-contract.md`](docs/boundary-contract.md) and enforced by `tests/test_boundary_contract.py`.
+
 1. Claude reads your executor scripts and their `--help` output
 2. You describe what to run in natural language — Claude builds the grid
 3. A `_hpc_dispatch.json` manifest maps each task ID to its full command

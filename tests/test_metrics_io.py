@@ -72,10 +72,9 @@ class TestExecutorTemplateEmitsMetrics:
     """End-to-end: the shipped scaffold writes metrics.json when RESULT_DIR is set."""
 
     def test_template_emits_metrics_json(self, tmp_path, monkeypatch):
-        # The template reads a data path, builds features, fits+predicts, and
-        # writes CSV + metrics.json.  The default load_data() returns [], so
-        # the run is a no-op aside from the file writes -- which is exactly
-        # what we want to test.
+        # The contract scaffold's compute() returns a domain-neutral
+        # {"value": 0.0, "n_samples": 0} placeholder -- enough to exercise
+        # the CSV + metrics.json write path without any domain assumptions.
         import runpy
 
         rdir = tmp_path / "rdir"
@@ -100,5 +99,5 @@ class TestExecutorTemplateEmitsMetrics:
         metrics_path = rdir / "metrics.json"
         assert metrics_path.exists()
         data = json.loads(metrics_path.read_text())
-        assert "metric" in data
+        assert "value" in data
         assert "n_samples" in data
