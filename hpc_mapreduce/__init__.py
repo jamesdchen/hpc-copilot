@@ -32,7 +32,6 @@ __all__ = [
     # Reduce
     "reduce_metrics",
     "reduce_by_grid_point",
-    "reduce_backtest",
     "reduce_partials",
     "reduce_resource_usage",
     "classify_failure",
@@ -132,7 +131,6 @@ from hpc_mapreduce.map.metrics_io import write_metrics
 from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
 from hpc_mapreduce.reduce.classify import classify_failure
 from hpc_mapreduce.reduce.metrics import (
-    reduce_backtest,
     reduce_by_grid_point,
     reduce_metrics,
     reduce_partials,
