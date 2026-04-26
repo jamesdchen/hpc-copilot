@@ -11,6 +11,9 @@ Read cluster definitions:
 
 Check for existing context (in priority order):
 
+0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `agent.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /monitor, or start a new submission?"
+   - This only handles the case where the user wants to switch context away from a fresh `/submit` toward picking up an existing run; otherwise fall through to priority 1.
+
 1. **Previous submission**: If `_hpc_dispatch.json` exists locally, read it. Offer: "Previous submission: [summary of grid, tasks, cluster]. Resubmit same, modify, or start fresh?"
    - **Resubmit same** → skip to Step 5 (sync + submit)
    - **Modify** → pre-populate from dispatch manifest, go to Step 3 (adjust grid/config)
@@ -453,6 +456,37 @@ After submission:
 1. Parse the job ID from submission output
 2. Report: job ID, executor(s), grid dimensions, total tasks, cluster
 3. Suggest running `/monitor` to track progress
+
+## Step 10: Record the submission in the run journal
+
+After the manifest is written locally and rsync'd to the cluster, persist the
+bootstrap context for cold-session resume:
+
+```python
+from pathlib import Path
+from agent import runner
+
+record = runner.submit_and_record(
+    Path.cwd(),
+    profile=<job_name>,
+    cluster=<cluster_name>,
+    ssh_target=f"{cluster.user}@{cluster.host}",
+    remote_path=<remote_path>,
+    job_name=<job_name>,
+    manifest_filename=<manifest filename written by write_manifest, e.g. "manifest.abc12345.json">,
+    job_ids=<list of job IDs returned by backend.submit_plan>,
+    total_tasks=<total_tasks>,
+)
+```
+
+The journal entry lets a future `/monitor` (no args) auto-discover this run
+and resume monitoring with one keystroke instead of re-asking for cluster /
+job_ids / etc. Slash commands MUST call `agent.runner.submit_and_record`
+rather than writing to `agent.session` directly — the bundled helper guards
+the journal write under a flock and keeps the run record consistent.
+
+For multi-executor submissions (one manifest per executor), call
+`submit_and_record` once per submitted job.
 
 ## Common Failure Modes
 

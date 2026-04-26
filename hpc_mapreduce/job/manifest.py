@@ -22,7 +22,7 @@ This module introduces content-addressed manifest filenames:
 * :func:`build_manifest_with_resume` threads an optional ``resume_from`` path
   through to :func:`~hpc_mapreduce.job.resubmit.resubmit_plan` so the Python
   layer can expose a single "build or resume" entry point while the
-  interactive prompt remains in ``commands/submit.md``.
+  interactive prompt remains in ``agent/commands/submit.md``.
 
 Back-compat: the manifest *contents* are unchanged; only the on-disk
 filename convention is additive.
@@ -261,7 +261,7 @@ def build_manifest_with_resume(
     :class:`~hpc_mapreduce.job.resubmit.ResubmitPlan`.
 
     The interactive resume-vs-fresh decision lives in
-    ``commands/submit.md`` — this helper is the Python side of that
+    ``agent/commands/submit.md`` — this helper is the Python side of that
     hand-off: the slash-command tells us which branch to take.
 
     Parameters

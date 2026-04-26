@@ -4,26 +4,57 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
 ## Setup
 
-Read cluster definitions:
-- `clusters.yaml`: resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+1. **Resolve experiment dir**: `experiment_dir = cwd`.
 
-Determine cluster and connection:
-- If `$ARGUMENTS` contains `--cluster <name>`, use that cluster
-- Else if `hpc.yaml` exists, read `cluster` field
-- Else check Claude Code memory for cached cluster preference
-- Else ask the user
+2. **Check the run journal first** (cold-session resume path):
 
-Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
+   ```python
+   from pathlib import Path
+   from agent import session, runner
 
-Read `_hpc_dispatch.json` to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories. Each task ID maps to a grid point with its full command and result directory.
-
-Recovery order if the local copy is missing:
-
-1. Pull from the cluster:
-   ```bash
-   rsync -az $SSH_TARGET:$REMOTE_PATH/_hpc_dispatch.json ./_hpc_dispatch.json
+   in_flight = session.find_in_flight_runs(Path.cwd())
    ```
-2. If also missing on the cluster, fall back to reading `logs/<job_name>_<job_id>_<task_id>.out` for each task as the last-resort artifact and surface the gap to the user — monitoring can only be partial without the manifest.
+
+   If `$ARGUMENTS` is empty AND `in_flight` is non-empty, present a one-line
+   resume offer per candidate (most recent first):
+
+   > "Found in-flight run: {profile} on {cluster}, jobs {job_ids}, last
+   > status {complete}/{total} complete @ {age(checked_at)} ago, waves
+   > combined {combined_waves}. Resume? [Y/n]"
+
+   On `Y` (default on empty), hydrate `cluster`, `ssh_target`, `remote_path`,
+   `job_name`, `job_ids`, `manifest`, `combined_waves`, `failed_waves`,
+   `retries` from the run record. Skip the cluster prompt below.
+
+   Then call `runner.reconcile(Path.cwd(), run_id, scheduler=<scheduler>)`
+   BEFORE Step 0.5. Reconcile re-derives ground truth from the cluster
+   (fresh status report, canonical `combined_waves` from `_combiner/wave_*.json`,
+   alive job-ID check) and writes it back to the journal in three parallel
+   SSH calls. If `reconcile` flips status to `'abandoned'` (zero recorded
+   job_ids known to the scheduler), prompt the user: "Recorded jobs no longer
+   exist. Mark abandoned, or start fresh?" — never silently mutate scheduler
+   state.
+
+   On `n`, fall through to step 3 below.
+
+3. **No journal hit — fall back to existing context sources** (priority order):
+
+   - If `$ARGUMENTS` contains `--cluster <name>`, use that cluster.
+   - Else if `hpc.yaml` exists, read `cluster` field.
+   - Else check Claude Code memory for cached cluster preference.
+   - Else ask the user.
+
+4. Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
+
+5. Read `_hpc_dispatch.json` to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories.
+
+   Recovery order if the local copy is missing:
+
+   1. Pull from the cluster:
+      ```bash
+      rsync -az $SSH_TARGET:$REMOTE_PATH/_hpc_dispatch.json ./_hpc_dispatch.json
+      ```
+   2. If also missing on the cluster, fall back to reading `logs/<job_name>_<job_id>_<task_id>.out` for each task as the last-resort artifact and surface the gap to the user — monitoring can only be partial without the manifest.
 
 ## SSH Quoting
 
@@ -205,20 +236,24 @@ If `_hpc_dispatch.json` contains a `wave_map` field, run the on-cluster combiner
 1. Read `wave_map` from the manifest to determine which task IDs belong to each wave
 2. Cross-reference with the Step 1 reporter's `tasks` dict: a wave is **complete** when every task ID in the wave has `status == "complete"` in the `tasks` dict (no separate re-count needed)
 3. Check `combined_waves` from the monitor state to skip waves already combined
-4. For each newly-complete wave not yet combined, invoke via `run_combiner_checked` (from `hpc_mapreduce.infra.remote`), which wraps the SSH call and returns `(ok, stdout, stderr)`:
-   ```bash
-   ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python3 _hpc_combiner.py --wave <N> --manifest _hpc_dispatch.json'
+4. For each newly-complete wave not yet combined, invoke `runner.combine_wave`. The wrapper records `combined_waves`/`failed_waves` atomically — the slash command must NOT call `update_run_status` directly for these fields:
+   ```python
+   from pathlib import Path
+   from agent import runner
+
+   ok, stdout, stderr = runner.combine_wave(
+       Path.cwd(), run_id,
+       wave=N,
+       ssh_target=SSH_TARGET,
+       remote_path=REMOTE_PATH,
+   )
    ```
-   To force-retry a wave (e.g. after fixing a reducer bug), add `--force`:
-   ```bash
-   ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python3 _hpc_combiner.py --wave <N> --manifest _hpc_dispatch.json --force'
-   ```
-5. On `ok=True`, add the wave number to `combined_waves` and report:
+5. On `ok=True`, the wrapper has already appended the wave to `combined_waves`. Report:
    `"Combiner: wave <N> aggregated — <grid_point>: <key_metric>=<value>, ..."`
-6. On `ok=False`, record the wave in `failed_waves` inside the state blob with a short stderr excerpt. **Never** mark a failed wave as combined.
+6. On `ok=False`, the wrapper has already appended the wave to `failed_waves` with the stderr excerpt. **Never** mark a failed wave as combined.
 
 **Failure policy:**
-- 1st failure: retry automatically on the next monitoring tick with `--force`.
+- 1st failure: retry automatically on the next monitoring tick via `runner.combine_wave(..., force=True)`.
 - 2nd failure: surface to the user with the stderr excerpt and stop retrying until the user intervenes.
 
 If the manifest has no `wave_map` field, skip this step (backward compatibility with older submissions).
@@ -270,6 +305,22 @@ Check retry count. The profile's `max_retries` (default 3) is the limit. If exce
 Build the resubmission command using the same dispatch mechanism. The task IDs in the resubmission correspond to the same `_hpc_dispatch.json` entries. Apply resource overrides to the submission flags.
 
 **Update your job-ids list** for subsequent status checks.
+
+After the resubmission backend call returns the new job IDs, record the retry attempt in the journal:
+
+```python
+from agent import runner
+
+runner.resubmit_failed(
+    Path.cwd(), run_id,
+    failed_task_ids=<list of task ids being resubmitted>,
+    category=<failure category from classify_failure, e.g. "system_oom">,
+    overrides=<resource overrides applied>,
+    new_job_ids=<list of new job ids returned by the backend>,
+)
+```
+
+The wrapper increments `retries[tid].attempts` and records category + overrides. A future cold session sees the retry count and won't blow past `max_retries`.
 
 ## Step 4a: Post-flight Verification
 
@@ -437,8 +488,8 @@ When a notification arrives:
 | `STATE c=… r=… p=… f=…` | Update internal counters; no action unless paired with another event below. |
 | `NEW_FAILURE tid=<n>` | Read `.err`/`.out` for that task (Step 2), classify with `classify_failure`, and resubmit per Step 3 if the category is auto-handled. After resubmit, `TaskStop` this monitor and re-arm with new `$JOB_IDS`. |
 | `WAVE_READY <grid_point_key>` | Run the on-cluster combiner (Step 1c). Update `combined_waves`. |
-| `TERMINAL all_complete` | Go to Step 4a (post-flight verification), then Step 4b (aggregate), then Step 6 (report). |
-| `TERMINAL has_failures` | Go to Step 2 (diagnose), then Step 3 (resubmit) or escalate. |
+| `TERMINAL all_complete` | Go to Step 4a (post-flight verification), then Step 4b (aggregate), then Step 6 (report). Then call `runner.mark_terminal(Path.cwd(), run_id, status='complete', stage='aggregate')` so the journal reflects the terminal state and `find_in_flight_runs` no longer returns this run. |
+| `TERMINAL has_failures` | Go to Step 2 (diagnose), then Step 3 (resubmit) or escalate. If the user explicitly abandons the run, call `runner.mark_terminal(Path.cwd(), run_id, status='failed')`. Otherwise leave the status as `in_flight` so the next session can resume. |
 | `STATUS_QUERY_FAILED …` / `STATUS_PARSE_FAILED` | Transient — first occurrence: ignore. Second consecutive: investigate (SSH dead? cluster down?) before re-arming. |
 
 ### Stall detection
@@ -459,4 +510,4 @@ Always end with a concise summary:
 2. **Don't re-poll on a tick.** The Monitor script is the only thing polling. The agent reacts to events; it does not run its own status reporter on a timer.
 3. **Compact event log**: When summarizing for the user, collapse repeated `STATE …` lines into deltas; surface only `NEW_FAILURE`, `WAVE_READY`, and `TERMINAL` lines verbatim.
 4. **Minimize tool output**: Use `tail -20` for logs. Prefer compact status commands over verbose output.
-5. **If the session ends**: monitoring stops. Re-run `/monitor <profile> <job_ids>` to resume — Step 0.5 + Step 1 will re-establish baseline before re-arming.
+5. **If the session ends**: monitoring stops. Re-run `/monitor` (no args) — the run journal at `~/.claude/hpc/<repo_hash>/` will surface the in-flight run with last-known status; on Y, `runner.reconcile` re-derives ground truth before re-arming the Monitor.
