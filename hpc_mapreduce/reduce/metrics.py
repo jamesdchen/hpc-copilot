@@ -8,7 +8,6 @@ from __future__ import annotations
 __all__ = [
     "reduce_metrics",
     "reduce_by_grid_point",
-    "reduce_backtest",
     "reduce_partials",
     "reduce_resource_usage",
 ]
@@ -123,10 +122,6 @@ def reduce_by_grid_point(manifest: dict) -> dict[str, dict]:
         results[grid_key] = reduce_metrics(result_dirs)
 
     return results
-
-
-# Back-compat alias; remove in the next PR.
-reduce_backtest = reduce_by_grid_point
 
 
 def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
