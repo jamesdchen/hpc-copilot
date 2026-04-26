@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hpc_mapreduce.infra.clusters import load_constraints
+from hpc_mapreduce.infra.clusters import load_clusters_config, load_constraints
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 
 
@@ -103,3 +103,19 @@ class TestLoadConstraints:
         c = load_constraints(cluster, profile)
         assert c.max_array_size == 100
         assert c.max_walltime == "1:00:00"
+
+
+class TestLoadClustersConfig:
+    """Tests for load_clusters_config robustness."""
+
+    def test_empty_yaml_file_returns_empty_dict(self, tmp_path):
+        # yaml.safe_load returns None for an empty/comment-only file;
+        # load_clusters_config must coerce that to {} so callers that
+        # do .get("constraints", {}) don't AttributeError.
+        empty = tmp_path / "clusters.yaml"
+        empty.write_text("")
+        assert load_clusters_config(empty) == {}
+
+        comments_only = tmp_path / "comments.yaml"
+        comments_only.write_text("# just a comment\n# nothing else\n")
+        assert load_clusters_config(comments_only) == {}
