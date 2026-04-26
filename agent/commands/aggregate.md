@@ -201,6 +201,41 @@ When interpreting:
 - Compare against any baseline results if available
 - Group results by grid dimensions for readability (e.g., by model, by feature set)
 
+## Step 7: Mark the run complete in the journal
+
+After aggregation succeeds and summaries are downloaded, finalize the run
+journal so `find_in_flight_runs` no longer surfaces this run on the next
+`/monitor` invocation:
+
+````python
+from pathlib import Path
+from agent import session, runner
+
+# Hydrate run_id from the active context, or pick from the in-flight set.
+in_flight = session.find_in_flight_runs(Path.cwd())
+if len(in_flight) == 1:
+    run_id = in_flight[0].run_id
+elif len(in_flight) == 0:
+    # Nothing to mark — likely the run was already finalized or never recorded.
+    run_id = None
+else:
+    # Multiple in-flight runs share this cwd. Prompt the user to pick the
+    # one that this aggregate call corresponds to (match by profile, manifest
+    # filename, or job_name).
+    run_id = <user's choice>
+
+if run_id is not None:
+    runner.mark_terminal(Path.cwd(), run_id, status='complete', stage='done')
+````
+
+If aggregation FAILS (e.g., cluster aggregate command exits non-zero, summary
+files are missing, key metrics fail validation), do NOT call `mark_terminal`.
+Leave the journal entry as `in_flight` so the user can re-run `/aggregate`
+once the issue is fixed, or transition to manual triage.
+
+For multi-executor submissions (one journal entry per submitted job), call
+`mark_terminal` once per `run_id` whose aggregation succeeded.
+
 ## Multi-Stage Aggregation
 
 If the profile has multiple stages and `$ARGUMENTS` does not specify a stage:
