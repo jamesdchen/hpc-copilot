@@ -30,11 +30,13 @@ _CACHE_FILE = "_shim_cache.json"
 def translate(chunk_id: int, total_chunks: int) -> list[str]:
     """Return CLI args to append to the downstream executor command.
 
-    This is the experiment-specific part. Adapt to your data pipeline.
-    Examples:
-      - Range split: determine total_rows, compute --start/--end   (shown below)
-      - File split:  list files, select subset for this chunk      (TODO)
-      - Date split:  compute date window from chunk index          (TODO)
+    This is the experiment-specific part. The arithmetic here is generic
+    range-splitting and stays as-is; the *data-aware* piece —
+    ``_cached_total_items()`` → ``_compute_total_items()`` below — must
+    reuse a loader from your experiment repo's ``lib/`` rather than inline
+    a parallel data-loading path.
+
+    Adapt the flag names if your executor doesn't use ``--start`` / ``--end``.
     """
     # TODO: edit below if your executor uses flags other than --start/--end.
     total_items = _cached_total_items()
@@ -81,11 +83,23 @@ def _cached_total_items() -> int:
 def _compute_total_items() -> int:
     """Determine the total number of items to split across chunks.
 
-    TODO: replicate your executor's data pipeline up to the point where the
-    array length is known, then return that length. Typical implementations:
+    **Import the loader from your experiment repo. Do not re-implement it.**
+    Whatever function your executors already call to materialise the dataset
+    — typically something in ``lib/loading.py``, ``lib/data.py``, or
+    ``utils/io.py`` — is the one this shim must call too. Re-implementing it
+    here is the most common shim bug: it drifts silently from the executor's
+    real data pipeline and the chunk boundaries no longer match.
+
+    The expected pattern is one or two lines:
 
         from lib.loading import load_raw_data
         return len(load_raw_data("data/all30min"))
+
+    Inspect ``executors/`` (or ``src/``, ``scripts/``) to find the exact
+    loader your executors use, then call it the same way here. Inline a
+    custom counter only if no such loader exists in the experiment repo —
+    and even then, prefer a tiny helper added to ``lib/`` over inline code
+    in this shim, so future executors can share it.
 
     Raising ``NotImplementedError`` here is intentional — a fresh shim is
     not useful until this function is filled in.

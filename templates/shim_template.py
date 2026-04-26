@@ -30,21 +30,41 @@ def translate(chunk_id: int, total_chunks: int) -> list[str]:
 
     TODO: implement the chunk_id -> downstream-CLI mapping for your script.
 
-    Common shapes (pick one):
+    **Prefer importing helpers from your experiment repo over inlining.**
+    A shim is a thin adapter; the heavy logic — loading data, listing files,
+    computing date windows — almost always already exists in ``lib/`` /
+    ``utils/`` or in one of your executors. Import it; do not re-implement it.
 
-        # Range split on known row count:
-        total = <YOUR SCRIPT'S ITEM COUNT>
+    Reuse-first shapes (pick the one that matches your script):
+
+        # Range split using your repo's own loader:
+        from lib.loading import load_raw_data           # ← reuse, don't inline
+        total = len(load_raw_data("data/all30min"))
         base, rem = divmod(total, total_chunks)
         start = base * chunk_id + min(chunk_id, rem)
         end   = start + base + (1 if chunk_id < rem else 0)
         return ["--start-row", str(start), "--end-row", str(end)]
 
-        # File-list split:
+        # File-list split using your repo's own globber:
+        from lib.io import list_inputs                  # ← reuse, don't inline
+        files = list_inputs("data/")
+        mine  = files[chunk_id::total_chunks]
+        return ["--files", ",".join(map(str, mine))]
+
+        # Date-window split using your repo's own period helper:
+        from utils.dates import month_periods           # ← reuse, don't inline
+        start_iso, end_iso = month_periods("2020-01-01", "2024-12-31")[chunk_id]
+        return ["--start", start_iso, "--end", end_iso]
+
+    Inline-only fallbacks (only when no helper exists in your repo):
+
+        # Naive file-list split:
+        from pathlib import Path
         files = sorted(Path("data/").glob("*.parquet"))
         mine  = files[chunk_id::total_chunks]
         return ["--files", ",".join(map(str, mine))]
 
-        # Date-window split:
+        # Pass-through window id:
         return ["--window-id", str(chunk_id)]
 
     Keep the return value a ``list[str]`` — these args are appended after

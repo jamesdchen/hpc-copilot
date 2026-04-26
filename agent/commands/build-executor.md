@@ -76,18 +76,31 @@ If the user is ambiguous ("make a ridge executor"), infer: existing `ml_ridge.py
 Use this when the user already has a working script that does not match the grid-param CLI conventions. You will generate only a shim — the user's script is untouched.
 
 1. Ask for the path to the user's script if not already given. Run `python <script> --help` and record its flags.
-2. Resolve the shim template:
+2. **Scan the experiment repo for reusable helpers BEFORE writing any shim code.** A good shim is a thin adapter — it `import`s the experiment repo's own helpers; it does *not* re-implement the user's data pipeline, calendar arithmetic, file-globbing logic, or anything else that already lives in `lib/`, `utils/`, or the executors. Concretely:
+   1. Read the user's script (the path from sub-step 1) and list every top-level `import` that resolves to a local module — e.g. `from lib.loading import load_raw_data`, `from utils.dates import business_days`. These are first-class reuse candidates.
+   2. List the contents of `lib/`, `utils/`, `src/lib/`, `src/utils/` (whichever exist) and skim each `.py` for public functions whose names match what `translate()` will need. Typical patterns: `load_*`, `count_*`, `n_rows`, `len_*`, `total_*`, `period_*`, `parse_dates`, `month_periods`, `business_days`. If a helper exists, the shim must call it.
+   3. Open one or two executors discovered in Step 1 and confirm how those helpers are invoked (data path, args). The shim should call them the same way.
+   4. Build a short table for yourself before generating:
+      | Need in `translate()` / `_compute_total_items()` | Reuse via                                                          | Inline only if            |
+      |--------------------------------------------------|--------------------------------------------------------------------|---------------------------|
+      | total item count                                 | `from lib.loading import load_raw_data` → `len(load_raw_data(p))`  | no loader exists in `lib/`|
+      | date-window split                                | `from utils.dates import month_periods` (or similar)               | no period helper exists   |
+      | file-list shard                                  | `from lib.io import list_inputs` (or similar)                      | no globber exists         |
+      Default to reuse. Inline only when no helper fits, and inline only the minimum needed.
+3. Resolve the shim template:
    ```bash
    python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "shim_template.py")'
    ```
    (`chunking_shim.py` next to it is a concrete chunking example; pattern-match off it for data-length splits. For simpler translations, start from `shim_template.py`.)
-3. Ask the user where the shim should live (default: `shims/<script_stem>_shim.py` in the experiment repo).
-4. Copy the template to that path, then customize `translate()` to map `--chunk-id`/`--total-chunks` onto the user-script flags discovered in step 1.
-5. The shim contract (see `hpc_mapreduce/map/shim.py` for the cache side — do not modify it here):
+4. Ask the user where the shim should live (default: `shims/<script_stem>_shim.py` in the experiment repo).
+5. Copy the template to that path, then customize `translate()` (and `_compute_total_items()` if you started from `chunking_shim.py`) using the helpers you identified in sub-step 2 — `import` them at the top of the shim; do not re-implement them. Inline custom logic only when no helper fits.
+6. After generation, scan the shim one more time: every block of more than ~5 lines of computation that mirrors something already in `lib/` / `utils/` / an executor is a smell — replace it with an import. Re-run the smoke test (Step 4) after any rewrite.
+7. The shim contract (see `hpc_mapreduce/map/shim.py` for the cache side — do not modify it here):
    - The shim script itself is a normal `.py` file that accepts `--chunk-id`, `--total-chunks`, then `--` and the downstream command.
    - Its `translate(chunk_id, total_chunks)` returns extra CLI args to append.
    - It invokes the downstream command via `subprocess.run` and forwards the return code.
-6. Jump to Step 4 (verify).
+   - Imports from the experiment repo are fine — at runtime the shim is launched from the experiment-repo root, so `lib/` and `utils/` resolve normally.
+8. Jump to Step 4 (verify).
 
 ## Step 4: Smoke-Test
 
