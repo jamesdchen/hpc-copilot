@@ -19,6 +19,7 @@ __all__ = [
     "run_combiner_checked",
 ]
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -136,17 +137,18 @@ def deploy_runtime(
     Must be called **after** :func:`rsync_push` (which uses ``--delete``).
     """
     target = _target(user, host)
+    remote_path_q = shlex.quote(remote_path)
 
     ssh_run(
-        f"mkdir -p {remote_path}/hpc_mapreduce/map"
-        f" && touch {remote_path}/hpc_mapreduce/__init__.py"
-        f" && touch {remote_path}/hpc_mapreduce/map/__init__.py",
+        f"mkdir -p {remote_path_q}/hpc_mapreduce/map"
+        f" && touch {remote_path_q}/hpc_mapreduce/__init__.py"
+        f" && touch {remote_path_q}/hpc_mapreduce/map/__init__.py",
         host=host,
         user=user,
     )
 
     src = str(Path(__file__).parent.parent / "map" / "context.py")
-    dst = f"{target}:{remote_path}/hpc_mapreduce/map/context.py"
+    dst = f"{target}:{shlex.quote(remote_path)}/hpc_mapreduce/map/context.py"
     subprocess.run(
         ["scp", src, dst],
         capture_output=True,
@@ -156,7 +158,7 @@ def deploy_runtime(
     # Deploy the per-task metrics sidecar writer so executors can `from
     # hpc_mapreduce.map.metrics_io import write_metrics` on compute nodes.
     metrics_io_src = str(Path(__file__).parent.parent / "map" / "metrics_io.py")
-    metrics_io_dst = f"{target}:{remote_path}/hpc_mapreduce/map/metrics_io.py"
+    metrics_io_dst = f"{target}:{shlex.quote(remote_path)}/hpc_mapreduce/map/metrics_io.py"
     subprocess.run(
         ["scp", metrics_io_src, metrics_io_dst],
         capture_output=True,
@@ -165,7 +167,7 @@ def deploy_runtime(
 
     # Deploy the on-cluster combiner script.
     combiner_src = str(Path(__file__).parent.parent / "map" / "combiner.py")
-    combiner_dst = f"{target}:{remote_path}/_hpc_combiner.py"
+    combiner_dst = f"{target}:{shlex.quote(remote_path)}/_hpc_combiner.py"
     return subprocess.run(
         ["scp", combiner_src, combiner_dst],
         capture_output=True,
@@ -206,10 +208,11 @@ def run_combiner(
         ``_combiner/wave_N.json`` output.
     """
     force_flag = " --force" if force else ""
+    manifest_q = shlex.quote(manifest_name)
     cmd = (
-        f"cd {remote_path} && "
-        f"HPC_WAVE={wave} HPC_MANIFEST={manifest_name} "
-        f"python3 _hpc_combiner.py --wave {wave} --manifest {manifest_name}{force_flag}"
+        f"cd {shlex.quote(remote_path)} && "
+        f"HPC_WAVE={wave} HPC_MANIFEST={manifest_q} "
+        f"python3 _hpc_combiner.py --wave {wave} --manifest {manifest_q}{force_flag}"
     )
     return ssh_run(cmd, host=host, user=user)
 
@@ -278,7 +281,7 @@ def rsync_pull(
         ``--include='*/'`` is prepended automatically (to traverse
         directories) and a trailing ``--exclude='*'`` is appended.
     """
-    src = f"{_target(user, host)}:{remote_path.rstrip('/')}/{remote_subdir.strip('/')}/"
+    src = f"{_target(user, host)}:{shlex.quote(remote_path.rstrip('/'))}/{shlex.quote(remote_subdir.strip('/'))}/"
 
     dst_path = Path(local_dir)
     dst_path.mkdir(parents=True, exist_ok=True)
