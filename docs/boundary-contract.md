@@ -123,21 +123,32 @@ package. Groupings mirror those in
 - `write_metrics` — helper executors call to write a sidecar metrics file
   into `$RESULT_DIR`.
 
-### Open boundary question: reduce ownership
+### Default reduce semantics
 
 The exports under **Reduce**, **Combiner**, and **Per-task metrics sidecar**
-above (`reduce_metrics`, `reduce_by_grid_point`, `reduce_partials`,
-`reduce_resource_usage`, `run_combiner`, `run_combiner_checked`,
-`write_metrics`) are **opt-in convenience currently under review for
-extraction to experiment-repo ownership.** They give the cluster-side
-data-locality path (per `commands/aggregate.md`) a turnkey default, but the
-specific reduction shape (weighted mean with optional `n_samples` weight) is
-a framework choice that arguably belongs in the experiment repo. A planned
-follow-up will move the reduce *callable* into the experiment repo while
-keeping the deployment plumbing (atomic writes, wave-based partial
-aggregation, cluster-side execution) in the framework. Until then, treat
-these exports as defaults that experiment repos may override by skipping
-`write_metrics` and shipping their own reduce step.
+above provide a turnkey default for the cluster-side data-locality path
+(see `commands/aggregate.md`): executors call `write_metrics({...})` per
+task, the cluster-deployed `_hpc_combiner.py` aggregates those sidecars by
+grid point using weighted mean (weight = `n_samples`, default 1) with
+Neumaier-compensated summation for order-invariance.
+
+The choice of weighted-mean reduction is a *framework default*, not a
+contract requirement. Experiment repos that need a different reduce shape
+(median, max, percentile, custom) can opt out today by **skipping
+`write_metrics` entirely**: emit results to `--output-file`, let
+`/aggregate` rsync the raw outputs back, and run reduction locally with
+whatever tools fit. The combiner runs on the cluster only when a task has
+written a `metrics.json` sidecar, so an experiment with no sidecars simply
+gets no cluster-side reduction.
+
+A general user-supplied reduce hook (where the cluster-deployed combiner
+discovers and `runpy`-imports a reduce callable from the experiment repo)
+is *not* implemented today. The local `run_combiner` API cannot pass a
+Python callable to the cluster-side process, and `_hpc_combiner.py` is in
+the reserved-filenames list — `deploy_runtime` always overwrites it with
+the framework default. Adding the hook would require a discovery
+convention plus tests, and should land when an experiment actually needs
+it. Until then, "skip `write_metrics`" is the supported override path.
 
 ## What experiment repos own
 
