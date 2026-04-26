@@ -22,7 +22,7 @@ tui = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["hpc_mapreduce*"]
+include = ["hpc_mapreduce*", "agent*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -33,7 +33,7 @@ experiment directory:
 When resuming a prior run, `/submit` picks up an existing
 `manifest.<cmd_sha_short>.json` and delegates to
 `hpc_mapreduce.job.resubmit.resubmit_plan` for the failing task IDs; see
-`commands/submit.md` for the interactive resume-vs-fresh prompt.
+`agent/commands/submit.md` for the interactive resume-vs-fresh prompt.
 
 ---
 

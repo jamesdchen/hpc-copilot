@@ -2,7 +2,7 @@
 
 Categories are consumed by the ``/monitor`` slash command to decide whether to
 auto-resubmit, adjust resources, or stop and escalate to the user.  See
-``commands/monitor.md`` for the action table keyed on these labels.
+``agent/commands/monitor.md`` for the action table keyed on these labels.
 """
 
 from __future__ import annotations
