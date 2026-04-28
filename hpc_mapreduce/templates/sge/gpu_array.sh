@@ -15,6 +15,8 @@ set -e
 #   $REPO_DIR      — repository root to cd into
 #   $GPU_COUNT     — number of GPUs per task (default: 2)
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
+#   $HPC_RUNTIME   — optional, "uv" runs ``uv sync`` in $REPO_DIR before
+#                    dispatch (honors MARs's #1 invariant: never bare pip)
 #
 # Submit with:
 #   qsub -t 1-10 -l gpu,A100,cuda=2 -v CONDA_SOURCE=...,CONDA_ENV=...,... gpu_array.sh
@@ -68,6 +70,19 @@ fi
 # --- Working Directory ---
 cd "$REPO_DIR"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+
+# --- Runtime (uv) ---
+# Opt-in via HPC_RUNTIME=uv. Sync the project's uv-managed venv before
+# any task runs so ``uv run python ...`` (set by build_task_manifest)
+# resolves to the right interpreter. Fail fast if uv is missing — this
+# is much clearer than running tasks with the wrong Python.
+if [ "${HPC_RUNTIME:-}" = "uv" ]; then
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "[template] HPC_RUNTIME=uv but 'uv' not on PATH" >&2
+        exit 2
+    fi
+    uv sync || { echo "[template] uv sync failed" >&2; exit 2; }
+fi
 
 # --- GPU Setup ---
 # CUDA_VISIBLE_DEVICES is typically set by SGE, but enforce if needed

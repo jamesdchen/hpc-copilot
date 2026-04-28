@@ -74,6 +74,34 @@
 - **README**: collapsed the "Using with MARs" section to a link to
   `docs/mars-integration.md`; kept the SSH-passthrough warning visible.
 
+### Added — MARs compat Tier 1
+
+- **`meta.json` ingestion**. The `discover` envelope now includes a `meta`
+  block with `experiment_id`, `seed`, `purpose`, and `tier` whenever a
+  `meta.json` file exists at the experiment-dir root. Callers stop reparsing
+  the file themselves. New helper `read_meta_json(experiment_dir)` is the
+  single seam — silent on parse failures, since claude-hpc is not the place
+  to validate MARs's schema beyond the fields it surfaces.
+- **Tier detection**. `discover` surfaces `tier: 1 | 2 | null` derived from
+  path layout: `probes/probe-*` + `probe.py` → 1, `runs/run-*` + `scripts/`
+  → 2, otherwise null. New `detect_mars_tier(experiment_dir)` helper.
+- **MARs layout discovery filter**. When `meta.json` is present at the
+  experiment-dir root, executor discovery narrows to `scripts/` (Tier-2
+  entrypoints) and the root-level `probe.py` (Tier-1) — never `src/`,
+  honoring MARs's modules-only contract for that directory. Default
+  behavior unchanged when the marker is absent.
+- **`runtime: uv` profile** in `build_task_manifest`. Opt-in cluster-side
+  `uv run` for every task command, with a `uv sync` preamble in all four
+  shipped job templates (SGE CPU/GPU, SLURM CPU/GPU) gated on the
+  `HPC_RUNTIME=uv` env var. Honors MARs's #1 invariant ("ALWAYS `uv run`
+  … NEVER `pip`"). Templates exit 2 with a clear diagnostic when uv is
+  missing — much clearer than running tasks with the wrong Python.
+- **`schemas/discover.output.json`**: new file pinning the discover
+  envelope's data shape (`executors` required, `meta` optional).
+- **`schemas/submit.input.json`**: optional `runtime` field (`"uv"` or
+  null) so the journal can record the runtime alongside the rest of
+  the spec.
+
 ### Changed
 
 - **`status`, `aggregate`, `reconcile` fail fast when `SSH_AUTH_SOCK` is

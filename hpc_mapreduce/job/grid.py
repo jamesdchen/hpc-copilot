@@ -181,12 +181,21 @@ def validate_result_dir_template(
         )
 
 
+# Runtime profiles accepted by ``build_task_manifest``. Currently only
+# ``"uv"`` (which prefixes every task ``cmd`` with ``"uv run "`` and
+# expects the cluster-side template's ``uv sync`` preamble to fire).
+# Reserve the field for future entries (``"pixi"``, …); the dispatcher
+# itself doesn't consult ``runtime`` — it just shells out the cmd.
+_SUPPORTED_RUNTIMES: frozenset[str] = frozenset({"uv"})
+
+
 def build_task_manifest(
     run_cmd: str,
     grid: dict[str, list],
     result_dir_template: str,
     max_tasks: int | None = 10_000,
     repo_path: str | Path | None = None,
+    runtime: str | None = None,
 ) -> dict:
     """Build a task manifest from a grid.
 
@@ -212,15 +221,31 @@ def build_task_manifest(
     repo_path:
         Directory used to resolve ``{git_sha}``.  Defaults to the current
         working directory.
+    runtime:
+        Optional runtime profile that the cluster-side dispatcher will
+        execute each task under. ``"uv"`` prefixes every task ``cmd`` with
+        ``"uv run "`` so the on-cluster ``uv``-managed venv is used —
+        honors MARs's #1 invariant ("ALWAYS ``uv run`` … NEVER ``pip``").
+        ``None`` (the default) leaves task commands untouched.
+        The chosen runtime is also recorded at the manifest top level so
+        observers can confirm it; the dispatcher itself does not consult
+        the field.
 
     Raises
     ------
     ValueError
         If ``max_tasks`` is not ``None`` and the computed total exceeds it,
-        or if ``result_dir_template`` references an unknown placeholder.
+        if ``result_dir_template`` references an unknown placeholder, or
+        if ``runtime`` is set to an unsupported value.
     """
     validate_grid_keys(grid)
     validate_result_dir_template(result_dir_template, grid)
+
+    if runtime is not None and runtime not in _SUPPORTED_RUNTIMES:
+        raise ValueError(
+            f"runtime={runtime!r} is not supported; "
+            f"expected one of {sorted(_SUPPORTED_RUNTIMES)} or None."
+        )
 
     if max_tasks is not None:
         projected = total_tasks(grid)
@@ -238,6 +263,8 @@ def build_task_manifest(
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     git_sha = resolve_git_sha(repo_path)
 
+    cmd_prefix = "uv run " if runtime == "uv" else ""
+
     tasks: dict[str, dict] = {}
     for task_idx, params in enumerate(points):
         parts = [run_cmd]
@@ -251,7 +278,7 @@ def build_task_manifest(
             **params,
         }
         entry: dict = {
-            "cmd": " ".join(parts),
+            "cmd": cmd_prefix + " ".join(parts),
             "result_dir": result_dir_template.format(**format_kwargs),
             "params": dict(params),
         }
@@ -261,13 +288,16 @@ def build_task_manifest(
 
     n_tasks = len(tasks)
 
-    return {
+    manifest: dict = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "total_tasks": n_tasks,
         "grid_size": len(points),
         "grid_keys": list(grid.keys()),
         "tasks": tasks,
     }
+    if runtime is not None:
+        manifest["runtime"] = runtime
+    return manifest
 
 
 def attach_wave_map(
