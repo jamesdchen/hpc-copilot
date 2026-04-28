@@ -14,6 +14,8 @@ set -e
 #   $RESULT_DIR    — output directory for results
 #   $REPO_DIR      — repository root to cd into
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
+#   $HPC_RUNTIME   — optional, "uv" runs ``uv sync`` in $REPO_DIR before
+#                    dispatch (honors MARs's #1 invariant: never bare pip)
 #
 # Submit with:
 #   sbatch --array=1-100 --export=TASK_OFFSET=0,CONDA_SOURCE=...,CONDA_ENV=...,... cpu_array.slurm
@@ -63,6 +65,19 @@ fi
 # --- Working Directory ---
 cd "$REPO_DIR"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+
+# --- Runtime (uv) ---
+# Opt-in via HPC_RUNTIME=uv. Sync the project's uv-managed venv before
+# any task runs so ``uv run python ...`` (set by build_task_manifest)
+# resolves to the right interpreter. Fail fast if uv is missing — this
+# is much clearer than running tasks with the wrong Python.
+if [ "${HPC_RUNTIME:-}" = "uv" ]; then
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "[template] HPC_RUNTIME=uv but 'uv' not on PATH" >&2
+        exit 2
+    fi
+    uv sync || { echo "[template] uv sync failed" >&2; exit 2; }
+fi
 
 # Bind CPU threads to allocated cores
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
