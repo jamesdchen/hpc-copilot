@@ -223,6 +223,7 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "capabilities",
                 "build-executor",
                 "logs",
+                "failures",
             ],
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
@@ -830,6 +831,83 @@ def cmd_logs(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: failures ──────────────────────────────────────────────────
+
+
+def cmd_failures(args: argparse.Namespace) -> int:
+    """Cluster failed tasks by stderr fingerprint for triage.
+
+    Re-polls status, fetches stderr for every failed task, and groups
+    them by fingerprint so 40 failures with the same root cause show up
+    as one cluster instead of 40 separate logs to read.
+    """
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
+
+    record = session.load_run(args.experiment_dir, args.run_id)
+    if record is None:
+        raise errors.JournalCorrupt(
+            f"no journal record for run_id {args.run_id!r}"
+        )
+
+    # Fresh poll: enumerate failed tasks.
+    report = runner._ssh_status_report(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        manifest_filename=record.manifest,
+        job_ids=record.job_ids,
+        job_name=record.job_name,
+    )
+    failed_ids: list[int] = []
+    for tid_str, info in (report.get("tasks") or {}).items():
+        if isinstance(info, dict) and info.get("status") == "failed":
+            try:
+                failed_ids.append(int(tid_str))
+            except (TypeError, ValueError):
+                continue
+
+    if not failed_ids:
+        _ok(
+            {
+                "run_id": args.run_id,
+                "failed_count": 0,
+                "clusters": [],
+                "note": "no failed tasks in current status report",
+            },
+            idempotent=True,
+        )
+        return EXIT_OK
+
+    # Cluster scheduler.
+    try:
+        clusters_cfg = load_clusters_config()
+    except Exception:  # noqa: BLE001
+        clusters_cfg = {}
+    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler") or "slurm"
+
+    logs = runner.fetch_task_logs(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        job_name=record.job_name,
+        job_ids=record.job_ids,
+        scheduler=scheduler,
+        task_ids=failed_ids,
+        lines=int(getattr(args, "lines", 30) or 30),
+    )
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+
+    _ok(
+        {
+            "run_id": args.run_id,
+            "failed_count": len(failed_ids),
+            "clusters": clusters,
+            "scheduler": scheduler,
+        },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
 # ─── subcommand: build-executor ────────────────────────────────────────────
 
 
@@ -1048,6 +1126,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of trailing lines to return per log (default 50).",
     )
     p_logs.set_defaults(func=cmd_logs)
+
+    # failures
+    p_fail = sub.add_parser(
+        "failures",
+        help="Cluster failed tasks by stderr fingerprint for triage.",
+    )
+    _add_experiment_dir(p_fail)
+    p_fail.add_argument("--run-id", required=True)
+    p_fail.add_argument(
+        "--lines",
+        type=int,
+        default=30,
+        help="Per-task stderr tail length used for fingerprinting (default 30).",
+    )
+    p_fail.set_defaults(func=cmd_failures)
 
     # build-executor
     p_be = sub.add_parser(

@@ -632,6 +632,76 @@ def test_build_provenance_carries_run_metadata(experiment):
     assert "T" in prov["combined_at"] and prov["combined_at"].endswith("+00:00")
 
 
+def test_fingerprint_strips_volatile_noise():
+    """Two failures differing only in path / pid / timestamp share a fingerprint."""
+    line_a = (
+        "Traceback ...\n"
+        "  File '/u/scratch/exp/run_42/train.py', line 87, in <module>\n"
+        "    raise RuntimeError('boom')\n"
+        "RuntimeError: boom"
+    )
+    line_b = (
+        "Traceback ...\n"
+        "  File '/u/scratch/exp/run_99/train.py', line 87, in <module>\n"
+        "    raise RuntimeError('boom')\n"
+        "RuntimeError: boom"
+    )
+    fp_a = runner.fingerprint_stderr_tail(line_a)
+    fp_b = runner.fingerprint_stderr_tail(line_b)
+    assert fp_a == fp_b
+    assert "RuntimeError: boom" in fp_a
+
+
+def test_fingerprint_returns_empty_for_empty_input():
+    assert runner.fingerprint_stderr_tail("") == ""
+    assert runner.fingerprint_stderr_tail(None) == ""
+    assert runner.fingerprint_stderr_tail("   \n  ") == ""
+
+
+def test_cluster_failures_groups_same_fingerprint():
+    logs = [
+        {"task_id": 1, "content": "RuntimeError: boom"},
+        {"task_id": 2, "content": "RuntimeError: boom"},
+        {"task_id": 3, "content": "RuntimeError: boom"},
+        {"task_id": 4, "content": "ValueError: nope"},
+    ]
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+    assert len(clusters) == 2
+    # Sorted by count desc → biggest cluster first.
+    assert clusters[0]["count"] == 3
+    assert sorted(clusters[0]["task_ids"]) == [1, 2, 3]
+    assert clusters[1]["count"] == 1
+    assert clusters[1]["task_ids"] == [4]
+
+
+def test_cluster_failures_categorizes_known_modes():
+    logs = [
+        {
+            "task_id": 1,
+            "content": "torch.cuda.OutOfMemoryError: CUDA out of memory.",
+        },
+        {
+            "task_id": 2,
+            "content": "slurmstepd: error: ... DUE TO TIME LIMIT ***",
+        },
+        {"task_id": 3, "content": "ImportError: No module named 'foo'"},
+    ]
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+    cats = {c["category"] for c in clusters}
+    assert {"gpu_oom", "walltime", "import_error"}.issubset(cats)
+
+
+def test_cluster_failures_buckets_missing_logs():
+    logs = [
+        {"task_id": 7, "missing": True},
+        {"task_id": 8, "missing": True},
+    ]
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+    assert len(clusters) == 1
+    assert clusters[0]["category"] == "log_missing"
+    assert sorted(clusters[0]["task_ids"]) == [7, 8]
+
+
 def test_fetch_task_logs_returns_content_for_slurm():
     """SLURM log path: <remote_path>/_hpc_logs/<job>_<jid>_<tid>.err."""
     captured: list[str] = []

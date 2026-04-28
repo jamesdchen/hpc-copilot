@@ -36,6 +36,8 @@ __all__ = [
     "write_remote_provenance",
     "validate_manifest_file",
     "fetch_task_logs",
+    "cluster_failures_by_fingerprint",
+    "fingerprint_stderr_tail",
 ]
 
 
@@ -535,6 +537,128 @@ def fetch_task_logs(
         else:
             out.append(found)
     return out
+
+
+# ─── failure clustering by stderr fingerprint ──────────────────────────────
+
+
+# Patterns that strongly identify a failure category, ordered most-specific first.
+# Matched case-insensitively against the joined log tail.  The first hit wins.
+_FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
+    ("system_oom", re.compile(r"\boom-killer\b|\bMemoryError\b|killed.*signal 9", re.I)),
+    ("walltime", re.compile(r"\bDUE TO TIME LIMIT\b|wall.?time.*exceeded|signal SIGTERM.*15", re.I)),
+    ("node_failure", re.compile(r"NODE_FAIL|node failed|connection (closed|reset by peer)|ssh: connect.*refused", re.I)),
+    ("import_error", re.compile(r"\bImportError\b|\bModuleNotFoundError\b", re.I)),
+    ("file_not_found", re.compile(r"\bFileNotFoundError\b|No such file or directory", re.I)),
+    ("permission_denied", re.compile(r"\bPermissionError\b|Permission denied", re.I)),
+    ("disk_full", re.compile(r"No space left on device|\bENOSPC\b", re.I)),
+    ("python_traceback", re.compile(r"^Traceback \(most recent call last\):", re.I | re.M)),
+)
+
+# Lines we strip before fingerprinting so per-task volatility (paths,
+# pids, timestamps, line numbers in tracebacks) doesn't fragment a
+# single failure mode into many "unique" fingerprints.
+_FINGERPRINT_NOISE: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*"),  # ISO timestamps
+    re.compile(r"\b/(?:home|u|scratch|tmp)/[^\s:]+"),             # absolute paths
+    re.compile(r"\bpid[=: ]\d+\b", re.I),
+    re.compile(r"\bjob[_ ]?id[=: ]\d+\b", re.I),
+    re.compile(r"\btask[_ ]?id[=: ]\d+\b", re.I),
+    re.compile(r"\bline \d+"),
+    re.compile(r"\b0x[0-9a-fA-F]+\b"),                            # hex pointers
+    re.compile(r"\b\d{8,}\b"),                                    # long ints (job ids, pids)
+)
+
+
+def fingerprint_stderr_tail(content: str | None, *, max_chars: int = 400) -> str:
+    """Reduce a stderr blob to a stable, comparable fingerprint string.
+
+    Strategy: take the last non-empty line of the tail (typically the
+    actual exception), strip volatile noise (timestamps, abs paths, pids,
+    hex pointers), and truncate.  Two failures with the same root cause
+    on different tasks yield the same fingerprint.
+    """
+    if not content or not content.strip():
+        return ""
+    # Last non-empty line: the actual exception is almost always there.
+    lines = [ln for ln in content.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    line = lines[-1].strip()
+    for pat in _FINGERPRINT_NOISE:
+        line = pat.sub("", line)
+    # Collapse runs of whitespace introduced by the substitutions.
+    line = re.sub(r"\s{2,}", " ", line).strip()
+    return line[:max_chars]
+
+
+def _categorize(content: str | None) -> str:
+    """Map a stderr blob to one of :data:`_FAILURE_CATEGORY_PATTERNS` or 'unknown'."""
+    if not content:
+        return "unknown"
+    for category, pat in _FAILURE_CATEGORY_PATTERNS:
+        if pat.search(content):
+            return category
+    return "unknown"
+
+
+def cluster_failures_by_fingerprint(
+    logs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Group ``fetch_task_logs`` output by failure fingerprint.
+
+    *logs* is the list returned by :func:`fetch_task_logs`.  Output is a
+    list of clusters, one per distinct fingerprint, sorted descending by
+    member count.  Each cluster carries:
+
+    * ``category``: high-level bucket (gpu_oom, walltime, etc., else 'unknown')
+    * ``fingerprint``: noise-stripped last line of the stderr tail
+    * ``count``: how many tasks share this failure
+    * ``task_ids``: the list of task ids
+    * ``sample``: a short representative snippet (last 200 chars)
+
+    Tasks marked ``missing: True`` are bucketed into a single
+    ``"log_missing"`` cluster so they're visible in the rollup.
+    """
+    by_fp: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in logs:
+        tid = entry.get("task_id")
+        if entry.get("missing"):
+            key = ("log_missing", "")
+            bucket = by_fp.setdefault(
+                key,
+                {
+                    "category": "log_missing",
+                    "fingerprint": "",
+                    "count": 0,
+                    "task_ids": [],
+                    "sample": "",
+                },
+            )
+            bucket["count"] += 1
+            if tid is not None:
+                bucket["task_ids"].append(tid)
+            continue
+        content = entry.get("content") or ""
+        fp = fingerprint_stderr_tail(content)
+        category = _categorize(content)
+        key = (category, fp)
+        bucket = by_fp.setdefault(
+            key,
+            {
+                "category": category,
+                "fingerprint": fp,
+                "count": 0,
+                "task_ids": [],
+                "sample": content[-200:].rstrip(),
+            },
+        )
+        bucket["count"] += 1
+        if tid is not None:
+            bucket["task_ids"].append(tid)
+    clusters = sorted(by_fp.values(), key=lambda b: -b["count"])
+    return clusters
 
 
 # ─── pre-submit manifest sanity ─────────────────────────────────────────────
