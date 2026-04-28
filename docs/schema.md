@@ -42,6 +42,7 @@ Top-level `project`, `cluster`, `remote_path`, `rsync_exclude` are shared across
 | `gpu_fallback` | list[str] | no | Ordered GPU types to try |
 | `max_retries` | int | no | Max auto-resubmissions on failure |
 | `auto_retry` | map | no | Per-category retry policy honored by `hpc-mapreduce failures`. See *auto_retry* below. |
+| `runtime` | string | no | Runtime profile for cluster-side execution. `"uv"` prefixes every task command with `uv run` and triggers a `uv sync` preamble in the job template (gated on `HPC_RUNTIME=uv`). Honors MARs's #1 invariant. The cluster must have `uv` on PATH; the template fails fast (exit 2) if not. Default: bare `python`. |
 
 ### Multi-Stage Profiles
 

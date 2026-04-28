@@ -308,3 +308,68 @@ class TestResolveGitSha:
         _git_init_with_commit(tmp_path)
         sha = resolve_git_sha(tmp_path)
         assert re.fullmatch(r"[0-9a-f]{7}", sha), f"unexpected sha: {sha!r}"
+
+
+class TestBuildTaskManifestRuntime:
+    def test_uv_prefixes_every_task_cmd(self):
+        m = build_task_manifest(
+            "python train.py",
+            {"lr": [0.01, 0.1]},
+            "results/{run_id}",
+            runtime="uv",
+        )
+        for task in m["tasks"].values():
+            assert task["cmd"].startswith("uv run "), task["cmd"]
+            assert "python train.py" in task["cmd"]
+
+    def test_default_runtime_unchanged_cmds(self):
+        """Back-compat: with no runtime, task cmds match the historical shape."""
+        m = build_task_manifest(
+            "python train.py",
+            {"lr": [0.01]},
+            "results/{run_id}",
+        )
+        cmd = m["tasks"]["0"]["cmd"]
+        assert not cmd.startswith("uv run ")
+        assert cmd.startswith("python train.py")
+
+    def test_manifest_top_level_runtime_set_when_uv(self):
+        m = build_task_manifest(
+            "python train.py",
+            {"lr": [0.01]},
+            "results/{run_id}",
+            runtime="uv",
+        )
+        assert m.get("runtime") == "uv"
+
+    def test_manifest_top_level_runtime_omitted_when_none(self):
+        m = build_task_manifest(
+            "python train.py",
+            {"lr": [0.01]},
+            "results/{run_id}",
+        )
+        assert "runtime" not in m
+
+    def test_unknown_runtime_raises_valueerror(self):
+        with pytest.raises(ValueError, match="runtime="):
+            build_task_manifest(
+                "python train.py",
+                {"lr": [0.01]},
+                "results/{run_id}",
+                runtime="bogus",
+            )
+
+    def test_uv_changes_cmd_sha(self):
+        """cmd_sha is derived from cmd, so the prefix must propagate."""
+        plain = build_task_manifest(
+            "python train.py",
+            {"lr": [0.01]},
+            "results/{run_id}",
+        )
+        with_uv = build_task_manifest(
+            "python train.py",
+            {"lr": [0.01]},
+            "results/{run_id}",
+            runtime="uv",
+        )
+        assert plain["tasks"]["0"]["cmd_sha"] != with_uv["tasks"]["0"]["cmd_sha"]
