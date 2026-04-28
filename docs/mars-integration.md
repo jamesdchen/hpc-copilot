@@ -72,7 +72,7 @@ introspect the required forwards without parsing this doc.
 
 | MARs rule | claude-hpc behavior |
 |---|---|
-| `uv run` for all Python | The proposed integration runs `uv run hpc-mapreduce …` inside MARs's venv. Cluster-side dispatch will use plain `python` until Phase 4 of the proposal (uv runtime profile) lands; track this as a known gap. |
+| `uv run` for all Python | The integration runs `uv run hpc-mapreduce …` inside MARs's venv. Cluster-side dispatch honors the invariant when callers set `runtime: "uv"` on the submit spec — `build_task_manifest(runtime="uv")` prefixes every task `cmd` with `uv run`, and the four shipped templates run a `uv sync` preamble gated on `HPC_RUNTIME=uv`. See `docs/cli-spec.md` § submit. |
 | Tier-1 = `probe.py` only | The agent snippet routes Tier-1 to `uv run python probe.py` directly; claude-hpc is never invoked for probes. |
 | Tier-2 entrypoints under `scripts/` | `hpc-mapreduce discover --experiment-dir <run-NNN>` finds `scripts/*.py` (it scans `executors/`, `scripts/`, `src/` today; a `meta.json`-aware filter to skip `src/` is a follow-up). |
 | `meta.json` is authoritative for `experiment_id` and `seed=42` | The agent reads `meta.json` first and threads `--seed 42` (and any experiment params) through the grid spec. claude-hpc treats them as ordinary CLI flags. |

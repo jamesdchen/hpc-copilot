@@ -125,8 +125,11 @@ Exit codes: 0 ok, 1 user error (fix and retry), 2 cluster/network (per
   expire.
 - **Submit is idempotent on (profile, manifest_sha).** A retried submit
   with the same spec returns `deduped: true`.
-- **Resubmit is NOT idempotent.** Each call increments per-task attempt
-  counters. Use `list-in-flight` to check state before resubmitting.
+- **Resubmit is idempotent on `request_id`.** A second call with the same
+  spec returns `deduped: true` without incrementing per-task retry
+  counters. When the caller does not supply a `request_id`, one is
+  derived from `(failed_task_ids, category, overrides)`. Use
+  `list-in-flight` to inspect retry counters.
 - **Scheduler rate limits.** Serialize submissions to a single cluster.
 - **`HPC_JOURNAL_DIR` is per-MARs-run.** Set it to
   `~/.mars/hpc/<experiment_id>/` so concurrent runs don't share state.
