@@ -632,6 +632,119 @@ def test_build_provenance_carries_run_metadata(experiment):
     assert "T" in prov["combined_at"] and prov["combined_at"].endswith("+00:00")
 
 
+def test_validate_manifest_file_passes_for_clean_manifest(tmp_path: Path):
+    """A v2 manifest with resolved cmds and consistent wave_map validates."""
+    manifest = {
+        "schema_version": 2,
+        "total_tasks": 2,
+        "tasks": {
+            "0": {
+                "cmd": "python3 train.py --lr 0.01",
+                "result_dir": "results/run_a",
+                "params": {"lr": 0.01},
+                "cmd_sha": "0" * 16,
+            },
+            "1": {
+                "cmd": "python3 train.py --lr 0.001",
+                "result_dir": "results/run_b",
+                "params": {"lr": 0.001},
+                "cmd_sha": "1" * 16,
+            },
+        },
+        "wave_map": {"0": ["0", "1"]},
+    }
+    manifest_path = tmp_path / "manifest.abcd1234.json"
+    manifest_path.write_text(json.dumps(manifest))
+    runner.validate_manifest_file(manifest_path)  # no raise
+
+
+def test_validate_manifest_file_raises_for_unresolved_placeholder(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": {
+                    "0": {
+                        "cmd": "python3 train.py --model {model_name}",  # unresolved
+                        "result_dir": "results/run",
+                        "params": {},
+                    }
+                },
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "unresolved placeholder" in str(exc_info.value)
+    assert "{model_name}" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_total_tasks_mismatch(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "total_tasks": 5,  # claimed
+                "tasks": {  # but only 1 here
+                    "0": {"cmd": "x", "result_dir": "y", "params": {}}
+                },
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "total_tasks" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_unknown_schema_version(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 99,
+                "tasks": {"0": {"cmd": "x", "result_dir": "y", "params": {}}},
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "schema_version" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_wave_map_drift(tmp_path: Path):
+    """Wave map references a task id not in tasks."""
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": {"0": {"cmd": "x", "result_dir": "y", "params": {}}},
+                "wave_map": {"0": ["0", "99"]},  # 99 doesn't exist
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "wave_map" in str(exc_info.value)
+    assert "99" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_invalid_json(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text("not json {")
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "not valid JSON" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_missing_file(tmp_path: Path):
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(tmp_path / "does-not-exist.json")
+    assert "not found" in str(exc_info.value)
+
+
 def test_write_remote_provenance_writes_sidecar_path():
     captured: list[str] = []
 

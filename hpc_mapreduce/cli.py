@@ -439,6 +439,16 @@ def cmd_submit(args: argparse.Namespace) -> int:
             f"--spec missing required fields: {missing}. See docs/cli-spec.md."
         )
 
+    # Pre-submit manifest sanity: opportunistic — if the manifest exists
+    # locally at the conventional path, validate it before recording the
+    # submission. Catches unresolved {placeholder}s, empty cmd fields, and
+    # wave_map / tasks coverage drift before they crash the cluster job
+    # mid-run. When the manifest is only on the cluster (rare), we skip.
+    manifest_path = args.experiment_dir / spec["manifest_filename"]
+    skip_check = getattr(args, "skip_manifest_check", False)
+    if manifest_path.is_file() and not skip_check:
+        runner.validate_manifest_file(manifest_path)
+
     if args.dry_run:
 
         _ok(
@@ -830,6 +840,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Validate the spec and report what would be launched; no SSH/qsub.",
+    )
+    p_sub.add_argument(
+        "--skip-manifest-check",
+        action="store_true",
+        help=(
+            "Skip pre-submit manifest sanity. Use only when the manifest "
+            "is built directly on the cluster and not present locally."
+        ),
     )
     p_sub.set_defaults(func=cmd_submit)
 

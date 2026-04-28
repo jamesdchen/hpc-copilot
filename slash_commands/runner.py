@@ -34,6 +34,7 @@ __all__ = [
     "verify_combiner_artifact",
     "build_provenance",
     "write_remote_provenance",
+    "validate_manifest_file",
 ]
 
 
@@ -459,6 +460,138 @@ def mark_terminal(
 ) -> RunRecord:
     """Thin pass-through to ``session.mark_run`` for symmetry."""
     return session.mark_run(experiment_dir, run_id, status=status, stage=stage)
+
+
+# ─── pre-submit manifest sanity ─────────────────────────────────────────────
+
+
+# Schema versions accepted by the on-cluster dispatcher.  Kept in sync
+# with ``hpc_mapreduce.map.dispatch.SUPPORTED_SCHEMA_VERSIONS`` and
+# ``hpc_mapreduce.job.grid.MANIFEST_SCHEMA_VERSION``.
+_SUPPORTED_MANIFEST_VERSIONS = (1, 2)
+
+# Match unresolved ``{placeholder}`` tokens.  False positives are
+# minimised by requiring an identifier-like body and a closing brace.
+# (Real shell brace expansion uses commas or numeric ranges, which this
+# pattern does not match.)
+_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def validate_manifest_file(manifest_path: Path) -> None:
+    """Raise :class:`ManifestInvalid` if *manifest_path* is unsafe to submit.
+
+    Checks (all client-side, no SSH):
+
+    * the file exists and is valid JSON;
+    * ``schema_version`` is in :data:`_SUPPORTED_MANIFEST_VERSIONS`;
+    * ``tasks`` is a non-empty dict, ``total_tasks`` matches ``len(tasks)``;
+    * every task carries ``cmd``, ``result_dir``, ``params`` with the right
+      types;
+    * no ``{placeholder}`` remnants in rendered ``cmd`` / ``result_dir``;
+    * if ``wave_map`` is present, its members exactly cover ``tasks``.
+
+    Catches the entire class of "manifest looked fine locally, crashed
+    mid-run on the cluster" failures.
+    """
+    if not manifest_path.is_file():
+        raise errors.ManifestInvalid(
+            f"manifest not found at {manifest_path}; rebuild via /submit "
+            f"or `hpc-mapreduce submit`."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise errors.ManifestInvalid(
+            f"manifest at {manifest_path} is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise errors.ManifestInvalid(
+            f"manifest at {manifest_path} must be a JSON object; "
+            f"got {type(manifest).__name__}"
+        )
+    schema_version = manifest.get("schema_version")
+    if schema_version not in _SUPPORTED_MANIFEST_VERSIONS:
+        raise errors.ManifestInvalid(
+            f"manifest schema_version={schema_version!r}; supported="
+            f"{list(_SUPPORTED_MANIFEST_VERSIONS)}. Regenerate with current hpc_mapreduce."
+        )
+
+    tasks = manifest.get("tasks")
+    if not isinstance(tasks, dict) or not tasks:
+        raise errors.ManifestInvalid(
+            f"manifest.tasks must be a non-empty object; "
+            f"got {type(tasks).__name__ if tasks is None else 'empty'}"
+        )
+
+    total_tasks = manifest.get("total_tasks")
+    if isinstance(total_tasks, int) and total_tasks != len(tasks):
+        raise errors.ManifestInvalid(
+            f"manifest.total_tasks ({total_tasks}) does not match "
+            f"len(tasks)={len(tasks)} — manifest is inconsistent."
+        )
+
+    for tid, task in tasks.items():
+        if not isinstance(task, dict):
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}] must be an object; "
+                f"got {type(task).__name__}"
+            )
+        cmd = task.get("cmd")
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].cmd must be a non-empty string"
+            )
+        if _PLACEHOLDER_RE.search(cmd):
+            leftover = _PLACEHOLDER_RE.findall(cmd)
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].cmd has unresolved placeholder(s) "
+                f"{leftover}: {cmd!r}. Rebuild the manifest so all "
+                f"{{name}} tokens render before submit."
+            )
+        result_dir = task.get("result_dir")
+        if not isinstance(result_dir, str) or not result_dir.strip():
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].result_dir must be a non-empty string"
+            )
+        if _PLACEHOLDER_RE.search(result_dir):
+            leftover = _PLACEHOLDER_RE.findall(result_dir)
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].result_dir has unresolved "
+                f"placeholder(s) {leftover}: {result_dir!r}."
+            )
+        params = task.get("params")
+        if not isinstance(params, dict):
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].params must be an object"
+            )
+
+    wave_map = manifest.get("wave_map")
+    if wave_map is not None:
+        if not isinstance(wave_map, dict):
+            raise errors.ManifestInvalid(
+                f"manifest.wave_map must be an object mapping wave -> [task_ids]"
+            )
+        covered: set[str] = set()
+        for wave_key, members in wave_map.items():
+            if not isinstance(members, list):
+                raise errors.ManifestInvalid(
+                    f"manifest.wave_map[{wave_key!r}] must be a list of task ids"
+                )
+            for tid in members:
+                covered.add(str(tid))
+        task_ids = set(tasks.keys())
+        missing_from_waves = task_ids - covered
+        unknown_in_waves = covered - task_ids
+        if missing_from_waves:
+            raise errors.ManifestInvalid(
+                f"wave_map omits task id(s) {sorted(missing_from_waves)[:10]} — "
+                f"every task must belong to a wave."
+            )
+        if unknown_in_waves:
+            raise errors.ManifestInvalid(
+                f"wave_map references unknown task id(s) "
+                f"{sorted(unknown_in_waves)[:10]} — manifest is inconsistent."
+            )
 
 
 # ─── aggregate preconditions / postconditions / provenance ──────────────────
