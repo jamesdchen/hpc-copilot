@@ -762,21 +762,26 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"got {category!r}"
         )
 
-    record = runner.resubmit_failed(
+    record, deduped, request_id = runner.resubmit_failed(
         args.experiment_dir,
         args.run_id,
         failed_task_ids=[int(t) for t in failed],
         category=category,
         overrides=spec.get("overrides"),
         new_job_ids=spec.get("new_job_ids"),
+        request_id=spec.get("request_id"),
     )
     _ok(
         {
             "run_id": record.run_id,
             "retries": record.retries,
             "job_ids": record.job_ids,
+            "request_id": request_id,
+            "deduped": deduped,
         },
-        idempotent=False,  # each call increments retry counters
+        # Honest now that resubmit_failed dedups on request_id: a replay
+        # with the same spec is a no-op, just like submit.
+        idempotent=True,
     )
     return EXIT_OK
 

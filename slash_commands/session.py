@@ -63,7 +63,15 @@ HPC_HOMEDIR = Path(
 )
 TERMINAL_STATUSES = frozenset({"complete", "failed", "abandoned"})
 _UPDATABLE_FIELDS = frozenset(
-    {"last_status", "combined_waves", "failed_waves", "retries", "stage", "job_ids"}
+    {
+        "last_status",
+        "combined_waves",
+        "failed_waves",
+        "retries",
+        "stage",
+        "job_ids",
+        "last_resubmit_request_id",
+    }
 )
 _log = logging.getLogger(__name__)
 
@@ -89,6 +97,7 @@ class RunRecord:
     retries: dict[str, dict] = dataclasses.field(default_factory=dict)
     stage: str = "monitor"
     status: str = "in_flight"
+    last_resubmit_request_id: str = ""
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
