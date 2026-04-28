@@ -993,3 +993,121 @@ def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
         env=env,
     )
     assert rc == 0, _parse_envelope(out)
+
+
+# ─── submit --from-meta overlay ────────────────────────────────────────────
+
+
+class TestSubmitFromMeta:
+    """Verify the --from-meta flag overlays meta.json::experiment_id onto
+    the submit spec's profile and job_name. setdefault semantics: never
+    overwrite caller-supplied values, silent no-op without meta.json."""
+
+    @staticmethod
+    def _write_spec(tmp_path: Path, **overrides: object) -> Path:
+        import json
+        spec = {
+            "cluster": "hoffman2",
+            "ssh_target": "user@host",
+            "remote_path": "/u/scratch/exp",
+            "manifest_filename": "manifest.abcd1234.json",
+            "job_ids": ["12345"],
+            "total_tasks": 4,
+        }
+        spec.update(overrides)
+        path = tmp_path / "spec.json"
+        path.write_text(json.dumps(spec))
+        return path
+
+    @staticmethod
+    def _write_meta(experiment_dir: Path, experiment_id: str | None) -> None:
+        import json
+        payload: dict = {"seed": 42, "purpose": "test"}
+        if experiment_id is not None:
+            payload["experiment_id"] = experiment_id
+        (experiment_dir / "meta.json").write_text(json.dumps(payload))
+
+    def test_from_meta_fills_missing_profile_and_job_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+        spec = self._write_spec(tmp_path)
+        self._write_meta(tmp_path, experiment_id="run-001-foo")
+        rc, out, _ = _run_cli(
+            "submit",
+            "--experiment-dir", str(tmp_path),
+            "--spec", str(spec),
+            "--from-meta",
+            env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
+        )
+        assert rc == 0, out
+        env = _parse_envelope(out)
+        assert env["ok"] is True
+        assert env["data"]["run_id"].startswith("run-001-foo_")
+
+    def test_from_meta_does_not_overwrite_present_fields(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = self._write_spec(tmp_path, profile="explicit", job_name="explicit")
+        self._write_meta(tmp_path, experiment_id="other")
+        rc, out, _ = _run_cli(
+            "submit",
+            "--experiment-dir", str(tmp_path),
+            "--spec", str(spec),
+            "--from-meta",
+            env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
+        )
+        assert rc == 0, out
+        env = _parse_envelope(out)
+        assert env["data"]["run_id"].startswith("explicit_")
+
+    def test_from_meta_no_op_without_meta_json(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = self._write_spec(tmp_path, profile="p", job_name="p")
+        # No meta.json on disk.
+        rc, out, _ = _run_cli(
+            "submit",
+            "--experiment-dir", str(tmp_path),
+            "--spec", str(spec),
+            "--from-meta",
+            env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
+        )
+        assert rc == 0, out
+        env = _parse_envelope(out)
+        assert env["data"]["run_id"].startswith("p_")
+
+    def test_from_meta_no_op_when_meta_lacks_experiment_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = self._write_spec(tmp_path)  # no profile, no job_name
+        self._write_meta(tmp_path, experiment_id=None)  # meta lacks experiment_id
+        rc, out, _ = _run_cli(
+            "submit",
+            "--experiment-dir", str(tmp_path),
+            "--spec", str(spec),
+            "--from-meta",
+            env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
+        )
+        # Spec is incomplete and no overlay applied; expect manifest_invalid.
+        assert rc == 1, out
+        env = _parse_envelope(out)
+        assert env["ok"] is False
+        assert env["error_code"] == "manifest_invalid"
+
+    def test_from_meta_off_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        spec = self._write_spec(tmp_path)  # no profile, no job_name
+        self._write_meta(tmp_path, experiment_id="run-001-foo")
+        # Flag NOT set: existing behavior (incomplete spec → manifest_invalid).
+        rc, out, _ = _run_cli(
+            "submit",
+            "--experiment-dir", str(tmp_path),
+            "--spec", str(spec),
+            env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
+        )
+        assert rc == 1, out
+        env = _parse_envelope(out)
+        assert env["ok"] is False
+        assert env["error_code"] == "manifest_invalid"
