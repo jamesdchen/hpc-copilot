@@ -1,12 +1,19 @@
 """SLURM backend — submits array jobs via sbatch."""
 
 import os
+import re
 
 from hpc_mapreduce.infra.backends import HPCBackend, register
 
 
 @register("slurm")
 class SlurmBackend(HPCBackend):
+    # sbatch prints ``Submitted batch job 12345``.  Anchor on the phrase
+    # so a warning prefix containing digits (``sbatch: warning: 30% of
+    # nodes pre-empt; Submitted batch job 12345``) doesn't poison the
+    # parse.
+    JOB_ID_REGEX = re.compile(r"Submitted batch job\s+(\d+)")
+
     def __init__(
         self,
         script: str | None = None,

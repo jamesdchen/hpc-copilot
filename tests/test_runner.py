@@ -280,3 +280,217 @@ def test_resubmit_failed_rejects_empty_list(journal_home, experiment):
 def test_split_ssh_target_validates():
     with pytest.raises(ValueError, match="user@host"):
         runner._split_ssh_target("just-a-host")
+
+
+# ─── Bug 15: bad manifest_filename rejected, not silently mangled ──────────
+
+
+def test_submit_and_record_rejects_non_conforming_manifest_filename(
+    journal_home, experiment
+):
+    """A manifest filename outside ``manifest.<8 hex>.json`` used to silently
+    produce garbage run_ids that violated the submit.output.json schema.
+    """
+    from slash_commands import errors
+
+    with pytest.raises(errors.ManifestInvalid, match="manifest.<8 hex"):
+        runner.submit_and_record(
+            experiment,
+            profile="ml_ridge",
+            cluster="hoffman2",
+            ssh_target="user@host",
+            remote_path="/x",
+            job_name="job",
+            manifest_filename="latest.json",  # not the canonical pattern
+            job_ids=["1"],
+            total_tasks=1,
+        )
+
+
+def test_submit_and_record_accepts_explicit_run_id_with_any_filename(
+    journal_home, experiment
+):
+    """Pre-validation only kicks in when the run_id is auto-derived; an
+    explicit ``run_id=`` lets callers bypass the pattern (useful for legacy
+    manifests we no longer rebuild).
+    """
+    record, _ = runner.submit_and_record(
+        experiment,
+        profile="ml_ridge",
+        cluster="hoffman2",
+        ssh_target="user@host",
+        remote_path="/x",
+        job_name="job",
+        manifest_filename="anything.json",
+        job_ids=["1"],
+        total_tasks=1,
+        run_id="custom_run",
+    )
+    assert record.run_id == "custom_run"
+
+
+# ─── Bug 4: SGE alive-check actually checks qstat exit codes ───────────────
+
+
+def test_sge_alive_check_returns_empty_when_qstat_silent():
+    """Previously the pipeline ``qstat | head -1 && echo __ALIVE__`` always
+    fired because the pipeline's exit status came from ``head -1`` (which
+    exits 0 even on empty input) — making every SGE alive-check return
+    every job_id and ``reconcile`` never marking runs abandoned.
+    """
+    with patch(
+        "slash_commands.runner.ssh_run",
+        return_value=_completed(stdout=""),
+    ) as m:
+        alive = runner._ssh_alive_job_ids(
+            ssh_target="user@host",
+            remote_path="/x",
+            job_ids=["123", "456"],
+            scheduler="sge",
+        )
+    assert alive == set()
+    # The new command anchors on qstat's *exit code*, not a piped tail.
+    sent_cmd = m.call_args[0][0]
+    assert ">/dev/null 2>&1" in sent_cmd
+    assert "head -1" not in sent_cmd
+
+
+def test_sge_alive_check_emits_marker_for_each_alive_job():
+    """The marker line ``__ALIVE__<jid>`` is still produced (and parsed) for
+    jobs that qstat knows about.
+    """
+    with patch(
+        "slash_commands.runner.ssh_run",
+        return_value=_completed(stdout="__ALIVE__123\n__ALIVE__456\n"),
+    ):
+        alive = runner._ssh_alive_job_ids(
+            ssh_target="user@host",
+            remote_path="/x",
+            job_ids=["123", "456"],
+            scheduler="sge",
+        )
+    assert alive == {"123", "456"}
+
+
+# ─── Bug 5: Slurm alive-check no longer trusts sacct history ──────────────
+
+
+def test_slurm_alive_check_skips_sacct_so_completed_jobs_drop_off():
+    """``sacct -j <ids>`` returns historical jobs (completed, cancelled,
+    failed); previously the code unioned squeue + sacct, so any job that
+    ever ran was considered alive forever.  The fix skips sacct entirely
+    and trusts squeue (which only lists active states).
+    """
+    with patch(
+        "slash_commands.runner.ssh_run",
+        return_value=_completed(stdout=""),  # squeue: no active jobs
+    ) as m:
+        alive = runner._ssh_alive_job_ids(
+            ssh_target="user@host",
+            remote_path="/x",
+            job_ids=["123"],
+            scheduler="slurm",
+        )
+    assert alive == set()
+    sent_cmd = m.call_args[0][0]
+    assert "squeue" in sent_cmd
+    assert "sacct" not in sent_cmd  # historical jobs no longer leak in
+
+
+def test_slurm_alive_check_accepts_squeue_output():
+    """Squeue lines containing the job id (possibly suffixed with array
+    indices like ``123_4``) still count as alive.
+    """
+    with patch(
+        "slash_commands.runner.ssh_run",
+        return_value=_completed(stdout="123_4\n123_5\n"),
+    ):
+        alive = runner._ssh_alive_job_ids(
+            ssh_target="user@host",
+            remote_path="/x",
+            job_ids=["123"],
+            scheduler="slurm",
+        )
+    assert alive == {"123"}
+
+
+# ─── Bug 2: reconcile is fault-tolerant on every SSH future ──────────────
+
+
+def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experiment):
+    """A network blip on ``_ssh_list_combined_waves`` used to abort the
+    whole reconcile after the status side-call had already finished;
+    now it falls back to the journaled list and records a warning.
+    """
+    _seed_run(experiment, combined_waves=[5])
+    status_payload = json.dumps({"summary": {"complete": 1}})
+    alive_squeue = "12345678\n"
+
+    def fake_ssh(cmd, *, host, user):
+        if "python -m hpc_mapreduce.reduce.status" in cmd:
+            return _completed(stdout=status_payload)
+        if "_combiner/wave_*.json" in cmd:
+            raise OSError("ssh: connection reset by peer")
+        return _completed(stdout=alive_squeue)
+
+    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
+        record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+
+    assert record.combined_waves == [5]  # unchanged, fallback used
+    assert "warnings" in record.last_status
+    assert any("wave list" in w for w in record.last_status["warnings"])
+
+
+def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(
+    journal_home, experiment
+):
+    """The dangerous edge case: if the *alive* SSH call itself fails, we
+    must not flip a healthy run to ``abandoned``.  Previously the
+    fault-tolerant path returned an empty alive set, falling straight
+    through into the abandonment branch.
+    """
+    _seed_run(experiment)
+    status_payload = json.dumps({"summary": {"complete": 0}})
+
+    def fake_ssh(cmd, *, host, user):
+        if "python -m hpc_mapreduce.reduce.status" in cmd:
+            return _completed(stdout=status_payload)
+        if "_combiner/wave_*.json" in cmd:
+            return _completed(stdout="")
+        raise OSError("alive check ssh failed")
+
+    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
+        record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+
+    assert record.status == "in_flight"  # NOT abandoned
+    assert "warnings" in record.last_status
+    assert any("alive check" in w for w in record.last_status["warnings"])
+
+
+# ─── Bug 9: last_status.json cache is written atomically ──────────────────
+
+
+def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
+    """A reader that opens the cache mid-write must not see a truncated
+    file.  Atomic writes (tempfile + os.replace) guarantee any successful
+    open returns a fully-formed JSON document.
+    """
+    _seed_run(experiment)
+    payload = {"summary": {"complete": 1, "running": 0, "failed": 0, "unknown": 0}}
+    with patch(
+        "slash_commands.runner.ssh_run",
+        return_value=_completed(stdout=json.dumps(payload)),
+    ):
+        runner.record_status(
+            experiment, "ml_ridge_abcd1234",
+            ssh_target="user@host",
+            remote_path="/x",
+            manifest_filename="manifest.abcd1234.json",
+            job_ids=["1"],
+            job_name="job",
+        )
+    cache = session.runs_dir(experiment) / "ml_ridge_abcd1234.last_status.json"
+    assert cache.exists()
+    # Round-trip parse — would raise on a half-written file.
+    body = json.loads(cache.read_text())
+    assert body["complete"] == 1

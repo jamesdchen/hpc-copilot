@@ -118,7 +118,7 @@ class TestRsyncPullMissingSource:
         monkeypatch.setattr(subprocess, "run", fake)
 
         # The primitive itself must not raise — it just returns non-zero
-        # and leaves error handling to the caller (the /monitor prompt).
+        # and leaves error handling to the caller (the /status prompt).
         error_seen: str | None = None
         try:
             result = rsync_pull(

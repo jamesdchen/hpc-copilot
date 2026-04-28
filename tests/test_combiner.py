@@ -331,3 +331,72 @@ class TestMainMultipleGridPoints:
         data = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
         assert len(data["grid_points"]) == 2
         assert data["errors"] == []
+
+
+# ─── Bug 11: wave_N.json output is written atomically ────────────────────
+
+
+class TestMainWritesOutputAtomically:
+    """Callers (slash_commands.runner._ssh_list_combined_waves) treat
+    ``_combiner/wave_<N>.json`` *existence* as the success marker for a
+    wave.  A combiner killed mid-``json.dump`` would otherwise leave a
+    truncated file that masquerades as success and crashes downstream
+    json.load consumers.  The fix uses tempfile + os.replace.
+    """
+
+    def _seed_manifest(self, tmp_path):
+        rdir = tmp_path / "results" / "ridge"
+        rdir.mkdir(parents=True)
+        (rdir / "metrics.json").write_text(json.dumps({"mse": 0.1, "n_samples": 1}))
+        manifest = {
+            "tasks": {"0": {"params": {"model": "ridge"}, "result_dir": str(rdir)}},
+            "wave_map": {"0": ["0"]},
+        }
+        mpath = tmp_path / "manifest.json"
+        mpath.write_text(json.dumps(manifest))
+        return mpath
+
+    def test_partial_write_failure_leaves_no_wave_file(self, tmp_path, monkeypatch):
+        """Simulate an OOM/walltime kill mid-dump: the tempfile must be
+        cleaned up and ``wave_0.json`` must NOT exist (its presence is
+        the wave-combined contract).
+        """
+        from unittest.mock import patch as _patch
+
+        manifest_path = self._seed_manifest(tmp_path)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.chdir(tmp_path)
+
+        # Reach into the combiner's json module so the atomic-write
+        # block raises after opening the tempfile.
+        import hpc_mapreduce.map.combiner as combiner
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("walltime")
+
+        with _patch.object(combiner.json, "dump", side_effect=boom):
+            with __import__("pytest").raises(RuntimeError):
+                combiner.main()
+
+        out = tmp_path / "_combiner" / "wave_0.json"
+        assert not out.exists(), (
+            "wave_0.json should be absent on partial write — its existence "
+            "is the documented success marker for a combined wave"
+        )
+        # And the temp file should have been cleaned up too.
+        leftovers = list((tmp_path / "_combiner").glob("wave_*.json.tmp"))
+        assert leftovers == [], f"tempfile leak: {leftovers}"
+
+    def test_successful_write_produces_parseable_json(self, tmp_path, monkeypatch):
+        manifest_path = self._seed_manifest(tmp_path)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        out = tmp_path / "_combiner" / "wave_0.json"
+        assert out.exists()
+        data = json.loads(out.read_text())  # round-trips cleanly
+        assert data["wave"] == 0

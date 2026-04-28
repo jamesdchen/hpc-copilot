@@ -258,7 +258,7 @@ hpc-mapreduce status --run-id sweep_3a7b8c9d
 
 Purpose: record a submission in the journal. The actual `qsub`/`sbatch`
 is the caller's responsibility — `submit` only persists the bookkeeping
-needed for `/status` and `/monitor` to pick up the run later.
+needed for `/status` to pick up the run later.
 
 Idempotent on `(profile, manifest_sha)`: a retried call with the same
 `run_id` returns the existing record with `deduped: true` and emits no

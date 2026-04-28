@@ -31,6 +31,8 @@
             "journal_corrupt",
             "remote_command_failed",
             "config_invalid",
+            "combiner_failed",
+            "cluster_timeout",
             "internal"
           ]
         },

@@ -312,7 +312,7 @@ from pathlib import Path
 from hpc_mapreduce import shim_cache_key, load_cached_shim, save_shim
 
 executor_path = Path("src/<executor>.py")
-template_path = Path("<path from _PACKAGE_ROOT / 'templates' / 'chunking_shim.py'>")
+template_path = Path("<path from _PACKAGE_ROOT / 'templates' / 'starters' / 'chunking_shim.py'>")
 cache_dir = Path(".hpc_cache")
 materialize_at = Path("src/hpc_chunking_shim.py")  # or "src/hpc_<task>_shim.py"
 

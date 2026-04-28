@@ -89,7 +89,7 @@ class TestHeaderOnlyCsv:
     """Header-only CSVs should count as complete by default (P1.4 bug fix).
 
     A legitimately-empty result (e.g. a zero-result task) used
-    to be marked failed and trigger infinite auto-resubmit in ``/monitor``.
+    to be marked failed and trigger infinite auto-resubmit in ``/status``.
     The default is now non-zero byte = complete; callers opt into the stricter
     check with ``min_rows>0``.
     """
@@ -140,3 +140,96 @@ class TestHeaderOnlyCsv:
 
         strict = check_results_from_manifest(manifest, file_glob="*.csv", min_rows=1)
         assert 1 not in strict
+
+
+# ─── Bug 1: report timestamps include explicit UTC offset ─────────────────
+
+
+class TestReportTimestampIsUtc:
+    def test_report_status_from_manifest_timestamp_has_offset(self, tmp_path):
+        """Previously ``time.strftime("%Y-%m-%dT%H:%M:%S")`` emitted local
+        time without a TZ marker; downstream consumers couldn't tell what
+        timezone the timestamp was in.  The fix uses an explicit UTC ISO
+        string so the field is unambiguous.
+        """
+        from hpc_mapreduce.reduce.status import report_status_from_manifest
+
+        task_dir = tmp_path / "t0"
+        task_dir.mkdir()
+        manifest = {
+            "total_tasks": 1,
+            "tasks": {"0": {"result_dir": str(task_dir)}},
+        }
+        report = report_status_from_manifest(manifest, [], scheduler="slurm")
+        assert report["timestamp"].endswith("+00:00")
+
+    def test_report_status_timestamp_has_offset(self, tmp_path):
+        result_dir = tmp_path / "r"
+        result_dir.mkdir()
+        report = report_status(result_dir, total_tasks=0, job_ids=[], scheduler="slurm")
+        assert report["timestamp"].endswith("+00:00")
+
+
+# ─── Bug 13: detect_scheduler honours experiment_meta.json hint ──────────
+
+
+class TestDetectSchedulerMetaHint:
+    def test_meta_file_overrides_local_sacct_heuristic(self, tmp_path, monkeypatch):
+        """When ``sacct --version`` is unavailable locally, the auto-
+        detector previously fell through to ``"sge"`` regardless of what
+        the manifest said.  The fix walks the result_dir up to the
+        experiment root looking for ``experiment_meta.json`` so a Slurm
+        cluster's meta file wins over a missing local ``sacct``.
+        """
+        from hpc_mapreduce.reduce.status import detect_scheduler
+
+        # Place the meta file at the experiment root, not the per-task dir.
+        exp = tmp_path / "exp"
+        task = exp / "task0"
+        task.mkdir(parents=True)
+        (exp / "experiment_meta.json").write_text('{"backend": "slurm"}')
+
+        # Pretend sacct isn't on PATH so the heuristic would say SGE.
+        def no_sacct(*args, **kwargs):
+            raise FileNotFoundError("no sacct")
+
+        with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
+            assert detect_scheduler(task) == "slurm"
+
+    def test_falls_back_to_sge_when_no_meta_and_no_sacct(self, tmp_path):
+        """No meta file, no sacct → preserve the existing fallback."""
+        from hpc_mapreduce.reduce.status import detect_scheduler
+
+        def no_sacct(*args, **kwargs):
+            raise FileNotFoundError("no sacct")
+
+        with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
+            assert detect_scheduler(tmp_path) == "sge"
+
+    def test_report_status_from_manifest_uses_first_task_meta(
+        self, tmp_path, monkeypatch
+    ):
+        """``report_status_from_manifest`` previously called
+        ``detect_scheduler()`` with no args, bypassing every meta hint.
+        Now it pulls a representative result_dir from the first task so
+        the heuristic has a chance to read the manifest's experiment
+        meta.
+        """
+        from hpc_mapreduce.reduce.status import report_status_from_manifest
+
+        exp = tmp_path / "exp2"
+        task = exp / "t0"
+        task.mkdir(parents=True)
+        (exp / "experiment_meta.json").write_text('{"backend": "slurm"}')
+
+        manifest = {
+            "total_tasks": 1,
+            "tasks": {"0": {"result_dir": str(task)}},
+        }
+
+        def no_sacct(*args, **kwargs):
+            raise FileNotFoundError("no sacct")
+
+        with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
+            report = report_status_from_manifest(manifest, [])
+        assert report["scheduler"] == "slurm"
