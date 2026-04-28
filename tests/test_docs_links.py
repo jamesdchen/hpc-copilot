@@ -63,6 +63,8 @@ _DOC_VOCABULARY = {
     "mars_skill_paths", "required_env",
     # Categories
     "user", "cluster", "network", "internal",
+    # Manifest / submit-spec fields
+    "cmd", "request_id",
 }
 
 
