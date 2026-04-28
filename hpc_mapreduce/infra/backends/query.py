@@ -3,7 +3,7 @@
 Batched-poll variant: each call to :func:`query_sacct` / :func:`query_sge`
 spawns **at most one** subprocess per scheduler tool rather than one per
 job ID.  This drastically reduces the number of SSH round-trips the
-/monitor loop incurs when many waves x batches are in flight.
+/status loop incurs when many waves x batches are in flight.
 
 Return shape (uniform across happy / error paths)::
 

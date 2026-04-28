@@ -1,10 +1,10 @@
-"""Live terminal UI for ``/monitor`` (opt-in ``--tui`` path).
+"""Live terminal UI for ``/status`` (opt-in ``--tui`` path).
 
 A thin wrapper around :func:`hpc_mapreduce.reduce.status.report_status_from_manifest`
 that polls the cluster on a fixed cadence and renders the result with Rich.
 The JSON / cron path in ``status.py`` is unchanged; the TUI is imported
 lazily so a user without ``rich`` installed pays zero cost for the normal
-``/monitor`` flow.
+``/status`` flow.
 
 Invoke directly::
 
@@ -21,7 +21,7 @@ Keybinds (single-keystroke, non-blocking read on stdin):
 If stdin is not a TTY (e.g. redirected output), the keybind reader is
 skipped and the UI just auto-refreshes until Ctrl-C.
 
-Design note: nothing in this file is imported by the default ``/monitor``
+Design note: nothing in this file is imported by the default ``/status``
 JSON path.  ``status.py`` does not know this module exists.
 """
 
@@ -264,7 +264,7 @@ def _render(state: _UiState, report: dict, manifest: dict, poll_interval: int) -
     )
 
     return Group(
-        Panel(header_tbl, title="/monitor", border_style="cyan"),
+        Panel(header_tbl, title="/status", border_style="cyan"),
         rollup_tbl,
         Panel(wave_progress, title="Waves", border_style="blue"),
         fail_tbl,
@@ -483,7 +483,7 @@ def run_tui(
 
 def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Live terminal UI for /monitor. Requires rich (pip install claude-hpc[tui]).",
+        description="Live terminal UI for /status. Requires rich (pip install claude-hpc[tui]).",
     )
     parser.add_argument("--manifest", required=True, help="Path to _hpc_dispatch.json")
     parser.add_argument("--job-ids", default="", help="Comma-separated scheduler job IDs")

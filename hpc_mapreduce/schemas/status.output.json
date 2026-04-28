@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/status.output.json",
+  "title": "status output data",
+  "description": "Shape of the `data` field on a successful `status` envelope.",
+  "type": "object",
+  "required": ["run_id", "lifecycle_state", "last_status", "combined_waves", "failed_waves"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": { "type": "string" },
+    "lifecycle_state": {
+      "type": "string",
+      "enum": ["in_flight", "complete", "failed", "abandoned"]
+    },
+    "last_status": {
+      "type": "object",
+      "description": "Snapshot from the on-cluster status reporter; see hpc_mapreduce.reduce.status."
+    },
+    "combined_waves": { "type": "array", "items": { "type": "integer" } },
+    "failed_waves":   { "type": "array", "items": { "type": "integer" } }
+  }
+}

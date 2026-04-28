@@ -23,7 +23,7 @@ __all__ = ["main"]
 #
 # v1 and v2 are accepted: v2 adds per-task ``cmd_sha`` which the dispatcher
 # does not need to consume — it's purely observational metadata for callers
-# like ``/monitor``.  ``EXPECTED_SCHEMA_VERSION`` is kept as a module-level
+# like ``/status``.  ``EXPECTED_SCHEMA_VERSION`` is kept as a module-level
 # alias for the *current* canonical version (the one ``build_task_manifest``
 # emits today) for existing tests that reference it.
 SUPPORTED_SCHEMA_VERSIONS = (1, 2)

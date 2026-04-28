@@ -30,7 +30,7 @@ from hpc_mapreduce.job.discover import (
 )
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mock_experiment"
-TEMPLATES_DIR = _PACKAGE_ROOT / "templates"
+TEMPLATES_DIR = _PACKAGE_ROOT / "templates" / "starters"
 
 
 # ─── discover_executors ───────────────────────────────────────────────────

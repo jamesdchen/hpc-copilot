@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/submit.input.json",
+  "title": "submit input spec",
+  "description": "Spec passed to `hpc-mapreduce submit --spec <file>`.",
+  "type": "object",
+  "required": [
+    "profile", "cluster", "ssh_target", "remote_path",
+    "job_name", "manifest_filename", "job_ids", "total_tasks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile":           { "type": "string", "minLength": 1 },
+    "cluster":           { "type": "string", "minLength": 1 },
+    "ssh_target":        { "type": "string", "pattern": "^[^@]+@[^@]+$" },
+    "remote_path":       { "type": "string", "minLength": 1 },
+    "job_name":          { "type": "string", "minLength": 1 },
+    "manifest_filename": { "type": "string", "pattern": "^manifest\\.[0-9a-f]{8}\\.json$" },
+    "job_ids":           { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "total_tasks":       { "type": "integer", "minimum": 1 },
+    "run_id":            { "type": ["string", "null"] }
+  }
+}

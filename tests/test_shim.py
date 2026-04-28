@@ -153,9 +153,10 @@ def test_date_window_template_has_distinct_cache_key(tmp_path):
     from hpc_mapreduce import shim_cache_key
 
     repo_root = Path(__file__).parent.parent
-    executor = repo_root / "templates" / "executor_template.py"
-    chunking = repo_root / "templates" / "chunking_shim.py"
-    date_window = repo_root / "templates" / "date_window_shim.py"
+    starters = repo_root / "hpc_mapreduce" / "templates" / "starters"
+    executor = starters / "executor_template.py"
+    chunking = starters / "chunking_shim.py"
+    date_window = starters / "date_window_shim.py"
 
     key_chunking = shim_cache_key(executor, chunking)
     key_date_window = shim_cache_key(executor, date_window)
