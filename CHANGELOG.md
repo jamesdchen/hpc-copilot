@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **MARs integration proposal package.**
+  - `docs/mars-integration.md` — Bun.spawn env block, `error_code` →
+    retry-policy mapping, troubleshooting flow for the silent-hang
+    failure mode, journal-coexistence rules.
+  - `docs/mars/experiment-runner.snippet.md` — paste-ready section for
+    MARs's `agents/experiment-runner.md` covering preflight → submit →
+    status → aggregate, decision rule for delegating to claude-hpc, and
+    the full retry table.
+  - `tests/test_docs_links.py` — drift guard ensuring every `error_code`
+    and required env var mentioned in the proposal docs matches the
+    code (`slash_commands/errors.py` and `capabilities.required_env`).
+- **`capabilities` envelope additions** (additive, schema-compatible):
+  - `mars_skill_paths` — absolute paths to bundled `skills/hpc-*/SKILL.md`
+    so consumers can discover them without hardcoding the package layout.
+  - `required_env` — env vars consumers must forward
+    (`SSH_AUTH_SOCK`, `HPC_JOURNAL_DIR`, `HPC_CLUSTERS_CONFIG`).
+- **README**: collapsed the "Using with MARs" section to a link to
+  `docs/mars-integration.md`; kept the SSH-passthrough warning visible.
+
+### Changed
+
+- **`status`, `aggregate`, `reconcile` fail fast when `SSH_AUTH_SOCK` is
+  unset.** Previously these subcommands hung indefinitely on auth — the
+  most common Bun.spawn failure mode for orchestrators. They now emit
+  `error_code: "ssh_unreachable"` (category `network`, `retry_safe: True`,
+  exit 2) immediately. `submit` (journal-only) and `resubmit`
+  (journal-only) are not gated.
+
 ## 0.2.0 — 2026-04
 
 Major refactor adding agent-facing CLI alongside the existing Claude Code slash

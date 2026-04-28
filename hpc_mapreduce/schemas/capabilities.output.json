@@ -14,6 +14,14 @@
     "supported_schedulers":{ "type": "array", "items": { "type": "string", "enum": ["sge", "slurm"] } },
     "schemas_dir":         { "type": "string" },
     "journal_dir":         { "type": "string" },
-    "ssh_multiplexing":    { "type": "boolean" }
+    "ssh_multiplexing":    { "type": "boolean" },
+    "mars_skill_paths": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "required_env": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
   }
 }

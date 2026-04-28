@@ -74,6 +74,28 @@ def test_capabilities_envelope_shape() -> None:
     assert isinstance(data["ssh_multiplexing"], bool)
 
 
+def test_capabilities_exposes_mars_skill_paths_and_required_env() -> None:
+    """Programmatic introspection for MARs: skill paths + required env."""
+    rc, out, _ = _run_cli("capabilities")
+    assert rc == 0
+    data = _parse_envelope(out)["data"]
+
+    skill_paths = data["mars_skill_paths"]
+    assert isinstance(skill_paths, dict)
+    # Source-tree installs ship five skills; wheel-only installs may ship
+    # zero. Either is acceptable, but every value must point to a real file.
+    for name, path in skill_paths.items():
+        assert name.startswith("hpc-"), name
+        assert Path(path).is_file(), f"{name} path does not exist: {path}"
+        assert path.endswith(f"skills/{name}/SKILL.md")
+
+    assert data["required_env"] == [
+        "SSH_AUTH_SOCK",
+        "HPC_JOURNAL_DIR",
+        "HPC_CLUSTERS_CONFIG",
+    ]
+
+
 def test_clusters_list_returns_known_clusters() -> None:
     """clusters list must return the names defined in the active clusters.yaml."""
     rc, out, _ = _run_cli("clusters", "list")
@@ -283,6 +305,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
     from slash_commands.session import RunRecord
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
 
     # Seed a run so cmd_aggregate gets past the journal lookup.
     rec = RunRecord(
@@ -336,7 +359,13 @@ def test_main_routes_journal_corrupt_for_missing_run(tmp_path: Path) -> None:
     import os
 
     journal = tmp_path / "journal"
-    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
+    env_vars = {
+        **os.environ,
+        "HPC_JOURNAL_DIR": str(journal),
+        # The SSH gate fires before the journal lookup; pre-populate so
+        # this test exercises the journal path it intends to.
+        "SSH_AUTH_SOCK": os.environ.get("SSH_AUTH_SOCK", "/tmp/fake-agent.sock"),
+    }
 
     rc, out, _ = _run_cli(
         "aggregate",
@@ -425,3 +454,104 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     assert rc != 0
     payload = _parse_envelope(out)
     assert payload["error_code"] == "manifest_invalid"
+
+
+# ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
+
+
+def _env_without_ssh_agent() -> dict[str, str]:
+    """Inherit PATH so the CLI binary works, but strip SSH_AUTH_SOCK so
+    the gate kicks in. Also sets HPC_JOURNAL_DIR so the journal lookup
+    isn't what fails first."""
+    import os
+
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        # No SSH_AUTH_SOCK on purpose.
+    }
+
+
+def test_ssh_gate_status_fails_fast_without_agent(tmp_path: Path) -> None:
+    """`status` must emit ssh_unreachable instead of hanging."""
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+    rc, out, _ = _run_cli(
+        "status", "--experiment-dir", str(tmp_path), "--run-id", "x",
+        env=env,
+    )
+    assert rc == 2, "ssh_unreachable is category=network → exit 2"
+    payload = _parse_envelope(out)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "ssh_unreachable"
+    assert payload["retry_safe"] is True
+    assert payload["category"] == "network"
+    assert "remediation" in payload
+
+
+def test_ssh_gate_aggregate_fails_fast_without_agent(tmp_path: Path) -> None:
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+    rc, out, _ = _run_cli(
+        "aggregate",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "x",
+        "--wave", "0",
+        env=env,
+    )
+    assert rc == 2
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "ssh_unreachable"
+
+
+def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+    rc, out, _ = _run_cli(
+        "reconcile",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "x",
+        "--scheduler", "sge",
+        env=env,
+    )
+    assert rc == 2
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "ssh_unreachable"
+
+
+def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
+    """`capabilities`, `expand-grid`, `clusters list`, `submit --dry-run`,
+    and `submit` (journal-only) must not be gated by SSH_AUTH_SOCK."""
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+
+    rc, _, _ = _run_cli("capabilities", env=env)
+    assert rc == 0
+
+    rc, _, _ = _run_cli("clusters", "list", env=env)
+    assert rc == 0
+
+    spec = tmp_path / "grid.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
+    rc, _, _ = _run_cli("expand-grid", "--spec", str(spec), env=env)
+    assert rc == 0
+
+    submit_spec = tmp_path / "spec.json"
+    submit_spec.write_text(json.dumps(SUBMIT_SPEC))
+    rc, out, _ = _run_cli(
+        "submit",
+        "--experiment-dir", str(tmp_path),
+        "--spec", str(submit_spec),
+        "--dry-run",
+        env=env,
+    )
+    assert rc == 0, _parse_envelope(out)
+
+    # Real submit is journal-only, no SSH — must succeed without agent.
+    rc, out, _ = _run_cli(
+        "submit",
+        "--experiment-dir", str(tmp_path),
+        "--spec", str(submit_spec),
+        env=env,
+    )
+    assert rc == 0, _parse_envelope(out)
