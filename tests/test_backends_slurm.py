@@ -161,3 +161,78 @@ class TestConstructor:
     def test_missing_script_raises(self):
         with pytest.raises(ValueError, match="script"):
             SlurmBackend()
+
+
+# ─── Bug 12: anchored job-id regex ignores warning prefixes ──────────────
+
+
+class TestJobIdParsingAnchored:
+    """Previously the backend used ``re.search(r"(\\d+)", stdout)`` and would
+    parse the FIRST run of digits — so an sbatch warning like ``sbatch:
+    warning: 30% pre-empt; Submitted batch job 12345`` produced ``"30"``
+    as the job id.  The anchored regex now requires the ``Submitted batch
+    job`` phrase.
+    """
+
+    def test_warning_prefix_does_not_poison_job_id(self, monkeypatch, tmp_path):
+        warning_stdout = (
+            "sbatch: warning: 30% of nodes pre-empt; "
+            "Submitted batch job 12345\n"
+        )
+
+        def fake_run(cmd, *args, **kwargs):
+            return _cp(stdout=warning_stdout, returncode=0)
+
+        monkeypatch.setattr("hpc_mapreduce.infra.backends.subprocess.run", fake_run)
+        backend = SlurmBackend(
+            script=str(tmp_path / "j.sh"),
+            log_dir=str(tmp_path / "logs"),
+        )
+        out = backend.submit_array_tracked(
+            "j", total_tasks=1, tasks_per_array=1, job_env={}, cwd=tmp_path,
+        )
+        assert out == [("1-1", "12345")]
+
+    def test_clean_output_still_parses(self, monkeypatch, tmp_path):
+        def fake_run(cmd, *args, **kwargs):
+            return _cp(stdout="Submitted batch job 99999\n", returncode=0)
+
+        monkeypatch.setattr("hpc_mapreduce.infra.backends.subprocess.run", fake_run)
+        backend = SlurmBackend(
+            script=str(tmp_path / "j.sh"),
+            log_dir=str(tmp_path / "logs"),
+        )
+        out = backend.submit_array_tracked(
+            "j", total_tasks=1, tasks_per_array=1, job_env={}, cwd=tmp_path,
+        )
+        assert out == [("1-1", "99999")]
+
+
+# ─── Bug 3: hung scheduler subprocess surfaces TimeoutExpired ────────────
+
+
+class TestSubmitTimeout:
+    """A hung qsub/sbatch (NFS stall, scheduler outage) used to block the
+    agent indefinitely.  ``_execute_command`` now passes a 120 s timeout
+    so the underlying subprocess raises ``TimeoutExpired`` for callers
+    to map onto a cluster-category error.
+    """
+
+    def test_timeout_propagates_to_caller(self, monkeypatch, tmp_path):
+        import subprocess as sp
+
+        def fake_run(cmd, *args, **kwargs):
+            assert "timeout" in kwargs, (
+                "backend submit subprocess must enforce a timeout"
+            )
+            raise sp.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
+
+        monkeypatch.setattr("hpc_mapreduce.infra.backends.subprocess.run", fake_run)
+        backend = SlurmBackend(
+            script=str(tmp_path / "j.sh"),
+            log_dir=str(tmp_path / "logs"),
+        )
+        with pytest.raises(sp.TimeoutExpired):
+            backend.submit_array_tracked(
+                "j", total_tasks=1, tasks_per_array=1, job_env={}, cwd=tmp_path,
+            )

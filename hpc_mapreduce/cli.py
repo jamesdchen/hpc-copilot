@@ -22,6 +22,7 @@ import shutil
 import socket
 import subprocess
 import sys
+from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Any
 
@@ -100,7 +101,18 @@ def _add_experiment_dir(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _load_spec(spec_path: Path | None) -> dict[str, Any]:
+def _load_spec(
+    spec_path: Path | None, *, schema_name: str | None = None
+) -> dict[str, Any]:
+    """Load and (optionally) JSON-Schema-validate ``--spec`` input.
+
+    Validation is opt-in via *schema_name* so callers without a matching
+    schema (e.g. ad-hoc dicts) still work, but every CLI subcommand that
+    has one in ``hpc_mapreduce/schemas/<name>.input.json`` should pass
+    it.  Validation failures map to ``ManifestInvalid`` with the schema
+    field path in the message — far more useful to a calling agent than
+    the Python ``int("abc")`` traceback we used to surface.
+    """
     if spec_path is None:
         return {}
     try:
@@ -115,7 +127,38 @@ def _load_spec(spec_path: Path | None) -> dict[str, Any]:
         raise errors.ConfigInvalid(
             f"--spec must be a JSON object; got {type(loaded).__name__}"
         )
+    if schema_name is not None:
+        _validate_against_schema(loaded, schema_name)
     return loaded
+
+
+def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
+    """Validate *payload* against ``hpc_mapreduce/schemas/<schema_name>.input.json``.
+
+    Raises :class:`errors.ManifestInvalid` on schema mismatch.  When the
+    ``jsonschema`` library is unavailable (older installs that haven't
+    picked up the runtime dep), this falls back to a no-op so the CLI
+    keeps working — schema validation is defence in depth, not the only
+    line of defence (``submit_and_record`` etc. still validate inputs).
+    """
+    try:
+        import jsonschema  # type: ignore[import-untyped]
+    except ImportError:
+        return
+    try:
+        schema_text = (
+            _resource_files("hpc_mapreduce.schemas") / f"{schema_name}.input.json"
+        ).read_text()
+    except (FileNotFoundError, ModuleNotFoundError):
+        return
+    schema = json.loads(schema_text)
+    try:
+        jsonschema.validate(payload, schema)
+    except jsonschema.ValidationError as exc:
+        path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
+        raise errors.ManifestInvalid(
+            f"--spec failed schema {schema_name}.input.json at {path}: {exc.message}"
+        ) from exc
 
 
 # ─── subcommand: capabilities ──────────────────────────────────────────────
@@ -240,7 +283,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
 
 
 def cmd_expand_grid(args: argparse.Namespace) -> int:
-    spec = _load_spec(args.spec)
+    spec = _load_spec(args.spec, schema_name="expand_grid")
     grid = spec.get("grid")
     if not isinstance(grid, dict):
         raise errors.ManifestInvalid(
@@ -338,7 +381,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
-    spec = _load_spec(args.spec)
+    spec = _load_spec(args.spec, schema_name="submit")
     required = ("profile", "cluster", "ssh_target", "remote_path", "job_name",
                 "manifest_filename", "job_ids", "total_tasks")
     missing = [k for k in required if k not in spec]
@@ -411,33 +454,63 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         manifest_filename=record.manifest,
         force=args.force,
     )
-    output_dir = args.output_dir or (args.experiment_dir / "_aggregated" / args.run_id)
-    output_dir = Path(output_dir).resolve()
-    _ok(
-        {
-            "run_id": args.run_id,
-            "wave": int(args.wave),
-            "combined": ok,
-            "output_dir": str(output_dir),
-            "stdout_tail": stdout[-2000:],
-            "stderr_tail": stderr[-2000:],
-        },
-        idempotent=ok,  # success is idempotent; failure is retry-safe per wave
+    if ok:
+        _ok(
+            {
+                "run_id": args.run_id,
+                "wave": int(args.wave),
+                "combined": True,
+                "stdout_tail": stdout[-2000:],
+                "stderr_tail": stderr[-2000:],
+            },
+            idempotent=True,
+        )
+        return EXIT_OK
+    # Combiner returned non-zero — surface as a typed error so the
+    # envelope's ``ok`` field and the exit code stay in sync.  Tail of
+    # stderr was already in the success payload; here we put it in the
+    # human-readable message so the caller can grep it.
+    return _err_from_hpc(
+        errors.CombinerFailed(
+            f"combiner returned non-zero for wave {args.wave}; "
+            f"stderr tail: {stderr[-500:]!r}"
+        )
     )
-    return EXIT_OK if ok else EXIT_CLUSTER_ERROR
 
 
 # ─── subcommand: resubmit ──────────────────────────────────────────────────
 
 
+_VALID_RESUBMIT_CATEGORIES = frozenset(
+    {
+        "gpu_oom",
+        "system_oom",
+        "walltime",
+        "node_failure",
+        "queue_stall",
+        "code_bug",
+        "unknown",
+    }
+)
+
+
 def cmd_resubmit(args: argparse.Namespace) -> int:
-    spec = _load_spec(args.spec)
+    spec = _load_spec(args.spec, schema_name="resubmit")
     failed = spec.get("failed_task_ids")
     category = spec.get("category")
     if not isinstance(failed, list) or not failed:
         raise errors.ManifestInvalid("--spec.failed_task_ids must be a non-empty list")
     if not isinstance(category, str):
         raise errors.ManifestInvalid("--spec.category must be a string")
+    # Belt-and-braces: schema validation also enforces this enum, but
+    # ``_validate_against_schema`` is a no-op when ``jsonschema`` is not
+    # installed.  Keep the local check so the seven-category contract
+    # holds either way.
+    if category not in _VALID_RESUBMIT_CATEGORIES:
+        raise errors.ManifestInvalid(
+            f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; "
+            f"got {category!r}"
+        )
 
     record = runner.resubmit_failed(
         args.experiment_dir,
@@ -519,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hpc-mapreduce",
         description=(
-            "Submit, monitor, and aggregate parameter-grid HPC experiments. "
+            "Submit, track status of, and aggregate parameter-grid HPC experiments. "
             "Stdout is a single-line JSON envelope; stderr is JSON-per-line "
             "log records. See docs/cli-spec.md for full schemas."
         ),
@@ -615,11 +688,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_agg.add_argument("--run-id", required=True)
     p_agg.add_argument("--wave", type=int, required=True)
     p_agg.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Where pulled artifacts land (default: <experiment-dir>/_aggregated/<run_id>/).",
-    )
-    p_agg.add_argument(
         "--force",
         action="store_true",
         help="Re-run the combiner even if the wave appears combined.",
@@ -693,12 +761,14 @@ def main(argv: list[str] | None = None) -> int:
         return rc
     except errors.HpcError as exc:
         return _err_from_hpc(exc)
-    except FileNotFoundError as exc:
-        return _err(
-            error_code="executor_not_found",
-            message=str(exc),
-            category="user",
-            retry_safe=False,
+    except subprocess.TimeoutExpired as exc:
+        # Backend ``qsub``/``sbatch``/``sacct`` exceeded its timeout.
+        # Surface as a typed cluster-category error so callers know
+        # to retry rather than treat it as user input invalid.
+        return _err_from_hpc(
+            errors.ClusterTimeout(
+                f"scheduler subprocess timed out after {exc.timeout}s: {exc.cmd!r}"
+            )
         )
     except ValueError as exc:
         return _err(

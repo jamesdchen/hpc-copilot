@@ -19,8 +19,9 @@ __all__ = [
 import hashlib
 import json
 import shutil
-import time
 from pathlib import Path
+
+from hpc_mapreduce._time import utcnow_iso
 
 SHIM_STAMP_PREFIX = "# hpc-shim-key: "
 
@@ -86,7 +87,7 @@ def save_shim(
 
     meta = {
         "key": key,
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generated_at": utcnow_iso(),
     }
     if executor_path is not None:
         meta["executor_path"] = str(executor_path)

@@ -20,10 +20,12 @@ Exit codes:
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 __all__ = ["main"]
@@ -272,8 +274,21 @@ def main(max_workers=None, argv=None):
         "errors": errors,
     }
 
-    with open(out_path, "w") as f:
-        json.dump(output, f, indent=2)
+    # Atomic write: tempfile + os.replace.  Critical because callers
+    # treat ``wave_<N>.json`` *existence* as the "wave combined" success
+    # marker (slash_commands/runner.py:_ssh_list_combined_waves).  A
+    # half-written file from an OOM-/walltime-killed combiner would
+    # otherwise masquerade as success and break downstream
+    # ``json.load``s in reduce_partials.
+    fd, tmp = tempfile.mkstemp(prefix="wave_", suffix=".json.tmp", dir=out_dir)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(output, f, indent=2)
+        os.replace(tmp, out_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
     print(f"[combiner] wrote {out_path}")
 
