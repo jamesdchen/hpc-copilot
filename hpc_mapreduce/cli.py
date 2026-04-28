@@ -331,6 +331,30 @@ def cmd_discover(args: argparse.Namespace) -> int:
 # ─── subcommand: expand-grid ───────────────────────────────────────────────
 
 
+_WALLTIME_RE = __import__("re").compile(
+    r"^(?:(?P<h>\d+):)?(?P<m>\d+):(?P<s>\d+)$|^(?P<bare_hours>\d+(?:\.\d+)?)h$",
+    __import__("re").IGNORECASE,
+)
+
+
+def _parse_walltime_to_seconds(value: str) -> int:
+    """Accept ``HH:MM:SS``, ``MM:SS``, or ``<float>h``; return seconds.
+
+    Raises :class:`errors.ManifestInvalid` on unparseable input.
+    """
+    m = _WALLTIME_RE.match(value.strip())
+    if not m:
+        raise errors.ManifestInvalid(
+            f"--per-task-walltime must be HH:MM:SS, MM:SS, or <float>h; got {value!r}"
+        )
+    if m.group("bare_hours"):
+        return int(round(float(m.group("bare_hours")) * 3600))
+    h = int(m.group("h") or 0)
+    minutes = int(m.group("m"))
+    s = int(m.group("s"))
+    return h * 3600 + minutes * 60 + s
+
+
 def cmd_expand_grid(args: argparse.Namespace) -> int:
     spec = _load_spec(args.spec, schema_name="expand_grid")
     grid = spec.get("grid")
@@ -339,7 +363,43 @@ def cmd_expand_grid(args: argparse.Namespace) -> int:
             "--spec must contain a top-level 'grid' object mapping name → values."
         )
     points = expand_grid(grid)
-    _ok({"points": points, "total": len(points)}, idempotent=True)
+
+    data: dict[str, Any] = {"points": points, "total": len(points)}
+
+    walltime_str = getattr(args, "per_task_walltime", None)
+    if walltime_str:
+        seconds = _parse_walltime_to_seconds(walltime_str)
+        cpus = max(1, int(getattr(args, "per_task_cpus", 1) or 1))
+        gpus = max(0, int(getattr(args, "per_task_gpus", 0) or 0))
+        max_concurrent = getattr(args, "max_concurrent_tasks", None)
+        if max_concurrent is not None:
+            try:
+                max_concurrent = max(1, int(max_concurrent))
+            except (TypeError, ValueError):
+                raise errors.ManifestInvalid(
+                    f"--max-concurrent-tasks must be a positive integer; "
+                    f"got {max_concurrent!r}"
+                )
+
+        total_task_seconds = seconds * len(points)
+        cost = {
+            "per_task_walltime_seconds": seconds,
+            "per_task_cpus": cpus,
+            "per_task_gpus": gpus,
+            "total_tasks": len(points),
+            "total_cpu_hours": round(total_task_seconds * cpus / 3600.0, 2),
+            "total_gpu_hours": round(total_task_seconds * gpus / 3600.0, 2),
+        }
+        if max_concurrent:
+            # Wall-clock estimate: ceil(total_tasks / max_concurrent) * walltime.
+            from math import ceil
+            waves = ceil(len(points) / max_concurrent)
+            cost["estimated_walltime_seconds"] = waves * seconds
+            cost["estimated_walltime_hours"] = round(waves * seconds / 3600.0, 2)
+            cost["max_concurrent_tasks"] = max_concurrent
+        data["cost_estimate"] = cost
+
+    _ok(data, idempotent=True)
     return EXIT_OK
 
 
@@ -989,6 +1049,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_eg.add_argument("--spec", type=Path, required=True)
     _add_experiment_dir(p_eg)
+    p_eg.add_argument(
+        "--per-task-walltime",
+        default=None,
+        help=(
+            "Per-task walltime as HH:MM:SS, MM:SS, or '4h'. When set, the "
+            "envelope's data block adds a `cost_estimate` with total CPU- "
+            "and GPU-hours."
+        ),
+    )
+    p_eg.add_argument(
+        "--per-task-cpus",
+        type=int,
+        default=1,
+        help="CPUs per task (default 1); used for total CPU-hour estimate.",
+    )
+    p_eg.add_argument(
+        "--per-task-gpus",
+        type=int,
+        default=0,
+        help="GPUs per task (default 0); used for total GPU-hour estimate.",
+    )
+    p_eg.add_argument(
+        "--max-concurrent-tasks",
+        type=int,
+        default=None,
+        help=(
+            "Optional concurrency cap; when set, the cost estimate also "
+            "reports an estimated wall-clock time as "
+            "ceil(total/concurrent) * walltime."
+        ),
+    )
     p_eg.set_defaults(func=cmd_expand_grid)
 
     # clusters

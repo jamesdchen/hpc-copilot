@@ -519,6 +519,81 @@ def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
     assert payload["error_code"] == "ssh_unreachable"
 
 
+# ─── expand-grid cost estimate ────────────────────────────────────────────
+
+
+def test_expand_grid_without_walltime_omits_cost_estimate(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2], "b": ["x"]}}))
+    rc, out, _ = _run_cli("expand-grid", "--spec", str(spec))
+    assert rc == 0
+    data = _parse_envelope(out)["data"]
+    assert data["total"] == 2
+    assert "cost_estimate" not in data
+
+
+def test_expand_grid_with_walltime_emits_cost_estimate(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2, 3, 4]}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "4h",
+        "--per-task-cpus", "2",
+        "--per-task-gpus", "1",
+    )
+    assert rc == 0
+    cost = _parse_envelope(out)["data"]["cost_estimate"]
+    assert cost["per_task_walltime_seconds"] == 4 * 3600
+    assert cost["per_task_cpus"] == 2
+    assert cost["per_task_gpus"] == 1
+    assert cost["total_tasks"] == 4
+    assert cost["total_cpu_hours"] == 4 * 4 * 2  # 32 CPU-hours
+    assert cost["total_gpu_hours"] == 4 * 4 * 1  # 16 GPU-hours
+
+
+def test_expand_grid_walltime_hh_mm_ss_format(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "1:30:00",
+    )
+    assert rc == 0
+    cost = _parse_envelope(out)["data"]["cost_estimate"]
+    assert cost["per_task_walltime_seconds"] == 5400  # 1h30m
+
+
+def test_expand_grid_with_max_concurrent_estimates_walltime(tmp_path: Path) -> None:
+    """100 tasks, 4h each, max 25 concurrent => ceil(100/25) = 4 waves * 4h = 16h."""
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": list(range(100))}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "4h",
+        "--max-concurrent-tasks", "25",
+    )
+    assert rc == 0
+    cost = _parse_envelope(out)["data"]["cost_estimate"]
+    assert cost["estimated_walltime_hours"] == 16.0
+    assert cost["max_concurrent_tasks"] == 25
+
+
+def test_expand_grid_invalid_walltime_format_returns_user_error(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "not-a-walltime",
+    )
+    assert rc != 0
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "manifest_invalid"
+
+
 # ─── logs subcommand ──────────────────────────────────────────────────────
 
 
