@@ -90,7 +90,7 @@ class TestExecutorTemplateEmitsMetrics:
         # Locate the template relative to this test file.
         template_path = (
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            + "/templates/executor_template.py"
+            + "/hpc_mapreduce/templates/starters/executor_template.py"
         )
         with pytest.raises(SystemExit) as exc:
             runpy.run_path(template_path, run_name="__main__")

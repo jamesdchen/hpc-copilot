@@ -1,4 +1,4 @@
-"""Tests for the per-run journal in ``agent.session``."""
+"""Tests for the per-run journal in ``slash_commands.session``."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from agent import session
-from agent.session import RunRecord
+from slash_commands import session
+from slash_commands.session import RunRecord
 
 
 @pytest.fixture

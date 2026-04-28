@@ -1,6 +1,6 @@
 """Job status checking, result validation, and status reporting.
 
-This module drives the LLM-orchestrator's ``/monitor`` loop.  The CLI entry
+This module drives the LLM-orchestrator's ``/status`` loop.  The CLI entry
 point (``python -m hpc_mapreduce.reduce.status --manifest ...``) emits JSON
 to stdout.  **Schema contract** (pinned; all four top-level keys ALWAYS
 present, never ``None``)::
@@ -335,7 +335,7 @@ def check_results_from_manifest(
     Completion semantics: a result file is considered complete when it exists and
     is non-zero byte.  CSVs with only a header (e.g. a zero-result task) are
     therefore accepted by default and will not trigger auto-resubmit
-    in ``/monitor``.  Set ``min_rows > 0`` to opt into the stricter check that
+    in ``/status``.  Set ``min_rows > 0`` to opt into the stricter check that
     requires at least that many CSV data rows beyond the header.
     """
     import csv

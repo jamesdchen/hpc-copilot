@@ -4,7 +4,7 @@ Each public function pairs a cluster-mutating mapreduce primitive with the
 corresponding journal update, so slash commands can't accidentally do one
 without the other (the failure mode that motivated this module).
 
-``agent.session`` stays pure-IO; this module is the seam where SSH calls
+``slash_commands.session`` stays pure-IO; this module is the seam where SSH calls
 and journal writes meet.
 """
 
@@ -12,15 +12,14 @@ from __future__ import annotations
 
 import json
 import shlex
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
-
-from agent import session
-from agent.session import RunRecord
+from slash_commands import session
+from slash_commands.errors import RemoteCommandFailed
+from slash_commands.session import RunRecord
 
 __all__ = [
     "submit_and_record",
@@ -58,15 +57,28 @@ def submit_and_record(
     job_ids: list[str],
     total_tasks: int,
     run_id: str | None = None,
-) -> RunRecord:
+) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
     ``run_id`` defaults to ``f"{profile}_{cmd_sha8}"`` where ``cmd_sha8``
     is the prefix of *manifest_filename* (``manifest.<sha8>.json``).
+
+    Returns ``(record, deduped)`` where ``deduped`` is True if a record
+    with this ``run_id`` already existed and the call was a no-op replay.
+    Submissions are deterministic in ``run_id`` (profile + manifest sha),
+    so an agent that retries on transient network errors gets dedup for
+    free — the cluster does not see duplicate ``qsub``/``sbatch`` calls
+    because the caller checks the returned ``deduped`` flag before issuing
+    them. The bundled CLI uses this to make ``submit`` idempotent.
     """
     if run_id is None:
         sha8 = manifest_filename.removeprefix("manifest.").removesuffix(".json")
         run_id = f"{profile}_{sha8}"
+
+    existing = session.load_run(experiment_dir, run_id)
+    if existing is not None:
+        return existing, True
+
     record = RunRecord(
         run_id=run_id,
         profile=profile,
@@ -81,7 +93,7 @@ def submit_and_record(
         experiment_dir=str(Path(experiment_dir).resolve()),
     )
     session.upsert_run(experiment_dir, record)
-    return record
+    return record, False
 
 
 def _ssh_status_report(
@@ -108,13 +120,13 @@ def _ssh_status_report(
     )
     proc = ssh_run(cmd, host=host, user=user)
     if proc.returncode != 0:
-        raise RuntimeError(
+        raise RemoteCommandFailed(
             f"status reporter failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
+        raise RemoteCommandFailed(
             f"status reporter returned invalid JSON: {exc}; first 200 chars: "
             f"{proc.stdout[:200]!r}"
         ) from exc
@@ -131,7 +143,13 @@ def record_status(
     job_name: str,
     file_glob: str = "*",
 ) -> RunRecord:
-    """Run the status reporter and write ``last_status`` to the journal."""
+    """Run the status reporter and write ``last_status`` to the journal.
+
+    Also writes the snapshot to ``<run_id>.last_status.json`` next to the
+    journal record so any consumer (agent, human, ``jq`` pipeline, file
+    watcher) can read the latest cached state without re-issuing an SSH
+    call. The file's mtime tells the caller how stale the snapshot is.
+    """
     report = _ssh_status_report(
         ssh_target=ssh_target,
         remote_path=remote_path,
@@ -142,7 +160,15 @@ def record_status(
     )
     summary = dict(report.get("summary", {}))
     summary["checked_at"] = _utcnow_iso()
-    return session.update_run_status(experiment_dir, run_id, last_status=summary)
+    record = session.update_run_status(experiment_dir, run_id, last_status=summary)
+    # Cache the snapshot for cheap external reads. Best-effort: a write
+    # failure here must not roll back the journal update.
+    cache_path = session.runs_dir(experiment_dir) / f"{run_id}.last_status.json"
+    try:
+        cache_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    except OSError:
+        pass
+    return record
 
 
 def combine_wave(

@@ -1,7 +1,16 @@
-# CLI Contract
+# Python-API Contract
 
-Authoritative reference for every CLI and helper that Claude invokes from the
-slash-commands. Keep responses deterministic, JSON-shaped, and grep-friendly.
+Authoritative reference for every Python helper, on-cluster CLI, and
+process-level entry point that the slash commands and library callers
+invoke from inside the `claude-hpc` checkout. This is the **Python-API
+surface**: function signatures, on-cluster `python -m ...` invocations,
+and the JSON shapes those produce. Keep responses deterministic,
+JSON-shaped, and grep-friendly.
+
+> **Looking for the shell `hpc-mapreduce` CLI?** That is the
+> agent-facing surface — see [`docs/cli-spec.md`](cli-spec.md). This
+> document covers the Python/library and on-cluster paths that
+> `slash_commands/*.py` and the CLI both reach into.
 
 Conventions
 -----------
@@ -33,7 +42,7 @@ experiment directory:
 When resuming a prior run, `/submit` picks up an existing
 `manifest.<cmd_sha_short>.json` and delegates to
 `hpc_mapreduce.job.resubmit.resubmit_plan` for the failing task IDs; see
-`agent/commands/submit.md` for the interactive resume-vs-fresh prompt.
+`slash_commands/commands/submit.md` for the interactive resume-vs-fresh prompt.
 
 ---
 

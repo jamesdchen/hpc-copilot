@@ -5,9 +5,17 @@ GPU selection, and experiment-agnostic grid dispatch. Cluster infrastructure
 is configured via clusters.yaml; experiment setup is conversational.
 """
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
+try:
+    __version__ = _pkg_version("claude-hpc")
+except PackageNotFoundError:  # pragma: no cover — running from a non-installed checkout
+    __version__ = "0.0.0+unknown"
+
 __all__ = [
     # Package root
     "_PACKAGE_ROOT",
+    "__version__",
     # Config & discovery
     "load_clusters_config",
     "get_template_path",
@@ -145,7 +153,7 @@ from hpc_mapreduce.reduce.status import (
     rollup_by_grid_point,
 )
 
-_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_PACKAGE_ROOT = Path(__file__).resolve().parent
 
 
 def get_template_path(scheduler: str, template: str) -> Path:

@@ -1,4 +1,4 @@
-"""Tests for templates/chunking_shim.py."""
+"""Tests for hpc_mapreduce/templates/starters/chunking_shim.py."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pytest
 
-_SHIM_PATH = Path(__file__).parent.parent / "templates" / "chunking_shim.py"
+_SHIM_PATH = (
+    Path(__file__).parent.parent
+    / "hpc_mapreduce" / "templates" / "starters" / "chunking_shim.py"
+)
 
 
 def _load_shim():
