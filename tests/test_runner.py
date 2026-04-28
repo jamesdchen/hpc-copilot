@@ -710,6 +710,53 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     assert rid2 == "rs_explicit_abc"
 
 
+def test_annotate_clusters_with_retry_advice_tags_eligible_and_blocked(
+    journal_home, experiment
+):
+    """Tasks with attempts < max_attempts are eligible; at-or-over are blocked."""
+    record = _seed_run(
+        experiment,
+        retries={
+            "3": {"attempts": 1, "category": "gpu_oom", "overrides": {}},  # at cap (1)
+            "7": {"attempts": 0, "category": "gpu_oom", "overrides": {}},  # eligible
+        },
+    )
+    clusters = [
+        {
+            "category": "gpu_oom",
+            "fingerprint": "...",
+            "count": 3,
+            "task_ids": [3, 7, 12],  # 12 has no prior attempts -> eligible
+        },
+    ]
+    annotated = runner.annotate_clusters_with_retry_advice(
+        clusters,
+        auto_retry_policy={"gpu_oom": {"max_attempts": 1, "mem_multiplier": 1.5}},
+        record=record,
+    )
+    advice = annotated[0]["retry_advice"]
+    assert sorted(advice["eligible_task_ids"]) == [7, 12]
+    assert advice["blocked_task_ids"] == [3]
+    assert advice["policy"]["mem_multiplier"] == 1.5
+
+
+def test_annotate_clusters_skips_categories_without_policy(
+    journal_home, experiment
+):
+    record = _seed_run(experiment)
+    clusters = [
+        {"category": "walltime", "task_ids": [1, 2], "count": 2},
+        {"category": "gpu_oom", "task_ids": [3], "count": 1},
+    ]
+    annotated = runner.annotate_clusters_with_retry_advice(
+        clusters,
+        auto_retry_policy={"gpu_oom": {"max_attempts": 1}},  # walltime not configured
+        record=record,
+    )
+    assert "retry_advice" in annotated[1]
+    assert "retry_advice" not in annotated[0]
+
+
 def test_fingerprint_strips_volatile_noise():
     """Two failures differing only in path / pid / timestamp share a fingerprint."""
     line_a = (
