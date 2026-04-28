@@ -181,6 +181,10 @@ def record_status(
     )
     summary = dict(report.get("summary", {}))
     summary["checked_at"] = _utcnow_iso()
+    # Carry per-wave breakdown into the persisted last_status when the
+    # cluster-side reporter emitted one (manifest had a wave_map).
+    if isinstance(report.get("waves"), dict) and report["waves"]:
+        summary["waves"] = report["waves"]
     record = session.update_run_status(experiment_dir, run_id, last_status=summary)
     # Cache the snapshot for cheap external reads. Best-effort: a write
     # failure here must not roll back the journal update.
@@ -403,12 +407,15 @@ def reconcile(
         )
 
         warnings: list[str] = []
+        report: dict[str, Any] = {}
         try:
             report = fut_status.result()
             summary = dict(report.get("summary", {}))
         except Exception as exc:
             summary = {"error": str(exc)}
         summary["checked_at"] = _utcnow_iso()
+        if isinstance(report.get("waves"), dict) and report["waves"]:
+            summary["waves"] = report["waves"]
 
         # Each future has its own try/except: an SSH blip on any of them
         # must not abort the journal update.  In particular, falling
