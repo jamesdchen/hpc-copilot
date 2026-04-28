@@ -579,6 +579,43 @@ def cmd_submit(args: argparse.Namespace) -> int:
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
 
 
+def _hpc_yaml_auto_retry(
+    experiment_dir: Path, profile: str | None
+) -> dict[str, dict[str, Any]]:
+    """Read ``profiles[profile].auto_retry`` from hpc.yaml.
+
+    Returns the raw nested dict (category -> policy fields). Empty when
+    hpc.yaml is missing, malformed, or has no ``auto_retry`` block.
+    """
+    hpc_yaml = experiment_dir / "hpc.yaml"
+    if not hpc_yaml.is_file():
+        return {}
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+    try:
+        data = yaml.safe_load(hpc_yaml.read_text()) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    profiles = data.get("profiles") or {}
+    if profile and isinstance(profiles, dict) and profile in profiles:
+        block = (profiles[profile] or {}).get("auto_retry") or {}
+    elif not profiles:
+        block = data.get("auto_retry") or {}
+    else:
+        return {}
+    if not isinstance(block, dict):
+        return {}
+    return {
+        cat: pol
+        for cat, pol in block.items()
+        if isinstance(cat, str) and isinstance(pol, dict)
+    }
+
+
 def _hpc_yaml_aggregate_defaults(
     experiment_dir: Path, profile: str | None
 ) -> dict[str, str]:
@@ -961,15 +998,28 @@ def cmd_failures(args: argparse.Namespace) -> int:
     )
     clusters = runner.cluster_failures_by_fingerprint(logs)
 
-    _ok(
-        {
-            "run_id": args.run_id,
-            "failed_count": len(failed_ids),
-            "clusters": clusters,
-            "scheduler": scheduler,
-        },
-        idempotent=True,
-    )
+    # Auto-retry policy from hpc.yaml: annotate each cluster with which
+    # task ids are still eligible for an automated retry per the
+    # configured per-category max_attempts.  Purely advisory — the actual
+    # resubmit remains the caller's job (matches existing /resubmit
+    # semantics).
+    auto_retry = _hpc_yaml_auto_retry(args.experiment_dir, record.profile)
+    if auto_retry:
+        clusters = runner.annotate_clusters_with_retry_advice(
+            clusters,
+            auto_retry_policy=auto_retry,
+            record=record,
+        )
+
+    data: dict[str, Any] = {
+        "run_id": args.run_id,
+        "failed_count": len(failed_ids),
+        "clusters": clusters,
+        "scheduler": scheduler,
+    }
+    if auto_retry:
+        data["auto_retry_policy"] = auto_retry
+    _ok(data, idempotent=True)
     return EXIT_OK
 
 

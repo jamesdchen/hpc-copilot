@@ -39,6 +39,7 @@ __all__ = [
     "cluster_failures_by_fingerprint",
     "fingerprint_stderr_tail",
     "derive_resubmit_request_id",
+    "annotate_clusters_with_retry_advice",
 ]
 
 
@@ -650,6 +651,57 @@ def _categorize(content: str | None) -> str:
         if pat.search(content):
             return category
     return "unknown"
+
+
+def annotate_clusters_with_retry_advice(
+    clusters: list[dict[str, Any]],
+    *,
+    auto_retry_policy: dict[str, dict[str, Any]],
+    record: RunRecord,
+) -> list[dict[str, Any]]:
+    """Tag each failure cluster with retry eligibility per hpc.yaml policy.
+
+    *auto_retry_policy* is the parsed ``profiles[profile].auto_retry``
+    block (see docs/schema.md). Schema:
+
+    .. code-block:: yaml
+
+        auto_retry:
+          gpu_oom:        { max_attempts: 1, mem_multiplier: 1.5 }
+          system_oom:     { max_attempts: 1, mem_multiplier: 1.5 }
+          walltime:       { max_attempts: 1, walltime_multiplier: 2.0 }
+          node_failure:   { max_attempts: 2 }
+
+    For each cluster, looks up ``record.retries[tid].attempts`` and tags
+    task ids as ``eligible_task_ids`` (attempts < max_attempts) or
+    ``blocked_task_ids`` (already at the cap). The policy dict itself is
+    echoed back so the caller can compute multiplied overrides.
+
+    Mutates and returns *clusters* for the caller's convenience.
+    """
+    if not auto_retry_policy:
+        return clusters
+    for cluster in clusters:
+        category = cluster.get("category")
+        policy = auto_retry_policy.get(category) if isinstance(category, str) else None
+        if not isinstance(policy, dict):
+            continue  # No policy for this category; leave untouched.
+        max_attempts = int(policy.get("max_attempts", 0) or 0)
+        eligible: list[int] = []
+        blocked: list[int] = []
+        for tid in cluster.get("task_ids", []) or []:
+            prior = record.retries.get(str(tid), {}) if record.retries else {}
+            attempts = int(prior.get("attempts", 0) or 0)
+            if attempts < max_attempts:
+                eligible.append(tid)
+            else:
+                blocked.append(tid)
+        cluster["retry_advice"] = {
+            "policy": dict(policy),
+            "eligible_task_ids": eligible,
+            "blocked_task_ids": blocked,
+        }
+    return clusters
 
 
 def cluster_failures_by_fingerprint(

@@ -2,7 +2,58 @@
 
 ## Unreleased
 
-### Added
+### Added — reliability / correctness
+
+- **Pre-submit manifest sanity.** `submit` now validates the dispatch
+  manifest before recording the submission: schema_version, JSON
+  parseability, every task has a non-empty `cmd` and `result_dir` with
+  no `{placeholder}` remnants, `total_tasks` matches `len(tasks)`,
+  `wave_map` (if present) exactly covers tasks. Catches the entire
+  class of "looked fine locally, crashed mid-run" failures. Opt-out via
+  `--skip-manifest-check`.
+- **Stale-cache age field.** `status` and `list-in-flight` envelopes
+  now carry `last_status_age_seconds` so consumers (humans + agents)
+  can flag stale snapshots without changing freshness contracts.
+- **Wave-aware `last_status`.** The on-cluster reporter now emits a
+  `waves` rollup keyed by wave id with `{complete, running, pending,
+  failed, unknown, total}` buckets. `record_status` and `reconcile`
+  carry it into the persisted `last_status`. New `rollup_by_wave`
+  helper in `hpc_mapreduce.reduce.status`.
+- **`hpc-mapreduce logs` subcommand.** Fetches per-task stderr from the
+  cluster: `--task-id 7,12,42` for explicit ids or `--all-failed` for
+  every failed task. Falls back through earlier `job_ids` when the
+  latest has no log. Removes a daily friction point.
+- **`hpc-mapreduce failures` subcommand.** Triage tool: re-polls
+  status, fetches stderr for failed tasks, strips volatile noise
+  (timestamps, abs paths, pids, hex pointers), fingerprints the last
+  non-empty line, and groups tasks sharing a fingerprint into clusters
+  tagged with a category (`gpu_oom`, `walltime`, `import_error`, etc.).
+
+### Added — ergonomics
+
+- **Cost estimate on `expand-grid`.** New `--per-task-walltime`,
+  `--per-task-cpus`, `--per-task-gpus`, `--max-concurrent-tasks` flags
+  add a `cost_estimate` block to the envelope: total CPU-hours,
+  GPU-hours, and (when concurrency is provided) estimated wall-clock.
+  Lets users catch a 5000-CPU-hour grid before it lands on the
+  scheduler.
+
+### Added — robustness
+
+- **Resubmit dedupe via `request_id`.** `resubmit_failed` now returns
+  `(record, deduped, request_id)` and is idempotent on the (explicit
+  or derived) `request_id`. A second call with the same spec returns
+  `deduped: true` without incrementing per-task retry counters. A
+  back-compat-default field `last_resubmit_request_id` was added to
+  `RunRecord`.
+- **`auto_retry` policy in hpc.yaml.** Per-category retry caps with
+  optional resource multipliers (advisory). `hpc-mapreduce failures`
+  annotates each cluster with `retry_advice = {policy,
+  eligible_task_ids, blocked_task_ids}`. The framework never resubmits
+  on its own — it surfaces eligibility; the caller decides. See
+  `docs/schema.md` for the full shape.
+
+### Added — MARs integration proposal package
 
 - **MARs integration proposal package.**
   - `docs/mars-integration.md` — Bun.spawn env block, `error_code` →
