@@ -98,7 +98,23 @@ If jobs are still running for the selected profile/stage, report which ones and 
 
 ## Step 3: Validate Task Completeness
 
-Check each task's result directory for expected output files. Use `_hpc_dispatch.json` to determine the result directory per task.
+**Preferred path: let `hpc-mapreduce aggregate` enforce this for you.**
+The CLI accepts `--require-outputs <template>` (with `{task_id}` placeholder)
+which resolves the template against the dispatch manifest's `wave_map`,
+SSH-checks every per-task output, and refuses to combine if any are
+missing. The error envelope reports `error_code: outputs_missing` with the
+list of absent paths. Set the default once per repo in `hpc.yaml` under
+`results.require_outputs` so every aggregate is guarded automatically:
+
+```yaml
+profiles:
+  ml_ridge:
+    results:
+      require_outputs: "results/{run_id}/metrics.{task_id}.json"
+      expect_output: "results/{run_id}/metrics.json"
+```
+
+When you must validate manually (e.g., older repos without `hpc.yaml`):
 
 ```bash
 # For each task, check if result files exist

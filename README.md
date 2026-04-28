@@ -32,24 +32,20 @@ Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": 
 
 ### Using with MARs
 
-claude-hpc plugs into MARs as a Bash-invokable tool. The MARs `agents/experiment-runner.md` agent already has `Bash` in its tool list, so the integration is:
+claude-hpc plugs into MARs as a `Bash`-invokable tool from the existing
+`experiment-runner` agent. See **[`docs/mars-integration.md`](docs/mars-integration.md)**
+for the proposal package: Bun.spawn env block, `error_code` → retry
+policy table, troubleshooting, and the paste-ready
+[`docs/mars/experiment-runner.snippet.md`](docs/mars/experiment-runner.snippet.md)
+for `agents/experiment-runner.md`.
 
-1. `pip install claude-hpc` in the MARs venv.
-2. Copy or symlink `skills/hpc-*` from this repo into your MARs checkout's `skills/` directory.
-3. Set environment so MARs can spawn into a configured state:
-   ```
-   export HPC_JOURNAL_DIR=~/.claude-paper/hpc
-   export HPC_CLUSTERS_CONFIG=/path/to/your/clusters.yaml   # optional override
-   # SSH credentials must be passed through to spawned children:
-   export SSH_AUTH_SOCK=...   # whatever your shell already has
-   ```
-4. (Optional) Add a one-line note in your MARs fork's `agents/experiment-runner.md` mentioning when to invoke the new skills (e.g., "use hpc-submit when an experiment requires HPC scale or array-job parallelism").
-
-**SSH env passthrough is the most common first-time-user failure.** When MARs spawns claude-hpc via `Bun.spawn`, the child inherits only forwarded env vars. Without `SSH_AUTH_SOCK`, every cluster call hangs on auth. Run `hpc-mapreduce preflight` first to catch this.
-
-**No cancel/abort.** claude-hpc deliberately does not kill cluster jobs (`settings.json` denies `scancel`/`qdel`). If MARs decides an experiment is bad, stop waiting on it; the cluster jobs run to walltime.
-
-**Journal coexistence.** MARs has its own experiment journal (`src/paper/experiments/journal.ts`) tracking experiment-level state. claude-hpc's journal at `$HPC_JOURNAL_DIR` tracks HPC-run-level state. Different scopes, no overlap.
+The most common first-time failure is `Bun.spawn`'s empty default env
+dropping `SSH_AUTH_SOCK`. `hpc-mapreduce status`/`aggregate`/`reconcile`
+now fail fast with `error_code: "ssh_unreachable"` (exit 2) instead of
+hanging on auth — run `hpc-mapreduce preflight` first to verify the spawn
+env. claude-hpc does not kill cluster jobs by design (`settings.json`
+denies `scancel`/`qdel`); if MARs decides a run is bad, stop polling and
+let it expire.
 
 ---
 

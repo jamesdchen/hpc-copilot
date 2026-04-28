@@ -30,6 +30,16 @@ __all__ = [
     "resubmit_failed",
     "reconcile",
     "mark_terminal",
+    "verify_per_task_outputs",
+    "verify_combiner_artifact",
+    "build_provenance",
+    "write_remote_provenance",
+    "validate_manifest_file",
+    "fetch_task_logs",
+    "cluster_failures_by_fingerprint",
+    "fingerprint_stderr_tail",
+    "derive_resubmit_request_id",
+    "annotate_clusters_with_retry_advice",
 ]
 
 
@@ -176,6 +186,10 @@ def record_status(
     )
     summary = dict(report.get("summary", {}))
     summary["checked_at"] = _utcnow_iso()
+    # Carry per-wave breakdown into the persisted last_status when the
+    # cluster-side reporter emitted one (manifest had a wave_map).
+    if isinstance(report.get("waves"), dict) and report["waves"]:
+        summary["waves"] = report["waves"]
     record = session.update_run_status(experiment_dir, run_id, last_status=summary)
     # Cache the snapshot for cheap external reads. Best-effort: a write
     # failure here must not roll back the journal update.
@@ -234,6 +248,30 @@ def combine_wave(
     return ok, stdout, stderr
 
 
+def derive_resubmit_request_id(
+    *,
+    failed_task_ids: list[int],
+    category: str,
+    overrides: dict[str, Any] | None,
+) -> str:
+    """Compute a deterministic dedupe key from the resubmit spec.
+
+    Same input → same id, regardless of dict-key order in *overrides*.
+    First 12 hex chars of sha256, prefixed with ``rs_`` for readability.
+    """
+    import hashlib
+
+    payload = json.dumps(
+        {
+            "failed_task_ids": sorted(int(t) for t in failed_task_ids),
+            "category": category,
+            "overrides": overrides or {},
+        },
+        sort_keys=True,
+    )
+    return "rs_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
 def resubmit_failed(
     experiment_dir: Path,
     run_id: str,
@@ -242,7 +280,8 @@ def resubmit_failed(
     category: str,
     overrides: dict[str, Any] | None = None,
     new_job_ids: list[str] | None = None,
-) -> RunRecord:
+    request_id: str | None = None,
+) -> tuple[RunRecord, bool, str]:
     """Record a resubmission attempt in the journal.
 
     The actual resubmit (manifest building + backend submission) is the
@@ -250,12 +289,31 @@ def resubmit_failed(
     counters and (optionally) the active job_ids list. Pass
     ``new_job_ids`` after the backend reports them so the journal stays
     in sync for the next monitor session.
+
+    Idempotent on ``request_id``. When the caller does not supply one,
+    a deterministic id is derived from the spec via
+    :func:`derive_resubmit_request_id`. A second call with the same
+    ``request_id`` (whether explicit or derived) returns
+    ``(record, deduped=True, request_id)`` without incrementing
+    per-task retry counters.
+
+    Returns ``(record, deduped, request_id)``.
     """
     if not failed_task_ids:
         raise ValueError("resubmit_failed requires at least one failed task id")
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no run record for {run_id!r}")
+
+    rid = request_id or derive_resubmit_request_id(
+        failed_task_ids=failed_task_ids,
+        category=category,
+        overrides=overrides,
+    )
+    if record.last_resubmit_request_id and record.last_resubmit_request_id == rid:
+        # Deduped: replay of the same resubmit. Don't increment counters.
+        return record, True, rid
+
     retries = dict(record.retries)
     overrides = dict(overrides or {})
     for tid in failed_task_ids:
@@ -266,10 +324,14 @@ def resubmit_failed(
             "category": category,
             "overrides": overrides,
         }
-    fields: dict[str, Any] = {"retries": retries}
+    fields: dict[str, Any] = {
+        "retries": retries,
+        "last_resubmit_request_id": rid,
+    }
     if new_job_ids is not None:
         fields["job_ids"] = list(new_job_ids)
-    return session.update_run_status(experiment_dir, run_id, **fields)
+    updated = session.update_run_status(experiment_dir, run_id, **fields)
+    return updated, False, rid
 
 
 def _ssh_list_combined_waves(
@@ -398,12 +460,15 @@ def reconcile(
         )
 
         warnings: list[str] = []
+        report: dict[str, Any] = {}
         try:
             report = fut_status.result()
             summary = dict(report.get("summary", {}))
         except Exception as exc:
             summary = {"error": str(exc)}
         summary["checked_at"] = _utcnow_iso()
+        if isinstance(report.get("waves"), dict) and report["waves"]:
+            summary["waves"] = report["waves"]
 
         # Each future has its own try/except: an SSH blip on any of them
         # must not abort the journal update.  In particular, falling
@@ -455,3 +520,565 @@ def mark_terminal(
 ) -> RunRecord:
     """Thin pass-through to ``session.mark_run`` for symmetry."""
     return session.mark_run(experiment_dir, run_id, status=status, stage=stage)
+
+
+# ─── per-task log fetching ──────────────────────────────────────────────────
+
+
+def fetch_task_logs(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    job_name: str,
+    job_ids: list[str],
+    scheduler: str,
+    task_ids: list[int],
+    lines: int = 50,
+) -> list[dict[str, Any]]:
+    """SSH to the cluster and tail each task's stderr log.
+
+    Tries the most recent ``job_id`` first, falls back through earlier
+    ones (matching :func:`hpc_mapreduce.reduce.status.get_err_log_paths`
+    semantics). Returns one dict per task; missing logs surface as
+    ``{"task_id": int, "missing": True}``.
+
+    Path conventions (must stay aligned with the job templates):
+
+    * SGE:    ``<remote_path>/<job_name>.o<job_id>.<task_id>``
+    * SLURM:  ``<remote_path>/_hpc_logs/<job_name>_<job_id>_<task_id>.err``
+    """
+    if not task_ids:
+        return []
+    user, host = _split_ssh_target(ssh_target)
+    out: list[dict[str, Any]] = []
+    for tid in task_ids:
+        found: dict[str, Any] | None = None
+        for job_id in reversed(job_ids or []):
+            if scheduler == "sge":
+                path = f"{remote_path.rstrip('/')}/{job_name}.o{job_id}.{tid}"
+            else:
+                path = (
+                    f"{remote_path.rstrip('/')}"
+                    f"/_hpc_logs/{job_name}_{job_id}_{tid}.err"
+                )
+            quoted = shlex.quote(path)
+            script = (
+                f"if [ -f {quoted} ]; then "
+                f"echo FOUND; tail -n {int(lines)} {quoted}; "
+                f"else echo MISSING; fi"
+            )
+            proc = ssh_run(script, host=host, user=user)
+            if proc.returncode != 0:
+                # SSH itself blew up; attribute to this attempt and try
+                # the next job_id rather than aborting the whole batch.
+                continue
+            stdout = proc.stdout or ""
+            first, _, rest = stdout.partition("\n")
+            if first.strip() == "FOUND":
+                found = {
+                    "task_id": tid,
+                    "path": path,
+                    "job_id": job_id,
+                    "content": rest,
+                }
+                break
+        if found is None:
+            out.append({"task_id": tid, "missing": True})
+        else:
+            out.append(found)
+    return out
+
+
+# ─── failure clustering by stderr fingerprint ──────────────────────────────
+
+
+# Patterns that strongly identify a failure category, ordered most-specific first.
+# Matched case-insensitively against the joined log tail.  The first hit wins.
+_FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
+    ("system_oom", re.compile(r"\boom-killer\b|\bMemoryError\b|killed.*signal 9", re.I)),
+    ("walltime", re.compile(r"\bDUE TO TIME LIMIT\b|wall.?time.*exceeded|signal SIGTERM.*15", re.I)),
+    ("node_failure", re.compile(r"NODE_FAIL|node failed|connection (closed|reset by peer)|ssh: connect.*refused", re.I)),
+    ("import_error", re.compile(r"\bImportError\b|\bModuleNotFoundError\b", re.I)),
+    ("file_not_found", re.compile(r"\bFileNotFoundError\b|No such file or directory", re.I)),
+    ("permission_denied", re.compile(r"\bPermissionError\b|Permission denied", re.I)),
+    ("disk_full", re.compile(r"No space left on device|\bENOSPC\b", re.I)),
+    ("python_traceback", re.compile(r"^Traceback \(most recent call last\):", re.I | re.M)),
+)
+
+# Lines we strip before fingerprinting so per-task volatility (paths,
+# pids, timestamps, line numbers in tracebacks) doesn't fragment a
+# single failure mode into many "unique" fingerprints.
+_FINGERPRINT_NOISE: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*"),  # ISO timestamps
+    re.compile(r"\b/(?:home|u|scratch|tmp)/[^\s:]+"),             # absolute paths
+    re.compile(r"\bpid[=: ]\d+\b", re.I),
+    re.compile(r"\bjob[_ ]?id[=: ]\d+\b", re.I),
+    re.compile(r"\btask[_ ]?id[=: ]\d+\b", re.I),
+    re.compile(r"\bline \d+"),
+    re.compile(r"\b0x[0-9a-fA-F]+\b"),                            # hex pointers
+    re.compile(r"\b\d{8,}\b"),                                    # long ints (job ids, pids)
+)
+
+
+def fingerprint_stderr_tail(content: str | None, *, max_chars: int = 400) -> str:
+    """Reduce a stderr blob to a stable, comparable fingerprint string.
+
+    Strategy: take the last non-empty line of the tail (typically the
+    actual exception), strip volatile noise (timestamps, abs paths, pids,
+    hex pointers), and truncate.  Two failures with the same root cause
+    on different tasks yield the same fingerprint.
+    """
+    if not content or not content.strip():
+        return ""
+    # Last non-empty line: the actual exception is almost always there.
+    lines = [ln for ln in content.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    line = lines[-1].strip()
+    for pat in _FINGERPRINT_NOISE:
+        line = pat.sub("", line)
+    # Collapse runs of whitespace introduced by the substitutions.
+    line = re.sub(r"\s{2,}", " ", line).strip()
+    return line[:max_chars]
+
+
+def _categorize(content: str | None) -> str:
+    """Map a stderr blob to one of :data:`_FAILURE_CATEGORY_PATTERNS` or 'unknown'."""
+    if not content:
+        return "unknown"
+    for category, pat in _FAILURE_CATEGORY_PATTERNS:
+        if pat.search(content):
+            return category
+    return "unknown"
+
+
+def annotate_clusters_with_retry_advice(
+    clusters: list[dict[str, Any]],
+    *,
+    auto_retry_policy: dict[str, dict[str, Any]],
+    record: RunRecord,
+) -> list[dict[str, Any]]:
+    """Tag each failure cluster with retry eligibility per hpc.yaml policy.
+
+    *auto_retry_policy* is the parsed ``profiles[profile].auto_retry``
+    block (see docs/schema.md). Schema:
+
+    .. code-block:: yaml
+
+        auto_retry:
+          gpu_oom:        { max_attempts: 1, mem_multiplier: 1.5 }
+          system_oom:     { max_attempts: 1, mem_multiplier: 1.5 }
+          walltime:       { max_attempts: 1, walltime_multiplier: 2.0 }
+          node_failure:   { max_attempts: 2 }
+
+    For each cluster, looks up ``record.retries[tid].attempts`` and tags
+    task ids as ``eligible_task_ids`` (attempts < max_attempts) or
+    ``blocked_task_ids`` (already at the cap). The policy dict itself is
+    echoed back so the caller can compute multiplied overrides.
+
+    Mutates and returns *clusters* for the caller's convenience.
+    """
+    if not auto_retry_policy:
+        return clusters
+    for cluster in clusters:
+        category = cluster.get("category")
+        policy = auto_retry_policy.get(category) if isinstance(category, str) else None
+        if not isinstance(policy, dict):
+            continue  # No policy for this category; leave untouched.
+        max_attempts = int(policy.get("max_attempts", 0) or 0)
+        eligible: list[int] = []
+        blocked: list[int] = []
+        for tid in cluster.get("task_ids", []) or []:
+            prior = record.retries.get(str(tid), {}) if record.retries else {}
+            attempts = int(prior.get("attempts", 0) or 0)
+            if attempts < max_attempts:
+                eligible.append(tid)
+            else:
+                blocked.append(tid)
+        cluster["retry_advice"] = {
+            "policy": dict(policy),
+            "eligible_task_ids": eligible,
+            "blocked_task_ids": blocked,
+        }
+    return clusters
+
+
+def cluster_failures_by_fingerprint(
+    logs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Group ``fetch_task_logs`` output by failure fingerprint.
+
+    *logs* is the list returned by :func:`fetch_task_logs`.  Output is a
+    list of clusters, one per distinct fingerprint, sorted descending by
+    member count.  Each cluster carries:
+
+    * ``category``: high-level bucket (gpu_oom, walltime, etc., else 'unknown')
+    * ``fingerprint``: noise-stripped last line of the stderr tail
+    * ``count``: how many tasks share this failure
+    * ``task_ids``: the list of task ids
+    * ``sample``: a short representative snippet (last 200 chars)
+
+    Tasks marked ``missing: True`` are bucketed into a single
+    ``"log_missing"`` cluster so they're visible in the rollup.
+    """
+    by_fp: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in logs:
+        tid = entry.get("task_id")
+        if entry.get("missing"):
+            key = ("log_missing", "")
+            bucket = by_fp.setdefault(
+                key,
+                {
+                    "category": "log_missing",
+                    "fingerprint": "",
+                    "count": 0,
+                    "task_ids": [],
+                    "sample": "",
+                },
+            )
+            bucket["count"] += 1
+            if tid is not None:
+                bucket["task_ids"].append(tid)
+            continue
+        content = entry.get("content") or ""
+        fp = fingerprint_stderr_tail(content)
+        category = _categorize(content)
+        key = (category, fp)
+        bucket = by_fp.setdefault(
+            key,
+            {
+                "category": category,
+                "fingerprint": fp,
+                "count": 0,
+                "task_ids": [],
+                "sample": content[-200:].rstrip(),
+            },
+        )
+        bucket["count"] += 1
+        if tid is not None:
+            bucket["task_ids"].append(tid)
+    clusters = sorted(by_fp.values(), key=lambda b: -b["count"])
+    return clusters
+
+
+# ─── pre-submit manifest sanity ─────────────────────────────────────────────
+
+
+# Schema versions accepted by the on-cluster dispatcher.  Kept in sync
+# with ``hpc_mapreduce.map.dispatch.SUPPORTED_SCHEMA_VERSIONS`` and
+# ``hpc_mapreduce.job.grid.MANIFEST_SCHEMA_VERSION``.
+_SUPPORTED_MANIFEST_VERSIONS = (1, 2)
+
+# Match unresolved ``{placeholder}`` tokens.  False positives are
+# minimised by requiring an identifier-like body and a closing brace.
+# (Real shell brace expansion uses commas or numeric ranges, which this
+# pattern does not match.)
+_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+
+
+def validate_manifest_file(manifest_path: Path) -> None:
+    """Raise :class:`ManifestInvalid` if *manifest_path* is unsafe to submit.
+
+    Checks (all client-side, no SSH):
+
+    * the file exists and is valid JSON;
+    * ``schema_version`` is in :data:`_SUPPORTED_MANIFEST_VERSIONS`;
+    * ``tasks`` is a non-empty dict, ``total_tasks`` matches ``len(tasks)``;
+    * every task carries ``cmd``, ``result_dir``, ``params`` with the right
+      types;
+    * no ``{placeholder}`` remnants in rendered ``cmd`` / ``result_dir``;
+    * if ``wave_map`` is present, its members exactly cover ``tasks``.
+
+    Catches the entire class of "manifest looked fine locally, crashed
+    mid-run on the cluster" failures.
+    """
+    if not manifest_path.is_file():
+        raise errors.ManifestInvalid(
+            f"manifest not found at {manifest_path}; rebuild via /submit "
+            f"or `hpc-mapreduce submit`."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise errors.ManifestInvalid(
+            f"manifest at {manifest_path} is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise errors.ManifestInvalid(
+            f"manifest at {manifest_path} must be a JSON object; "
+            f"got {type(manifest).__name__}"
+        )
+    schema_version = manifest.get("schema_version")
+    if schema_version not in _SUPPORTED_MANIFEST_VERSIONS:
+        raise errors.ManifestInvalid(
+            f"manifest schema_version={schema_version!r}; supported="
+            f"{list(_SUPPORTED_MANIFEST_VERSIONS)}. Regenerate with current hpc_mapreduce."
+        )
+
+    tasks = manifest.get("tasks")
+    if not isinstance(tasks, dict) or not tasks:
+        raise errors.ManifestInvalid(
+            f"manifest.tasks must be a non-empty object; "
+            f"got {type(tasks).__name__ if tasks is None else 'empty'}"
+        )
+
+    total_tasks = manifest.get("total_tasks")
+    if isinstance(total_tasks, int) and total_tasks != len(tasks):
+        raise errors.ManifestInvalid(
+            f"manifest.total_tasks ({total_tasks}) does not match "
+            f"len(tasks)={len(tasks)} — manifest is inconsistent."
+        )
+
+    for tid, task in tasks.items():
+        if not isinstance(task, dict):
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}] must be an object; "
+                f"got {type(task).__name__}"
+            )
+        cmd = task.get("cmd")
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].cmd must be a non-empty string"
+            )
+        if _PLACEHOLDER_RE.search(cmd):
+            leftover = _PLACEHOLDER_RE.findall(cmd)
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].cmd has unresolved placeholder(s) "
+                f"{leftover}: {cmd!r}. Rebuild the manifest so all "
+                f"{{name}} tokens render before submit."
+            )
+        result_dir = task.get("result_dir")
+        if not isinstance(result_dir, str) or not result_dir.strip():
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].result_dir must be a non-empty string"
+            )
+        if _PLACEHOLDER_RE.search(result_dir):
+            leftover = _PLACEHOLDER_RE.findall(result_dir)
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].result_dir has unresolved "
+                f"placeholder(s) {leftover}: {result_dir!r}."
+            )
+        params = task.get("params")
+        if not isinstance(params, dict):
+            raise errors.ManifestInvalid(
+                f"manifest.tasks[{tid!r}].params must be an object"
+            )
+
+    wave_map = manifest.get("wave_map")
+    if wave_map is not None:
+        if not isinstance(wave_map, dict):
+            raise errors.ManifestInvalid(
+                f"manifest.wave_map must be an object mapping wave -> [task_ids]"
+            )
+        covered: set[str] = set()
+        for wave_key, members in wave_map.items():
+            if not isinstance(members, list):
+                raise errors.ManifestInvalid(
+                    f"manifest.wave_map[{wave_key!r}] must be a list of task ids"
+                )
+            for tid in members:
+                covered.add(str(tid))
+        task_ids = set(tasks.keys())
+        missing_from_waves = task_ids - covered
+        unknown_in_waves = covered - task_ids
+        if missing_from_waves:
+            raise errors.ManifestInvalid(
+                f"wave_map omits task id(s) {sorted(missing_from_waves)[:10]} — "
+                f"every task must belong to a wave."
+            )
+        if unknown_in_waves:
+            raise errors.ManifestInvalid(
+                f"wave_map references unknown task id(s) "
+                f"{sorted(unknown_in_waves)[:10]} — manifest is inconsistent."
+            )
+
+
+# ─── aggregate preconditions / postconditions / provenance ──────────────────
+#
+# These helpers are framework-agnostic guarantees around the user-supplied
+# combiner.  They check plumbing (every task produced output, the combiner
+# wrote what it claimed to write, the aggregated artifact carries provenance
+# tied to the run) without learning anything about experiment semantics.
+# Both /aggregate and `hpc-mapreduce aggregate` use them.
+
+
+def _read_remote_manifest(
+    *, ssh_target: str, remote_path: str, manifest_filename: str
+) -> dict[str, Any]:
+    """SSH-cat the dispatch manifest from the cluster and parse it.
+
+    The manifest carries ``wave_map`` (set by ``attach_wave_map``) which
+    maps wave index -> list of task ids belonging to that wave.  When
+    absent, we fall back to assuming every task belongs to wave 0.
+    """
+    user, host = _split_ssh_target(ssh_target)
+    cmd = f"cat {shlex.quote(f'{remote_path}/{manifest_filename}')}"
+    proc = ssh_run(cmd, host=host, user=user)
+    if proc.returncode != 0:
+        raise RemoteCommandFailed(
+            f"failed to read remote manifest at {remote_path}/{manifest_filename}: "
+            f"{proc.stderr.strip()[:500]}"
+        )
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RemoteCommandFailed(
+            f"remote manifest at {remote_path}/{manifest_filename} is not valid JSON: {exc}"
+        ) from exc
+
+
+def _wave_task_ids(manifest: dict[str, Any], wave: int) -> list[str]:
+    """Return task ids belonging to *wave* per ``manifest['wave_map']``.
+
+    Falls back to "every task" when ``wave==0`` and no wave_map is present
+    (un-batched submissions ship a single implicit wave-0).
+    """
+    wave_map = manifest.get("wave_map") or {}
+    if wave_map:
+        members = wave_map.get(str(wave))
+        return [str(t) for t in members] if members else []
+    if wave == 0:
+        return list((manifest.get("tasks") or {}).keys())
+    return []
+
+
+def verify_per_task_outputs(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    manifest_filename: str,
+    wave: int,
+    template: str,
+) -> list[str]:
+    """Check every per-task output named by *template* exists on the cluster.
+
+    *template* may include ``{task_id}``; it is substituted with each task
+    id in the wave (per ``manifest['wave_map']``).  Paths are interpreted
+    relative to *remote_path* unless absolute.
+
+    Returns the list of *missing* paths (relative to remote_path or
+    absolute as written).  Empty list = all expected outputs are present.
+    """
+    manifest = _read_remote_manifest(
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        manifest_filename=manifest_filename,
+    )
+    task_ids = _wave_task_ids(manifest, wave)
+    if not task_ids:
+        return []
+    expected = [template.format(task_id=tid) for tid in task_ids]
+    user, host = _split_ssh_target(ssh_target)
+    paths_inline = " ".join(shlex.quote(p) for p in expected)
+    script = (
+        f"cd {shlex.quote(remote_path)} && "
+        f"for f in {paths_inline}; do "
+        f'[ -f "$f" ] || echo "MISSING:$f"; '
+        f"done"
+    )
+    proc = ssh_run(script, host=host, user=user)
+    if proc.returncode != 0:
+        raise RemoteCommandFailed(
+            f"per-task output existence check failed: "
+            f"{proc.stderr.strip()[:500]}"
+        )
+    return [
+        line[len("MISSING:"):].strip()
+        for line in proc.stdout.splitlines()
+        if line.startswith("MISSING:")
+    ]
+
+
+def verify_combiner_artifact(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    expect_output: str,
+) -> tuple[bool, str]:
+    """Verify the combiner produced *expect_output* (relative to remote_path).
+
+    Existence is always checked.  When the path ends in ``.json`` the file
+    is also parsed via ``python3`` on the login node — combiners that exit
+    0 but emit truncated/empty JSON don't pass.
+
+    Returns ``(ok, detail)``.  *detail* is "ok" on success or a short
+    human-readable reason on failure.
+    """
+    user, host = _split_ssh_target(ssh_target)
+    full_path = f"{remote_path.rstrip('/')}/{expect_output.lstrip('/')}"
+    if expect_output.endswith(".json"):
+        # python3 -c returns 0 on parse success; non-zero (with stderr) on
+        # failure.  Login nodes universally have python3.
+        script = (
+            f"if [ ! -f {shlex.quote(full_path)} ]; then "
+            f"echo MISSING; exit 0; fi; "
+            f"python3 -c 'import json,sys; json.load(open({json.dumps(full_path)}))' "
+            f"&& echo OK || echo INVALID_JSON"
+        )
+    else:
+        script = (
+            f"[ -f {shlex.quote(full_path)} ] && echo OK || echo MISSING"
+        )
+    proc = ssh_run(script, host=host, user=user)
+    out_tail = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+    if out_tail == "OK":
+        return True, "ok"
+    if out_tail == "MISSING":
+        return False, f"is missing at {full_path}"
+    if out_tail == "INVALID_JSON":
+        return False, f"at {full_path} is not valid JSON"
+    return False, f"unrecognised verifier output: {proc.stdout.strip()[:200]!r}"
+
+
+def build_provenance(record: RunRecord, *, wave: int) -> dict[str, Any]:
+    """Build the provenance metadata block for an aggregated wave.
+
+    Pure metadata — agnostic to experiment semantics.  Lets a downstream
+    consumer (agent or human) verify that an aggregated artifact
+    corresponds to the run they expect, without re-querying the journal.
+    """
+    return {
+        "run_id": record.run_id,
+        "manifest": record.manifest,
+        "wave": int(wave),
+        "profile": record.profile,
+        "cluster": record.cluster,
+        "combined_at": utcnow_iso(),
+    }
+
+
+def write_remote_provenance(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    expect_output: str,
+    provenance: dict[str, Any],
+) -> str:
+    """Write ``_provenance.json`` next to the combiner's expected output.
+
+    Path resolution: the sidecar lives in the same directory as
+    *expect_output* on the cluster.  Returns the absolute remote path
+    written.  Best-effort — callers may catch and log; provenance also
+    appears in the aggregate envelope so this is a convenience, not a
+    contract.
+    """
+    user, host = _split_ssh_target(ssh_target)
+    full_output = f"{remote_path.rstrip('/')}/{expect_output.lstrip('/')}"
+    output_dir = full_output.rsplit("/", 1)[0] if "/" in full_output else remote_path
+    sidecar = f"{output_dir.rstrip('/')}/_provenance.json"
+    payload = json.dumps(provenance, sort_keys=True)
+    # Ferry the JSON via base64 to dodge quoting hazards.
+    import base64
+    b64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    script = (
+        f"mkdir -p {shlex.quote(output_dir)} && "
+        f"echo {b64} | base64 -d > {shlex.quote(sidecar)}"
+    )
+    proc = ssh_run(script, host=host, user=user)
+    if proc.returncode != 0:
+        raise RemoteCommandFailed(
+            f"failed to write provenance sidecar at {sidecar}: "
+            f"{proc.stderr.strip()[:500]}"
+        )
+    return sidecar

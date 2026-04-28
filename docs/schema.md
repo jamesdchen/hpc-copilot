@@ -41,6 +41,7 @@ Top-level `project`, `cluster`, `remote_path`, `rsync_exclude` are shared across
 | `constraints` | map | no | Cluster constraints for throughput optimization |
 | `gpu_fallback` | list[str] | no | Ordered GPU types to try |
 | `max_retries` | int | no | Max auto-resubmissions on failure |
+| `auto_retry` | map | no | Per-category retry policy honored by `hpc-mapreduce failures`. See *auto_retry* below. |
 
 ### Multi-Stage Profiles
 
@@ -74,6 +75,39 @@ Map of parameter_name → list of values. Cartesian product = one task per combo
 | `gpu_type` | string | no | Preferred GPU type (e.g., `a100`) |
 
 If `gpus` is present, the `gpu_array` template is used; otherwise `cpu_array`.
+
+## auto_retry
+
+Per-category retry policy. When set, `hpc-mapreduce failures` annotates each
+failure cluster with a `retry_advice` block listing which task IDs are still
+eligible for an automated retry (attempts so far < `max_attempts`) and which
+have hit the cap.
+
+```yaml
+profiles:
+  ml_ridge:
+    auto_retry:
+      gpu_oom:        { max_attempts: 1, mem_multiplier: 1.5 }
+      system_oom:     { max_attempts: 1, mem_multiplier: 1.5 }
+      walltime:       { max_attempts: 1, walltime_multiplier: 2.0 }
+      node_failure:   { max_attempts: 2 }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `max_attempts` | int | yes | Per-task retry cap for this category. Tasks at this count are blocked from auto-retry. |
+| `mem_multiplier` | float | no | Recommended memory multiplier for the next attempt (advisory; the framework echoes it back, the caller computes the concrete value). |
+| `walltime_multiplier` | float | no | Recommended walltime multiplier (advisory). |
+| `gpus_multiplier` | float | no | Recommended GPU count multiplier (advisory). |
+
+Categories must match the failure-cluster categories emitted by
+`hpc-mapreduce failures`: `gpu_oom`, `system_oom`, `walltime`,
+`node_failure`, `import_error`, `file_not_found`, `permission_denied`,
+`disk_full`, `python_traceback`, `unknown`.
+
+The framework does not apply the multipliers — it surfaces the policy and
+eligibility lists, and the caller (agent or human) decides whether to
+issue `hpc-mapreduce resubmit` with the computed overrides.
 
 ## results
 
