@@ -252,3 +252,176 @@ def test_subcommand_help_is_non_empty(subcommand: str) -> None:
     rc, out, _ = _run_cli(subcommand, "--help")
     assert rc == 0
     assert len(out.strip()) > 50, f"{subcommand} --help is too sparse"
+
+
+# ─── Bug 6: aggregate no longer advertises a non-functional --output-dir ─
+
+
+def test_aggregate_help_does_not_mention_output_dir() -> None:
+    """The previous CLI accepted ``--output-dir`` and echoed it in the
+    response envelope, but never threaded the value into the actual
+    combiner call.  Drop the flag rather than ship a misleading one.
+    """
+    rc, out, _ = _run_cli("aggregate", "--help")
+    assert rc == 0
+    assert "--output-dir" not in out
+
+
+# ─── Bug 7: aggregate failure → ok:false envelope with non-zero exit ─────
+
+
+def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> None:
+    """When the combiner returns non-zero, the CLI used to emit ``ok:
+    true`` on stdout and exit with EXIT_CLUSTER_ERROR — a contract
+    violation since callers can drive logic from either field.  The fix
+    routes the failure through ``_err`` so both fields agree.
+    """
+    import argparse
+    from unittest.mock import patch
+
+    from slash_commands import session as session_mod
+    from slash_commands.session import RunRecord
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+
+    # Seed a run so cmd_aggregate gets past the journal lookup.
+    rec = RunRecord(
+        run_id="r_abcd1234",
+        profile="p",
+        cluster="hoffman2",
+        ssh_target="user@host",
+        remote_path="/x",
+        job_name="j",
+        job_ids=["1"],
+        manifest="manifest.abcd1234.json",
+        total_tasks=1,
+        submitted_at="2026-04-28T00:00:00+00:00",
+        experiment_dir=str(tmp_path),
+    )
+    session_mod.upsert_run(tmp_path, rec)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="r_abcd1234",
+        wave=0,
+        force=False,
+    )
+    captured: list[str] = []
+
+    def fake_emit(payload):
+        captured.append(json.dumps(payload))
+
+    with patch(
+        "slash_commands.runner.combine_wave",
+        return_value=(False, "", "boom: missing metrics"),
+    ), patch.object(cli, "_emit", side_effect=fake_emit):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc != 0  # exit code reflects failure
+    payload = json.loads(captured[-1])
+    assert payload["ok"] is False
+    assert payload["error_code"] == "combiner_failed"
+    assert payload["category"] == "cluster"
+
+
+# ─── Bug 8: missing run record surfaces as journal_corrupt, not exec NF ──
+
+
+def test_main_routes_journal_corrupt_for_missing_run(tmp_path: Path) -> None:
+    """``runner.combine_wave`` raises ``JournalCorrupt`` when the run is
+    missing.  Previously the CLI's blanket ``FileNotFoundError`` handler
+    caught a bare exception and labelled it ``executor_not_found``,
+    which steered agents at the wrong remediation.
+    """
+    import os
+
+    journal = tmp_path / "journal"
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
+
+    rc, out, _ = _run_cli(
+        "aggregate",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "definitely_not_a_run",
+        "--wave", "0",
+        env=env_vars,
+    )
+    assert rc != 0
+    payload = _parse_envelope(out)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "journal_corrupt"
+
+
+def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
+    """A genuinely unexpected exception (anything not ``HpcError`` /
+    ``ValueError`` / ``TimeoutExpired``) should land on ``error_code:
+    internal``, not the previous ``executor_not_found`` mislabel.
+    """
+    from unittest.mock import patch
+
+    def boom(_args):
+        raise RuntimeError("kaboom")
+
+    captured: list[dict] = []
+
+    def fake_emit(payload):
+        captured.append(payload)
+
+    with patch.object(cli, "_emit", side_effect=fake_emit), patch.object(
+        cli, "cmd_capabilities", side_effect=boom
+    ):
+        rc = cli.main(["capabilities"])
+    assert rc == cli.EXIT_INTERNAL
+    assert captured[-1]["error_code"] == "internal"
+
+
+# ─── Bug 16: spec validation surfaces a schema-pointed message ────────────
+
+
+def test_submit_spec_with_wrong_type_fails_with_schema_message(tmp_path: Path) -> None:
+    """``total_tasks: "five"`` would previously fall through to ``int()``
+    and raise a Python traceback.  Schema validation now flags it before
+    dispatch with an actionable message.
+    """
+    import os
+
+    bad_spec = {**SUBMIT_SPEC, "total_tasks": "five"}  # type: ignore[dict-item]
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps(bad_spec))
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
+
+    rc, out, _ = _run_cli(
+        "submit", "--experiment-dir", str(tmp_path), "--spec", str(spec),
+        env=env_vars,
+    )
+    assert rc != 0
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "manifest_invalid"
+
+
+# ─── Bug 17: cmd_resubmit rejects categories outside the documented enum ─
+
+
+def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
+    """The resubmit input schema constrains category to seven values; the
+    CLI used to accept any string and silently record garbage in the
+    journal.
+    """
+    import os
+
+    spec = tmp_path / "rs.json"
+    spec.write_text(json.dumps({
+        "failed_task_ids": [1],
+        "category": "totally_made_up",
+    }))
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
+
+    rc, out, _ = _run_cli(
+        "resubmit",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "doesnt_matter",
+        "--spec", str(spec),
+        env=env_vars,
+    )
+    assert rc != 0
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "manifest_invalid"

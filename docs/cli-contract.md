@@ -98,7 +98,7 @@ execs the resolved command.
 
 Exit codes: `0` on task success, non-zero on setup or dispatch failure.
 
-Stderr messages that `/monitor` greps for:
+Stderr messages that `/status` greps for:
 - `TASK_ID unset`
 - `manifest missing`
 - `schema_version unsupported`
@@ -127,7 +127,7 @@ Env fallbacks when args are absent: `HPC_WAVE`, `HPC_MANIFEST`.
 ```
 
 Exit `0` on success (wave combined), non-zero on failure (e.g. missing task
-results, reducer raised). Stderr carries a short excerpt `/monitor` can show.
+results, reducer raised). Stderr carries a short excerpt `/status` can show.
 
 ## `hpc_mapreduce.infra.backends.query.query_sacct`, `query_sge`
 
@@ -167,5 +167,5 @@ def run_combiner_checked(
 
 - `ok` is `True` iff the underlying SSH process exits 0.
 - `stdout` is the combiner's JSON (when produced) or empty.
-- `stderr` should be captured into the `/monitor` state blob on failure so the
+- `stderr` should be captured into the `/status` state blob on failure so the
   user can see why a wave did not combine.

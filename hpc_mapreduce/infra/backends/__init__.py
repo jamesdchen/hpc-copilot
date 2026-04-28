@@ -33,6 +33,20 @@ if TYPE_CHECKING:
     from hpc_mapreduce.job.throughput import JobBatch, SubmissionPlan
 
 
+# Default fallback regex for parsing job IDs out of scheduler stdout.
+# Backends override ``JOB_ID_REGEX`` with a scheduler-specific anchor so
+# that warnings or banners containing digits (``sbatch: warning: 30%
+# pre-empt; Submitted batch job 12345``) don't poison the parse with a
+# stray ``30``.
+_DEFAULT_JOB_ID_REGEX = re.compile(r"(\d+)")
+
+# Default subprocess timeout for ``qsub``/``sbatch`` invocations.  A
+# hung scheduler binary (NFS stall, scheduler outage) would otherwise
+# block the agent indefinitely; we surface ``TimeoutExpired`` so callers
+# can map it to a cluster-category error.
+SUBMIT_TIMEOUT_SEC = 120
+
+
 class HPCBackend(abc.ABC):
     """Minimal interface for HPC job submission backends.
 
@@ -42,6 +56,7 @@ class HPCBackend(abc.ABC):
     """
 
     log_dir: str  # subclasses must set this
+    JOB_ID_REGEX: re.Pattern[str] = _DEFAULT_JOB_ID_REGEX
 
     @abc.abstractmethod
     def _build_command(
@@ -62,7 +77,14 @@ class HPCBackend(abc.ABC):
         cwd: Path,
     ) -> subprocess.CompletedProcess[str]:
         """Execute a scheduler command.  Override for remote execution."""
-        return subprocess.run(cmd, env=job_env, cwd=cwd, capture_output=True, text=True)
+        return subprocess.run(
+            cmd,
+            env=job_env,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=SUBMIT_TIMEOUT_SEC,
+        )
 
     def _setup_log_dir(self) -> None:
         """Ensure the log directory exists.  Override for remote ``mkdir``."""
@@ -115,7 +137,7 @@ class HPCBackend(abc.ABC):
                         f"  command: {' '.join(cmd)}\n"
                         f"  stderr:  {stderr_msg}"
                     )
-                match = re.search(r"(\d+)", result.stdout)
+                match = self.JOB_ID_REGEX.search(result.stdout)
                 if not match:
                     raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
                 job_id = match.group(1)
@@ -195,7 +217,7 @@ class HPCBackend(abc.ABC):
                     f"  stderr:  {stderr_msg}"
                 )
             if track:
-                match = re.search(r"(\d+)", result.stdout)
+                match = self.JOB_ID_REGEX.search(result.stdout)
                 if not match:
                     raise RuntimeError(f"Could not parse job ID from output: {result.stdout!r}")
                 submissions.append((task_range, match.group(1)))

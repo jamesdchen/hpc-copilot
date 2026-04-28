@@ -28,6 +28,8 @@ DOCUMENTED_ERROR_CODES = frozenset(
         "journal_corrupt",
         "remote_command_failed",
         "config_invalid",
+        "combiner_failed",
+        "cluster_timeout",
         "internal",
     }
 )
@@ -43,6 +45,8 @@ EXPECTED_SUBCLASSES = {
     "journal_corrupt": errors.JournalCorrupt,
     "remote_command_failed": errors.RemoteCommandFailed,
     "config_invalid": errors.ConfigInvalid,
+    "combiner_failed": errors.CombinerFailed,
+    "cluster_timeout": errors.ClusterTimeout,
 }
 
 

@@ -257,7 +257,17 @@ def _all_run_files(experiment_dir: Path) -> list[Path]:
     rdir = runs_dir(experiment_dir)
     if not rdir.exists():
         return []
-    return [p for p in rdir.glob("*.json") if not p.name.endswith(".tmp")]
+    # Exclude ``*.last_status.json`` cache snapshots written by
+    # ``slash_commands.runner.record_status`` — they share the runs/
+    # directory but are not journal records.  Including them here
+    # made every status poll touch the directory's mtime and force
+    # a full index rebuild on the next ``find_in_flight_runs``.
+    return [
+        p
+        for p in rdir.glob("*.json")
+        if not p.name.endswith(".tmp")
+        and not p.name.endswith(".last_status.json")
+    ]
 
 
 def _read_index(experiment_dir: Path) -> dict:
@@ -348,7 +358,13 @@ def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
     if len(terminal) <= keep:
         return 0
     terminal.sort(key=lambda item: item[0], reverse=True)
-    removed = 0
+
+    # Collect deletions first; update the index once at the end so we
+    # do one atomic write + one flock per prune call instead of N.
+    # Without batching, a process that dies mid-loop leaves run files
+    # ``unlink``'d but still listed in the index — a journal pointing
+    # at ghosts until the next staleness rebuild.
+    removed_ids: list[str] = []
     for _, path, run_id in terminal[keep:]:
         try:
             path.unlink()
@@ -356,11 +372,23 @@ def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
             continue
         with contextlib.suppress(OSError):
             _lock_path(path).unlink()
-        removed += 1
+        # Also unlink the per-run ``.last_status.json`` cache file
+        # written by ``runner.record_status``; otherwise it
+        # accumulates indefinitely.
+        with contextlib.suppress(OSError):
+            (path.parent / f"{path.stem}.last_status.json").unlink()
+        removed_ids.append(run_id)
+
+    if removed_ids:
         idx_path = journal_dir(experiment_dir) / "index.json"
         with _locked(idx_path):
             idx = _read_json(idx_path) or {}
-            if isinstance(idx, dict) and run_id in idx:
-                del idx[run_id]
-                _atomic_write_json(idx_path, idx)
-    return removed
+            if isinstance(idx, dict):
+                changed = False
+                for rid in removed_ids:
+                    if rid in idx:
+                        del idx[rid]
+                        changed = True
+                if changed:
+                    _atomic_write_json(idx_path, idx)
+    return len(removed_ids)

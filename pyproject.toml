@@ -9,6 +9,12 @@ description = "HPC orchestrator for Claude Code and agent harnesses (MARs, etc.)
 requires-python = ">=3.10"
 dependencies = [
     "pyyaml>=6.0",
+    # Schema validation is part of the documented CLI contract
+    # (docs/cli-spec.md): every ``--spec`` payload is validated against
+    # the matching JSON Schema before the subcommand runs.  Importing
+    # the library lazily keeps the lock-step with older installs that
+    # haven't picked it up yet, but it must be a runtime dep.
+    "jsonschema>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -16,7 +22,6 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "pytest>=8.0",
-    "jsonschema>=4.0",
 ]
 tui = [
     "rich>=13.0",

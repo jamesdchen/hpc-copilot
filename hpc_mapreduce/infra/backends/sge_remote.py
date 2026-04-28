@@ -6,6 +6,7 @@ to be provided at construction time (no project-specific imports).
 
 from __future__ import annotations
 
+import re
 import shlex
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,10 @@ class RemoteSGEBackend(HPCBackend):
     pass_env_keys : tuple[str, ...]
         Environment variable names to forward via ``qsub -v``.
     """
+
+    # Same anchored regex as the local SGE backend — qsub output format
+    # is identical regardless of how we invoke it.
+    JOB_ID_REGEX = re.compile(r"Your job(?:-array)?\s+(\d+)")
 
     def __init__(
         self,

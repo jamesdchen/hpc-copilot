@@ -46,8 +46,9 @@ import json
 import logging
 import os
 import subprocess
-import time
 from pathlib import Path
+
+from hpc_mapreduce._time import utcnow_iso
 
 logger = logging.getLogger(__name__)
 
@@ -144,19 +145,33 @@ def check_results(
 
 
 def detect_scheduler(result_dir: str | Path | None = None) -> str:
-    """Auto-detect scheduler type."""
+    """Auto-detect scheduler type.
+
+    When *result_dir* is given, look for ``experiment_meta.json`` in that
+    directory and any of its ancestors up to the filesystem root. This
+    matches both the "one shared meta file per experiment" layout (meta
+    lives at the experiment root) and the "meta file per task" layout
+    (meta lives directly in result_dir).
+    """
     if result_dir is not None:
-        meta_path = Path(result_dir) / "experiment_meta.json"
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text())
-                backend = meta.get("backend", "")
-                if "sge" in backend:
-                    return "sge"
-                if "slurm" in backend:
-                    return "slurm"
-            except (json.JSONDecodeError, OSError):
-                pass
+        candidate: Path | None = Path(result_dir)
+        seen: set[Path] = set()
+        while candidate is not None and candidate not in seen:
+            seen.add(candidate)
+            meta_path = candidate / "experiment_meta.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    backend = meta.get("backend", "")
+                    if "sge" in backend:
+                        return "sge"
+                    if "slurm" in backend:
+                        return "slurm"
+                except (json.JSONDecodeError, OSError):
+                    pass
+                break  # found meta, but its backend was unrecognised
+            parent = candidate.parent
+            candidate = parent if parent != candidate else None
     try:
         result = subprocess.run(["sacct", "--version"], capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
@@ -298,7 +313,7 @@ def report_status(
         "result_dir": str(Path(result_dir).resolve()),
         "total_tasks": total_tasks,
         "scheduler": scheduler,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "timestamp": utcnow_iso(),
         "tasks": tasks,
         "summary": summary,
         "errors": errors,
@@ -415,7 +430,13 @@ def report_status_from_manifest(
     completed = check_results_from_manifest(manifest, file_glob=file_glob, min_rows=min_rows)
 
     if scheduler is None:
-        scheduler = detect_scheduler()
+        # Pass a representative per-task result_dir so detect_scheduler can
+        # consult experiment_meta.json instead of falling back to the
+        # ``sacct --version`` shell heuristic — which silently returns "sge"
+        # on hosts without sacct on $PATH.
+        first_task = next(iter(manifest_tasks.values()), None)
+        meta_dir = first_task.get("result_dir") if isinstance(first_task, dict) else None
+        scheduler = detect_scheduler(meta_dir)
 
     errors: list[dict] = []
     if job_ids:
@@ -477,7 +498,7 @@ def report_status_from_manifest(
     report: dict = {
         "total_tasks": total,
         "scheduler": scheduler,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "timestamp": utcnow_iso(),
         "tasks": tasks,
         "summary": summary,
         "errors": errors,
