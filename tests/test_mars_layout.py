@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hpc_mapreduce.job.discover import (
     detect_mars_tier,
@@ -26,6 +26,8 @@ from hpc_mapreduce.job.discover import (
     read_meta_json,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _EXEC_SRC = (
     "import argparse\n"
