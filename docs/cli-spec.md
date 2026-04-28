@@ -169,11 +169,32 @@ that looks like a CLI per `hpc_mapreduce.job.discover.is_executor_source`).
 
 Args: `--experiment-dir`.
 
-`data` shape:
+`data` shape (validated against `schemas/discover.output.json`):
 
 ```json
-{"executors": [{"name": "train", "path": "/abs/.../src/train.py", "flags": ["--lr", "--seed"]}]}
+{"executors": [{"name": "train", "path": "/abs/.../scripts/train.py", "cli_framework": "argparse", "has_main_guard": true}]}
 ```
+
+When the experiment-dir has a MARs `meta.json` at its root, the envelope
+also includes a `meta` block with the fields claude-hpc knows about plus
+a path-derived tier:
+
+```json
+{
+  "executors": [...],
+  "meta": {
+    "experiment_id": "run-001-foo",
+    "seed": 42,
+    "purpose": "ridge baseline",
+    "tier": 2
+  }
+}
+```
+
+`tier` is `1` for `probes/probe-*` paths with `probe.py` at root, `2` for
+`runs/run-*` paths with `scripts/`, and `null` otherwise. The MARs layout
+filter narrows discovery to `scripts/` (Tier-2 entrypoints) and the
+root-level `probe.py` (Tier-1) — never `src/`, MARs's modules-only dir.
 
 Idempotent: yes. Error codes: `internal` only. Exit: 0.
 
@@ -284,9 +305,16 @@ Args:
   "manifest_filename": "manifest.3a7b8c9d.json",
   "job_ids": ["12345"],
   "total_tasks": 24,
-  "run_id": null
+  "run_id": null,
+  "runtime": null
 }
 ```
+
+Optional `runtime` accepts `"uv"` or `null` (default). When `"uv"`, the
+caller is expected to have built the manifest with
+`build_task_manifest(runtime="uv")` so every task `cmd` is prefixed with
+`uv run`, and to ensure `HPC_RUNTIME=uv` is exported into the job
+environment so the template's `uv sync` preamble fires before dispatch.
 
 `data` shape (validated against `schemas/submit.output.json`):
 

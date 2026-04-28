@@ -9,12 +9,14 @@ Templates are read as static text — no scheduler is invoked.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from hpc_mapreduce import _PACKAGE_ROOT
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 TEMPLATES = [
     _PACKAGE_ROOT / "templates" / "sge" / "cpu_array.sh",
