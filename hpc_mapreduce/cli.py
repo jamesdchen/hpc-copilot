@@ -28,7 +28,11 @@ from typing import Any
 
 import hpc_mapreduce
 from hpc_mapreduce.infra.clusters import load_clusters_config
-from hpc_mapreduce.job.discover import discover_executors
+from hpc_mapreduce.job.discover import (
+    detect_mars_tier,
+    discover_executors,
+    read_meta_json,
+)
 from hpc_mapreduce.job.grid import expand_grid
 from slash_commands import errors, runner, session
 
@@ -311,21 +315,40 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
 def cmd_discover(args: argparse.Namespace) -> int:
     infos = discover_executors(args.experiment_dir)
-    _ok(
-        {
-            "executors": [
-                {
-                    "name": i.name,
-                    "path": str(i.path),
-                    "cli_framework": i.cli_framework,
-                    "has_main_guard": i.has_main_guard,
-                }
-                for i in infos
-            ]
-        },
-        idempotent=True,
-    )
+    data: dict[str, Any] = {
+        "executors": [
+            {
+                "name": i.name,
+                "path": str(i.path),
+                "cli_framework": i.cli_framework,
+                "has_main_guard": i.has_main_guard,
+            }
+            for i in infos
+        ]
+    }
+    meta = _build_mars_meta_block(Path(args.experiment_dir))
+    if meta is not None:
+        data["meta"] = meta
+    _ok(data, idempotent=True)
     return EXIT_OK
+
+
+def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
+    """Assemble the ``meta`` block for the discover envelope.
+
+    Returns ``None`` when *experiment_dir* is not a MARs experiment
+    (no ``meta.json`` present). Otherwise extracts the fields claude-hpc
+    knows about and adds a path-derived ``tier``.
+    """
+    raw = read_meta_json(experiment_dir)
+    if raw is None:
+        return None
+    block: dict[str, Any] = {}
+    for key in ("experiment_id", "seed", "purpose"):
+        if key in raw:
+            block[key] = raw[key]
+    block["tier"] = detect_mars_tier(experiment_dir)
+    return block
 
 
 # ─── subcommand: expand-grid ───────────────────────────────────────────────
