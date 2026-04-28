@@ -481,12 +481,57 @@ def cmd_submit(args: argparse.Namespace) -> int:
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
 
 
+def _hpc_yaml_aggregate_defaults(
+    experiment_dir: Path, profile: str | None
+) -> dict[str, str]:
+    """Read ``profiles[profile].results.{require_outputs,expect_output}``.
+
+    Returns an empty dict when hpc.yaml is missing, malformed, or the
+    profile has no aggregate defaults.  Silent failure is intentional —
+    config validity is enforced by ``/submit``, not the aggregate path.
+    """
+    hpc_yaml = experiment_dir / "hpc.yaml"
+    if not hpc_yaml.is_file():
+        return {}
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+    try:
+        data = yaml.safe_load(hpc_yaml.read_text()) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    profiles = data.get("profiles") or {}
+    if profile and isinstance(profiles, dict) and profile in profiles:
+        results_block = (profiles[profile] or {}).get("results") or {}
+    elif not profiles:
+        # Single-profile shorthand: results at top level
+        results_block = data.get("results") or {}
+    else:
+        return {}
+    if not isinstance(results_block, dict):
+        return {}
+    return {
+        k: results_block[k]
+        for k in ("require_outputs", "expect_output")
+        if isinstance(results_block.get(k), str)
+    }
+
+
 def cmd_aggregate(args: argparse.Namespace) -> int:
-    # The full aggregation pipeline is driven by slash_commands.runner.combine_wave
-    # plus the user-supplied combiner script on the cluster. The CLI exposes the
-    # journal-update half so a calling agent can record successful aggregation
-    # outcomes; running an actual combiner from the CLI is deliberately out of
-    # scope for this version (combiner choice + output dir layout is user-side).
+    # The aggregation pipeline is driven by slash_commands.runner.combine_wave
+    # plus the user-supplied combiner script on the cluster. The CLI wraps it
+    # with three optional, framework-agnostic guarantees:
+    #   --require-outputs <template>  : every per-task output exists before
+    #                                   the combiner runs (precondition)
+    #   --expect-output <path>        : the combiner produced a parseable
+    #                                   artifact at <path> (postcondition)
+    #   provenance                    : metadata block in envelope.data and
+    #                                   sidecar file when --expect-output set
+    # Defaults for require/expect can be set in hpc.yaml under
+    # ``results.require_outputs`` / ``results.expect_output``.
     if (rc := _require_ssh_agent()) is not None:
         return rc
     record = session.load_run(args.experiment_dir, args.run_id)
@@ -496,6 +541,32 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         )
     if args.wave is None:
         raise errors.ManifestInvalid("aggregate requires --wave <int>")
+
+    # Resolve aggregate flags: explicit CLI > hpc.yaml > none.
+    # ``getattr`` keeps in-process callers (tests, slash-command shims)
+    # working even when they hand-build a Namespace without these keys.
+    defaults = _hpc_yaml_aggregate_defaults(args.experiment_dir, record.profile)
+    require_outputs = getattr(args, "require_outputs", None) or defaults.get("require_outputs")
+    expect_output = getattr(args, "expect_output", None) or defaults.get("expect_output")
+
+    # Precondition: every per-task output must exist before we combine.
+    if require_outputs:
+        missing = runner.verify_per_task_outputs(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            manifest_filename=record.manifest,
+            wave=int(args.wave),
+            template=require_outputs,
+        )
+        if missing:
+            preview = missing[:10]
+            ellipsis = "..." if len(missing) > 10 else ""
+            return _err_from_hpc(
+                errors.OutputsMissing(
+                    f"{len(missing)} per-task output(s) missing for wave "
+                    f"{args.wave}: {preview}{ellipsis}",
+                )
+            )
 
     ok, stdout, stderr = runner.combine_wave(
         args.experiment_dir,
@@ -507,16 +578,45 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         force=args.force,
     )
     if ok:
-        _ok(
-            {
-                "run_id": args.run_id,
-                "wave": int(args.wave),
-                "combined": True,
-                "stdout_tail": stdout[-2000:],
-                "stderr_tail": stderr[-2000:],
-            },
-            idempotent=True,
-        )
+        # Postcondition: the combiner must have produced the declared file.
+        if expect_output:
+            artifact_ok, detail = runner.verify_combiner_artifact(
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                expect_output=expect_output,
+            )
+            if not artifact_ok:
+                return _err_from_hpc(
+                    errors.CombinerFailed(
+                        f"combiner returned 0 but expected output {expect_output!r} {detail}",
+                    )
+                )
+
+        provenance = runner.build_provenance(record, wave=int(args.wave))
+        sidecar_path: str | None = None
+        if expect_output:
+            try:
+                sidecar_path = runner.write_remote_provenance(
+                    ssh_target=record.ssh_target,
+                    remote_path=record.remote_path,
+                    expect_output=expect_output,
+                    provenance=provenance,
+                )
+            except errors.RemoteCommandFailed:
+                # Best-effort — envelope still carries provenance.
+                sidecar_path = None
+
+        data: dict[str, Any] = {
+            "run_id": args.run_id,
+            "wave": int(args.wave),
+            "combined": True,
+            "stdout_tail": stdout[-2000:],
+            "stderr_tail": stderr[-2000:],
+            "provenance": provenance,
+        }
+        if sidecar_path is not None:
+            data["provenance_sidecar"] = sidecar_path
+        _ok(data, idempotent=True)
         return EXIT_OK
     # Combiner returned non-zero — surface as a typed error so the
     # envelope's ``ok`` field and the exit code stay in sync.  Tail of
@@ -745,6 +845,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Re-run the combiner even if the wave appears combined.",
+    )
+    p_agg.add_argument(
+        "--require-outputs",
+        default=None,
+        help=(
+            "Path template (with {task_id}) checked on the cluster before "
+            "the combiner runs. Refuses to combine if any task in this "
+            "wave is missing its expected output. Default reads from "
+            "hpc.yaml's results.require_outputs."
+        ),
+    )
+    p_agg.add_argument(
+        "--expect-output",
+        default=None,
+        help=(
+            "Remote path (relative to remote_path) that the combiner must "
+            "produce. Verified after the combiner exits 0; .json files "
+            "are also checked for parseability. Default reads from "
+            "hpc.yaml's results.expect_output."
+        ),
     )
     p_agg.set_defaults(func=cmd_aggregate)
 

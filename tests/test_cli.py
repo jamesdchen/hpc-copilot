@@ -519,6 +519,237 @@ def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
     assert payload["error_code"] == "ssh_unreachable"
 
 
+# ─── aggregate preconditions / postconditions / provenance ─────────────────
+
+
+def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
+    """Helper: seed a journal record so cmd_aggregate gets past lookup."""
+    from slash_commands import session as session_mod
+    from slash_commands.session import RunRecord
+
+    rec = RunRecord(
+        run_id=run_id,
+        profile="ml",
+        cluster="hoffman2",
+        ssh_target="user@host",
+        remote_path="/exp",
+        job_name="ml",
+        job_ids=["12345"],
+        manifest="manifest.abcd1234.json",
+        total_tasks=2,
+        submitted_at="2026-04-28T00:00:00+00:00",
+        experiment_dir=str(tmp_path),
+    )
+    session_mod.upsert_run(tmp_path, rec)
+    return rec
+
+
+def test_aggregate_precondition_blocks_combine_on_missing_outputs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--require-outputs must refuse to combine when any per-task output is
+    absent on the cluster, before invoking the user's combiner."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs="results/metrics.{task_id}.json",
+        expect_output=None,
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner,
+        "verify_per_task_outputs",
+        return_value=["results/metrics.1.json"],
+    ), patch.object(
+        cli.runner, "combine_wave"
+    ) as combine_mock, patch.object(
+        cli, "_emit", side_effect=lambda p: captured.append(p)
+    ):
+        rc = cli.cmd_aggregate(args)
+
+    combine_mock.assert_not_called(), "combiner must not run when outputs missing"
+    assert rc != 0
+    payload = captured[-1]
+    assert payload["ok"] is False
+    assert payload["error_code"] == "outputs_missing"
+    assert payload["retry_safe"] is True
+
+
+def test_aggregate_postcondition_fails_when_combiner_artifact_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--expect-output must surface combiner_failed when the combiner exits 0
+    but the declared output isn't there or isn't parseable."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,
+        expect_output="results/metrics.json",
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(
+        cli.runner,
+        "verify_combiner_artifact",
+        return_value=(False, "is missing at /exp/results/metrics.json"),
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc != 0
+    payload = captured[-1]
+    assert payload["ok"] is False
+    assert payload["error_code"] == "combiner_failed"
+    assert "results/metrics.json" in payload["message"]
+
+
+def test_aggregate_envelope_carries_provenance_on_success(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Successful aggregate must embed provenance metadata in envelope.data."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,
+        expect_output=None,
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc == 0
+    payload = captured[-1]
+    assert payload["ok"] is True
+    prov = payload["data"]["provenance"]
+    assert prov["run_id"] == "ml_abcd1234"
+    assert prov["wave"] == 0
+    assert prov["manifest"] == "manifest.abcd1234.json"
+    assert prov["profile"] == "ml"
+    assert prov["cluster"] == "hoffman2"
+    assert "combined_at" in prov
+
+
+def test_aggregate_reads_hpc_yaml_defaults_for_require_and_expect(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When the CLI flags are omitted, hpc.yaml's results.{require_outputs,
+    expect_output} must be honored under the matching profile."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    (tmp_path / "hpc.yaml").write_text(
+        "profiles:\n"
+        "  ml:\n"
+        "    results:\n"
+        "      require_outputs: 'results/metrics.{task_id}.json'\n"
+        "      expect_output: 'results/metrics.json'\n"
+    )
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,  # no CLI flag — default should apply
+        expect_output=None,
+    )
+
+    seen_template: list[str] = []
+    seen_expect: list[str] = []
+
+    def fake_verify_outputs(*, template, **_kw):
+        seen_template.append(template)
+        return []  # nothing missing
+
+    def fake_verify_artifact(*, expect_output, **_kw):
+        seen_expect.append(expect_output)
+        return True, "ok"
+
+    with patch.object(
+        cli.runner, "verify_per_task_outputs", side_effect=fake_verify_outputs
+    ), patch.object(
+        cli.runner, "verify_combiner_artifact", side_effect=fake_verify_artifact
+    ), patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(
+        cli.runner, "write_remote_provenance", return_value="/exp/results/_provenance.json"
+    ), patch.object(cli, "_emit"):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc == 0, "hpc.yaml-defaulted aggregate should succeed"
+    assert seen_template == ["results/metrics.{task_id}.json"]
+    assert seen_expect == ["results/metrics.json"]
+
+
+def test_aggregate_writes_sidecar_when_expect_output_set(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When --expect-output is set, the envelope reports the sidecar path."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,
+        expect_output="results/metrics.json",
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(
+        cli.runner, "verify_combiner_artifact", return_value=(True, "ok")
+    ), patch.object(
+        cli.runner,
+        "write_remote_provenance",
+        return_value="/exp/results/_provenance.json",
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc == 0
+    payload = captured[-1]
+    assert payload["data"]["provenance_sidecar"] == "/exp/results/_provenance.json"
+
+
 def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
     """`capabilities`, `expand-grid`, `clusters list`, `submit --dry-run`,
     and `submit` (journal-only) must not be gated by SSH_AUTH_SOCK."""
