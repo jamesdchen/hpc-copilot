@@ -632,6 +632,84 @@ def test_build_provenance_carries_run_metadata(experiment):
     assert "T" in prov["combined_at"] and prov["combined_at"].endswith("+00:00")
 
 
+def test_derive_resubmit_request_id_is_deterministic():
+    """Same input → same id, regardless of dict-key order in overrides."""
+    a = runner.derive_resubmit_request_id(
+        failed_task_ids=[3, 7, 1],  # unsorted
+        category="system_oom",
+        overrides={"mem": "32G", "walltime": "2:00:00"},
+    )
+    b = runner.derive_resubmit_request_id(
+        failed_task_ids=[1, 3, 7],
+        category="system_oom",
+        overrides={"walltime": "2:00:00", "mem": "32G"},  # reordered
+    )
+    assert a == b
+    assert a.startswith("rs_")
+
+
+def test_derive_resubmit_request_id_differs_on_overrides():
+    a = runner.derive_resubmit_request_id(
+        failed_task_ids=[3], category="walltime", overrides={"walltime": "2:00:00"}
+    )
+    b = runner.derive_resubmit_request_id(
+        failed_task_ids=[3], category="walltime", overrides={"walltime": "4:00:00"}
+    )
+    assert a != b
+
+
+def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
+    """Second call with the same spec returns deduped=True without bumping
+    retry counters."""
+    _seed_run(experiment)
+
+    rec1, dedup1, rid1 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[3],
+        category="system_oom",
+        overrides={"mem": "32G"},
+    )
+    assert dedup1 is False
+    assert rec1.retries["3"]["attempts"] == 1
+
+    # Same spec again — should dedupe.
+    rec2, dedup2, rid2 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[3],
+        category="system_oom",
+        overrides={"mem": "32G"},
+    )
+    assert dedup2 is True
+    assert rid2 == rid1
+    # Counter must NOT have incremented.
+    after = session.load_run(experiment, "ml_ridge_abcd1234")
+    assert after.retries["3"]["attempts"] == 1
+
+
+def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
+    """Caller-supplied request_id is honored for dedupe."""
+    _seed_run(experiment)
+
+    _, dedup1, rid1 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[3],
+        category="system_oom",
+        request_id="rs_explicit_abc",
+    )
+    assert dedup1 is False
+    assert rid1 == "rs_explicit_abc"
+
+    _, dedup2, rid2 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[7],  # different task!
+        category="walltime",  # different category!
+        request_id="rs_explicit_abc",  # but same id
+    )
+    # Same explicit request_id wins over differing spec.
+    assert dedup2 is True
+    assert rid2 == "rs_explicit_abc"
+
+
 def test_fingerprint_strips_volatile_noise():
     """Two failures differing only in path / pid / timestamp share a fingerprint."""
     line_a = (
