@@ -20,9 +20,11 @@ __all__ = [
     "detect_mars_tier",
     "discover_executors",
     "is_executor_source",
+    "read_meta_json",
 ]
 
 import ast
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -96,6 +98,28 @@ class ExecutorInfo:
     def is_executor(self) -> bool:
         """An executor has BOTH a main guard and a recognized CLI framework."""
         return self.has_main_guard and self.cli_framework is not None
+
+
+def read_meta_json(experiment_dir: Path | str) -> dict | None:
+    """Return the parsed ``meta.json`` of *experiment_dir* if present and valid.
+
+    MARs's ``meta.json`` is the authoritative experiment-context marker
+    (``experiment_id``, ``seed``, ``purpose``, …). This helper lets every
+    surface — CLI, slash command, future MARs adapters — read it through one
+    seam.
+
+    Returns ``None`` when the file is missing, unreadable, or not a JSON
+    object. Never raises; claude-hpc is not the place to validate MARs's
+    schema beyond extracting the fields it knows about.
+    """
+    p = Path(experiment_dir) / "meta.json"
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def detect_mars_tier(experiment_dir: Path | str) -> int | None:
