@@ -89,6 +89,24 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
     )
 
 
+def _require_ssh_agent() -> int | None:
+    # Cluster-touching subcommands hang silently when SSH_AUTH_SOCK is
+    # missing — the most common Bun.spawn failure mode for orchestrators
+    # like MARs. Fail fast with a typed error instead of stalling on auth.
+    if os.environ.get("SSH_AUTH_SOCK"):
+        return None
+    return _err_from_hpc(
+        errors.SshUnreachable(
+            "SSH_AUTH_SOCK is not set; cannot reach the cluster.",
+            remediation=(
+                "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
+                "environment, then run `hpc-mapreduce preflight` to verify. "
+                "See docs/mars-integration.md for the Bun.spawn env block."
+            ),
+        )
+    )
+
+
 # ─── shared option helpers ─────────────────────────────────────────────────
 
 
@@ -164,6 +182,29 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
 # ─── subcommand: capabilities ──────────────────────────────────────────────
 
 
+_MARS_SKILL_NAMES = (
+    "hpc-submit",
+    "hpc-status",
+    "hpc-preflight",
+    "hpc-aggregate",
+    "hpc-build-executor",
+)
+
+
+def _mars_skill_paths() -> dict[str, str]:
+    # Skills live one level up from the package (skills/ is a sibling of
+    # hpc_mapreduce/ in the source tree). Wheel-only deploys won't ship
+    # them — return only entries that resolve to an existing file so a
+    # consumer can rely on every value being a real path.
+    skills_root = hpc_mapreduce._PACKAGE_ROOT.parent / "skills"
+    out: dict[str, str] = {}
+    for name in _MARS_SKILL_NAMES:
+        path = skills_root / name / "SKILL.md"
+        if path.is_file():
+            out[name] = str(path.resolve())
+    return out
+
+
 def cmd_capabilities(_args: argparse.Namespace) -> int:
     _ok(
         {
@@ -181,11 +222,19 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "clusters",
                 "capabilities",
                 "build-executor",
+                "logs",
+                "failures",
             ],
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
             "journal_dir": str(session.HPC_HOMEDIR),
             "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
+            "mars_skill_paths": _mars_skill_paths(),
+            "required_env": [
+                "SSH_AUTH_SOCK",
+                "HPC_JOURNAL_DIR",
+                "HPC_CLUSTERS_CONFIG",
+            ],
         },
         idempotent=True,
     )
@@ -282,6 +331,30 @@ def cmd_discover(args: argparse.Namespace) -> int:
 # ─── subcommand: expand-grid ───────────────────────────────────────────────
 
 
+_WALLTIME_RE = __import__("re").compile(
+    r"^(?:(?P<h>\d+):)?(?P<m>\d+):(?P<s>\d+)$|^(?P<bare_hours>\d+(?:\.\d+)?)h$",
+    __import__("re").IGNORECASE,
+)
+
+
+def _parse_walltime_to_seconds(value: str) -> int:
+    """Accept ``HH:MM:SS``, ``MM:SS``, or ``<float>h``; return seconds.
+
+    Raises :class:`errors.ManifestInvalid` on unparseable input.
+    """
+    m = _WALLTIME_RE.match(value.strip())
+    if not m:
+        raise errors.ManifestInvalid(
+            f"--per-task-walltime must be HH:MM:SS, MM:SS, or <float>h; got {value!r}"
+        )
+    if m.group("bare_hours"):
+        return int(round(float(m.group("bare_hours")) * 3600))
+    h = int(m.group("h") or 0)
+    minutes = int(m.group("m"))
+    s = int(m.group("s"))
+    return h * 3600 + minutes * 60 + s
+
+
 def cmd_expand_grid(args: argparse.Namespace) -> int:
     spec = _load_spec(args.spec, schema_name="expand_grid")
     grid = spec.get("grid")
@@ -290,7 +363,43 @@ def cmd_expand_grid(args: argparse.Namespace) -> int:
             "--spec must contain a top-level 'grid' object mapping name → values."
         )
     points = expand_grid(grid)
-    _ok({"points": points, "total": len(points)}, idempotent=True)
+
+    data: dict[str, Any] = {"points": points, "total": len(points)}
+
+    walltime_str = getattr(args, "per_task_walltime", None)
+    if walltime_str:
+        seconds = _parse_walltime_to_seconds(walltime_str)
+        cpus = max(1, int(getattr(args, "per_task_cpus", 1) or 1))
+        gpus = max(0, int(getattr(args, "per_task_gpus", 0) or 0))
+        max_concurrent = getattr(args, "max_concurrent_tasks", None)
+        if max_concurrent is not None:
+            try:
+                max_concurrent = max(1, int(max_concurrent))
+            except (TypeError, ValueError):
+                raise errors.ManifestInvalid(
+                    f"--max-concurrent-tasks must be a positive integer; "
+                    f"got {max_concurrent!r}"
+                )
+
+        total_task_seconds = seconds * len(points)
+        cost = {
+            "per_task_walltime_seconds": seconds,
+            "per_task_cpus": cpus,
+            "per_task_gpus": gpus,
+            "total_tasks": len(points),
+            "total_cpu_hours": round(total_task_seconds * cpus / 3600.0, 2),
+            "total_gpu_hours": round(total_task_seconds * gpus / 3600.0, 2),
+        }
+        if max_concurrent:
+            # Wall-clock estimate: ceil(total_tasks / max_concurrent) * walltime.
+            from math import ceil
+            waves = ceil(len(points) / max_concurrent)
+            cost["estimated_walltime_seconds"] = waves * seconds
+            cost["estimated_walltime_hours"] = round(waves * seconds / 3600.0, 2)
+            cost["max_concurrent_tasks"] = max_concurrent
+        data["cost_estimate"] = cost
+
+    _ok(data, idempotent=True)
     return EXIT_OK
 
 
@@ -324,6 +433,30 @@ def cmd_clusters_describe(args: argparse.Namespace) -> int:
 # ─── subcommand: list-in-flight ────────────────────────────────────────────
 
 
+def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
+    """Return age in seconds of ``last_status.checked_at``, or None.
+
+    Returns ``None`` when ``last_status`` is empty, has no ``checked_at``,
+    or the timestamp is unparseable.  Callers use this to surface
+    staleness to humans without changing the freshness contract of any
+    SSH-mutating subcommand.
+    """
+    if not isinstance(last_status, dict):
+        return None
+    iso = last_status.get("checked_at")
+    if not isinstance(iso, str):
+        return None
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.fromisoformat(iso)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - ts
+        return max(0, int(delta.total_seconds()))
+    except (ValueError, TypeError):
+        return None
+
+
 def cmd_list_in_flight(args: argparse.Namespace) -> int:
     records = session.find_in_flight_runs(args.experiment_dir)
     _ok(
@@ -337,6 +470,7 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
                     "total_tasks": r.total_tasks,
                     "submitted_at": r.submitted_at,
                     "last_status": r.last_status,
+                    "last_status_age_seconds": _last_status_age_seconds(r.last_status),
                 }
                 for r in records
             ]
@@ -350,6 +484,8 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
     record = session.load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(
@@ -369,6 +505,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "run_id": updated.run_id,
             "lifecycle_state": updated.status,
             "last_status": updated.last_status,
+            "last_status_age_seconds": _last_status_age_seconds(updated.last_status),
             "combined_waves": updated.combined_waves,
             "failed_waves": updated.failed_waves,
         },
@@ -390,7 +527,18 @@ def cmd_submit(args: argparse.Namespace) -> int:
             f"--spec missing required fields: {missing}. See docs/cli-spec.md."
         )
 
+    # Pre-submit manifest sanity: opportunistic — if the manifest exists
+    # locally at the conventional path, validate it before recording the
+    # submission. Catches unresolved {placeholder}s, empty cmd fields, and
+    # wave_map / tasks coverage drift before they crash the cluster job
+    # mid-run. When the manifest is only on the cluster (rare), we skip.
+    manifest_path = args.experiment_dir / spec["manifest_filename"]
+    skip_check = getattr(args, "skip_manifest_check", False)
+    if manifest_path.is_file() and not skip_check:
+        runner.validate_manifest_file(manifest_path)
+
     if args.dry_run:
+
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
@@ -431,12 +579,96 @@ def cmd_submit(args: argparse.Namespace) -> int:
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
 
 
+def _hpc_yaml_auto_retry(
+    experiment_dir: Path, profile: str | None
+) -> dict[str, dict[str, Any]]:
+    """Read ``profiles[profile].auto_retry`` from hpc.yaml.
+
+    Returns the raw nested dict (category -> policy fields). Empty when
+    hpc.yaml is missing, malformed, or has no ``auto_retry`` block.
+    """
+    hpc_yaml = experiment_dir / "hpc.yaml"
+    if not hpc_yaml.is_file():
+        return {}
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+    try:
+        data = yaml.safe_load(hpc_yaml.read_text()) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    profiles = data.get("profiles") or {}
+    if profile and isinstance(profiles, dict) and profile in profiles:
+        block = (profiles[profile] or {}).get("auto_retry") or {}
+    elif not profiles:
+        block = data.get("auto_retry") or {}
+    else:
+        return {}
+    if not isinstance(block, dict):
+        return {}
+    return {
+        cat: pol
+        for cat, pol in block.items()
+        if isinstance(cat, str) and isinstance(pol, dict)
+    }
+
+
+def _hpc_yaml_aggregate_defaults(
+    experiment_dir: Path, profile: str | None
+) -> dict[str, str]:
+    """Read ``profiles[profile].results.{require_outputs,expect_output}``.
+
+    Returns an empty dict when hpc.yaml is missing, malformed, or the
+    profile has no aggregate defaults.  Silent failure is intentional —
+    config validity is enforced by ``/submit``, not the aggregate path.
+    """
+    hpc_yaml = experiment_dir / "hpc.yaml"
+    if not hpc_yaml.is_file():
+        return {}
+    try:
+        import yaml  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+    try:
+        data = yaml.safe_load(hpc_yaml.read_text()) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    profiles = data.get("profiles") or {}
+    if profile and isinstance(profiles, dict) and profile in profiles:
+        results_block = (profiles[profile] or {}).get("results") or {}
+    elif not profiles:
+        # Single-profile shorthand: results at top level
+        results_block = data.get("results") or {}
+    else:
+        return {}
+    if not isinstance(results_block, dict):
+        return {}
+    return {
+        k: results_block[k]
+        for k in ("require_outputs", "expect_output")
+        if isinstance(results_block.get(k), str)
+    }
+
+
 def cmd_aggregate(args: argparse.Namespace) -> int:
-    # The full aggregation pipeline is driven by slash_commands.runner.combine_wave
-    # plus the user-supplied combiner script on the cluster. The CLI exposes the
-    # journal-update half so a calling agent can record successful aggregation
-    # outcomes; running an actual combiner from the CLI is deliberately out of
-    # scope for this version (combiner choice + output dir layout is user-side).
+    # The aggregation pipeline is driven by slash_commands.runner.combine_wave
+    # plus the user-supplied combiner script on the cluster. The CLI wraps it
+    # with three optional, framework-agnostic guarantees:
+    #   --require-outputs <template>  : every per-task output exists before
+    #                                   the combiner runs (precondition)
+    #   --expect-output <path>        : the combiner produced a parseable
+    #                                   artifact at <path> (postcondition)
+    #   provenance                    : metadata block in envelope.data and
+    #                                   sidecar file when --expect-output set
+    # Defaults for require/expect can be set in hpc.yaml under
+    # ``results.require_outputs`` / ``results.expect_output``.
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
     record = session.load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(
@@ -444,6 +676,32 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         )
     if args.wave is None:
         raise errors.ManifestInvalid("aggregate requires --wave <int>")
+
+    # Resolve aggregate flags: explicit CLI > hpc.yaml > none.
+    # ``getattr`` keeps in-process callers (tests, slash-command shims)
+    # working even when they hand-build a Namespace without these keys.
+    defaults = _hpc_yaml_aggregate_defaults(args.experiment_dir, record.profile)
+    require_outputs = getattr(args, "require_outputs", None) or defaults.get("require_outputs")
+    expect_output = getattr(args, "expect_output", None) or defaults.get("expect_output")
+
+    # Precondition: every per-task output must exist before we combine.
+    if require_outputs:
+        missing = runner.verify_per_task_outputs(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            manifest_filename=record.manifest,
+            wave=int(args.wave),
+            template=require_outputs,
+        )
+        if missing:
+            preview = missing[:10]
+            ellipsis = "..." if len(missing) > 10 else ""
+            return _err_from_hpc(
+                errors.OutputsMissing(
+                    f"{len(missing)} per-task output(s) missing for wave "
+                    f"{args.wave}: {preview}{ellipsis}",
+                )
+            )
 
     ok, stdout, stderr = runner.combine_wave(
         args.experiment_dir,
@@ -455,16 +713,45 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         force=args.force,
     )
     if ok:
-        _ok(
-            {
-                "run_id": args.run_id,
-                "wave": int(args.wave),
-                "combined": True,
-                "stdout_tail": stdout[-2000:],
-                "stderr_tail": stderr[-2000:],
-            },
-            idempotent=True,
-        )
+        # Postcondition: the combiner must have produced the declared file.
+        if expect_output:
+            artifact_ok, detail = runner.verify_combiner_artifact(
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                expect_output=expect_output,
+            )
+            if not artifact_ok:
+                return _err_from_hpc(
+                    errors.CombinerFailed(
+                        f"combiner returned 0 but expected output {expect_output!r} {detail}",
+                    )
+                )
+
+        provenance = runner.build_provenance(record, wave=int(args.wave))
+        sidecar_path: str | None = None
+        if expect_output:
+            try:
+                sidecar_path = runner.write_remote_provenance(
+                    ssh_target=record.ssh_target,
+                    remote_path=record.remote_path,
+                    expect_output=expect_output,
+                    provenance=provenance,
+                )
+            except errors.RemoteCommandFailed:
+                # Best-effort — envelope still carries provenance.
+                sidecar_path = None
+
+        data: dict[str, Any] = {
+            "run_id": args.run_id,
+            "wave": int(args.wave),
+            "combined": True,
+            "stdout_tail": stdout[-2000:],
+            "stderr_tail": stderr[-2000:],
+            "provenance": provenance,
+        }
+        if sidecar_path is not None:
+            data["provenance_sidecar"] = sidecar_path
+        _ok(data, idempotent=True)
         return EXIT_OK
     # Combiner returned non-zero — surface as a typed error so the
     # envelope's ``ok`` field and the exit code stay in sync.  Tail of
@@ -512,21 +799,26 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"got {category!r}"
         )
 
-    record = runner.resubmit_failed(
+    record, deduped, request_id = runner.resubmit_failed(
         args.experiment_dir,
         args.run_id,
         failed_task_ids=[int(t) for t in failed],
         category=category,
         overrides=spec.get("overrides"),
         new_job_ids=spec.get("new_job_ids"),
+        request_id=spec.get("request_id"),
     )
     _ok(
         {
             "run_id": record.run_id,
             "retries": record.retries,
             "job_ids": record.job_ids,
+            "request_id": request_id,
+            "deduped": deduped,
         },
-        idempotent=False,  # each call increments retry counters
+        # Honest now that resubmit_failed dedups on request_id: a replay
+        # with the same spec is a no-op, just like submit.
+        idempotent=True,
     )
     return EXIT_OK
 
@@ -535,6 +827,8 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
     record = runner.reconcile(
         args.experiment_dir,
         args.run_id,
@@ -550,6 +844,182 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         },
         idempotent=True,
     )
+    return EXIT_OK
+
+
+# ─── subcommand: logs ──────────────────────────────────────────────────────
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Fetch per-task stderr logs from the cluster.
+
+    Two ways to select tasks:
+      --task-id 7,12,42   explicit list
+      --all-failed        re-poll status, fetch logs for failed tasks
+    """
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
+
+    record = session.load_run(args.experiment_dir, args.run_id)
+    if record is None:
+        raise errors.JournalCorrupt(
+            f"no journal record for run_id {args.run_id!r}"
+        )
+
+    # Resolve task ids.
+    task_ids: list[int] = []
+    note: str | None = None
+    if getattr(args, "all_failed", False):
+        # Fresh status poll to enumerate failed tasks.
+        try:
+            report = runner._ssh_status_report(
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                manifest_filename=record.manifest,
+                job_ids=record.job_ids,
+                job_name=record.job_name,
+            )
+        except errors.HpcError:
+            raise
+        for tid_str, info in (report.get("tasks") or {}).items():
+            if isinstance(info, dict) and info.get("status") == "failed":
+                try:
+                    task_ids.append(int(tid_str))
+                except (TypeError, ValueError):
+                    continue
+        if not task_ids:
+            note = "no failed tasks in current status report"
+    elif args.task_id:
+        try:
+            task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
+        except ValueError as exc:
+            raise errors.ManifestInvalid(
+                f"--task-id must be comma-separated integers: {exc}"
+            ) from exc
+        if not task_ids:
+            raise errors.ManifestInvalid("--task-id is empty")
+    else:
+        raise errors.ManifestInvalid(
+            "logs requires --task-id <ids> or --all-failed"
+        )
+
+    # Cluster-side scheduler.
+    try:
+        clusters = load_clusters_config()
+    except Exception:  # noqa: BLE001 — config errors fall through to user-error path
+        clusters = {}
+    scheduler = (clusters.get(record.cluster) or {}).get("scheduler") or "slurm"
+
+    logs: list[dict[str, Any]] = []
+    if task_ids:
+        logs = runner.fetch_task_logs(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            job_name=record.job_name,
+            job_ids=record.job_ids,
+            scheduler=scheduler,
+            task_ids=task_ids,
+            lines=int(getattr(args, "lines", 50) or 50),
+        )
+
+    data: dict[str, Any] = {
+        "run_id": args.run_id,
+        "scheduler": scheduler,
+        "logs": logs,
+    }
+    if note is not None:
+        data["note"] = note
+    _ok(data, idempotent=True)
+    return EXIT_OK
+
+
+# ─── subcommand: failures ──────────────────────────────────────────────────
+
+
+def cmd_failures(args: argparse.Namespace) -> int:
+    """Cluster failed tasks by stderr fingerprint for triage.
+
+    Re-polls status, fetches stderr for every failed task, and groups
+    them by fingerprint so 40 failures with the same root cause show up
+    as one cluster instead of 40 separate logs to read.
+    """
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
+
+    record = session.load_run(args.experiment_dir, args.run_id)
+    if record is None:
+        raise errors.JournalCorrupt(
+            f"no journal record for run_id {args.run_id!r}"
+        )
+
+    # Fresh poll: enumerate failed tasks.
+    report = runner._ssh_status_report(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        manifest_filename=record.manifest,
+        job_ids=record.job_ids,
+        job_name=record.job_name,
+    )
+    failed_ids: list[int] = []
+    for tid_str, info in (report.get("tasks") or {}).items():
+        if isinstance(info, dict) and info.get("status") == "failed":
+            try:
+                failed_ids.append(int(tid_str))
+            except (TypeError, ValueError):
+                continue
+
+    if not failed_ids:
+        _ok(
+            {
+                "run_id": args.run_id,
+                "failed_count": 0,
+                "clusters": [],
+                "note": "no failed tasks in current status report",
+            },
+            idempotent=True,
+        )
+        return EXIT_OK
+
+    # Cluster scheduler.
+    try:
+        clusters_cfg = load_clusters_config()
+    except Exception:  # noqa: BLE001
+        clusters_cfg = {}
+    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler") or "slurm"
+
+    logs = runner.fetch_task_logs(
+        ssh_target=record.ssh_target,
+        remote_path=record.remote_path,
+        job_name=record.job_name,
+        job_ids=record.job_ids,
+        scheduler=scheduler,
+        task_ids=failed_ids,
+        lines=int(getattr(args, "lines", 30) or 30),
+    )
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+
+    # Auto-retry policy from hpc.yaml: annotate each cluster with which
+    # task ids are still eligible for an automated retry per the
+    # configured per-category max_attempts.  Purely advisory — the actual
+    # resubmit remains the caller's job (matches existing /resubmit
+    # semantics).
+    auto_retry = _hpc_yaml_auto_retry(args.experiment_dir, record.profile)
+    if auto_retry:
+        clusters = runner.annotate_clusters_with_retry_advice(
+            clusters,
+            auto_retry_policy=auto_retry,
+            record=record,
+        )
+
+    data: dict[str, Any] = {
+        "run_id": args.run_id,
+        "failed_count": len(failed_ids),
+        "clusters": clusters,
+        "scheduler": scheduler,
+    }
+    if auto_retry:
+        data["auto_retry_policy"] = auto_retry
+    _ok(data, idempotent=True)
     return EXIT_OK
 
 
@@ -634,6 +1104,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_eg.add_argument("--spec", type=Path, required=True)
     _add_experiment_dir(p_eg)
+    p_eg.add_argument(
+        "--per-task-walltime",
+        default=None,
+        help=(
+            "Per-task walltime as HH:MM:SS, MM:SS, or '4h'. When set, the "
+            "envelope's data block adds a `cost_estimate` with total CPU- "
+            "and GPU-hours."
+        ),
+    )
+    p_eg.add_argument(
+        "--per-task-cpus",
+        type=int,
+        default=1,
+        help="CPUs per task (default 1); used for total CPU-hour estimate.",
+    )
+    p_eg.add_argument(
+        "--per-task-gpus",
+        type=int,
+        default=0,
+        help="GPUs per task (default 0); used for total GPU-hour estimate.",
+    )
+    p_eg.add_argument(
+        "--max-concurrent-tasks",
+        type=int,
+        default=None,
+        help=(
+            "Optional concurrency cap; when set, the cost estimate also "
+            "reports an estimated wall-clock time as "
+            "ceil(total/concurrent) * walltime."
+        ),
+    )
     p_eg.set_defaults(func=cmd_expand_grid)
 
     # clusters
@@ -677,6 +1178,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate the spec and report what would be launched; no SSH/qsub.",
     )
+    p_sub.add_argument(
+        "--skip-manifest-check",
+        action="store_true",
+        help=(
+            "Skip pre-submit manifest sanity. Use only when the manifest "
+            "is built directly on the cluster and not present locally."
+        ),
+    )
     p_sub.set_defaults(func=cmd_submit)
 
     # aggregate
@@ -691,6 +1200,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="Re-run the combiner even if the wave appears combined.",
+    )
+    p_agg.add_argument(
+        "--require-outputs",
+        default=None,
+        help=(
+            "Path template (with {task_id}) checked on the cluster before "
+            "the combiner runs. Refuses to combine if any task in this "
+            "wave is missing its expected output. Default reads from "
+            "hpc.yaml's results.require_outputs."
+        ),
+    )
+    p_agg.add_argument(
+        "--expect-output",
+        default=None,
+        help=(
+            "Remote path (relative to remote_path) that the combiner must "
+            "produce. Verified after the combiner exits 0; .json files "
+            "are also checked for parseability. Default reads from "
+            "hpc.yaml's results.expect_output."
+        ),
     )
     p_agg.set_defaults(func=cmd_aggregate)
 
@@ -718,6 +1247,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scheduler family — needed to query alive job IDs.",
     )
     p_rec.set_defaults(func=cmd_reconcile)
+
+    # logs
+    p_logs = sub.add_parser(
+        "logs",
+        help="Fetch per-task stderr logs from the cluster (requires --task-id or --all-failed).",
+    )
+    _add_experiment_dir(p_logs)
+    p_logs.add_argument("--run-id", required=True)
+    p_logs.add_argument(
+        "--task-id",
+        default=None,
+        help="Comma-separated task ids to fetch (e.g. '7,12,42').",
+    )
+    p_logs.add_argument(
+        "--all-failed",
+        action="store_true",
+        help="Re-poll status and fetch logs for every task with status=failed.",
+    )
+    p_logs.add_argument(
+        "--lines",
+        type=int,
+        default=50,
+        help="Number of trailing lines to return per log (default 50).",
+    )
+    p_logs.set_defaults(func=cmd_logs)
+
+    # failures
+    p_fail = sub.add_parser(
+        "failures",
+        help="Cluster failed tasks by stderr fingerprint for triage.",
+    )
+    _add_experiment_dir(p_fail)
+    p_fail.add_argument("--run-id", required=True)
+    p_fail.add_argument(
+        "--lines",
+        type=int,
+        default=30,
+        help="Per-task stderr tail length used for fingerprinting (default 30).",
+    )
+    p_fail.set_defaults(func=cmd_failures)
 
     # build-executor
     p_be = sub.add_parser(

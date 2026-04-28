@@ -1,5 +1,111 @@
 # Changelog
 
+## Unreleased
+
+### Added — reliability / correctness
+
+- **Pre-submit manifest sanity.** `submit` now validates the dispatch
+  manifest before recording the submission: schema_version, JSON
+  parseability, every task has a non-empty `cmd` and `result_dir` with
+  no `{placeholder}` remnants, `total_tasks` matches `len(tasks)`,
+  `wave_map` (if present) exactly covers tasks. Catches the entire
+  class of "looked fine locally, crashed mid-run" failures. Opt-out via
+  `--skip-manifest-check`.
+- **Stale-cache age field.** `status` and `list-in-flight` envelopes
+  now carry `last_status_age_seconds` so consumers (humans + agents)
+  can flag stale snapshots without changing freshness contracts.
+- **Wave-aware `last_status`.** The on-cluster reporter now emits a
+  `waves` rollup keyed by wave id with `{complete, running, pending,
+  failed, unknown, total}` buckets. `record_status` and `reconcile`
+  carry it into the persisted `last_status`. New `rollup_by_wave`
+  helper in `hpc_mapreduce.reduce.status`.
+- **`hpc-mapreduce logs` subcommand.** Fetches per-task stderr from the
+  cluster: `--task-id 7,12,42` for explicit ids or `--all-failed` for
+  every failed task. Falls back through earlier `job_ids` when the
+  latest has no log. Removes a daily friction point.
+- **`hpc-mapreduce failures` subcommand.** Triage tool: re-polls
+  status, fetches stderr for failed tasks, strips volatile noise
+  (timestamps, abs paths, pids, hex pointers), fingerprints the last
+  non-empty line, and groups tasks sharing a fingerprint into clusters
+  tagged with a category (`gpu_oom`, `walltime`, `import_error`, etc.).
+
+### Added — ergonomics
+
+- **Cost estimate on `expand-grid`.** New `--per-task-walltime`,
+  `--per-task-cpus`, `--per-task-gpus`, `--max-concurrent-tasks` flags
+  add a `cost_estimate` block to the envelope: total CPU-hours,
+  GPU-hours, and (when concurrency is provided) estimated wall-clock.
+  Lets users catch a 5000-CPU-hour grid before it lands on the
+  scheduler.
+
+### Added — robustness
+
+- **Resubmit dedupe via `request_id`.** `resubmit_failed` now returns
+  `(record, deduped, request_id)` and is idempotent on the (explicit
+  or derived) `request_id`. A second call with the same spec returns
+  `deduped: true` without incrementing per-task retry counters. A
+  back-compat-default field `last_resubmit_request_id` was added to
+  `RunRecord`.
+- **`auto_retry` policy in hpc.yaml.** Per-category retry caps with
+  optional resource multipliers (advisory). `hpc-mapreduce failures`
+  annotates each cluster with `retry_advice = {policy,
+  eligible_task_ids, blocked_task_ids}`. The framework never resubmits
+  on its own — it surfaces eligibility; the caller decides. See
+  `docs/schema.md` for the full shape.
+
+### Added — MARs integration proposal package
+
+- **MARs integration proposal package.**
+  - `docs/mars-integration.md` — Bun.spawn env block, `error_code` →
+    retry-policy mapping, troubleshooting flow for the silent-hang
+    failure mode, journal-coexistence rules.
+  - `docs/mars/experiment-runner.snippet.md` — paste-ready section for
+    MARs's `agents/experiment-runner.md` covering preflight → submit →
+    status → aggregate, decision rule for delegating to claude-hpc, and
+    the full retry table.
+  - `tests/test_docs_links.py` — drift guard ensuring every `error_code`
+    and required env var mentioned in the proposal docs matches the
+    code (`slash_commands/errors.py` and `capabilities.required_env`).
+- **`capabilities` envelope additions** (additive, schema-compatible):
+  - `mars_skill_paths` — absolute paths to bundled `skills/hpc-*/SKILL.md`
+    so consumers can discover them without hardcoding the package layout.
+  - `required_env` — env vars consumers must forward
+    (`SSH_AUTH_SOCK`, `HPC_JOURNAL_DIR`, `HPC_CLUSTERS_CONFIG`).
+- **README**: collapsed the "Using with MARs" section to a link to
+  `docs/mars-integration.md`; kept the SSH-passthrough warning visible.
+
+### Changed
+
+- **`status`, `aggregate`, `reconcile` fail fast when `SSH_AUTH_SOCK` is
+  unset.** Previously these subcommands hung indefinitely on auth — the
+  most common Bun.spawn failure mode for orchestrators. They now emit
+  `error_code: "ssh_unreachable"` (category `network`, `retry_safe: True`,
+  exit 2) immediately. `submit` (journal-only) and `resubmit`
+  (journal-only) are not gated.
+- **`aggregate` gains framework-agnostic plumbing guarantees.** Three
+  optional, additive checks help both human `/aggregate` users and
+  agent CLI callers catch silent partial-data combines:
+  - `--require-outputs <template>` — pre-combiner SSH check that every
+    per-task output named by the template (with `{task_id}` placeholder)
+    exists. Refuses to combine on partial data; surfaces a new
+    `error_code: "outputs_missing"` (category `cluster`, `retry_safe: True`)
+    listing the absent paths.
+  - `--expect-output <path>` — post-combiner check that the declared
+    artifact exists and (for `.json` paths) is parseable. A combiner
+    that exits 0 but writes nothing now surfaces as `combiner_failed`
+    immediately instead of producing a silent "successful" aggregate.
+  - **Provenance** — the success envelope's `data` block always carries
+    a `provenance` object: `{run_id, manifest, wave, profile, cluster,
+    combined_at}`. When `--expect-output` is set, claude-hpc also
+    writes a `_provenance.json` sidecar next to the output on the
+    cluster (best-effort; envelope is the source of truth).
+- **`hpc.yaml` defaults for the new aggregate flags.** Set
+  `results.require_outputs` and `results.expect_output` once per profile
+  to enforce the precondition/postcondition automatically on every
+  aggregate. Explicit CLI flags override hpc.yaml. The
+  `slash_commands/commands/aggregate.md` prompt now points users at
+  this.
+
 ## 0.2.0 — 2026-04
 
 Major refactor adding agent-facing CLI alongside the existing Claude Code slash

@@ -37,6 +37,7 @@ __all__ = [
     "report_status",
     "report_status_from_manifest",
     "rollup_by_grid_point",
+    "rollup_by_wave",
     "get_err_log_paths",
     "detect_scheduler",
 ]
@@ -539,6 +540,47 @@ def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
     return rollup
 
 
+def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
+    """Group per-task statuses by wave (from manifest ``wave_map``).
+
+    Returns ``{wave: {complete, running, pending, failed, unknown, total}}``.
+    Empty when the manifest has no ``wave_map`` (un-batched submissions).
+
+    Wave map keys are stored as 0-based task ids in the manifest; the
+    status report keys tasks 1-based to match scheduler array indexing,
+    so we shift on lookup.
+    """
+    wave_map = manifest.get("wave_map") or {}
+    if not wave_map:
+        return {}
+    report_tasks = report.get("tasks", {}) or {}
+    rollup: dict[str, dict] = {}
+    for wave_key, members in wave_map.items():
+        bucket = {
+            "complete": 0,
+            "running": 0,
+            "pending": 0,
+            "failed": 0,
+            "unknown": 0,
+            "total": 0,
+        }
+        for tid in members or []:
+            bucket["total"] += 1
+            # Manifest stores 0-based; report keys 1-based.
+            try:
+                report_key = str(int(tid) + 1)
+            except (TypeError, ValueError):
+                report_key = str(tid)
+            task_info = report_tasks.get(report_key) or {}
+            status = task_info.get("status", "unknown")
+            if status in bucket:
+                bucket[status] += 1
+            else:
+                bucket["unknown"] += 1
+        rollup[str(wave_key)] = bucket
+    return rollup
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point - `python -m hpc_mapreduce.reduce.status`
 # ---------------------------------------------------------------------------
@@ -620,11 +662,13 @@ def _main() -> int:
         min_rows=args.min_rows,
     )
     report["rollup"] = rollup_by_grid_point(report, manifest)
+    report["waves"] = rollup_by_wave(report, manifest)
 
     # Pin all four top-level keys, even if upstream forgot one.
     report.setdefault("summary", _empty_summary())
     report.setdefault("tasks", {})
     report.setdefault("rollup", {})
+    report.setdefault("waves", {})
     report.setdefault("errors", [])
 
     json.dump(report, sys.stdout, indent=2, sort_keys=True)

@@ -74,6 +74,28 @@ def test_capabilities_envelope_shape() -> None:
     assert isinstance(data["ssh_multiplexing"], bool)
 
 
+def test_capabilities_exposes_mars_skill_paths_and_required_env() -> None:
+    """Programmatic introspection for MARs: skill paths + required env."""
+    rc, out, _ = _run_cli("capabilities")
+    assert rc == 0
+    data = _parse_envelope(out)["data"]
+
+    skill_paths = data["mars_skill_paths"]
+    assert isinstance(skill_paths, dict)
+    # Source-tree installs ship five skills; wheel-only installs may ship
+    # zero. Either is acceptable, but every value must point to a real file.
+    for name, path in skill_paths.items():
+        assert name.startswith("hpc-"), name
+        assert Path(path).is_file(), f"{name} path does not exist: {path}"
+        assert path.endswith(f"skills/{name}/SKILL.md")
+
+    assert data["required_env"] == [
+        "SSH_AUTH_SOCK",
+        "HPC_JOURNAL_DIR",
+        "HPC_CLUSTERS_CONFIG",
+    ]
+
+
 def test_clusters_list_returns_known_clusters() -> None:
     """clusters list must return the names defined in the active clusters.yaml."""
     rc, out, _ = _run_cli("clusters", "list")
@@ -283,6 +305,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
     from slash_commands.session import RunRecord
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
 
     # Seed a run so cmd_aggregate gets past the journal lookup.
     rec = RunRecord(
@@ -336,7 +359,13 @@ def test_main_routes_journal_corrupt_for_missing_run(tmp_path: Path) -> None:
     import os
 
     journal = tmp_path / "journal"
-    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
+    env_vars = {
+        **os.environ,
+        "HPC_JOURNAL_DIR": str(journal),
+        # The SSH gate fires before the journal lookup; pre-populate so
+        # this test exercises the journal path it intends to.
+        "SSH_AUTH_SOCK": os.environ.get("SSH_AUTH_SOCK", "/tmp/fake-agent.sock"),
+    }
 
     rc, out, _ = _run_cli(
         "aggregate",
@@ -425,3 +454,542 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     assert rc != 0
     payload = _parse_envelope(out)
     assert payload["error_code"] == "manifest_invalid"
+
+
+# ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
+
+
+def _env_without_ssh_agent() -> dict[str, str]:
+    """Inherit PATH so the CLI binary works, but strip SSH_AUTH_SOCK so
+    the gate kicks in. Also sets HPC_JOURNAL_DIR so the journal lookup
+    isn't what fails first."""
+    import os
+
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        # No SSH_AUTH_SOCK on purpose.
+    }
+
+
+def test_ssh_gate_status_fails_fast_without_agent(tmp_path: Path) -> None:
+    """`status` must emit ssh_unreachable instead of hanging."""
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+    rc, out, _ = _run_cli(
+        "status", "--experiment-dir", str(tmp_path), "--run-id", "x",
+        env=env,
+    )
+    assert rc == 2, "ssh_unreachable is category=network → exit 2"
+    payload = _parse_envelope(out)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "ssh_unreachable"
+    assert payload["retry_safe"] is True
+    assert payload["category"] == "network"
+    assert "remediation" in payload
+
+
+def test_ssh_gate_aggregate_fails_fast_without_agent(tmp_path: Path) -> None:
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+    rc, out, _ = _run_cli(
+        "aggregate",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "x",
+        "--wave", "0",
+        env=env,
+    )
+    assert rc == 2
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "ssh_unreachable"
+
+
+def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+    rc, out, _ = _run_cli(
+        "reconcile",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "x",
+        "--scheduler", "sge",
+        env=env,
+    )
+    assert rc == 2
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "ssh_unreachable"
+
+
+# ─── expand-grid cost estimate ────────────────────────────────────────────
+
+
+def test_expand_grid_without_walltime_omits_cost_estimate(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2], "b": ["x"]}}))
+    rc, out, _ = _run_cli("expand-grid", "--spec", str(spec))
+    assert rc == 0
+    data = _parse_envelope(out)["data"]
+    assert data["total"] == 2
+    assert "cost_estimate" not in data
+
+
+def test_expand_grid_with_walltime_emits_cost_estimate(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2, 3, 4]}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "4h",
+        "--per-task-cpus", "2",
+        "--per-task-gpus", "1",
+    )
+    assert rc == 0
+    cost = _parse_envelope(out)["data"]["cost_estimate"]
+    assert cost["per_task_walltime_seconds"] == 4 * 3600
+    assert cost["per_task_cpus"] == 2
+    assert cost["per_task_gpus"] == 1
+    assert cost["total_tasks"] == 4
+    assert cost["total_cpu_hours"] == 4 * 4 * 2  # 32 CPU-hours
+    assert cost["total_gpu_hours"] == 4 * 4 * 1  # 16 GPU-hours
+
+
+def test_expand_grid_walltime_hh_mm_ss_format(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "1:30:00",
+    )
+    assert rc == 0
+    cost = _parse_envelope(out)["data"]["cost_estimate"]
+    assert cost["per_task_walltime_seconds"] == 5400  # 1h30m
+
+
+def test_expand_grid_with_max_concurrent_estimates_walltime(tmp_path: Path) -> None:
+    """100 tasks, 4h each, max 25 concurrent => ceil(100/25) = 4 waves * 4h = 16h."""
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": list(range(100))}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "4h",
+        "--max-concurrent-tasks", "25",
+    )
+    assert rc == 0
+    cost = _parse_envelope(out)["data"]["cost_estimate"]
+    assert cost["estimated_walltime_hours"] == 16.0
+    assert cost["max_concurrent_tasks"] == 25
+
+
+def test_expand_grid_invalid_walltime_format_returns_user_error(tmp_path: Path) -> None:
+    spec = tmp_path / "g.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
+    rc, out, _ = _run_cli(
+        "expand-grid",
+        "--spec", str(spec),
+        "--per-task-walltime", "not-a-walltime",
+    )
+    assert rc != 0
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "manifest_invalid"
+
+
+# ─── logs subcommand ──────────────────────────────────────────────────────
+
+
+def test_logs_requires_task_id_or_all_failed(tmp_path: Path) -> None:
+    """`logs` with neither --task-id nor --all-failed surfaces user error."""
+    import os
+
+    # Need a journal record for the run-id lookup to get past first.
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps(SUBMIT_SPEC))
+    journal = tmp_path / "journal"
+    env_vars = {
+        **os.environ,
+        "HPC_JOURNAL_DIR": str(journal),
+        "SSH_AUTH_SOCK": os.environ.get("SSH_AUTH_SOCK", "/tmp/fake.sock"),
+    }
+    _run_cli("submit", "--experiment-dir", str(tmp_path), "--spec", str(spec), env=env_vars)
+
+    rc, out, _ = _run_cli(
+        "logs",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "ml_abcd1234",
+        env=env_vars,
+    )
+    assert rc != 0
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "manifest_invalid"
+
+
+def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
+    """logs --task-id 7 returns a list with one entry from fetch_task_logs."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake.sock")
+
+    # Seed a run.
+    from slash_commands import session as session_mod
+    from slash_commands.session import RunRecord
+
+    rec = RunRecord(
+        run_id="ml_abcd1234",
+        profile="ml",
+        cluster="hoffman2",
+        ssh_target="user@host",
+        remote_path="/exp",
+        job_name="ml",
+        job_ids=["12345"],
+        manifest="manifest.abcd1234.json",
+        total_tasks=10,
+        submitted_at="2026-04-28T00:00:00+00:00",
+        experiment_dir=str(tmp_path),
+    )
+    session_mod.upsert_run(tmp_path, rec)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        task_id="7",
+        all_failed=False,
+        lines=50,
+    )
+
+    captured: list[dict] = []
+    fake_logs = [
+        {
+            "task_id": 7,
+            "path": "/exp/_hpc_logs/ml_12345_7.err",
+            "job_id": "12345",
+            "content": "boom\n",
+        }
+    ]
+    with patch.object(
+        cli.runner, "fetch_task_logs", return_value=fake_logs
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_logs(args)
+
+    assert rc == 0
+    payload = captured[-1]
+    assert payload["ok"] is True
+    assert payload["data"]["logs"] == fake_logs
+    assert payload["data"]["run_id"] == "ml_abcd1234"
+
+
+# ─── stale-cache age field on status / list-in-flight ──────────────────────
+
+
+def test_last_status_age_seconds_is_recent_for_now_stamp() -> None:
+    """A checked_at stamped at 'now' yields a small age (< 5s)."""
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    age = cli._last_status_age_seconds({"checked_at": now_iso})
+    assert age is not None
+    assert 0 <= age < 5
+
+
+def test_last_status_age_seconds_handles_missing_checked_at() -> None:
+    assert cli._last_status_age_seconds({}) is None
+    assert cli._last_status_age_seconds(None) is None  # type: ignore[arg-type]
+    assert cli._last_status_age_seconds({"checked_at": "garbage"}) is None
+
+
+def test_last_status_age_seconds_is_old_for_distant_past() -> None:
+    """A timestamp from a year ago should yield a very large age."""
+    age = cli._last_status_age_seconds({"checked_at": "2024-01-01T00:00:00+00:00"})
+    assert age is not None
+    assert age > 60 * 60 * 24 * 30  # at least 30 days
+
+
+def test_list_in_flight_envelope_includes_age_field(tmp_path: Path) -> None:
+    """list-in-flight surfaces last_status_age_seconds for each run so the
+    caller can flag stale snapshots."""
+    import os
+
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps(SUBMIT_SPEC))
+    journal = tmp_path / "journal"
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
+
+    _run_cli("submit", "--experiment-dir", str(tmp_path), "--spec", str(spec), env=env_vars)
+    rc, out, _ = _run_cli(
+        "list-in-flight", "--experiment-dir", str(tmp_path), env=env_vars
+    )
+    assert rc == 0
+    runs = _parse_envelope(out)["data"]["runs"]
+    assert len(runs) == 1
+    # No status poll yet: last_status is empty/missing -> age is None.
+    assert runs[0].get("last_status_age_seconds") is None
+
+
+# ─── aggregate preconditions / postconditions / provenance ─────────────────
+
+
+def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
+    """Helper: seed a journal record so cmd_aggregate gets past lookup."""
+    from slash_commands import session as session_mod
+    from slash_commands.session import RunRecord
+
+    rec = RunRecord(
+        run_id=run_id,
+        profile="ml",
+        cluster="hoffman2",
+        ssh_target="user@host",
+        remote_path="/exp",
+        job_name="ml",
+        job_ids=["12345"],
+        manifest="manifest.abcd1234.json",
+        total_tasks=2,
+        submitted_at="2026-04-28T00:00:00+00:00",
+        experiment_dir=str(tmp_path),
+    )
+    session_mod.upsert_run(tmp_path, rec)
+    return rec
+
+
+def test_aggregate_precondition_blocks_combine_on_missing_outputs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--require-outputs must refuse to combine when any per-task output is
+    absent on the cluster, before invoking the user's combiner."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs="results/metrics.{task_id}.json",
+        expect_output=None,
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner,
+        "verify_per_task_outputs",
+        return_value=["results/metrics.1.json"],
+    ), patch.object(
+        cli.runner, "combine_wave"
+    ) as combine_mock, patch.object(
+        cli, "_emit", side_effect=lambda p: captured.append(p)
+    ):
+        rc = cli.cmd_aggregate(args)
+
+    combine_mock.assert_not_called(), "combiner must not run when outputs missing"
+    assert rc != 0
+    payload = captured[-1]
+    assert payload["ok"] is False
+    assert payload["error_code"] == "outputs_missing"
+    assert payload["retry_safe"] is True
+
+
+def test_aggregate_postcondition_fails_when_combiner_artifact_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--expect-output must surface combiner_failed when the combiner exits 0
+    but the declared output isn't there or isn't parseable."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,
+        expect_output="results/metrics.json",
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(
+        cli.runner,
+        "verify_combiner_artifact",
+        return_value=(False, "is missing at /exp/results/metrics.json"),
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc != 0
+    payload = captured[-1]
+    assert payload["ok"] is False
+    assert payload["error_code"] == "combiner_failed"
+    assert "results/metrics.json" in payload["message"]
+
+
+def test_aggregate_envelope_carries_provenance_on_success(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Successful aggregate must embed provenance metadata in envelope.data."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,
+        expect_output=None,
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc == 0
+    payload = captured[-1]
+    assert payload["ok"] is True
+    prov = payload["data"]["provenance"]
+    assert prov["run_id"] == "ml_abcd1234"
+    assert prov["wave"] == 0
+    assert prov["manifest"] == "manifest.abcd1234.json"
+    assert prov["profile"] == "ml"
+    assert prov["cluster"] == "hoffman2"
+    assert "combined_at" in prov
+
+
+def test_aggregate_reads_hpc_yaml_defaults_for_require_and_expect(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When the CLI flags are omitted, hpc.yaml's results.{require_outputs,
+    expect_output} must be honored under the matching profile."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    (tmp_path / "hpc.yaml").write_text(
+        "profiles:\n"
+        "  ml:\n"
+        "    results:\n"
+        "      require_outputs: 'results/metrics.{task_id}.json'\n"
+        "      expect_output: 'results/metrics.json'\n"
+    )
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,  # no CLI flag — default should apply
+        expect_output=None,
+    )
+
+    seen_template: list[str] = []
+    seen_expect: list[str] = []
+
+    def fake_verify_outputs(*, template, **_kw):
+        seen_template.append(template)
+        return []  # nothing missing
+
+    def fake_verify_artifact(*, expect_output, **_kw):
+        seen_expect.append(expect_output)
+        return True, "ok"
+
+    with patch.object(
+        cli.runner, "verify_per_task_outputs", side_effect=fake_verify_outputs
+    ), patch.object(
+        cli.runner, "verify_combiner_artifact", side_effect=fake_verify_artifact
+    ), patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(
+        cli.runner, "write_remote_provenance", return_value="/exp/results/_provenance.json"
+    ), patch.object(cli, "_emit"):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc == 0, "hpc.yaml-defaulted aggregate should succeed"
+    assert seen_template == ["results/metrics.{task_id}.json"]
+    assert seen_expect == ["results/metrics.json"]
+
+
+def test_aggregate_writes_sidecar_when_expect_output_set(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """When --expect-output is set, the envelope reports the sidecar path."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
+    _seed_aggregate_run(tmp_path)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        wave=0,
+        force=False,
+        require_outputs=None,
+        expect_output="results/metrics.json",
+    )
+    captured: list[dict] = []
+    with patch.object(
+        cli.runner, "combine_wave", return_value=(True, "ok", "")
+    ), patch.object(
+        cli.runner, "verify_combiner_artifact", return_value=(True, "ok")
+    ), patch.object(
+        cli.runner,
+        "write_remote_provenance",
+        return_value="/exp/results/_provenance.json",
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_aggregate(args)
+
+    assert rc == 0
+    payload = captured[-1]
+    assert payload["data"]["provenance_sidecar"] == "/exp/results/_provenance.json"
+
+
+def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
+    """`capabilities`, `expand-grid`, `clusters list`, `submit --dry-run`,
+    and `submit` (journal-only) must not be gated by SSH_AUTH_SOCK."""
+    env = _env_without_ssh_agent()
+    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
+
+    rc, _, _ = _run_cli("capabilities", env=env)
+    assert rc == 0
+
+    rc, _, _ = _run_cli("clusters", "list", env=env)
+    assert rc == 0
+
+    spec = tmp_path / "grid.json"
+    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
+    rc, _, _ = _run_cli("expand-grid", "--spec", str(spec), env=env)
+    assert rc == 0
+
+    submit_spec = tmp_path / "spec.json"
+    submit_spec.write_text(json.dumps(SUBMIT_SPEC))
+    rc, out, _ = _run_cli(
+        "submit",
+        "--experiment-dir", str(tmp_path),
+        "--spec", str(submit_spec),
+        "--dry-run",
+        env=env,
+    )
+    assert rc == 0, _parse_envelope(out)
+
+    # Real submit is journal-only, no SSH — must succeed without agent.
+    rc, out, _ = _run_cli(
+        "submit",
+        "--experiment-dir", str(tmp_path),
+        "--spec", str(submit_spec),
+        env=env,
+    )
+    assert rc == 0, _parse_envelope(out)

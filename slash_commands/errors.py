@@ -22,6 +22,7 @@ __all__ = [
     "ConfigInvalid",
     "CombinerFailed",
     "ClusterTimeout",
+    "OutputsMissing",
 ]
 
 
@@ -145,4 +146,22 @@ class ClusterTimeout(HpcError):
         "The scheduler took too long to respond (likely an NFS stall or a "
         "scheduler outage).  Run the same command again after a short delay; "
         "if the problem persists, check cluster status with the ops team."
+    )
+
+
+class OutputsMissing(HpcError):
+    """Per-task output files declared by ``--require-outputs`` are absent.
+
+    Raised by ``aggregate`` when the precondition check fails, before the
+    combiner runs.  The aggregator refuses to combine on partial data; the
+    caller must resubmit the listed task ids and try again.
+    """
+
+    error_code = "outputs_missing"
+    retry_safe = True
+    category = "cluster"
+    remediation = (
+        "Resubmit the listed task ids and re-run aggregate.  Inspect "
+        "<remote_path>/_hpc_logs/ for per-task stderr if the resubmit "
+        "doesn't produce the expected output."
     )

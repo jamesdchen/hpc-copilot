@@ -8,6 +8,7 @@ from hpc_mapreduce.reduce.status import (
     check_results_from_manifest,
     report_status_from_manifest,
     rollup_by_grid_point,
+    rollup_by_wave,
 )
 
 
@@ -124,3 +125,56 @@ def test_report_status_from_manifest_integrates(tmp_path):
     assert report["summary"]["complete"] == 1
     assert report["summary"]["unknown"] == 3
     assert report["tasks"]["1"]["status"] == "complete"
+
+
+def test_rollup_by_wave_returns_empty_without_wave_map(tmp_path):
+    """Manifests without a wave_map (un-batched submissions) yield {}."""
+    manifest = _manifest(tmp_path)  # _manifest builds no wave_map
+    assert "wave_map" not in manifest
+    report = {"tasks": {"1": {"status": "complete"}}}
+    assert rollup_by_wave(report, manifest) == {}
+
+
+def test_rollup_by_wave_groups_tasks_by_wave():
+    """Each wave's bucket counts tasks by status; manifest 0-based ↔ report 1-based."""
+    manifest = {
+        "total_tasks": 4,
+        "tasks": {
+            "0": {"params": {}, "cmd": "x", "result_dir": "/x"},
+            "1": {"params": {}, "cmd": "x", "result_dir": "/x"},
+            "2": {"params": {}, "cmd": "x", "result_dir": "/x"},
+            "3": {"params": {}, "cmd": "x", "result_dir": "/x"},
+        },
+        # Wave 0 = tasks 0,1; wave 1 = tasks 2,3
+        "wave_map": {"0": ["0", "1"], "1": ["2", "3"]},
+    }
+    # Report uses 1-based task ids
+    report = {
+        "tasks": {
+            "1": {"status": "complete"},  # manifest 0
+            "2": {"status": "complete"},  # manifest 1
+            "3": {"status": "running"},   # manifest 2
+            "4": {"status": "failed"},    # manifest 3
+        }
+    }
+
+    waves = rollup_by_wave(report, manifest)
+
+    assert set(waves.keys()) == {"0", "1"}
+    assert waves["0"]["complete"] == 2
+    assert waves["0"]["total"] == 2
+    assert waves["1"]["running"] == 1
+    assert waves["1"]["failed"] == 1
+    assert waves["1"]["total"] == 2
+
+
+def test_rollup_by_wave_marks_missing_tasks_unknown():
+    """Tasks listed in wave_map but absent from the report count as unknown."""
+    manifest = {
+        "tasks": {"0": {"params": {}, "cmd": "x", "result_dir": "/x"}},
+        "wave_map": {"0": ["0"]},
+    }
+    report = {"tasks": {}}  # empty -> task 0 not present
+    waves = rollup_by_wave(report, manifest)
+    assert waves["0"]["unknown"] == 1
+    assert waves["0"]["total"] == 1

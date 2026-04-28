@@ -16,6 +16,10 @@
       ]
     },
     "overrides":   { "type": "object", "description": "Resource overrides for retry (mem, walltime, gpus, ...)." },
-    "new_job_ids": { "type": ["array", "null"], "items": { "type": "string" } }
+    "new_job_ids": { "type": ["array", "null"], "items": { "type": "string" } },
+    "request_id": {
+      "type": ["string", "null"],
+      "description": "Optional dedupe key. When omitted, claude-hpc derives a deterministic id from (sorted failed_task_ids, category, sorted overrides). A second resubmit with the same request_id returns the existing record without incrementing retry counters."
+    }
   }
 }

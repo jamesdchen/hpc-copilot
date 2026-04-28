@@ -494,3 +494,559 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
     # Round-trip parse — would raise on a half-written file.
     body = json.loads(cache.read_text())
     assert body["complete"] == 1
+
+
+# ─── aggregate verification helpers ────────────────────────────────────────
+
+
+def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment):
+    """Wave's task ids are read from manifest.wave_map; one SSH call enumerates
+    missing files."""
+    manifest_json = json.dumps(
+        {
+            "schema_version": 2,
+            "tasks": {"0": {}, "1": {}, "2": {}},
+            "wave_map": {"0": ["0", "1", "2"]},
+        }
+    )
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        if cmd.startswith("cat "):
+            return _completed(stdout=manifest_json)
+        # Existence check: pretend task 1's output is missing.
+        return _completed(
+            stdout="MISSING:results/metrics.1.json\n", returncode=0
+        )
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        missing = runner.verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            manifest_filename="manifest.abcd1234.json",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
+    assert missing == ["results/metrics.1.json"]
+
+
+def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, experiment):
+    manifest_json = json.dumps(
+        {"schema_version": 2, "tasks": {"0": {}, "1": {}}, "wave_map": {"0": ["0", "1"]}}
+    )
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        if cmd.startswith("cat "):
+            return _completed(stdout=manifest_json)
+        return _completed(stdout="", returncode=0)  # nothing missing
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        missing = runner.verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            manifest_filename="m.json",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
+    assert missing == []
+
+
+def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(
+    journal_home, experiment
+):
+    """Older un-batched manifests have no wave_map; treat wave 0 as 'all'."""
+    manifest_json = json.dumps({"schema_version": 2, "tasks": {"0": {}, "1": {}}})
+
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        if cmd.startswith("cat "):
+            return _completed(stdout=manifest_json)
+        return _completed(stdout="", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        runner.verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            manifest_filename="m.json",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
+    # The existence-check script should mention both task ids.
+    check_cmd = next(c for c in captured if not c.startswith("cat "))
+    assert "metrics.0.json" in check_cmd and "metrics.1.json" in check_cmd
+
+
+def test_verify_combiner_artifact_ok_for_valid_json():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        # python3 -c json.load returns 0; script echoes OK.
+        return _completed(stdout="OK\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        ok, detail = runner.verify_combiner_artifact(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+        )
+    assert ok is True
+    assert detail == "ok"
+
+
+def test_verify_combiner_artifact_missing():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return _completed(stdout="MISSING\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        ok, detail = runner.verify_combiner_artifact(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+        )
+    assert ok is False
+    assert "missing" in detail
+
+
+def test_verify_combiner_artifact_invalid_json():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return _completed(stdout="INVALID_JSON\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        ok, detail = runner.verify_combiner_artifact(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+        )
+    assert ok is False
+    assert "JSON" in detail
+
+
+def test_build_provenance_carries_run_metadata(experiment):
+    record = _seed_run(experiment, run_id="r_42", profile="prof", cluster="hoffman2")
+    prov = runner.build_provenance(record, wave=2)
+    assert prov["run_id"] == "r_42"
+    assert prov["profile"] == "prof"
+    assert prov["cluster"] == "hoffman2"
+    assert prov["wave"] == 2
+    assert prov["manifest"] == "manifest.abcd1234.json"
+    # combined_at is ISO 8601 with offset; check shape, not exact value.
+    assert "T" in prov["combined_at"] and prov["combined_at"].endswith("+00:00")
+
+
+def test_derive_resubmit_request_id_is_deterministic():
+    """Same input → same id, regardless of dict-key order in overrides."""
+    a = runner.derive_resubmit_request_id(
+        failed_task_ids=[3, 7, 1],  # unsorted
+        category="system_oom",
+        overrides={"mem": "32G", "walltime": "2:00:00"},
+    )
+    b = runner.derive_resubmit_request_id(
+        failed_task_ids=[1, 3, 7],
+        category="system_oom",
+        overrides={"walltime": "2:00:00", "mem": "32G"},  # reordered
+    )
+    assert a == b
+    assert a.startswith("rs_")
+
+
+def test_derive_resubmit_request_id_differs_on_overrides():
+    a = runner.derive_resubmit_request_id(
+        failed_task_ids=[3], category="walltime", overrides={"walltime": "2:00:00"}
+    )
+    b = runner.derive_resubmit_request_id(
+        failed_task_ids=[3], category="walltime", overrides={"walltime": "4:00:00"}
+    )
+    assert a != b
+
+
+def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
+    """Second call with the same spec returns deduped=True without bumping
+    retry counters."""
+    _seed_run(experiment)
+
+    rec1, dedup1, rid1 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[3],
+        category="system_oom",
+        overrides={"mem": "32G"},
+    )
+    assert dedup1 is False
+    assert rec1.retries["3"]["attempts"] == 1
+
+    # Same spec again — should dedupe.
+    rec2, dedup2, rid2 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[3],
+        category="system_oom",
+        overrides={"mem": "32G"},
+    )
+    assert dedup2 is True
+    assert rid2 == rid1
+    # Counter must NOT have incremented.
+    after = session.load_run(experiment, "ml_ridge_abcd1234")
+    assert after.retries["3"]["attempts"] == 1
+
+
+def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
+    """Caller-supplied request_id is honored for dedupe."""
+    _seed_run(experiment)
+
+    _, dedup1, rid1 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[3],
+        category="system_oom",
+        request_id="rs_explicit_abc",
+    )
+    assert dedup1 is False
+    assert rid1 == "rs_explicit_abc"
+
+    _, dedup2, rid2 = runner.resubmit_failed(
+        experiment, "ml_ridge_abcd1234",
+        failed_task_ids=[7],  # different task!
+        category="walltime",  # different category!
+        request_id="rs_explicit_abc",  # but same id
+    )
+    # Same explicit request_id wins over differing spec.
+    assert dedup2 is True
+    assert rid2 == "rs_explicit_abc"
+
+
+def test_annotate_clusters_with_retry_advice_tags_eligible_and_blocked(
+    journal_home, experiment
+):
+    """Tasks with attempts < max_attempts are eligible; at-or-over are blocked."""
+    record = _seed_run(
+        experiment,
+        retries={
+            "3": {"attempts": 1, "category": "gpu_oom", "overrides": {}},  # at cap (1)
+            "7": {"attempts": 0, "category": "gpu_oom", "overrides": {}},  # eligible
+        },
+    )
+    clusters = [
+        {
+            "category": "gpu_oom",
+            "fingerprint": "...",
+            "count": 3,
+            "task_ids": [3, 7, 12],  # 12 has no prior attempts -> eligible
+        },
+    ]
+    annotated = runner.annotate_clusters_with_retry_advice(
+        clusters,
+        auto_retry_policy={"gpu_oom": {"max_attempts": 1, "mem_multiplier": 1.5}},
+        record=record,
+    )
+    advice = annotated[0]["retry_advice"]
+    assert sorted(advice["eligible_task_ids"]) == [7, 12]
+    assert advice["blocked_task_ids"] == [3]
+    assert advice["policy"]["mem_multiplier"] == 1.5
+
+
+def test_annotate_clusters_skips_categories_without_policy(
+    journal_home, experiment
+):
+    record = _seed_run(experiment)
+    clusters = [
+        {"category": "walltime", "task_ids": [1, 2], "count": 2},
+        {"category": "gpu_oom", "task_ids": [3], "count": 1},
+    ]
+    annotated = runner.annotate_clusters_with_retry_advice(
+        clusters,
+        auto_retry_policy={"gpu_oom": {"max_attempts": 1}},  # walltime not configured
+        record=record,
+    )
+    assert "retry_advice" in annotated[1]
+    assert "retry_advice" not in annotated[0]
+
+
+def test_fingerprint_strips_volatile_noise():
+    """Two failures differing only in path / pid / timestamp share a fingerprint."""
+    line_a = (
+        "Traceback ...\n"
+        "  File '/u/scratch/exp/run_42/train.py', line 87, in <module>\n"
+        "    raise RuntimeError('boom')\n"
+        "RuntimeError: boom"
+    )
+    line_b = (
+        "Traceback ...\n"
+        "  File '/u/scratch/exp/run_99/train.py', line 87, in <module>\n"
+        "    raise RuntimeError('boom')\n"
+        "RuntimeError: boom"
+    )
+    fp_a = runner.fingerprint_stderr_tail(line_a)
+    fp_b = runner.fingerprint_stderr_tail(line_b)
+    assert fp_a == fp_b
+    assert "RuntimeError: boom" in fp_a
+
+
+def test_fingerprint_returns_empty_for_empty_input():
+    assert runner.fingerprint_stderr_tail("") == ""
+    assert runner.fingerprint_stderr_tail(None) == ""
+    assert runner.fingerprint_stderr_tail("   \n  ") == ""
+
+
+def test_cluster_failures_groups_same_fingerprint():
+    logs = [
+        {"task_id": 1, "content": "RuntimeError: boom"},
+        {"task_id": 2, "content": "RuntimeError: boom"},
+        {"task_id": 3, "content": "RuntimeError: boom"},
+        {"task_id": 4, "content": "ValueError: nope"},
+    ]
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+    assert len(clusters) == 2
+    # Sorted by count desc → biggest cluster first.
+    assert clusters[0]["count"] == 3
+    assert sorted(clusters[0]["task_ids"]) == [1, 2, 3]
+    assert clusters[1]["count"] == 1
+    assert clusters[1]["task_ids"] == [4]
+
+
+def test_cluster_failures_categorizes_known_modes():
+    logs = [
+        {
+            "task_id": 1,
+            "content": "torch.cuda.OutOfMemoryError: CUDA out of memory.",
+        },
+        {
+            "task_id": 2,
+            "content": "slurmstepd: error: ... DUE TO TIME LIMIT ***",
+        },
+        {"task_id": 3, "content": "ImportError: No module named 'foo'"},
+    ]
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+    cats = {c["category"] for c in clusters}
+    assert {"gpu_oom", "walltime", "import_error"}.issubset(cats)
+
+
+def test_cluster_failures_buckets_missing_logs():
+    logs = [
+        {"task_id": 7, "missing": True},
+        {"task_id": 8, "missing": True},
+    ]
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+    assert len(clusters) == 1
+    assert clusters[0]["category"] == "log_missing"
+    assert sorted(clusters[0]["task_ids"]) == [7, 8]
+
+
+def test_fetch_task_logs_returns_content_for_slurm():
+    """SLURM log path: <remote_path>/_hpc_logs/<job>_<jid>_<tid>.err."""
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        # First job_id attempt found.
+        return _completed(
+            stdout="FOUND\nline1\nline2\nline3\n", returncode=0
+        )
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["12345"],
+            scheduler="slurm",
+            task_ids=[7],
+            lines=50,
+        )
+
+    assert len(logs) == 1
+    entry = logs[0]
+    assert entry["task_id"] == 7
+    assert entry["job_id"] == "12345"
+    assert entry["path"] == "/exp/_hpc_logs/ml_12345_7.err"
+    assert "line1\nline2\nline3" in entry["content"]
+
+
+def test_fetch_task_logs_marks_missing_when_all_job_ids_have_no_log():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return _completed(stdout="MISSING\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["111", "222"],
+            scheduler="slurm",
+            task_ids=[7],
+        )
+
+    assert logs == [{"task_id": 7, "missing": True}]
+
+
+def test_fetch_task_logs_falls_back_to_earlier_job_id():
+    """When the latest job_id has no log, try the next-most-recent."""
+    sequence = [
+        _completed(stdout="MISSING\n", returncode=0),  # job 222 (newest)
+        _completed(stdout="FOUND\nold log\n", returncode=0),  # job 111
+    ]
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return sequence.pop(0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["111", "222"],  # reversed -> 222 first
+            scheduler="slurm",
+            task_ids=[7],
+        )
+
+    assert logs[0]["job_id"] == "111"
+    assert "old log" in logs[0]["content"]
+
+
+def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        return _completed(stdout="FOUND\nbody\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["12345"],
+            scheduler="sge",
+            task_ids=[7],
+        )
+
+    assert logs[0]["path"] == "/exp/ml.o12345.7"
+
+
+def test_validate_manifest_file_passes_for_clean_manifest(tmp_path: Path):
+    """A v2 manifest with resolved cmds and consistent wave_map validates."""
+    manifest = {
+        "schema_version": 2,
+        "total_tasks": 2,
+        "tasks": {
+            "0": {
+                "cmd": "python3 train.py --lr 0.01",
+                "result_dir": "results/run_a",
+                "params": {"lr": 0.01},
+                "cmd_sha": "0" * 16,
+            },
+            "1": {
+                "cmd": "python3 train.py --lr 0.001",
+                "result_dir": "results/run_b",
+                "params": {"lr": 0.001},
+                "cmd_sha": "1" * 16,
+            },
+        },
+        "wave_map": {"0": ["0", "1"]},
+    }
+    manifest_path = tmp_path / "manifest.abcd1234.json"
+    manifest_path.write_text(json.dumps(manifest))
+    runner.validate_manifest_file(manifest_path)  # no raise
+
+
+def test_validate_manifest_file_raises_for_unresolved_placeholder(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": {
+                    "0": {
+                        "cmd": "python3 train.py --model {model_name}",  # unresolved
+                        "result_dir": "results/run",
+                        "params": {},
+                    }
+                },
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "unresolved placeholder" in str(exc_info.value)
+    assert "{model_name}" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_total_tasks_mismatch(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "total_tasks": 5,  # claimed
+                "tasks": {  # but only 1 here
+                    "0": {"cmd": "x", "result_dir": "y", "params": {}}
+                },
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "total_tasks" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_unknown_schema_version(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 99,
+                "tasks": {"0": {"cmd": "x", "result_dir": "y", "params": {}}},
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "schema_version" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_wave_map_drift(tmp_path: Path):
+    """Wave map references a task id not in tasks."""
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "tasks": {"0": {"cmd": "x", "result_dir": "y", "params": {}}},
+                "wave_map": {"0": ["0", "99"]},  # 99 doesn't exist
+            }
+        )
+    )
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "wave_map" in str(exc_info.value)
+    assert "99" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_invalid_json(tmp_path: Path):
+    manifest_path = tmp_path / "m.json"
+    manifest_path.write_text("not json {")
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(manifest_path)
+    assert "not valid JSON" in str(exc_info.value)
+
+
+def test_validate_manifest_file_raises_for_missing_file(tmp_path: Path):
+    with pytest.raises(Exception) as exc_info:
+        runner.validate_manifest_file(tmp_path / "does-not-exist.json")
+    assert "not found" in str(exc_info.value)
+
+
+def test_write_remote_provenance_writes_sidecar_path():
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        return _completed(returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        path = runner.write_remote_provenance(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+            provenance={"run_id": "r_42"},
+        )
+    assert path == "/exp/results/_provenance.json"
+    # Script should base64-decode into the sidecar path.
+    assert any(
+        "base64 -d" in c and "_provenance.json" in c for c in captured
+    ), captured
