@@ -1,7 +1,7 @@
 """Per-run journal for HPC submissions.
 
 Persists the bootstrap context for an in-flight `/submit` so a fresh Claude
-Code session can pick up `/monitor` without re-deriving the cluster, job
+Code session can pick up `/status` without re-deriving the cluster, job
 IDs, manifest filename, combined-wave list, retry history, etc.
 
 Storage layout (one tree per experiment cwd):
@@ -17,7 +17,7 @@ Storage layout (one tree per experiment cwd):
 
 `repo_hash` is `sha256(experiment_dir.resolve())[:12]`. Pure IO; no SSH,
 no mapreduce imports. Composition with cluster-mutating ops lives in
-``agent.runner``.
+``slash_commands.runner``.
 """
 
 from __future__ import annotations
@@ -56,7 +56,11 @@ __all__ = [
 ]
 
 SCHEMA_VERSION = 1
-HPC_HOMEDIR = Path.home() / ".claude" / "hpc"
+# Resolve at import time. MARs (and any caller that wants its own state tree)
+# can set HPC_JOURNAL_DIR before importing this module to redirect the journal.
+HPC_HOMEDIR = Path(
+    os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc")
+)
 TERMINAL_STATUSES = frozenset({"complete", "failed", "abandoned"})
 _UPDATABLE_FIELDS = frozenset(
     {"last_status", "combined_waves", "failed_waves", "retries", "stage", "job_ids"}

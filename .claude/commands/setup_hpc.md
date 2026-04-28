@@ -4,6 +4,6 @@ Copy all slash commands from this repo into the global Claude commands directory
 
 ## Steps
 
-1. Copy each `.md` file from `agent/commands/` into `~/.claude/commands/`, overwriting existing files
+1. Copy each `.md` file from `slash_commands/commands/` into `~/.claude/commands/`, overwriting existing files
 2. Run `pip install -e .` from the repo root
 3. List the installed commands and confirm the hpc_mapreduce package is importable

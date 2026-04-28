@@ -8,7 +8,7 @@ parameters - there are no hardcoded defaults.  Callers obtain these
 values from ``clusters.yaml`` + ``hpc.yaml`` via :mod:`hpc_mapreduce.job.manifest`.
 
 Every subprocess invocation in this module enforces a timeout so a flaky
-cluster connection or paused rsync cannot block ``/submit``, ``/monitor``,
+cluster connection or paused rsync cannot block ``/submit``, ``/status``,
 or ``/aggregate`` indefinitely.  The defaults are :data:`SSH_TIMEOUT_SEC`
 for SSH/scp commands and :data:`RSYNC_TIMEOUT_SEC` for rsync transfers.
 Callers may override per-call by passing ``timeout=`` (in seconds), or
@@ -31,6 +31,7 @@ __all__ = [
     "run_combiner_checked",
 ]
 
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -43,6 +44,27 @@ from typing import Any, Final
 # minutes before declaring the transfer hung.
 SSH_TIMEOUT_SEC = 60
 RSYNC_TIMEOUT_SEC = 1800
+
+
+def _ssh_multiplex_opts() -> list[str]:
+    """Return SSH options that enable connection multiplexing.
+
+    First call to a host opens the master socket; subsequent calls within
+    the ControlPersist window (10 minutes) reuse it. For an agent polling
+    `status` every 30s during a 4-hour job, this is the difference between
+    hundreds of full handshakes and a single one.
+
+    Opt out by setting ``HPC_NO_SSH_MULTIPLEX=1`` (some clusters disallow
+    multiplexed sessions, e.g. due to PAM-based session limits).
+    """
+    if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
+        return []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    return [
+        "-o", "ControlMaster=auto",
+        "-o", f"ControlPath={runtime_dir}/hpc-cm-%C",
+        "-o", "ControlPersist=10m",
+    ]
 
 # Sentinel marker meaning "caller did not specify a timeout".  We need a
 # distinct value (not ``None``) because ``timeout=None`` is the documented
@@ -114,7 +136,7 @@ def ssh_run(
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
-    argv = ["ssh", _target(user, host), cmd]
+    argv = ["ssh", *_ssh_multiplex_opts(), _target(user, host), cmd]
     try:
         return subprocess.run(
             argv,

@@ -16,7 +16,7 @@ Discovery uses the same contract as `/submit`: a file is an executor iff it pars
 |-----------|---------------|
 | (empty) | Start from Step 1, ask the user what to build |
 | `"ml_elasticnet from ml_ridge"` | Mode (a): clone `ml_ridge.py` to `ml_elasticnet.py`, modify |
-| `"scaffold ml_lasso"` | Mode (b): start from `templates/executor_template.py` |
+| `"scaffold ml_lasso"` | Mode (b): start from `templates/starters/executor_template.py` |
 | `"wrap scripts/my_train.py"` | Mode (c): generate a shim for the given user script |
 
 Parse `$ARGUMENTS` before Step 1; skip ahead if intent is already clear.
@@ -64,7 +64,7 @@ If the user is ambiguous ("make a ridge executor"), infer: existing `ml_ridge.py
 
 1. Resolve the template path:
    ```bash
-   python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "executor_template.py")'
+   python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "starters" / "executor_template.py")'
    ```
 2. Ask the user for the target path (e.g. `src/my_executor.py` or `executors/foo.py`).
 3. Copy the template into the experiment repo at that path.
@@ -89,7 +89,7 @@ Use this when the user already has a working script that does not match the grid
       Default to reuse. Inline only when no helper fits, and inline only the minimum needed.
 3. Resolve the shim template:
    ```bash
-   python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "shim_template.py")'
+   python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "starters" / "shim_template.py")'
    ```
    (`chunking_shim.py` next to it is a concrete chunking example; pattern-match off it for data-length splits. For simpler translations, start from `shim_template.py`.)
 4. Ask the user where the shim should live (default: `shims/<script_stem>_shim.py` in the experiment repo).
@@ -141,7 +141,7 @@ End with a concise report: what was created, where, and the `/submit` command th
 
 ## Common executor patterns
 
-`templates/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit`'s grid expansion treats any of these flags as grid-able when their values are passed as lists.
+`templates/starters/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit`'s grid expansion treats any of these flags as grid-able when their values are passed as lists.
 
 **(a) ML training executor** — fit on a date/index window, score against a horizon, write a metric.
 

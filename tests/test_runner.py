@@ -1,4 +1,4 @@
-"""Tests for ``agent.runner`` — the bundled mapreduce + journal ops.
+"""Tests for ``slash_commands.runner`` — the bundled mapreduce + journal ops.
 
 SSH primitives are mocked so the tests exercise the wiring (journal-update
 ordering, retry counting, drift reconciliation) without touching a network.
@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from agent import runner, session
-from agent.session import RunRecord
+from slash_commands import runner, session
+from slash_commands.session import RunRecord
 
 
 @pytest.fixture
@@ -56,7 +56,7 @@ def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
 
 
 def test_submit_and_record_writes_journal(journal_home, experiment):
-    record = runner.submit_and_record(
+    record, deduped = runner.submit_and_record(
         experiment,
         profile="ml_ridge",
         cluster="hoffman2",
@@ -67,6 +67,7 @@ def test_submit_and_record_writes_journal(journal_home, experiment):
         job_ids=["12345678"],
         total_tasks=100,
     )
+    assert deduped is False
     assert record.run_id == "ml_ridge_abcd1234"
     assert record.status == "in_flight"
     assert record.stage == "monitor"
@@ -77,9 +78,33 @@ def test_submit_and_record_writes_journal(journal_home, experiment):
     assert loaded.total_tasks == 100
 
 
+def test_submit_and_record_dedups_replay(journal_home, experiment):
+    """Second call with the same spec returns the existing record + deduped=True."""
+    kwargs = dict(
+        profile="ml_ridge",
+        cluster="hoffman2",
+        ssh_target="user@hoffman2.idre.ucla.edu",
+        remote_path="/u/scratch/exp",
+        job_name="ml_ridge",
+        manifest_filename="manifest.abcd1234.json",
+        job_ids=["12345678"],
+        total_tasks=100,
+    )
+    first, first_dedup = runner.submit_and_record(experiment, **kwargs)
+    assert first_dedup is False
+
+    # Replay with new job_ids should be ignored — dedup means the existing
+    # record is returned untouched, so retries can't double-submit.
+    replay_kwargs = {**kwargs, "job_ids": ["99999999"]}
+    second, second_dedup = runner.submit_and_record(experiment, **replay_kwargs)
+    assert second_dedup is True
+    assert second.run_id == first.run_id
+    assert second.job_ids == ["12345678"]  # original wins
+
+
 def test_combine_wave_records_success(journal_home, experiment):
     _seed_run(experiment)
-    with patch("agent.runner.run_combiner_checked", return_value=(True, "ok", "")) as m:
+    with patch("slash_commands.runner.run_combiner_checked", return_value=(True, "ok", "")) as m:
         ok, _, _ = runner.combine_wave(
             experiment, "ml_ridge_abcd1234",
             wave=2,
@@ -95,7 +120,7 @@ def test_combine_wave_records_success(journal_home, experiment):
 
 def test_combine_wave_records_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch("agent.runner.run_combiner_checked", return_value=(False, "", "boom")):
+    with patch("slash_commands.runner.run_combiner_checked", return_value=(False, "", "boom")):
         ok, _, _ = runner.combine_wave(
             experiment, "ml_ridge_abcd1234",
             wave=3,
@@ -110,12 +135,12 @@ def test_combine_wave_records_failure(journal_home, experiment):
 
 def test_combine_wave_failed_then_success_clears_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch("agent.runner.run_combiner_checked", return_value=(False, "", "boom")):
+    with patch("slash_commands.runner.run_combiner_checked", return_value=(False, "", "boom")):
         runner.combine_wave(
             experiment, "ml_ridge_abcd1234",
             wave=4, ssh_target="user@h", remote_path="/x",
         )
-    with patch("agent.runner.run_combiner_checked", return_value=(True, "ok", "")):
+    with patch("slash_commands.runner.run_combiner_checked", return_value=(True, "ok", "")):
         runner.combine_wave(
             experiment, "ml_ridge_abcd1234",
             wave=4, ssh_target="user@h", remote_path="/x",
@@ -161,7 +186,7 @@ def test_record_status_sets_checked_at(journal_home, experiment):
     _seed_run(experiment)
     payload = {"summary": {"complete": 7, "running": 3, "pending": 0, "failed": 1, "unknown": 0}}
     with patch(
-        "agent.runner.ssh_run",
+        "slash_commands.runner.ssh_run",
         return_value=_completed(stdout=json.dumps(payload)),
     ):
         record = runner.record_status(
@@ -189,7 +214,7 @@ def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive_squeue)
 
-    with patch("agent.runner.ssh_run", side_effect=fake_ssh):
+    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.combined_waves == [0, 2]
@@ -208,7 +233,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
             return _completed(stdout="")
         return _completed(stdout="")
 
-    with patch("agent.runner.ssh_run", side_effect=fake_ssh):
+    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert record.status == "abandoned"
     assert session.find_in_flight_runs(experiment) == []
@@ -227,7 +252,7 @@ def test_reconcile_idempotent(journal_home, experiment):
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive)
 
-    with patch("agent.runner.ssh_run", side_effect=fake_ssh):
+    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
         first = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
         second = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert first.combined_waves == [0, 1]

@@ -18,14 +18,29 @@ The exports below are the entire public surface of the `hpc_mapreduce`
 package. Groupings mirror those in
 [`hpc_mapreduce/__init__.py`](../hpc_mapreduce/__init__.py).
 
+The public boundary also now includes the **shell CLI** at
+`hpc_mapreduce/cli.py` (entry point `hpc-mapreduce`). Its envelope
+shape, subcommand list, and exit-code contract are documented in
+[`docs/cli-spec.md`](cli-spec.md) and the JSON Schemas under
+`hpc_mapreduce/schemas/`. The CLI calls into the same atomic-ops layer
+(`slash_commands/runner.py`) that the slash commands use, so the
+invariants in [`docs/sync-checklist.md`](sync-checklist.md) bind both.
+
 ### Package root
 
-- `_PACKAGE_ROOT` — absolute path to the framework checkout; used to resolve
-  `config/clusters.yaml` and bundled templates.
+- `_PACKAGE_ROOT` — absolute path to the **package directory**
+  (`hpc_mapreduce/`, where `__init__.py` lives). Used to resolve
+  `hpc_mapreduce/config/clusters.yaml`, the bundled job templates
+  under `hpc_mapreduce/templates/<scheduler>/`, and starter templates
+  under `hpc_mapreduce/templates/starters/`. Note: this points at the
+  package, **not** the repo root.
+- `__version__` — package version string, resolved at import time from
+  the installed distribution metadata. Falls back to
+  `"0.0.0+unknown"` when running from a non-installed checkout.
 
 ### Config & discovery
 
-- `load_clusters_config` — parse and return `config/clusters.yaml`.
+- `load_clusters_config` — parse and return `hpc_mapreduce/config/clusters.yaml`.
 - `get_template_path` — resolve a bundled job template by `(scheduler, name)`.
 
 ### Remote execution
@@ -161,8 +176,9 @@ Everything outside the framework's public API. Concretely:
 - **`hpc.yaml`** — optional per-experiment profile config (see
   [`docs/schema.md`](schema.md)).
 - **Generated shims** — `date_window_shim.py`, `chunking_shim.py`, or any
-  custom shim the LLM writes from the templates in `templates/`. These live
-  in the experiment repo, are versioned there, and are user-editable.
+  custom shim the LLM writes from the templates in
+  `hpc_mapreduce/templates/starters/`. These live in the experiment
+  repo, are versioned there, and are user-editable.
 - **Domain-specific aggregation** — any `aggregate_cmd` the experiment
   defines for fan-in.
 
@@ -197,13 +213,15 @@ runnable executors), not a framework reservation. Experiment repos may use
 1. **`hpc_mapreduce/**` may import the standard library plus the
    third-party deps listed in `pyproject.toml`** (currently just `pyyaml`).
    No other runtime deps.
-2. **`hpc_mapreduce/**` MUST NOT import from `templates/`.** Templates are
-   source files copied into experiment repos; treating them as importable
-   modules would couple the framework to a fixed set of templates.
-3. **`templates/**` MUST NOT import from `hpc_mapreduce/**`** — with one
-   narrow exception. Templates ship into experiment repos and run there,
-   where `claude-hpc` is generally not installed. The exception: a small
-   allowlist of "runtime modules" that `deploy_runtime`
+2. **`hpc_mapreduce/**` MUST NOT import from
+   `hpc_mapreduce/templates/`.** Templates are source files copied
+   into experiment repos; treating them as importable modules would
+   couple the framework to a fixed set of templates.
+3. **`hpc_mapreduce/templates/**` MUST NOT import from
+   `hpc_mapreduce/**`** — with one narrow exception. Templates ship
+   into experiment repos and run there, where `claude-hpc` is
+   generally not installed. The exception: a small allowlist of
+   "runtime modules" that `deploy_runtime`
    (`hpc_mapreduce/infra/remote.py`) explicitly copies onto the cluster
    compute node alongside the executor. Templates may import from those
    because they are guaranteed to be present at execution time. The current
@@ -226,18 +244,19 @@ Cluster-infrastructure config and per-experiment config are deliberately
 separated, so that adding a new experiment never requires editing the
 framework, and adding a new cluster never requires touching any experiment.
 
-- **`config/clusters.yaml`** — cluster infrastructure (host, scheduler,
-  scratch path, modules, conda envs, GPU types, throughput constraints).
-  Ships with `claude-hpc`. See [`README.md`](../README.md) lines 95–109.
+- **`hpc_mapreduce/config/clusters.yaml`** — cluster infrastructure
+  (host, scheduler, scratch path, modules, conda envs, GPU types,
+  throughput constraints). Ships with `claude-hpc`. See
+  [`README.md`](../README.md) lines 95–109.
 - **`hpc.yaml`** — optional per-experiment profile config (project name,
   grid, resources, results layout). Lives in the experiment repo. See
   [`README.md`](../README.md) lines 111–117 and
   [`docs/schema.md`](schema.md) line 3.
 
 The lint test `test_clusters_yaml_is_infra_only` enforces that
-`config/clusters.yaml` only contains infrastructure-shaped keys; any
-experiment-shaped field (e.g. `grid`, `executors`) leaking into a cluster
-entry will fail it.
+`hpc_mapreduce/config/clusters.yaml` only contains infrastructure-shaped
+keys; any experiment-shaped field (e.g. `grid`, `executors`) leaking
+into a cluster entry will fail it.
 
 ## How to extend
 

@@ -31,6 +31,7 @@ ALLOWED_EXPORTS = frozenset(
     {
         # Package root
         "_PACKAGE_ROOT",
+        "__version__",
         # Config & discovery
         "load_clusters_config",
         "get_template_path",
@@ -277,8 +278,8 @@ def test_templates_do_not_import_core() -> None:
 
 
 def test_clusters_yaml_is_infra_only() -> None:
-    """Each cluster entry in ``config/clusters.yaml`` must use only infra keys."""
-    clusters_path = REPO_ROOT / "config" / "clusters.yaml"
+    """Each cluster entry in ``hpc_mapreduce/config/clusters.yaml`` must use only infra keys."""
+    clusters_path = REPO_ROOT / "hpc_mapreduce" / "config" / "clusters.yaml"
     with clusters_path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
 

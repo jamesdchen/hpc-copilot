@@ -1,16 +1,61 @@
 # claude-hpc
 
-A Claude Code plugin for running experiment repos on HPC clusters (SGE/SLURM). Point Claude at your executors, describe what you want to run, and hpc_mapreduce handles the rest — grid expansion, dispatch, monitoring, and result aggregation — all via SSH.
+HPC orchestrator for parameter-grid experiments on SGE/SLURM clusters. Two surfaces over one core:
+
+- **Slash commands for humans** in Claude Code (`/submit`, `/status`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, prompts you for cluster + grid params.
+- **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs).
+
+Both go through the same atomic-ops layer (`slash_commands/runner.py`), so cross-surface state (in-flight runs, journal records) is shared automatically.
 
 ## Quick Start
 
-### 1. Install
+### For humans (Claude Code)
 
 ```bash
 pip install -e .
 ```
+Open the repo in Claude Code, then:
+- `/preflight` — verify SSH agent + cluster reachability.
+- `/submit` — answer prompts about cluster, executor, grid params.
+- `/status` to monitor, `/aggregate` to collect results.
 
-### 2. Organize your experiment repo
+### For agents and automation
+
+```bash
+pip install claude-hpc
+hpc-mapreduce preflight --cluster hoffman2     # health check
+hpc-mapreduce submit --spec spec.json          # JSON envelope on stdout
+hpc-mapreduce status --run-id <id>             # one-shot snapshot; poll as needed
+hpc-mapreduce aggregate --run-id <id> --wave 1 # combiner + result pull
+```
+Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/cli-spec.md`](docs/cli-spec.md); JSON Schema files for runtime validation under `hpc_mapreduce/schemas/`.
+
+### Using with MARs
+
+claude-hpc plugs into MARs as a Bash-invokable tool. The MARs `agents/experiment-runner.md` agent already has `Bash` in its tool list, so the integration is:
+
+1. `pip install claude-hpc` in the MARs venv.
+2. Copy or symlink `skills/hpc-*` from this repo into your MARs checkout's `skills/` directory.
+3. Set environment so MARs can spawn into a configured state:
+   ```
+   export HPC_JOURNAL_DIR=~/.claude-paper/hpc
+   export HPC_CLUSTERS_CONFIG=/path/to/your/clusters.yaml   # optional override
+   # SSH credentials must be passed through to spawned children:
+   export SSH_AUTH_SOCK=...   # whatever your shell already has
+   ```
+4. (Optional) Add a one-line note in your MARs fork's `agents/experiment-runner.md` mentioning when to invoke the new skills (e.g., "use hpc-submit when an experiment requires HPC scale or array-job parallelism").
+
+**SSH env passthrough is the most common first-time-user failure.** When MARs spawns claude-hpc via `Bun.spawn`, the child inherits only forwarded env vars. Without `SSH_AUTH_SOCK`, every cluster call hangs on auth. Run `hpc-mapreduce preflight` first to catch this.
+
+**No cancel/abort.** claude-hpc deliberately does not kill cluster jobs (`settings.json` denies `scancel`/`qdel`). If MARs decides an experiment is bad, stop waiting on it; the cluster jobs run to walltime.
+
+**Journal coexistence.** MARs has its own experiment journal (`src/paper/experiments/journal.ts`) tracking experiment-level state. claude-hpc's journal at `$HPC_JOURNAL_DIR` tracks HPC-run-level state. Different scopes, no overlap.
+
+---
+
+## Standalone usage
+
+### Organize your experiment repo
 
 Keep standalone executor scripts in a dedicated directory, separate from shared utilities:
 
@@ -28,11 +73,12 @@ my_experiment/
 
 Each executor accepts experiment-specific arguments (`--horizon`, `--start`, `--end`, `--features`, etc.). No HPC awareness is needed — all parameters arrive as CLI flags.
 
-### 3. Run
+### Run
 
 ```
+/preflight → verify SSH agent + cluster reachability before first submit
 /submit    → discovers executors, builds grid conversationally, syncs code, submits
-/monitor   → tracks completion per grid point, diagnoses failures, auto-resubmits
+/status    → tracks completion per grid point, diagnoses failures, auto-resubmits
 /aggregate → validates completeness, runs aggregation, downloads summaries
 ```
 
@@ -54,7 +100,7 @@ Proposed plan:
 
 You: yes
 
-Claude: Submitted job 12345678 (6 tasks). Run /monitor to track progress.
+Claude: Submitted job 12345678 (6 tasks). Run /status to track progress.
 ```
 
 No config files required. Claude discovers your executors by reading their source and `--help`, then suggests resources conversationally based on the executor and your input.
@@ -89,14 +135,16 @@ Configure constraints in `clusters.yaml` (cluster-level) or `hpc.yaml` profiles 
 
 | Command | What it does |
 |---------|-------------|
+| `/preflight` | Verify SSH agent, ssh/rsync on PATH, clusters.yaml parses, cluster reachable |
 | `/submit` | Discover executors, build grid conversationally, sync code, submit array jobs |
-| `/monitor` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
+| `/status` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
+| `/build-executor` | Scaffold a new executor or shim from a starter template |
 ## Configuration
 
 ### `clusters.yaml` (required)
 
-Cluster infrastructure definitions. Ships with claude-hpc in `config/clusters.yaml`:
+Cluster infrastructure definitions. Ships inside the package at `hpc_mapreduce/config/clusters.yaml`. Override the active path with `HPC_CLUSTERS_CONFIG=/your/clusters.yaml` (useful for MARs users who want to keep their cluster definitions outside the package):
 
 ```yaml
 hoffman2:
@@ -134,7 +182,7 @@ Templates are parameterized via environment variables injected at submission tim
 | Hoffman2 | UCLA IDRE | SGE |
 | Discovery | USC CARC | SLURM |
 
-Cluster connection details are in `config/clusters.yaml`.
+Cluster connection details are in `hpc_mapreduce/config/clusters.yaml` (or whatever `HPC_CLUSTERS_CONFIG` points at).
 
 ## Python API
 

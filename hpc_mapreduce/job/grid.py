@@ -8,7 +8,7 @@ Manifest schema history:
   ``grid_keys``, and per-task ``cmd`` / ``result_dir`` / ``params``.
 * v2: adds ``cmd_sha`` on every task (first 16 hex chars of the SHA-256 of
   the task's ``cmd`` string).  Provides a stable identifier for each task's
-  command that observers (``/monitor``, status tools) can use to detect
+  command that observers (``/status``, status tools) can use to detect
   drift between the manifest and what actually ran.  The on-cluster
   dispatcher accepts both v1 and v2 for back-compat.
 """

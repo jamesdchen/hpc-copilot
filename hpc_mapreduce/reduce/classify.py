@@ -1,8 +1,8 @@
 """Classify failed task logs into actionable failure categories.
 
-Categories are consumed by the ``/monitor`` slash command to decide whether to
+Categories are consumed by the ``/status`` slash command to decide whether to
 auto-resubmit, adjust resources, or stop and escalate to the user.  See
-``agent/commands/monitor.md`` for the action table keyed on these labels.
+``slash_commands/commands/status.md`` for the action table keyed on these labels.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ _TRACEBACK = re.compile(r"Traceback \(most recent call last\):")
 def classify_failure(log_text: str) -> str:
     """Classify a failed task's stderr/log text into a category.
 
-    The ``/monitor`` slash command uses the returned label to decide an action
+    The ``/status`` slash command uses the returned label to decide an action
     (resubmit with more memory, bump walltime, escalate, etc.).  Checks are
     order-sensitive: specific patterns are tested before the catch-all Python
     traceback check so that e.g. a ``torch.cuda.OutOfMemoryError`` traceback
