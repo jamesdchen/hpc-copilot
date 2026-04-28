@@ -140,13 +140,7 @@ When you add a new invariant or change one of the above:
 
 ## Known discrepancies (v0.2.0)
 
-- The `--spec.category` enum in
-  `hpc_mapreduce/schemas/resubmit.input.json` lists
-  `["oom", "gpu_oom", "walltime", "code_bug", "infra", "unknown"]`,
-  which **does not match** the `CATEGORIES` tuple in
-  `hpc_mapreduce/reduce/classify.py`
-  (`gpu_oom, system_oom, walltime, node_failure, queue_stall,
-  code_bug, unknown`). The schema accepts `oom` and `infra` (neither
-  is a classifier output) and rejects `system_oom`, `node_failure`,
-  `queue_stall` (all valid classifier outputs). One of the two files
-  needs to win; resolve before the next minor version bump.
+None at release. The `--spec.category` enum in
+`hpc_mapreduce/schemas/resubmit.input.json` is the canonical mirror of
+`CATEGORIES` in `hpc_mapreduce/reduce/classify.py`; if you add a new
+failure category, update both files in the same commit.
