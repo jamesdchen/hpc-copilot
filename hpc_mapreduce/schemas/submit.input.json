@@ -18,6 +18,7 @@
     "manifest_filename": { "type": "string", "pattern": "^manifest\\.[0-9a-f]{8}\\.json$" },
     "job_ids":           { "type": "array", "items": { "type": "string" }, "minItems": 1 },
     "total_tasks":       { "type": "integer", "minimum": 1 },
-    "run_id":            { "type": ["string", "null"] }
+    "run_id":            { "type": ["string", "null"] },
+    "runtime":           { "type": ["string", "null"], "enum": ["uv", null] }
   }
 }
