@@ -16,6 +16,10 @@
       "type": "object",
       "description": "Snapshot from the on-cluster status reporter; see hpc_mapreduce.reduce.status."
     },
+    "last_status_age_seconds": {
+      "type": ["integer", "null"],
+      "description": "Age of last_status.checked_at in seconds; null when unavailable. Callers may treat any value above their threshold as stale."
+    },
     "combined_waves": { "type": "array", "items": { "type": "integer" } },
     "failed_waves":   { "type": "array", "items": { "type": "integer" } }
   }

@@ -371,6 +371,30 @@ def cmd_clusters_describe(args: argparse.Namespace) -> int:
 # ─── subcommand: list-in-flight ────────────────────────────────────────────
 
 
+def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
+    """Return age in seconds of ``last_status.checked_at``, or None.
+
+    Returns ``None`` when ``last_status`` is empty, has no ``checked_at``,
+    or the timestamp is unparseable.  Callers use this to surface
+    staleness to humans without changing the freshness contract of any
+    SSH-mutating subcommand.
+    """
+    if not isinstance(last_status, dict):
+        return None
+    iso = last_status.get("checked_at")
+    if not isinstance(iso, str):
+        return None
+    try:
+        from datetime import datetime, timezone
+        ts = datetime.fromisoformat(iso)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - ts
+        return max(0, int(delta.total_seconds()))
+    except (ValueError, TypeError):
+        return None
+
+
 def cmd_list_in_flight(args: argparse.Namespace) -> int:
     records = session.find_in_flight_runs(args.experiment_dir)
     _ok(
@@ -384,6 +408,7 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
                     "total_tasks": r.total_tasks,
                     "submitted_at": r.submitted_at,
                     "last_status": r.last_status,
+                    "last_status_age_seconds": _last_status_age_seconds(r.last_status),
                 }
                 for r in records
             ]
@@ -418,6 +443,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "run_id": updated.run_id,
             "lifecycle_state": updated.status,
             "last_status": updated.last_status,
+            "last_status_age_seconds": _last_status_age_seconds(updated.last_status),
             "combined_waves": updated.combined_waves,
             "failed_waves": updated.failed_waves,
         },

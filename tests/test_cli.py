@@ -519,6 +519,53 @@ def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
     assert payload["error_code"] == "ssh_unreachable"
 
 
+# ─── stale-cache age field on status / list-in-flight ──────────────────────
+
+
+def test_last_status_age_seconds_is_recent_for_now_stamp() -> None:
+    """A checked_at stamped at 'now' yields a small age (< 5s)."""
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    age = cli._last_status_age_seconds({"checked_at": now_iso})
+    assert age is not None
+    assert 0 <= age < 5
+
+
+def test_last_status_age_seconds_handles_missing_checked_at() -> None:
+    assert cli._last_status_age_seconds({}) is None
+    assert cli._last_status_age_seconds(None) is None  # type: ignore[arg-type]
+    assert cli._last_status_age_seconds({"checked_at": "garbage"}) is None
+
+
+def test_last_status_age_seconds_is_old_for_distant_past() -> None:
+    """A timestamp from a year ago should yield a very large age."""
+    age = cli._last_status_age_seconds({"checked_at": "2024-01-01T00:00:00+00:00"})
+    assert age is not None
+    assert age > 60 * 60 * 24 * 30  # at least 30 days
+
+
+def test_list_in_flight_envelope_includes_age_field(tmp_path: Path) -> None:
+    """list-in-flight surfaces last_status_age_seconds for each run so the
+    caller can flag stale snapshots."""
+    import os
+
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps(SUBMIT_SPEC))
+    journal = tmp_path / "journal"
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
+
+    _run_cli("submit", "--experiment-dir", str(tmp_path), "--spec", str(spec), env=env_vars)
+    rc, out, _ = _run_cli(
+        "list-in-flight", "--experiment-dir", str(tmp_path), env=env_vars
+    )
+    assert rc == 0
+    runs = _parse_envelope(out)["data"]["runs"]
+    assert len(runs) == 1
+    # No status poll yet: last_status is empty/missing -> age is None.
+    assert runs[0].get("last_status_age_seconds") is None
+
+
 # ─── aggregate preconditions / postconditions / provenance ─────────────────
 
 
