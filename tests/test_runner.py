@@ -632,6 +632,97 @@ def test_build_provenance_carries_run_metadata(experiment):
     assert "T" in prov["combined_at"] and prov["combined_at"].endswith("+00:00")
 
 
+def test_fetch_task_logs_returns_content_for_slurm():
+    """SLURM log path: <remote_path>/_hpc_logs/<job>_<jid>_<tid>.err."""
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        # First job_id attempt found.
+        return _completed(
+            stdout="FOUND\nline1\nline2\nline3\n", returncode=0
+        )
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["12345"],
+            scheduler="slurm",
+            task_ids=[7],
+            lines=50,
+        )
+
+    assert len(logs) == 1
+    entry = logs[0]
+    assert entry["task_id"] == 7
+    assert entry["job_id"] == "12345"
+    assert entry["path"] == "/exp/_hpc_logs/ml_12345_7.err"
+    assert "line1\nline2\nline3" in entry["content"]
+
+
+def test_fetch_task_logs_marks_missing_when_all_job_ids_have_no_log():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return _completed(stdout="MISSING\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["111", "222"],
+            scheduler="slurm",
+            task_ids=[7],
+        )
+
+    assert logs == [{"task_id": 7, "missing": True}]
+
+
+def test_fetch_task_logs_falls_back_to_earlier_job_id():
+    """When the latest job_id has no log, try the next-most-recent."""
+    sequence = [
+        _completed(stdout="MISSING\n", returncode=0),  # job 222 (newest)
+        _completed(stdout="FOUND\nold log\n", returncode=0),  # job 111
+    ]
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return sequence.pop(0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["111", "222"],  # reversed -> 222 first
+            scheduler="slurm",
+            task_ids=[7],
+        )
+
+    assert logs[0]["job_id"] == "111"
+    assert "old log" in logs[0]["content"]
+
+
+def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        return _completed(stdout="FOUND\nbody\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        logs = runner.fetch_task_logs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            job_name="ml",
+            job_ids=["12345"],
+            scheduler="sge",
+            task_ids=[7],
+        )
+
+    assert logs[0]["path"] == "/exp/ml.o12345.7"
+
+
 def test_validate_manifest_file_passes_for_clean_manifest(tmp_path: Path):
     """A v2 manifest with resolved cmds and consistent wave_map validates."""
     manifest = {

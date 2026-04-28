@@ -222,6 +222,7 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "clusters",
                 "capabilities",
                 "build-executor",
+                "logs",
             ],
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
@@ -743,6 +744,92 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: logs ──────────────────────────────────────────────────────
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    """Fetch per-task stderr logs from the cluster.
+
+    Two ways to select tasks:
+      --task-id 7,12,42   explicit list
+      --all-failed        re-poll status, fetch logs for failed tasks
+    """
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
+
+    record = session.load_run(args.experiment_dir, args.run_id)
+    if record is None:
+        raise errors.JournalCorrupt(
+            f"no journal record for run_id {args.run_id!r}"
+        )
+
+    # Resolve task ids.
+    task_ids: list[int] = []
+    note: str | None = None
+    if getattr(args, "all_failed", False):
+        # Fresh status poll to enumerate failed tasks.
+        try:
+            report = runner._ssh_status_report(
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                manifest_filename=record.manifest,
+                job_ids=record.job_ids,
+                job_name=record.job_name,
+            )
+        except errors.HpcError:
+            raise
+        for tid_str, info in (report.get("tasks") or {}).items():
+            if isinstance(info, dict) and info.get("status") == "failed":
+                try:
+                    task_ids.append(int(tid_str))
+                except (TypeError, ValueError):
+                    continue
+        if not task_ids:
+            note = "no failed tasks in current status report"
+    elif args.task_id:
+        try:
+            task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
+        except ValueError as exc:
+            raise errors.ManifestInvalid(
+                f"--task-id must be comma-separated integers: {exc}"
+            ) from exc
+        if not task_ids:
+            raise errors.ManifestInvalid("--task-id is empty")
+    else:
+        raise errors.ManifestInvalid(
+            "logs requires --task-id <ids> or --all-failed"
+        )
+
+    # Cluster-side scheduler.
+    try:
+        clusters = load_clusters_config()
+    except Exception:  # noqa: BLE001 — config errors fall through to user-error path
+        clusters = {}
+    scheduler = (clusters.get(record.cluster) or {}).get("scheduler") or "slurm"
+
+    logs: list[dict[str, Any]] = []
+    if task_ids:
+        logs = runner.fetch_task_logs(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            job_name=record.job_name,
+            job_ids=record.job_ids,
+            scheduler=scheduler,
+            task_ids=task_ids,
+            lines=int(getattr(args, "lines", 50) or 50),
+        )
+
+    data: dict[str, Any] = {
+        "run_id": args.run_id,
+        "scheduler": scheduler,
+        "logs": logs,
+    }
+    if note is not None:
+        data["note"] = note
+    _ok(data, idempotent=True)
+    return EXIT_OK
+
+
 # ─── subcommand: build-executor ────────────────────────────────────────────
 
 
@@ -936,6 +1023,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scheduler family — needed to query alive job IDs.",
     )
     p_rec.set_defaults(func=cmd_reconcile)
+
+    # logs
+    p_logs = sub.add_parser(
+        "logs",
+        help="Fetch per-task stderr logs from the cluster (requires --task-id or --all-failed).",
+    )
+    _add_experiment_dir(p_logs)
+    p_logs.add_argument("--run-id", required=True)
+    p_logs.add_argument(
+        "--task-id",
+        default=None,
+        help="Comma-separated task ids to fetch (e.g. '7,12,42').",
+    )
+    p_logs.add_argument(
+        "--all-failed",
+        action="store_true",
+        help="Re-poll status and fetch logs for every task with status=failed.",
+    )
+    p_logs.add_argument(
+        "--lines",
+        type=int,
+        default=50,
+        help="Number of trailing lines to return per log (default 50).",
+    )
+    p_logs.set_defaults(func=cmd_logs)
 
     # build-executor
     p_be = sub.add_parser(

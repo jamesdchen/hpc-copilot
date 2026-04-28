@@ -519,6 +519,91 @@ def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
     assert payload["error_code"] == "ssh_unreachable"
 
 
+# ─── logs subcommand ──────────────────────────────────────────────────────
+
+
+def test_logs_requires_task_id_or_all_failed(tmp_path: Path) -> None:
+    """`logs` with neither --task-id nor --all-failed surfaces user error."""
+    import os
+
+    # Need a journal record for the run-id lookup to get past first.
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps(SUBMIT_SPEC))
+    journal = tmp_path / "journal"
+    env_vars = {
+        **os.environ,
+        "HPC_JOURNAL_DIR": str(journal),
+        "SSH_AUTH_SOCK": os.environ.get("SSH_AUTH_SOCK", "/tmp/fake.sock"),
+    }
+    _run_cli("submit", "--experiment-dir", str(tmp_path), "--spec", str(spec), env=env_vars)
+
+    rc, out, _ = _run_cli(
+        "logs",
+        "--experiment-dir", str(tmp_path),
+        "--run-id", "ml_abcd1234",
+        env=env_vars,
+    )
+    assert rc != 0
+    payload = _parse_envelope(out)
+    assert payload["error_code"] == "manifest_invalid"
+
+
+def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
+    """logs --task-id 7 returns a list with one entry from fetch_task_logs."""
+    import argparse
+    from unittest.mock import patch
+
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake.sock")
+
+    # Seed a run.
+    from slash_commands import session as session_mod
+    from slash_commands.session import RunRecord
+
+    rec = RunRecord(
+        run_id="ml_abcd1234",
+        profile="ml",
+        cluster="hoffman2",
+        ssh_target="user@host",
+        remote_path="/exp",
+        job_name="ml",
+        job_ids=["12345"],
+        manifest="manifest.abcd1234.json",
+        total_tasks=10,
+        submitted_at="2026-04-28T00:00:00+00:00",
+        experiment_dir=str(tmp_path),
+    )
+    session_mod.upsert_run(tmp_path, rec)
+
+    args = argparse.Namespace(
+        experiment_dir=tmp_path,
+        run_id="ml_abcd1234",
+        task_id="7",
+        all_failed=False,
+        lines=50,
+    )
+
+    captured: list[dict] = []
+    fake_logs = [
+        {
+            "task_id": 7,
+            "path": "/exp/_hpc_logs/ml_12345_7.err",
+            "job_id": "12345",
+            "content": "boom\n",
+        }
+    ]
+    with patch.object(
+        cli.runner, "fetch_task_logs", return_value=fake_logs
+    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+        rc = cli.cmd_logs(args)
+
+    assert rc == 0
+    payload = captured[-1]
+    assert payload["ok"] is True
+    assert payload["data"]["logs"] == fake_logs
+    assert payload["data"]["run_id"] == "ml_abcd1234"
+
+
 # ─── stale-cache age field on status / list-in-flight ──────────────────────
 
 

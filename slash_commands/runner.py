@@ -35,6 +35,7 @@ __all__ = [
     "build_provenance",
     "write_remote_provenance",
     "validate_manifest_file",
+    "fetch_task_logs",
 ]
 
 
@@ -467,6 +468,73 @@ def mark_terminal(
 ) -> RunRecord:
     """Thin pass-through to ``session.mark_run`` for symmetry."""
     return session.mark_run(experiment_dir, run_id, status=status, stage=stage)
+
+
+# ─── per-task log fetching ──────────────────────────────────────────────────
+
+
+def fetch_task_logs(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    job_name: str,
+    job_ids: list[str],
+    scheduler: str,
+    task_ids: list[int],
+    lines: int = 50,
+) -> list[dict[str, Any]]:
+    """SSH to the cluster and tail each task's stderr log.
+
+    Tries the most recent ``job_id`` first, falls back through earlier
+    ones (matching :func:`hpc_mapreduce.reduce.status.get_err_log_paths`
+    semantics). Returns one dict per task; missing logs surface as
+    ``{"task_id": int, "missing": True}``.
+
+    Path conventions (must stay aligned with the job templates):
+
+    * SGE:    ``<remote_path>/<job_name>.o<job_id>.<task_id>``
+    * SLURM:  ``<remote_path>/_hpc_logs/<job_name>_<job_id>_<task_id>.err``
+    """
+    if not task_ids:
+        return []
+    user, host = _split_ssh_target(ssh_target)
+    out: list[dict[str, Any]] = []
+    for tid in task_ids:
+        found: dict[str, Any] | None = None
+        for job_id in reversed(job_ids or []):
+            if scheduler == "sge":
+                path = f"{remote_path.rstrip('/')}/{job_name}.o{job_id}.{tid}"
+            else:
+                path = (
+                    f"{remote_path.rstrip('/')}"
+                    f"/_hpc_logs/{job_name}_{job_id}_{tid}.err"
+                )
+            quoted = shlex.quote(path)
+            script = (
+                f"if [ -f {quoted} ]; then "
+                f"echo FOUND; tail -n {int(lines)} {quoted}; "
+                f"else echo MISSING; fi"
+            )
+            proc = ssh_run(script, host=host, user=user)
+            if proc.returncode != 0:
+                # SSH itself blew up; attribute to this attempt and try
+                # the next job_id rather than aborting the whole batch.
+                continue
+            stdout = proc.stdout or ""
+            first, _, rest = stdout.partition("\n")
+            if first.strip() == "FOUND":
+                found = {
+                    "task_id": tid,
+                    "path": path,
+                    "job_id": job_id,
+                    "content": rest,
+                }
+                break
+        if found is None:
+            out.append({"task_id": tid, "missing": True})
+        else:
+            out.append(found)
+    return out
 
 
 # ─── pre-submit manifest sanity ─────────────────────────────────────────────
