@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/capabilities.output.json",
+  "title": "capabilities output data",
+  "type": "object",
+  "required": [
+    "version", "subcommands", "supported_schedulers",
+    "schemas_dir", "journal_dir", "ssh_multiplexing"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version":             { "type": "string" },
+    "subcommands":         { "type": "array", "items": { "type": "string" } },
+    "supported_schedulers":{ "type": "array", "items": { "type": "string", "enum": ["sge", "slurm"] } },
+    "schemas_dir":         { "type": "string" },
+    "journal_dir":         { "type": "string" },
+    "ssh_multiplexing":    { "type": "boolean" }
+  }
+}

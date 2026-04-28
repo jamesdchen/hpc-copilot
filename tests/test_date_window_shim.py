@@ -1,4 +1,4 @@
-"""Tests for templates/date_window_shim.py."""
+"""Tests for hpc_mapreduce/templates/starters/date_window_shim.py."""
 
 from __future__ import annotations
 
@@ -7,11 +7,14 @@ from pathlib import Path
 
 import pytest
 
-_SHIM_PATH = Path(__file__).parent.parent / "templates" / "date_window_shim.py"
+_SHIM_PATH = (
+    Path(__file__).parent.parent
+    / "hpc_mapreduce" / "templates" / "starters" / "date_window_shim.py"
+)
 
 
 def _load_shim():
-    """Load the shim module by path (it lives under templates/, not a package)."""
+    """Load the shim module by path (it lives under hpc_mapreduce/templates/starters/)."""
     spec = importlib.util.spec_from_file_location("date_window_shim", _SHIM_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

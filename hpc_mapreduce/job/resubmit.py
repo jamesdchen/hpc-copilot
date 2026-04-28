@@ -1,6 +1,6 @@
 """Resubmission helpers: re-run only the failed task IDs from a prior job.
 
-When a grid job finishes with some failed tasks, ``/monitor`` (and the LLM)
+When a grid job finishes with some failed tasks, ``/status`` (and the LLM)
 needs to resubmit exactly those task IDs — possibly under adjusted resources
 (more memory, a longer walltime) — without duplicating the on-cluster
 batching logic that lives in :mod:`hpc_mapreduce.job.throughput`.

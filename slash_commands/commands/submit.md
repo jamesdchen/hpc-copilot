@@ -11,7 +11,7 @@ Read cluster definitions:
 
 Check for existing context (in priority order):
 
-0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `agent.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /monitor, or start a new submission?"
+0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /status, or start a new submission?"
    - This only handles the case where the user wants to switch context away from a fresh `/submit` toward picking up an existing run; otherwise fall through to priority 1.
 
 1. **Previous submission**: If `_hpc_dispatch.json` exists locally, read it. Offer: "Previous submission: [summary of grid, tasks, cluster]. Resubmit same, modify, or start fresh?"
@@ -110,7 +110,7 @@ The user can add dimensions: "also sweep horizon=[1, 5, 25]" → grid becomes 30
 
 When the selected profile has a `backtest:` block (`start`, `end`, `chunk_duration`, optional `start_arg`/`end_arg`), translate it into a generated shim instead of passing the block into the framework core:
 
-1. Instantiate `templates/date_window_shim.py` (resolve via `_PACKAGE_ROOT / "templates" / "date_window_shim.py"`), filling in the five module-level constants (`START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG`) from the yaml block.
+1. Instantiate `templates/starters/date_window_shim.py` (resolve via `_PACKAGE_ROOT / "templates" / "starters" / "date_window_shim.py"`), filling in the five module-level constants (`START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG`) from the yaml block.
 2. Route the shim through the existing Step 6 shim-cache machinery (`shim_cache_key` / `load_cached_shim` / `save_shim`) — reuse that block; do NOT duplicate the code here.
 3. Prepend `python3 <materialized_shim_path> --` to the profile's `run` command.
 4. Add `chunk-id: [0..N-1]` as a grid dimension where `N` is the period count computed from the `backtest` block (same arithmetic as `date_window_shim._periods()`).
@@ -228,7 +228,7 @@ Confirm?
 
 For each job, use `hpc_mapreduce.job.grid.build_task_manifest()` to generate a `_hpc_dispatch.json` file locally. This JSON maps each task ID (0-based) to its full command string and result directory.
 
-`_hpc_dispatch.json` is the recoverable artifact for `/monitor` and `/aggregate`; it must persist between waves and across resubmissions (both locally and on the cluster).
+`_hpc_dispatch.json` is the recoverable artifact for `/status` and `/aggregate`; it must persist between waves and across resubmissions (both locally and on the cluster).
 
 For multi-executor submissions, generate one manifest per executor. Name them `_hpc_dispatch_{executor_name}.json` or use separate subdirectories.
 
@@ -260,7 +260,7 @@ Before writing the manifest to disk, guard against silently overwriting a prior 
    Resume (re-dispatch only failed tasks) or fresh (new run_id)?
    ```
 
-   - **Resume**: call `/monitor` (or `hpc_mapreduce.report_status_from_manifest`)
+   - **Resume**: call `/status` (or `hpc_mapreduce.report_status_from_manifest`)
      against `prior` to get the list of failing task IDs, then call
      `build_manifest_with_resume(manifest, resume_from=prior, failed_task_ids=[...])`
      which delegates to `hpc_mapreduce.job.resubmit.resubmit_plan` on the
@@ -285,7 +285,7 @@ path = write_manifest(experiment_dir, manifest, cmd_sha=cmd_sha)
 plan = build_manifest_with_resume(
     manifest,
     resume_from=prior,
-    failed_task_ids=<from /monitor status>,
+    failed_task_ids=<from /status status>,
     overrides=<optional resource bumps>,
 )
 # plan is a ResubmitPlan — submit via backend.submit_plan(plan, ...)
@@ -301,9 +301,9 @@ In Step 1, you ran `--help` on each executor. If an executor doesn't accept `--c
 
 **Shim template selection.** Pick the starting template based on the kind of parallelism the user wants:
 
-- **Date-window parallelism** (yaml has a `backtest:` block, or the user asked for "split by date range", "6M/1Y periods", etc.) → `templates/date_window_shim.py`. Fill in the `START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG` module-level constants from the yaml block (or the user's described date range + chunk duration).
-- **Row-index chunking** (executor accepts `--start`/`--end` as row indices, or the user wants "split by N chunks of data") → `templates/chunking_shim.py`. Fill in `_compute_total_items()` and `translate()`.
-- **Anything else** (file lists, GPU device IDs, task-specific seeds, ad-hoc fan-out axes) → start from the blank `templates/shim_template.py` and hand-write the translation.
+- **Date-window parallelism** (yaml has a `backtest:` block, or the user asked for "split by date range", "6M/1Y periods", etc.) → `templates/starters/date_window_shim.py`. Fill in the `START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG` module-level constants from the yaml block (or the user's described date range + chunk duration).
+- **Row-index chunking** (executor accepts `--start`/`--end` as row indices, or the user wants "split by N chunks of data") → `templates/starters/chunking_shim.py`. Fill in `_compute_total_items()` and `translate()`.
+- **Anything else** (file lists, GPU device IDs, task-specific seeds, ad-hoc fan-out axes) → start from the blank `templates/starters/shim_template.py` and hand-write the translation.
 
 **Cache-check precondition.** Before generating, check the content-addressed shim cache — re-running for an unchanged executor must produce a byte-identical shim.
 
@@ -323,7 +323,7 @@ cached = load_cached_shim(cache_dir, key)
 - If `cached is not None`: copy `cached` to `materialize_at` (overwriting only if the existing file at `materialize_at` starts with `# hpc-shim-key: <key>` — a matching stamp means the on-disk file is a prior cache copy, so it's safe to overwrite). If the existing file has a different stamp or no stamp, treat it as user-edited and do NOT overwrite. Report "shim cache hit: <key>" and skip to the `run:` configuration below.
 - If `cached is None`: proceed with generation below. After generating the shim source, call `save_shim(cache_dir, key, shim_source, executor_path=executor_path, template_path=template_path, materialize_at=materialize_at)` to persist it. The helper prepends the `# hpc-shim-key:` stamp automatically.
 
-**Generation (cache miss only).** Read the template at `templates/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "chunking_shim.py")'`). Fill in:
+**Generation (cache miss only).** Read the template at `templates/starters/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "starters" / "chunking_shim.py")'`). Fill in:
 
 - `_compute_total_items()` — read the executor source, replicate its data pipeline up to the point where the array length is known
 - `translate()` — adjust the return args if the executor uses something other than `--start`/`--end`
@@ -455,7 +455,7 @@ Save to Claude Code memory for this project:
 After submission:
 1. Parse the job ID from submission output
 2. Report: job ID, executor(s), grid dimensions, total tasks, cluster
-3. Suggest running `/monitor` to track progress
+3. Suggest running `/status` to track progress
 
 ## Step 10: Record the submission in the run journal
 
@@ -464,9 +464,9 @@ bootstrap context for cold-session resume:
 
 ```python
 from pathlib import Path
-from agent import runner
+from slash_commands import runner
 
-record = runner.submit_and_record(
+record, deduped = runner.submit_and_record(
     Path.cwd(),
     profile=<job_name>,
     cluster=<cluster_name>,
@@ -477,12 +477,16 @@ record = runner.submit_and_record(
     job_ids=<list of job IDs returned by backend.submit_plan>,
     total_tasks=<total_tasks>,
 )
+# `deduped == True` means a journal record for this run_id already existed
+# (deterministic on profile + manifest sha) and the call was a no-op replay.
+# When that happens, do NOT call backend.submit_plan again — the original
+# cluster jobs are already running. Just resume monitoring.
 ```
 
-The journal entry lets a future `/monitor` (no args) auto-discover this run
+The journal entry lets a future `/status` (no args) auto-discover this run
 and resume monitoring with one keystroke instead of re-asking for cluster /
-job_ids / etc. Slash commands MUST call `agent.runner.submit_and_record`
-rather than writing to `agent.session` directly — the bundled helper guards
+job_ids / etc. Slash commands MUST call `slash_commands.runner.submit_and_record`
+rather than writing to `slash_commands.session` directly — the bundled helper guards
 the journal write under a flock and keeps the run record consistent.
 
 For multi-executor submissions (one manifest per executor), call

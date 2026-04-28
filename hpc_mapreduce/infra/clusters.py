@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import os
+from pathlib import Path
+from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
@@ -17,12 +16,17 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
 
     Searches (in order):
     1. Explicit *path* argument
-    2. ``config/clusters.yaml`` relative to the package root
+    2. ``HPC_CLUSTERS_CONFIG`` env var (full path to a yaml file)
+    3. ``config/clusters.yaml`` shipped inside the ``hpc_mapreduce`` package
     """
     if path is None:
-        from hpc_mapreduce import _PACKAGE_ROOT
+        env_path = os.environ.get("HPC_CLUSTERS_CONFIG")
+        if env_path:
+            path = Path(env_path)
+        else:
+            from hpc_mapreduce import _PACKAGE_ROOT
 
-        path = _PACKAGE_ROOT / "config" / "clusters.yaml"
+            path = _PACKAGE_ROOT / "config" / "clusters.yaml"
     with open(path) as f:
         # yaml.safe_load returns None for an empty file; coerce to {} so
         # downstream `.get(...)` calls on the result don't AttributeError.

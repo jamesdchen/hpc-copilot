@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json",
+  "title": "CLI envelope",
+  "description": "Universal envelope wrapping every hpc-mapreduce stdout response.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["ok", "idempotent", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "idempotent": { "type": "boolean" },
+        "data": { "type": "object" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["ok", "error_code", "message", "category", "retry_safe"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": false },
+        "error_code": {
+          "type": "string",
+          "enum": [
+            "ssh_unreachable",
+            "scheduler_throttled",
+            "manifest_invalid",
+            "executor_not_found",
+            "cluster_unknown",
+            "journal_corrupt",
+            "remote_command_failed",
+            "config_invalid",
+            "internal"
+          ]
+        },
+        "message": { "type": "string" },
+        "category": {
+          "type": "string",
+          "enum": ["user", "cluster", "network", "internal"]
+        },
+        "retry_safe": { "type": "boolean" },
+        "remediation": { "type": "string" }
+      }
+    }
+  ]
+}

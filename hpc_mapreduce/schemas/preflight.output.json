@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/preflight.output.json",
+  "title": "preflight output data",
+  "type": "object",
+  "required": ["all_ok", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "all_ok": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "ok"],
+        "additionalProperties": false,
+        "properties": {
+          "name":   { "type": "string" },
+          "ok":     { "type": "boolean" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}
