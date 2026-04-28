@@ -18,6 +18,7 @@ The runtime contract (see ``hpc_mapreduce/map/shim.py`` for the cache side):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
@@ -72,10 +73,8 @@ def _cached_total_items() -> int:
                 json.dump(cache, f)
             os.replace(tmp, _CACHE_FILE)
         except BaseException:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
             raise
     return total
 
