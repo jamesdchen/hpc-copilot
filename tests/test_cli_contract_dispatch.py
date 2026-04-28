@@ -1,6 +1,6 @@
 """Stderr/exit-code contract tests for ``hpc_mapreduce.map.dispatch``.
 
-Pins the behaviours that ``/monitor`` and other observers rely on.  Each test
+Pins the behaviours that ``/status`` and other observers rely on.  Each test
 drives the dispatcher as a subprocess (matching cluster execution) and asserts
 on ``returncode`` + stderr substrings only — never on stdout formatting.
 """

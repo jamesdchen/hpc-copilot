@@ -11,15 +11,17 @@ and journal writes meet.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from hpc_mapreduce._time import utcnow_iso
 from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
-from slash_commands import session
+from slash_commands import errors, session
 from slash_commands.errors import RemoteCommandFailed
-from slash_commands.session import RunRecord
+from slash_commands.session import RunRecord, _atomic_write_json
 
 __all__ = [
     "submit_and_record",
@@ -39,10 +41,18 @@ def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
     return user, host
 
 
-def _utcnow_iso() -> str:
-    from datetime import datetime, timezone
+# Backwards-compatible alias for tests/external imports that referenced
+# the original helper here.  The canonical implementation now lives in
+# ``hpc_mapreduce._time`` so timestamps stay consistent across the
+# package.
+_utcnow_iso = utcnow_iso
 
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+# Manifest filenames are content-addressed: ``manifest.<sha8>.json``
+# where ``sha8`` is exactly 8 hex chars.  ``submit_and_record`` derives
+# the run_id suffix from this prefix, so a non-conforming filename used
+# to silently produce garbage run_ids that violated the
+# ``submit.output.json`` schema.
+_MANIFEST_NAME_RE = re.compile(r"^manifest\.([0-9a-f]{8})\.json$")
 
 
 def submit_and_record(
@@ -72,8 +82,14 @@ def submit_and_record(
     them. The bundled CLI uses this to make ``submit`` idempotent.
     """
     if run_id is None:
-        sha8 = manifest_filename.removeprefix("manifest.").removesuffix(".json")
-        run_id = f"{profile}_{sha8}"
+        match = _MANIFEST_NAME_RE.match(manifest_filename)
+        if not match:
+            raise errors.ManifestInvalid(
+                f"manifest_filename {manifest_filename!r} must match "
+                f"'manifest.<8 hex chars>.json'; pass an explicit run_id "
+                f"to bypass this check."
+            )
+        run_id = f"{profile}_{match.group(1)}"
 
     existing = session.load_run(experiment_dir, run_id)
     if existing is not None:
@@ -165,7 +181,10 @@ def record_status(
     # failure here must not roll back the journal update.
     cache_path = session.runs_dir(experiment_dir) / f"{run_id}.last_status.json"
     try:
-        cache_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+        # Atomic write so a concurrent reader never sees a half-written
+        # file.  ``Path.write_text`` truncates in place; readers that
+        # race with the writer would otherwise observe a JSONDecodeError.
+        _atomic_write_json(cache_path, summary)
     except OSError:
         pass
     return record
@@ -198,7 +217,7 @@ def combine_wave(
     )
     record = session.load_run(experiment_dir, run_id)
     if record is None:
-        raise FileNotFoundError(f"no run record for {run_id!r}")
+        raise errors.JournalCorrupt(f"no run record for {run_id!r}")
     if ok:
         if wave not in record.combined_waves:
             record.combined_waves = sorted({*record.combined_waves, wave})
@@ -236,7 +255,7 @@ def resubmit_failed(
         raise ValueError("resubmit_failed requires at least one failed task id")
     record = session.load_run(experiment_dir, run_id)
     if record is None:
-        raise FileNotFoundError(f"no run record for {run_id!r}")
+        raise errors.JournalCorrupt(f"no run record for {run_id!r}")
     retries = dict(record.retries)
     overrides = dict(overrides or {})
     for tid in failed_task_ids:
@@ -285,21 +304,35 @@ def _ssh_list_combined_waves(
 def _ssh_alive_job_ids(
     *, ssh_target: str, remote_path: str, job_ids: list[str], scheduler: str
 ) -> set[str]:
-    """Return the subset of *job_ids* still known to the scheduler."""
+    """Return the subset of *job_ids* still known to the scheduler.
+
+    "Alive" means *currently* known to the scheduler (queued, running,
+    requeued).  Slurm's ``sacct`` reports historical jobs too — completed,
+    cancelled, failed — so we deliberately skip it here; ``squeue``
+    alone covers pending+running+requeued, which is what callers actually
+    want when deciding whether a run has been abandoned.
+    """
     if not job_ids:
         return set()
     user, host = _split_ssh_target(ssh_target)
     csv = ",".join(job_ids)
     if scheduler == "slurm":
-        cmd = (
-            f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null; "
-            f"sacct -j {shlex.quote(csv)} -n -P -o JobID 2>/dev/null"
-        )
+        # squeue lists only active states; sacct would leak completed
+        # jobs into the alive set and cause runs to never be marked
+        # abandoned.
+        cmd = f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null || true"
     else:  # sge
+        # Key the marker on qstat's *exit code*, not on the pipeline
+        # tail.  ``qstat | head -1`` would always return 0 (head reads
+        # empty stdin successfully), making ``&& echo __ALIVE__`` fire
+        # for missing jobs and the alive check meaningless.
         cmd = (
             "{ "
-            + "; ".join(f"qstat -j {shlex.quote(jid)} 2>/dev/null | head -1 "
-                        f"&& echo __ALIVE__{jid}" for jid in job_ids)
+            + "; ".join(
+                f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 "
+                f"&& echo __ALIVE__{jid}"
+                for jid in job_ids
+            )
             + "; } || true"
         )
     proc = ssh_run(cmd, host=host, user=user)
@@ -339,7 +372,7 @@ def reconcile(
     """
     record = session.load_run(experiment_dir, run_id)
     if record is None:
-        raise FileNotFoundError(f"no run record for {run_id!r}")
+        raise errors.JournalCorrupt(f"no run record for {run_id!r}")
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         fut_status = pool.submit(
@@ -364,6 +397,7 @@ def reconcile(
             scheduler=scheduler,
         )
 
+        warnings: list[str] = []
         try:
             report = fut_status.result()
             summary = dict(report.get("summary", {}))
@@ -371,8 +405,29 @@ def reconcile(
             summary = {"error": str(exc)}
         summary["checked_at"] = _utcnow_iso()
 
-        combined = fut_waves.result()
-        alive = fut_alive.result()
+        # Each future has its own try/except: an SSH blip on any of them
+        # must not abort the journal update.  In particular, falling
+        # back to the *current* job_ids on the alive-check path is
+        # essential — defaulting to empty would mark a healthy run
+        # ``abandoned`` whenever the SSH check itself failed.
+        try:
+            combined = fut_waves.result()
+        except Exception as exc:
+            combined = list(record.combined_waves)
+            warnings.append(f"wave list: {exc}")
+            alive_check_failed = False
+        else:
+            alive_check_failed = False
+
+        try:
+            alive: list[str] | set[str] = fut_alive.result()
+        except Exception as exc:
+            alive = list(record.job_ids)  # treat as still alive on error
+            warnings.append(f"alive check: {exc}")
+            alive_check_failed = True
+
+    if warnings:
+        summary["warnings"] = warnings
 
     fields: dict[str, Any] = {
         "last_status": summary,
@@ -382,7 +437,9 @@ def reconcile(
     }
     updated = session.update_run_status(experiment_dir, run_id, **fields)
 
-    if record.job_ids and not alive:
+    # Only mark abandoned when the alive check actually ran and found
+    # nothing — never on SSH failure of the alive check itself.
+    if record.job_ids and not alive and not alive_check_failed:
         updated = session.mark_run(
             experiment_dir, run_id, status="abandoned"
         )

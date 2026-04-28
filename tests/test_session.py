@@ -213,3 +213,95 @@ def test_repo_meta_records_experiment_dir(journal_home, experiment):
     repo_meta = json.loads((session.journal_dir(experiment) / "repo.json").read_text())
     assert repo_meta["experiment_dir"] == str(experiment.resolve())
     assert "first_seen" in repo_meta
+
+
+# ─── Bug 10: prune updates the index in one batch, not per-deletion ────────
+
+
+def test_prune_terminal_runs_writes_index_once(journal_home, experiment):
+    """Previously the index was rewritten inside the per-run deletion loop:
+    pruning N runs cost N atomic writes + N flocks and left a window where
+    deleted runs still appeared in the index.  The fix collects deletions
+    and updates once at the end.
+    """
+    # Seed 5 terminal runs and 1 in-flight run.
+    for i in range(5):
+        rec = _make_record(run_id=f"r_terminal_{i:08x}", status="complete")
+        session.upsert_run(experiment, rec)
+    session.upsert_run(experiment, _make_record(run_id="r_inflight"))
+
+    # Force the staleness check to find the index needs rebuilding once
+    # before prune_terminal_runs touches it.
+    _ = session._index_is_stale(experiment)
+
+    real_atomic = session._atomic_write_json
+    idx_path = session.journal_dir(experiment) / "index.json"
+    calls: list[Path] = []
+
+    def tracking(path, payload):
+        if path == idx_path:
+            calls.append(path)
+        return real_atomic(path, payload)
+
+    with patch.object(session, "_atomic_write_json", side_effect=tracking):
+        removed = session.prune_terminal_runs(experiment, keep=1)
+
+    assert removed == 4
+    # One write to the index, regardless of how many runs were pruned.
+    assert len(calls) == 1
+
+
+def test_prune_terminal_runs_unlinks_last_status_cache(journal_home, experiment):
+    """The per-run last_status.json cache file lives in the same runs/
+    directory; pruning a terminal run should reap the cache too so it
+    doesn't accumulate forever.
+    """
+    rec = _make_record(run_id="r_terminal_abcdef00", status="complete")
+    session.upsert_run(experiment, rec)
+    cache = session.runs_dir(experiment) / f"{rec.run_id}.last_status.json"
+    cache.write_text(json.dumps({"complete": 0}))
+
+    session.prune_terminal_runs(experiment, keep=0)
+
+    assert not cache.exists()
+
+
+# ─── Bug 14: last_status.json files don't trigger false index rebuilds ────
+
+
+def test_last_status_files_excluded_from_staleness_check(journal_home, experiment):
+    """A status poll writes ``runs/<run_id>.last_status.json`` next to the
+    journal record.  Including those in ``_all_run_files`` would force an
+    index rebuild on every poll because their mtime advances each time.
+    """
+    rec = _make_record()
+    session.upsert_run(experiment, rec)
+
+    # Force a fresh index so we're starting from "not stale".
+    session._rebuild_index(experiment)
+    assert session._index_is_stale(experiment) is False
+
+    # Touch the cache file to advance its mtime.
+    cache = session.runs_dir(experiment) / f"{rec.run_id}.last_status.json"
+    cache.write_text("{}")
+    # Bump mtime past the index by a comfortable margin.
+    idx_path = session.journal_dir(experiment) / "index.json"
+    future = idx_path.stat().st_mtime + 5
+    os.utime(cache, (future, future))
+
+    # Cache file is *not* a journal record — staleness should not flip.
+    assert session._index_is_stale(experiment) is False
+
+
+def test_last_status_files_not_returned_by_all_run_files(journal_home, experiment):
+    """Direct test of the filter — if this regresses, prune and rebuild
+    will start treating the cache as a record.
+    """
+    rec = _make_record()
+    session.upsert_run(experiment, rec)
+    cache = session.runs_dir(experiment) / f"{rec.run_id}.last_status.json"
+    cache.write_text("{}")
+
+    files = session._all_run_files(experiment)
+    assert cache not in files
+    assert any(p.name == f"{rec.run_id}.json" for p in files)

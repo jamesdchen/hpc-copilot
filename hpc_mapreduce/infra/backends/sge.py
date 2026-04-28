@@ -1,12 +1,19 @@
 """SGE (Sun/Univa Grid Engine) backend — submits array jobs via qsub."""
 
 import os
+import re
 
 from hpc_mapreduce.infra.backends import HPCBackend, register
 
 
 @register("sge")
 class SGEBackend(HPCBackend):
+    # qsub prints either ``Your job 12345 ("name") has been submitted``
+    # (single jobs) or ``Your job-array 12345.1-10:1 ("name") has been
+    # submitted``.  Anchor on that phrase so a stray digit elsewhere in
+    # the output doesn't win.
+    JOB_ID_REGEX = re.compile(r"Your job(?:-array)?\s+(\d+)")
+
     def __init__(
         self,
         script: str | None = None,

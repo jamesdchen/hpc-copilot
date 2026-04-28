@@ -20,6 +20,8 @@ __all__ = [
     "JournalCorrupt",
     "RemoteCommandFailed",
     "ConfigInvalid",
+    "CombinerFailed",
+    "ClusterTimeout",
 ]
 
 
@@ -118,3 +120,29 @@ class ConfigInvalid(HpcError):
     retry_safe = False
     category = "user"
     remediation = "Validate the yaml against docs/schema.md."
+
+
+class CombinerFailed(HpcError):
+    """Per-wave combiner returned non-zero on the cluster."""
+
+    error_code = "combiner_failed"
+    retry_safe = True
+    category = "cluster"
+    remediation = (
+        "Inspect the stderr_tail in the JSON payload to find which task's "
+        "metrics.json was missing or malformed; resubmit those tasks and "
+        "rerun /aggregate."
+    )
+
+
+class ClusterTimeout(HpcError):
+    """A scheduler-side subprocess (qsub/sbatch/sacct) exceeded its timeout."""
+
+    error_code = "cluster_timeout"
+    retry_safe = True
+    category = "cluster"
+    remediation = (
+        "The scheduler took too long to respond (likely an NFS stall or a "
+        "scheduler outage).  Run the same command again after a short delay; "
+        "if the problem persists, check cluster status with the ops team."
+    )
