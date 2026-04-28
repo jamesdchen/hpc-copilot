@@ -292,6 +292,7 @@ Args:
 | `--experiment-dir` | no | default CWD |
 | `--spec spec.json` | yes | input spec |
 | `--dry-run` | no | validate spec, report shape, no journal write |
+| `--from-meta` | no | overlay missing `profile` / `job_name` from `<experiment-dir>/meta.json` `experiment_id` (setdefault; silent no-op when meta is absent) |
 
 `--spec` shape (validated against `schemas/submit.input.json`):
 
