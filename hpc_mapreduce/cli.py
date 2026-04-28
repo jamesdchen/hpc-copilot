@@ -89,6 +89,24 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
     )
 
 
+def _require_ssh_agent() -> int | None:
+    # Cluster-touching subcommands hang silently when SSH_AUTH_SOCK is
+    # missing — the most common Bun.spawn failure mode for orchestrators
+    # like MARs. Fail fast with a typed error instead of stalling on auth.
+    if os.environ.get("SSH_AUTH_SOCK"):
+        return None
+    return _err_from_hpc(
+        errors.SshUnreachable(
+            "SSH_AUTH_SOCK is not set; cannot reach the cluster.",
+            remediation=(
+                "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
+                "environment, then run `hpc-mapreduce preflight` to verify. "
+                "See docs/mars-integration.md for the Bun.spawn env block."
+            ),
+        )
+    )
+
+
 # ─── shared option helpers ─────────────────────────────────────────────────
 
 
@@ -164,6 +182,29 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
 # ─── subcommand: capabilities ──────────────────────────────────────────────
 
 
+_MARS_SKILL_NAMES = (
+    "hpc-submit",
+    "hpc-status",
+    "hpc-preflight",
+    "hpc-aggregate",
+    "hpc-build-executor",
+)
+
+
+def _mars_skill_paths() -> dict[str, str]:
+    # Skills live one level up from the package (skills/ is a sibling of
+    # hpc_mapreduce/ in the source tree). Wheel-only deploys won't ship
+    # them — return only entries that resolve to an existing file so a
+    # consumer can rely on every value being a real path.
+    skills_root = hpc_mapreduce._PACKAGE_ROOT.parent / "skills"
+    out: dict[str, str] = {}
+    for name in _MARS_SKILL_NAMES:
+        path = skills_root / name / "SKILL.md"
+        if path.is_file():
+            out[name] = str(path.resolve())
+    return out
+
+
 def cmd_capabilities(_args: argparse.Namespace) -> int:
     _ok(
         {
@@ -186,6 +227,12 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
             "journal_dir": str(session.HPC_HOMEDIR),
             "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
+            "mars_skill_paths": _mars_skill_paths(),
+            "required_env": [
+                "SSH_AUTH_SOCK",
+                "HPC_JOURNAL_DIR",
+                "HPC_CLUSTERS_CONFIG",
+            ],
         },
         idempotent=True,
     )
@@ -350,6 +397,8 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
     record = session.load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(
@@ -391,6 +440,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         )
 
     if args.dry_run:
+
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
@@ -437,6 +487,8 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     # journal-update half so a calling agent can record successful aggregation
     # outcomes; running an actual combiner from the CLI is deliberately out of
     # scope for this version (combiner choice + output dir layout is user-side).
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
     record = session.load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(
@@ -535,6 +587,8 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
     record = runner.reconcile(
         args.experiment_dir,
         args.run_id,
