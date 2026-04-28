@@ -494,3 +494,160 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
     # Round-trip parse — would raise on a half-written file.
     body = json.loads(cache.read_text())
     assert body["complete"] == 1
+
+
+# ─── aggregate verification helpers ────────────────────────────────────────
+
+
+def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment):
+    """Wave's task ids are read from manifest.wave_map; one SSH call enumerates
+    missing files."""
+    manifest_json = json.dumps(
+        {
+            "schema_version": 2,
+            "tasks": {"0": {}, "1": {}, "2": {}},
+            "wave_map": {"0": ["0", "1", "2"]},
+        }
+    )
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        if cmd.startswith("cat "):
+            return _completed(stdout=manifest_json)
+        # Existence check: pretend task 1's output is missing.
+        return _completed(
+            stdout="MISSING:results/metrics.1.json\n", returncode=0
+        )
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        missing = runner.verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            manifest_filename="manifest.abcd1234.json",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
+    assert missing == ["results/metrics.1.json"]
+
+
+def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, experiment):
+    manifest_json = json.dumps(
+        {"schema_version": 2, "tasks": {"0": {}, "1": {}}, "wave_map": {"0": ["0", "1"]}}
+    )
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        if cmd.startswith("cat "):
+            return _completed(stdout=manifest_json)
+        return _completed(stdout="", returncode=0)  # nothing missing
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        missing = runner.verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            manifest_filename="m.json",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
+    assert missing == []
+
+
+def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(
+    journal_home, experiment
+):
+    """Older un-batched manifests have no wave_map; treat wave 0 as 'all'."""
+    manifest_json = json.dumps({"schema_version": 2, "tasks": {"0": {}, "1": {}}})
+
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        if cmd.startswith("cat "):
+            return _completed(stdout=manifest_json)
+        return _completed(stdout="", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        runner.verify_per_task_outputs(
+            ssh_target="user@host",
+            remote_path="/exp",
+            manifest_filename="m.json",
+            wave=0,
+            template="results/metrics.{task_id}.json",
+        )
+    # The existence-check script should mention both task ids.
+    check_cmd = next(c for c in captured if not c.startswith("cat "))
+    assert "metrics.0.json" in check_cmd and "metrics.1.json" in check_cmd
+
+
+def test_verify_combiner_artifact_ok_for_valid_json():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        # python3 -c json.load returns 0; script echoes OK.
+        return _completed(stdout="OK\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        ok, detail = runner.verify_combiner_artifact(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+        )
+    assert ok is True
+    assert detail == "ok"
+
+
+def test_verify_combiner_artifact_missing():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return _completed(stdout="MISSING\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        ok, detail = runner.verify_combiner_artifact(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+        )
+    assert ok is False
+    assert "missing" in detail
+
+
+def test_verify_combiner_artifact_invalid_json():
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        return _completed(stdout="INVALID_JSON\n", returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        ok, detail = runner.verify_combiner_artifact(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+        )
+    assert ok is False
+    assert "JSON" in detail
+
+
+def test_build_provenance_carries_run_metadata(experiment):
+    record = _seed_run(experiment, run_id="r_42", profile="prof", cluster="hoffman2")
+    prov = runner.build_provenance(record, wave=2)
+    assert prov["run_id"] == "r_42"
+    assert prov["profile"] == "prof"
+    assert prov["cluster"] == "hoffman2"
+    assert prov["wave"] == 2
+    assert prov["manifest"] == "manifest.abcd1234.json"
+    # combined_at is ISO 8601 with offset; check shape, not exact value.
+    assert "T" in prov["combined_at"] and prov["combined_at"].endswith("+00:00")
+
+
+def test_write_remote_provenance_writes_sidecar_path():
+    captured: list[str] = []
+
+    def fake_ssh_run(cmd, *, host, user, **_kw):
+        captured.append(cmd)
+        return _completed(returncode=0)
+
+    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+        path = runner.write_remote_provenance(
+            ssh_target="user@host",
+            remote_path="/exp",
+            expect_output="results/metrics.json",
+            provenance={"run_id": "r_42"},
+        )
+    assert path == "/exp/results/_provenance.json"
+    # Script should base64-decode into the sidecar path.
+    assert any(
+        "base64 -d" in c and "_provenance.json" in c for c in captured
+    ), captured

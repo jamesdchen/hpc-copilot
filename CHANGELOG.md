@@ -31,6 +31,29 @@
   `error_code: "ssh_unreachable"` (category `network`, `retry_safe: True`,
   exit 2) immediately. `submit` (journal-only) and `resubmit`
   (journal-only) are not gated.
+- **`aggregate` gains framework-agnostic plumbing guarantees.** Three
+  optional, additive checks help both human `/aggregate` users and
+  agent CLI callers catch silent partial-data combines:
+  - `--require-outputs <template>` — pre-combiner SSH check that every
+    per-task output named by the template (with `{task_id}` placeholder)
+    exists. Refuses to combine on partial data; surfaces a new
+    `error_code: "outputs_missing"` (category `cluster`, `retry_safe: True`)
+    listing the absent paths.
+  - `--expect-output <path>` — post-combiner check that the declared
+    artifact exists and (for `.json` paths) is parseable. A combiner
+    that exits 0 but writes nothing now surfaces as `combiner_failed`
+    immediately instead of producing a silent "successful" aggregate.
+  - **Provenance** — the success envelope's `data` block always carries
+    a `provenance` object: `{run_id, manifest, wave, profile, cluster,
+    combined_at}`. When `--expect-output` is set, claude-hpc also
+    writes a `_provenance.json` sidecar next to the output on the
+    cluster (best-effort; envelope is the source of truth).
+- **`hpc.yaml` defaults for the new aggregate flags.** Set
+  `results.require_outputs` and `results.expect_output` once per profile
+  to enforce the precondition/postcondition automatically on every
+  aggregate. Explicit CLI flags override hpc.yaml. The
+  `slash_commands/commands/aggregate.md` prompt now points users at
+  this.
 
 ## 0.2.0 — 2026-04
 
