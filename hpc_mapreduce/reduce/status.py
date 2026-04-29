@@ -1,7 +1,7 @@
 """Job status checking, result validation, and status reporting.
 
 This module drives the LLM-orchestrator's ``/status`` loop.  The CLI entry
-point (``python -m hpc_mapreduce.reduce.status --manifest ...``) emits JSON
+point (``python -m hpc_mapreduce.reduce.status --run-id <id>``) emits JSON
 to stdout.  **Schema contract** (pinned; all four top-level keys ALWAYS
 present, never ``None``)::
 
@@ -14,11 +14,14 @@ present, never ``None``)::
         "errors": [{"code": str, "detail": str}, ...],
     }
 
-``cmd_sha`` is passed through from the manifest (schema v2); absent on v1
-manifests -> serialized as ``null`` for each task.  Additional top-level
-keys (``total_tasks``, ``scheduler``, ``timestamp``, ``result_dir``,
-``err_log_paths``, ``resource_usage``) may appear but are informational
-only; the four keys above are the parse contract.
+The CLI reads ``.hpc/runs/<run_id>.json`` for the run sidecar and
+``.hpc/tasks.py`` for the per-task kwargs, then synthesizes a per-task
+dict that the reporting helpers consume.  ``tasks[tid].cmd_sha`` is
+``null`` in the new model — ``cmd_sha`` lives at the run level.
+Additional top-level keys (``total_tasks``, ``scheduler``,
+``timestamp``, ``result_dir``, ``err_log_paths``, ``resource_usage``)
+may appear but are informational only; the four keys above are the
+parse contract.
 
 ``resource_usage`` is additive and shaped like::
 
@@ -640,13 +643,11 @@ def _main() -> int:
     parser = argparse.ArgumentParser(
         description="Emit a JSON status report for a run.",
     )
-    src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument(
+    parser.add_argument(
         "--run-id",
-        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json. "
-        "Mutually exclusive with --manifest.",
+        required=True,
+        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json.",
     )
-    src.add_argument("--manifest", help="Path to legacy dispatch manifest (pending removal)")
     parser.add_argument(
         "--job-ids",
         default="",
@@ -679,42 +680,31 @@ def _main() -> int:
         sys.stdout.write("\n")
         return exit_code
 
-    if args.run_id is not None:
-        # NEW path: read .hpc/runs/<run_id>.json + .hpc/tasks.py and
-        # synthesize a manifest dict the existing reporting code consumes.
-        sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
-        if not sidecar_path.is_file():
-            print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
-            return _emit_err("sidecar_not_found", str(sidecar_path))
-        try:
-            sidecar = json.loads(sidecar_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
+    # Read .hpc/runs/<run_id>.json + .hpc/tasks.py and synthesize a
+    # task-keyed dict the reporting code consumes.
+    sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
+    if not sidecar_path.is_file():
+        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
+        return _emit_err("sidecar_not_found", str(sidecar_path))
+    try:
+        sidecar = json.loads(sidecar_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
 
-        tasks_py_path = Path(".hpc") / "tasks.py"
-        if not tasks_py_path.is_file():
-            return _emit_err("tasks_py_not_found", str(tasks_py_path))
-        try:
-            from hpc_mapreduce import load_tasks_module
+    tasks_py_path = Path(".hpc") / "tasks.py"
+    if not tasks_py_path.is_file():
+        return _emit_err("tasks_py_not_found", str(tasks_py_path))
+    try:
+        from hpc_mapreduce import load_tasks_module
 
-            tasks_module = load_tasks_module(tasks_py_path)
-        except Exception as exc:
-            return _emit_err("tasks_py_import_error", f"{tasks_py_path}: {exc}")
+        tasks_module = load_tasks_module(tasks_py_path)
+    except Exception as exc:
+        return _emit_err("tasks_py_import_error", f"{tasks_py_path}: {exc}")
 
-        try:
-            manifest = _build_synthetic_manifest_from_sidecar(sidecar, tasks_module)
-        except Exception as exc:
-            return _emit_err("synthetic_manifest_error", str(exc))
-    else:
-        # LEGACY path: --manifest <file>; pending removal once consumers migrate.
-        manifest_path = Path(args.manifest)
-        if not manifest_path.is_file():
-            print(f"manifest not found: {manifest_path}", file=sys.stderr)
-            return _emit_err("manifest_not_found", str(manifest_path))
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            return _emit_err("manifest_parse_error", f"{manifest_path}: {exc}")
+    try:
+        manifest = _build_synthetic_manifest_from_sidecar(sidecar, tasks_module)
+    except Exception as exc:
+        return _emit_err("synthetic_manifest_error", str(exc))
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
 

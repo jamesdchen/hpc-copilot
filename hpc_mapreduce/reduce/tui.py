@@ -485,14 +485,10 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Live terminal UI for /status. Requires rich (pip install claude-hpc[tui]).",
     )
-    src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument(
+    parser.add_argument(
         "--run-id",
-        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json. "
-        "Mutually exclusive with --manifest.",
-    )
-    src.add_argument(
-        "--manifest", help="Path to legacy dispatch manifest (pending removal)"
+        required=True,
+        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json.",
     )
     parser.add_argument("--job-ids", default="", help="Comma-separated scheduler job IDs")
     parser.add_argument("--job-name", default="")
@@ -510,35 +506,31 @@ def _main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # Resolve manifest_path: with --run-id, materialize a synthetic
-    # manifest from the sidecar + tasks.py and write it to a tempfile so
-    # the existing _load_manifest()/poll loop can re-read it on each tick.
-    if args.run_id is not None:
-        from pathlib import Path as _P
-        from hpc_mapreduce import load_tasks_module
-        from hpc_mapreduce.reduce.status import (
-            _build_synthetic_manifest_from_sidecar,
-        )
+    # Materialize the synthetic per-task dict from the sidecar +
+    # .hpc/tasks.py and write it to a stable path next to the sidecar
+    # so the existing poll loop (which reloads on each tick) can re-read
+    # it cheaply.
+    from pathlib import Path as _P
+    from hpc_mapreduce import load_tasks_module
+    from hpc_mapreduce.reduce.status import (
+        _build_synthetic_manifest_from_sidecar,
+    )
 
-        sidecar_path = _P(".hpc") / "runs" / f"{args.run_id}.json"
-        if not sidecar_path.is_file():
-            print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
-            return 2
-        try:
-            sidecar = json.loads(sidecar_path.read_text())
-            tasks = load_tasks_module(_P(".hpc") / "tasks.py")
-            manifest = _build_synthetic_manifest_from_sidecar(sidecar, tasks)
-        except Exception as exc:
-            print(f"failed to build synthetic manifest: {exc}", file=sys.stderr)
-            return 2
-        # Materialize the synthetic manifest at a stable path next to the
-        # sidecar so the poll loop's reload-each-tick is cheap. The TUI
-        # is interactive (no concurrent writers), so a plain write is
-        # sufficient.
-        manifest_path = sidecar_path.with_suffix(".synthetic-manifest.json")
-        manifest_path.write_text(json.dumps(manifest, sort_keys=True))
-    else:
-        manifest_path = args.manifest
+    sidecar_path = _P(".hpc") / "runs" / f"{args.run_id}.json"
+    if not sidecar_path.is_file():
+        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
+        return 2
+    try:
+        sidecar = json.loads(sidecar_path.read_text())
+        tasks = load_tasks_module(_P(".hpc") / "tasks.py")
+        manifest = _build_synthetic_manifest_from_sidecar(sidecar, tasks)
+    except Exception as exc:
+        print(f"failed to build per-task dict: {exc}", file=sys.stderr)
+        return 2
+    # The TUI is interactive (no concurrent writers), so a plain write
+    # is sufficient.
+    manifest_path = sidecar_path.with_suffix(".synthetic-manifest.json")
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True))
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
     return run_tui(
