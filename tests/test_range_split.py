@@ -1,8 +1,9 @@
-"""Tests for row-index range-split arithmetic for chunking shims, per submit.md Step 6.
+"""Tests for row-index range-split arithmetic for chunking, per submit.md Step 6.
 
-The range computation is performed by the LLM at submission time (see
-submit.md Step 6) and baked into manifest commands.  These tests verify
-the documented formula so the LLM can be validated against known outputs.
+The range computation is performed by the agent at scaffolding time
+(see submit.md Step 6) and baked into ``.hpc/tasks.py`` as the kwargs
+each task receives. These tests verify the documented formula so the
+agent's output can be validated against known fixtures.
 """
 
 from __future__ import annotations

@@ -1095,9 +1095,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sub = sub.add_parser(
         "submit",
         help=(
-            "Record a submission in the journal. Idempotent on (profile, "
-            "manifest sha): the bundled atomic-ops layer dedups by run_id, so "
-            "a retry on transient network errors does not double-submit."
+            "Record a submission in the journal. Idempotent on run_id: "
+            "the bundled atomic-ops layer dedups so a retry on transient "
+            "network errors does not double-submit."
         ),
     )
     _add_experiment_dir(p_sub)

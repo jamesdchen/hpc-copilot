@@ -109,20 +109,23 @@ def submit_and_record(
 
 
 def build_job_env(
-    manifest: dict[str, Any], base_env: dict[str, str]
+    runtime_spec: dict[str, Any], base_env: dict[str, str]
 ) -> dict[str, str]:
     """Return *base_env* augmented with runtime-derived env vars.
 
-    Today: when ``manifest.get("runtime") == "uv"``, sets
-    ``HPC_RUNTIME=uv`` so the cluster-side template's ``uv sync``
-    preamble fires. For any other runtime value (or none), returns a
-    plain copy of *base_env*. Never mutates either input.
+    *runtime_spec* is a small dict carrying any runtime selector the
+    caller wants threaded into the cluster job — typically
+    ``{"runtime": "uv"}`` taken from the submit-spec. When
+    ``runtime_spec.get("runtime") == "uv"``, sets ``HPC_RUNTIME=uv`` so
+    the cluster-side template's ``uv sync`` preamble fires. Any other
+    value (or an empty dict) returns a plain copy of *base_env*. Never
+    mutates either input.
 
     Add new branches as new runtime profiles land (``pixi``, ``poetry``,
     …); the contract — copy + augment — should stay invariant.
     """
     env = dict(base_env)
-    if manifest.get("runtime") == "uv":
+    if runtime_spec.get("runtime") == "uv":
         env["HPC_RUNTIME"] = "uv"
     return env
 
@@ -140,8 +143,9 @@ def _ssh_status_report(
     """Run the on-cluster status reporter (``--run-id``) and return parsed JSON.
 
     The reporter reads ``.hpc/runs/<run_id>.json`` for run metadata and
-    ``.hpc/tasks.py`` for per-task kwargs, then emits the same JSON
-    envelope the legacy ``--manifest`` path produced.
+    ``.hpc/tasks.py`` for per-task kwargs, then emits the JSON envelope
+    pinned by ``docs/cli-contract.md`` (summary / tasks / rollup /
+    errors).
     """
     user, host = _split_ssh_target(ssh_target)
     job_ids_csv = ",".join(job_ids)
@@ -199,7 +203,7 @@ def record_status(
     summary = dict(report.get("summary", {}))
     summary["checked_at"] = _utcnow_iso()
     # Carry per-wave breakdown into the persisted last_status when the
-    # cluster-side reporter emitted one (manifest had a wave_map).
+    # cluster-side reporter emitted one (sidecar carried a wave_map).
     if isinstance(report.get("waves"), dict) and report["waves"]:
         summary["waves"] = report["waves"]
     record = session.update_run_status(experiment_dir, run_id, last_status=summary)
@@ -298,9 +302,9 @@ def resubmit_failed(
 ) -> tuple[RunRecord, bool, str]:
     """Record a resubmission attempt in the journal.
 
-    The actual resubmit (manifest building + backend submission) is the
-    caller's responsibility — this helper only updates per-task retry
-    counters and (optionally) the active job_ids list. Pass
+    The actual resubmit (writing a fresh sidecar + backend submission)
+    is the caller's responsibility — this helper only updates per-task
+    retry counters and (optionally) the active job_ids list. Pass
     ``new_job_ids`` after the backend reports them so the journal stays
     in sync for the next monitor session.
 

@@ -78,7 +78,7 @@ def test_classify_failures_buckets_logs(tmp_path):
         },
         "err_log_paths": {"1": str(oom), "2": str(walltime)},
     }
-    buckets = _classify_failures(report, manifest={})
+    buckets = _classify_failures(report, per_task_dict={})
     assert buckets.get("gpu_oom") == 1
     assert buckets.get("walltime") == 1
     assert buckets.get("unknown") == 1
@@ -95,13 +95,13 @@ def test_run_tui_errors_cleanly_when_rich_missing(monkeypatch, tmp_path, capsys)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    # Minimal valid manifest so we don't short-circuit on manifest errors.
-    manifest = tmp_path / "m.json"
-    manifest.write_text('{"total_tasks": 0, "tasks": {}}')
+    # Minimal valid per-task dict so we don't short-circuit on load errors.
+    per_task_dict_path = tmp_path / "m.json"
+    per_task_dict_path.write_text('{"total_tasks": 0, "tasks": {}}')
 
     from hpc_mapreduce.reduce import tui
 
-    rc = tui.run_tui(manifest)
+    rc = tui.run_tui(per_task_dict_path)
     assert rc == 2
     err = capsys.readouterr().err
     assert "rich" in err.lower()
@@ -116,7 +116,7 @@ def test_render_returns_rich_group_when_rich_present(tmp_path):
     pytest.importorskip("rich")
     from hpc_mapreduce.reduce.tui import _render, _UiState
 
-    manifest = {"run_id": "r1", "cluster": "c1", "wave_map": {"0": ["0", "1"]}, "tasks": {}}
+    per_task_dict = {"run_id": "r1", "cluster": "c1", "wave_map": {"0": ["0", "1"]}, "tasks": {}}
     report = {
         "summary": {"complete": 1, "running": 0, "pending": 1, "failed": 0, "unknown": 0},
         "tasks": {"1": {"status": "complete"}, "2": {"status": "pending"}},
@@ -128,7 +128,7 @@ def test_render_returns_rich_group_when_rich_present(tmp_path):
         },
         "scheduler": "slurm",
     }
-    out = _render(_UiState(), report, manifest, 30)
+    out = _render(_UiState(), report, per_task_dict, 30)
     # Rich Group is truthy and has a `renderables` attribute.
     assert hasattr(out, "renderables")
     assert len(out.renderables) >= 5

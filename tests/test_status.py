@@ -126,19 +126,21 @@ class TestHeaderOnlyCsv:
 
         assert 1 not in results
 
-    def test_manifest_header_only_csv_complete_by_default(self, tmp_path):
+    def test_header_only_csv_complete_via_tasks_dict(self, tmp_path):
+        """Same contract as the check_results variant above, but driven
+        through ``check_results_from_tasks`` (the per-task dict path)."""
         task_result_dir = tmp_path / "task0"
         task_result_dir.mkdir()
         (task_result_dir / "out.csv").write_text("a,b\n")
-        manifest = {
+        tasks_data = {
             "total_tasks": 1,
             "tasks": {"0": {"result_dir": str(task_result_dir)}},
         }
 
-        results = check_results_from_tasks(manifest, file_glob="*.csv")
+        results = check_results_from_tasks(tasks_data, file_glob="*.csv")
         assert 1 in results
 
-        strict = check_results_from_tasks(manifest, file_glob="*.csv", min_rows=1)
+        strict = check_results_from_tasks(tasks_data, file_glob="*.csv", min_rows=1)
         assert 1 not in strict
 
 
@@ -156,11 +158,11 @@ class TestReportTimestampIsUtc:
 
         task_dir = tmp_path / "t0"
         task_dir.mkdir()
-        manifest = {
+        tasks_data = {
             "total_tasks": 1,
             "tasks": {"0": {"result_dir": str(task_dir)}},
         }
-        report = report_status_from_tasks(manifest, [], scheduler="slurm")
+        report = report_status_from_tasks(tasks_data, [], scheduler="slurm")
         assert report["timestamp"].endswith("+00:00")
 
     def test_report_status_timestamp_has_offset(self, tmp_path):
@@ -176,8 +178,8 @@ class TestReportTimestampIsUtc:
 class TestDetectSchedulerMetaHint:
     def test_meta_file_overrides_local_sacct_heuristic(self, tmp_path, monkeypatch):
         """When ``sacct --version`` is unavailable locally, the auto-
-        detector previously fell through to ``"sge"`` regardless of what
-        the manifest said.  The fix walks the result_dir up to the
+        detector previously fell through to ``"sge"`` regardless of the
+        actual cluster type.  The fix walks the result_dir up to the
         experiment root looking for ``experiment_meta.json`` so a Slurm
         cluster's meta file wins over a missing local ``sacct``.
         """
@@ -212,8 +214,8 @@ class TestDetectSchedulerMetaHint:
         """``report_status_from_tasks`` previously called
         ``detect_scheduler()`` with no args, bypassing every meta hint.
         Now it pulls a representative result_dir from the first task so
-        the heuristic has a chance to read the manifest's experiment
-        meta.
+        the heuristic has a chance to read the experiment meta JSON
+        sitting at the experiment root.
         """
         from hpc_mapreduce.reduce.status import report_status_from_tasks
 
@@ -222,7 +224,7 @@ class TestDetectSchedulerMetaHint:
         task.mkdir(parents=True)
         (exp / "experiment_meta.json").write_text('{"backend": "slurm"}')
 
-        manifest = {
+        tasks_data = {
             "total_tasks": 1,
             "tasks": {"0": {"result_dir": str(task)}},
         }
@@ -231,5 +233,5 @@ class TestDetectSchedulerMetaHint:
             raise FileNotFoundError("no sacct")
 
         with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
-            report = report_status_from_tasks(manifest, [])
+            report = report_status_from_tasks(tasks_data, [])
         assert report["scheduler"] == "slurm"

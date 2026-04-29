@@ -58,11 +58,6 @@ def _grid_key(params):
     return re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
 
-# Legacy alias retained while tests still import the pre-rename name.
-# Removed alongside the manifest/grid deletions in a follow-up commit.
-_run_id = _grid_key
-
-
 def _neumaier_sum(values):
     """Neumaier-compensated summation (improved Kahan).
 

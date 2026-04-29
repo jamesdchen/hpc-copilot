@@ -341,16 +341,16 @@ def _grid_point_key(params: dict) -> str:
 
 
 def check_results_from_tasks(
-    manifest: dict,
+    tasks_data: dict,
     file_glob: str = "*",
     *,
     min_rows: int = 0,
 ) -> dict[int, dict]:
     """Mark tasks complete by checking each task's ``result_dir``.
 
-    Consumes a manifest-shape dict — either the synthetic dict produced
+    Consumes a per-task dict — either the synthetic dict produced
     from a per-run sidecar + ``.hpc/tasks.py`` by
-    :func:`_build_synthetic_manifest_from_sidecar`, or any equivalent
+    :func:`_build_per_task_dict_from_sidecar`, or any equivalent
     structure with ``tasks.<tid>.result_dir`` fields.  Task IDs in the
     input are 0-based; returned dict uses 1-based task IDs to match
     :func:`report_status`.
@@ -365,7 +365,7 @@ def check_results_from_tasks(
     import csv
 
     results: dict[int, dict] = {}
-    for tid_str, entry in manifest.get("tasks", {}).items():
+    for tid_str, entry in tasks_data.get("tasks", {}).items():
         try:
             tid = int(tid_str) + 1
         except (TypeError, ValueError):
@@ -409,7 +409,7 @@ def check_results_from_tasks(
 
 
 def report_status_from_tasks(
-    manifest: dict,
+    tasks_data: dict,
     job_ids: list[str],
     scheduler: str | None = None,
     *,
@@ -424,7 +424,7 @@ def report_status_from_tasks(
     """Like :func:`report_status` but driven by a per-task dict.
 
     Uses the per-task ``result_dir`` recorded in each task entry instead of a
-    single shared directory.  Consumes the same manifest-shape dict as
+    single shared directory.  Consumes the same per-task dict as
     :func:`check_results_from_tasks` — typically synthesized from a
     sidecar + ``.hpc/tasks.py``. ``min_rows`` is forwarded to
     :func:`check_results_from_tasks`; see its docstring for the CSV
@@ -435,17 +435,17 @@ def report_status_from_tasks(
     """
     from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
 
-    total = int(manifest.get("total_tasks", len(manifest.get("tasks", {}))))
-    manifest_tasks = manifest.get("tasks", {}) or {}
+    total = int(tasks_data.get("total_tasks", len(tasks_data.get("tasks", {}))))
+    task_entries = tasks_data.get("tasks", {}) or {}
 
-    completed = check_results_from_tasks(manifest, file_glob=file_glob, min_rows=min_rows)
+    completed = check_results_from_tasks(tasks_data, file_glob=file_glob, min_rows=min_rows)
 
     if scheduler is None:
         # Pass a representative per-task result_dir so detect_scheduler can
         # consult experiment_meta.json instead of falling back to the
         # ``sacct --version`` shell heuristic — which silently returns "sge"
         # on hosts without sacct on $PATH.
-        first_task = next(iter(manifest_tasks.values()), None)
+        first_task = next(iter(task_entries.values()), None)
         meta_dir = first_task.get("result_dir") if isinstance(first_task, dict) else None
         scheduler = detect_scheduler(meta_dir)
 
@@ -461,8 +461,8 @@ def report_status_from_tasks(
         job_info = {}
 
     def _cmd_sha_for(one_based_tid: int) -> str | None:
-        """Look up cmd_sha on the manifest entry for a 1-based task id."""
-        entry = manifest_tasks.get(str(one_based_tid - 1))
+        """Look up cmd_sha on the task entry for a 1-based task id."""
+        entry = task_entries.get(str(one_based_tid - 1))
         if not entry:
             return None
         sha = entry.get("cmd_sha")
@@ -520,20 +520,20 @@ def report_status_from_tasks(
     return report
 
 
-def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
-    """Group per-task statuses in *report* by grid point (from manifest ``params``).
+def rollup_by_grid_point(report: dict, tasks_data: dict) -> dict[str, dict]:
+    """Group per-task statuses in *report* by grid point (from task ``params``).
 
     Manifest task IDs are 0-based strings; report task IDs are 1-based strings.
     Returned dict maps grid-point key -> ``{complete, running, pending, failed, unknown, total}``.
     """
     rollup: dict[str, dict] = {}
-    manifest_tasks = manifest.get("tasks", {})
+    task_entries = tasks_data.get("tasks", {})
     for tid_str, task_info in report.get("tasks", {}).items():
         try:
-            manifest_key = str(int(tid_str) - 1)
+            entry_key = str(int(tid_str) - 1)
         except (TypeError, ValueError):
             continue
-        entry = manifest_tasks.get(manifest_key)
+        entry = task_entries.get(entry_key)
         if entry is None:
             continue
         gp = _grid_point_key(entry.get("params") or {})
@@ -550,17 +550,17 @@ def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
     return rollup
 
 
-def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
-    """Group per-task statuses by wave (from manifest ``wave_map``).
+def rollup_by_wave(report: dict, tasks_data: dict) -> dict[str, dict]:
+    """Group per-task statuses by wave (from task ``wave_map``).
 
     Returns ``{wave: {complete, running, pending, failed, unknown, total}}``.
-    Empty when the manifest has no ``wave_map`` (un-batched submissions).
+    Empty when the per-task dict has no ``wave_map`` (un-batched submissions).
 
-    Wave map keys are stored as 0-based task ids in the manifest; the
+    Wave map keys are stored as 0-based task ids; the
     status report keys tasks 1-based to match scheduler array indexing,
     so we shift on lookup.
     """
-    wave_map = manifest.get("wave_map") or {}
+    wave_map = tasks_data.get("wave_map") or {}
     if not wave_map:
         return {}
     report_tasks = report.get("tasks", {}) or {}
@@ -596,8 +596,8 @@ def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 
-def _build_synthetic_manifest_from_sidecar(sidecar: dict, tasks_module) -> dict:
-    """Build a manifest-shaped dict from sidecar + ``.hpc/tasks.py``.
+def _build_per_task_dict_from_sidecar(sidecar: dict, tasks_module) -> dict:
+    """Build a per-task dict from sidecar + ``.hpc/tasks.py``.
 
     Adapter that lets the existing reporting code
     (``report_status_from_tasks``, ``rollup_by_grid_point``,
@@ -702,14 +702,14 @@ def _main() -> int:
         return _emit_err("tasks_py_import_error", f"{tasks_py_path}: {exc}")
 
     try:
-        manifest = _build_synthetic_manifest_from_sidecar(sidecar, tasks_module)
+        tasks_data = _build_per_task_dict_from_sidecar(sidecar, tasks_module)
     except Exception as exc:
-        return _emit_err("synthetic_manifest_error", str(exc))
+        return _emit_err("synthetic_dict_error", str(exc))
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
 
     report = report_status_from_tasks(
-        manifest,
+        tasks_data,
         job_ids,
         scheduler=args.scheduler,
         file_glob=args.file_glob,
@@ -720,8 +720,8 @@ def _main() -> int:
         sge_user=args.sge_user,
         min_rows=args.min_rows,
     )
-    report["rollup"] = rollup_by_grid_point(report, manifest)
-    report["waves"] = rollup_by_wave(report, manifest)
+    report["rollup"] = rollup_by_grid_point(report, tasks_data)
+    report["waves"] = rollup_by_wave(report, tasks_data)
 
     # Pin all four top-level keys, even if upstream forgot one.
     report.setdefault("summary", _empty_summary())
