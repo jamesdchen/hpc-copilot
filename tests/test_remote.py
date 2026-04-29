@@ -144,35 +144,53 @@ class TestDeployRuntime:
     """
 
     def test_ssh_mkdir_then_scps_in_order(self):
-        # subprocess.run is used both inside ssh_run (first call) and for each scp.
+        # subprocess.run is used both inside ssh_run (mkdir) and for each scp.
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.deploy_runtime(host="c", user="u", remote_path="/p")
 
         all_calls = mock_run.call_args_list
-        # Expect 4 subprocess.run invocations: ssh (mkdir), scp x3
-        # (context.py, metrics_io.py, combiner.py).
-        assert len(all_calls) >= 4
+        # Expect 8 subprocess.run invocations:
+        #   1 ssh (mkdir -p hpc_mapreduce/map and .hpc/templates),
+        #   2 scp into hpc_mapreduce/map/ (context.py, metrics_io.py),
+        #   1 scp into .hpc/_hpc_dispatch.py,
+        #   4 scp into .hpc/templates/ (sge cpu/gpu, slurm cpu/gpu),
+        #   1 scp into .hpc/_hpc_combiner.py.
+        assert len(all_calls) == 9, [c[0][0][:3] for c in all_calls]
 
-        first_argv = all_calls[0][0][0]
-        second_argv = all_calls[1][0][0]
-        third_argv = all_calls[2][0][0]
-        fourth_argv = all_calls[3][0][0]
+        argvs = [c[0][0] for c in all_calls]
 
-        assert first_argv[0] == "ssh"
-        assert "mkdir -p" in first_argv[-1]
+        # ssh mkdir is first
+        assert argvs[0][0] == "ssh"
+        assert "mkdir -p" in argvs[0][-1]
+        assert ".hpc/templates" in argvs[0][-1]
 
-        assert second_argv[0] == "scp"
-        assert second_argv[1].endswith("context.py")
-        assert second_argv[2].endswith(":/p/hpc_mapreduce/map/context.py")
+        # Importable stubs into hpc_mapreduce/map/
+        assert argvs[1][0] == "scp"
+        assert argvs[1][1].endswith("context.py")
+        assert argvs[1][2].endswith(":/p/hpc_mapreduce/map/context.py")
 
-        assert third_argv[0] == "scp"
-        assert third_argv[1].endswith("metrics_io.py")
-        assert third_argv[2].endswith(":/p/hpc_mapreduce/map/metrics_io.py")
+        assert argvs[2][0] == "scp"
+        assert argvs[2][1].endswith("metrics_io.py")
+        assert argvs[2][2].endswith(":/p/hpc_mapreduce/map/metrics_io.py")
 
-        assert fourth_argv[0] == "scp"
-        assert fourth_argv[1].endswith("combiner.py")
-        assert fourth_argv[2].endswith(":/p/_hpc_combiner.py")
+        # Framework executor into .hpc/
+        assert argvs[3][0] == "scp"
+        assert argvs[3][1].endswith("dispatch.py")
+        assert argvs[3][2].endswith(":/p/.hpc/_hpc_dispatch.py")
+
+        # Four templates into .hpc/templates/
+        template_dsts = {argv[2] for argv in argvs[4:8]}
+        assert all(argv[0] == "scp" for argv in argvs[4:8])
+        assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in template_dsts)
+        assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in template_dsts)
+        assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
+        assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
+
+        # Combiner is last
+        assert argvs[8][0] == "scp"
+        assert argvs[8][1].endswith("combiner.py")
+        assert argvs[8][2].endswith(":/p/.hpc/_hpc_combiner.py")
 
 
 # ---------------------------------------------------------------------------
@@ -205,18 +223,18 @@ class TestRunCombiner:
     def test_run_combiner_default_no_force(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=3)
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=3, run_id="r1")
         argv = mock_run.call_args[0][0]
-        # argv = ["ssh", "u@c", "<command string>"]
         cmd_str = argv[-1]
         assert "--wave 3" in cmd_str
-        assert "--manifest _hpc_dispatch.json" in cmd_str
+        assert "--run-id r1" in cmd_str
+        assert ".hpc/_hpc_combiner.py" in cmd_str
         assert "--force" not in cmd_str
 
     def test_run_combiner_force_appends_flag(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=3, force=True)
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=3, run_id="r1", force=True)
         cmd_str = mock_run.call_args[0][0][-1]
         assert "--force" in cmd_str
 
@@ -225,7 +243,7 @@ class TestRunCombinerChecked:
     def test_returns_true_on_success(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="ok\n", stderr="", returncode=0)
-            ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0)
+            ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         assert ok is True
         assert out == "ok\n"
         assert err == ""
@@ -233,7 +251,7 @@ class TestRunCombinerChecked:
     def test_returns_false_on_failure(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="", stderr="boom", returncode=1)
-            ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0)
+            ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         assert ok is False
         assert out == ""
         assert err == "boom"
@@ -241,7 +259,7 @@ class TestRunCombinerChecked:
     def test_force_threaded_through(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, force=True)
+            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1", force=True)
         cmd_str = mock_run.call_args[0][0][-1]
         assert "--force" in cmd_str
 
@@ -255,12 +273,12 @@ class TestRunCombinerShellQuoting:
                 user="u",
                 remote_path="/path with space",
                 wave=1,
-                manifest_name="my manifest.json",
+                run_id="my run id",
             )
         cmd_str = mock_run.call_args[0][0][-1]
         assert "cd '/path with space'" in cmd_str
-        assert "HPC_MANIFEST='my manifest.json'" in cmd_str
-        assert "--manifest 'my manifest.json'" in cmd_str
+        assert "HPC_RUN_ID='my run id'" in cmd_str
+        assert "--run-id 'my run id'" in cmd_str
 
 
 # ---------------------------------------------------------------------------
@@ -453,21 +471,21 @@ class TestRunCombinerTimeout:
     def test_default_timeout_threaded_through_to_ssh_run(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0)
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_threaded_through_to_ssh_run(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, timeout=15)
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=15)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 15
 
     def test_explicit_none_threaded_through_to_ssh_run(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, timeout=None)
+            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=None)
         kwargs = mock_run.call_args.kwargs
         assert "timeout" in kwargs
         assert kwargs["timeout"] is None
@@ -477,14 +495,14 @@ class TestRunCombinerCheckedTimeout:
     def test_default_timeout_threaded_through(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0)
+            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_threaded_through(self):
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, timeout=21)
+            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=21)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 21
 
@@ -496,4 +514,4 @@ class TestRunCombinerCheckedTimeout:
         with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
-                remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0)
+                remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
