@@ -281,9 +281,9 @@ Purpose: record a submission in the journal. The actual `qsub`/`sbatch`
 is the caller's responsibility — `submit` only persists the bookkeeping
 needed for `/status` to pick up the run later.
 
-Idempotent on `(profile, manifest_sha)`: a retried call with the same
-`run_id` returns the existing record with `deduped: true` and emits no
-new side effects. See `slash_commands/runner.py:submit_and_record`.
+Idempotent on `run_id`: a retried call with the same `run_id` returns
+the existing record with `deduped: true` and emits no new side effects.
+See `slash_commands/runner.py:submit_and_record`.
 
 Args:
 
@@ -303,27 +303,28 @@ Args:
   "ssh_target": "user@host",
   "remote_path": "/u/home/user/myexp",
   "job_name": "sweep-2026-04-28",
-  "manifest_filename": "manifest.3a7b8c9d.json",
+  "run_id": "sweep-20260428-153012-3a7b8c9d",
   "job_ids": ["12345"],
   "total_tasks": 24,
-  "run_id": null,
   "runtime": null
 }
 ```
 
-Optional `runtime` accepts `"uv"` or `null` (default). When `"uv"`, the
-caller is expected to have built the manifest with
-`build_task_manifest(runtime="uv")` so every task `cmd` is prefixed with
-`uv run`, and to ensure `HPC_RUNTIME=uv` is exported into the job
-environment so the template's `uv sync` preamble fires before dispatch.
+`run_id` is the primary identity field; the per-run sidecar lives at
+`.hpc/runs/<run_id>.json`. The legacy `manifest_filename` field is
+accepted by `submit_and_record` for back-compat with older callers but
+is no longer required when `run_id` is supplied directly.
+
+Optional `runtime` accepts `"uv"` or `null` (default). When `"uv"`,
+`HPC_RUNTIME=uv` is exported into the job environment so the template's
+`uv sync` preamble fires before dispatch.
 
 `data` shape (validated against `schemas/submit.output.json`):
 
 ```json
 {
-  "run_id": "sweep_3a7b8c9d",
+  "run_id": "sweep-20260428-153012-3a7b8c9d",
   "job_ids": ["12345"],
-  "manifest": "manifest.3a7b8c9d.json",
   "total_tasks": 24,
   "deduped": false
 }
@@ -333,7 +334,7 @@ environment so the template's `uv sync` preamble fires before dispatch.
 
 ```json
 {"would_launch": 24, "profile": "sweep", "cluster": "hoffman2",
- "manifest": "manifest.3a7b8c9d.json", "dry_run": true}
+ "run_id": "sweep-20260428-153012-3a7b8c9d", "dry_run": true}
 ```
 
 Idempotent: yes. Error codes: `manifest_invalid` (missing required
@@ -431,8 +432,7 @@ Idempotent: yes. Error codes: `journal_corrupt`, `ssh_unreachable`,
 
 ### `build-executor`
 
-Purpose: scaffold a new executor or shim file from a starter template
-in `hpc_mapreduce/templates/starters/`.
+Purpose: scaffold a new executor file from `hpc_mapreduce/templates/starters/`.
 
 Args:
 
@@ -440,7 +440,7 @@ Args:
 |---|---|---|
 | `--name <stem>` | yes | output filename stem (no `.py`) |
 | `--output-dir <dir>` | no | default CWD |
-| `--type {plain,chunked,date-window,shim}` | no | default `plain` |
+| `--type {plain}` | no | default `plain` |
 | `--force` | no | overwrite existing destination |
 
 Type → starter template:
@@ -448,9 +448,12 @@ Type → starter template:
 | Type | Source file (under `hpc_mapreduce/templates/starters/`) |
 |---|---|
 | `plain` | `executor_template.py` |
-| `chunked` | `chunking_shim.py` |
-| `date-window` | `date_window_shim.py` |
-| `shim` | `shim_template.py` |
+
+The legacy `chunked`, `date-window`, and `shim` types are gone — those
+axes are now expressed inline in `.hpc/tasks.py` (`itertools.product`,
+slicing, date-window comprehensions). The canonical reference is
+`hpc_mapreduce/templates/tasks_example.py`; the agent walks the user
+through adapting it during `/submit` Step 6.
 
 `data` shape: `{"path": "/abs/.../<name>.py", "type": "plain", "source": "/abs/.../executor_template.py"}`.
 
