@@ -79,14 +79,18 @@ mkdir -p "$RESULT_DIR"
 
 # Convert 1-based SGE_TASK_ID to 0-based, add offset for batched submission
 TASK_ID=$((SGE_TASK_ID - 1 + ${TASK_OFFSET:-0}))
+HPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py
 
 echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
+echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "Result dir:   $RESULT_DIR"
 echo "Executor:     $EXECUTOR"
 echo "============================================"
 
 # --- Execute ---
-export TASK_ID RESULT_DIR
+# HPC_RUN_ID arrives via qsub -v from the submit-side env; re-exported here
+# so the dispatcher inside $EXECUTOR sees it.
+export TASK_ID HPC_TASK_ID HPC_RUN_ID RESULT_DIR
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."
