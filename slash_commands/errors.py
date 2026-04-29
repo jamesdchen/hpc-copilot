@@ -67,12 +67,21 @@ class SchedulerThrottled(HpcError):
 
 
 class ManifestInvalid(HpcError):
-    """Dispatch manifest is malformed or fails schema validation."""
+    """Run definition is malformed or fails validation.
+
+    Despite the name (kept for back-compat with downstream callers and
+    serialized error envelopes), this now covers the per-run sidecar at
+    ``.hpc/runs/<run_id>.json`` and the user's ``.hpc/tasks.py`` —
+    whichever the framework was reading at the time of the failure.
+    """
 
     error_code = "manifest_invalid"
     retry_safe = False
     category = "user"
-    remediation = "Inspect _hpc_dispatch.json; rebuild via /submit or `hpc-mapreduce submit`."
+    remediation = (
+        "Inspect .hpc/tasks.py and .hpc/runs/<run_id>.json; rebuild via "
+        "/submit or `hpc-mapreduce submit`."
+    )
 
 
 class ExecutorNotFound(HpcError):
