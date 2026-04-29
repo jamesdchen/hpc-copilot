@@ -61,9 +61,11 @@ ALLOWED_EXPORTS = frozenset(
         "deploy_runtime",
         # Job status & results
         "check_results",
-        "check_results_from_manifest",  # internal adapter for synthetic-manifest path
+        "check_results_from_tasks",
+        "check_results_from_manifest",  # deprecated alias
         "report_status",
-        "report_status_from_manifest",  # internal adapter for synthetic-manifest path
+        "report_status_from_tasks",
+        "report_status_from_manifest",  # deprecated alias
         "rollup_by_grid_point",
         "detect_scheduler",
         # GPU selection

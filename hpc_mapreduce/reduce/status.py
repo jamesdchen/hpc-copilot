@@ -33,9 +33,11 @@ from __future__ import annotations
 
 __all__ = [
     "check_results",
-    "check_results_from_manifest",
+    "check_results_from_tasks",
+    "check_results_from_manifest",  # deprecated alias for check_results_from_tasks
     "report_status",
-    "report_status_from_manifest",
+    "report_status_from_tasks",
+    "report_status_from_manifest",  # deprecated alias for report_status_from_tasks
     "rollup_by_grid_point",
     "rollup_by_wave",
     "get_err_log_paths",
@@ -337,22 +339,27 @@ def _grid_point_key(params: dict) -> str:
     return "_".join(f"{k}={params[k]}" for k in sorted(params))
 
 
-def check_results_from_manifest(
+def check_results_from_tasks(
     manifest: dict,
     file_glob: str = "*",
     *,
     min_rows: int = 0,
 ) -> dict[int, dict]:
-    """Mark tasks complete by checking their per-task ``result_dir`` from a dispatch manifest.
+    """Mark tasks complete by checking each task's ``result_dir``.
 
-    Manifest task IDs are 0-based; returned dict uses 1-based task IDs to match
+    Consumes a manifest-shape dict — either the synthetic dict produced
+    from a per-run sidecar + ``.hpc/tasks.py`` by
+    :func:`_build_synthetic_manifest_from_sidecar`, or any equivalent
+    structure with ``tasks.<tid>.result_dir`` fields.  Task IDs in the
+    input are 0-based; returned dict uses 1-based task IDs to match
     :func:`report_status`.
 
-    Completion semantics: a result file is considered complete when it exists and
-    is non-zero byte.  CSVs with only a header (e.g. a zero-result task) are
-    therefore accepted by default and will not trigger auto-resubmit
-    in ``/status``.  Set ``min_rows > 0`` to opt into the stricter check that
-    requires at least that many CSV data rows beyond the header.
+    Completion semantics: a result file is considered complete when it
+    exists and is non-zero byte.  CSVs with only a header (e.g. a
+    zero-result task) are accepted by default and will not trigger
+    auto-resubmit in ``/status``.  Set ``min_rows > 0`` to opt into the
+    stricter check that requires at least that many CSV data rows beyond
+    the header.
     """
     import csv
 
@@ -400,7 +407,7 @@ def check_results_from_manifest(
     return results
 
 
-def report_status_from_manifest(
+def report_status_from_tasks(
     manifest: dict,
     job_ids: list[str],
     scheduler: str | None = None,
@@ -413,22 +420,24 @@ def report_status_from_manifest(
     sge_user: str | None = None,
     min_rows: int = 0,
 ) -> dict:
-    """Like :func:`report_status` but driven by a dispatch manifest.
+    """Like :func:`report_status` but driven by a per-task dict.
 
-    Uses the per-task ``result_dir`` recorded in each manifest entry instead of a single
-    shared directory.  ``min_rows`` is forwarded to
-    :func:`check_results_from_manifest`; see its docstring for the CSV
+    Uses the per-task ``result_dir`` recorded in each task entry instead of a
+    single shared directory.  Consumes the same manifest-shape dict as
+    :func:`check_results_from_tasks` — typically synthesized from a
+    sidecar + ``.hpc/tasks.py``. ``min_rows`` is forwarded to
+    :func:`check_results_from_tasks`; see its docstring for the CSV
     completion semantics.
 
-    Each task's per-task dict includes ``cmd_sha`` pulled from the manifest
-    entry when present (manifest schema v2+); ``null`` otherwise (v1 back-compat).
+    Each task's per-task dict includes ``cmd_sha`` pulled from the task
+    entry when present; ``null`` otherwise.
     """
     from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
 
     total = int(manifest.get("total_tasks", len(manifest.get("tasks", {}))))
     manifest_tasks = manifest.get("tasks", {}) or {}
 
-    completed = check_results_from_manifest(manifest, file_glob=file_glob, min_rows=min_rows)
+    completed = check_results_from_tasks(manifest, file_glob=file_glob, min_rows=min_rows)
 
     if scheduler is None:
         # Pass a representative per-task result_dir so detect_scheduler can
@@ -510,6 +519,15 @@ def report_status_from_manifest(
     return report
 
 
+# Deprecated aliases — kept for back-compat with consumers that still
+# import the manifest-named functions. New code should use the
+# ``_from_tasks`` names which more accurately describe the input
+# (a manifest-shape dict that's now synthesized from .hpc/tasks.py +
+# a per-run sidecar). To be removed in a future minor version.
+check_results_from_manifest = check_results_from_tasks
+report_status_from_manifest = report_status_from_tasks
+
+
 def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
     """Group per-task statuses in *report* by grid point (from manifest ``params``).
 
@@ -589,8 +607,8 @@ def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
 def _build_synthetic_manifest_from_sidecar(sidecar: dict, tasks_module) -> dict:
     """Build a manifest-shaped dict from sidecar + ``.hpc/tasks.py``.
 
-    Adapter that lets the existing manifest-based reporting code
-    (``report_status_from_manifest``, ``rollup_by_grid_point``,
+    Adapter that lets the existing reporting code
+    (``report_status_from_tasks``, ``rollup_by_grid_point``,
     ``rollup_by_wave``) operate unchanged against the new model. Each
     task's ``result_dir`` is computed by formatting the sidecar's
     ``result_dir_template`` against ``task_id`` + ``run_id`` + the
@@ -711,7 +729,7 @@ def _main() -> int:
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
 
-    report = report_status_from_manifest(
+    report = report_status_from_tasks(
         manifest,
         job_ids,
         scheduler=args.scheduler,

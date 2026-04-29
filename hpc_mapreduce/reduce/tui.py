@@ -1,6 +1,6 @@
 """Live terminal UI for ``/status`` (opt-in ``--tui`` path).
 
-A thin wrapper around :func:`hpc_mapreduce.reduce.status.report_status_from_manifest`
+A thin wrapper around :func:`hpc_mapreduce.reduce.status.report_status_from_tasks`
 that polls the cluster on a fixed cadence and renders the result with Rich.
 The JSON / cron path in ``status.py`` is unchanged; the TUI is imported
 lazily so a user without ``rich`` installed pays zero cost for the normal
@@ -381,7 +381,7 @@ def run_tui(
         print(f"(import error: {exc})", file=sys.stderr)
         return 2
 
-    from hpc_mapreduce.reduce.status import report_status_from_manifest
+    from hpc_mapreduce.reduce.status import report_status_from_tasks
 
     manifest_path = Path(manifest_path)
     try:
@@ -403,7 +403,7 @@ def run_tui(
         except (FileNotFoundError, json.JSONDecodeError):
             mf = state.last_manifest or {}
         state.last_manifest = mf
-        rep = report_status_from_manifest(
+        rep = report_status_from_tasks(
             mf,
             job_ids or [],
             scheduler=scheduler,
