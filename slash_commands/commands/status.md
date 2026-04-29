@@ -23,8 +23,11 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
    > combined {combined_waves}. Resume? [Y/n]"
 
    On `Y` (default on empty), hydrate `cluster`, `ssh_target`, `remote_path`,
-   `job_name`, `job_ids`, `manifest`, `combined_waves`, `failed_waves`,
-   `retries` from the run record. Skip the cluster prompt below.
+   `job_name`, `job_ids`, `run_id`, `combined_waves`, `failed_waves`,
+   `retries` from the run record. Skip the cluster prompt below. The
+   per-run sidecar at `.hpc/runs/<run_id>.json` carries cmd_sha,
+   executor, result_dir_template, and wave_map; `.hpc/tasks.py` carries
+   the per-task kwargs.
 
    Then call `runner.reconcile(Path.cwd(), run_id, scheduler=<scheduler>)`
    BEFORE Step 0.5. Reconcile re-derives ground truth from the cluster
@@ -46,15 +49,26 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
 4. Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
 
-5. Read `_hpc_dispatch.json` to load the task-to-grid-point mapping. This is the **primary source of truth** for task structure, grid dimensions, and result directories.
+5. Load the run's identity and task definition. Two files together carry what used to live in the manifest:
 
-   Recovery order if the local copy is missing:
+   - `.hpc/runs/<run_id>.json` — the per-run sidecar: cmd_sha, executor command, `result_dir_template`, task_count, wave_map, claude_hpc_version, submitted_at.
+   - `.hpc/tasks.py` — the user's `total()` / `resolve(task_id)` module. Per-task kwargs come from `tasks.resolve(i)`; per-task `result_dir` is the sidecar's `result_dir_template.format(task_id=i, run_id=<run_id>, **kwargs)`.
+
+   ```python
+   from hpc_mapreduce import load_tasks_module, read_run_sidecar, tasks_path
+   sidecar = read_run_sidecar(experiment_dir, run_id)
+   tasks = load_tasks_module(tasks_path(experiment_dir))
+   ```
+
+   Recovery order if the local sidecar is missing:
 
    1. Pull from the cluster:
       ```bash
-      rsync -az $SSH_TARGET:$REMOTE_PATH/_hpc_dispatch.json ./_hpc_dispatch.json
+      mkdir -p .hpc/runs
+      rsync -az $SSH_TARGET:$REMOTE_PATH/.hpc/runs/<run_id>.json ./.hpc/runs/<run_id>.json
       ```
-   2. If also missing on the cluster, fall back to reading `logs/<job_name>_<job_id>_<task_id>.out` for each task as the last-resort artifact and surface the gap to the user — monitoring can only be partial without the manifest.
+   2. `.hpc/tasks.py` should already be in your local repo (it's git-tracked). If it's missing, the experiment was never properly scaffolded — re-run `/submit` and follow Step 6's scaffolding flow.
+   3. If both are missing on the cluster too, fall back to reading `logs/<job_name>_<job_id>_<task_id>.out` for each task as the last-resort artifact and surface the gap to the user — monitoring can only be partial without the sidecar.
 
 ## SSH Quoting
 
@@ -91,7 +105,7 @@ $ARGUMENTS formats (pick one):
    Example: `ml_ridge 12345678 100`
 
 3. **Auto-discover** (empty):
-   Check for active jobs belonging to the current project via queue status commands. Read `_hpc_dispatch.json` to identify which executors were submitted and their expected task counts.
+   Check for active jobs belonging to the current project via queue status commands. Read `.hpc/runs/` to identify recent runs (newest-first via `find_existing_runs`) and pick the one matching the active job IDs. Each sidecar carries the run's `task_count`, `executor`, and `wave_map`.
 
 ### Optional: `--tui`
 
@@ -100,10 +114,11 @@ instead of running the one-shot JSON poll. This is for **interactive, attended**
 monitoring only — the default cron / self-scheduling path stays JSON. Do not
 schedule a TUI session via `CronCreate`.
 
-The TUI reuses the same `report_status_from_manifest` code path, so the JSON
-contract described below is unchanged. Rich is an optional dep
-(`pip install 'claude-hpc[tui]'`); if it's missing, `--tui` prints a short
-install hint and exits 2, and plain `/status` continues to work.
+The TUI reuses the same `report_status` code path (with the run_id-keyed
+sidecar adapter on the cluster), so the JSON contract described below
+is unchanged. Rich is an optional dep (`pip install 'claude-hpc[tui]'`);
+if it's missing, `--tui` prints a short install hint and exits 2, and
+plain `/status` continues to work.
 
 Keybinds:
 
@@ -118,7 +133,7 @@ Invoke the module directly:
 
 ```bash
 python -m hpc_mapreduce.reduce.tui \
-    --manifest _hpc_dispatch.json \
+    --run-id <run_id> \
     --job-ids <csv_job_ids> \
     --job-name <profile> \
     --log-dir logs \
@@ -128,7 +143,7 @@ python -m hpc_mapreduce.reduce.tui \
 
 The TUI surfaces four panels: header (run_id / cluster / scheduler /
 wall-clock), per-grid-point rollup (queued / running / done / failed),
-wave progress bars sourced from the manifest's `wave_map`, failure
+wave progress bars sourced from the sidecar's `wave_map`, failure
 classification counts (via `classify_failure`), plus a tail of the 10
 most recent failing tasks with one-line diagnostics. The footer shows
 live CPU-hour / GPU-hour totals from `resource_usage`.
@@ -153,14 +168,20 @@ ssh $SSH_TARGET 'qstat -j '"$JOB_IDS"' 2>&1 | head'
 
 A job that is neither in the queue nor in the accounting DB → abort.
 
-### 0.5b — Manifest is consistent
+### 0.5b — Sidecar + tasks.py are consistent
 
 ```bash
-rsync -az $SSH_TARGET:$REMOTE_PATH/_hpc_dispatch.json ./_hpc_dispatch.json
-python -c 'import json; m=json.load(open("_hpc_dispatch.json")); print(m["schema_version"], m["total_tasks"])'
+mkdir -p .hpc/runs
+rsync -az $SSH_TARGET:$REMOTE_PATH/.hpc/runs/<run_id>.json ./.hpc/runs/<run_id>.json
+python -c '
+import json
+from hpc_mapreduce import load_tasks_module, tasks_path
+sc = json.load(open(".hpc/runs/<run_id>.json"))
+print(sc["sidecar_schema_version"], sc["task_count"])
+print(load_tasks_module(tasks_path(".")).total())'
 ```
 
-Verify `schema_version >= 2` and `total_tasks` matches the value the user passed (or the sum of array sizes from squeue/qstat). A mismatch suggests manifest corruption — see `failure_manifest_corruption.md`. Abort and tell the user to re-run `pre_sync_check.py` before re-syncing.
+Verify `sidecar_schema_version >= 1` and `task_count` matches both `tasks.total()` and the value the user passed (or the sum of array sizes from squeue/qstat). A mismatch suggests the local `.hpc/tasks.py` was edited after submission; re-run `/submit` to write a fresh sidecar with the current task list.
 
 ### 0.5c — Executor imports cleanly
 
@@ -174,7 +195,13 @@ Non-zero exit, `ImportError`, or `ModuleNotFoundError` → abort. The executor m
 
 ### 0.5d — Result-dir parent is writable
 
-Spot-check one task's `result_dir` parent. Read the path from `_hpc_dispatch.json`'s first task entry.
+Spot-check one task's `result_dir` parent. Compute the path from the
+sidecar's `result_dir_template` against `tasks.resolve(0)`:
+
+```python
+ctx = {"task_id": 0, "run_id": run_id, **tasks.resolve(0)}
+result_dir = sidecar["result_dir_template"].format(**ctx)
+```
 
 ```bash
 ssh $SSH_TARGET 'parent=$(dirname '"$RESULT_DIR"'); [ -d "$parent" ] && [ -w "$parent" ] && echo OK || echo "NOT_WRITABLE: $parent"'
@@ -186,11 +213,11 @@ Anything other than `OK` → abort.
 
 > **Anti-pattern (critical):** Do NOT use `ls logs/ | wc -l` or `find results/ -name '*.csv' | wc -l` as a success proxy. **Failed tasks produce logs and partial output too** — an `ImportError` still leaves an `.o*` file; a mid-run crash still leaves a `_wip_*` directory. Counting these as "progress" has led to hours of wasted cluster time discovering 100% failure rates after submission. Always either (a) invoke the status reporter below, or (b) `grep -clE 'Error|Traceback|ImportError' logs/*` and compute error-rate alongside any file count. **File existence is not success.**
 
-Run the deterministic status reporter on the cluster. It reads `_hpc_dispatch.json`, checks each task's per-task `result_dir` for completion, queries the scheduler (sacct for SLURM, qstat for SGE) for in-flight tasks, and emits a single JSON blob:
+Run the deterministic status reporter on the cluster. It reads `.hpc/runs/<run_id>.json` and `.hpc/tasks.py`, computes each task's `result_dir` from the sidecar's `result_dir_template` + `tasks.resolve(i)`, queries the scheduler (sacct for SLURM, qstat for SGE) for in-flight tasks, and emits a single JSON blob:
 
 ```bash
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m hpc_mapreduce.reduce.status \
-    --manifest _hpc_dispatch.json \
+    --run-id <run_id> \
     --job-ids <comma_separated_job_ids> \
     --job-name <profile_name> \
     --log-dir logs \
@@ -200,7 +227,7 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m hpc_mapreduce.reduce.status \
 The returned JSON has:
 - `summary`: `{complete, running, pending, failed, unknown}` counts across all tasks
 - `tasks`: per-task `{status, ...}` with 1-based task IDs
-- `rollup`: per-grid-point counts (grouped by the manifest's `params` dict), keyed by a stable `k=v` string
+- `rollup`: per-grid-point counts (grouped by the kwargs returned by `tasks.resolve(i)`), keyed by a stable `k=v` string
 
 Format the `rollup` and `summary` into the user-facing table:
 
@@ -231,9 +258,9 @@ Parse the `summary` to determine state:
 
 ### Step 1c: Run Combiners for Completed Waves
 
-If `_hpc_dispatch.json` contains a `wave_map` field, run the on-cluster combiner for each newly-completed wave. This aggregates metrics on the cluster while later waves are still running (pipeline parallelism).
+If the run sidecar contains a `wave_map` field, run the on-cluster combiner for each newly-completed wave. This aggregates metrics on the cluster while later waves are still running (pipeline parallelism).
 
-1. Read `wave_map` from the manifest to determine which task IDs belong to each wave
+1. Read `wave_map` from the sidecar to determine which task IDs belong to each wave
 2. Cross-reference with the Step 1 reporter's `tasks` dict: a wave is **complete** when every task ID in the wave has `status == "complete"` in the `tasks` dict (no separate re-count needed)
 3. Check `combined_waves` from the monitor state to skip waves already combined
 4. For each newly-complete wave not yet combined, invoke `runner.combine_wave`. The wrapper records `combined_waves`/`failed_waves` atomically — the slash command must NOT call `update_run_status` directly for these fields:
@@ -256,7 +283,7 @@ If `_hpc_dispatch.json` contains a `wave_map` field, run the on-cluster combiner
 - 1st failure: retry automatically on the next monitoring tick via `runner.combine_wave(..., force=True)`.
 - 2nd failure: surface to the user with the stderr excerpt and stop retrying until the user intervenes.
 
-If the manifest has no `wave_map` field, skip this step (backward compatibility with older submissions).
+If the sidecar has no `wave_map` field, skip this step (backward compatibility with older submissions).
 
 ## Step 2: Diagnose Failures
 
@@ -302,7 +329,7 @@ Check retry count. The profile's `max_retries` (default 3) is the limit. If exce
 | Node fail | no overrides | no overrides |
 | Queue stall | switch GPU type (use `gpu_fallback` from profile, or `gpu_types` from cluster) | next GPU in fallback |
 
-Build the resubmission command using the same dispatch mechanism. The task IDs in the resubmission correspond to the same `_hpc_dispatch.json` entries. Apply resource overrides to the submission flags.
+Build the resubmission command using the same dispatch mechanism. The task IDs in the resubmission correspond to the same `.hpc/tasks.py` indices (resolved at task time on the cluster); the existing per-run sidecar at `.hpc/runs/<run_id>.json` is reused unchanged. Apply resource overrides to the submission flags.
 
 **Update your job-ids list** for subsequent status checks.
 
@@ -334,7 +361,7 @@ Re-run the status reporter with `--min-rows N` (the existing CLI flag — see `d
 
 ```bash
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m hpc_mapreduce.reduce.status \
-    --manifest _hpc_dispatch.json \
+    --run-id <run_id> \
     --job-ids '"$JOB_IDS"' --job-name '"$NAME"' --log-dir logs \
     --file-glob "'"$SUMMARY_PATTERN"'" \
     --min-rows '"$MIN_ROWS"
@@ -344,15 +371,22 @@ Any task that previously read `complete` but flips to `failed` here had an empty
 
 ### 4a.2 — Spot-check 3 tasks
 
-Pick the first, middle, and last task IDs from the manifest. For each, read the head of its result file and verify:
+Pick the first, middle, and last task IDs (`0`, `task_count // 2`, `task_count - 1`). For each, read the head of its result file and verify:
 
 - The file exists and is non-empty.
 - Expected columns are present (use `results.summary_pattern` and the executor's known schema).
 - Key metric column has at least one non-NaN value.
 
+The per-task `result_dir` is computed locally from the sidecar:
+
+```python
+ctx = {"task_id": tid, "run_id": run_id, **tasks.resolve(tid)}
+result_dir = sidecar["result_dir_template"].format(**ctx)
+```
+
 ```bash
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && for tid in '"$FIRST $MID $LAST"'; do
-  rd=$(jq -r --arg t "$tid" ".tasks[\$t].result_dir" _hpc_dispatch.json)
+  rd=<formatted result_dir for this tid>
   echo "=== tid=$tid rd=$rd ==="
   ls -la "$rd" 2>&1 | head -5
   for f in "$rd"/'"$SUMMARY_PATTERN"'; do head -3 "$f"; done
@@ -441,7 +475,7 @@ prev_complete=0
 while true; do
   raw=$(ssh -o IdentitiesOnly=yes "$SSH_TARGET" "cd $REMOTE_PATH && \
     python -m hpc_mapreduce.reduce.status \
-      --manifest _hpc_dispatch.json \
+      --run-id <run_id> \
       --job-ids $JOB_IDS --job-name $NAME --log-dir logs" 2>&1) \
     || { echo "STATUS_QUERY_FAILED $(printf %s "$raw" | head -1)"; sleep "$INTERVAL"; continue; }
 

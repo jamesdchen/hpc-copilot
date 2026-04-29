@@ -31,7 +31,19 @@ Determine cluster and connection:
 
 Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
 
-Read `_hpc_dispatch.json` (locally if available, or from the cluster via SSH) to understand the grid structure: task-to-grid-point mapping and result directories per grid point. This is the **primary source of truth** for what was submitted.
+Load the run's identity and task definition. Two files together carry what used to live in the dispatch manifest:
+
+- `.hpc/runs/<run_id>.json` — the per-run sidecar: cmd_sha, executor, `result_dir_template`, task_count, wave_map.
+- `.hpc/tasks.py` — the user's `total()` / `resolve(task_id)` module. Per-task kwargs (the "grid point") come from `tasks.resolve(i)`; per-task `result_dir` is the sidecar's template formatted against `task_id` + `run_id` + kwargs.
+
+Pull the sidecar locally if missing:
+
+```bash
+mkdir -p .hpc/runs
+rsync -az $SSH_TARGET:$REMOTE_PATH/.hpc/runs/<run_id>.json ./.hpc/runs/<run_id>.json
+```
+
+`.hpc/tasks.py` is git-tracked; it should already be in your local repo.
 
 ## SSH Quoting
 
@@ -57,7 +69,7 @@ Check for combiner output:
 ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_combiner/wave_*.json 2>/dev/null | wc -l'
 ```
 
-Read `_hpc_dispatch.json` to determine how many waves were in the submission plan (from the `wave_map` field).
+Read `.hpc/runs/<run_id>.json` to determine how many waves were in the submission plan (from the sidecar's `wave_map` field).
 
 **If all waves have combiner output:**
 1. Pull only the combiner partials (small files):
@@ -70,23 +82,38 @@ Read `_hpc_dispatch.json` to determine how many waves were in the submission pla
 **If combiner output is missing or incomplete:**
 - Optionally run missing combiners on-demand:
   ```bash
-  ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && HPC_WAVE=<N> HPC_MANIFEST=_hpc_dispatch.json python3 _hpc_combiner.py'
+  ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && HPC_WAVE=<N> HPC_RUN_ID=<run_id> python3 .hpc/_hpc_combiner.py --wave <N> --run-id <run_id>'
+  ```
+  Or, equivalently, from Python:
+  ```python
+  from hpc_mapreduce import run_combiner_checked
+  run_combiner_checked(host=..., user=..., remote_path=..., wave=N, run_id=run_id)
   ```
 - Or fall through to the standard aggregation flow below
 
 ## Step 1: Identify What to Aggregate
 
-Read `_hpc_dispatch.json` to understand the submission structure:
+Load `.hpc/runs/<run_id>.json` and `.hpc/tasks.py` to understand the submission structure:
+
+```python
+from hpc_mapreduce import load_tasks_module, read_run_sidecar, tasks_path
+sidecar = read_run_sidecar(experiment_dir, run_id)
+tasks = load_tasks_module(tasks_path(experiment_dir))
+n = tasks.total()
+```
+
+Each task's grid point is `tasks.resolve(i)` (a kwargs dict); each task's `result_dir` is `sidecar["result_dir_template"].format(task_id=i, run_id=run_id, **tasks.resolve(i))`.
 
 ```
-Submission summary (from dispatch manifest):
-  Grid keys: [executor, horizon]
-  Grid points: 6
-  Total tasks: 60
-  Result directories: results/ml_ridge_h1_2020-01/, results/ml_ridge_h1_2020-07/, ...
+Submission summary (from sidecar + tasks.py):
+  Run ID:        ml_ridge-20260429-153012-abc12345
+  Executor:      python3 src/ml_ridge.py
+  Tasks:         60
+  Grid kwargs:   {executor, horizon, window_start, window_end}
+  Sample dir:    results/ml_ridge_h1_2020-01/
 ```
 
-If `$ARGUMENTS` specifies an executor or result directory, use it. Otherwise, present the grid structure from the dispatch manifest and ask what to aggregate.
+If `$ARGUMENTS` specifies an executor or result directory, use it. Otherwise, present the kwargs structure from `tasks.py` and ask what to aggregate.
 
 If `hpc.yaml` exists and has `results.aggregate_cmd` for a matching profile, use it. Otherwise, discover aggregation scripts in the repo or ask the user what aggregation command to run.
 
@@ -100,7 +127,7 @@ If jobs are still running for the selected profile/stage, report which ones and 
 
 **Preferred path: let `hpc-mapreduce aggregate` enforce this for you.**
 The CLI accepts `--require-outputs <template>` (with `{task_id}` placeholder)
-which resolves the template against the dispatch manifest's `wave_map`,
+which resolves the template against the run sidecar's `wave_map`,
 SSH-checks every per-task output, and refuses to combine if any are
 missing. The error envelope reports `error_code: outputs_missing` with the
 list of absent paths. Set the default once per repo in `hpc.yaml` under
@@ -133,7 +160,7 @@ Task completeness:
 
 **If tasks are missing results:**
 
-1. Identify which task IDs are missing by cross-referencing the dispatch manifest with existing result directories.
+1. Identify which task IDs are missing by cross-referencing `tasks.total()` with existing result directories (one per `tasks.resolve(i)` formatted through the sidecar's `result_dir_template`).
 2. Check job accounting for failure reasons (qacct for SGE, sacct for SLURM).
 3. Check error logs (tail -50).
 4. Report findings and suggest resubmitting via `/submit` or monitoring via `/status` for gaps.
@@ -236,8 +263,8 @@ elif len(in_flight) == 0:
     run_id = None
 else:
     # Multiple in-flight runs share this cwd. Prompt the user to pick the
-    # one that this aggregate call corresponds to (match by profile, manifest
-    # filename, or job_name).
+    # one that this aggregate call corresponds to (match by profile, run_id,
+    # or job_name).
     run_id = <user's choice>
 
 if run_id is not None:
