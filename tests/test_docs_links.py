@@ -63,6 +63,8 @@ _DOC_VOCABULARY = {
     "mars_skill_paths", "required_env",
     # Categories
     "user", "cluster", "network", "internal",
+    # Manifest / submit-spec fields
+    "cmd", "request_id",
 }
 
 
@@ -150,3 +152,33 @@ def test_mars_docs_env_vars_match_capabilities() -> None:
         assert var in integration_text, (
             f"docs/mars-integration.md does not mention required env var {var!r}"
         )
+
+
+# ─── Drift sentinels for refreshed wording ────────────────────────────────
+# These pin recent doc corrections so a future editor doesn't accidentally
+# reintroduce the stale claims.
+
+
+def test_mars_snippet_does_not_claim_resubmit_non_idempotent() -> None:
+    """``slash_commands.runner.resubmit_failed`` dedupes on ``request_id``
+    (see CHANGELOG: 'Resubmit dedupe via request_id'); the snippet must not
+    claim resubmit is non-idempotent."""
+    text = _doc_text(MARS_SNIPPET)
+    assert "NOT idempotent" not in text, (
+        "experiment-runner.snippet.md still contains 'NOT idempotent' near "
+        "the resubmit block. resubmit_failed has been idempotent on "
+        "request_id since the dedupe change landed in main; update the "
+        "snippet to match."
+    )
+
+
+def test_mars_integration_does_not_track_uv_as_known_gap() -> None:
+    """``runtime: uv`` is honored end-to-end since MARs compat Tier 1
+    (build_task_manifest prefix + uv sync template preamble); the
+    integration doc must not still call it a 'known gap'."""
+    text = _doc_text(MARS_INTEGRATION)
+    assert "track this as a known gap" not in text, (
+        "docs/mars-integration.md still calls cluster-side uv run a "
+        "'known gap'. Tier 1 closed the gap; update the Honoring-MARs-"
+        "invariants table to reflect the new behavior."
+    )

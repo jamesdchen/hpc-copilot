@@ -537,11 +537,37 @@ def cmd_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _overlay_meta_on_spec(
+    spec: dict[str, Any], experiment_dir: Path
+) -> dict[str, Any]:
+    """Overlay missing ``profile`` / ``job_name`` from ``meta.json``.
+
+    Uses ``setdefault`` semantics — never overwrites a caller-supplied
+    value, silent no-op when ``meta.json`` is absent or has no
+    ``experiment_id``. Mutates and returns *spec* for clarity.
+    """
+    meta = read_meta_json(experiment_dir)
+    if meta is None:
+        return spec
+    experiment_id = meta.get("experiment_id")
+    if not experiment_id:
+        return spec
+    spec.setdefault("profile", experiment_id)
+    spec.setdefault("job_name", experiment_id)
+    return spec
+
+
 # ─── subcommand: submit ────────────────────────────────────────────────────
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
-    spec = _load_spec(args.spec, schema_name="submit")
+    # Load without schema validation so ``--from-meta`` can fill missing
+    # required fields (profile/job_name) before the schema check rejects
+    # an otherwise-partial spec.
+    spec = _load_spec(args.spec, schema_name=None)
+    if getattr(args, "from_meta", False):
+        spec = _overlay_meta_on_spec(spec, args.experiment_dir)
+    _validate_against_schema(spec, "submit")
     required = ("profile", "cluster", "ssh_target", "remote_path", "job_name",
                 "manifest_filename", "job_ids", "total_tasks")
     missing = [k for k in required if k not in spec]
@@ -1207,6 +1233,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Skip pre-submit manifest sanity. Use only when the manifest "
             "is built directly on the cluster and not present locally."
+        ),
+    )
+    p_sub.add_argument(
+        "--from-meta",
+        action="store_true",
+        help=(
+            "Overlay missing 'profile' and 'job_name' on the spec from "
+            "<experiment-dir>/meta.json `experiment_id`. setdefault "
+            "semantics — never overwrites caller-supplied values; silent "
+            "no-op when meta.json is absent."
         ),
     )
     p_sub.set_defaults(func=cmd_submit)

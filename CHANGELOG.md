@@ -74,6 +74,27 @@
 - **README**: collapsed the "Using with MARs" section to a link to
   `docs/mars-integration.md`; kept the SSH-passthrough warning visible.
 
+### Added — MARs compat Tier 2
+
+- **`submit --from-meta`.** Overlay missing `profile` / `job_name` on
+  the submit spec from `<experiment-dir>/meta.json` `experiment_id`
+  via `setdefault` semantics — never overwrites caller-supplied
+  values, silent no-op when `meta.json` is absent or missing
+  `experiment_id`. Removes the manual overlay step from the MARs
+  experiment-runner snippet.
+- **`HPC_RUNTIME` job-env wiring.** New
+  `slash_commands.runner.build_job_env(manifest, base_env)` returns
+  `base_env` augmented with `HPC_RUNTIME=uv` when `runtime: "uv"` is
+  on the manifest. The `/submit` slash command now constructs the
+  `qsub` / `sbatch` env via this helper instead of inlining the gate
+  logic. Closes the dangling end of Tier 1's `runtime: uv` work.
+- **Doc refresh + drift guards.** Removed two stale claims from the
+  MARs proposal docs (resubmit idempotence in
+  `experiment-runner.snippet.md`; `uv run` "known gap" caveat in
+  `mars-integration.md`). Added sentinel tests in
+  `tests/test_docs_links.py` pinning the corrected wording so a
+  future editor accidentally reintroducing either phrase fails CI.
+
 ### Added — MARs compat Tier 1
 
 - **`meta.json` ingestion**. The `discover` envelope now includes a `meta`
