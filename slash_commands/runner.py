@@ -804,9 +804,12 @@ def cluster_failures_by_fingerprint(
 # ─── pre-submit manifest sanity ─────────────────────────────────────────────
 
 
-# Schema versions accepted by the on-cluster dispatcher.  Kept in sync
-# with ``hpc_mapreduce.map.dispatch.SUPPORTED_SCHEMA_VERSIONS`` and
-# ``hpc_mapreduce.job.grid.MANIFEST_SCHEMA_VERSION``.
+# Schema versions accepted by the on-cluster dispatcher's legacy
+# manifest validator.  Kept in sync with the (now-deleted) historical
+# manifest format that some old experiment repos may still carry; new
+# submissions go through the .hpc/runs/<run_id>.json sidecar path
+# instead, validated against ``SIDECAR_SCHEMA_VERSION`` in
+# ``hpc_mapreduce.job.runs``.
 _SUPPORTED_MANIFEST_VERSIONS = (1, 2)
 
 # Match unresolved ``{placeholder}`` tokens.  False positives are
@@ -945,11 +948,13 @@ def validate_manifest_file(manifest_path: Path) -> None:
 def _read_remote_manifest(
     *, ssh_target: str, remote_path: str, manifest_filename: str
 ) -> dict[str, Any]:
-    """SSH-cat the dispatch manifest from the cluster and parse it.
+    """SSH-cat a legacy dispatch manifest from the cluster and parse it.
 
-    The manifest carries ``wave_map`` (set by ``attach_wave_map``) which
-    maps wave index -> list of task ids belonging to that wave.  When
-    absent, we fall back to assuming every task belongs to wave 0.
+    Used only by callers still operating on the pre-sidecar manifest
+    format.  New code should prefer reading the per-run sidecar at
+    ``.hpc/runs/<run_id>.json`` (where ``wave_map`` is now stored)
+    rather than the manifest itself.  When ``wave_map`` is absent, we
+    fall back to assuming every task belongs to wave 0.
     """
     user, host = _split_ssh_target(ssh_target)
     cmd = f"cat {shlex.quote(f'{remote_path}/{manifest_filename}')}"

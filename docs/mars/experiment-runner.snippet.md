@@ -48,16 +48,21 @@ Read `meta.json` first. The spec MUST include `seed: 42` and
   "ssh_target": "user@hoffman2.idre.ucla.edu",
   "remote_path": "/u/scratch/<user>/<experiment_id>",
   "job_name": "<experiment_id>",
-  "manifest_filename": "manifest.<sha8>.json",
+  "run_id": "<experiment_id>-<utc_ts>-<cmd_sha8>",
   "job_ids": [],
   "total_tasks": 0
 }
 ```
 
+`run_id` is the primary identity field. It locates the per-run sidecar
+at `.hpc/runs/<run_id>.json` once the agent has scaffolded
+`.hpc/tasks.py` and submitted (see `/submit` Step 6). The legacy
+`manifest_filename` field is still accepted by the schema for
+back-compat, but `run_id` should be preferred for new callers.
+
 Validate before submitting:
 
 ```bash
-uv run hpc-mapreduce expand-grid --spec grid.json
 uv run hpc-mapreduce submit --spec spec.json --dry-run
 ```
 
@@ -69,9 +74,9 @@ uv run hpc-mapreduce submit --spec spec.json
 
 Parse the envelope:
 
-- `data.deduped: true` — a journal record for this `(profile,
-  manifest_sha)` exists; the cluster jobs are already running. Do NOT
-  re-issue `qsub`. Switch to `status` polling.
+- `data.deduped: true` — a journal record for this `run_id` exists;
+  the cluster jobs are already running. Do NOT re-issue `qsub`. Switch
+  to `status` polling.
 - `data.deduped: false` — fresh submission. Record `data.run_id` and
   `data.job_ids` for downstream calls.
 
@@ -123,8 +128,8 @@ Exit codes: 0 ok, 1 user error (fix and retry), 2 cluster/network (per
 - **No cancel/abort.** Once submitted, jobs run to walltime; claude-hpc
   cannot kill them. If you decide a run is bad, stop polling and let it
   expire.
-- **Submit is idempotent on (profile, manifest_sha).** A retried submit
-  with the same spec returns `deduped: true`.
+- **Submit is idempotent on `run_id`.** A retried submit with the same
+  `run_id` returns `deduped: true`.
 - **Resubmit is idempotent on `request_id`.** A second call with the same
   spec returns `deduped: true` without incrementing per-task retry
   counters. When the caller does not supply a `request_id`, one is
