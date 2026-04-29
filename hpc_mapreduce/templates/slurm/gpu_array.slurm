@@ -42,6 +42,7 @@ REPO_DIR="${REPO_DIR:-.}"
 
 # Convert 1-based SLURM_ARRAY_TASK_ID to 0-based, add offset for batched submission
 TASK_ID=$((SLURM_ARRAY_TASK_ID - 1 + ${TASK_OFFSET:-0}))
+HPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py
 
 # --- Diagnostics ---
 echo "============================================"
@@ -51,6 +52,7 @@ echo "Hostname:     $(hostname)"
 echo "GPUs:         $GPU_COUNT"
 echo "CPUs:         $SLURM_CPUS_PER_TASK"
 echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
+echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "============================================"
 
 # --- Module Setup ---
@@ -107,7 +109,9 @@ echo "Executor:     $EXECUTOR"
 echo "============================================"
 
 # --- Execute ---
-export TASK_ID RESULT_DIR GPU_COUNT
+# HPC_RUN_ID arrives via sbatch --export from the submit-side env;
+# re-exported here so the dispatcher inside $EXECUTOR sees it.
+export TASK_ID HPC_TASK_ID HPC_RUN_ID RESULT_DIR GPU_COUNT
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."
