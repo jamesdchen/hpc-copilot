@@ -36,10 +36,69 @@ Parse the JSON envelope. If `data.all_ok` is false, surface
 false → the spawn env is missing `SSH_AUTH_SOCK`. This is the operator's
 problem, not a code bug.
 
-### Build the grid spec
+### Scaffold `.hpc/tasks.py` (you write this; claude-hpc imports it)
 
-Read `meta.json` first. The spec MUST include `seed: 42` and
-`experiment_id: <from meta.json>`. Example:
+This is the central agent-driven moment. The framework's task fan-out
+is defined by **`<experiment-dir>/.hpc/tasks.py`** — a small Python
+module with two callables:
+
+```python
+def total() -> int: ...               # number of tasks
+def resolve(i: int) -> dict: ...      # kwargs for task #i
+```
+
+Claude (you) writes this file once per experiment proposal, translating
+`meta.json`'s parameter axes into a materialized `_TASKS` list. The
+framework never auto-generates it — keeping the experiment definition
+in user code (committed to git) is what makes claude-hpc reusable
+across experiments.
+
+1. If `.hpc/tasks.py` already exists, **do not regenerate**. Verify it
+   imports cleanly and `total()` returns the cardinality you expect:
+   ```bash
+   uv run python -c 'from hpc_mapreduce import load_tasks_module, tasks_path; m = load_tasks_module(tasks_path(".")); print("total=", m.total(), "sample=", m.resolve(0))'
+   ```
+   Skip to "Build the run spec" below.
+
+2. Otherwise, read the canonical reference (the only `tasks.py` example
+   the framework ships):
+   ```bash
+   uv run python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "tasks_example.py")'
+   ```
+   It demonstrates three patterns inline (Cartesian product, chunking,
+   date-window backtests). Pick the one that matches what `meta.json`
+   describes; delete the rest.
+
+3. Translate `meta.json`'s axes into `_TASKS`. Eager-materialized — the
+   list is built at module load, not on each `resolve()` call. Example
+   for a `{lr: [0.01, 0.001], seed: [42, 1337]}` sweep:
+   ```python
+   # .hpc/tasks.py
+   import itertools
+   _TASKS = [
+       {"lr": lr, "seed": seed}
+       for lr, seed in itertools.product([0.01, 0.001], [42, 1337])
+   ]
+   def total() -> int:    return len(_TASKS)
+   def resolve(i: int) -> dict: return _TASKS[i]
+   ```
+
+4. Verify locally before submitting:
+   ```bash
+   uv run python -c 'from hpc_mapreduce import load_tasks_module, tasks_path, compute_cmd_sha; m = load_tasks_module(tasks_path(".")); print("total=", m.total(), "cmd_sha=", compute_cmd_sha(m)[:8])'
+   ```
+
+5. Commit `.hpc/tasks.py` alongside `meta.json` and your executor:
+   ```bash
+   git add .hpc/tasks.py meta.json scripts/<executor>.py
+   git commit -m "scaffold experiment <experiment_id>"
+   ```
+
+### Build the run spec
+
+The submit-spec is the JSON envelope passed to `hpc-mapreduce submit`.
+It carries the run's identity (`run_id`), cluster routing, and task
+count derived from `tasks.total()`:
 
 ```json
 {
@@ -50,15 +109,15 @@ Read `meta.json` first. The spec MUST include `seed: 42` and
   "job_name": "<experiment_id>",
   "run_id": "<experiment_id>-<utc_ts>-<cmd_sha8>",
   "job_ids": [],
-  "total_tasks": 0
+  "total_tasks": <tasks.total()>
 }
 ```
 
-`run_id` is the primary identity field. It locates the per-run sidecar
-at `.hpc/runs/<run_id>.json` once the agent has scaffolded
-`.hpc/tasks.py` and submitted (see `/submit` Step 6). The legacy
-`manifest_filename` field is still accepted by the schema for
-back-compat, but `run_id` should be preferred for new callers.
+Construct `run_id` as `f"{experiment_id}-{utc_ts}-{cmd_sha[:8]}"`
+where `cmd_sha` is from `compute_cmd_sha(tasks_module)`. This format
+sorts chronologically and ties identity to the materialized task list
+— a re-run of the same experiment with unchanged `tasks.py` produces
+the same `cmd_sha` (and `submit` will dedup on it).
 
 Validate before submitting:
 

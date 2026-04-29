@@ -48,7 +48,7 @@ _DOC_VOCABULARY = {
     "ssh_auth_sock", "cluster_tcp_22", "experiment_id", "manifest_sha",
     "run_id", "job_ids", "manifest_filename", "total_tasks", "profile",
     "ssh_target", "remote_path", "job_name", "wave", "seed",
-    "executor",
+    "executor", "cmd_sha", "tasks.py", "_TASKS", "lr", "i", "experiment_id",
     "timestamp", "models", "rankings", "statistical_tests",
     "qsub", "sbatch",
     "last_status",
