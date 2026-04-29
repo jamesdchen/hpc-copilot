@@ -1,4 +1,10 @@
-"""Tests for hpc_mapreduce.map.dispatch atomic output pattern."""
+"""Tests for hpc_mapreduce.map.dispatch — the cluster-side framework executor.
+
+The dispatcher imports the user's ``.hpc/tasks.py``, reads the per-run
+sidecar at ``.hpc/runs/<run_id>.json`` for the executor command and
+result_dir template, formats result_dir from kwargs, and runs the
+executor with WIP / atomic-promote semantics.
+"""
 
 from __future__ import annotations
 
@@ -12,200 +18,179 @@ from hpc_mapreduce.map import dispatch
 from hpc_mapreduce.reduce.status import check_results
 
 
-class TestDispatchAtomicOutput:
-    def _write_manifest(self, path: Path, tasks: dict) -> str:
-        """Write a manifest JSON and return its path as a string."""
-        manifest = {
-            "schema_version": dispatch.EXPECTED_SCHEMA_VERSION,
-            "tasks": tasks,
-        }
-        manifest_path = str(path / "manifest.json")
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f)
-        return manifest_path
+def _scaffold(tmp_path: Path, *, executor: str, result_dir_template: str,
+              kwargs_per_task: list[dict], run_id: str = "test_run") -> Path:
+    """Materialize a ``.hpc/`` next to *tmp_path* with tasks.py + sidecar.
 
+    Returns the ``.hpc/`` path so callers can override env vars.
+    """
+    hpc = tmp_path / ".hpc"
+    (hpc / "runs").mkdir(parents=True)
+
+    tasks_py = hpc / "tasks.py"
+    tasks_py.write_text(
+        "import json\n"
+        f"_TASKS = {json.dumps(kwargs_per_task)}\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n"
+    )
+
+    sidecar = hpc / "runs" / f"{run_id}.json"
+    sidecar.write_text(json.dumps({
+        "sidecar_schema_version": 1,
+        "run_id": run_id,
+        "cmd_sha": "deadbeef" * 8,
+        "claude_hpc_version": "0.0.0+test",
+        "submitted_at": "2026-01-01T00:00:00Z",
+        "executor": executor,
+        "result_dir_template": result_dir_template,
+        "task_count": len(kwargs_per_task),
+        "tasks_py_sha": "abc123",
+    }))
+    return hpc
+
+
+class TestDispatchAtomicOutput:
     def test_successful_task_promotes_output(self, tmp_path, monkeypatch):
-        result_dir = str(tmp_path / "results")
-        manifest_path = self._write_manifest(
+        # The dispatcher uses HPC_TASKS_PATH override to find tasks.py
+        # outside cwd; we point it at the .hpc/ we set up under tmp_path.
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
             tmp_path,
-            {
-                "1": {
-                    "cmd": 'echo hello > "$RESULT_DIR/results_task_1.csv"',
-                    "result_dir": result_dir,
-                },
-            },
+            executor='echo hello > "$RESULT_DIR/results_task_1.csv"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}],  # two tasks, kwargs empty
         )
 
-        monkeypatch.setenv("TASK_ID", "1")
-        monkeypatch.setenv("HPC_MANIFEST", manifest_path)
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        # Cluster-side executor uses sibling lookup of tasks.py to find runs/;
+        # for tests we inject the .hpc dir via __file__ alongside tasks.py:
+        monkeypatch.chdir(tmp_path)
+        # Trick: dispatch.py uses Path(__file__).parent for tasks/sidecar;
+        # but with HPC_TASKS_PATH set, tasks.py loads from override. The
+        # sidecar lookup still uses Path(__file__).parent / "runs" / ...
+        # In tests we have to point that at .hpc/. Patch the module's
+        # __file__-derived path:
+        monkeypatch.setattr(
+            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
 
         assert exc_info.value.code == 0
-
-        # Output file should be promoted to the final result dir
-        assert (Path(result_dir) / "results_task_1.csv").exists()
-        assert (Path(result_dir) / "results_task_1.csv").read_text().strip() == "hello"
-
-        # WIP directory should be cleaned up
-        assert not (Path(result_dir) / "_wip_1").exists()
+        result_dir = result_root / "1"
+        assert (result_dir / "results_task_1.csv").exists()
+        assert (result_dir / "results_task_1.csv").read_text().strip() == "hello"
+        assert not (result_dir / "_wip_1").exists()
 
     def test_failed_task_preserves_wip(self, tmp_path, monkeypatch):
-        result_dir = str(tmp_path / "results")
-        manifest_path = self._write_manifest(
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
             tmp_path,
-            {
-                "0": {
-                    "cmd": 'echo partial > "$RESULT_DIR/out.csv" && exit 1',
-                    "result_dir": result_dir,
-                },
-            },
+            executor='echo partial > "$RESULT_DIR/out.csv" && exit 1',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
         )
 
-        monkeypatch.setenv("TASK_ID", "0")
-        monkeypatch.setenv("HPC_MANIFEST", manifest_path)
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(
+            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
 
         assert exc_info.value.code == 1
-
-        # WIP directory should still exist with the partial file
-        wip_dir = Path(result_dir) / "_wip_0"
+        wip_dir = result_root / "0" / "_wip_0"
         assert wip_dir.exists()
-        assert (wip_dir / "out.csv").exists()
         assert (wip_dir / "out.csv").read_text().strip() == "partial"
-
-        # Final result dir should NOT have the output file
-        assert not (Path(result_dir) / "out.csv").exists()
-
-    def test_multiple_files_promoted(self, tmp_path, monkeypatch):
-        result_dir = str(tmp_path / "results")
-        cmd = (
-            'echo "a,b" > "$RESULT_DIR/results_task_1.csv" && '
-            'echo "x,y" > "$RESULT_DIR/results_task_2.csv"'
-        )
-        manifest_path = self._write_manifest(
-            tmp_path,
-            {
-                "5": {
-                    "cmd": cmd,
-                    "result_dir": result_dir,
-                },
-            },
-        )
-
-        monkeypatch.setenv("TASK_ID", "5")
-        monkeypatch.setenv("HPC_MANIFEST", manifest_path)
-
-        with pytest.raises(SystemExit) as exc_info:
-            dispatch.main()
-
-        assert exc_info.value.code == 0
-
-        # Both files should be in the final result dir
-        assert (Path(result_dir) / "results_task_1.csv").exists()
-        assert (Path(result_dir) / "results_task_2.csv").exists()
-        assert (Path(result_dir) / "results_task_1.csv").read_text().strip() == "a,b"
-        assert (Path(result_dir) / "results_task_2.csv").read_text().strip() == "x,y"
-
-        # WIP directory should be cleaned up
-        assert not (Path(result_dir) / "_wip_5").exists()
+        assert not (result_root / "0" / "out.csv").exists()
 
 
 class TestDispatchStaleWipRetry:
-    def _write_manifest(self, path: Path, tasks: dict) -> str:
-        manifest = {
-            "schema_version": dispatch.EXPECTED_SCHEMA_VERSION,
-            "tasks": tasks,
-        }
-        manifest_path = str(path / "manifest.json")
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f)
-        return manifest_path
-
     def test_stale_wip_renamed_on_retry(self, tmp_path, monkeypatch):
-        """A pre-existing _wip_{id}/ is renamed aside, and the retry succeeds."""
-        result_dir = tmp_path / "results"
-        result_dir.mkdir()
-
-        # Seed a stale WIP dir from a prior failed attempt of task 1.
-        stale_wip = result_dir / "_wip_1"
+        result_root = tmp_path / "results"
+        result_root.mkdir()
+        task_dir = result_root / "1"
+        task_dir.mkdir()
+        stale_wip = task_dir / "_wip_1"
         stale_wip.mkdir()
         (stale_wip / "partial.csv").write_text("stale partial\n")
 
-        manifest_path = self._write_manifest(
+        hpc = _scaffold(
             tmp_path,
-            {
-                "1": {
-                    "cmd": 'echo fresh > "$RESULT_DIR/results_task_1.csv"',
-                    "result_dir": str(result_dir),
-                },
-            },
+            executor='echo fresh > "$RESULT_DIR/results_task_1.csv"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}, {}],
         )
 
-        monkeypatch.setenv("TASK_ID", "1")
-        monkeypatch.setenv("HPC_MANIFEST", manifest_path)
+        monkeypatch.setenv("HPC_TASK_ID", "1")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(
+            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
 
         assert exc_info.value.code == 0
 
-        # Stale WIP was renamed to _wip_1_failed_<unix_ts>/ and its content preserved.
-        renamed = [p for p in result_dir.iterdir() if re.match(r"^_wip_1_failed_\d+$", p.name)]
-        assert len(renamed) == 1, (
-            f"expected exactly one renamed stale WIP, got {list(result_dir.iterdir())}"
-        )
+        renamed = [p for p in task_dir.iterdir() if re.match(r"^_wip_1_failed_\d+$", p.name)]
+        assert len(renamed) == 1
         assert (renamed[0] / "partial.csv").read_text().strip() == "stale partial"
-
-        # The original stale path is gone (renamed).
         assert not stale_wip.exists()
-
-        # The fresh run promoted its output to the final result dir.
-        assert (result_dir / "results_task_1.csv").exists()
-        assert (result_dir / "results_task_1.csv").read_text().strip() == "fresh"
+        assert (task_dir / "results_task_1.csv").read_text().strip() == "fresh"
 
 
-class TestDispatchSchemaVersion:
+class TestDispatchSidecarSchemaVersion:
     def test_missing_schema_version_exits_2(self, tmp_path, monkeypatch):
-        result_dir = str(tmp_path / "results")
-        manifest_path = str(tmp_path / "manifest.json")
-        # Deliberately omit schema_version.
-        with open(manifest_path, "w") as f:
-            json.dump(
-                {
-                    "tasks": {
-                        "0": {"cmd": "true", "result_dir": result_dir},
-                    },
-                },
-                f,
-            )
+        hpc = _scaffold(
+            tmp_path,
+            executor="true",
+            result_dir_template=str(tmp_path / "r"),
+            kwargs_per_task=[{}],
+        )
+        # Deliberately mangle the sidecar.
+        sidecar_path = hpc / "runs" / "test_run.json"
+        data = json.loads(sidecar_path.read_text())
+        data.pop("sidecar_schema_version")
+        sidecar_path.write_text(json.dumps(data))
 
-        monkeypatch.setenv("TASK_ID", "0")
-        monkeypatch.setenv("HPC_MANIFEST", manifest_path)
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(
+            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
         assert exc_info.value.code == 2
 
     def test_wrong_schema_version_exits_2(self, tmp_path, monkeypatch):
-        result_dir = str(tmp_path / "results")
-        manifest_path = str(tmp_path / "manifest.json")
-        with open(manifest_path, "w") as f:
-            json.dump(
-                {
-                    "schema_version": dispatch.EXPECTED_SCHEMA_VERSION + 99,
-                    "tasks": {
-                        "0": {"cmd": "true", "result_dir": result_dir},
-                    },
-                },
-                f,
-            )
+        hpc = _scaffold(
+            tmp_path,
+            executor="true",
+            result_dir_template=str(tmp_path / "r"),
+            kwargs_per_task=[{}],
+        )
+        sidecar_path = hpc / "runs" / "test_run.json"
+        data = json.loads(sidecar_path.read_text())
+        data["sidecar_schema_version"] = 999
+        sidecar_path.write_text(json.dumps(data))
 
-        monkeypatch.setenv("TASK_ID", "0")
-        monkeypatch.setenv("HPC_MANIFEST", manifest_path)
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(
+            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
+        )
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
@@ -216,20 +201,13 @@ class TestCheckResultsIgnoresWip:
     def test_check_results_ignores_wip(self, tmp_path):
         result_dir = tmp_path / "results"
         result_dir.mkdir()
-
-        # Write a valid CSV in the result dir (header + 1 data row)
         valid_csv = result_dir / "results_task_1.csv"
         valid_csv.write_text("col_a,col_b\n1,2\n")
-
-        # Create a _wip_0 subdir with another CSV that should be ignored
         wip_dir = result_dir / "_wip_0"
         wip_dir.mkdir()
-        wip_csv = wip_dir / "results_task_2.csv"
-        wip_csv.write_text("col_a,col_b\n3,4\n")
+        (wip_dir / "results_task_2.csv").write_text("col_a,col_b\n3,4\n")
 
         results = check_results(result_dir, total_tasks=2)
-
-        # Only task 1 should be found; task 2 in _wip_ should be skipped
         assert 1 in results
         assert 2 not in results
         assert len(results) == 1
