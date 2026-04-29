@@ -922,7 +922,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
             report = runner._ssh_status_report(
                 ssh_target=record.ssh_target,
                 remote_path=record.remote_path,
-                manifest_filename=record.manifest,
+                run_id=args.run_id,
                 job_ids=record.job_ids,
                 job_name=record.job_name,
             )
@@ -1003,7 +1003,7 @@ def cmd_failures(args: argparse.Namespace) -> int:
     report = runner._ssh_status_report(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        manifest_filename=record.manifest,
+        run_id=args.run_id,
         job_ids=record.job_ids,
         job_name=record.job_name,
     )
