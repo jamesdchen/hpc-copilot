@@ -1,31 +1,31 @@
 """Stderr/exit-code contract tests for ``hpc_mapreduce.map.dispatch``.
 
-Pins the behaviours that ``/status`` and other observers rely on.  Each test
-drives the dispatcher as a subprocess (matching cluster execution) and asserts
-on ``returncode`` + stderr substrings only — never on stdout formatting.
+Pins the behaviours that ``/status`` and other observers rely on. Each
+test drives the dispatcher as a subprocess (matching cluster execution)
+against a minimal ``.hpc/`` layout under tmp_path, and asserts on
+``returncode`` + stderr substrings only — never on stdout formatting.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-DISPATCH_MODULE = "hpc_mapreduce.map.dispatch"
+import hpc_mapreduce
 
 
 def _run(
     *,
+    dispatch_path: Path,
     cwd: Path,
     env: dict[str, str],
 ) -> subprocess.CompletedProcess[str]:
     full_env = {"PATH": "/usr/bin:/bin:/usr/local/bin", **env}
     return subprocess.run(
-        [sys.executable, "-m", DISPATCH_MODULE],
+        [sys.executable, str(dispatch_path)],
         cwd=str(cwd),
         env=full_env,
         capture_output=True,
@@ -34,77 +34,101 @@ def _run(
     )
 
 
-def _stub_manifest(tmp_path: Path, schema_version: int, *, with_cmd_sha: bool) -> Path:
-    """Write a manifest with one trivial task and return its path."""
-    result_dir = tmp_path / "out"
-    entry: dict = {
-        "cmd": f"{sys.executable} -c 'pass'",
-        "result_dir": str(result_dir),
-        "params": {"x": "1"},
-    }
-    if with_cmd_sha:
-        # Arbitrary 16-hex — dispatcher must not validate it.
-        entry["cmd_sha"] = "deadbeefcafef00d"
-    manifest = {
-        "schema_version": schema_version,
-        "tasks": {"0": entry},
-    }
-    path = tmp_path / "_hpc_dispatch.json"
-    path.write_text(json.dumps(manifest))
-    return path
+def _stub_layout(
+    tmp_path: Path,
+    *,
+    run_id: str = "test_run",
+    schema_version: int = 1,
+    executor: str | None = None,
+) -> Path:
+    """Materialize tmp_path/.hpc/{tasks.py, runs/<id>.json, _hpc_dispatch.py}.
+
+    Returns the dispatch.py copy that callers should invoke.
+    """
+    hpc = tmp_path / ".hpc"
+    (hpc / "runs").mkdir(parents=True)
+
+    (hpc / "tasks.py").write_text(
+        "_TASKS = [{}]\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n"
+    )
+
+    sidecar = hpc / "runs" / f"{run_id}.json"
+    sidecar.write_text(json.dumps({
+        "sidecar_schema_version": schema_version,
+        "run_id": run_id,
+        "cmd_sha": "deadbeef" * 8,
+        "claude_hpc_version": "0.0.0+test",
+        "submitted_at": "2026-01-01T00:00:00Z",
+        "executor": executor or f"{sys.executable} -c 'pass'",
+        "result_dir_template": str(tmp_path / "out"),
+        "task_count": 1,
+        "tasks_py_sha": "abc",
+    }))
+
+    dispatch_dst = hpc / "_hpc_dispatch.py"
+    pkg_dispatch = Path(hpc_mapreduce.__file__).parent / "map" / "dispatch.py"
+    shutil.copyfile(pkg_dispatch, dispatch_dst)
+    return dispatch_dst
 
 
 class TestMissingTaskId:
     def test_missing_task_id_env_var(self, tmp_path: Path) -> None:
-        manifest_path = _stub_manifest(tmp_path, schema_version=2, with_cmd_sha=True)
+        dispatch = _stub_layout(tmp_path)
         proc = _run(
+            dispatch_path=dispatch,
             cwd=tmp_path,
-            env={"HPC_MANIFEST": str(manifest_path)},
+            env={"HPC_RUN_ID": "test_run"},
         )
         assert proc.returncode != 0
-        assert "TASK_ID" in proc.stderr
+        assert "HPC_TASK_ID" in proc.stderr
 
 
-class TestMissingManifest:
-    def test_missing_manifest_file(self, tmp_path: Path) -> None:
+class TestMissingRunId:
+    def test_missing_run_id_env_var(self, tmp_path: Path) -> None:
+        dispatch = _stub_layout(tmp_path)
         proc = _run(
+            dispatch_path=dispatch,
             cwd=tmp_path,
-            env={
-                "TASK_ID": "0",
-                "HPC_MANIFEST": str(tmp_path / "nope.json"),
-            },
+            env={"HPC_TASK_ID": "0"},
         )
         assert proc.returncode != 0
-        assert "manifest not found" in proc.stderr
+        assert "HPC_RUN_ID" in proc.stderr
+
+
+class TestMissingSidecar:
+    def test_missing_sidecar_file(self, tmp_path: Path) -> None:
+        dispatch = _stub_layout(tmp_path)
+        # Remove the sidecar to simulate the failure case.
+        (tmp_path / ".hpc" / "runs" / "test_run.json").unlink()
+        proc = _run(
+            dispatch_path=dispatch,
+            cwd=tmp_path,
+            env={"HPC_TASK_ID": "0", "HPC_RUN_ID": "test_run"},
+        )
+        assert proc.returncode != 0
+        assert "sidecar not found" in proc.stderr
 
 
 class TestWrongSchemaVersion:
     def test_schema_99_rejected(self, tmp_path: Path) -> None:
-        manifest_path = _stub_manifest(tmp_path, schema_version=99, with_cmd_sha=False)
+        dispatch = _stub_layout(tmp_path, schema_version=99)
         proc = _run(
+            dispatch_path=dispatch,
             cwd=tmp_path,
-            env={"TASK_ID": "0", "HPC_MANIFEST": str(manifest_path)},
+            env={"HPC_TASK_ID": "0", "HPC_RUN_ID": "test_run"},
         )
         assert proc.returncode != 0
-        # The error must reference the schema so users know what to fix.
         assert "schema" in proc.stderr.lower()
 
 
-class TestSchemaV1BackCompat:
-    def test_v1_manifest_without_cmd_sha_runs(self, tmp_path: Path) -> None:
-        manifest_path = _stub_manifest(tmp_path, schema_version=1, with_cmd_sha=False)
+class TestPipelineHappyPath:
+    def test_v1_layout_dispatches_cleanly(self, tmp_path: Path) -> None:
+        dispatch = _stub_layout(tmp_path, schema_version=1)
         proc = _run(
+            dispatch_path=dispatch,
             cwd=tmp_path,
-            env={"TASK_ID": "0", "HPC_MANIFEST": str(manifest_path)},
+            env={"HPC_TASK_ID": "0", "HPC_RUN_ID": "test_run"},
         )
-        assert proc.returncode == 0, f"v1 manifest must still dispatch: stderr={proc.stderr!r}"
-
-
-class TestSchemaV2:
-    def test_v2_manifest_with_cmd_sha_runs(self, tmp_path: Path) -> None:
-        manifest_path = _stub_manifest(tmp_path, schema_version=2, with_cmd_sha=True)
-        proc = _run(
-            cwd=tmp_path,
-            env={"TASK_ID": "0", "HPC_MANIFEST": str(manifest_path)},
-        )
-        assert proc.returncode == 0, f"v2 manifest must dispatch cleanly: stderr={proc.stderr!r}"
+        assert proc.returncode == 0, f"valid layout must dispatch cleanly: stderr={proc.stderr!r}"
