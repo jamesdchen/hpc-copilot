@@ -2,15 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/submit.input.json",
   "title": "submit input spec",
-  "description": "Spec passed to `hpc-mapreduce submit --spec <file>`. Either `run_id` or the legacy `manifest_filename` must be supplied.",
+  "description": "Spec passed to `hpc-mapreduce submit --spec <file>`.",
   "type": "object",
   "required": [
     "profile", "cluster", "ssh_target", "remote_path",
-    "job_name", "job_ids", "total_tasks"
-  ],
-  "anyOf": [
-    {"required": ["run_id"]},
-    {"required": ["manifest_filename"]}
+    "job_name", "run_id", "job_ids", "total_tasks"
   ],
   "additionalProperties": false,
   "properties": {
@@ -19,10 +15,9 @@
     "ssh_target":        { "type": "string", "pattern": "^[^@]+@[^@]+$" },
     "remote_path":       { "type": "string", "minLength": 1 },
     "job_name":          { "type": "string", "minLength": 1 },
+    "run_id":            { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
     "job_ids":           { "type": "array", "items": { "type": "string" }, "minItems": 1 },
     "total_tasks":       { "type": "integer", "minimum": 1 },
-    "run_id":            { "type": ["string", "null"], "pattern": "^[A-Za-z0-9._\\-]+$" },
-    "manifest_filename": { "type": ["string", "null"], "pattern": "^manifest\\.[0-9a-f]{8}\\.json$" },
     "runtime":           { "type": ["string", "null"], "enum": ["uv", null] }
   }
 }

@@ -491,31 +491,20 @@ def cmd_submit(args: argparse.Namespace) -> int:
         spec = _overlay_meta_on_spec(spec, args.experiment_dir)
     _validate_against_schema(spec, "submit")
     required = ("profile", "cluster", "ssh_target", "remote_path", "job_name",
-                "manifest_filename", "job_ids", "total_tasks")
+                "run_id", "job_ids", "total_tasks")
     missing = [k for k in required if k not in spec]
     if missing:
         raise errors.ManifestInvalid(
             f"--spec missing required fields: {missing}. See docs/cli-spec.md."
         )
 
-    # Pre-submit manifest sanity: opportunistic — if the manifest exists
-    # locally at the conventional path, validate it before recording the
-    # submission. Catches unresolved {placeholder}s, empty cmd fields, and
-    # wave_map / tasks coverage drift before they crash the cluster job
-    # mid-run. When the manifest is only on the cluster (rare), we skip.
-    manifest_path = args.experiment_dir / spec["manifest_filename"]
-    skip_check = getattr(args, "skip_manifest_check", False)
-    if manifest_path.is_file() and not skip_check:
-        runner.validate_manifest_file(manifest_path)
-
     if args.dry_run:
-
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
                 "profile": spec["profile"],
                 "cluster": spec["cluster"],
-                "manifest": spec["manifest_filename"],
+                "run_id": spec["run_id"],
                 "dry_run": True,
             },
             idempotent=True,
@@ -529,16 +518,14 @@ def cmd_submit(args: argparse.Namespace) -> int:
         ssh_target=spec["ssh_target"],
         remote_path=spec["remote_path"],
         job_name=spec["job_name"],
-        manifest_filename=spec["manifest_filename"],
         job_ids=list(spec["job_ids"]),
         total_tasks=int(spec["total_tasks"]),
-        run_id=spec.get("run_id"),
+        run_id=spec["run_id"],
     )
     _ok(
         {
             "run_id": record.run_id,
             "job_ids": record.job_ids,
-            "manifest": record.manifest,
             "total_tasks": record.total_tasks,
             "deduped": deduped,
         },
@@ -660,7 +647,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         missing = runner.verify_per_task_outputs(
             ssh_target=record.ssh_target,
             remote_path=record.remote_path,
-            manifest_filename=record.manifest,
+            run_id=args.run_id,
             wave=int(args.wave),
             template=require_outputs,
         )
@@ -1119,14 +1106,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Validate the spec and report what would be launched; no SSH/qsub.",
-    )
-    p_sub.add_argument(
-        "--skip-manifest-check",
-        action="store_true",
-        help=(
-            "Skip pre-submit manifest sanity. Use only when the manifest "
-            "is built directly on the cluster and not present locally."
-        ),
     )
     p_sub.add_argument(
         "--from-meta",
