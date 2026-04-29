@@ -61,15 +61,11 @@ ALLOWED_EXPORTS = frozenset(
         "deploy_runtime",
         # Job status & results
         "check_results",
-        "check_results_from_manifest",  # legacy — pending removal
+        "check_results_from_manifest",  # internal adapter for synthetic-manifest path
         "report_status",
-        "report_status_from_manifest",  # legacy — pending removal
+        "report_status_from_manifest",  # internal adapter for synthetic-manifest path
         "rollup_by_grid_point",
         "detect_scheduler",
-        # Legacy shim cache — pending removal
-        "shim_cache_key",
-        "load_cached_shim",
-        "save_shim",
         # GPU selection
         "pick_gpu",
         # Reduce
@@ -78,24 +74,6 @@ ALLOWED_EXPORTS = frozenset(
         "reduce_partials",
         "reduce_resource_usage",
         "classify_failure",
-        # Legacy grid API — pending removal
-        "expand_grid",
-        "build_task_manifest",
-        "total_tasks",
-        "attach_wave_map",
-        "MANIFEST_SCHEMA_VERSION",
-        "resolve_git_sha",
-        "validate_result_dir_template",
-        # Legacy manifest filenames & resume — pending removal
-        "MAX_MANIFESTS",
-        "MANIFEST_ALIAS",
-        "manifest_filename_for_sha",
-        "aggregate_cmd_sha",
-        "write_manifest",
-        "find_existing_manifests",
-        "find_manifest_by_cmd_sha",
-        "prune_old_manifests",
-        "build_manifest_with_resume",
         # Executor discovery
         "ExecutorInfo",
         "discover_executors",

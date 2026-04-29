@@ -33,7 +33,24 @@ from hpc_mapreduce.job.discover import (
     discover_executors,
     read_meta_json,
 )
-from hpc_mapreduce.job.grid import expand_grid
+import itertools
+
+
+def expand_grid(grid: dict[str, list]) -> list[dict[str, str]]:
+    """Cartesian product of all grid values, preserving key insertion order.
+
+    Inlined here from the deleted ``hpc_mapreduce.job.grid`` module so
+    the ``expand-grid`` CLI subcommand keeps working — grids no longer
+    drive the framework's task structure (that lives in
+    ``.hpc/tasks.py``), but the CLI utility is still useful for ad-hoc
+    enumeration.
+    """
+    keys = list(grid.keys())
+    values = [grid[k] for k in keys]
+    return [
+        {k: str(v) for k, v in zip(keys, combo, strict=True)}
+        for combo in itertools.product(*values)
+    ]
 from slash_commands import errors, runner, session
 
 EXIT_OK = 0
