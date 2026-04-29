@@ -109,7 +109,11 @@ def reduce_by_grid_point(manifest: dict) -> dict[str, dict]:
     dict mapping ``run_id`` (str) → aggregated metrics (dict).
     Grid points with no metrics files return empty dicts.
     """
-    from hpc_mapreduce.job.grid import run_id as _run_id
+    import re as _re
+
+    def _run_id(params: dict[str, str]) -> str:
+        raw = "_".join(str(v) for v in params.values())
+        return _re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
     # Group tasks by grid point (via run_id over params)
     groups: dict[str, list[Path]] = {}
