@@ -190,8 +190,15 @@ class TestReducePartials:
 
         # reduce_partials path — simulate combiner output for same data
         combiner_dir = tmp_path / "_combiner"
-        # Wave 0 has task 0, wave 1 has task 1
-        from hpc_mapreduce.job.grid import run_id
+        # Wave 0 has task 0, wave 1 has task 1.
+        # Inlined run_id (formerly hpc_mapreduce.job.grid.run_id) — the
+        # combiner's _grid_key has the same semantics; we use a local copy
+        # here to keep the test self-contained.
+        import re as _re
+
+        def run_id(params):
+            raw = "_".join(str(v) for v in params.values())
+            return _re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
         grid_key = run_id({"model": "ridge"})
         _write_wave(combiner_dir, 0, {grid_key: {"mse": 0.10, "n_samples": 100}})

@@ -93,23 +93,15 @@ embedded in the manifest header (`run_id`, `cmd_sha`,
 ### Job status & results
 
 - `check_results` — count completed/failed result files for a run.
-- `check_results_from_manifest` — legacy manifest-keyed variant
-  (pending removal once consumers migrate to `--run-id`).
+- `check_results_from_manifest` — internal adapter consumed by the
+  synthetic-manifest path in `reduce/status.py` (the cluster-side
+  reporter builds a manifest-shaped dict from the sidecar +
+  `tasks.py` and feeds it through this function). Kept stable so the
+  existing reporting code keeps working unchanged.
 - `report_status` — formatted status report for a submitted job.
-- `report_status_from_manifest` — legacy manifest-keyed variant
-  (pending removal).
+- `report_status_from_manifest` — internal adapter, same pattern as above.
 - `rollup_by_grid_point` — group per-task status into per-grid-point status.
 - `detect_scheduler` — identify the scheduler family on a remote host.
-
-### Legacy shim cache (pending removal)
-
-The shim cache disappears once `tasks.py` replaces all shim usage; it
-is currently retained only so existing experiments keep working through
-the transition.
-
-- `shim_cache_key` — hash of the inputs that uniquely identify a shim.
-- `load_cached_shim` — fetch a previously-generated shim from the cache.
-- `save_shim` — store a generated shim under its cache key.
 
 ### GPU selection
 
