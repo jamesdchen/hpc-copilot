@@ -62,10 +62,8 @@ ALLOWED_EXPORTS = frozenset(
         # Job status & results
         "check_results",
         "check_results_from_tasks",
-        "check_results_from_manifest",  # deprecated alias
         "report_status",
         "report_status_from_tasks",
-        "report_status_from_manifest",  # deprecated alias
         "rollup_by_grid_point",
         "detect_scheduler",
         # GPU selection

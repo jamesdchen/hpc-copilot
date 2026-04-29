@@ -1,4 +1,4 @@
-"""End-to-end pipeline: tasks.py + sidecar -> dispatch -> check_results_from_manifest.
+"""End-to-end pipeline: tasks.py + sidecar -> dispatch -> check_results_from_tasks.
 
 No scheduler, no network — every task is executed locally by
 subprocess-invoking the deployed ``.hpc/_hpc_dispatch.py`` with
@@ -8,7 +8,7 @@ chain in a single pytest run.
 The reporting side still consumes a manifest-shaped dict;
 ``_synthetic_manifest`` builds one from the sidecar + tasks.py the same
 way ``hpc_mapreduce.reduce.status._build_synthetic_manifest_from_sidecar``
-does on the cluster, so the existing ``check_results_from_manifest``
+does on the cluster, so the existing ``check_results_from_tasks``
 contract is unchanged.
 """
 
@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 import hpc_mapreduce
-from hpc_mapreduce.reduce.status import check_results_from_manifest
+from hpc_mapreduce.reduce.status import check_results_from_tasks
 
 STUB_SCRIPT = """\
 import os
@@ -151,8 +151,8 @@ def pipeline(tmp_path: Path) -> dict:
 class TestPipelineAllComplete:
     def test_every_task_reports_complete(self, pipeline: dict) -> None:
         manifest = pipeline["manifest"]
-        results = check_results_from_manifest(manifest, file_glob="*.csv")
-        # check_results_from_manifest returns 1-based task IDs.
+        results = check_results_from_tasks(manifest, file_glob="*.csv")
+        # check_results_from_tasks returns 1-based task IDs.
         expected = set(range(1, manifest["total_tasks"] + 1))
         assert set(results) == expected, (
             f"expected complete tids {sorted(expected)}, got {sorted(results)}"
@@ -177,7 +177,7 @@ class TestPoisonedTaskDetected:
     def test_deleting_one_result_flips_status(self, pipeline: dict) -> None:
         manifest = pipeline["manifest"]
 
-        initial = check_results_from_manifest(manifest, file_glob="*.csv")
+        initial = check_results_from_tasks(manifest, file_glob="*.csv")
         assert len(initial) == manifest["total_tasks"]
 
         # Poison task 0 by removing its result file.
@@ -186,6 +186,6 @@ class TestPoisonedTaskDetected:
         assert victim.exists(), "pre-condition: stub must have produced results.csv"
         victim.unlink()
 
-        after = check_results_from_manifest(manifest, file_glob="*.csv")
+        after = check_results_from_tasks(manifest, file_glob="*.csv")
         assert 1 not in after, f"task 1 should no longer be complete after poisoning, got {after}"
         assert len(after) == manifest["total_tasks"] - 1

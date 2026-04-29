@@ -1,12 +1,12 @@
-"""Tests for rollup_by_grid_point and check_results_from_manifest."""
+"""Tests for rollup_by_grid_point and check_results_from_tasks."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
 from hpc_mapreduce.reduce.status import (
-    check_results_from_manifest,
-    report_status_from_manifest,
+    check_results_from_tasks,
+    report_status_from_tasks,
     rollup_by_grid_point,
     rollup_by_wave,
 )
@@ -34,7 +34,7 @@ def _manifest(tmp_path):
     }
 
 
-def test_check_results_from_manifest_finds_completed(tmp_path):
+def test_check_results_from_tasks_finds_completed(tmp_path):
     manifest = _manifest(tmp_path)
     # Complete tasks 0 and 2 by writing result files
     for tid_str in ("0", "2"):
@@ -42,7 +42,7 @@ def test_check_results_from_manifest_finds_completed(tmp_path):
         rdir.mkdir(parents=True, exist_ok=True)
         (rdir / "metrics.json").write_text("{}")
 
-    results = check_results_from_manifest(manifest, file_glob="*.json")
+    results = check_results_from_tasks(manifest, file_glob="*.json")
 
     # Manifest IDs are 0-based, results dict is 1-based
     assert 1 in results
@@ -59,7 +59,7 @@ def test_check_results_ignores_wip(tmp_path):
     wip = rdir / "_wip_partial.json"
     wip.write_text("{}")
 
-    results = check_results_from_manifest(manifest, file_glob="*.json")
+    results = check_results_from_tasks(manifest, file_glob="*.json")
 
     assert 1 not in results
 
@@ -102,7 +102,7 @@ def test_rollup_handles_empty_params():
     assert rollup["_"]["complete"] == 1
 
 
-def test_report_status_from_manifest_integrates(tmp_path):
+def test_report_status_from_tasks_integrates(tmp_path):
     manifest = _manifest(tmp_path)
     # Mark task 0 complete by writing a result file
     rdir_name = manifest["tasks"]["0"]["result_dir"].split("/")[-1]
@@ -114,7 +114,7 @@ def test_report_status_from_manifest_integrates(tmp_path):
         patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
         patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}),
     ):
-        report = report_status_from_manifest(
+        report = report_status_from_tasks(
             manifest,
             job_ids=["12345"],
             scheduler="slurm",
