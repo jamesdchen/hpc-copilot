@@ -1,72 +1,69 @@
 #!/usr/bin/env python3
 """Standalone per-wave combiner deployed to the HPC cluster.
 
-This script is rsynced to the cluster and executed on the login node after
-each wave completes.  It reads per-task ``metrics.json`` sidecars and
-aggregates them into per-wave partial results grouped by grid point.
-It must remain zero-dependency -- only Python stdlib, no imports from the
+This script is scp'd to ``$REMOTE_PATH/.hpc/_hpc_combiner.py`` by
+``deploy_runtime`` and executed on the login node after each wave
+completes. It reads per-task ``metrics.json`` sidecars and aggregates
+them into per-wave partial results grouped by grid point.
+
+Stays zero-dependency — only Python stdlib, no imports from the
 ``hpc_mapreduce`` package.
 
-CLI (preferred):
+CLI:
 
-    python3 _hpc_combiner.py --wave 0 --manifest _hpc_dispatch.json [--force]
+    python3 _hpc_combiner.py --wave 0 --run-id <id> [--force]
 
-Environment variables (``HPC_WAVE`` / ``HPC_MANIFEST``) remain the fallback
-for already-deployed copies on clusters that invoke the combiner via env.
+Environment variable fallbacks (``HPC_WAVE``, ``HPC_RUN_ID``) remain
+supported for already-deployed copies on clusters that invoke the
+combiner via env.
 
 Exit codes:
     0  - success
-    1  - bad input (missing wave, malformed manifest, output already exists)
+    1  - bad input (missing wave, malformed sidecar, output already exists)
 """
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 import re
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 __all__ = ["main"]
 
+SUPPORTED_SCHEMA_VERSIONS = (1,)
 
-def _default_max_workers() -> int:
+
+def _default_max_workers():
     """Default thread-pool size: 2x CPU count, capped at 32 to spare NFS."""
     return min(32, (os.cpu_count() or 4) * 2)
 
 
 def _read_metrics(metrics_path):
-    """Read and parse one ``metrics.json`` file.
-
-    Raises ``FileNotFoundError`` if missing, ``json.JSONDecodeError`` /
-    ``OSError`` on read/parse failure -- the caller translates these into
-    per-task error strings.
-    """
     with open(metrics_path) as f:
-        data = json.load(f)
-    return data
+        return json.load(f)
 
 
-# Duplicated from hpc_mapreduce.job.grid.run_id -- this script cannot import
-# from the package because it runs standalone on the cluster.
-def _run_id(params):
-    """Deterministic string ID from param values, joined by ``_``."""
-    raw = "_".join(params.values())
+def _grid_key(params):
+    """Deterministic string ID from kwargs values, joined by ``_``.
+
+    Mirrors ``hpc_mapreduce.reduce.metrics.run_id`` semantics. Duplicated
+    here because the combiner is deployed standalone (no package).
+    """
+    raw = "_".join(str(v) for v in params.values())
     return re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
 
 def _neumaier_sum(values):
     """Neumaier-compensated summation (improved Kahan).
 
-    Reduces accumulated float rounding error over long or wide-dynamic-range
-    sequences, so cross-task aggregates in the combiner are order-invariant
-    within one ULP. Handles the case where the running sum is smaller than
-    the incoming term -- which classic Kahan does not.
-
-    Duplicated verbatim in ``hpc_mapreduce/reduce/metrics.py``; keep them in
-    sync. Not imported from there because this module is deployed standalone
-    to the cluster (no package available).
+    Reduces accumulated float rounding error. Handles the case where the
+    running sum is smaller than the incoming term, which classic Kahan
+    does not. Duplicated verbatim in ``hpc_mapreduce/reduce/metrics.py``.
     """
     s = 0.0
     c = 0.0
@@ -81,14 +78,6 @@ def _neumaier_sum(values):
 
 
 def _weighted_mean(entries):
-    """Compute weighted-mean metrics across *entries*.
-
-    Mirrors the algorithm in ``hpc_mapreduce.reduce.metrics.reduce_metrics``:
-    every metric key is averaged weighted by ``n_samples`` (defaulting to 1),
-    while ``n_samples`` itself is summed.  Uses Neumaier-compensated
-    summation for numerator and denominator so the aggregate is stable
-    regardless of task arrival order.
-    """
     if not entries:
         return {}
 
@@ -100,7 +89,6 @@ def _weighted_mean(entries):
 
     for key in sorted(all_keys):
         if key == "n_samples":
-            # n_samples is an integer count -- plain sum is exact.
             result["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
             continue
         pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
@@ -113,8 +101,21 @@ def _weighted_mean(entries):
     return result
 
 
+def _load_tasks_module(tasks_py_path):
+    spec = importlib.util.spec_from_file_location("hpc_user_tasks", tasks_py_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load tasks.py from {tasks_py_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _format_result_dir(template, *, task_id, run_id, kwargs):
+    ctx = {"task_id": task_id, "run_id": run_id, **kwargs}
+    return template.format(**ctx)
+
+
 def _parse_args(argv):
-    """Parse CLI args.  Falls back to env vars for unset flags (back-compat)."""
     parser = argparse.ArgumentParser(
         description="Per-wave combiner: aggregate metrics.json into wave_N.json.",
     )
@@ -125,9 +126,9 @@ def _parse_args(argv):
         help="Wave number (0-based). Falls back to $HPC_WAVE.",
     )
     parser.add_argument(
-        "--manifest",
+        "--run-id",
         default=None,
-        help="Path to the dispatch manifest. Falls back to $HPC_MANIFEST or '_hpc_dispatch.json'.",
+        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json. Falls back to $HPC_RUN_ID.",
     )
     parser.add_argument(
         "--force",
@@ -138,9 +139,7 @@ def _parse_args(argv):
 
 
 def main(max_workers=None, argv=None):
-    # When invoked from __main__ the entry block passes sys.argv[1:] explicitly;
-    # when called programmatically (e.g. tests) with argv=None we default to []
-    # so argparse doesn't inherit the host process's argv.
+    here = Path(__file__).resolve().parent  # cluster-side .hpc/
     args = _parse_args(argv if argv is not None else [])
 
     # --- Resolve wave: CLI first, env var fallback ---
@@ -163,37 +162,61 @@ def main(max_workers=None, argv=None):
             )
             sys.exit(1)
 
-    # --- Resolve manifest path: CLI first, then env, then default ---
-    if args.manifest is not None:
-        manifest_path = args.manifest
-    else:
-        manifest_path = os.environ.get("HPC_MANIFEST", "_hpc_dispatch.json")
+    # --- Resolve run_id ---
+    run_id = args.run_id or os.environ.get("HPC_RUN_ID")
+    if not run_id:
+        print(
+            "[combiner] ERROR: --run-id not given and HPC_RUN_ID env var not set",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    # --- Load manifest ---
-    if not os.path.isfile(manifest_path):
-        print(f"[combiner] ERROR: manifest not found: {manifest_path}", file=sys.stderr)
+    sidecar_path = here / "runs" / f"{run_id}.json"
+    if not sidecar_path.is_file():
+        print(f"[combiner] ERROR: sidecar not found: {sidecar_path}", file=sys.stderr)
         sys.exit(1)
 
     try:
-        with open(manifest_path) as f:
-            manifest = json.load(f)
+        sidecar = json.loads(sidecar_path.read_text())
     except json.JSONDecodeError as exc:
-        print(f"[combiner] ERROR: failed to parse manifest: {exc}", file=sys.stderr)
+        print(f"[combiner] ERROR: failed to parse sidecar: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # --- Resolve wave ---
-    wave_map = manifest.get("wave_map", {})
+    schema_version = sidecar.get("sidecar_schema_version")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        print(
+            f"[combiner] ERROR: sidecar schema_version={schema_version}, "
+            f"supported={list(SUPPORTED_SCHEMA_VERSIONS)}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    wave_map = sidecar.get("wave_map", {})
     wave_key = str(wave)
     if wave_key not in wave_map:
         print(
-            f"[combiner] ERROR: wave {wave} not found in wave_map "
+            f"[combiner] ERROR: wave {wave} not in wave_map "
             f"(available: {sorted(wave_map.keys())})",
             file=sys.stderr,
         )
         sys.exit(1)
 
     task_ids = wave_map[wave_key]
-    tasks = manifest.get("tasks", {})
+    result_dir_template = sidecar.get("result_dir_template")
+    if not result_dir_template:
+        print("[combiner] ERROR: sidecar missing result_dir_template", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Load tasks.py ---
+    tasks_path = here / "tasks.py"
+    if not tasks_path.is_file():
+        print(f"[combiner] ERROR: tasks.py not found: {tasks_path}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        tasks = _load_tasks_module(tasks_path)
+    except Exception as exc:
+        print(f"[combiner] ERROR: failed to import tasks.py: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     # --- Output path & --force handling (check BEFORE doing any work) ---
     out_dir = "_combiner"
@@ -205,49 +228,44 @@ def main(max_workers=None, argv=None):
         )
         sys.exit(1)
 
-    print(f"[combiner] wave={wave} tasks={len(task_ids)}")
+    print(f"[combiner] wave={wave} run_id={run_id} tasks={len(task_ids)}")
 
-    # --- Read metrics per task (parallelized -- I/O-bound over NFS) ---
+    # --- Read metrics per task (parallelized — I/O-bound over NFS) ---
     errors = []
-    # grid_point -> list of metric dicts
-    groups = {}
+    groups = {}  # grid_key -> list of metric dicts
+    readable = []  # (tid, grid_key, metrics_path)
 
-    # Pre-resolve tasks into (tid, task, metrics_path) triples.  Tasks with
-    # no manifest entry or no metrics.json are short-circuited into errors
-    # here so the thread pool only handles genuine file reads.
-    readable = []  # list of (tid, grid_key, metrics_path)
     for tid in task_ids:
-        task = tasks.get(str(tid))
-        if task is None:
-            errors.append(f"task {tid}: not found in manifest")
+        try:
+            kwargs = tasks.resolve(int(tid))
+        except Exception as exc:
+            errors.append(f"task {tid}: tasks.resolve raised: {exc}")
             continue
-
-        result_dir = task["result_dir"]
+        if not isinstance(kwargs, dict):
+            errors.append(f"task {tid}: tasks.resolve returned non-dict")
+            continue
+        try:
+            result_dir = _format_result_dir(
+                result_dir_template, task_id=int(tid), run_id=run_id, kwargs=kwargs
+            )
+        except KeyError as exc:
+            errors.append(f"task {tid}: result_dir_template missing key {exc.args[0]!r}")
+            continue
         metrics_path = os.path.join(result_dir, "metrics.json")
-
         if not os.path.isfile(metrics_path):
             errors.append(f"task {tid}: metrics.json not found")
             continue
-
-        grid_key = _run_id(task.get("params", {}))
-        readable.append((tid, grid_key, metrics_path))
+        readable.append((tid, _grid_key(kwargs), metrics_path))
 
     workers = max_workers if max_workers is not None else _default_max_workers()
-    # Don't spin up more threads than there is work to do.
     workers = max(1, min(workers, len(readable))) if readable else 1
 
     if readable:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            # Submit in task_id order; map future -> (tid, grid_key) so we
-            # can still attribute errors to the right task.
             future_to_info = {
                 pool.submit(_read_metrics, metrics_path): (tid, grid_key)
                 for tid, grid_key, metrics_path in readable
             }
-            # Iterate in submission order so error messages / appended
-            # metrics are in a deterministic order (task_id order).  The
-            # weighted-mean aggregate is order-independent, but deterministic
-            # order makes logs easier to read.
             for future in future_to_info:
                 tid, grid_key = future_to_info[future]
                 try:
@@ -269,17 +287,14 @@ def main(max_workers=None, argv=None):
 
     output = {
         "wave": wave,
+        "run_id": run_id,
         "task_ids": list(task_ids),
         "grid_points": grid_points,
         "errors": errors,
     }
 
-    # Atomic write: tempfile + os.replace.  Critical because callers
-    # treat ``wave_<N>.json`` *existence* as the "wave combined" success
-    # marker (slash_commands/runner.py:_ssh_list_combined_waves).  A
-    # half-written file from an OOM-/walltime-killed combiner would
-    # otherwise masquerade as success and break downstream
-    # ``json.load``s in reduce_partials.
+    # Atomic write: tempfile + os.replace. Critical because callers treat
+    # ``wave_<N>.json`` *existence* as the "wave combined" success marker.
     fd, tmp = tempfile.mkstemp(prefix="wave_", suffix=".json.tmp", dir=out_dir)
     try:
         with os.fdopen(fd, "w") as f:
