@@ -68,6 +68,119 @@ const envelope = JSON.parse(stdout);
 `hpc-mapreduce capabilities` returns `data.required_env` so MARs can
 introspect the required forwards without parsing this doc.
 
+## The `.hpc/tasks.py` boundary — MARs writes the task definition
+
+This is the most important section of this doc and the property that
+keeps claude-hpc reusable across experiments.
+
+**The split is**: claude-hpc owns the *protocol* (the `total()` /
+`resolve(task_id)` interface, the per-run sidecar schema, the SSH
+plumbing, the WIP/atomic-promote dispatcher); **MARs owns the
+*content*** (which experiment, what parameter axes, what kwargs each
+task should receive). The bridge between them is a single user-written
+file in the experiment repo:
+
+```
+<experiment-dir>/.hpc/tasks.py        # MARs writes this; claude-hpc imports it
+<experiment-dir>/.hpc/runs/<id>.json  # claude-hpc writes this each submit
+```
+
+`.hpc/tasks.py` exposes exactly two callables:
+
+```python
+def total() -> int:
+    """How many tasks this experiment fans out into."""
+
+def resolve(task_id: int) -> dict:
+    """Return the kwargs for task #i. Eager-materialized (see below)."""
+```
+
+The eager-materialization convention — `_TASKS = [...]` at module load,
+`total()` returns `len(_TASKS)`, `resolve(i)` indexes — gives free
+`cmd_sha` derivation, submit-time error catching, and laptop-side
+inspectability. The canonical reference at
+`hpc_mapreduce/templates/tasks_example.py` shows three usage patterns
+inline (Cartesian product, chunking by row count, date-window
+backtests) — MARs picks whichever matches the experiment it just
+proposed.
+
+### Why MARs and not claude-hpc
+
+claude-hpc is **experiment-agnostic by design**. It cannot know what a
+new experiment's parameter sweep should look like — only the agent
+that proposed the experiment has that context. Putting the
+parameter-shape decision in claude-hpc would force every new
+experiment kind into a framework upgrade. Putting it in MARs (or
+whatever meta-agent is driving) keeps claude-hpc reusable.
+
+### Recommended MARs flow
+
+When MARs proposes a new Tier-2 experiment, it scaffolds three files
+in the experiment dir as a single atomic step (one git commit):
+
+1. **`meta.json`** — experiment_id, seed, purpose, the parameter
+   axes/values MARs decided to sweep.
+2. **`scripts/<entrypoint>.py`** — the executor that consumes one
+   task's kwargs and writes per-task outputs.
+3. **`.hpc/tasks.py`** — the materialized `_TASKS = [...]` translating
+   `meta.json`'s axes into per-task kwarg dicts.
+
+Concrete example. Say MARs proposes a hyperparameter sweep with
+`{lr: [0.01, 0.001], seed: [42, 1337]}`. The agent writes:
+
+```python
+# .hpc/tasks.py — written by MARs once at experiment-proposal time
+import itertools
+_TASKS = [
+    {"lr": lr, "seed": seed}
+    for lr, seed in itertools.product([0.01, 0.001], [42, 1337])
+]
+def total() -> int:
+    return len(_TASKS)
+def resolve(i: int) -> dict:
+    return _TASKS[i]
+```
+
+Then submits via `hpc-mapreduce submit`. The cluster-side dispatcher
+imports this `tasks.py` at task time, calls `resolve(task_id)` to get
+the kwargs, exports them as env vars (uppercased + `HPC_KW_*`), and
+runs the executor command from the per-run sidecar.
+
+### Where to teach MARs about this
+
+The MARs agent doc (`agents/experiment-runner.md`) should include —
+just above the `hpc-mapreduce submit` invocation — a step that:
+
+1. Reads the canonical example via
+   `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "tasks_example.py")'`.
+2. Drafts the experiment's `_TASKS` list from `meta.json`'s parameter
+   axes.
+3. Writes `.hpc/tasks.py` and commits it alongside `meta.json`.
+4. Verifies locally with
+   `python -c 'from hpc_mapreduce import load_tasks_module, tasks_path; m = load_tasks_module(tasks_path(".")); print("total=", m.total(), "sample=", m.resolve(0))'`
+   before the first `submit` call.
+
+If `.hpc/tasks.py` is already present (a re-run, a manual edit), MARs
+**does not regenerate** — it inspects the existing file, computes
+`total()` to confirm cardinality matches expectations, and proceeds.
+That's the only way reuse-across-experiments stays clean.
+
+### What stays in `meta.json` vs. what moves to `tasks.py`
+
+- `meta.json` keeps experiment-level metadata (experiment_id, seed,
+  purpose, what was tried, what was learned). It is **declarative**;
+  it describes the experiment.
+- `.hpc/tasks.py` is **operational** — the materialized fan-out shape
+  the cluster dispatcher consumes. MARs may regenerate it from
+  `meta.json` if the parameter axes change between proposals (a fresh
+  experiment id), but on a re-run of the same experiment_id the file
+  is read as-is.
+
+There is no schema drift: `meta.json` is the human-readable summary
+and the source the agent reads when scaffolding; `.hpc/tasks.py` is
+the machine-readable sweep definition the framework consumes. They are
+both git-tracked and diffable.
+
 ## Honoring MARs invariants
 
 | MARs rule | claude-hpc behavior |
