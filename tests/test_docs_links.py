@@ -37,7 +37,7 @@ _BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 _DOC_VOCABULARY = {
     # Subcommands
     "submit", "status", "aggregate", "reconcile", "resubmit", "preflight",
-    "discover", "expand-grid", "list-in-flight", "clusters", "capabilities",
+    "discover", "list-in-flight", "clusters", "capabilities",
     "build-executor",
     # Envelope keys
     "ok", "data", "error_code", "category", "retry_safe", "remediation",
