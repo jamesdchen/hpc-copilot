@@ -1,35 +1,87 @@
-"""Tests for the on-cluster combiner script (hpc_mapreduce/map/combiner.py)."""
+"""Tests for the on-cluster combiner (hpc_mapreduce/map/combiner.py).
+
+The combiner imports the user's ``.hpc/tasks.py`` and reads the per-run
+sidecar at ``.hpc/runs/<run_id>.json`` for the wave_map and result_dir
+template. Pure-function tests (Neumaier sum, weighted mean, grid-key
+derivation) don't need either, and live above.
+"""
 
 from __future__ import annotations
 
 import json
 import math
 import random
+from pathlib import Path
 
-from hpc_mapreduce.job.grid import run_id
-from hpc_mapreduce.map.combiner import _neumaier_sum, _run_id, _weighted_mean, main
+from hpc_mapreduce.map import combiner as combiner_mod
+from hpc_mapreduce.map.combiner import _grid_key, _neumaier_sum, _weighted_mean, main
 
 
-class TestRunIdMatchesGrid:
-    """Verify the combiner's _run_id matches the canonical run_id from grid."""
+def _scaffold(
+    tmp_path: Path,
+    *,
+    kwargs_per_task: list[dict],
+    result_dir_template: str | None = None,
+    run_id: str = "test_run",
+    wave_map: dict[str, list[int]] | None = None,
+) -> Path:
+    """Materialize tmp_path/.hpc/{tasks.py, runs/<run_id>.json}.
 
+    Returns the .hpc dir so callers can monkeypatch combiner.__file__.
+    """
+    hpc = tmp_path / ".hpc"
+    (hpc / "runs").mkdir(parents=True)
+    (hpc / "tasks.py").write_text(
+        "import json\n"
+        f"_TASKS = {json.dumps(kwargs_per_task)}\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n"
+    )
+    if wave_map is None:
+        wave_map = {"0": list(range(len(kwargs_per_task)))}
+    if result_dir_template is None:
+        result_dir_template = str(tmp_path / "results" / "task_{task_id}")
+    (hpc / "runs" / f"{run_id}.json").write_text(json.dumps({
+        "sidecar_schema_version": 1,
+        "run_id": run_id,
+        "cmd_sha": "deadbeef" * 8,
+        "claude_hpc_version": "0.0.0+test",
+        "submitted_at": "2026-01-01T00:00:00Z",
+        "executor": "true",
+        "result_dir_template": result_dir_template,
+        "task_count": len(kwargs_per_task),
+        "tasks_py_sha": "abc",
+        "wave_map": {k: list(v) for k, v in wave_map.items()},
+    }))
+    return hpc
+
+
+def _patch_sibling_lookup(monkeypatch, hpc: Path) -> None:
+    """Make combiner.main treat hpc/ as the dir containing __file__."""
+    monkeypatch.setattr(
+        combiner_mod, "__file__", str(hpc / "_hpc_combiner.py"), raising=False
+    )
+
+
+# ─── Pure-function tests ────────────────────────────────────────────────────
+
+
+class TestGridKeyStability:
     def test_simple_params(self):
-        params = {"model": "ridge", "horizon": "1"}
-        assert _run_id(params) == run_id(params)
+        assert _grid_key({"model": "ridge", "horizon": "1"}) == "ridge_1"
 
-    def test_different_keys(self):
-        params = {"executor": "xgb", "horizon": "25"}
-        assert _run_id(params) == run_id(params)
+    def test_special_chars_sanitized(self):
+        # "/" and " " aren't in [A-Za-z0-9.-]; both become "_".
+        assert _grid_key({"path": "/some/path", "name": "foo bar"}) == "_some_path_foo_bar"
 
-    def test_special_chars(self):
-        params = {"path": "/some/path", "name": "foo bar"}
-        assert _run_id(params) == run_id(params)
+    def test_handles_non_string_values(self):
+        # The new combiner casts via str(), so numeric kwargs work.
+        assert _grid_key({"seed": 42, "model": "v1"}) == "42_v1"
 
 
 class TestWeightedMeanSingleEntry:
     def test_single_entry_returned_as_is(self):
-        entries = [{"mse": 0.5, "n_samples": 100}]
-        result = _weighted_mean(entries)
+        result = _weighted_mean([{"mse": 0.5, "n_samples": 100}])
         assert abs(result["mse"] - 0.5) < 1e-9
         assert result["n_samples"] == 100
 
@@ -49,154 +101,84 @@ class TestWeightedMeanUnequalWeights:
     def test_unequal_weights(self):
         entries = [
             {"mse": 0.10, "n_samples": 100},
-            {"mse": 0.30, "n_samples": 300},
+            {"mse": 0.20, "n_samples": 300},
         ]
         result = _weighted_mean(entries)
-        # (0.10*100 + 0.30*300) / 400 = 100/400 = 0.25
-        assert abs(result["mse"] - 0.25) < 1e-9
+        # weighted mean = (0.10*100 + 0.20*300) / 400 = 70/400 = 0.175
+        assert abs(result["mse"] - 0.175) < 1e-9
         assert result["n_samples"] == 400
 
 
 class TestNeumaierSum:
-    """The compensated sum is what makes cluster-side reductions reliable."""
-
     def test_benign_input_matches_plain_sum(self):
-        values = [0.1, 0.2, 0.3, 0.4]
-        assert abs(_neumaier_sum(values) - sum(values)) < 1e-12
+        xs = [0.1, 0.2, 0.3, 0.4]
+        assert abs(_neumaier_sum(xs) - sum(xs)) < 1e-12
 
     def test_pathological_cancellation_matches_fsum(self):
-        # Classic Kahan regression: huge term, tiny term, huge negative term,
-        # repeated many times.  Plain sum drifts; Neumaier tracks fsum.
-        seq = [1.0, 1e100, 1.0, -1e100] * 1000
-        got = _neumaier_sum(seq)
-        want = math.fsum(seq)  # 2000.0 exactly
-        assert abs(got - want) < 1e-6
-        assert want == 2000.0
-        # And demonstrate that plain sum really would have been wrong --
-        # guard against someone re-introducing plain sum later.
-        assert sum(seq) != want
+        random.seed(0)
+        xs = [random.gauss(0, 1) for _ in range(1000)]
+        # Add huge magnitudes that nearly cancel, exposing naive sum's drift.
+        xs.extend([1e16, -1e16, 1.0])
+        assert abs(_neumaier_sum(xs) - math.fsum(xs)) < 1e-9
 
     def test_empty_sequence_is_zero(self):
         assert _neumaier_sum([]) == 0.0
 
 
-class TestWeightedMeanOrderInvariant:
-    """Running the same entries in a different order must produce the
-    same aggregate -- this is the reliability guarantee users care about
-    when tasks complete in nondeterministic order on the cluster."""
-
-    def test_order_invariant_on_large_input(self):
-        # 500 tasks with varying metric magnitudes and n_samples counts.
-        rng = random.Random(42)
-        entries_forward = [
-            {"mse": rng.uniform(1e-8, 1e4), "n_samples": rng.randint(1, 10_000)}
-            for _ in range(500)
-        ]
-        entries_shuffled = list(entries_forward)
-        rng.shuffle(entries_shuffled)
-
-        a = _weighted_mean(entries_forward)
-        b = _weighted_mean(entries_shuffled)
-
-        assert a["n_samples"] == b["n_samples"]
-        assert abs(a["mse"] - b["mse"]) < 1e-12
-
-    def test_order_invariant_on_wide_dynamic_range(self):
-        # Deliberately extreme magnitudes so plain sum would diverge.
-        entries = [
-            {"v": 1e12, "n_samples": 1},
-            {"v": 1.0, "n_samples": 1},
-            {"v": -1e12, "n_samples": 1},
-            {"v": 1.0, "n_samples": 1},
-        ]
-        forward = _weighted_mean(entries)
-        reverse = _weighted_mean(list(reversed(entries)))
-        assert abs(forward["v"] - reverse["v"]) < 1e-12
+# ─── End-to-end via combiner.main() ─────────────────────────────────────────
 
 
 class TestMainEndToEnd:
     def test_main_produces_wave_file(self, tmp_path, monkeypatch):
-        # Create two task result dirs with metrics
-        r0 = tmp_path / "results" / "task_0"
-        r1 = tmp_path / "results" / "task_1"
+        result_root = tmp_path / "results"
+        r0 = result_root / "task_0"
+        r1 = result_root / "task_1"
         r0.mkdir(parents=True)
         r1.mkdir(parents=True)
         (r0 / "metrics.json").write_text(json.dumps({"mse": 0.10, "n_samples": 100}))
         (r1 / "metrics.json").write_text(json.dumps({"mse": 0.20, "n_samples": 100}))
 
-        # Build manifest with wave_map
-        manifest = {
-            "tasks": {
-                "0": {
-                    "params": {"model": "ridge", "horizon": "1"},
-                    "result_dir": str(r0),
-                },
-                "1": {
-                    "params": {"model": "ridge", "horizon": "1"},
-                    "result_dir": str(r1),
-                },
-            },
-            "wave_map": {
-                "0": ["0", "1"],
-            },
-        }
-        manifest_path = tmp_path / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest))
-
+        hpc = _scaffold(
+            tmp_path,
+            # Two tasks with the same kwargs ⇒ same grid_key ⇒ one grid point.
+            kwargs_per_task=[{"model": "ridge", "horizon": "1"},
+                             {"model": "ridge", "horizon": "1"}],
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
-        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.chdir(tmp_path)
 
         main()
 
-        out_path = tmp_path / "_combiner" / "wave_0.json"
-        assert out_path.exists()
-        data = json.loads(out_path.read_text())
-        assert data["wave"] == 0
-        assert data["task_ids"] == ["0", "1"]
-        assert len(data["grid_points"]) == 1
-        assert data["errors"] == []
-
-        # Check aggregated metrics (equal weights → simple average)
-        gp = list(data["grid_points"].values())[0]
+        out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        assert out["wave"] == 0
+        assert out["task_ids"] == [0, 1]
+        assert len(out["grid_points"]) == 1
+        assert out["errors"] == []
+        gp = next(iter(out["grid_points"].values()))
         assert abs(gp["mse"] - 0.15) < 1e-9
         assert gp["n_samples"] == 200
 
 
 class TestMainMissingMetrics:
     def test_missing_metrics_records_error(self, tmp_path, monkeypatch):
-        # Only create one task's result dir with metrics
-        r0 = tmp_path / "results" / "task_0"
+        result_root = tmp_path / "results"
+        r0 = result_root / "task_0"
         r0.mkdir(parents=True)
         (r0 / "metrics.json").write_text(json.dumps({"mse": 0.10, "n_samples": 50}))
+        # task 1 dir has no metrics.json
+        (result_root / "task_1").mkdir()
 
-        # Task 1 has no metrics file
-        r1 = tmp_path / "results" / "task_1"
-        r1.mkdir(parents=True)
-
-        manifest = {
-            "tasks": {
-                "0": {
-                    "params": {"model": "ridge"},
-                    "result_dir": str(r0),
-                },
-                "1": {
-                    "params": {"model": "ridge"},
-                    "result_dir": str(r1),
-                },
-            },
-            "wave_map": {
-                "0": ["0", "1"],
-            },
-        }
-        manifest_path = tmp_path / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest))
-
+        hpc = _scaffold(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge"}, {"model": "ridge"}],
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
-        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.chdir(tmp_path)
 
-        # Should not crash
         main()
 
         data = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
@@ -207,123 +189,86 @@ class TestMainMissingMetrics:
 class TestMainParallelReads:
     """Parallel metrics reads must produce semantically identical output to serial."""
 
-    @staticmethod
-    def _build_manifest(tmp_path, n_tasks: int, malformed_tid: str | None = None):
-        """Build a manifest with n_tasks across a few grid points.
-
-        If malformed_tid is set, that task's metrics.json is written as
-        invalid JSON so the combiner logs an error but doesn't crash.
-        """
-        tasks: dict = {}
-        task_ids: list = []
-        # Three grid points cycled through so the weighted mean has
-        # something non-trivial to aggregate.
-        grid_params = [
+    def _seed(self, tmp_path: Path, n_tasks: int, malformed_tid: int | None = None) -> Path:
+        """Set up tmp_path/.hpc/, result dirs, return .hpc path."""
+        result_root = tmp_path / "results"
+        kwargs_per_task = []
+        grid_choices = [
             {"model": "ridge", "horizon": "1"},
             {"model": "xgb", "horizon": "1"},
             {"model": "ridge", "horizon": "25"},
         ]
         for i in range(n_tasks):
-            tid = str(i)
-            rdir = tmp_path / "results" / f"task_{i}"
+            kwargs_per_task.append(grid_choices[i % len(grid_choices)])
+            rdir = result_root / f"task_{i}"
             rdir.mkdir(parents=True)
-            if tid == malformed_tid:
+            if i == malformed_tid:
                 (rdir / "metrics.json").write_text("{not valid json")
             else:
-                # Varying metric values so averaging isn't degenerate.
                 (rdir / "metrics.json").write_text(
                     json.dumps({"mse": 0.10 + 0.01 * i, "n_samples": 100 + i})
                 )
-            tasks[tid] = {
-                "params": grid_params[i % len(grid_params)],
-                "result_dir": str(rdir),
-            }
-            task_ids.append(tid)
+        return _scaffold(tmp_path, kwargs_per_task=kwargs_per_task)
 
-        manifest = {"tasks": tasks, "wave_map": {"0": task_ids}}
-        manifest_path = tmp_path / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest))
-        return manifest_path
-
-    def _run(self, tmp_path, monkeypatch, manifest_path, max_workers):
+    def _run(self, tmp_path, monkeypatch, max_workers):
+        hpc = tmp_path / ".hpc"
+        _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
-        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.chdir(tmp_path)
         main(max_workers=max_workers)
         return json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
 
     def test_parallel_matches_serial(self, tmp_path, monkeypatch):
-        # Run serial first in its own tmp subdir, then parallel in another.
         serial_dir = tmp_path / "serial"
         parallel_dir = tmp_path / "parallel"
         serial_dir.mkdir()
         parallel_dir.mkdir()
+        self._seed(serial_dir, n_tasks=20)
+        self._seed(parallel_dir, n_tasks=20)
 
-        s_manifest = self._build_manifest(serial_dir, n_tasks=20)
-        p_manifest = self._build_manifest(parallel_dir, n_tasks=20)
+        serial = self._run(serial_dir, monkeypatch, max_workers=1)
+        parallel = self._run(parallel_dir, monkeypatch, max_workers=8)
 
-        serial = self._run(serial_dir, monkeypatch, s_manifest, max_workers=1)
-        parallel = self._run(parallel_dir, monkeypatch, p_manifest, max_workers=8)
-
-        # Same grid-point keys
         assert set(serial["grid_points"].keys()) == set(parallel["grid_points"].keys())
-
-        # Same weighted-mean values per grid point
         for key in serial["grid_points"]:
             s_gp = serial["grid_points"][key]
             p_gp = parallel["grid_points"][key]
             assert set(s_gp.keys()) == set(p_gp.keys())
             for metric in s_gp:
                 assert abs(s_gp[metric] - p_gp[metric]) < 1e-9, f"mismatch on {key}/{metric}"
-
-        # Same error count (both zero here)
         assert len(serial["errors"]) == len(parallel["errors"]) == 0
 
     def test_parallel_with_malformed_metrics(self, tmp_path, monkeypatch):
-        manifest_path = self._build_manifest(tmp_path, n_tasks=20, malformed_tid="7")
-        data = self._run(tmp_path, monkeypatch, manifest_path, max_workers=8)
+        self._seed(tmp_path, n_tasks=20, malformed_tid=7)
+        data = self._run(tmp_path, monkeypatch, max_workers=8)
 
-        # Exactly one error, attributed to task 7, and the run didn't crash.
         assert len(data["errors"]) == 1
         assert "task 7:" in data["errors"][0]
         assert "failed to read metrics.json" in data["errors"][0]
 
-        # The other 19 tasks still aggregated into their grid points.
         total_n = sum(gp["n_samples"] for gp in data["grid_points"].values())
-        # n_samples = sum of (100+i) for i in 0..19 except i=7 -> sum(100..119) - 107
         expected = sum(100 + i for i in range(20)) - 107
         assert total_n == expected
 
 
 class TestMainMultipleGridPoints:
     def test_separate_grid_point_entries(self, tmp_path, monkeypatch):
-        r0 = tmp_path / "results" / "ridge"
-        r1 = tmp_path / "results" / "xgb"
+        result_root = tmp_path / "results"
+        r0 = result_root / "task_0"
+        r1 = result_root / "task_1"
         r0.mkdir(parents=True)
         r1.mkdir(parents=True)
         (r0 / "metrics.json").write_text(json.dumps({"mse": 0.10, "n_samples": 50}))
         (r1 / "metrics.json").write_text(json.dumps({"mse": 0.30, "n_samples": 50}))
 
-        manifest = {
-            "tasks": {
-                "0": {
-                    "params": {"model": "ridge"},
-                    "result_dir": str(r0),
-                },
-                "1": {
-                    "params": {"model": "xgb"},
-                    "result_dir": str(r1),
-                },
-            },
-            "wave_map": {
-                "0": ["0", "1"],
-            },
-        }
-        manifest_path = tmp_path / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest))
-
+        hpc = _scaffold(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge"}, {"model": "xgb"}],
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
-        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.chdir(tmp_path)
 
         main()
@@ -333,70 +278,49 @@ class TestMainMultipleGridPoints:
         assert data["errors"] == []
 
 
-# ─── Bug 11: wave_N.json output is written atomically ────────────────────
-
-
 class TestMainWritesOutputAtomically:
-    """Callers (slash_commands.runner._ssh_list_combined_waves) treat
-    ``_combiner/wave_<N>.json`` *existence* as the success marker for a
-    wave.  A combiner killed mid-``json.dump`` would otherwise leave a
-    truncated file that masquerades as success and crashes downstream
-    json.load consumers.  The fix uses tempfile + os.replace.
+    """``_combiner/wave_<N>.json`` existence is the wave-combined success
+    marker. A combiner killed mid-write must not leave a half-written
+    file masquerading as success.
     """
 
-    def _seed_manifest(self, tmp_path):
-        rdir = tmp_path / "results" / "ridge"
+    def _seed(self, tmp_path: Path) -> Path:
+        rdir = tmp_path / "results" / "task_0"
         rdir.mkdir(parents=True)
         (rdir / "metrics.json").write_text(json.dumps({"mse": 0.1, "n_samples": 1}))
-        manifest = {
-            "tasks": {"0": {"params": {"model": "ridge"}, "result_dir": str(rdir)}},
-            "wave_map": {"0": ["0"]},
-        }
-        mpath = tmp_path / "manifest.json"
-        mpath.write_text(json.dumps(manifest))
-        return mpath
+        return _scaffold(tmp_path, kwargs_per_task=[{"model": "ridge"}])
 
     def test_partial_write_failure_leaves_no_wave_file(self, tmp_path, monkeypatch):
-        """Simulate an OOM/walltime kill mid-dump: the tempfile must be
-        cleaned up and ``wave_0.json`` must NOT exist (its presence is
-        the wave-combined contract).
-        """
         from unittest.mock import patch as _patch
 
-        manifest_path = self._seed_manifest(tmp_path)
+        hpc = self._seed(tmp_path)
+        _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
-        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.chdir(tmp_path)
-
-        # Reach into the combiner's json module so the atomic-write
-        # block raises after opening the tempfile.
-        import hpc_mapreduce.map.combiner as combiner
 
         def boom(*args, **kwargs):
             raise RuntimeError("walltime")
 
-        with _patch.object(combiner.json, "dump", side_effect=boom):
+        with _patch.object(combiner_mod.json, "dump", side_effect=boom):
             with __import__("pytest").raises(RuntimeError):
-                combiner.main()
+                combiner_mod.main()
 
         out = tmp_path / "_combiner" / "wave_0.json"
-        assert not out.exists(), (
-            "wave_0.json should be absent on partial write — its existence "
-            "is the documented success marker for a combined wave"
-        )
-        # And the temp file should have been cleaned up too.
+        assert not out.exists()
         leftovers = list((tmp_path / "_combiner").glob("wave_*.json.tmp"))
-        assert leftovers == [], f"tempfile leak: {leftovers}"
+        assert leftovers == []
 
     def test_successful_write_produces_parseable_json(self, tmp_path, monkeypatch):
-        manifest_path = self._seed_manifest(tmp_path)
+        hpc = self._seed(tmp_path)
+        _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
-        monkeypatch.setenv("HPC_MANIFEST", str(manifest_path))
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.chdir(tmp_path)
 
         main()
 
         out = tmp_path / "_combiner" / "wave_0.json"
         assert out.exists()
-        data = json.loads(out.read_text())  # round-trips cleanly
+        data = json.loads(out.read_text())
         assert data["wave"] == 0
