@@ -519,7 +519,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         args.run_id,
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        manifest_filename=record.manifest,
         job_ids=record.job_ids,
         job_name=record.job_name,
     )
