@@ -74,25 +74,35 @@ def submit_and_record(
     ssh_target: str,
     remote_path: str,
     job_name: str,
-    manifest_filename: str,
     job_ids: list[str],
     total_tasks: int,
     run_id: str | None = None,
+    manifest_filename: str | None = None,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
-    ``run_id`` defaults to ``f"{profile}_{cmd_sha8}"`` where ``cmd_sha8``
-    is the prefix of *manifest_filename* (``manifest.<sha8>.json``).
+    Either *run_id* or *manifest_filename* must be supplied. With
+    *run_id* (the new model), the journal entry is keyed directly by it
+    and ``manifest_filename`` defaults to ``""`` for back-compat with
+    existing ``RunRecord`` consumers — the per-run sidecar at
+    ``.hpc/runs/<run_id>.json`` is the source of truth in the new layout.
+
+    With only *manifest_filename* (legacy path, pending removal),
+    ``run_id`` is derived as ``f"{profile}_{cmd_sha8}"`` where
+    ``cmd_sha8`` is the prefix of ``manifest.<sha8>.json``.
 
     Returns ``(record, deduped)`` where ``deduped`` is True if a record
     with this ``run_id`` already existed and the call was a no-op replay.
-    Submissions are deterministic in ``run_id`` (profile + manifest sha),
-    so an agent that retries on transient network errors gets dedup for
-    free — the cluster does not see duplicate ``qsub``/``sbatch`` calls
-    because the caller checks the returned ``deduped`` flag before issuing
-    them. The bundled CLI uses this to make ``submit`` idempotent.
+    Submissions are deterministic in ``run_id``, so a retry on transient
+    network errors gets dedup for free — the cluster does not see
+    duplicate ``qsub``/``sbatch`` calls because the caller checks the
+    returned ``deduped`` flag before issuing them.
     """
     if run_id is None:
+        if not manifest_filename:
+            raise errors.ManifestInvalid(
+                "submit_and_record requires either run_id or manifest_filename"
+            )
         match = _MANIFEST_NAME_RE.match(manifest_filename)
         if not match:
             raise errors.ManifestInvalid(
@@ -114,7 +124,7 @@ def submit_and_record(
         remote_path=remote_path,
         job_name=job_name,
         job_ids=list(job_ids),
-        manifest=manifest_filename,
+        manifest=manifest_filename or "",
         total_tasks=int(total_tasks),
         submitted_at=_utcnow_iso(),
         experiment_dir=str(Path(experiment_dir).resolve()),
