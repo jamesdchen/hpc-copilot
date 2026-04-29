@@ -413,6 +413,26 @@ Build env vars:
 - `CONDA_ENV=<detected/selected conda_env>` (if needed)
 - `TOTAL_TASKS=<total_tasks>`
 
+**Building the job_env (with runtime support)**
+
+When the manifest carries `runtime: "uv"` (set by `build_task_manifest(runtime="uv")` per Tier 1), `HPC_RUNTIME=uv` MUST be in the job's env so the cluster-side template's `uv sync` preamble fires. Constructing this by hand is easy to forget; instead, call the `build_job_env` helper which threads the manifest's runtime field into the env automatically:
+
+```python
+from slash_commands.runner import build_job_env
+base_env = {
+    "EXECUTOR": "python3 _hpc_dispatch.py",
+    "HPC_MANIFEST": "_hpc_dispatch.json",
+    "REPO_DIR": remote_path,
+    "MODULES": ...,
+    "CONDA_SOURCE": ...,
+    "CONDA_ENV": ...,
+    "TOTAL_TASKS": str(total_tasks),
+}
+job_env = build_job_env(manifest, base_env)  # adds HPC_RUNTIME if needed
+```
+
+> **NOTE:** when using `SGEBackend(pass_env_keys=...)`, the tuple MUST include `"HPC_RUNTIME"` so the qsub `-v` filter forwards it. The SLURM backend forwards everything in `job_env` automatically.
+
 ### SGE Submission
 
 ```bash

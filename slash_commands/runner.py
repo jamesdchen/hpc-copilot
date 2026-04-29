@@ -25,6 +25,7 @@ from slash_commands.session import RunRecord, _atomic_write_json
 
 __all__ = [
     "submit_and_record",
+    "build_job_env",
     "record_status",
     "combine_wave",
     "resubmit_failed",
@@ -120,6 +121,25 @@ def submit_and_record(
     )
     session.upsert_run(experiment_dir, record)
     return record, False
+
+
+def build_job_env(
+    manifest: dict[str, Any], base_env: dict[str, str]
+) -> dict[str, str]:
+    """Return *base_env* augmented with runtime-derived env vars.
+
+    Today: when ``manifest.get("runtime") == "uv"``, sets
+    ``HPC_RUNTIME=uv`` so the cluster-side template's ``uv sync``
+    preamble fires. For any other runtime value (or none), returns a
+    plain copy of *base_env*. Never mutates either input.
+
+    Add new branches as new runtime profiles land (``pixi``, ``poetry``,
+    …); the contract — copy + augment — should stay invariant.
+    """
+    env = dict(base_env)
+    if manifest.get("runtime") == "uv":
+        env["HPC_RUNTIME"] = "uv"
+    return env
 
 
 def _ssh_status_report(
