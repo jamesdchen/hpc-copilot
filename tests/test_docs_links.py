@@ -174,9 +174,11 @@ def test_mars_snippet_does_not_claim_resubmit_non_idempotent() -> None:
 
 
 def test_mars_integration_does_not_track_uv_as_known_gap() -> None:
-    """``runtime: uv`` is honored end-to-end since MARs compat Tier 1
-    (build_task_manifest prefix + uv sync template preamble); the
-    integration doc must not still call it a 'known gap'."""
+    """``runtime: uv`` is honored end-to-end (the agent writes
+    ``uv run python ...`` into the per-run sidecar's ``executor`` field
+    and the four shipped templates run a ``uv sync`` preamble gated on
+    ``HPC_RUNTIME=uv``); the integration doc must not still call it a
+    'known gap'."""
     text = _doc_text(MARS_INTEGRATION)
     assert "track this as a known gap" not in text, (
         "docs/mars-integration.md still calls cluster-side uv run a "
