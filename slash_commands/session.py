@@ -87,7 +87,6 @@ class RunRecord:
     remote_path: str
     job_name: str
     job_ids: list[str]
-    manifest: str
     total_tasks: int
     submitted_at: str
     experiment_dir: str

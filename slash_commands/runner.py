@@ -35,7 +35,6 @@ __all__ = [
     "verify_combiner_artifact",
     "build_provenance",
     "write_remote_provenance",
-    "validate_manifest_file",
     "fetch_task_logs",
     "cluster_failures_by_fingerprint",
     "fingerprint_stderr_tail",
@@ -58,13 +57,6 @@ def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
 # package.
 _utcnow_iso = utcnow_iso
 
-# Manifest filenames are content-addressed: ``manifest.<sha8>.json``
-# where ``sha8`` is exactly 8 hex chars.  ``submit_and_record`` derives
-# the run_id suffix from this prefix, so a non-conforming filename used
-# to silently produce garbage run_ids that violated the
-# ``submit.output.json`` schema.
-_MANIFEST_NAME_RE = re.compile(r"^manifest\.([0-9a-f]{8})\.json$")
-
 
 def submit_and_record(
     experiment_dir: Path,
@@ -74,22 +66,17 @@ def submit_and_record(
     ssh_target: str,
     remote_path: str,
     job_name: str,
+    run_id: str,
     job_ids: list[str],
     total_tasks: int,
-    run_id: str | None = None,
-    manifest_filename: str | None = None,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
-    Either *run_id* or *manifest_filename* must be supplied. With
-    *run_id* (the new model), the journal entry is keyed directly by it
-    and ``manifest_filename`` defaults to ``""`` for back-compat with
-    existing ``RunRecord`` consumers — the per-run sidecar at
-    ``.hpc/runs/<run_id>.json`` is the source of truth in the new layout.
-
-    With only *manifest_filename* (legacy path, pending removal),
-    ``run_id`` is derived as ``f"{profile}_{cmd_sha8}"`` where
-    ``cmd_sha8`` is the prefix of ``manifest.<sha8>.json``.
+    The journal entry is keyed by *run_id* — the per-run sidecar at
+    ``.hpc/runs/<run_id>.json`` is the source of truth for everything
+    the cluster-side dispatcher and combiner consume; the journal record
+    is the laptop-side bookkeeping that lets a future ``/status`` resume
+    monitoring without re-asking the user for cluster / job_ids.
 
     Returns ``(record, deduped)`` where ``deduped`` is True if a record
     with this ``run_id`` already existed and the call was a no-op replay.
@@ -98,19 +85,8 @@ def submit_and_record(
     duplicate ``qsub``/``sbatch`` calls because the caller checks the
     returned ``deduped`` flag before issuing them.
     """
-    if run_id is None:
-        if not manifest_filename:
-            raise errors.ManifestInvalid(
-                "submit_and_record requires either run_id or manifest_filename"
-            )
-        match = _MANIFEST_NAME_RE.match(manifest_filename)
-        if not match:
-            raise errors.ManifestInvalid(
-                f"manifest_filename {manifest_filename!r} must match "
-                f"'manifest.<8 hex chars>.json'; pass an explicit run_id "
-                f"to bypass this check."
-            )
-        run_id = f"{profile}_{match.group(1)}"
+    if not run_id:
+        raise errors.ManifestInvalid("submit_and_record requires a non-empty run_id")
 
     existing = session.load_run(experiment_dir, run_id)
     if existing is not None:
@@ -124,7 +100,6 @@ def submit_and_record(
         remote_path=remote_path,
         job_name=job_name,
         job_ids=list(job_ids),
-        manifest=manifest_filename or "",
         total_tasks=int(total_tasks),
         submitted_at=_utcnow_iso(),
         experiment_dir=str(Path(experiment_dir).resolve()),
@@ -480,7 +455,7 @@ def reconcile(
             _ssh_status_report,
             ssh_target=record.ssh_target,
             remote_path=record.remote_path,
-            manifest_filename=record.manifest,
+            run_id=run_id,
             job_ids=record.job_ids,
             job_name=record.job_name,
             file_glob=file_glob,
@@ -801,141 +776,6 @@ def cluster_failures_by_fingerprint(
     return clusters
 
 
-# ─── pre-submit manifest sanity ─────────────────────────────────────────────
-
-
-# Schema versions accepted by the on-cluster dispatcher's legacy
-# manifest validator.  Kept in sync with the (now-deleted) historical
-# manifest format that some old experiment repos may still carry; new
-# submissions go through the .hpc/runs/<run_id>.json sidecar path
-# instead, validated against ``SIDECAR_SCHEMA_VERSION`` in
-# ``hpc_mapreduce.job.runs``.
-_SUPPORTED_MANIFEST_VERSIONS = (1, 2)
-
-# Match unresolved ``{placeholder}`` tokens.  False positives are
-# minimised by requiring an identifier-like body and a closing brace.
-# (Real shell brace expansion uses commas or numeric ranges, which this
-# pattern does not match.)
-_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
-
-
-def validate_manifest_file(manifest_path: Path) -> None:
-    """Raise :class:`ManifestInvalid` if *manifest_path* is unsafe to submit.
-
-    Checks (all client-side, no SSH):
-
-    * the file exists and is valid JSON;
-    * ``schema_version`` is in :data:`_SUPPORTED_MANIFEST_VERSIONS`;
-    * ``tasks`` is a non-empty dict, ``total_tasks`` matches ``len(tasks)``;
-    * every task carries ``cmd``, ``result_dir``, ``params`` with the right
-      types;
-    * no ``{placeholder}`` remnants in rendered ``cmd`` / ``result_dir``;
-    * if ``wave_map`` is present, its members exactly cover ``tasks``.
-
-    Catches the entire class of "manifest looked fine locally, crashed
-    mid-run on the cluster" failures.
-    """
-    if not manifest_path.is_file():
-        raise errors.ManifestInvalid(
-            f"manifest not found at {manifest_path}; rebuild via /submit "
-            f"or `hpc-mapreduce submit`."
-        )
-    try:
-        manifest = json.loads(manifest_path.read_text())
-    except json.JSONDecodeError as exc:
-        raise errors.ManifestInvalid(
-            f"manifest at {manifest_path} is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(manifest, dict):
-        raise errors.ManifestInvalid(
-            f"manifest at {manifest_path} must be a JSON object; "
-            f"got {type(manifest).__name__}"
-        )
-    schema_version = manifest.get("schema_version")
-    if schema_version not in _SUPPORTED_MANIFEST_VERSIONS:
-        raise errors.ManifestInvalid(
-            f"manifest schema_version={schema_version!r}; supported="
-            f"{list(_SUPPORTED_MANIFEST_VERSIONS)}. Regenerate with current hpc_mapreduce."
-        )
-
-    tasks = manifest.get("tasks")
-    if not isinstance(tasks, dict) or not tasks:
-        raise errors.ManifestInvalid(
-            f"manifest.tasks must be a non-empty object; "
-            f"got {type(tasks).__name__ if tasks is None else 'empty'}"
-        )
-
-    total_tasks = manifest.get("total_tasks")
-    if isinstance(total_tasks, int) and total_tasks != len(tasks):
-        raise errors.ManifestInvalid(
-            f"manifest.total_tasks ({total_tasks}) does not match "
-            f"len(tasks)={len(tasks)} — manifest is inconsistent."
-        )
-
-    for tid, task in tasks.items():
-        if not isinstance(task, dict):
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}] must be an object; "
-                f"got {type(task).__name__}"
-            )
-        cmd = task.get("cmd")
-        if not isinstance(cmd, str) or not cmd.strip():
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].cmd must be a non-empty string"
-            )
-        if _PLACEHOLDER_RE.search(cmd):
-            leftover = _PLACEHOLDER_RE.findall(cmd)
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].cmd has unresolved placeholder(s) "
-                f"{leftover}: {cmd!r}. Rebuild the manifest so all "
-                f"{{name}} tokens render before submit."
-            )
-        result_dir = task.get("result_dir")
-        if not isinstance(result_dir, str) or not result_dir.strip():
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].result_dir must be a non-empty string"
-            )
-        if _PLACEHOLDER_RE.search(result_dir):
-            leftover = _PLACEHOLDER_RE.findall(result_dir)
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].result_dir has unresolved "
-                f"placeholder(s) {leftover}: {result_dir!r}."
-            )
-        params = task.get("params")
-        if not isinstance(params, dict):
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].params must be an object"
-            )
-
-    wave_map = manifest.get("wave_map")
-    if wave_map is not None:
-        if not isinstance(wave_map, dict):
-            raise errors.ManifestInvalid(
-                f"manifest.wave_map must be an object mapping wave -> [task_ids]"
-            )
-        covered: set[str] = set()
-        for wave_key, members in wave_map.items():
-            if not isinstance(members, list):
-                raise errors.ManifestInvalid(
-                    f"manifest.wave_map[{wave_key!r}] must be a list of task ids"
-                )
-            for tid in members:
-                covered.add(str(tid))
-        task_ids = set(tasks.keys())
-        missing_from_waves = task_ids - covered
-        unknown_in_waves = covered - task_ids
-        if missing_from_waves:
-            raise errors.ManifestInvalid(
-                f"wave_map omits task id(s) {sorted(missing_from_waves)[:10]} — "
-                f"every task must belong to a wave."
-            )
-        if unknown_in_waves:
-            raise errors.ManifestInvalid(
-                f"wave_map references unknown task id(s) "
-                f"{sorted(unknown_in_waves)[:10]} — manifest is inconsistent."
-            )
-
-
 # ─── aggregate preconditions / postconditions / provenance ──────────────────
 #
 # These helpers are framework-agnostic guarantees around the user-supplied
@@ -945,45 +785,39 @@ def validate_manifest_file(manifest_path: Path) -> None:
 # Both /aggregate and `hpc-mapreduce aggregate` use them.
 
 
-def _read_remote_manifest(
-    *, ssh_target: str, remote_path: str, manifest_filename: str
+def _read_remote_sidecar(
+    *, ssh_target: str, remote_path: str, run_id: str
 ) -> dict[str, Any]:
-    """SSH-cat a legacy dispatch manifest from the cluster and parse it.
-
-    Used only by callers still operating on the pre-sidecar manifest
-    format.  New code should prefer reading the per-run sidecar at
-    ``.hpc/runs/<run_id>.json`` (where ``wave_map`` is now stored)
-    rather than the manifest itself.  When ``wave_map`` is absent, we
-    fall back to assuming every task belongs to wave 0.
-    """
+    """SSH-cat the per-run sidecar at ``.hpc/runs/<run_id>.json``."""
     user, host = _split_ssh_target(ssh_target)
-    cmd = f"cat {shlex.quote(f'{remote_path}/{manifest_filename}')}"
+    sidecar_rel = f".hpc/runs/{run_id}.json"
+    cmd = f"cat {shlex.quote(f'{remote_path}/{sidecar_rel}')}"
     proc = ssh_run(cmd, host=host, user=user)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
-            f"failed to read remote manifest at {remote_path}/{manifest_filename}: "
+            f"failed to read remote sidecar at {remote_path}/{sidecar_rel}: "
             f"{proc.stderr.strip()[:500]}"
         )
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
         raise RemoteCommandFailed(
-            f"remote manifest at {remote_path}/{manifest_filename} is not valid JSON: {exc}"
+            f"remote sidecar at {remote_path}/{sidecar_rel} is not valid JSON: {exc}"
         ) from exc
 
 
-def _wave_task_ids(manifest: dict[str, Any], wave: int) -> list[str]:
-    """Return task ids belonging to *wave* per ``manifest['wave_map']``.
+def _wave_task_ids(sidecar: dict[str, Any], wave: int) -> list[int]:
+    """Return task ids belonging to *wave* per ``sidecar['wave_map']``.
 
     Falls back to "every task" when ``wave==0`` and no wave_map is present
     (un-batched submissions ship a single implicit wave-0).
     """
-    wave_map = manifest.get("wave_map") or {}
+    wave_map = sidecar.get("wave_map") or {}
     if wave_map:
         members = wave_map.get(str(wave))
-        return [str(t) for t in members] if members else []
+        return [int(t) for t in members] if members else []
     if wave == 0:
-        return list((manifest.get("tasks") or {}).keys())
+        return list(range(int(sidecar.get("task_count", 0))))
     return []
 
 
@@ -991,25 +825,25 @@ def verify_per_task_outputs(
     *,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str,
+    run_id: str,
     wave: int,
     template: str,
 ) -> list[str]:
     """Check every per-task output named by *template* exists on the cluster.
 
     *template* may include ``{task_id}``; it is substituted with each task
-    id in the wave (per ``manifest['wave_map']``).  Paths are interpreted
-    relative to *remote_path* unless absolute.
+    id in the wave (per the per-run sidecar's ``wave_map``).  Paths are
+    interpreted relative to *remote_path* unless absolute.
 
     Returns the list of *missing* paths (relative to remote_path or
     absolute as written).  Empty list = all expected outputs are present.
     """
-    manifest = _read_remote_manifest(
+    sidecar = _read_remote_sidecar(
         ssh_target=ssh_target,
         remote_path=remote_path,
-        manifest_filename=manifest_filename,
+        run_id=run_id,
     )
-    task_ids = _wave_task_ids(manifest, wave)
+    task_ids = _wave_task_ids(sidecar, wave)
     if not task_ids:
         return []
     expected = [template.format(task_id=tid) for tid in task_ids]
@@ -1084,7 +918,6 @@ def build_provenance(record: RunRecord, *, wave: int) -> dict[str, Any]:
     """
     return {
         "run_id": record.run_id,
-        "manifest": record.manifest,
         "wave": int(wave),
         "profile": record.profile,
         "cluster": record.cluster,

@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from slash_commands import runner, session
+from slash_commands import errors, runner, session
 from slash_commands.session import RunRecord
 
 
@@ -40,7 +40,6 @@ def _seed_run(experiment: Path, **overrides) -> RunRecord:
         "remote_path": "/u/scratch/exp",
         "job_name": "ml_ridge",
         "job_ids": ["12345678"],
-        "manifest": "manifest.abcd1234.json",
         "total_tasks": 100,
         "submitted_at": "2026-04-26T17:00:00+00:00",
         "experiment_dir": str(experiment.resolve()),
@@ -63,7 +62,7 @@ def test_submit_and_record_writes_journal(journal_home, experiment):
         ssh_target="user@hoffman2.idre.ucla.edu",
         remote_path="/u/scratch/exp",
         job_name="ml_ridge",
-        manifest_filename="manifest.abcd1234.json",
+        run_id="ml_ridge_abcd1234",
         job_ids=["12345678"],
         total_tasks=100,
     )
@@ -79,14 +78,14 @@ def test_submit_and_record_writes_journal(journal_home, experiment):
 
 
 def test_submit_and_record_dedups_replay(journal_home, experiment):
-    """Second call with the same spec returns the existing record + deduped=True."""
+    """Second call with the same run_id returns the existing record + deduped=True."""
     kwargs = dict(
         profile="ml_ridge",
         cluster="hoffman2",
         ssh_target="user@hoffman2.idre.ucla.edu",
         remote_path="/u/scratch/exp",
         job_name="ml_ridge",
-        manifest_filename="manifest.abcd1234.json",
+        run_id="ml_ridge_abcd1234",
         job_ids=["12345678"],
         total_tasks=100,
     )
@@ -100,6 +99,22 @@ def test_submit_and_record_dedups_replay(journal_home, experiment):
     assert second_dedup is True
     assert second.run_id == first.run_id
     assert second.job_ids == ["12345678"]  # original wins
+
+
+def test_submit_and_record_rejects_empty_run_id(journal_home, experiment):
+    """An empty run_id is a programmer error and must surface immediately."""
+    with pytest.raises(errors.ManifestInvalid, match="non-empty run_id"):
+        runner.submit_and_record(
+            experiment,
+            profile="ml_ridge",
+            cluster="hoffman2",
+            ssh_target="user@hoffman2.idre.ucla.edu",
+            remote_path="/u/scratch/exp",
+            job_name="ml_ridge",
+            run_id="",
+            job_ids=["12345678"],
+            total_tasks=100,
+        )
 
 
 def test_combine_wave_records_success(journal_home, experiment):
@@ -281,53 +296,6 @@ def test_split_ssh_target_validates():
         runner._split_ssh_target("just-a-host")
 
 
-# ─── Bug 15: bad manifest_filename rejected, not silently mangled ──────────
-
-
-def test_submit_and_record_rejects_non_conforming_manifest_filename(
-    journal_home, experiment
-):
-    """A manifest filename outside ``manifest.<8 hex>.json`` used to silently
-    produce garbage run_ids that violated the submit.output.json schema.
-    """
-    from slash_commands import errors
-
-    with pytest.raises(errors.ManifestInvalid, match="manifest.<8 hex"):
-        runner.submit_and_record(
-            experiment,
-            profile="ml_ridge",
-            cluster="hoffman2",
-            ssh_target="user@host",
-            remote_path="/x",
-            job_name="job",
-            manifest_filename="latest.json",  # not the canonical pattern
-            job_ids=["1"],
-            total_tasks=1,
-        )
-
-
-def test_submit_and_record_accepts_explicit_run_id_with_any_filename(
-    journal_home, experiment
-):
-    """Pre-validation only kicks in when the run_id is auto-derived; an
-    explicit ``run_id=`` lets callers bypass the pattern (useful for legacy
-    manifests we no longer rebuild).
-    """
-    record, _ = runner.submit_and_record(
-        experiment,
-        profile="ml_ridge",
-        cluster="hoffman2",
-        ssh_target="user@host",
-        remote_path="/x",
-        job_name="job",
-        manifest_filename="anything.json",
-        job_ids=["1"],
-        total_tasks=1,
-        run_id="custom_run",
-    )
-    assert record.run_id == "custom_run"
-
-
 # ─── Bug 4: SGE alive-check actually checks qstat exit codes ───────────────
 
 
@@ -498,19 +466,19 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
 
 
 def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment):
-    """Wave's task ids are read from manifest.wave_map; one SSH call enumerates
+    """Wave's task ids are read from sidecar.wave_map; one SSH call enumerates
     missing files."""
-    manifest_json = json.dumps(
+    sidecar_json = json.dumps(
         {
-            "schema_version": 2,
-            "tasks": {"0": {}, "1": {}, "2": {}},
-            "wave_map": {"0": ["0", "1", "2"]},
+            "sidecar_schema_version": 1,
+            "task_count": 3,
+            "wave_map": {"0": [0, 1, 2]},
         }
     )
 
     def fake_ssh_run(cmd, *, host, user, **_kw):
         if cmd.startswith("cat "):
-            return _completed(stdout=manifest_json)
+            return _completed(stdout=sidecar_json)
         # Existence check: pretend task 1's output is missing.
         return _completed(
             stdout="MISSING:results/metrics.1.json\n", returncode=0
@@ -520,7 +488,7 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
         missing = runner.verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
-            manifest_filename="manifest.abcd1234.json",
+            run_id="run_abcd1234",
             wave=0,
             template="results/metrics.{task_id}.json",
         )
@@ -528,20 +496,20 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
 
 
 def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, experiment):
-    manifest_json = json.dumps(
-        {"schema_version": 2, "tasks": {"0": {}, "1": {}}, "wave_map": {"0": ["0", "1"]}}
+    sidecar_json = json.dumps(
+        {"sidecar_schema_version": 1, "task_count": 2, "wave_map": {"0": [0, 1]}}
     )
 
     def fake_ssh_run(cmd, *, host, user, **_kw):
         if cmd.startswith("cat "):
-            return _completed(stdout=manifest_json)
+            return _completed(stdout=sidecar_json)
         return _completed(stdout="", returncode=0)  # nothing missing
 
     with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
         missing = runner.verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
-            manifest_filename="m.json",
+            run_id="run_x",
             wave=0,
             template="results/metrics.{task_id}.json",
         )
@@ -551,22 +519,23 @@ def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, ex
 def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(
     journal_home, experiment
 ):
-    """Older un-batched manifests have no wave_map; treat wave 0 as 'all'."""
-    manifest_json = json.dumps({"schema_version": 2, "tasks": {"0": {}, "1": {}}})
+    """A sidecar without wave_map (un-batched single-array submission) treats
+    wave 0 as 'every task in [0, task_count)'."""
+    sidecar_json = json.dumps({"sidecar_schema_version": 1, "task_count": 2})
 
     captured: list[str] = []
 
     def fake_ssh_run(cmd, *, host, user, **_kw):
         captured.append(cmd)
         if cmd.startswith("cat "):
-            return _completed(stdout=manifest_json)
+            return _completed(stdout=sidecar_json)
         return _completed(stdout="", returncode=0)
 
     with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
         runner.verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
-            manifest_filename="m.json",
+            run_id="run_x",
             wave=0,
             template="results/metrics.{task_id}.json",
         )
@@ -625,7 +594,6 @@ def test_build_provenance_carries_run_metadata(experiment):
     assert prov["profile"] == "prof"
     assert prov["cluster"] == "hoffman2"
     assert prov["wave"] == 2
-    assert prov["manifest"] == "manifest.abcd1234.json"
     # combined_at is ISO 8601 with offset; check shape, not exact value.
     assert "T" in prov["combined_at"] and prov["combined_at"].endswith("+00:00")
 
@@ -914,119 +882,6 @@ def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
         )
 
     assert logs[0]["path"] == "/exp/ml.o12345.7"
-
-
-def test_validate_manifest_file_passes_for_clean_manifest(tmp_path: Path):
-    """A v2 manifest with resolved cmds and consistent wave_map validates."""
-    manifest = {
-        "schema_version": 2,
-        "total_tasks": 2,
-        "tasks": {
-            "0": {
-                "cmd": "python3 train.py --lr 0.01",
-                "result_dir": "results/run_a",
-                "params": {"lr": 0.01},
-                "cmd_sha": "0" * 16,
-            },
-            "1": {
-                "cmd": "python3 train.py --lr 0.001",
-                "result_dir": "results/run_b",
-                "params": {"lr": 0.001},
-                "cmd_sha": "1" * 16,
-            },
-        },
-        "wave_map": {"0": ["0", "1"]},
-    }
-    manifest_path = tmp_path / "manifest.abcd1234.json"
-    manifest_path.write_text(json.dumps(manifest))
-    runner.validate_manifest_file(manifest_path)  # no raise
-
-
-def test_validate_manifest_file_raises_for_unresolved_placeholder(tmp_path: Path):
-    manifest_path = tmp_path / "m.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "tasks": {
-                    "0": {
-                        "cmd": "python3 train.py --model {model_name}",  # unresolved
-                        "result_dir": "results/run",
-                        "params": {},
-                    }
-                },
-            }
-        )
-    )
-    with pytest.raises(Exception) as exc_info:
-        runner.validate_manifest_file(manifest_path)
-    assert "unresolved placeholder" in str(exc_info.value)
-    assert "{model_name}" in str(exc_info.value)
-
-
-def test_validate_manifest_file_raises_for_total_tasks_mismatch(tmp_path: Path):
-    manifest_path = tmp_path / "m.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "total_tasks": 5,  # claimed
-                "tasks": {  # but only 1 here
-                    "0": {"cmd": "x", "result_dir": "y", "params": {}}
-                },
-            }
-        )
-    )
-    with pytest.raises(Exception) as exc_info:
-        runner.validate_manifest_file(manifest_path)
-    assert "total_tasks" in str(exc_info.value)
-
-
-def test_validate_manifest_file_raises_for_unknown_schema_version(tmp_path: Path):
-    manifest_path = tmp_path / "m.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 99,
-                "tasks": {"0": {"cmd": "x", "result_dir": "y", "params": {}}},
-            }
-        )
-    )
-    with pytest.raises(Exception) as exc_info:
-        runner.validate_manifest_file(manifest_path)
-    assert "schema_version" in str(exc_info.value)
-
-
-def test_validate_manifest_file_raises_for_wave_map_drift(tmp_path: Path):
-    """Wave map references a task id not in tasks."""
-    manifest_path = tmp_path / "m.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "tasks": {"0": {"cmd": "x", "result_dir": "y", "params": {}}},
-                "wave_map": {"0": ["0", "99"]},  # 99 doesn't exist
-            }
-        )
-    )
-    with pytest.raises(Exception) as exc_info:
-        runner.validate_manifest_file(manifest_path)
-    assert "wave_map" in str(exc_info.value)
-    assert "99" in str(exc_info.value)
-
-
-def test_validate_manifest_file_raises_for_invalid_json(tmp_path: Path):
-    manifest_path = tmp_path / "m.json"
-    manifest_path.write_text("not json {")
-    with pytest.raises(Exception) as exc_info:
-        runner.validate_manifest_file(manifest_path)
-    assert "not valid JSON" in str(exc_info.value)
-
-
-def test_validate_manifest_file_raises_for_missing_file(tmp_path: Path):
-    with pytest.raises(Exception) as exc_info:
-        runner.validate_manifest_file(tmp_path / "does-not-exist.json")
-    assert "not found" in str(exc_info.value)
 
 
 def test_write_remote_provenance_writes_sidecar_path():

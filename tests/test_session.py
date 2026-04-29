@@ -40,7 +40,6 @@ def _make_record(run_id: str = "ridge_abcd1234", **overrides) -> RunRecord:
         "remote_path": "/u/scratch/exp",
         "job_name": "ml_ridge",
         "job_ids": ["12345678"],
-        "manifest": "manifest.abcd1234.json",
         "total_tasks": 100,
         "submitted_at": "2026-04-26T17:00:00+00:00",
         "experiment_dir": "/tmp/exp",

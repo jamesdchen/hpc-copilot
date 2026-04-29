@@ -312,7 +312,6 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
         remote_path="/x",
         job_name="j",
         job_ids=["1"],
-        manifest="manifest.abcd1234.json",
         total_tasks=1,
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
@@ -564,7 +563,6 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
         remote_path="/exp",
         job_name="ml",
         job_ids=["12345"],
-        manifest="manifest.abcd1234.json",
         total_tasks=10,
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
@@ -663,7 +661,6 @@ def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
         remote_path="/exp",
         job_name="ml",
         job_ids=["12345"],
-        manifest="manifest.abcd1234.json",
         total_tasks=2,
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
@@ -780,7 +777,6 @@ def test_aggregate_envelope_carries_provenance_on_success(
     prov = payload["data"]["provenance"]
     assert prov["run_id"] == "ml_abcd1234"
     assert prov["wave"] == 0
-    assert prov["manifest"] == "manifest.abcd1234.json"
     assert prov["profile"] == "ml"
     assert prov["cluster"] == "hoffman2"
     assert "combined_at" in prov
