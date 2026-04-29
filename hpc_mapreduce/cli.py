@@ -1092,12 +1092,24 @@ def cmd_failures(args: argparse.Namespace) -> int:
 
 def cmd_build_executor(args: argparse.Namespace) -> int:
     starters = hpc_mapreduce._PACKAGE_ROOT / "templates" / "starters"
+    # Only "plain" (executor_template.py) survives the move to the
+    # .hpc/tasks.py model — chunked / date-window / shim were starter
+    # templates for the old shim layer which is now collapsed into the
+    # user's tasks.py.  Aliases for the deleted types raise an
+    # actionable error pointing at /submit's scaffolding flow.
     template_map = {
         "plain": starters / "executor_template.py",
-        "chunked": starters / "chunking_shim.py",
-        "date-window": starters / "date_window_shim.py",
-        "shim": starters / "shim_template.py",
     }
+    deprecated_types = {"chunked", "date-window", "shim"}
+    if args.type in deprecated_types:
+        raise errors.ManifestInvalid(
+            f"--type {args.type!r} is no longer supported. The chunking / "
+            f"date-window / generic-shim axes are now expressed inline in "
+            f".hpc/tasks.py; the agent walks you through writing it during "
+            f"/submit Step 6, adapting the canonical example at "
+            f"hpc_mapreduce/templates/tasks_example.py. Use --type plain to "
+            f"scaffold a regular executor."
+        )
     if args.type not in template_map:
         raise errors.ManifestInvalid(
             f"unknown --type {args.type!r}; choose from {sorted(template_map)}"
@@ -1365,7 +1377,7 @@ def build_parser() -> argparse.ArgumentParser:
     # build-executor
     p_be = sub.add_parser(
         "build-executor",
-        help="Scaffold a new executor or shim from a starter template.",
+        help="Scaffold a new executor from a starter template.",
     )
     p_be.add_argument("--name", required=True, help="Output filename stem (no .py).")
     p_be.add_argument(
@@ -1377,13 +1389,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_be.add_argument(
         "--type",
         default="plain",
+        # The "chunked" / "date-window" / "shim" choices are accepted at
+        # the argparse layer but rejected at the cmd_build_executor body
+        # with a pointer to /submit's .hpc/tasks.py scaffolding flow.
+        # Keeping them in `choices` so old scripts get a friendly error
+        # rather than a generic argparse complaint.
         choices=["plain", "chunked", "date-window", "shim"],
         help=(
-            "Which template to instantiate: "
-            "plain = standard executor scaffold; "
-            "chunked = one task per row-index range; "
-            "date-window = one task per (start, end) date pair; "
-            "shim = blank shim template for hand-written translations."
+            "Which template to instantiate. Only 'plain' (a standard "
+            "executor scaffold) survives the .hpc/tasks.py refactor — "
+            "the legacy 'chunked' / 'date-window' / 'shim' types now "
+            "live inline in .hpc/tasks.py and are scaffolded by /submit "
+            "Step 6 from hpc_mapreduce/templates/tasks_example.py."
         ),
     )
     p_be.add_argument(

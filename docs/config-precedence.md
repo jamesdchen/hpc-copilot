@@ -56,22 +56,32 @@ Notes:
 
 - **Source**: `hpc_mapreduce.job.discover.discover_executors` walks
   `--experiment-dir` (CLI) or the active experiment repo (slash).
-- **Reserved filenames** (skipped): `_hpc_dispatch.py`,
-  `_hpc_combiner.py`, `hpc_chunking_shim.py`, `__init__.py` — see
-  `_SKIP_BASENAMES` in `hpc_mapreduce/job/discover.py`.
+- **Reserved directory** (skipped wholesale): `.hpc/` — see `_SKIP_DIRS`
+  in `hpc_mapreduce/job/discover.py`. The framework files inside it
+  (`tasks.py`, `runs/<run_id>.json`, and on the cluster also
+  `_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are never
+  treated as user executors.
+- **Reserved filenames**: `__init__.py` (Python convention; same
+  `_SKIP_BASENAMES`).
 - **Override path**: there is no `hpc.yaml` field for this; experiment
   authors influence discovery by where they put their `.py` files. The
   `hpc-mapreduce discover` subcommand exposes the result for inspection.
 
-### Grid params
+### Parallelization axis (`.hpc/tasks.py`)
 
-- **Layer 1**: `expand-grid --spec spec.json` (CLI, `{"grid": {...}}`).
-- **Layer 2**: `hpc.yaml` profile's `grid:` block (see
-  `docs/schema.md`). Slash `/submit` reads this and offers it as a
-  pre-populated answer; the user can override interactively at submit
-  time.
-- **No env override** — grids are experiment-level.
-- Cartesian-product expansion happens in `hpc_mapreduce.job.grid.expand_grid`.
+- **Layer 1**: `.hpc/tasks.py` itself — a user-written Python module
+  exposing `total()` and `resolve(task_id)`. Authored once via
+  `/submit` Step 6's scaffolding flow; thereafter committed to git and
+  reused on every submit.
+- **Layer 2 (legacy migration only)**: `hpc.yaml`'s `chunking:` /
+  `backtest:` blocks, when present, are translated into Python and
+  stripped from the spec by `/submit` Step 6 the first time. They are
+  not interpreted at runtime by the framework.
+- **No env override** — the axis is part of the experiment's source
+  code, not its environment.
+- The CLI's `expand-grid` subcommand is a Cartesian-product utility
+  (inlined in `hpc_mapreduce/cli.py`) but no longer feeds the
+  framework's task structure.
 
 ### Resource overrides (mem, walltime, gpus, gpu_type)
 
@@ -103,9 +113,11 @@ Notes:
 | `HPC_CLUSTERS_CONFIG` | (package default) | `hpc_mapreduce/infra/clusters.py` | Use alternate `clusters.yaml`. |
 | `HPC_NO_SSH_MULTIPLEX` | unset | `hpc_mapreduce/cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
 | `SSH_AUTH_SOCK` | (set by ssh-agent) | `cmd_preflight` | Required for SSH auth; preflight fails if missing. |
-| `HPC_MANIFEST` | `_hpc_dispatch.json` | cluster-side `_hpc_dispatch.py`, `_hpc_combiner.py` | Manifest filename override on the compute node. |
-| `HPC_WAVE` | (none) | cluster-side `_hpc_combiner.py` | Wave index when args absent. |
-| `TASK_ID` | (none) | cluster-side `_hpc_dispatch.py` | 1-based task index. |
+| `HPC_RUN_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py` | Locates `.hpc/runs/<run_id>.json`. |
+| `HPC_TASK_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py` | 0-based task index. `TASK_ID` is accepted as a fallback for the env-var transition. |
+| `HPC_TASKS_PATH` | sibling of `_hpc_dispatch.py` | cluster-side `.hpc/_hpc_dispatch.py` | Override path to user's `tasks.py`. |
+| `HPC_WAVE` | (none) | cluster-side `.hpc/_hpc_combiner.py` | Wave index when `--wave` is absent. |
+| `HPC_RUNTIME` | unset | scheduler templates | When `uv`, the template runs `uv sync` before dispatch. |
 
 ## Versioning
 

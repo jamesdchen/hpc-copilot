@@ -8,9 +8,9 @@ task count, and the wave map computed by the throughput optimizer.
 The user's per-task definition lives in ``$EXPERIMENT/.hpc/tasks.py``
 exposing ``total()`` and ``resolve(task_id)``. ``cmd_sha`` is derived from
 materializing ``[resolve(i) for i in range(total())]`` and hashing the
-sorted-keys JSON line-joined form — i.e. the same algorithm as the old
-``aggregate_cmd_sha`` but sourced from function calls instead of dict
-reads.
+sorted-keys JSON line-joined form — every task's full kwargs dict
+contributes to the digest, so any change to ``tasks.py`` that affects
+task content also changes the run's identity.
 """
 
 from __future__ import annotations

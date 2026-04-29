@@ -99,14 +99,17 @@ def reduce_by_grid_point(manifest: dict) -> dict[str, dict]:
     Parameters
     ----------
     manifest : dict
-        The task manifest (from :func:`build_task_manifest`).  Each task
-        entry must have ``params`` and ``result_dir``.  Tasks are grouped
-        by their ``params`` dict (via :func:`run_id`); any additional
-        task-level keys are ignored.
+        Manifest-shaped dict — either the synthetic dict produced from
+        a per-run sidecar + ``.hpc/tasks.py`` by
+        :func:`hpc_mapreduce.reduce.status._build_synthetic_manifest_from_sidecar`,
+        or any equivalent shape with ``tasks.<tid>.params`` and
+        ``tasks.<tid>.result_dir`` fields. Tasks are grouped by their
+        ``params`` dict (via the inlined ``run_id`` helper); any
+        additional task-level keys are ignored.
 
     Returns
     -------
-    dict mapping ``run_id`` (str) → aggregated metrics (dict).
+    dict mapping grid-point key (str) → aggregated metrics (dict).
     Grid points with no metrics files return empty dicts.
     """
     import re as _re

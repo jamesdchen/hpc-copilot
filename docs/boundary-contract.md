@@ -117,30 +117,6 @@ embedded in the manifest header (`run_id`, `cmd_sha`,
 - `reduce_resource_usage` — summarise CPU/mem/GPU usage across tasks.
 - `classify_failure` — categorise a task failure from its log.
 
-### Grid API
-
-- `expand_grid` — Cartesian product of a grid spec into per-task parameter
-  dicts.
-- `build_task_manifest` — produce the `_hpc_dispatch.json` manifest for a run.
-- `total_tasks` — count tasks in a grid spec.
-- `attach_wave_map` — annotate a manifest with throughput-optimizer waves.
-- `MANIFEST_SCHEMA_VERSION` — current schema version of the manifest format.
-- `resolve_git_sha` — short git SHA of the experiment repo (or `"nogit"`).
-- `validate_result_dir_template` — check `results.dir` placeholders resolve.
-
-### Manifest filenames & resume
-
-- `MAX_MANIFESTS` — maximum kept manifests before pruning.
-- `MANIFEST_ALIAS` — canonical alias filename pointing at the active manifest.
-- `manifest_filename_for_sha` — deterministic manifest filename for a cmd SHA.
-- `aggregate_cmd_sha` — content hash of the aggregation command.
-- `write_manifest` — persist a manifest to disk.
-- `find_existing_manifests` — list manifests in a result directory.
-- `find_manifest_by_cmd_sha` — locate a manifest by its cmd SHA.
-- `prune_old_manifests` — keep only the most recent `MAX_MANIFESTS`.
-- `build_manifest_with_resume` — manifest builder that reuses prior task IDs
-  on resubmit.
-
 ### Executor discovery
 
 - `ExecutorInfo` — dataclass describing one discovered executor.
@@ -213,10 +189,12 @@ Everything outside the framework's public API. Concretely:
   put it).
 - **`hpc.yaml`** — optional per-experiment profile config (see
   [`docs/schema.md`](schema.md)).
-- **Generated shims** — `date_window_shim.py`, `chunking_shim.py`, or any
-  custom shim the LLM writes from the templates in
-  `hpc_mapreduce/templates/starters/`. These live in the experiment
-  repo, are versioned there, and are user-editable.
+- **`.hpc/tasks.py`** — the user-written Python module exposing
+  `total()` and `resolve(task_id)`. Authored once via `/submit`
+  Step 6's scaffolding flow (adapting the canonical example at
+  `hpc_mapreduce/templates/tasks_example.py`), git-tracked, and
+  user-editable. The bridge between the framework's task-id contract
+  and whatever parallelization axis the experiment needs.
 - **Domain-specific aggregation** — any `aggregate_cmd` the experiment
   defines for fan-in.
 

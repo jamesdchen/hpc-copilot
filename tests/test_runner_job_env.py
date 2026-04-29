@@ -10,8 +10,10 @@ from __future__ import annotations
 from slash_commands.runner import build_job_env
 
 _BASE_ENV = {
-    "EXECUTOR": "python3 _hpc_dispatch.py",
-    "HPC_MANIFEST": "_hpc_dispatch.json",
+    "EXECUTOR": "python3 .hpc/_hpc_dispatch.py",
+    "HPC_RUN_ID": "exp-20260429-153012-abc12345",
+    "HPC_CMD_SHA": "abc12345" * 8,
+    "HPC_TASK_COUNT": "24",
     "REPO_DIR": "/u/scratch/exp",
 }
 
