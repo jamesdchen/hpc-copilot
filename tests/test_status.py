@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from hpc_mapreduce.reduce.status import (
     check_results,
-    check_results_from_manifest,
+    check_results_from_tasks,
     report_status,
 )
 
@@ -135,10 +135,10 @@ class TestHeaderOnlyCsv:
             "tasks": {"0": {"result_dir": str(task_result_dir)}},
         }
 
-        results = check_results_from_manifest(manifest, file_glob="*.csv")
+        results = check_results_from_tasks(manifest, file_glob="*.csv")
         assert 1 in results
 
-        strict = check_results_from_manifest(manifest, file_glob="*.csv", min_rows=1)
+        strict = check_results_from_tasks(manifest, file_glob="*.csv", min_rows=1)
         assert 1 not in strict
 
 
@@ -146,13 +146,13 @@ class TestHeaderOnlyCsv:
 
 
 class TestReportTimestampIsUtc:
-    def test_report_status_from_manifest_timestamp_has_offset(self, tmp_path):
+    def test_report_status_from_tasks_timestamp_has_offset(self, tmp_path):
         """Previously ``time.strftime("%Y-%m-%dT%H:%M:%S")`` emitted local
         time without a TZ marker; downstream consumers couldn't tell what
         timezone the timestamp was in.  The fix uses an explicit UTC ISO
         string so the field is unambiguous.
         """
-        from hpc_mapreduce.reduce.status import report_status_from_manifest
+        from hpc_mapreduce.reduce.status import report_status_from_tasks
 
         task_dir = tmp_path / "t0"
         task_dir.mkdir()
@@ -160,7 +160,7 @@ class TestReportTimestampIsUtc:
             "total_tasks": 1,
             "tasks": {"0": {"result_dir": str(task_dir)}},
         }
-        report = report_status_from_manifest(manifest, [], scheduler="slurm")
+        report = report_status_from_tasks(manifest, [], scheduler="slurm")
         assert report["timestamp"].endswith("+00:00")
 
     def test_report_status_timestamp_has_offset(self, tmp_path):
@@ -206,16 +206,16 @@ class TestDetectSchedulerMetaHint:
         with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
             assert detect_scheduler(tmp_path) == "sge"
 
-    def test_report_status_from_manifest_uses_first_task_meta(
+    def test_report_status_from_tasks_uses_first_task_meta(
         self, tmp_path, monkeypatch
     ):
-        """``report_status_from_manifest`` previously called
+        """``report_status_from_tasks`` previously called
         ``detect_scheduler()`` with no args, bypassing every meta hint.
         Now it pulls a representative result_dir from the first task so
         the heuristic has a chance to read the manifest's experiment
         meta.
         """
-        from hpc_mapreduce.reduce.status import report_status_from_manifest
+        from hpc_mapreduce.reduce.status import report_status_from_tasks
 
         exp = tmp_path / "exp2"
         task = exp / "t0"
@@ -231,5 +231,5 @@ class TestDetectSchedulerMetaHint:
             raise FileNotFoundError("no sacct")
 
         with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
-            report = report_status_from_manifest(manifest, [])
+            report = report_status_from_tasks(manifest, [])
         assert report["scheduler"] == "slurm"

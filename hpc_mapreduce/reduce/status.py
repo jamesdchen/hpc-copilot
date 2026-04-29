@@ -34,10 +34,8 @@ from __future__ import annotations
 __all__ = [
     "check_results",
     "check_results_from_tasks",
-    "check_results_from_manifest",  # deprecated alias for check_results_from_tasks
     "report_status",
     "report_status_from_tasks",
-    "report_status_from_manifest",  # deprecated alias for report_status_from_tasks
     "rollup_by_grid_point",
     "rollup_by_wave",
     "get_err_log_paths",
@@ -517,15 +515,6 @@ def report_status_from_tasks(
     if err_paths:
         report["err_log_paths"] = err_paths
     return report
-
-
-# Deprecated aliases — kept for back-compat with consumers that still
-# import the manifest-named functions. New code should use the
-# ``_from_tasks`` names which more accurately describe the input
-# (a manifest-shape dict that's now synthesized from .hpc/tasks.py +
-# a per-run sidecar). To be removed in a future minor version.
-check_results_from_manifest = check_results_from_tasks
-report_status_from_manifest = report_status_from_tasks
 
 
 def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
