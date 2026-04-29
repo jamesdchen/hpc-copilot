@@ -15,7 +15,6 @@ contract lives under `hpc_mapreduce/schemas/`:
 - `status.output.json` — `status` data block.
 - `capabilities.output.json` — `capabilities` data block.
 - `preflight.output.json` — `preflight` data block.
-- `expand_grid.input.json` — `expand-grid --spec` shape.
 - `resubmit.input.json` — `resubmit --spec` shape.
 
 Agents constructing/validating envelopes should validate against the
@@ -197,23 +196,6 @@ filter narrows discovery to `scripts/` (Tier-2 entrypoints) and the
 root-level `probe.py` (Tier-1) — never `src/`, MARs's modules-only dir.
 
 Idempotent: yes. Error codes: `internal` only. Exit: 0.
-
-### `expand-grid`
-
-Purpose: Cartesian-product expansion of a grid spec. Pure compute.
-
-Args: `--spec spec.json` (required), `--experiment-dir`.
-
-`--spec` shape (validated against `schemas/expand_grid.input.json`):
-
-```json
-{"grid": {"lr": [0.01, 0.001], "seed": [1, 2, 3]}}
-```
-
-`data` shape: `{"points": [{"lr": 0.01, "seed": 1}, ...], "total": 6}`.
-
-Idempotent: yes. Error codes: `manifest_invalid` (missing/malformed
-`grid`), `config_invalid` (unreadable spec file). Exit: 0 / 1.
 
 ### `list-in-flight`
 

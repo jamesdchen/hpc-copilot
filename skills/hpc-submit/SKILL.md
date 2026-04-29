@@ -22,13 +22,13 @@ Submit a recorded run via the `hpc-mapreduce` CLI. The CLI is idempotent on (pro
    ```
    Parse `data.executors[]` for `name`, `path`, `flags`.
 
-4. Optionally expand the grid to verify task count before submitting:
+4. The parallelization axis lives in `.hpc/tasks.py` (`total()` + `resolve(task_id)`); the agent walks the user through writing it during `/submit` Step 6. Verify task count locally before submitting:
    ```bash
-   hpc-mapreduce expand-grid --spec spec.json --experiment-dir <path>
+   python -c 'from hpc_mapreduce import load_tasks_module, tasks_path; print(load_tasks_module(tasks_path(".")).total())'
    ```
-   Read `data.total`. If unexpectedly large (>1000), stop and surface to the caller.
+   If unexpectedly large (>1000), stop and surface to the caller.
 
-5. Write the submission spec to `spec.json` — required fields: `profile`, `cluster`, `ssh_target`, `remote_path`, `job_name`, `manifest_filename`, `job_ids` (list), `total_tasks` (int). Optional: `run_id` (for explicit dedup).
+5. Write the submission spec to `spec.json` — required fields: `profile`, `cluster`, `ssh_target`, `remote_path`, `job_name`, `run_id`, `job_ids` (list), `total_tasks` (int). The legacy `manifest_filename` field is still accepted for back-compat but `run_id` is preferred.
 
 6. Dry-run validate first:
    ```bash

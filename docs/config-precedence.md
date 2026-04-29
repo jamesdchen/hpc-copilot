@@ -79,9 +79,9 @@ Notes:
   not interpreted at runtime by the framework.
 - **No env override** — the axis is part of the experiment's source
   code, not its environment.
-- The CLI's `expand-grid` subcommand is a Cartesian-product utility
-  (inlined in `hpc_mapreduce/cli.py`) but no longer feeds the
-  framework's task structure.
+- There is no longer an `expand-grid` CLI subcommand. Cartesian
+  products are the user's responsibility — write `itertools.product`
+  inline in `.hpc/tasks.py` if that's the axis you want.
 
 ### Resource overrides (mem, walltime, gpus, gpu_type)
 
