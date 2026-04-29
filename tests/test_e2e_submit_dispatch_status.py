@@ -7,7 +7,7 @@ chain in a single pytest run.
 
 The reporting side still consumes a manifest-shaped dict;
 ``_synthetic_manifest`` builds one from the sidecar + tasks.py the same
-way ``hpc_mapreduce.reduce.status._build_synthetic_manifest_from_sidecar``
+way ``hpc_mapreduce.reduce.status._build_per_task_dict_from_sidecar``
 does on the cluster, so the existing ``check_results_from_tasks``
 contract is unchanged.
 """
@@ -94,7 +94,7 @@ def _synthetic_manifest(
     result_dir_template: str,
     run_id: str = "test_run",
 ) -> dict:
-    """Mirror reduce.status._build_synthetic_manifest_from_sidecar locally."""
+    """Mirror reduce.status._build_per_task_dict_from_sidecar locally."""
     tasks = {}
     for i, kwargs in enumerate(kwargs_per_task):
         ctx = {"task_id": i, "run_id": run_id, **kwargs}

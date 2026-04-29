@@ -91,21 +91,20 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
     return result
 
 
-def reduce_by_grid_point(manifest: dict) -> dict[str, dict]:
+def reduce_by_grid_point(tasks_data: dict) -> dict[str, dict]:
     """Group tasks by grid point, then reduce each group via :func:`reduce_metrics`.
 
     Tasks sharing the same ``params`` dict are treated as one grid point.
 
     Parameters
     ----------
-    manifest : dict
-        Manifest-shaped dict — either the synthetic dict produced from
-        a per-run sidecar + ``.hpc/tasks.py`` by
-        :func:`hpc_mapreduce.reduce.status._build_synthetic_manifest_from_sidecar`,
-        or any equivalent shape with ``tasks.<tid>.params`` and
-        ``tasks.<tid>.result_dir`` fields. Tasks are grouped by their
-        ``params`` dict (via the inlined ``run_id`` helper); any
-        additional task-level keys are ignored.
+    tasks_data : dict
+        Per-task dict with ``tasks.<tid>.params`` and
+        ``tasks.<tid>.result_dir`` fields. Typically the synthetic dict
+        produced from a per-run sidecar + ``.hpc/tasks.py`` by
+        :func:`hpc_mapreduce.reduce.status._build_per_task_dict_from_sidecar`.
+        Tasks are grouped by their ``params`` dict (via the inlined
+        ``run_id`` helper); any additional task-level keys are ignored.
 
     Returns
     -------
@@ -120,7 +119,7 @@ def reduce_by_grid_point(manifest: dict) -> dict[str, dict]:
 
     # Group tasks by grid point (via run_id over params)
     groups: dict[str, list[Path]] = {}
-    for task in manifest["tasks"].values():
+    for task in tasks_data["tasks"].values():
         key = _run_id(task["params"])
         groups.setdefault(key, []).append(Path(task["result_dir"]))
 

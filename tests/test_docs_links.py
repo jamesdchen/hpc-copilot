@@ -45,8 +45,8 @@ _DOC_VOCABULARY = {
     # Status fields
     "deduped", "lifecycle_state", "in_flight", "complete", "failed",
     "abandoned", "all_ok", "checks", "stderr_tail", "stdout_tail",
-    "ssh_auth_sock", "cluster_tcp_22", "experiment_id", "manifest_sha",
-    "run_id", "job_ids", "manifest_filename", "total_tasks", "profile",
+    "ssh_auth_sock", "cluster_tcp_22", "experiment_id",
+    "run_id", "job_ids", "total_tasks", "profile",
     "ssh_target", "remote_path", "job_name", "wave", "seed",
     "executor", "cmd_sha", "tasks.py", "_TASKS", "lr", "i", "experiment_id",
     "timestamp", "models", "rankings", "statistical_tests",

@@ -95,7 +95,7 @@ embedded in the manifest header (`run_id`, `cmd_sha`,
 - `check_results` — count completed/failed result files for a run.
 - `check_results_from_tasks` — same, but driven by a per-task dict
   (synthesized from a per-run sidecar + `.hpc/tasks.py` by
-  `_build_synthetic_manifest_from_sidecar`). Used internally by the
+  `_build_per_task_dict_from_sidecar`). Used internally by the
   cluster-side status reporter.
 - `report_status` — formatted status report for a submitted job.
 - `report_status_from_tasks` — same, but driven by the per-task dict
