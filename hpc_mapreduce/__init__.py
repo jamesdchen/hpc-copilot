@@ -19,7 +19,7 @@ __all__ = [
     # Config & discovery
     "load_clusters_config",
     "get_template_path",
-    # Framework subdirectory layout
+    # Framework subdirectory layout (NEW — the .hpc/tasks.py model)
     "HPC_SUBDIR",
     "TASKS_FILENAME",
     "RUNS_SUBDIR",
@@ -27,7 +27,7 @@ __all__ = [
     "runs_subdir",
     "tasks_path",
     "load_tasks_module",
-    # Per-run sidecars
+    # Per-run sidecars (NEW)
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
     "compute_cmd_sha",
@@ -45,7 +45,9 @@ __all__ = [
     "deploy_runtime",
     # Job status & results
     "check_results",
+    "check_results_from_manifest",  # legacy — pending removal
     "report_status",
+    "report_status_from_manifest",  # legacy — pending removal
     "rollup_by_grid_point",
     "detect_scheduler",
     # GPU selection
@@ -56,6 +58,28 @@ __all__ = [
     "reduce_partials",
     "reduce_resource_usage",
     "classify_failure",
+    # Legacy grid API — being phased out as tasks.py replaces manifests
+    "expand_grid",
+    "build_task_manifest",
+    "total_tasks",
+    "attach_wave_map",
+    "MANIFEST_SCHEMA_VERSION",
+    "resolve_git_sha",
+    "validate_result_dir_template",
+    # Legacy manifest API — being phased out
+    "MAX_MANIFESTS",
+    "MANIFEST_ALIAS",
+    "manifest_filename_for_sha",
+    "aggregate_cmd_sha",
+    "write_manifest",
+    "find_existing_manifests",
+    "find_manifest_by_cmd_sha",
+    "prune_old_manifests",
+    "build_manifest_with_resume",
+    # Legacy shim cache — being phased out
+    "shim_cache_key",
+    "load_cached_shim",
+    "save_shim",
     # Executor discovery
     "ExecutorInfo",
     "discover_executors",
@@ -100,6 +124,26 @@ from hpc_mapreduce.job.discover import (
     discover_executors,
     is_executor_source,
 )
+from hpc_mapreduce.job.grid import (
+    MANIFEST_SCHEMA_VERSION,
+    attach_wave_map,
+    build_task_manifest,
+    expand_grid,
+    resolve_git_sha,
+    total_tasks,
+    validate_result_dir_template,
+)
+from hpc_mapreduce.job.manifest import (
+    MANIFEST_ALIAS,
+    MAX_MANIFESTS,
+    aggregate_cmd_sha,
+    build_manifest_with_resume,
+    find_existing_manifests,
+    find_manifest_by_cmd_sha,
+    manifest_filename_for_sha,
+    prune_old_manifests,
+    write_manifest,
+)
 from hpc_mapreduce.job.resubmit import (
     ResubmitBatch,
     ResubmitPlan,
@@ -125,6 +169,7 @@ from hpc_mapreduce.job.throughput import (
     compute_submission_plan,
 )
 from hpc_mapreduce.map.metrics_io import write_metrics
+from hpc_mapreduce.map.shim import load_cached_shim, save_shim, shim_cache_key
 from hpc_mapreduce.reduce.classify import classify_failure
 from hpc_mapreduce.reduce.metrics import (
     reduce_by_grid_point,
@@ -134,8 +179,10 @@ from hpc_mapreduce.reduce.metrics import (
 )
 from hpc_mapreduce.reduce.status import (
     check_results,
+    check_results_from_manifest,
     detect_scheduler,
     report_status,
+    report_status_from_manifest,
     rollup_by_grid_point,
 )
 
