@@ -11,6 +11,27 @@ Read cluster definitions:
 
 Check for existing context (in priority order):
 
+**Migration check (legacy `_hpc_dispatch.json`):** Before any of the
+priority checks below, look for a top-level `_hpc_dispatch.json` (or
+`manifest.<sha8>.json`, or `manifest.json`) in the experiment dir. These
+are artifacts of the pre-`.hpc/tasks.py` model that no longer drive the
+framework. If any are present, surface a one-time migration message:
+
+> "I found a legacy dispatch manifest at `_hpc_dispatch.json`. The
+> framework no longer reads manifests — task definitions live in
+> `.hpc/tasks.py` and per-run state in `.hpc/runs/<run_id>.json`. I'll
+> walk you through writing `.hpc/tasks.py` once at Step 6 (using your
+> existing manifest as a translation hint if helpful), then we can move
+> the old manifest aside. OK to proceed?"
+
+If the user agrees, continue to priority 0 below; the manifest's
+existing `tasks[*].cmd` and `tasks[*].params` are useful context for
+Step 6's scaffolding conversation but are not consumed by the framework.
+Once the new `.hpc/tasks.py` is committed, suggest the user `git mv
+_hpc_dispatch.json .hpc/legacy/` (or simply delete it). Don't proceed
+silently — a stale `_hpc_dispatch.json` next to a fresh `.hpc/tasks.py`
+is confusing on inspection.
+
 0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /status, or start a new submission?"
    - This only handles the case where the user wants to switch context away from a fresh `/submit` toward picking up an existing run; otherwise fall through to priority 1.
 
