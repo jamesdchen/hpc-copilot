@@ -9,7 +9,6 @@
   "properties": {
     "run_id":      { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
     "job_ids":     { "type": "array", "items": { "type": "string" } },
-    "manifest":    { "type": "string", "description": "Legacy field kept for back-compat with old envelope readers; empty string when run_id-driven." },
     "total_tasks": { "type": "integer", "minimum": 0 },
     "deduped":     { "type": "boolean" }
   }

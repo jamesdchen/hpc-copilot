@@ -160,7 +160,7 @@ SUBMIT_SPEC = {
     "ssh_target": "user@hoffman2.idre.ucla.edu",
     "remote_path": "/u/scratch/exp",
     "job_name": "ml",
-    "manifest_filename": "manifest.abcd1234.json",
+    "run_id": "ml-20260429-153012-abcd1234",
     "job_ids": ["12345"],
     "total_tasks": 6,
 }
@@ -237,7 +237,7 @@ def test_list_in_flight_finds_submitted_run(tmp_path: Path) -> None:
     assert rc == 0
     env_resp = _parse_envelope(out)
     runs = env_resp["data"]["runs"]
-    assert any(r["run_id"] == "ml_abcd1234" for r in runs)
+    assert any(r["run_id"] == SUBMIT_SPEC["run_id"] for r in runs)
 
 
 # ─── envelope schema validation (structural) ───────────────────────────────
@@ -536,7 +536,7 @@ def test_logs_requires_task_id_or_all_failed(tmp_path: Path) -> None:
     rc, out, _ = _run_cli(
         "logs",
         "--experiment-dir", str(tmp_path),
-        "--run-id", "ml_abcd1234",
+        "--run-id", SUBMIT_SPEC["run_id"],
         env=env_vars,
     )
     assert rc != 0
@@ -926,7 +926,7 @@ class TestSubmitFromMeta:
             "cluster": "hoffman2",
             "ssh_target": "user@host",
             "remote_path": "/u/scratch/exp",
-            "manifest_filename": "manifest.abcd1234.json",
+            "run_id": "run-20260429-153012-abcd1234",
             "job_ids": ["12345"],
             "total_tasks": 4,
         }
@@ -959,7 +959,14 @@ class TestSubmitFromMeta:
         assert rc == 0, out
         env = _parse_envelope(out)
         assert env["ok"] is True
-        assert env["data"]["run_id"].startswith("run-001-foo_")
+        # run_id is now spec-supplied directly; --from-meta only fills
+        # the profile + job_name fields.  Verify by reading the journal.
+        from slash_commands import session
+        monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        record = session.load_run(tmp_path, env["data"]["run_id"])
+        assert record is not None
+        assert record.profile == "run-001-foo"
+        assert record.job_name == "run-001-foo"
 
     def test_from_meta_does_not_overwrite_present_fields(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -975,7 +982,12 @@ class TestSubmitFromMeta:
         )
         assert rc == 0, out
         env = _parse_envelope(out)
-        assert env["data"]["run_id"].startswith("explicit_")
+        from slash_commands import session
+        monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        record = session.load_run(tmp_path, env["data"]["run_id"])
+        assert record is not None
+        assert record.profile == "explicit"
+        assert record.job_name == "explicit"
 
     def test_from_meta_no_op_without_meta_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -991,7 +1003,11 @@ class TestSubmitFromMeta:
         )
         assert rc == 0, out
         env = _parse_envelope(out)
-        assert env["data"]["run_id"].startswith("p_")
+        from slash_commands import session
+        monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        record = session.load_run(tmp_path, env["data"]["run_id"])
+        assert record is not None
+        assert record.profile == "p"
 
     def test_from_meta_no_op_when_meta_lacks_experiment_id(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
