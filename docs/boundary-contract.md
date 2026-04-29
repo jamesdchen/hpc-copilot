@@ -50,16 +50,62 @@ invariants in [`docs/sync-checklist.md`](sync-checklist.md) bind both.
 - `rsync_pull` — pull a remote directory to local.
 - `deploy_runtime` — stage the framework's runtime files on the cluster.
 
+### Framework subdirectory layout
+
+Every framework-generated artifact in an experiment repo lives under
+`.hpc/`. The only file the user is expected to author there is
+`tasks.py`; per-run sidecars in `.hpc/runs/` are generated and
+gitignored.
+
+- `HPC_SUBDIR` — `".hpc"`. The directory name itself; reserved (see
+  *Reserved filenames* below).
+- `TASKS_FILENAME` — `"tasks.py"`. The single file the user owns inside
+  `.hpc/`.
+- `RUNS_SUBDIR` — `"runs"`. Per-run sidecars live here.
+- `framework_subdir` — return `experiment_dir/.hpc`, mkdir it, and
+  write `.hpc/.gitignore` (ignoring `runs/`) on first call.
+- `runs_subdir` — return `experiment_dir/.hpc/runs`, mkdir it.
+- `tasks_path` — return `experiment_dir/.hpc/tasks.py` (does not create).
+- `load_tasks_module` — importlib helper that imports a `tasks.py` from
+  an arbitrary path; verifies the module exposes `total()` and
+  `resolve(task_id)`.
+
+### Per-run sidecars
+
+A sidecar `.hpc/runs/<run_id>.json` carries per-run state previously
+embedded in the manifest header (`run_id`, `cmd_sha`,
+`claude_hpc_version`, `submitted_at`, `executor`,
+`result_dir_template`, `task_count`, `tasks_py_sha`, optional
+`wave_map`).
+
+- `MAX_RUNS` — maximum sidecars retained before pruning.
+- `SIDECAR_SCHEMA_VERSION` — current sidecar schema version.
+- `compute_cmd_sha` — hash the materialized task list of a `tasks.py`
+  module — the source of truth for run identity.
+- `compute_tasks_py_sha` — diagnostic hash of `tasks.py`'s bytes.
+- `write_run_sidecar` — write `.hpc/runs/<run_id>.json`.
+- `read_run_sidecar` — load a sidecar by run_id.
+- `find_existing_runs` — list sidecars newest-first.
+- `find_run_by_cmd_sha` — locate the newest sidecar matching a cmd_sha.
+- `prune_old_runs` — keep only the most recent `MAX_RUNS`.
+- `run_sidecar_path` — canonical path for a run_id (does not create).
+
 ### Job status & results
 
 - `check_results` — count completed/failed result files for a run.
-- `check_results_from_manifest` — same, keyed off a dispatch manifest.
+- `check_results_from_manifest` — legacy manifest-keyed variant
+  (pending removal once consumers migrate to `--run-id`).
 - `report_status` — formatted status report for a submitted job.
-- `report_status_from_manifest` — manifest-driven variant.
+- `report_status_from_manifest` — legacy manifest-keyed variant
+  (pending removal).
 - `rollup_by_grid_point` — group per-task status into per-grid-point status.
 - `detect_scheduler` — identify the scheduler family on a remote host.
 
-### Shim cache
+### Legacy shim cache (pending removal)
+
+The shim cache disappears once `tasks.py` replaces all shim usage; it
+is currently retained only so existing experiments keep working through
+the transition.
 
 - `shim_cache_key` — hash of the inputs that uniquely identify a shim.
 - `load_cached_shim` — fetch a previously-generated shim from the cache.
@@ -182,31 +228,30 @@ Everything outside the framework's public API. Concretely:
 - **Domain-specific aggregation** — any `aggregate_cmd` the experiment
   defines for fan-in.
 
-A small set of files are **framework-generated artifacts** that land in the
-experiment repo at submit time but are not authored there:
-`_hpc_dispatch.json`, `_hpc_dispatch.py`, `_hpc_combiner.py`, and
-`hpc_chunking_shim.py`. They are produced by the framework, deployed to the
-cluster alongside the experiment code, and overwritten on each `/submit`.
+All framework-generated artifacts live under the **reserved
+directory `.hpc/`**:
 
-## Reserved filenames
+- `.hpc/tasks.py` — user-authored, git-tracked, the only file the user
+  edits in there.
+- `.hpc/runs/<run_id>.json` — per-run sidecar (gitignored).
+- `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py`,
+  `.hpc/templates/{cpu,gpu}_array.{sh,slurm}` — placed on the **cluster**
+  copy of `.hpc/` by `deploy_runtime`. They are not present in the
+  local `.hpc/` and are protected from rsync `--delete` by
+  `DEFAULT_RSYNC_EXCLUDES`.
 
-The framework reserves the following basenames inside experiment repos.
-Experiment authors must not create files with these names; the discovery
-scanner skips them so they are never misclassified as executors. The current
-source of truth is `_SKIP_BASENAMES` in
-[`hpc_mapreduce/job/discover.py`](../hpc_mapreduce/job/discover.py).
+## Reserved directories
 
-- `_hpc_dispatch.py` — the standalone dispatch script written by the
-  framework at submit time.
-- `_hpc_combiner.py` — the standalone combiner script written by the
-  framework when an aggregation step is configured.
-- `hpc_chunking_shim.py` — the framework's row-index chunking shim when the
-  user opts into chunked parallelism.
+The framework reserves the **`.hpc/` directory** inside experiment
+repos. The discovery scanner skips this directory wholesale via
+`_SKIP_DIRS` in
+[`hpc_mapreduce/job/discover.py`](../hpc_mapreduce/job/discover.py), so
+nothing inside it is misclassified as an executor. Experiment authors
+must not place user-code files (executors, libraries) under `.hpc/`.
 
-`__init__.py` also appears in `_SKIP_BASENAMES`, but that is a Python package
-convention (the discovery scanner skips it because package markers are not
-runnable executors), not a framework reservation. Experiment repos may use
-`__init__.py` freely.
+`_SKIP_BASENAMES` retains `__init__.py` so package markers are not
+treated as runnable executors. That is a Python package convention, not
+a framework reservation; experiment repos may use `__init__.py` freely.
 
 ## Import directions (allowed)
 

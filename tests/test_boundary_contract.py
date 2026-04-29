@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 import hpc_mapreduce
-from hpc_mapreduce.job.discover import _SKIP_BASENAMES
+from hpc_mapreduce.job.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_DOC = "docs/boundary-contract.md"
@@ -35,6 +35,25 @@ ALLOWED_EXPORTS = frozenset(
         # Config & discovery
         "load_clusters_config",
         "get_template_path",
+        # Framework subdirectory layout (NEW: .hpc/tasks.py model)
+        "HPC_SUBDIR",
+        "TASKS_FILENAME",
+        "RUNS_SUBDIR",
+        "framework_subdir",
+        "runs_subdir",
+        "tasks_path",
+        "load_tasks_module",
+        # Per-run sidecars (NEW)
+        "MAX_RUNS",
+        "SIDECAR_SCHEMA_VERSION",
+        "compute_cmd_sha",
+        "compute_tasks_py_sha",
+        "find_existing_runs",
+        "find_run_by_cmd_sha",
+        "prune_old_runs",
+        "read_run_sidecar",
+        "run_sidecar_path",
+        "write_run_sidecar",
         # Remote execution
         "ssh_run",
         "rsync_push",
@@ -42,12 +61,12 @@ ALLOWED_EXPORTS = frozenset(
         "deploy_runtime",
         # Job status & results
         "check_results",
-        "check_results_from_manifest",
+        "check_results_from_manifest",  # legacy — pending removal
         "report_status",
-        "report_status_from_manifest",
+        "report_status_from_manifest",  # legacy — pending removal
         "rollup_by_grid_point",
         "detect_scheduler",
-        # Shim cache
+        # Legacy shim cache — pending removal
         "shim_cache_key",
         "load_cached_shim",
         "save_shim",
@@ -59,7 +78,7 @@ ALLOWED_EXPORTS = frozenset(
         "reduce_partials",
         "reduce_resource_usage",
         "classify_failure",
-        # Grid API
+        # Legacy grid API — pending removal
         "expand_grid",
         "build_task_manifest",
         "total_tasks",
@@ -67,7 +86,7 @@ ALLOWED_EXPORTS = frozenset(
         "MANIFEST_SCHEMA_VERSION",
         "resolve_git_sha",
         "validate_result_dir_template",
-        # Manifest filenames & resume
+        # Legacy manifest filenames & resume — pending removal
         "MAX_MANIFESTS",
         "MANIFEST_ALIAS",
         "manifest_filename_for_sha",
@@ -104,12 +123,16 @@ ALLOWED_EXPORTS = frozenset(
 
 RESERVED_FILES = frozenset(
     {
+        # Python package convention; not a framework reservation but the
+        # discovery scanner skips it so it stays out of executor candidates.
         "__init__.py",
-        "_hpc_dispatch.py",
-        "_hpc_combiner.py",
-        "hpc_chunking_shim.py",
     }
 )
+
+# Reserved DIRECTORIES inside experiment repos. The discovery scanner
+# skips these wholesale, and ``deploy_runtime`` populates the cluster's
+# ``.hpc/`` with framework artifacts.
+RESERVED_DIRS = frozenset({".hpc"})
 
 ALLOWED_CLUSTER_KEYS = frozenset(
     {
@@ -197,6 +220,18 @@ def test_reserved_filenames_match_contract() -> None:
     expected = set(RESERVED_FILES)
     assert actual == expected, _diff_message(
         "Reserved filenames (_SKIP_BASENAMES)", actual, expected
+    )
+
+
+def test_reserved_dirs_match_contract() -> None:
+    """``_SKIP_DIRS`` in discover.py must include the reserved-dirs allowlist."""
+    # _SKIP_DIRS may include build/cache dirs (.git, __pycache__, .mypy_cache)
+    # in addition to the framework-reserved .hpc; only require the latter is
+    # present.
+    actual = set(_SKIP_DIRS)
+    missing = set(RESERVED_DIRS) - actual
+    assert not missing, _diff_message(
+        "Reserved dirs (_SKIP_DIRS)", actual, set(RESERVED_DIRS)
     )
 
 
