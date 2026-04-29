@@ -231,14 +231,16 @@ def combine_wave(
     wave: int,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str = "_hpc_dispatch.json",
     force: bool = False,
 ) -> tuple[bool, str, str]:
     """Run the on-cluster combiner for *wave*; record the outcome.
 
-    On success, append *wave* to ``combined_waves``. On failure, append
-    to ``failed_waves`` and never mark the wave combined. Returns the raw
-    ``(ok, stdout, stderr)`` from ``run_combiner_checked``.
+    The cluster-side combiner (``.hpc/_hpc_combiner.py``) reads the
+    per-run sidecar at ``.hpc/runs/<run_id>.json`` to discover the
+    wave_map and result_dir_template. On success, append *wave* to
+    ``combined_waves``. On failure, append to ``failed_waves`` and never
+    mark the wave combined. Returns ``(ok, stdout, stderr)`` from
+    :func:`run_combiner_checked`.
     """
     user, host = _split_ssh_target(ssh_target)
     ok, stdout, stderr = run_combiner_checked(
@@ -246,7 +248,7 @@ def combine_wave(
         user=user,
         remote_path=remote_path,
         wave=wave,
-        manifest_name=manifest_filename,
+        run_id=run_id,
         force=force,
     )
     record = session.load_run(experiment_dir, run_id)

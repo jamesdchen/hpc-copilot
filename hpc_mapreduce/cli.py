@@ -758,7 +758,6 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         wave=int(args.wave),
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        manifest_filename=record.manifest,
         force=args.force,
     )
     if ok:
