@@ -93,13 +93,18 @@ embedded in the manifest header (`run_id`, `cmd_sha`,
 ### Job status & results
 
 - `check_results` — count completed/failed result files for a run.
-- `check_results_from_manifest` — internal adapter consumed by the
-  synthetic-manifest path in `reduce/status.py` (the cluster-side
-  reporter builds a manifest-shaped dict from the sidecar +
-  `tasks.py` and feeds it through this function). Kept stable so the
-  existing reporting code keeps working unchanged.
+- `check_results_from_tasks` — same, but driven by a manifest-shape dict
+  (typically synthesized from a per-run sidecar + `.hpc/tasks.py` by
+  `_build_synthetic_manifest_from_sidecar`). Used internally by the
+  cluster-side status reporter.
+- `check_results_from_manifest` — deprecated alias for
+  `check_results_from_tasks`. Pending removal in a future minor version.
 - `report_status` — formatted status report for a submitted job.
-- `report_status_from_manifest` — internal adapter, same pattern as above.
+- `report_status_from_tasks` — same, but driven by the manifest-shape
+  dict (synthesized from sidecar + tasks.py). Used by the cluster-side
+  reporter and the live TUI.
+- `report_status_from_manifest` — deprecated alias for
+  `report_status_from_tasks`.
 - `rollup_by_grid_point` — group per-task status into per-grid-point status.
 - `detect_scheduler` — identify the scheduler family on a remote host.
 
