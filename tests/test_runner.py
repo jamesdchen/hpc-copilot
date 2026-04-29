@@ -193,7 +193,6 @@ def test_record_status_sets_checked_at(journal_home, experiment):
             experiment, "ml_ridge_abcd1234",
             ssh_target="user@hoffman2.idre.ucla.edu",
             remote_path="/u/scratch/exp",
-            manifest_filename="manifest.abcd1234.json",
             job_ids=["12345678"],
             job_name="ml_ridge",
         )
@@ -485,7 +484,6 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
             experiment, "ml_ridge_abcd1234",
             ssh_target="user@host",
             remote_path="/x",
-            manifest_filename="manifest.abcd1234.json",
             job_ids=["1"],
             job_name="job",
         )

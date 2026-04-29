@@ -586,14 +586,60 @@ def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 
+def _build_synthetic_manifest_from_sidecar(sidecar: dict, tasks_module) -> dict:
+    """Build a manifest-shaped dict from sidecar + ``.hpc/tasks.py``.
+
+    Adapter that lets the existing manifest-based reporting code
+    (``report_status_from_manifest``, ``rollup_by_grid_point``,
+    ``rollup_by_wave``) operate unchanged against the new model. Each
+    task's ``result_dir`` is computed by formatting the sidecar's
+    ``result_dir_template`` against ``task_id`` + ``run_id`` + the
+    kwargs returned by ``tasks_module.resolve(task_id)``.
+    """
+    n = int(sidecar["task_count"])
+    template = sidecar["result_dir_template"]
+    run_id = sidecar["run_id"]
+    tasks: dict[str, dict] = {}
+    for i in range(n):
+        kwargs = tasks_module.resolve(i)
+        if not isinstance(kwargs, dict):
+            kwargs = {}
+        ctx = {"task_id": i, "run_id": run_id, **kwargs}
+        try:
+            result_dir = template.format(**ctx)
+        except KeyError:
+            # Surface as empty so downstream "missing result file" logic
+            # flags the misconfiguration without crashing the report.
+            result_dir = ""
+        tasks[str(i)] = {
+            "result_dir": result_dir,
+            "params": kwargs,
+            "cmd_sha": None,  # cmd_sha lives at the run level in the new model
+        }
+    return {
+        "schema_version": 2,
+        "total_tasks": n,
+        "tasks": tasks,
+        "wave_map": sidecar.get("wave_map", {}),
+        "cmd_sha": sidecar.get("cmd_sha"),
+        "run_id": run_id,
+    }
+
+
 def _main() -> int:
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(
-        description="Emit a JSON status report for a dispatch manifest.",
+        description="Emit a JSON status report for a run.",
     )
-    parser.add_argument("--manifest", required=True, help="Path to _hpc_dispatch.json")
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument(
+        "--run-id",
+        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json. "
+        "Mutually exclusive with --manifest.",
+    )
+    src.add_argument("--manifest", help="Path to legacy dispatch manifest (pending removal)")
     parser.add_argument(
         "--job-ids",
         default="",
@@ -615,37 +661,53 @@ def _main() -> int:
     )
     args = parser.parse_args()
 
-    manifest_path = Path(args.manifest)
-    if not manifest_path.is_file():
-        # Even on error, emit the pinned 4-key shape so the LLM orchestrator
-        # can parse stdout unconditionally.
+    def _emit_err(code: str, detail: str, exit_code: int = 2) -> int:
         err_doc = {
             "summary": _empty_summary(),
             "tasks": {},
             "rollup": {},
-            "errors": [
-                {"code": "manifest_not_found", "detail": str(manifest_path)},
-            ],
+            "errors": [{"code": code, "detail": detail}],
         }
         json.dump(err_doc, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
-        print(f"manifest not found: {manifest_path}", file=sys.stderr)
-        return 2
+        return exit_code
 
-    try:
-        manifest = json.loads(manifest_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        err_doc = {
-            "summary": _empty_summary(),
-            "tasks": {},
-            "rollup": {},
-            "errors": [
-                {"code": "manifest_parse_error", "detail": f"{manifest_path}: {exc}"},
-            ],
-        }
-        json.dump(err_doc, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-        return 2
+    if args.run_id is not None:
+        # NEW path: read .hpc/runs/<run_id>.json + .hpc/tasks.py and
+        # synthesize a manifest dict the existing reporting code consumes.
+        sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
+        if not sidecar_path.is_file():
+            print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
+            return _emit_err("sidecar_not_found", str(sidecar_path))
+        try:
+            sidecar = json.loads(sidecar_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
+
+        tasks_py_path = Path(".hpc") / "tasks.py"
+        if not tasks_py_path.is_file():
+            return _emit_err("tasks_py_not_found", str(tasks_py_path))
+        try:
+            from hpc_mapreduce import load_tasks_module
+
+            tasks_module = load_tasks_module(tasks_py_path)
+        except Exception as exc:
+            return _emit_err("tasks_py_import_error", f"{tasks_py_path}: {exc}")
+
+        try:
+            manifest = _build_synthetic_manifest_from_sidecar(sidecar, tasks_module)
+        except Exception as exc:
+            return _emit_err("synthetic_manifest_error", str(exc))
+    else:
+        # LEGACY path: --manifest <file>; pending removal once consumers migrate.
+        manifest_path = Path(args.manifest)
+        if not manifest_path.is_file():
+            print(f"manifest not found: {manifest_path}", file=sys.stderr)
+            return _emit_err("manifest_not_found", str(manifest_path))
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            return _emit_err("manifest_parse_error", f"{manifest_path}: {exc}")
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
 

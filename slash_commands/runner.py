@@ -146,19 +146,24 @@ def _ssh_status_report(
     *,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str,
+    run_id: str,
     job_ids: list[str],
     job_name: str,
     log_dir: str = "logs",
     file_glob: str = "*",
 ) -> dict:
-    """Run the on-cluster status reporter and return its parsed JSON."""
+    """Run the on-cluster status reporter (``--run-id``) and return parsed JSON.
+
+    The reporter reads ``.hpc/runs/<run_id>.json`` for run metadata and
+    ``.hpc/tasks.py`` for per-task kwargs, then emits the same JSON
+    envelope the legacy ``--manifest`` path produced.
+    """
     user, host = _split_ssh_target(ssh_target)
     job_ids_csv = ",".join(job_ids)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
         f"python -m hpc_mapreduce.reduce.status "
-        f"--manifest {shlex.quote(manifest_filename)} "
+        f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "
         f"--log-dir {shlex.quote(log_dir)} "
@@ -184,12 +189,14 @@ def record_status(
     *,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str,
     job_ids: list[str],
     job_name: str,
     file_glob: str = "*",
 ) -> RunRecord:
     """Run the status reporter and write ``last_status`` to the journal.
+
+    The cluster-side reporter reads ``.hpc/runs/<run_id>.json`` for run
+    metadata and ``.hpc/tasks.py`` for per-task kwargs.
 
     Also writes the snapshot to ``<run_id>.last_status.json`` next to the
     journal record so any consumer (agent, human, ``jq`` pipeline, file
@@ -199,7 +206,7 @@ def record_status(
     report = _ssh_status_report(
         ssh_target=ssh_target,
         remote_path=remote_path,
-        manifest_filename=manifest_filename,
+        run_id=run_id,
         job_ids=job_ids,
         job_name=job_name,
         file_glob=file_glob,
