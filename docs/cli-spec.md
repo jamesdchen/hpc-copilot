@@ -292,10 +292,8 @@ Args:
 }
 ```
 
-`run_id` is the primary identity field; the per-run sidecar lives at
-`.hpc/runs/<run_id>.json`. The legacy `manifest_filename` field is
-accepted by `submit_and_record` for back-compat with older callers but
-is no longer required when `run_id` is supplied directly.
+`run_id` is the primary (and only) identity field; the per-run sidecar
+lives at `.hpc/runs/<run_id>.json`.
 
 Optional `runtime` accepts `"uv"` or `null` (default). When `"uv"`,
 `HPC_RUNTIME=uv` is exported into the job environment so the template's
