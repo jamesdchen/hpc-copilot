@@ -495,6 +495,37 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch \
 
 For GPU jobs: `--gres=gpu:<count>`, appropriate partition, and use `.hpc/templates/gpu_array.slurm`.
 
+## Step 8b: Verify the array is actually queued/running
+
+`qsub`/`sbatch` returning a job ID is necessary but not sufficient — the scheduler can still place the array into an error state (`Eqw` on SGE, `BOOT_FAIL`/`NODE_FAIL` on SLURM) or, on a wedged controller, drop the registration entirely. Confirm each returned job ID is alive on the cluster **before** reporting success (Step 9) or writing the journal record (Step 10). A poisoned run that lands in the journal is worse than a clean failure here, because `/status` will keep latching onto a dead job ID.
+
+Query the scheduler for every job ID returned by `backend.submit_array` / `backend.submit_plan`:
+
+```bash
+# SLURM
+ssh $SSH_TARGET 'squeue -j '"$JOB_IDS"' -h -o "%i %T %r"; \
+                 sacct -j '"$JOB_IDS"' -n -P -o JobID,State,Reason 2>&1 | head'
+
+# SGE — qstat -j prints the queue-instance reason if the job is in error
+ssh $SSH_TARGET 'qstat -j '"$JOB_IDS"' 2>&1 | head -40; \
+                 qstat -u '"$USER"' | awk "NR>2"'
+```
+
+`$JOB_IDS` is comma-separated for SLURM (`12345,12346`) and space-separated for SGE.
+
+**Healthy** (proceed): `PENDING` / `RUNNING` / `CONFIGURING` / `COMPLETING` (SLURM); `qw` / `hqw` / `r` / `t` / `Rq` / `Rr` (SGE). Wave-2+ jobs from a plan-based submission are *expected* to be `PENDING` with `Reason=Dependency` (SLURM) or `hqw` (SGE) — that is healthy, not a failure.
+
+**Failed** (abort — do NOT call `submit_and_record`):
+- SLURM state in `{BOOT_FAIL, FAILED, NODE_FAIL, OUT_OF_MEMORY, TIMEOUT, DEADLINE, REVOKED, SPECIAL_EXIT}`, or `CANCELLED` within seconds of submit
+- SGE state starting with `E` (e.g. `Eqw`) or `d` (deletion in progress)
+- Job ID absent from both `squeue`/`qstat` and `sacct`/`qacct` after one retry (~3s pause): the scheduler never registered it
+
+If the first query shows an ID as unknown, retry **once** after a brief pause (busy SLURM controllers can lag a second or two before `squeue` reflects a new submission). If still unknown, treat as failed.
+
+On failure: surface the scheduler's reason verbatim (`qstat -j <id>` line `error reason 1:` for SGE, `sacct -j <id> -o JobID,State,Reason` for SLURM), tell the user which job ID is bad, and stop. Do not run Step 9 or Step 10 — the partial state is recoverable only if nothing was journaled. The user can then either fix the underlying issue (resources, queue, env) and re-run `/submit`, or, for SGE-specific transient `Eqw`, run `qmod -cj <jobid>` and re-verify.
+
+If the canary in Step 7b just succeeded, this verification almost always passes; the value is catching the rare case where the full-array submit hits a quota/AR/queue limit the canary did not.
+
 ## Step 9: Cache and Report
 
 ### Cache decisions
@@ -504,9 +535,9 @@ Save to Claude Code memory for this project:
 - Default resources
 
 ### Report
-After submission:
+After submission **and the Step 8b verification**:
 1. Parse the job ID from submission output
-2. Report: job ID, executor(s), grid dimensions, total tasks, cluster
+2. Report: job ID, executor(s), grid dimensions, total tasks, cluster, and the verified scheduler state (e.g. "all 4 array jobs PENDING/RUNNING")
 3. Suggest running `/status` to track progress
 
 ## Step 10: Record the submission in the run journal
