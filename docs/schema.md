@@ -42,11 +42,12 @@ Top-level `project`, `cluster`, `remote_path`, `rsync_exclude` are shared across
 | `auto_retry` | map | no | Per-category retry policy honored by `hpc-mapreduce failures`. See *auto_retry* below. |
 | `runtime` | string | no | Runtime profile for cluster-side execution. `"uv"` prefixes every task command with `uv run` and triggers a `uv sync` preamble in the job template (gated on `HPC_RUNTIME=uv`). The cluster must have `uv` on PATH; the template fails fast (exit 2) if not. Default: bare `python`. |
 
-**Parallelization axis lives in `.hpc/tasks.py`.** Profiles do not
-carry `grid:`, `chunking:`, or `backtest:` blocks; the parallelization
-axis is expressed inline in `.hpc/tasks.py` (e.g. `itertools.product`,
-slicing, date window comprehensions). See
-`hpc_mapreduce/templates/tasks_example.py` for the canonical reference.
+**Parallelization axis lives in `.hpc/tasks.py`.** The number of
+tasks and the per-task kwargs are determined by the user-written
+`total()` and `resolve(task_id)` callables there — written in plain
+Python (e.g. `itertools.product`, slicing, date-window
+comprehensions). See `hpc_mapreduce/templates/tasks_example.py` for
+the canonical reference.
 
 ### Multi-Stage Profiles
 
