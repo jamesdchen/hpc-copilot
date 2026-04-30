@@ -76,9 +76,9 @@ export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 
 # --- Runtime (uv) ---
 # Opt-in via HPC_RUNTIME=uv. Sync the project's uv-managed venv before
-# any task runs so ``uv run python ...`` (set by build_task_manifest)
-# resolves to the right interpreter. Fail fast if uv is missing — this
-# is much clearer than running tasks with the wrong Python.
+# any task runs so the dispatcher's ``uv run python`` resolves to the
+# right interpreter. Fail fast if uv is missing — this is much clearer
+# than running tasks with the wrong Python.
 if [ "${HPC_RUNTIME:-}" = "uv" ]; then
     if ! command -v uv >/dev/null 2>&1; then
         echo "[template] HPC_RUNTIME=uv but 'uv' not on PATH" >&2
