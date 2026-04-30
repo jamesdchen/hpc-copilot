@@ -42,6 +42,7 @@ REPO_DIR="${REPO_DIR:-.}"
 
 # Convert 1-based SLURM_ARRAY_TASK_ID to 0-based, add offset for batched submission
 TASK_ID=$((SLURM_ARRAY_TASK_ID - 1 + ${TASK_OFFSET:-0}))
+HPC_TASK_ID=$TASK_ID  # canonical name used by .hpc/_hpc_dispatch.py
 
 # --- Diagnostics ---
 echo "============================================"
@@ -51,6 +52,7 @@ echo "Hostname:     $(hostname)"
 echo "GPUs:         $GPU_COUNT"
 echo "CPUs:         $SLURM_CPUS_PER_TASK"
 echo "Task:         $TASK_ID (offset=${TASK_OFFSET:-0})"
+echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "============================================"
 
 # --- Module Setup ---
@@ -74,9 +76,9 @@ export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 
 # --- Runtime (uv) ---
 # Opt-in via HPC_RUNTIME=uv. Sync the project's uv-managed venv before
-# any task runs so ``uv run python ...`` (set by build_task_manifest)
-# resolves to the right interpreter. Fail fast if uv is missing — this
-# is much clearer than running tasks with the wrong Python.
+# any task runs so the dispatcher's ``uv run python`` resolves to the
+# right interpreter. Fail fast if uv is missing — this is much clearer
+# than running tasks with the wrong Python.
 if [ "${HPC_RUNTIME:-}" = "uv" ]; then
     if ! command -v uv >/dev/null 2>&1; then
         echo "[template] HPC_RUNTIME=uv but 'uv' not on PATH" >&2
@@ -107,7 +109,9 @@ echo "Executor:     $EXECUTOR"
 echo "============================================"
 
 # --- Execute ---
-export TASK_ID RESULT_DIR GPU_COUNT
+# HPC_RUN_ID arrives via sbatch --export from the submit-side env;
+# re-exported here so the dispatcher inside $EXECUTOR sees it.
+export TASK_ID HPC_TASK_ID HPC_RUN_ID RESULT_DIR GPU_COUNT
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."

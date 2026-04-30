@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 import hpc_mapreduce
-from hpc_mapreduce.job.discover import _SKIP_BASENAMES
+from hpc_mapreduce.job.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_DOC = "docs/boundary-contract.md"
@@ -35,6 +35,25 @@ ALLOWED_EXPORTS = frozenset(
         # Config & discovery
         "load_clusters_config",
         "get_template_path",
+        # Framework subdirectory layout (NEW: .hpc/tasks.py model)
+        "HPC_SUBDIR",
+        "TASKS_FILENAME",
+        "RUNS_SUBDIR",
+        "framework_subdir",
+        "runs_subdir",
+        "tasks_path",
+        "load_tasks_module",
+        # Per-run sidecars (NEW)
+        "MAX_RUNS",
+        "SIDECAR_SCHEMA_VERSION",
+        "compute_cmd_sha",
+        "compute_tasks_py_sha",
+        "find_existing_runs",
+        "find_run_by_cmd_sha",
+        "prune_old_runs",
+        "read_run_sidecar",
+        "run_sidecar_path",
+        "write_run_sidecar",
         # Remote execution
         "ssh_run",
         "rsync_push",
@@ -42,15 +61,11 @@ ALLOWED_EXPORTS = frozenset(
         "deploy_runtime",
         # Job status & results
         "check_results",
-        "check_results_from_manifest",
+        "check_results_from_tasks",
         "report_status",
-        "report_status_from_manifest",
+        "report_status_from_tasks",
         "rollup_by_grid_point",
         "detect_scheduler",
-        # Shim cache
-        "shim_cache_key",
-        "load_cached_shim",
-        "save_shim",
         # GPU selection
         "pick_gpu",
         # Reduce
@@ -59,24 +74,6 @@ ALLOWED_EXPORTS = frozenset(
         "reduce_partials",
         "reduce_resource_usage",
         "classify_failure",
-        # Grid API
-        "expand_grid",
-        "build_task_manifest",
-        "total_tasks",
-        "attach_wave_map",
-        "MANIFEST_SCHEMA_VERSION",
-        "resolve_git_sha",
-        "validate_result_dir_template",
-        # Manifest filenames & resume
-        "MAX_MANIFESTS",
-        "MANIFEST_ALIAS",
-        "manifest_filename_for_sha",
-        "aggregate_cmd_sha",
-        "write_manifest",
-        "find_existing_manifests",
-        "find_manifest_by_cmd_sha",
-        "prune_old_manifests",
-        "build_manifest_with_resume",
         # Executor discovery
         "ExecutorInfo",
         "discover_executors",
@@ -104,12 +101,16 @@ ALLOWED_EXPORTS = frozenset(
 
 RESERVED_FILES = frozenset(
     {
+        # Python package convention; not a framework reservation but the
+        # discovery scanner skips it so it stays out of executor candidates.
         "__init__.py",
-        "_hpc_dispatch.py",
-        "_hpc_combiner.py",
-        "hpc_chunking_shim.py",
     }
 )
+
+# Reserved DIRECTORIES inside experiment repos. The discovery scanner
+# skips these wholesale, and ``deploy_runtime`` populates the cluster's
+# ``.hpc/`` with framework artifacts.
+RESERVED_DIRS = frozenset({".hpc"})
 
 ALLOWED_CLUSTER_KEYS = frozenset(
     {
@@ -200,6 +201,18 @@ def test_reserved_filenames_match_contract() -> None:
     )
 
 
+def test_reserved_dirs_match_contract() -> None:
+    """``_SKIP_DIRS`` in discover.py must include the reserved-dirs allowlist."""
+    # _SKIP_DIRS may include build/cache dirs (.git, __pycache__, .mypy_cache)
+    # in addition to the framework-reserved .hpc; only require the latter is
+    # present.
+    actual = set(_SKIP_DIRS)
+    missing = set(RESERVED_DIRS) - actual
+    assert not missing, _diff_message(
+        "Reserved dirs (_SKIP_DIRS)", actual, set(RESERVED_DIRS)
+    )
+
+
 def test_core_does_not_import_templates() -> None:
     """No file under ``hpc_mapreduce/`` may import from ``templates``."""
     core_root = REPO_ROOT / "hpc_mapreduce"
@@ -231,7 +244,7 @@ def _imported_dotted_modules(path: Path) -> set[str]:
 
     Like :func:`_imported_top_level_modules` but returns the full dotted name
     so callers can distinguish ``hpc_mapreduce.map.metrics_io`` (a deployed
-    runtime module) from ``hpc_mapreduce.job.grid`` (framework-internal).
+    runtime module) from ``hpc_mapreduce.job.runs`` (framework-internal).
     """
     source = path.read_text(encoding="utf-8")
     try:

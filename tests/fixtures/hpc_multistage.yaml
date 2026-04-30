@@ -7,9 +7,6 @@ results:
 profiles:
   train:
     run: "python -m myexp.train"
-    grid:
-      model: [ridge, lasso]
-      alpha: [0.1, 1.0]
     resources:
       cpus: 1
       memory: 8G

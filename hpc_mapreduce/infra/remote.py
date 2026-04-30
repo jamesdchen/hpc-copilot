@@ -4,8 +4,8 @@ Provides thin wrappers around ssh/rsync so cluster commands can be
 executed from a local machine without paramiko or other dependencies.
 
 All functions require explicit ``host``, ``user``, and ``remote_path``
-parameters - there are no hardcoded defaults.  Callers obtain these
-values from ``clusters.yaml`` + ``hpc.yaml`` via :mod:`hpc_mapreduce.job.manifest`.
+parameters - there are no hardcoded defaults. Callers obtain these
+values from ``clusters.yaml`` + ``hpc.yaml``.
 
 Every subprocess invocation in this module enforces a timeout so a flaky
 cluster connection or paused rsync cannot block ``/submit``, ``/status``,
@@ -80,6 +80,13 @@ DEFAULT_RSYNC_EXCLUDES: list[str] = [
     ".mypy_cache/",
     ".claude/",
     "hpc_mapreduce/",  # protect deployed runtime stubs from --delete
+    # Protect framework files scp'd into the cluster-side .hpc/ from the
+    # local rsync's --delete pass.  The local .hpc/ contains only
+    # tasks.py + runs/<id>.json; the cluster also holds _hpc_dispatch.py,
+    # _hpc_combiner.py, and templates/ placed there by deploy_runtime.
+    ".hpc/_hpc_dispatch.py",
+    ".hpc/_hpc_combiner.py",
+    ".hpc/templates/",
 ]
 
 
@@ -224,76 +231,76 @@ def deploy_runtime(
     user: str,
     remote_path: str,
 ) -> subprocess.CompletedProcess[str]:
-    """Deploy minimal ``hpc_mapreduce`` runtime package to the cluster.
+    """Deploy framework runtime files to the cluster.
 
-    Creates ``{remote_path}/hpc_mapreduce/map/`` with ``__init__.py`` stubs
-    and copies of ``context.py`` and ``metrics_io.py`` so that
-    ``from hpc_mapreduce.map.context import map_context`` and
-    ``from hpc_mapreduce.map.metrics_io import write_metrics`` both work
-    inside HPC jobs without installing the full claude-hpc package.
+    Two payloads:
+
+    1. **Importable stubs** in ``{remote_path}/hpc_mapreduce/map/``:
+       ``context.py`` and ``metrics_io.py`` so user executors can do
+       ``from hpc_mapreduce.map.metrics_io import write_metrics`` on
+       compute nodes without installing the full package.
+    2. **Framework artifacts** in ``{remote_path}/.hpc/``: the framework
+       executor (``_hpc_dispatch.py``), the combiner
+       (``_hpc_combiner.py``), and the four job templates under
+       ``templates/``. The cluster-side ``.hpc/`` mirrors the experiment's
+       local ``.hpc/`` directory layout — ``tasks.py`` and
+       ``runs/<id>.json`` come over via :func:`rsync_push`; the framework
+       files are placed here by scp.
 
     Each underlying ssh/scp invocation is bounded by
-    :data:`SSH_TIMEOUT_SEC`; if any of them exceeds it, a
-    :class:`TimeoutError` is raised that names the host and the basename
-    of the file being copied.
+    :data:`SSH_TIMEOUT_SEC`; if any exceeds it, :class:`TimeoutError` is
+    raised that names the host and the basename of the file being copied.
 
     Must be called **after** :func:`rsync_push` (which uses ``--delete``).
+    The default rsync excludes preserve cluster-side framework files
+    inside ``.hpc/``, but deploy_runtime is still safe to re-run after
+    every push (it overwrites with the package-versioned bytes).
     """
     target = _target(user, host)
     remote_path_q = shlex.quote(remote_path)
+    pkg_dir = Path(__file__).parent.parent
 
     ssh_run(
-        f"mkdir -p {remote_path_q}/hpc_mapreduce/map"
+        f"mkdir -p {remote_path_q}/hpc_mapreduce/map {remote_path_q}/.hpc/templates"
         f" && touch {remote_path_q}/hpc_mapreduce/__init__.py"
         f" && touch {remote_path_q}/hpc_mapreduce/map/__init__.py",
         host=host,
         user=user,
     )
 
-    src = str(Path(__file__).parent.parent / "map" / "context.py")
-    dst = f"{target}:{shlex.quote(remote_path)}/hpc_mapreduce/map/context.py"
-    try:
-        subprocess.run(
-            ["scp", src, dst],
-            capture_output=True,
-            text=True,
-            timeout=SSH_TIMEOUT_SEC,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"scp to {host} timed out after {SSH_TIMEOUT_SEC}s: {Path(src).name}"
-        ) from exc
+    def _scp(src: Path, dst_rel: str) -> subprocess.CompletedProcess[str]:
+        dst = f"{target}:{shlex.quote(remote_path)}/{dst_rel}"
+        try:
+            return subprocess.run(
+                ["scp", str(src), dst],
+                capture_output=True,
+                text=True,
+                timeout=SSH_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"scp to {host} timed out after {SSH_TIMEOUT_SEC}s: {src.name}"
+            ) from exc
 
-    # Deploy the per-task metrics sidecar writer so executors can `from
-    # hpc_mapreduce.map.metrics_io import write_metrics` on compute nodes.
-    metrics_io_src = str(Path(__file__).parent.parent / "map" / "metrics_io.py")
-    metrics_io_dst = f"{target}:{shlex.quote(remote_path)}/hpc_mapreduce/map/metrics_io.py"
-    try:
-        subprocess.run(
-            ["scp", metrics_io_src, metrics_io_dst],
-            capture_output=True,
-            text=True,
-            timeout=SSH_TIMEOUT_SEC,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"scp to {host} timed out after {SSH_TIMEOUT_SEC}s: {Path(metrics_io_src).name}"
-        ) from exc
+    # Importable stubs (used inside cluster jobs by user executors).
+    _scp(pkg_dir / "map" / "context.py", "hpc_mapreduce/map/context.py")
+    _scp(pkg_dir / "map" / "metrics_io.py", "hpc_mapreduce/map/metrics_io.py")
 
-    # Deploy the on-cluster combiner script.
-    combiner_src = str(Path(__file__).parent.parent / "map" / "combiner.py")
-    combiner_dst = f"{target}:{shlex.quote(remote_path)}/_hpc_combiner.py"
-    try:
-        return subprocess.run(
-            ["scp", combiner_src, combiner_dst],
-            capture_output=True,
-            text=True,
-            timeout=SSH_TIMEOUT_SEC,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"scp to {host} timed out after {SSH_TIMEOUT_SEC}s: {Path(combiner_src).name}"
-        ) from exc
+    # Framework executor + combiner inside .hpc/.
+    _scp(pkg_dir / "map" / "dispatch.py", ".hpc/_hpc_dispatch.py")
+
+    # Job templates inside .hpc/templates/.
+    for sched in ("sge", "slurm"):
+        for kind in ("cpu_array", "gpu_array"):
+            ext = "sh" if sched == "sge" else "slurm"
+            _scp(
+                pkg_dir / "templates" / sched / f"{kind}.{ext}",
+                f".hpc/templates/{kind}.{ext}",
+            )
+
+    # Combiner is the last scp; return its CompletedProcess so callers
+    # can inspect the trailing returncode.
+    return _scp(pkg_dir / "map" / "combiner.py", ".hpc/_hpc_combiner.py")
 
 
 def run_combiner(
@@ -302,48 +309,39 @@ def run_combiner(
     user: str,
     remote_path: str,
     wave: int,
-    manifest_name: str = "_hpc_dispatch.json",
+    run_id: str,
     force: bool = False,
     timeout: float | None = _DEFAULT,
 ) -> subprocess.CompletedProcess[str]:
     """Run the on-cluster combiner on the login node for a specific wave.
 
-    Executes ``_hpc_combiner.py`` on the remote host via SSH.  The combiner
-    accepts both CLI flags (preferred) and ``HPC_WAVE`` / ``HPC_MANIFEST``
-    env vars (for back-compat with older deployed copies); we pass both
-    so the same helper works against either version.
+    Executes ``.hpc/_hpc_combiner.py`` on the remote host via SSH. The
+    combiner accepts both CLI flags (preferred) and ``HPC_WAVE`` /
+    ``HPC_RUN_ID`` env vars; we pass both.
 
     Parameters
     ----------
-    host:
-        Cluster hostname.
-    user:
-        SSH username on the cluster.
-    remote_path:
-        Absolute path to the project directory on the remote host.
+    host, user, remote_path:
+        SSH target and remote project root.
     wave:
         Wave number (0-based) to combine.
-    manifest_name:
-        Name of the manifest file (relative to *remote_path*).
+    run_id:
+        Run identifier — locates the per-run sidecar at
+        ``.hpc/runs/<run_id>.json`` from which the combiner reads
+        ``wave_map`` and ``result_dir_template``.
     force:
-        If True, append ``--force`` so the combiner overwrites any existing
+        If True, pass ``--force`` so the combiner overwrites any existing
         ``_combiner/wave_N.json`` output.
     timeout:
         Per-call subprocess timeout in seconds, threaded through to
-        :func:`ssh_run`.  Defaults to :data:`SSH_TIMEOUT_SEC` when omitted.
-        Pass ``timeout=None`` to disable enforcement.
-
-    Raises
-    ------
-    TimeoutError
-        If the underlying SSH call exceeds the timeout.
+        :func:`ssh_run`. Defaults to :data:`SSH_TIMEOUT_SEC` when omitted.
     """
     force_flag = " --force" if force else ""
-    manifest_q = shlex.quote(manifest_name)
+    run_id_q = shlex.quote(run_id)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
-        f"HPC_WAVE={wave} HPC_MANIFEST={manifest_q} "
-        f"python3 _hpc_combiner.py --wave {wave} --manifest {manifest_q}{force_flag}"
+        f"HPC_WAVE={wave} HPC_RUN_ID={run_id_q} "
+        f"python3 .hpc/_hpc_combiner.py --wave {wave} --run-id {run_id_q}{force_flag}"
     )
     if timeout is _DEFAULT:
         return ssh_run(cmd, host=host, user=user)
@@ -356,23 +354,16 @@ def run_combiner_checked(
     user: str,
     remote_path: str,
     wave: int,
-    manifest_name: str = "_hpc_dispatch.json",
+    run_id: str,
     force: bool = False,
     timeout: float | None = _DEFAULT,
 ) -> tuple[bool, str, str]:
     """Run the combiner and return ``(ok, stdout, stderr)``.
 
     Thin wrapper around :func:`run_combiner` that collapses
-    ``CompletedProcess`` into a simple tuple, saving callers (especially
-    the LLM orchestrator) from having to know the subprocess API.
-
-    ``ok`` is ``True`` iff the remote combiner exited with returncode ``0``.
-
-    *timeout* is threaded through to :func:`run_combiner` (and onward to
-    :func:`ssh_run`); see those for semantics.  A timeout propagates as
-    :class:`TimeoutError` rather than collapsing into ``ok=False``, so
-    callers can distinguish "remote returned non-zero" from "we never
-    heard back".
+    ``CompletedProcess`` into a simple tuple. ``ok`` is ``True`` iff the
+    remote combiner exited with returncode ``0``. A timeout propagates
+    as :class:`TimeoutError`, not ``ok=False``.
     """
     if timeout is _DEFAULT:
         result = run_combiner(
@@ -380,7 +371,7 @@ def run_combiner_checked(
             user=user,
             remote_path=remote_path,
             wave=wave,
-            manifest_name=manifest_name,
+            run_id=run_id,
             force=force,
         )
     else:
@@ -389,7 +380,7 @@ def run_combiner_checked(
             user=user,
             remote_path=remote_path,
             wave=wave,
-            manifest_name=manifest_name,
+            run_id=run_id,
             force=force,
             timeout=timeout,
         )

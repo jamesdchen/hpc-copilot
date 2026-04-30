@@ -159,12 +159,13 @@ def build_wave_map(plan: SubmissionPlan) -> dict[int, list[int]]:
 
     The returned dict is keyed by wave number (``0``, ``1``, …) and each
     value is a sorted list of 0-based task IDs.  This mapping is written
-    into the task manifest so the on-cluster combiner knows which tasks
-    to aggregate after each wave completes.
+    into the per-run sidecar (``.hpc/runs/<run_id>.json::wave_map``) so
+    the on-cluster combiner knows which tasks to aggregate after each
+    wave completes.
     """
     wave_map: dict[int, list[int]] = {}
     for batch in plan.batches:
-        # batch.task_start/task_end are 1-based inclusive; manifest IDs are 0-based
+        # batch.task_start/task_end are 1-based inclusive; task IDs are 0-based
         task_ids = list(range(batch.task_start - 1, batch.task_end))
         wave_map.setdefault(batch.wave, []).extend(task_ids)
     return wave_map

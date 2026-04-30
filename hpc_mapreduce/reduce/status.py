@@ -1,7 +1,7 @@
 """Job status checking, result validation, and status reporting.
 
 This module drives the LLM-orchestrator's ``/status`` loop.  The CLI entry
-point (``python -m hpc_mapreduce.reduce.status --manifest ...``) emits JSON
+point (``python -m hpc_mapreduce.reduce.status --run-id <id>``) emits JSON
 to stdout.  **Schema contract** (pinned; all four top-level keys ALWAYS
 present, never ``None``)::
 
@@ -14,11 +14,14 @@ present, never ``None``)::
         "errors": [{"code": str, "detail": str}, ...],
     }
 
-``cmd_sha`` is passed through from the manifest (schema v2); absent on v1
-manifests -> serialized as ``null`` for each task.  Additional top-level
-keys (``total_tasks``, ``scheduler``, ``timestamp``, ``result_dir``,
-``err_log_paths``, ``resource_usage``) may appear but are informational
-only; the four keys above are the parse contract.
+The CLI reads ``.hpc/runs/<run_id>.json`` for the run sidecar and
+``.hpc/tasks.py`` for the per-task kwargs, then synthesizes a per-task
+dict that the reporting helpers consume.  ``tasks[tid].cmd_sha`` is
+``null`` in the new model — ``cmd_sha`` lives at the run level.
+Additional top-level keys (``total_tasks``, ``scheduler``,
+``timestamp``, ``result_dir``, ``err_log_paths``, ``resource_usage``)
+may appear but are informational only; the four keys above are the
+parse contract.
 
 ``resource_usage`` is additive and shaped like::
 
@@ -33,9 +36,9 @@ from __future__ import annotations
 
 __all__ = [
     "check_results",
-    "check_results_from_manifest",
+    "check_results_from_tasks",
     "report_status",
-    "report_status_from_manifest",
+    "report_status_from_tasks",
     "rollup_by_grid_point",
     "rollup_by_wave",
     "get_err_log_paths",
@@ -44,14 +47,11 @@ __all__ = [
 
 import glob
 import json
-import logging
 import os
 import subprocess
 from pathlib import Path
 
 from hpc_mapreduce._time import utcnow_iso
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Result checking
@@ -326,7 +326,7 @@ def report_status(
 
 
 # ---------------------------------------------------------------------------
-# Manifest-driven variants (per-task result directories)
+# Tasks-driven variants (per-task result directories)
 # ---------------------------------------------------------------------------
 
 
@@ -337,27 +337,32 @@ def _grid_point_key(params: dict) -> str:
     return "_".join(f"{k}={params[k]}" for k in sorted(params))
 
 
-def check_results_from_manifest(
-    manifest: dict,
+def check_results_from_tasks(
+    tasks_data: dict,
     file_glob: str = "*",
     *,
     min_rows: int = 0,
 ) -> dict[int, dict]:
-    """Mark tasks complete by checking their per-task ``result_dir`` from a dispatch manifest.
+    """Mark tasks complete by checking each task's ``result_dir``.
 
-    Manifest task IDs are 0-based; returned dict uses 1-based task IDs to match
+    Consumes a per-task dict — either the synthetic dict produced
+    from a per-run sidecar + ``.hpc/tasks.py`` by
+    :func:`_build_per_task_dict_from_sidecar`, or any equivalent
+    structure with ``tasks.<tid>.result_dir`` fields.  Task IDs in the
+    input are 0-based; returned dict uses 1-based task IDs to match
     :func:`report_status`.
 
-    Completion semantics: a result file is considered complete when it exists and
-    is non-zero byte.  CSVs with only a header (e.g. a zero-result task) are
-    therefore accepted by default and will not trigger auto-resubmit
-    in ``/status``.  Set ``min_rows > 0`` to opt into the stricter check that
-    requires at least that many CSV data rows beyond the header.
+    Completion semantics: a result file is considered complete when it
+    exists and is non-zero byte.  CSVs with only a header (e.g. a
+    zero-result task) are accepted by default and will not trigger
+    auto-resubmit in ``/status``.  Set ``min_rows > 0`` to opt into the
+    stricter check that requires at least that many CSV data rows beyond
+    the header.
     """
     import csv
 
     results: dict[int, dict] = {}
-    for tid_str, entry in manifest.get("tasks", {}).items():
+    for tid_str, entry in tasks_data.get("tasks", {}).items():
         try:
             tid = int(tid_str) + 1
         except (TypeError, ValueError):
@@ -400,8 +405,8 @@ def check_results_from_manifest(
     return results
 
 
-def report_status_from_manifest(
-    manifest: dict,
+def report_status_from_tasks(
+    tasks_data: dict,
     job_ids: list[str],
     scheduler: str | None = None,
     *,
@@ -413,29 +418,31 @@ def report_status_from_manifest(
     sge_user: str | None = None,
     min_rows: int = 0,
 ) -> dict:
-    """Like :func:`report_status` but driven by a dispatch manifest.
+    """Like :func:`report_status` but driven by a per-task dict.
 
-    Uses the per-task ``result_dir`` recorded in each manifest entry instead of a single
-    shared directory.  ``min_rows`` is forwarded to
-    :func:`check_results_from_manifest`; see its docstring for the CSV
+    Uses the per-task ``result_dir`` recorded in each task entry instead of a
+    single shared directory.  Consumes the same per-task dict as
+    :func:`check_results_from_tasks` — typically synthesized from a
+    sidecar + ``.hpc/tasks.py``. ``min_rows`` is forwarded to
+    :func:`check_results_from_tasks`; see its docstring for the CSV
     completion semantics.
 
-    Each task's per-task dict includes ``cmd_sha`` pulled from the manifest
-    entry when present (manifest schema v2+); ``null`` otherwise (v1 back-compat).
+    Each task's per-task dict includes ``cmd_sha`` pulled from the task
+    entry when present; ``null`` otherwise.
     """
     from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
 
-    total = int(manifest.get("total_tasks", len(manifest.get("tasks", {}))))
-    manifest_tasks = manifest.get("tasks", {}) or {}
+    total = int(tasks_data.get("total_tasks", len(tasks_data.get("tasks", {}))))
+    task_entries = tasks_data.get("tasks", {}) or {}
 
-    completed = check_results_from_manifest(manifest, file_glob=file_glob, min_rows=min_rows)
+    completed = check_results_from_tasks(tasks_data, file_glob=file_glob, min_rows=min_rows)
 
     if scheduler is None:
         # Pass a representative per-task result_dir so detect_scheduler can
         # consult experiment_meta.json instead of falling back to the
         # ``sacct --version`` shell heuristic — which silently returns "sge"
         # on hosts without sacct on $PATH.
-        first_task = next(iter(manifest_tasks.values()), None)
+        first_task = next(iter(task_entries.values()), None)
         meta_dir = first_task.get("result_dir") if isinstance(first_task, dict) else None
         scheduler = detect_scheduler(meta_dir)
 
@@ -451,8 +458,8 @@ def report_status_from_manifest(
         job_info = {}
 
     def _cmd_sha_for(one_based_tid: int) -> str | None:
-        """Look up cmd_sha on the manifest entry for a 1-based task id."""
-        entry = manifest_tasks.get(str(one_based_tid - 1))
+        """Look up cmd_sha on the task entry for a 1-based task id."""
+        entry = task_entries.get(str(one_based_tid - 1))
         if not entry:
             return None
         sha = entry.get("cmd_sha")
@@ -510,20 +517,20 @@ def report_status_from_manifest(
     return report
 
 
-def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
-    """Group per-task statuses in *report* by grid point (from manifest ``params``).
+def rollup_by_grid_point(report: dict, tasks_data: dict) -> dict[str, dict]:
+    """Group per-task statuses in *report* by grid point (from task ``params``).
 
-    Manifest task IDs are 0-based strings; report task IDs are 1-based strings.
+    Per-task dict task IDs are 0-based strings; report task IDs are 1-based strings.
     Returned dict maps grid-point key -> ``{complete, running, pending, failed, unknown, total}``.
     """
     rollup: dict[str, dict] = {}
-    manifest_tasks = manifest.get("tasks", {})
+    task_entries = tasks_data.get("tasks", {})
     for tid_str, task_info in report.get("tasks", {}).items():
         try:
-            manifest_key = str(int(tid_str) - 1)
+            entry_key = str(int(tid_str) - 1)
         except (TypeError, ValueError):
             continue
-        entry = manifest_tasks.get(manifest_key)
+        entry = task_entries.get(entry_key)
         if entry is None:
             continue
         gp = _grid_point_key(entry.get("params") or {})
@@ -540,17 +547,17 @@ def rollup_by_grid_point(report: dict, manifest: dict) -> dict[str, dict]:
     return rollup
 
 
-def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
-    """Group per-task statuses by wave (from manifest ``wave_map``).
+def rollup_by_wave(report: dict, tasks_data: dict) -> dict[str, dict]:
+    """Group per-task statuses by wave (from task ``wave_map``).
 
     Returns ``{wave: {complete, running, pending, failed, unknown, total}}``.
-    Empty when the manifest has no ``wave_map`` (un-batched submissions).
+    Empty when the per-task dict has no ``wave_map`` (un-batched submissions).
 
-    Wave map keys are stored as 0-based task ids in the manifest; the
+    Wave map keys are stored as 0-based task ids; the
     status report keys tasks 1-based to match scheduler array indexing,
     so we shift on lookup.
     """
-    wave_map = manifest.get("wave_map") or {}
+    wave_map = tasks_data.get("wave_map") or {}
     if not wave_map:
         return {}
     report_tasks = report.get("tasks", {}) or {}
@@ -566,7 +573,7 @@ def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
         }
         for tid in members or []:
             bucket["total"] += 1
-            # Manifest stores 0-based; report keys 1-based.
+            # Per-task dict stores 0-based; report keys 1-based.
             try:
                 report_key = str(int(tid) + 1)
             except (TypeError, ValueError):
@@ -586,14 +593,58 @@ def rollup_by_wave(report: dict, manifest: dict) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 
+def _build_per_task_dict_from_sidecar(sidecar: dict, tasks_module) -> dict:
+    """Build a per-task dict from sidecar + ``.hpc/tasks.py``.
+
+    Adapter that lets the existing reporting code
+    (``report_status_from_tasks``, ``rollup_by_grid_point``,
+    ``rollup_by_wave``) operate unchanged against the new model. Each
+    task's ``result_dir`` is computed by formatting the sidecar's
+    ``result_dir_template`` against ``task_id`` + ``run_id`` + the
+    kwargs returned by ``tasks_module.resolve(task_id)``.
+    """
+    n = int(sidecar["task_count"])
+    template = sidecar["result_dir_template"]
+    run_id = sidecar["run_id"]
+    tasks: dict[str, dict] = {}
+    for i in range(n):
+        kwargs = tasks_module.resolve(i)
+        if not isinstance(kwargs, dict):
+            kwargs = {}
+        ctx = {"task_id": i, "run_id": run_id, **kwargs}
+        try:
+            result_dir = template.format(**ctx)
+        except KeyError:
+            # Surface as empty so downstream "missing result file" logic
+            # flags the misconfiguration without crashing the report.
+            result_dir = ""
+        tasks[str(i)] = {
+            "result_dir": result_dir,
+            "params": kwargs,
+            "cmd_sha": None,  # cmd_sha lives at the run level in the new model
+        }
+    return {
+        "schema_version": 2,
+        "total_tasks": n,
+        "tasks": tasks,
+        "wave_map": sidecar.get("wave_map", {}),
+        "cmd_sha": sidecar.get("cmd_sha"),
+        "run_id": run_id,
+    }
+
+
 def _main() -> int:
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(
-        description="Emit a JSON status report for a dispatch manifest.",
+        description="Emit a JSON status report for a run.",
     )
-    parser.add_argument("--manifest", required=True, help="Path to _hpc_dispatch.json")
+    parser.add_argument(
+        "--run-id",
+        required=True,
+        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json.",
+    )
     parser.add_argument(
         "--job-ids",
         default="",
@@ -615,42 +666,47 @@ def _main() -> int:
     )
     args = parser.parse_args()
 
-    manifest_path = Path(args.manifest)
-    if not manifest_path.is_file():
-        # Even on error, emit the pinned 4-key shape so the LLM orchestrator
-        # can parse stdout unconditionally.
+    def _emit_err(code: str, detail: str, exit_code: int = 2) -> int:
         err_doc = {
             "summary": _empty_summary(),
             "tasks": {},
             "rollup": {},
-            "errors": [
-                {"code": "manifest_not_found", "detail": str(manifest_path)},
-            ],
+            "errors": [{"code": code, "detail": detail}],
         }
         json.dump(err_doc, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")
-        print(f"manifest not found: {manifest_path}", file=sys.stderr)
-        return 2
+        return exit_code
+
+    # Read .hpc/runs/<run_id>.json + .hpc/tasks.py and synthesize a
+    # task-keyed dict the reporting code consumes.
+    sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
+    if not sidecar_path.is_file():
+        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
+        return _emit_err("sidecar_not_found", str(sidecar_path))
+    try:
+        sidecar = json.loads(sidecar_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
+
+    tasks_py_path = Path(".hpc") / "tasks.py"
+    if not tasks_py_path.is_file():
+        return _emit_err("tasks_py_not_found", str(tasks_py_path))
+    try:
+        from hpc_mapreduce import load_tasks_module
+
+        tasks_module = load_tasks_module(tasks_py_path)
+    except Exception as exc:
+        return _emit_err("tasks_py_import_error", f"{tasks_py_path}: {exc}")
 
     try:
-        manifest = json.loads(manifest_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        err_doc = {
-            "summary": _empty_summary(),
-            "tasks": {},
-            "rollup": {},
-            "errors": [
-                {"code": "manifest_parse_error", "detail": f"{manifest_path}: {exc}"},
-            ],
-        }
-        json.dump(err_doc, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write("\n")
-        return 2
+        tasks_data = _build_per_task_dict_from_sidecar(sidecar, tasks_module)
+    except Exception as exc:
+        return _emit_err("synthetic_dict_error", str(exc))
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
 
-    report = report_status_from_manifest(
-        manifest,
+    report = report_status_from_tasks(
+        tasks_data,
         job_ids,
         scheduler=args.scheduler,
         file_glob=args.file_glob,
@@ -661,8 +717,8 @@ def _main() -> int:
         sge_user=args.sge_user,
         min_rows=args.min_rows,
     )
-    report["rollup"] = rollup_by_grid_point(report, manifest)
-    report["waves"] = rollup_by_wave(report, manifest)
+    report["rollup"] = rollup_by_grid_point(report, tasks_data)
+    report["waves"] = rollup_by_wave(report, tasks_data)
 
     # Pin all four top-level keys, even if upstream forgot one.
     report.setdefault("summary", _empty_summary())

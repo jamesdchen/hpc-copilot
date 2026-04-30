@@ -35,7 +35,6 @@ __all__ = [
     "verify_combiner_artifact",
     "build_provenance",
     "write_remote_provenance",
-    "validate_manifest_file",
     "fetch_task_logs",
     "cluster_failures_by_fingerprint",
     "fingerprint_stderr_tail",
@@ -58,13 +57,6 @@ def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
 # package.
 _utcnow_iso = utcnow_iso
 
-# Manifest filenames are content-addressed: ``manifest.<sha8>.json``
-# where ``sha8`` is exactly 8 hex chars.  ``submit_and_record`` derives
-# the run_id suffix from this prefix, so a non-conforming filename used
-# to silently produce garbage run_ids that violated the
-# ``submit.output.json`` schema.
-_MANIFEST_NAME_RE = re.compile(r"^manifest\.([0-9a-f]{8})\.json$")
-
 
 def submit_and_record(
     experiment_dir: Path,
@@ -74,33 +66,27 @@ def submit_and_record(
     ssh_target: str,
     remote_path: str,
     job_name: str,
-    manifest_filename: str,
+    run_id: str,
     job_ids: list[str],
     total_tasks: int,
-    run_id: str | None = None,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
-    ``run_id`` defaults to ``f"{profile}_{cmd_sha8}"`` where ``cmd_sha8``
-    is the prefix of *manifest_filename* (``manifest.<sha8>.json``).
+    The journal entry is keyed by *run_id* — the per-run sidecar at
+    ``.hpc/runs/<run_id>.json`` is the source of truth for everything
+    the cluster-side dispatcher and combiner consume; the journal record
+    is the laptop-side bookkeeping that lets a future ``/status`` resume
+    monitoring without re-asking the user for cluster / job_ids.
 
     Returns ``(record, deduped)`` where ``deduped`` is True if a record
     with this ``run_id`` already existed and the call was a no-op replay.
-    Submissions are deterministic in ``run_id`` (profile + manifest sha),
-    so an agent that retries on transient network errors gets dedup for
-    free — the cluster does not see duplicate ``qsub``/``sbatch`` calls
-    because the caller checks the returned ``deduped`` flag before issuing
-    them. The bundled CLI uses this to make ``submit`` idempotent.
+    Submissions are deterministic in ``run_id``, so a retry on transient
+    network errors gets dedup for free — the cluster does not see
+    duplicate ``qsub``/``sbatch`` calls because the caller checks the
+    returned ``deduped`` flag before issuing them.
     """
-    if run_id is None:
-        match = _MANIFEST_NAME_RE.match(manifest_filename)
-        if not match:
-            raise errors.ManifestInvalid(
-                f"manifest_filename {manifest_filename!r} must match "
-                f"'manifest.<8 hex chars>.json'; pass an explicit run_id "
-                f"to bypass this check."
-            )
-        run_id = f"{profile}_{match.group(1)}"
+    if not run_id:
+        raise errors.SpecInvalid("submit_and_record requires a non-empty run_id")
 
     existing = session.load_run(experiment_dir, run_id)
     if existing is not None:
@@ -114,7 +100,6 @@ def submit_and_record(
         remote_path=remote_path,
         job_name=job_name,
         job_ids=list(job_ids),
-        manifest=manifest_filename,
         total_tasks=int(total_tasks),
         submitted_at=_utcnow_iso(),
         experiment_dir=str(Path(experiment_dir).resolve()),
@@ -124,20 +109,23 @@ def submit_and_record(
 
 
 def build_job_env(
-    manifest: dict[str, Any], base_env: dict[str, str]
+    runtime_spec: dict[str, Any], base_env: dict[str, str]
 ) -> dict[str, str]:
     """Return *base_env* augmented with runtime-derived env vars.
 
-    Today: when ``manifest.get("runtime") == "uv"``, sets
-    ``HPC_RUNTIME=uv`` so the cluster-side template's ``uv sync``
-    preamble fires. For any other runtime value (or none), returns a
-    plain copy of *base_env*. Never mutates either input.
+    *runtime_spec* is a small dict carrying any runtime selector the
+    caller wants threaded into the cluster job — typically
+    ``{"runtime": "uv"}`` taken from the submit-spec. When
+    ``runtime_spec.get("runtime") == "uv"``, sets ``HPC_RUNTIME=uv`` so
+    the cluster-side template's ``uv sync`` preamble fires. Any other
+    value (or an empty dict) returns a plain copy of *base_env*. Never
+    mutates either input.
 
     Add new branches as new runtime profiles land (``pixi``, ``poetry``,
     …); the contract — copy + augment — should stay invariant.
     """
     env = dict(base_env)
-    if manifest.get("runtime") == "uv":
+    if runtime_spec.get("runtime") == "uv":
         env["HPC_RUNTIME"] = "uv"
     return env
 
@@ -146,19 +134,25 @@ def _ssh_status_report(
     *,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str,
+    run_id: str,
     job_ids: list[str],
     job_name: str,
     log_dir: str = "logs",
     file_glob: str = "*",
 ) -> dict:
-    """Run the on-cluster status reporter and return its parsed JSON."""
+    """Run the on-cluster status reporter (``--run-id``) and return parsed JSON.
+
+    The reporter reads ``.hpc/runs/<run_id>.json`` for run metadata and
+    ``.hpc/tasks.py`` for per-task kwargs, then emits the JSON envelope
+    pinned by ``docs/cli-contract.md`` (summary / tasks / rollup /
+    errors).
+    """
     user, host = _split_ssh_target(ssh_target)
     job_ids_csv = ",".join(job_ids)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
         f"python -m hpc_mapreduce.reduce.status "
-        f"--manifest {shlex.quote(manifest_filename)} "
+        f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "
         f"--log-dir {shlex.quote(log_dir)} "
@@ -184,12 +178,14 @@ def record_status(
     *,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str,
     job_ids: list[str],
     job_name: str,
     file_glob: str = "*",
 ) -> RunRecord:
     """Run the status reporter and write ``last_status`` to the journal.
+
+    The cluster-side reporter reads ``.hpc/runs/<run_id>.json`` for run
+    metadata and ``.hpc/tasks.py`` for per-task kwargs.
 
     Also writes the snapshot to ``<run_id>.last_status.json`` next to the
     journal record so any consumer (agent, human, ``jq`` pipeline, file
@@ -199,7 +195,7 @@ def record_status(
     report = _ssh_status_report(
         ssh_target=ssh_target,
         remote_path=remote_path,
-        manifest_filename=manifest_filename,
+        run_id=run_id,
         job_ids=job_ids,
         job_name=job_name,
         file_glob=file_glob,
@@ -207,7 +203,7 @@ def record_status(
     summary = dict(report.get("summary", {}))
     summary["checked_at"] = _utcnow_iso()
     # Carry per-wave breakdown into the persisted last_status when the
-    # cluster-side reporter emitted one (manifest had a wave_map).
+    # cluster-side reporter emitted one (sidecar carried a wave_map).
     if isinstance(report.get("waves"), dict) and report["waves"]:
         summary["waves"] = report["waves"]
     record = session.update_run_status(experiment_dir, run_id, last_status=summary)
@@ -231,14 +227,16 @@ def combine_wave(
     wave: int,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str = "_hpc_dispatch.json",
     force: bool = False,
 ) -> tuple[bool, str, str]:
     """Run the on-cluster combiner for *wave*; record the outcome.
 
-    On success, append *wave* to ``combined_waves``. On failure, append
-    to ``failed_waves`` and never mark the wave combined. Returns the raw
-    ``(ok, stdout, stderr)`` from ``run_combiner_checked``.
+    The cluster-side combiner (``.hpc/_hpc_combiner.py``) reads the
+    per-run sidecar at ``.hpc/runs/<run_id>.json`` to discover the
+    wave_map and result_dir_template. On success, append *wave* to
+    ``combined_waves``. On failure, append to ``failed_waves`` and never
+    mark the wave combined. Returns ``(ok, stdout, stderr)`` from
+    :func:`run_combiner_checked`.
     """
     user, host = _split_ssh_target(ssh_target)
     ok, stdout, stderr = run_combiner_checked(
@@ -246,7 +244,7 @@ def combine_wave(
         user=user,
         remote_path=remote_path,
         wave=wave,
-        manifest_name=manifest_filename,
+        run_id=run_id,
         force=force,
     )
     record = session.load_run(experiment_dir, run_id)
@@ -304,9 +302,9 @@ def resubmit_failed(
 ) -> tuple[RunRecord, bool, str]:
     """Record a resubmission attempt in the journal.
 
-    The actual resubmit (manifest building + backend submission) is the
-    caller's responsibility — this helper only updates per-task retry
-    counters and (optionally) the active job_ids list. Pass
+    The actual resubmit (writing a fresh sidecar + backend submission)
+    is the caller's responsibility — this helper only updates per-task
+    retry counters and (optionally) the active job_ids list. Pass
     ``new_job_ids`` after the backend reports them so the journal stays
     in sync for the next monitor session.
 
@@ -461,7 +459,7 @@ def reconcile(
             _ssh_status_report,
             ssh_target=record.ssh_target,
             remote_path=record.remote_path,
-            manifest_filename=record.manifest,
+            run_id=run_id,
             job_ids=record.job_ids,
             job_name=record.job_name,
             file_glob=file_glob,
@@ -782,138 +780,6 @@ def cluster_failures_by_fingerprint(
     return clusters
 
 
-# ─── pre-submit manifest sanity ─────────────────────────────────────────────
-
-
-# Schema versions accepted by the on-cluster dispatcher.  Kept in sync
-# with ``hpc_mapreduce.map.dispatch.SUPPORTED_SCHEMA_VERSIONS`` and
-# ``hpc_mapreduce.job.grid.MANIFEST_SCHEMA_VERSION``.
-_SUPPORTED_MANIFEST_VERSIONS = (1, 2)
-
-# Match unresolved ``{placeholder}`` tokens.  False positives are
-# minimised by requiring an identifier-like body and a closing brace.
-# (Real shell brace expansion uses commas or numeric ranges, which this
-# pattern does not match.)
-_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
-
-
-def validate_manifest_file(manifest_path: Path) -> None:
-    """Raise :class:`ManifestInvalid` if *manifest_path* is unsafe to submit.
-
-    Checks (all client-side, no SSH):
-
-    * the file exists and is valid JSON;
-    * ``schema_version`` is in :data:`_SUPPORTED_MANIFEST_VERSIONS`;
-    * ``tasks`` is a non-empty dict, ``total_tasks`` matches ``len(tasks)``;
-    * every task carries ``cmd``, ``result_dir``, ``params`` with the right
-      types;
-    * no ``{placeholder}`` remnants in rendered ``cmd`` / ``result_dir``;
-    * if ``wave_map`` is present, its members exactly cover ``tasks``.
-
-    Catches the entire class of "manifest looked fine locally, crashed
-    mid-run on the cluster" failures.
-    """
-    if not manifest_path.is_file():
-        raise errors.ManifestInvalid(
-            f"manifest not found at {manifest_path}; rebuild via /submit "
-            f"or `hpc-mapreduce submit`."
-        )
-    try:
-        manifest = json.loads(manifest_path.read_text())
-    except json.JSONDecodeError as exc:
-        raise errors.ManifestInvalid(
-            f"manifest at {manifest_path} is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(manifest, dict):
-        raise errors.ManifestInvalid(
-            f"manifest at {manifest_path} must be a JSON object; "
-            f"got {type(manifest).__name__}"
-        )
-    schema_version = manifest.get("schema_version")
-    if schema_version not in _SUPPORTED_MANIFEST_VERSIONS:
-        raise errors.ManifestInvalid(
-            f"manifest schema_version={schema_version!r}; supported="
-            f"{list(_SUPPORTED_MANIFEST_VERSIONS)}. Regenerate with current hpc_mapreduce."
-        )
-
-    tasks = manifest.get("tasks")
-    if not isinstance(tasks, dict) or not tasks:
-        raise errors.ManifestInvalid(
-            f"manifest.tasks must be a non-empty object; "
-            f"got {type(tasks).__name__ if tasks is None else 'empty'}"
-        )
-
-    total_tasks = manifest.get("total_tasks")
-    if isinstance(total_tasks, int) and total_tasks != len(tasks):
-        raise errors.ManifestInvalid(
-            f"manifest.total_tasks ({total_tasks}) does not match "
-            f"len(tasks)={len(tasks)} — manifest is inconsistent."
-        )
-
-    for tid, task in tasks.items():
-        if not isinstance(task, dict):
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}] must be an object; "
-                f"got {type(task).__name__}"
-            )
-        cmd = task.get("cmd")
-        if not isinstance(cmd, str) or not cmd.strip():
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].cmd must be a non-empty string"
-            )
-        if _PLACEHOLDER_RE.search(cmd):
-            leftover = _PLACEHOLDER_RE.findall(cmd)
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].cmd has unresolved placeholder(s) "
-                f"{leftover}: {cmd!r}. Rebuild the manifest so all "
-                f"{{name}} tokens render before submit."
-            )
-        result_dir = task.get("result_dir")
-        if not isinstance(result_dir, str) or not result_dir.strip():
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].result_dir must be a non-empty string"
-            )
-        if _PLACEHOLDER_RE.search(result_dir):
-            leftover = _PLACEHOLDER_RE.findall(result_dir)
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].result_dir has unresolved "
-                f"placeholder(s) {leftover}: {result_dir!r}."
-            )
-        params = task.get("params")
-        if not isinstance(params, dict):
-            raise errors.ManifestInvalid(
-                f"manifest.tasks[{tid!r}].params must be an object"
-            )
-
-    wave_map = manifest.get("wave_map")
-    if wave_map is not None:
-        if not isinstance(wave_map, dict):
-            raise errors.ManifestInvalid(
-                f"manifest.wave_map must be an object mapping wave -> [task_ids]"
-            )
-        covered: set[str] = set()
-        for wave_key, members in wave_map.items():
-            if not isinstance(members, list):
-                raise errors.ManifestInvalid(
-                    f"manifest.wave_map[{wave_key!r}] must be a list of task ids"
-                )
-            for tid in members:
-                covered.add(str(tid))
-        task_ids = set(tasks.keys())
-        missing_from_waves = task_ids - covered
-        unknown_in_waves = covered - task_ids
-        if missing_from_waves:
-            raise errors.ManifestInvalid(
-                f"wave_map omits task id(s) {sorted(missing_from_waves)[:10]} — "
-                f"every task must belong to a wave."
-            )
-        if unknown_in_waves:
-            raise errors.ManifestInvalid(
-                f"wave_map references unknown task id(s) "
-                f"{sorted(unknown_in_waves)[:10]} — manifest is inconsistent."
-            )
-
-
 # ─── aggregate preconditions / postconditions / provenance ──────────────────
 #
 # These helpers are framework-agnostic guarantees around the user-supplied
@@ -923,43 +789,39 @@ def validate_manifest_file(manifest_path: Path) -> None:
 # Both /aggregate and `hpc-mapreduce aggregate` use them.
 
 
-def _read_remote_manifest(
-    *, ssh_target: str, remote_path: str, manifest_filename: str
+def _read_remote_sidecar(
+    *, ssh_target: str, remote_path: str, run_id: str
 ) -> dict[str, Any]:
-    """SSH-cat the dispatch manifest from the cluster and parse it.
-
-    The manifest carries ``wave_map`` (set by ``attach_wave_map``) which
-    maps wave index -> list of task ids belonging to that wave.  When
-    absent, we fall back to assuming every task belongs to wave 0.
-    """
+    """SSH-cat the per-run sidecar at ``.hpc/runs/<run_id>.json``."""
     user, host = _split_ssh_target(ssh_target)
-    cmd = f"cat {shlex.quote(f'{remote_path}/{manifest_filename}')}"
+    sidecar_rel = f".hpc/runs/{run_id}.json"
+    cmd = f"cat {shlex.quote(f'{remote_path}/{sidecar_rel}')}"
     proc = ssh_run(cmd, host=host, user=user)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
-            f"failed to read remote manifest at {remote_path}/{manifest_filename}: "
+            f"failed to read remote sidecar at {remote_path}/{sidecar_rel}: "
             f"{proc.stderr.strip()[:500]}"
         )
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
         raise RemoteCommandFailed(
-            f"remote manifest at {remote_path}/{manifest_filename} is not valid JSON: {exc}"
+            f"remote sidecar at {remote_path}/{sidecar_rel} is not valid JSON: {exc}"
         ) from exc
 
 
-def _wave_task_ids(manifest: dict[str, Any], wave: int) -> list[str]:
-    """Return task ids belonging to *wave* per ``manifest['wave_map']``.
+def _wave_task_ids(sidecar: dict[str, Any], wave: int) -> list[int]:
+    """Return task ids belonging to *wave* per ``sidecar['wave_map']``.
 
     Falls back to "every task" when ``wave==0`` and no wave_map is present
     (un-batched submissions ship a single implicit wave-0).
     """
-    wave_map = manifest.get("wave_map") or {}
+    wave_map = sidecar.get("wave_map") or {}
     if wave_map:
         members = wave_map.get(str(wave))
-        return [str(t) for t in members] if members else []
+        return [int(t) for t in members] if members else []
     if wave == 0:
-        return list((manifest.get("tasks") or {}).keys())
+        return list(range(int(sidecar.get("task_count", 0))))
     return []
 
 
@@ -967,25 +829,25 @@ def verify_per_task_outputs(
     *,
     ssh_target: str,
     remote_path: str,
-    manifest_filename: str,
+    run_id: str,
     wave: int,
     template: str,
 ) -> list[str]:
     """Check every per-task output named by *template* exists on the cluster.
 
     *template* may include ``{task_id}``; it is substituted with each task
-    id in the wave (per ``manifest['wave_map']``).  Paths are interpreted
-    relative to *remote_path* unless absolute.
+    id in the wave (per the per-run sidecar's ``wave_map``).  Paths are
+    interpreted relative to *remote_path* unless absolute.
 
     Returns the list of *missing* paths (relative to remote_path or
     absolute as written).  Empty list = all expected outputs are present.
     """
-    manifest = _read_remote_manifest(
+    sidecar = _read_remote_sidecar(
         ssh_target=ssh_target,
         remote_path=remote_path,
-        manifest_filename=manifest_filename,
+        run_id=run_id,
     )
-    task_ids = _wave_task_ids(manifest, wave)
+    task_ids = _wave_task_ids(sidecar, wave)
     if not task_ids:
         return []
     expected = [template.format(task_id=tid) for tid in task_ids]
@@ -1060,7 +922,6 @@ def build_provenance(record: RunRecord, *, wave: int) -> dict[str, Any]:
     """
     return {
         "run_id": record.run_id,
-        "manifest": record.manifest,
         "wave": int(wave),
         "profile": record.profile,
         "cluster": record.cluster,

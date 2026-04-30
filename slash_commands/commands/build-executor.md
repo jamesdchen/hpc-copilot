@@ -17,7 +17,7 @@ Discovery uses the same contract as `/submit`: a file is an executor iff it pars
 | (empty) | Start from Step 1, ask the user what to build |
 | `"ml_elasticnet from ml_ridge"` | Mode (a): clone `ml_ridge.py` to `ml_elasticnet.py`, modify |
 | `"scaffold ml_lasso"` | Mode (b): start from `templates/starters/executor_template.py` |
-| `"wrap scripts/my_train.py"` | Mode (c): generate a shim for the given user script |
+| `"wrap scripts/my_train.py"` | Redirect to `/submit` Step 6 — per-task fan-out is expressed in `.hpc/tasks.py`, not in a separate file. |
 
 Parse `$ARGUMENTS` before Step 1; skip ahead if intent is already clear.
 
@@ -42,8 +42,9 @@ Executors found in src/:
 What do you want to build?
   (a) Copy and modify one of the above
   (b) Scaffold a fresh executor from the hpc-mapreduce template
-  (c) Wrap an already-written script (generate a shim only)
 ```
+
+If the user wants to wrap an existing script that doesn't match the grid-param CLI conventions, **redirect them to `/submit`**: the parallelization axis is expressed in user-written Python during `/submit` Step 6 (`.hpc/tasks.py`), not via a separate file produced by this command.
 
 If `discover_executors` returns an empty list, skip the (a) option and note the directory was empty.
 
@@ -71,40 +72,9 @@ If the user is ambiguous ("make a ridge executor"), infer: existing `ml_ridge.py
 4. Walk the file and fill in every `# TODO:` marker based on what the user described — model type, data source, feature engineering, metric, etc. Keep the standard CLI args (`--data-path`, `--horizon`, `--start`, `--end`, `--output-file`) unless the user explicitly wants different flags.
 5. Jump to Step 4 (verify).
 
-## Step 3c: Wrap an Existing User Script (Shim Only)
-
-Use this when the user already has a working script that does not match the grid-param CLI conventions. You will generate only a shim — the user's script is untouched.
-
-1. Ask for the path to the user's script if not already given. Run `python <script> --help` and record its flags.
-2. **Scan the experiment repo for reusable helpers BEFORE writing any shim code.** A good shim is a thin adapter — it `import`s the experiment repo's own helpers; it does *not* re-implement the user's data pipeline, calendar arithmetic, file-globbing logic, or anything else that already lives in `lib/`, `utils/`, or the executors. Concretely:
-   1. Read the user's script (the path from sub-step 1) and list every top-level `import` that resolves to a local module — e.g. `from lib.loading import load_raw_data`, `from utils.dates import business_days`. These are first-class reuse candidates.
-   2. List the contents of `lib/`, `utils/`, `src/lib/`, `src/utils/` (whichever exist) and skim each `.py` for public functions whose names match what `translate()` will need. Typical patterns: `load_*`, `count_*`, `n_rows`, `len_*`, `total_*`, `period_*`, `parse_dates`, `month_periods`, `business_days`. If a helper exists, the shim must call it.
-   3. Open one or two executors discovered in Step 1 and confirm how those helpers are invoked (data path, args). The shim should call them the same way.
-   4. Build a short table for yourself before generating:
-      | Need in `translate()` / `_compute_total_items()` | Reuse via                                                          | Inline only if            |
-      |--------------------------------------------------|--------------------------------------------------------------------|---------------------------|
-      | total item count                                 | `from lib.loading import load_raw_data` → `len(load_raw_data(p))`  | no loader exists in `lib/`|
-      | date-window split                                | `from utils.dates import month_periods` (or similar)               | no period helper exists   |
-      | file-list shard                                  | `from lib.io import list_inputs` (or similar)                      | no globber exists         |
-      Default to reuse. Inline only when no helper fits, and inline only the minimum needed.
-3. Resolve the shim template:
-   ```bash
-   python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "starters" / "shim_template.py")'
-   ```
-   (`chunking_shim.py` next to it is a concrete chunking example; pattern-match off it for data-length splits. For simpler translations, start from `shim_template.py`.)
-4. Ask the user where the shim should live (default: `shims/<script_stem>_shim.py` in the experiment repo).
-5. Copy the template to that path, then customize `translate()` (and `_compute_total_items()` if you started from `chunking_shim.py`) using the helpers you identified in sub-step 2 — `import` them at the top of the shim; do not re-implement them. Inline custom logic only when no helper fits.
-6. After generation, scan the shim one more time: every block of more than ~5 lines of computation that mirrors something already in `lib/` / `utils/` / an executor is a smell — replace it with an import. Re-run the smoke test (Step 4) after any rewrite.
-7. The shim contract (see `hpc_mapreduce/map/shim.py` for the cache side — do not modify it here):
-   - The shim script itself is a normal `.py` file that accepts `--chunk-id`, `--total-chunks`, then `--` and the downstream command.
-   - Its `translate(chunk_id, total_chunks)` returns extra CLI args to append.
-   - It invokes the downstream command via `subprocess.run` and forwards the return code.
-   - Imports from the experiment repo are fine — at runtime the shim is launched from the experiment-repo root, so `lib/` and `utils/` resolve normally.
-8. Jump to Step 4 (verify).
-
 ## Step 4: Smoke-Test
 
-Run `python <new_executor> --help` (or `python <new_shim> --chunk-id 0 --total-chunks 1 -- echo test` for a shim). Capture stdout. Report:
+Run `python <new_executor> --help`. Capture stdout. Report:
 
 - `Smoke test OK: <path> --help returned <N> flags.`
 - Echo the discovered flags back to the user so they can confirm the CLI matches their intent.
@@ -122,26 +92,15 @@ or with grid overrides:
   /submit run <new_name> horizon=[1,5,25]
 ```
 
-For a shim, make the instruction explicit:
-
-```
-Shim generated at shims/<script>_shim.py. /submit will auto-detect it when
-the profile's run command is set to:
-  run: "python3 shims/<script>_shim.py -- python3 <user_script>"
-```
-
 ## Step 6: Cache and Report
 
-Save to Claude Code memory for this project:
-
-- The directory where the new executor landed (so `/submit`'s discovery finds it next time).
-- If (c): the mapping from downstream script -> shim path.
+Save to Claude Code memory for this project: the directory where the new executor landed (so `/submit`'s discovery finds it next time).
 
 End with a concise report: what was created, where, and the `/submit` command that exercises it.
 
 ## Common executor patterns
 
-`templates/starters/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit`'s grid expansion treats any of these flags as grid-able when their values are passed as lists.
+`templates/starters/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit` Step 6 wires whichever of these flags the user wants to fan out across into `.hpc/tasks.py`'s `resolve()`.
 
 **(a) ML training executor** — fit on a date/index window, score against a horizon, write a metric.
 
@@ -187,5 +146,5 @@ parser.add_argument("--output-file", required=True)
 ## Do Not
 
 - Do not create or edit files under the `hpc_mapreduce/` package, the `templates/` directory, or the `commands/` directory of the framework repo. Those are framework sources.
-- Do not invent new protocols, ABCs, or required helper functions for the generated executor. The contract remains `argparse --help` + optional shim.
+- Do not invent new protocols, ABCs, or required helper functions for the generated executor. The contract is just `argparse --help`.
 - Do not run the downstream training loop during smoke-testing — `--help` only.

@@ -12,17 +12,21 @@ update both surfaces and bump the version.
 
 ### `run_id` format
 
-- **Format**: `f"{profile}_{cmd_sha8}"` where `cmd_sha8` is the first
-  8 hex chars of `sha256(canonicalized_manifest)` (extracted from the
-  manifest filename `manifest.<sha8>.json`).
-- **Defined in**: `slash_commands/runner.py:submit_and_record` (lines
-  74–76 — `manifest_filename.removeprefix("manifest.").removesuffix(".json")`).
+- **Recommended format**: `f"{profile}-{utc_ts}-{cmd_sha[:8]}"` where
+  `utc_ts` is `YYYYMMDD-HHMMSS` and `cmd_sha` is computed by
+  `hpc_mapreduce.job.runs.compute_cmd_sha(tasks_module)` over the
+  materialized `[tasks.resolve(i) for i in range(tasks.total())]`.
+- **Validation**: `hpc_mapreduce.job.runs.run_sidecar_path` accepts any
+  string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
+  sidecars sorted chronologically by mtime ↔ filename.
+- **Defined in**: `slash_commands/runner.py:submit_and_record` —
+  `run_id` is a required keyword.
 - **Public contract**: MARs and orchestrator agents may key state on
   this. Renaming the format breaks every downstream consumer.
 
 ### `error_code` enum
 
-The full set of 9 values that may appear in an error envelope's
+The full set of 12 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
 `slash_commands/errors.py`.
 
@@ -30,12 +34,15 @@ The full set of 9 values that may appear in an error envelope's
 |---|---|---|---|
 | `ssh_unreachable` | `SshUnreachable` | network | yes |
 | `scheduler_throttled` | `SchedulerThrottled` | cluster | yes |
-| `manifest_invalid` | `ManifestInvalid` | user | no |
+| `spec_invalid` | `SpecInvalid` | user | no |
 | `executor_not_found` | `ExecutorNotFound` | user | no |
 | `cluster_unknown` | `ClusterUnknown` | user | no |
 | `journal_corrupt` | `JournalCorrupt` | internal | no |
 | `remote_command_failed` | `RemoteCommandFailed` | cluster | no |
 | `config_invalid` | `ConfigInvalid` | user | no |
+| `combiner_failed` | `CombinerFailed` | cluster | yes |
+| `cluster_timeout` | `ClusterTimeout` | cluster | yes |
+| `outputs_missing` | `OutputsMissing` | cluster | yes |
 | `internal` | `HpcError` (base / catch-all) | internal | no |
 
 The same enum appears in `hpc_mapreduce/schemas/envelope.json`. Adding
@@ -96,8 +103,9 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 
 - **Lives in**: the experiment repo (optional file).
 - **Schema**: documented in `docs/schema.md` (top-level fields,
-  profiles, single- vs multi-stage, grid, env, resources, results,
-  backtest, constraints, cluster_envs).
+  profiles, single- vs multi-stage, env, resources, results,
+  constraints, cluster_envs). The parallelization axis lives in
+  `.hpc/tasks.py`, not in the spec.
 
 ### Exit-code → error_code mapping
 
@@ -115,15 +123,21 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 - **Shape**: same as `RunRecord.last_status` plus a `checked_at`
   ISO-8601 UTC timestamp. Stable across `schema_version` 1.
 
-### Manifest filename convention
+### Per-run sidecar layout
 
-- **Format**: `manifest.<cmd_sha8>.json` (8 lowercase hex chars).
-- **Validated in**: `hpc_mapreduce/schemas/submit.input.json`
-  (`pattern: ^manifest\.[0-9a-f]{8}\.json$`) and
-  `runner.submit_and_record` (which strips the prefix/suffix to derive
-  `run_id`).
-- **Alias**: `manifest.json` symlinks/copies to the active manifest;
-  see `docs/cli-contract.md` (Python-API contract).
+- **Path**: `.hpc/runs/<run_id>.json` inside the experiment repo.
+- **Schema**: `sidecar_schema_version` (currently `1`), `run_id`,
+  `cmd_sha`, `claude_hpc_version`, `submitted_at`, `executor`,
+  `result_dir_template`, `task_count`, `tasks_py_sha`, optional
+  `wave_map` and `extra` pocket.
+- **Helpers**: `hpc_mapreduce.job.runs.{write,read}_run_sidecar`,
+  `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`,
+  `compute_cmd_sha`, `run_sidecar_path`. All re-exported at package
+  root; see `docs/boundary-contract.md`.
+- **Retention**: `MAX_RUNS = 10`, oldest by mtime evicted on every
+  write.
+- **Identity**: the `run_id` string is the sole identifier; sidecars
+  are addressable directly at `.hpc/runs/<run_id>.json`.
 
 ## How to extend
 

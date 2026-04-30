@@ -1,18 +1,18 @@
-"""Tests for rollup_by_grid_point and check_results_from_manifest."""
+"""Tests for rollup_by_grid_point and check_results_from_tasks."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
 from hpc_mapreduce.reduce.status import (
-    check_results_from_manifest,
-    report_status_from_manifest,
+    check_results_from_tasks,
+    report_status_from_tasks,
     rollup_by_grid_point,
     rollup_by_wave,
 )
 
 
-def _manifest(tmp_path):
+def _tasks_data(tmp_path):
     """Two grid points x two chunks = 4 tasks. Each task has its own result_dir."""
     tasks = {}
     idx = 0
@@ -34,17 +34,17 @@ def _manifest(tmp_path):
     }
 
 
-def test_check_results_from_manifest_finds_completed(tmp_path):
-    manifest = _manifest(tmp_path)
+def test_check_results_from_tasks_finds_completed(tmp_path):
+    tasks_data = _tasks_data(tmp_path)
     # Complete tasks 0 and 2 by writing result files
     for tid_str in ("0", "2"):
-        rdir = tmp_path / manifest["tasks"][tid_str]["result_dir"].split("/")[-1]
+        rdir = tmp_path / tasks_data["tasks"][tid_str]["result_dir"].split("/")[-1]
         rdir.mkdir(parents=True, exist_ok=True)
         (rdir / "metrics.json").write_text("{}")
 
-    results = check_results_from_manifest(manifest, file_glob="*.json")
+    results = check_results_from_tasks(tasks_data, file_glob="*.json")
 
-    # Manifest IDs are 0-based, results dict is 1-based
+    # Per-task dict IDs are 0-based, results dict is 1-based
     assert 1 in results
     assert 3 in results
     assert 2 not in results
@@ -53,30 +53,30 @@ def test_check_results_from_manifest_finds_completed(tmp_path):
 
 
 def test_check_results_ignores_wip(tmp_path):
-    manifest = _manifest(tmp_path)
-    rdir = tmp_path / manifest["tasks"]["0"]["result_dir"].split("/")[-1]
+    tasks_data = _tasks_data(tmp_path)
+    rdir = tmp_path / tasks_data["tasks"]["0"]["result_dir"].split("/")[-1]
     rdir.mkdir(parents=True)
     wip = rdir / "_wip_partial.json"
     wip.write_text("{}")
 
-    results = check_results_from_manifest(manifest, file_glob="*.json")
+    results = check_results_from_tasks(tasks_data, file_glob="*.json")
 
     assert 1 not in results
 
 
 def test_rollup_groups_by_grid_point(tmp_path):
-    manifest = _manifest(tmp_path)
+    tasks_data = _tasks_data(tmp_path)
     # 4 tasks total (horizon=1 and horizon=5, each x 2 chunks)
     report = {
         "tasks": {
-            "1": {"status": "complete"},  # manifest 0: horizon=1, chunk a
-            "2": {"status": "complete"},  # manifest 1: horizon=1, chunk b
-            "3": {"status": "running"},  # manifest 2: horizon=5, chunk a
-            "4": {"status": "failed"},  # manifest 3: horizon=5, chunk b
+            "1": {"status": "complete"},  # task 0: horizon=1, chunk a
+            "2": {"status": "complete"},  # task 1: horizon=1, chunk b
+            "3": {"status": "running"},  # task 2: horizon=5, chunk a
+            "4": {"status": "failed"},  # task 3: horizon=5, chunk b
         },
     }
 
-    rollup = rollup_by_grid_point(report, manifest)
+    rollup = rollup_by_grid_point(report, tasks_data)
 
     # Two grid points: horizon=1 (both complete) and horizon=5 (one running, one failed)
     assert len(rollup) == 2
@@ -90,22 +90,22 @@ def test_rollup_groups_by_grid_point(tmp_path):
 
 
 def test_rollup_handles_empty_params():
-    manifest = {
+    tasks_data = {
         "total_tasks": 1,
         "tasks": {"0": {"cmd": "x", "result_dir": "/tmp/x", "params": {}}},
     }
     report = {"tasks": {"1": {"status": "complete"}}}
 
-    rollup = rollup_by_grid_point(report, manifest)
+    rollup = rollup_by_grid_point(report, tasks_data)
 
     assert "_" in rollup
     assert rollup["_"]["complete"] == 1
 
 
-def test_report_status_from_manifest_integrates(tmp_path):
-    manifest = _manifest(tmp_path)
+def test_report_status_from_tasks_integrates(tmp_path):
+    tasks_data = _tasks_data(tmp_path)
     # Mark task 0 complete by writing a result file
-    rdir_name = manifest["tasks"]["0"]["result_dir"].split("/")[-1]
+    rdir_name = tasks_data["tasks"]["0"]["result_dir"].split("/")[-1]
     rdir = tmp_path / rdir_name
     rdir.mkdir(parents=True)
     (rdir / "done.json").write_text("{}")
@@ -114,8 +114,8 @@ def test_report_status_from_manifest_integrates(tmp_path):
         patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
         patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}),
     ):
-        report = report_status_from_manifest(
-            manifest,
+        report = report_status_from_tasks(
+            tasks_data,
             job_ids=["12345"],
             scheduler="slurm",
             file_glob="*.json",
@@ -128,16 +128,16 @@ def test_report_status_from_manifest_integrates(tmp_path):
 
 
 def test_rollup_by_wave_returns_empty_without_wave_map(tmp_path):
-    """Manifests without a wave_map (un-batched submissions) yield {}."""
-    manifest = _manifest(tmp_path)  # _manifest builds no wave_map
-    assert "wave_map" not in manifest
+    """A per-task dict without a wave_map (un-batched submissions) yields {}."""
+    tasks_data = _tasks_data(tmp_path)  # _tasks_data builds no wave_map
+    assert "wave_map" not in tasks_data
     report = {"tasks": {"1": {"status": "complete"}}}
-    assert rollup_by_wave(report, manifest) == {}
+    assert rollup_by_wave(report, tasks_data) == {}
 
 
 def test_rollup_by_wave_groups_tasks_by_wave():
-    """Each wave's bucket counts tasks by status; manifest 0-based ↔ report 1-based."""
-    manifest = {
+    """Each wave's bucket counts tasks by status; per-task dict 0-based ↔ report 1-based."""
+    tasks_data = {
         "total_tasks": 4,
         "tasks": {
             "0": {"params": {}, "cmd": "x", "result_dir": "/x"},
@@ -151,14 +151,14 @@ def test_rollup_by_wave_groups_tasks_by_wave():
     # Report uses 1-based task ids
     report = {
         "tasks": {
-            "1": {"status": "complete"},  # manifest 0
-            "2": {"status": "complete"},  # manifest 1
-            "3": {"status": "running"},   # manifest 2
-            "4": {"status": "failed"},    # manifest 3
+            "1": {"status": "complete"},  # task 0
+            "2": {"status": "complete"},  # task 1
+            "3": {"status": "running"},   # task 2
+            "4": {"status": "failed"},    # task 3
         }
     }
 
-    waves = rollup_by_wave(report, manifest)
+    waves = rollup_by_wave(report, tasks_data)
 
     assert set(waves.keys()) == {"0", "1"}
     assert waves["0"]["complete"] == 2
@@ -170,11 +170,11 @@ def test_rollup_by_wave_groups_tasks_by_wave():
 
 def test_rollup_by_wave_marks_missing_tasks_unknown():
     """Tasks listed in wave_map but absent from the report count as unknown."""
-    manifest = {
+    tasks_data = {
         "tasks": {"0": {"params": {}, "cmd": "x", "result_dir": "/x"}},
         "wave_map": {"0": ["0"]},
     }
     report = {"tasks": {}}  # empty -> task 0 not present
-    waves = rollup_by_wave(report, manifest)
+    waves = rollup_by_wave(report, tasks_data)
     assert waves["0"]["unknown"] == 1
     assert waves["0"]["total"] == 1

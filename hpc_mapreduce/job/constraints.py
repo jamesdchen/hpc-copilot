@@ -29,8 +29,7 @@ class ClusterConstraints:
         Optional *advisory* ceiling on total tasks for a single submission.
         Surfaced by ``/submit`` to confirm large grids with the user.  This
         is **not** enforced by the throughput optimizer — it is a soft hint.
-        ``None`` disables the advisory (no prompt before the built-in
-        ``build_task_manifest`` default ceiling of 10_000).
+        ``None`` disables the advisory.
     """
 
     max_array_size: int = 1000

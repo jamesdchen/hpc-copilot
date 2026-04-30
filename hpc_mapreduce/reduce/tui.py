@@ -1,6 +1,6 @@
 """Live terminal UI for ``/status`` (opt-in ``--tui`` path).
 
-A thin wrapper around :func:`hpc_mapreduce.reduce.status.report_status_from_manifest`
+A thin wrapper around :func:`hpc_mapreduce.reduce.status.report_status_from_tasks`
 that polls the cluster on a fixed cadence and renders the result with Rich.
 The JSON / cron path in ``status.py`` is unchanged; the TUI is imported
 lazily so a user without ``rich`` installed pays zero cost for the normal
@@ -8,7 +8,7 @@ lazily so a user without ``rich`` installed pays zero cost for the normal
 
 Invoke directly::
 
-    python -m hpc_mapreduce.reduce.tui --manifest _hpc_dispatch.json \\
+    python -m hpc_mapreduce.reduce.tui --run-id <run_id> \\
         --job-ids 12345,12346 --poll-interval 30
 
 Keybinds (single-keystroke, non-blocking read on stdin):
@@ -55,17 +55,20 @@ class _UiState:
     start_ts: float = field(default_factory=time.time)
     focused_failing: bool = False
     last_report: dict | None = None
-    last_manifest: dict | None = None
+    last_per_task_dict: dict | None = None
     # Task id (string, 1-based, matches report["tasks"] keys) of the currently
     # focused failing task, or None when focus is off.
     focused_task_id: str | None = None
 
 
-def _load_manifest(manifest_path: Path) -> dict:
-    """Load & parse the dispatch manifest; raise FileNotFoundError if absent."""
-    if not manifest_path.is_file():
-        raise FileNotFoundError(f"manifest not found: {manifest_path}")
-    data: dict = json.loads(manifest_path.read_text())
+def _load_per_task_dict(per_task_dict_path: Path) -> dict:
+    """Load & parse the synthetic per-task dict written next to the run sidecar.
+
+    Raises ``FileNotFoundError`` if absent.
+    """
+    if not per_task_dict_path.is_file():
+        raise FileNotFoundError(f"per-task dict not found: {per_task_dict_path}")
+    data: dict = json.loads(per_task_dict_path.read_text())
     return data
 
 
@@ -80,7 +83,7 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"{s}s"
 
 
-def _classify_failures(report: dict, manifest: dict) -> dict[str, int]:
+def _classify_failures(report: dict, per_task_dict: dict) -> dict[str, int]:
     """Bucket failing/unknown tasks by :func:`classify_failure` category.
 
     Lazy-imports classify so we don't pay for log reads when no tasks are
@@ -108,7 +111,7 @@ def _classify_failures(report: dict, manifest: dict) -> dict[str, int]:
             continue
         cat = classify_failure(text)
         counts[cat] = counts.get(cat, 0) + 1
-    _ = manifest  # accepted for symmetry; not needed today
+    _ = per_task_dict  # accepted for symmetry; not needed today
     return counts
 
 
@@ -148,7 +151,7 @@ def _failing_tail(report: dict, limit: int = 10) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
-def _render(state: _UiState, report: dict, manifest: dict, poll_interval: int) -> Any:
+def _render(state: _UiState, report: dict, per_task_dict: dict, poll_interval: int) -> Any:
     """Build the Rich renderable tree for the current snapshot."""
     from rich.console import Group
     from rich.panel import Panel
@@ -159,8 +162,8 @@ def _render(state: _UiState, report: dict, manifest: dict, poll_interval: int) -
     from hpc_mapreduce.reduce.status import rollup_by_grid_point
 
     # Header -----------------------------------------------------------------
-    run_id = manifest.get("run_id") or manifest.get("project") or "(unknown)"
-    cluster = manifest.get("cluster") or "(unknown)"
+    run_id = per_task_dict.get("run_id") or per_task_dict.get("project") or "(unknown)"
+    cluster = per_task_dict.get("cluster") or "(unknown)"
     scheduler = report.get("scheduler", "?")
     wall = _fmt_elapsed(time.time() - state.start_ts)
 
@@ -182,7 +185,7 @@ def _render(state: _UiState, report: dict, manifest: dict, poll_interval: int) -
     )
 
     # Per-grid-point rollup table -------------------------------------------
-    rollup = rollup_by_grid_point(report, manifest)
+    rollup = rollup_by_grid_point(report, per_task_dict)
     rollup_tbl = Table(title="Per grid-point", show_lines=False, expand=True)
     rollup_tbl.add_column("grid point", overflow="fold")
     rollup_tbl.add_column("queued", justify="right")
@@ -199,7 +202,7 @@ def _render(state: _UiState, report: dict, manifest: dict, poll_interval: int) -
         )
 
     # Wave progress bars ----------------------------------------------------
-    wave_map = manifest.get("wave_map") or {}
+    wave_map = per_task_dict.get("wave_map") or {}
     wave_progress: Any
     if wave_map:
         wave_progress = Progress(
@@ -213,7 +216,7 @@ def _render(state: _UiState, report: dict, manifest: dict, poll_interval: int) -
         for wave_key in sorted(wave_map.keys(), key=lambda k: int(k) if str(k).isdigit() else 0):
             members = wave_map[wave_key] or []
             total = len(members)
-            # wave_map task IDs are stored 0-based (manifest indexing) — shift
+            # wave_map task IDs are stored 0-based — shift
             # to 1-based to match the report's tasks keys.
             done = 0
             for raw_tid in members:
@@ -225,10 +228,10 @@ def _render(state: _UiState, report: dict, manifest: dict, poll_interval: int) -
                     done += 1
             wave_progress.add_task(f"wave {wave_key}", total=total, completed=done)
     else:
-        wave_progress = Text("(no wave_map in manifest)", style="dim")
+        wave_progress = Text("(no wave_map in sidecar)", style="dim")
 
     # Failure classification -----------------------------------------------
-    fail_counts = _classify_failures(report, manifest)
+    fail_counts = _classify_failures(report, per_task_dict)
     fail_tbl = Table(title="Failure classification", expand=True)
     fail_tbl.add_column("category")
     fail_tbl.add_column("count", justify="right")
@@ -351,7 +354,7 @@ def _open_log(ssh_target: str | None, log_path: str, live: Any) -> None:
 
 
 def run_tui(
-    manifest_path: str | Path,
+    per_task_dict_path: str | Path,
     *,
     job_ids: list[str] | None = None,
     poll_interval: int = 30,
@@ -381,29 +384,29 @@ def run_tui(
         print(f"(import error: {exc})", file=sys.stderr)
         return 2
 
-    from hpc_mapreduce.reduce.status import report_status_from_manifest
+    from hpc_mapreduce.reduce.status import report_status_from_tasks
 
-    manifest_path = Path(manifest_path)
+    per_task_dict_path = Path(per_task_dict_path)
     try:
-        manifest = _load_manifest(manifest_path)
+        per_task_dict = _load_per_task_dict(per_task_dict_path)
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     except json.JSONDecodeError as exc:
-        print(f"manifest parse error: {exc}", file=sys.stderr)
+        print(f"per-task dict parse error: {exc}", file=sys.stderr)
         return 2
 
-    state = _UiState(last_manifest=manifest)
+    state = _UiState(last_per_task_dict=per_task_dict)
     console = Console()
 
     def _poll() -> dict:
-        # Reload manifest each tick — it's cheap and resilient to edits.
+        # Reload the per-task dict each tick — it's cheap and resilient to edits.
         try:
-            mf = _load_manifest(manifest_path)
+            mf = _load_per_task_dict(per_task_dict_path)
         except (FileNotFoundError, json.JSONDecodeError):
-            mf = state.last_manifest or {}
-        state.last_manifest = mf
-        rep = report_status_from_manifest(
+            mf = state.last_per_task_dict or {}
+        state.last_per_task_dict = mf
+        rep = report_status_from_tasks(
             mf,
             job_ids or [],
             scheduler=scheduler,
@@ -422,7 +425,7 @@ def run_tui(
     with (
         _RawStdin() as keys,
         Live(
-            _render(state, initial, state.last_manifest or {}, poll_interval),
+            _render(state, initial, state.last_per_task_dict or {}, poll_interval),
             console=console,
             refresh_per_second=4,
             screen=False,
@@ -438,7 +441,7 @@ def run_tui(
                 break
             if key == "r":
                 live.update(
-                    _render(state, _poll(), state.last_manifest or {}, poll_interval),
+                    _render(state, _poll(), state.last_per_task_dict or {}, poll_interval),
                     refresh=True,
                 )
                 last_poll = time.time()
@@ -451,7 +454,7 @@ def run_tui(
                     _render(
                         state,
                         state.last_report or initial,
-                        state.last_manifest or {},
+                        state.last_per_task_dict or {},
                         poll_interval,
                     ),
                     refresh=True,
@@ -468,7 +471,7 @@ def run_tui(
 
             if time.time() - last_poll >= poll_interval:
                 live.update(
-                    _render(state, _poll(), state.last_manifest or {}, poll_interval),
+                    _render(state, _poll(), state.last_per_task_dict or {}, poll_interval),
                     refresh=True,
                 )
                 last_poll = time.time()
@@ -485,7 +488,11 @@ def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Live terminal UI for /status. Requires rich (pip install claude-hpc[tui]).",
     )
-    parser.add_argument("--manifest", required=True, help="Path to _hpc_dispatch.json")
+    parser.add_argument(
+        "--run-id",
+        required=True,
+        help="Run ID — locates the sidecar at .hpc/runs/<run_id>.json.",
+    )
     parser.add_argument("--job-ids", default="", help="Comma-separated scheduler job IDs")
     parser.add_argument("--job-name", default="")
     parser.add_argument("--scheduler", default=None, choices=[None, "sge", "slurm"])
@@ -502,9 +509,35 @@ def _main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Materialize the synthetic per-task dict from the sidecar +
+    # .hpc/tasks.py and write it to a stable path next to the sidecar
+    # so the existing poll loop (which reloads on each tick) can re-read
+    # it cheaply.
+    from pathlib import Path as _P
+    from hpc_mapreduce import load_tasks_module
+    from hpc_mapreduce.reduce.status import (
+        _build_per_task_dict_from_sidecar,
+    )
+
+    sidecar_path = _P(".hpc") / "runs" / f"{args.run_id}.json"
+    if not sidecar_path.is_file():
+        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
+        return 2
+    try:
+        sidecar = json.loads(sidecar_path.read_text())
+        tasks = load_tasks_module(_P(".hpc") / "tasks.py")
+        per_task_dict = _build_per_task_dict_from_sidecar(sidecar, tasks)
+    except Exception as exc:
+        print(f"failed to build per-task dict: {exc}", file=sys.stderr)
+        return 2
+    # The TUI is interactive (no concurrent writers), so a plain write
+    # is sufficient.
+    per_task_dict_path = sidecar_path.with_suffix(".per-task-dict.json")
+    per_task_dict_path.write_text(json.dumps(per_task_dict, sort_keys=True))
+
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
     return run_tui(
-        args.manifest,
+        per_task_dict_path,
         job_ids=job_ids,
         poll_interval=args.poll_interval,
         scheduler=args.scheduler,

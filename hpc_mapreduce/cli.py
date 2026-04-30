@@ -33,7 +33,6 @@ from hpc_mapreduce.job.discover import (
     discover_executors,
     read_meta_json,
 )
-from hpc_mapreduce.job.grid import expand_grid
 from slash_commands import errors, runner, session
 
 EXIT_OK = 0
@@ -131,7 +130,7 @@ def _load_spec(
     Validation is opt-in via *schema_name* so callers without a matching
     schema (e.g. ad-hoc dicts) still work, but every CLI subcommand that
     has one in ``hpc_mapreduce/schemas/<name>.input.json`` should pass
-    it.  Validation failures map to ``ManifestInvalid`` with the schema
+    it.  Validation failures map to ``SpecInvalid`` with the schema
     field path in the message — far more useful to a calling agent than
     the Python ``int("abc")`` traceback we used to surface.
     """
@@ -157,7 +156,7 @@ def _load_spec(
 def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
     """Validate *payload* against ``hpc_mapreduce/schemas/<schema_name>.input.json``.
 
-    Raises :class:`errors.ManifestInvalid` on schema mismatch.  When the
+    Raises :class:`errors.SpecInvalid` on schema mismatch.  When the
     ``jsonschema`` library is unavailable (older installs that haven't
     picked up the runtime dep), this falls back to a no-op so the CLI
     keeps working — schema validation is defence in depth, not the only
@@ -178,7 +177,7 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
         jsonschema.validate(payload, schema)
     except jsonschema.ValidationError as exc:
         path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"--spec failed schema {schema_name}.input.json at {path}: {exc.message}"
         ) from exc
 
@@ -221,7 +220,6 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "resubmit",
                 "preflight",
                 "discover",
-                "expand-grid",
                 "list-in-flight",
                 "clusters",
                 "capabilities",
@@ -351,81 +349,6 @@ def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
     return block
 
 
-# ─── subcommand: expand-grid ───────────────────────────────────────────────
-
-
-_WALLTIME_RE = __import__("re").compile(
-    r"^(?:(?P<h>\d+):)?(?P<m>\d+):(?P<s>\d+)$|^(?P<bare_hours>\d+(?:\.\d+)?)h$",
-    __import__("re").IGNORECASE,
-)
-
-
-def _parse_walltime_to_seconds(value: str) -> int:
-    """Accept ``HH:MM:SS``, ``MM:SS``, or ``<float>h``; return seconds.
-
-    Raises :class:`errors.ManifestInvalid` on unparseable input.
-    """
-    m = _WALLTIME_RE.match(value.strip())
-    if not m:
-        raise errors.ManifestInvalid(
-            f"--per-task-walltime must be HH:MM:SS, MM:SS, or <float>h; got {value!r}"
-        )
-    if m.group("bare_hours"):
-        return int(round(float(m.group("bare_hours")) * 3600))
-    h = int(m.group("h") or 0)
-    minutes = int(m.group("m"))
-    s = int(m.group("s"))
-    return h * 3600 + minutes * 60 + s
-
-
-def cmd_expand_grid(args: argparse.Namespace) -> int:
-    spec = _load_spec(args.spec, schema_name="expand_grid")
-    grid = spec.get("grid")
-    if not isinstance(grid, dict):
-        raise errors.ManifestInvalid(
-            "--spec must contain a top-level 'grid' object mapping name → values."
-        )
-    points = expand_grid(grid)
-
-    data: dict[str, Any] = {"points": points, "total": len(points)}
-
-    walltime_str = getattr(args, "per_task_walltime", None)
-    if walltime_str:
-        seconds = _parse_walltime_to_seconds(walltime_str)
-        cpus = max(1, int(getattr(args, "per_task_cpus", 1) or 1))
-        gpus = max(0, int(getattr(args, "per_task_gpus", 0) or 0))
-        max_concurrent = getattr(args, "max_concurrent_tasks", None)
-        if max_concurrent is not None:
-            try:
-                max_concurrent = max(1, int(max_concurrent))
-            except (TypeError, ValueError):
-                raise errors.ManifestInvalid(
-                    f"--max-concurrent-tasks must be a positive integer; "
-                    f"got {max_concurrent!r}"
-                )
-
-        total_task_seconds = seconds * len(points)
-        cost = {
-            "per_task_walltime_seconds": seconds,
-            "per_task_cpus": cpus,
-            "per_task_gpus": gpus,
-            "total_tasks": len(points),
-            "total_cpu_hours": round(total_task_seconds * cpus / 3600.0, 2),
-            "total_gpu_hours": round(total_task_seconds * gpus / 3600.0, 2),
-        }
-        if max_concurrent:
-            # Wall-clock estimate: ceil(total_tasks / max_concurrent) * walltime.
-            from math import ceil
-            waves = ceil(len(points) / max_concurrent)
-            cost["estimated_walltime_seconds"] = waves * seconds
-            cost["estimated_walltime_hours"] = round(waves * seconds / 3600.0, 2)
-            cost["max_concurrent_tasks"] = max_concurrent
-        data["cost_estimate"] = cost
-
-    _ok(data, idempotent=True)
-    return EXIT_OK
-
-
 # ─── subcommand: clusters ──────────────────────────────────────────────────
 
 
@@ -519,7 +442,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         args.run_id,
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        manifest_filename=record.manifest,
         job_ids=record.job_ids,
         job_name=record.job_name,
     )
@@ -569,31 +491,20 @@ def cmd_submit(args: argparse.Namespace) -> int:
         spec = _overlay_meta_on_spec(spec, args.experiment_dir)
     _validate_against_schema(spec, "submit")
     required = ("profile", "cluster", "ssh_target", "remote_path", "job_name",
-                "manifest_filename", "job_ids", "total_tasks")
+                "run_id", "job_ids", "total_tasks")
     missing = [k for k in required if k not in spec]
     if missing:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"--spec missing required fields: {missing}. See docs/cli-spec.md."
         )
 
-    # Pre-submit manifest sanity: opportunistic — if the manifest exists
-    # locally at the conventional path, validate it before recording the
-    # submission. Catches unresolved {placeholder}s, empty cmd fields, and
-    # wave_map / tasks coverage drift before they crash the cluster job
-    # mid-run. When the manifest is only on the cluster (rare), we skip.
-    manifest_path = args.experiment_dir / spec["manifest_filename"]
-    skip_check = getattr(args, "skip_manifest_check", False)
-    if manifest_path.is_file() and not skip_check:
-        runner.validate_manifest_file(manifest_path)
-
     if args.dry_run:
-
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
                 "profile": spec["profile"],
                 "cluster": spec["cluster"],
-                "manifest": spec["manifest_filename"],
+                "run_id": spec["run_id"],
                 "dry_run": True,
             },
             idempotent=True,
@@ -607,16 +518,14 @@ def cmd_submit(args: argparse.Namespace) -> int:
         ssh_target=spec["ssh_target"],
         remote_path=spec["remote_path"],
         job_name=spec["job_name"],
-        manifest_filename=spec["manifest_filename"],
         job_ids=list(spec["job_ids"]),
         total_tasks=int(spec["total_tasks"]),
-        run_id=spec.get("run_id"),
+        run_id=spec["run_id"],
     )
     _ok(
         {
             "run_id": record.run_id,
             "job_ids": record.job_ids,
-            "manifest": record.manifest,
             "total_tasks": record.total_tasks,
             "deduped": deduped,
         },
@@ -724,10 +633,10 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
             f"no journal record for run_id {args.run_id!r}"
         )
     if args.wave is None:
-        raise errors.ManifestInvalid("aggregate requires --wave <int>")
+        raise errors.SpecInvalid("aggregate requires --wave <int>")
 
     # Resolve aggregate flags: explicit CLI > hpc.yaml > none.
-    # ``getattr`` keeps in-process callers (tests, slash-command shims)
+    # ``getattr`` keeps in-process callers (tests, slash-command wrappers)
     # working even when they hand-build a Namespace without these keys.
     defaults = _hpc_yaml_aggregate_defaults(args.experiment_dir, record.profile)
     require_outputs = getattr(args, "require_outputs", None) or defaults.get("require_outputs")
@@ -738,7 +647,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         missing = runner.verify_per_task_outputs(
             ssh_target=record.ssh_target,
             remote_path=record.remote_path,
-            manifest_filename=record.manifest,
+            run_id=args.run_id,
             wave=int(args.wave),
             template=require_outputs,
         )
@@ -758,7 +667,6 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         wave=int(args.wave),
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        manifest_filename=record.manifest,
         force=args.force,
     )
     if ok:
@@ -835,15 +743,15 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
     failed = spec.get("failed_task_ids")
     category = spec.get("category")
     if not isinstance(failed, list) or not failed:
-        raise errors.ManifestInvalid("--spec.failed_task_ids must be a non-empty list")
+        raise errors.SpecInvalid("--spec.failed_task_ids must be a non-empty list")
     if not isinstance(category, str):
-        raise errors.ManifestInvalid("--spec.category must be a string")
+        raise errors.SpecInvalid("--spec.category must be a string")
     # Belt-and-braces: schema validation also enforces this enum, but
     # ``_validate_against_schema`` is a no-op when ``jsonschema`` is not
     # installed.  Keep the local check so the seven-category contract
     # holds either way.
     if category not in _VALID_RESUBMIT_CATEGORIES:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; "
             f"got {category!r}"
         )
@@ -924,7 +832,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
             report = runner._ssh_status_report(
                 ssh_target=record.ssh_target,
                 remote_path=record.remote_path,
-                manifest_filename=record.manifest,
+                run_id=args.run_id,
                 job_ids=record.job_ids,
                 job_name=record.job_name,
             )
@@ -942,13 +850,13 @@ def cmd_logs(args: argparse.Namespace) -> int:
         try:
             task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
         except ValueError as exc:
-            raise errors.ManifestInvalid(
+            raise errors.SpecInvalid(
                 f"--task-id must be comma-separated integers: {exc}"
             ) from exc
         if not task_ids:
-            raise errors.ManifestInvalid("--task-id is empty")
+            raise errors.SpecInvalid("--task-id is empty")
     else:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             "logs requires --task-id <ids> or --all-failed"
         )
 
@@ -1005,7 +913,7 @@ def cmd_failures(args: argparse.Namespace) -> int:
     report = runner._ssh_status_report(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        manifest_filename=record.manifest,
+        run_id=args.run_id,
         job_ids=record.job_ids,
         job_name=record.job_name,
     )
@@ -1079,12 +987,9 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
     starters = hpc_mapreduce._PACKAGE_ROOT / "templates" / "starters"
     template_map = {
         "plain": starters / "executor_template.py",
-        "chunked": starters / "chunking_shim.py",
-        "date-window": starters / "date_window_shim.py",
-        "shim": starters / "shim_template.py",
     }
     if args.type not in template_map:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"unknown --type {args.type!r}; choose from {sorted(template_map)}"
         )
     src = template_map[args.type]
@@ -1092,7 +997,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
         raise errors.ConfigInvalid(f"template missing on disk: {src}")
     dest = (args.output_dir / args.name).with_suffix(".py")
     if dest.exists() and not args.force:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"refusing to overwrite {dest}; pass --force to overwrite"
         )
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1146,46 +1051,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_disc)
     p_disc.set_defaults(func=cmd_discover)
 
-    # expand-grid
-    p_eg = sub.add_parser(
-        "expand-grid",
-        help="Cartesian-product expand a grid spec; print all points.",
-    )
-    p_eg.add_argument("--spec", type=Path, required=True)
-    _add_experiment_dir(p_eg)
-    p_eg.add_argument(
-        "--per-task-walltime",
-        default=None,
-        help=(
-            "Per-task walltime as HH:MM:SS, MM:SS, or '4h'. When set, the "
-            "envelope's data block adds a `cost_estimate` with total CPU- "
-            "and GPU-hours."
-        ),
-    )
-    p_eg.add_argument(
-        "--per-task-cpus",
-        type=int,
-        default=1,
-        help="CPUs per task (default 1); used for total CPU-hour estimate.",
-    )
-    p_eg.add_argument(
-        "--per-task-gpus",
-        type=int,
-        default=0,
-        help="GPUs per task (default 0); used for total GPU-hour estimate.",
-    )
-    p_eg.add_argument(
-        "--max-concurrent-tasks",
-        type=int,
-        default=None,
-        help=(
-            "Optional concurrency cap; when set, the cost estimate also "
-            "reports an estimated wall-clock time as "
-            "ceil(total/concurrent) * walltime."
-        ),
-    )
-    p_eg.set_defaults(func=cmd_expand_grid)
-
     # clusters
     p_cl = sub.add_parser("clusters", help="Introspect available cluster definitions.")
     p_cl_sub = p_cl.add_subparsers(dest="clusters_cmd", required=True)
@@ -1215,9 +1080,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sub = sub.add_parser(
         "submit",
         help=(
-            "Record a submission in the journal. Idempotent on (profile, "
-            "manifest sha): the bundled atomic-ops layer dedups by run_id, so "
-            "a retry on transient network errors does not double-submit."
+            "Record a submission in the journal. Idempotent on run_id: "
+            "the bundled atomic-ops layer dedups so a retry on transient "
+            "network errors does not double-submit."
         ),
     )
     _add_experiment_dir(p_sub)
@@ -1226,14 +1091,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Validate the spec and report what would be launched; no SSH/qsub.",
-    )
-    p_sub.add_argument(
-        "--skip-manifest-check",
-        action="store_true",
-        help=(
-            "Skip pre-submit manifest sanity. Use only when the manifest "
-            "is built directly on the cluster and not present locally."
-        ),
     )
     p_sub.add_argument(
         "--from-meta",
@@ -1350,7 +1207,7 @@ def build_parser() -> argparse.ArgumentParser:
     # build-executor
     p_be = sub.add_parser(
         "build-executor",
-        help="Scaffold a new executor or shim from a starter template.",
+        help="Scaffold a new executor from a starter template.",
     )
     p_be.add_argument("--name", required=True, help="Output filename stem (no .py).")
     p_be.add_argument(
@@ -1362,13 +1219,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_be.add_argument(
         "--type",
         default="plain",
-        choices=["plain", "chunked", "date-window", "shim"],
+        choices=["plain"],
         help=(
-            "Which template to instantiate: "
-            "plain = standard executor scaffold; "
-            "chunked = one task per row-index range; "
-            "date-window = one task per (start, end) date pair; "
-            "shim = blank shim template for hand-written translations."
+            "Which template to instantiate. The only template is 'plain' "
+            "(a standard executor scaffold); per-task fan-out lives "
+            "inline in .hpc/tasks.py, scaffolded by /submit Step 6."
         ),
     )
     p_be.add_argument(
@@ -1400,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         return _err(
-            error_code="manifest_invalid",
+            error_code="spec_invalid",
             message=str(exc),
             category="user",
             retry_safe=False,

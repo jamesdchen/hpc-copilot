@@ -6,7 +6,7 @@
   "type": "object",
   "required": [
     "profile", "cluster", "ssh_target", "remote_path",
-    "job_name", "manifest_filename", "job_ids", "total_tasks"
+    "job_name", "run_id", "job_ids", "total_tasks"
   ],
   "additionalProperties": false,
   "properties": {
@@ -15,10 +15,9 @@
     "ssh_target":        { "type": "string", "pattern": "^[^@]+@[^@]+$" },
     "remote_path":       { "type": "string", "minLength": 1 },
     "job_name":          { "type": "string", "minLength": 1 },
-    "manifest_filename": { "type": "string", "pattern": "^manifest\\.[0-9a-f]{8}\\.json$" },
+    "run_id":            { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
     "job_ids":           { "type": "array", "items": { "type": "string" }, "minItems": 1 },
     "total_tasks":       { "type": "integer", "minimum": 1 },
-    "run_id":            { "type": ["string", "null"] },
     "runtime":           { "type": ["string", "null"], "enum": ["uv", null] }
   }
 }
