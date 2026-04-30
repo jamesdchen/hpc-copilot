@@ -101,9 +101,8 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 - **Lives in**: the experiment repo (optional file).
 - **Schema**: documented in `docs/schema.md` (top-level fields,
   profiles, single- vs multi-stage, env, resources, results,
-  constraints, cluster_envs). The legacy `grid:`, `chunking:`, and
-  `backtest:` blocks are no longer first-class — `/submit` translates
-  any present blocks into `.hpc/tasks.py` and strips them from the spec.
+  constraints, cluster_envs). The parallelization axis lives in
+  `.hpc/tasks.py`, not in the spec.
 
 ### Exit-code → error_code mapping
 

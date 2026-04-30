@@ -59,12 +59,12 @@ _DOC_VOCABULARY = {
     "true", "false", "null",
     # Tier names
     "scripts", "src", "probe.py", "meta.json", "metrics.json",
-    "results/metrics.json", "manifest.<sha8>.json",
+    "results/metrics.json",
     # Capabilities additions
     "mars_skill_paths", "required_env",
     # Categories
     "user", "cluster", "network", "internal",
-    # Manifest / submit-spec fields
+    # Submit-spec fields
     "cmd", "request_id",
 }
 

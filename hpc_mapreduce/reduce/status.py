@@ -329,7 +329,7 @@ def report_status(
 
 
 # ---------------------------------------------------------------------------
-# Manifest-driven variants (per-task result directories)
+# Tasks-driven variants (per-task result directories)
 # ---------------------------------------------------------------------------
 
 
@@ -523,7 +523,7 @@ def report_status_from_tasks(
 def rollup_by_grid_point(report: dict, tasks_data: dict) -> dict[str, dict]:
     """Group per-task statuses in *report* by grid point (from task ``params``).
 
-    Manifest task IDs are 0-based strings; report task IDs are 1-based strings.
+    Per-task dict task IDs are 0-based strings; report task IDs are 1-based strings.
     Returned dict maps grid-point key -> ``{complete, running, pending, failed, unknown, total}``.
     """
     rollup: dict[str, dict] = {}
@@ -576,7 +576,7 @@ def rollup_by_wave(report: dict, tasks_data: dict) -> dict[str, dict]:
         }
         for tid in members or []:
             bucket["total"] += 1
-            # Manifest stores 0-based; report keys 1-based.
+            # Per-task dict stores 0-based; report keys 1-based.
             try:
                 report_key = str(int(tid) + 1)
             except (TypeError, ValueError):
