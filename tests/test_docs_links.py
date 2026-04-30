@@ -48,7 +48,7 @@ _DOC_VOCABULARY = {
     "ssh_auth_sock", "cluster_tcp_22", "experiment_id",
     "run_id", "job_ids", "total_tasks", "profile",
     "ssh_target", "remote_path", "job_name", "wave", "seed",
-    "executor", "cmd_sha", "tasks.py", "_TASKS", "lr", "i", "experiment_id",
+    "executor", "cmd_sha", "tasks.py", "_TASKS", "lr", "i",
     "timestamp", "models", "rankings", "statistical_tests",
     "qsub", "sbatch",
     "last_status",
@@ -134,7 +134,6 @@ def test_mars_docs_env_vars_match_capabilities() -> None:
 
     # Re-execute capabilities in-process to get the canonical list.
     import argparse
-    import json
     from unittest.mock import patch
 
     captured: list[dict] = []
