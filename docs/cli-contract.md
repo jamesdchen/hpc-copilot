@@ -63,8 +63,7 @@ Emit a full status report for a run.
 
 | Arg | Required | Description |
 |---|---|---|
-| `--run-id` | yes (or `--manifest`) | Run identifier; locates `.hpc/runs/<run_id>.json` |
-| `--manifest` | yes (or `--run-id`) | Path to a legacy dispatch manifest (pending removal) |
+| `--run-id` | yes | Run identifier; locates `.hpc/runs/<run_id>.json` |
 | `--job-ids` | no | Comma-separated scheduler job IDs |
 | `--job-name` | no | Job name (for error-log lookup) |
 | `--scheduler` | no | `sge` or `slurm` (auto-detected if omitted) |
@@ -75,9 +74,8 @@ Emit a full status report for a run.
 | `--sge-user` | no | `qstat -u` value |
 | `--min-rows` | no | CSV min-row threshold (default 0) |
 
-`--run-id` and `--manifest` are mutually exclusive — exactly one must be
-supplied. With `--run-id`, the reporter reads the sidecar and imports
-`.hpc/tasks.py` to derive each task's `result_dir`.
+The reporter reads `.hpc/runs/<run_id>.json` for the run sidecar and
+imports `.hpc/tasks.py` to derive each task's `result_dir`.
 
 **Stdout JSON schema** — four top-level keys always present, plus
 `resource_usage` when scheduler accounting data is available:
@@ -100,7 +98,7 @@ supplied. With `--run-id`, the reporter reads the sidecar and imports
   `sacct`/`qstat` accounting fields (`ElapsedRaw`, `ReqCPUS`, `AllocTRES` for
   SLURM; `ru_wallclock`, `slots`, `gpu` for SGE). Sums across completed tasks
   only. Absent or zeroed when the scheduler query returns no accounting data.
-- Exit code: `0` on success, `2` if the sidecar/manifest is missing or unparseable.
+- Exit code: `0` on success, `2` if the sidecar is missing or unparseable.
 
 ## `python3 .hpc/_hpc_dispatch.py` (on cluster)
 

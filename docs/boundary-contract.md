@@ -141,7 +141,7 @@ embedded in the manifest header (`run_id`, `cmd_sha`,
 - `compact_task_ids` — collapse a task-id list into scheduler array syntax.
 - `ResubmitBatch` — one batch in a resubmit plan.
 - `ResubmitPlan` — full plan for resubmitting failed/missing tasks.
-- `resubmit_plan` — build a `ResubmitPlan` from a manifest + status.
+- `resubmit_plan` — build a `ResubmitPlan` from a `task_count` plus a list of `failed_task_ids`.
 
 ### Combiner
 
