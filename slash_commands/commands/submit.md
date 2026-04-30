@@ -40,7 +40,7 @@ is confusing on inspection.
    - **Modify** → tell the user to edit `.hpc/tasks.py` directly (`_TASKS = [...]`), commit the change, and re-run `/submit`. The new `cmd_sha` will be different, so it's a fresh run.
    - **Start fresh** → only reachable when the user wants a clean reset; offer to delete `.hpc/tasks.py` so the scaffolding flow at Step 6 fires again.
 
-2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation. Legacy `chunking:` and `backtest:` blocks (if present) are **migration inputs only** — Step 6's scaffolding flow translates them into Python inside `.hpc/tasks.py` once and then strips them from the spec. The framework no longer interprets them at runtime.
+2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation.
 
 3. **Neither exists**: Continue to Step 1 (full discovery).
 
@@ -126,10 +126,6 @@ Adjust the axis, or confirm?
 If the projected task count (per executor or overall) exceeds the cluster's `constraints.max_tasks` advisory (when set) or a common-sense threshold of ~1000, surface it explicitly: `"This will produce N tasks. Confirm? [y/N]"`. The actual cardinality is whatever `tasks.total()` returns once `.hpc/tasks.py` is written — Step 6 verifies it matches the user's intent before submission.
 
 When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in `--help`), flag it: `"ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"`.
-
-### Migration: legacy `chunking:` and `backtest:` blocks
-
-If `hpc.yaml` carries a `chunking:` or `backtest:` block from the old model, treat it as a **declarative description of the axis**, not as something the framework will interpret at runtime. At Step 6 the agent translates the block into Python inside `.hpc/tasks.py` (e.g. `chunking: { total: 100 }` → `_TASKS = [{"chunk_id": i, "total_chunks": 100} for i in range(100)]`). Once translated, **remove the block from the spec** and `git add` both files together. There is no longer a `backtest=` kwarg on any framework call; periods are just elements of `_TASKS`.
 
 ## Step 4: Auto-Configure Environment
 
@@ -269,7 +265,7 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 
 1. **Read the canonical example.** Resolve `hpc_mapreduce/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
 
-2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and the experiment's `hpc.yaml`/`meta.json`. If the spec contains a legacy `chunking:` or `backtest:` block, treat it as a **declarative description of the axis**: e.g. `chunking: { total: 100 }` becomes `_TASKS = [{"chunk_id": i, "total_chunks": 100} for i in range(100)]`; `backtest: { start, end, chunk_duration, start_arg, end_arg }` becomes a list comprehension over `datetime` windows. The block does not survive into the runtime; it gets stripped from the spec when the new `tasks.py` is committed.
+2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and the experiment's `hpc.yaml`/`meta.json` for axis hints (parameter names, ranges, chunking intent, date windows).
 
 3. **Walk the user through writing the file.** This is conversational, not template substitution. The agent:
    - Re-states the axis from Step 3 in concrete terms (e.g. "We're going to materialize a list of {seed, model} dicts, one per task — 4 tasks total. Sound right?").
@@ -284,10 +280,7 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
    ```python
    tp.write_text(final_source)          # the full tasks.py text
    import subprocess
-   to_add = [str(tp)]
-   if migrated_legacy_block:
-       to_add.append("hpc.yaml")        # spec was edited to remove the block
-   subprocess.run(["git", "add", *to_add], check=True)
+   subprocess.run(["git", "add", str(tp)], check=True)
    subprocess.run(
        ["git", "commit", "-m", f"Add .hpc/tasks.py for {executor_name}"],
        check=True,
@@ -449,8 +442,6 @@ Build env vars:
 
 The cluster-side template translates the scheduler's per-task index (`SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`) into `HPC_TASK_ID` (0-based) before exec'ing `$EXECUTOR`, which then imports `.hpc/tasks.py`, calls `tasks.resolve(HPC_TASK_ID)`, and runs the executor command from the sidecar with kwargs merged into the env.
 
-**No `HPC_MANIFEST`.** That env var has been removed; identity is `HPC_RUN_ID` end-to-end.
-
 **Building the job_env (with runtime support)**
 
 When the user's spec carries `runtime: "uv"`, `HPC_RUNTIME=uv` MUST be in the job's env so the cluster-side template's `uv sync` preamble fires. The `build_job_env` helper takes a runtime-tagged dict and threads it through:
@@ -510,7 +501,7 @@ For GPU jobs: `--gres=gpu:<count>`, appropriate partition, and use `.hpc/templat
 Save to Claude Code memory for this project:
 - Executor directory, cluster, remote_path
 - Environment: modules, conda_env per executor type (CPU/GPU)
-- Default resources, generated shim path
+- Default resources
 
 ### Report
 After submission:

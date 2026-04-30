@@ -298,8 +298,8 @@ def deploy_runtime(
                 f".hpc/templates/{kind}.{ext}",
             )
 
-    # Combiner is the last scp; return its CompletedProcess to preserve the
-    # legacy contract (callers inspect returncode of the trailing call).
+    # Combiner is the last scp; return its CompletedProcess so callers
+    # can inspect the trailing returncode.
     return _scp(pkg_dir / "map" / "combiner.py", ".hpc/_hpc_combiner.py")
 
 

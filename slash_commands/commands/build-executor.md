@@ -17,7 +17,7 @@ Discovery uses the same contract as `/submit`: a file is an executor iff it pars
 | (empty) | Start from Step 1, ask the user what to build |
 | `"ml_elasticnet from ml_ridge"` | Mode (a): clone `ml_ridge.py` to `ml_elasticnet.py`, modify |
 | `"scaffold ml_lasso"` | Mode (b): start from `templates/starters/executor_template.py` |
-| `"wrap scripts/my_train.py"` | Redirect to `/submit` Step 6 — wrapping an existing script is now a `.hpc/tasks.py` scaffolding concern, not a separate shim. |
+| `"wrap scripts/my_train.py"` | Redirect to `/submit` Step 6 — per-task fan-out is expressed in `.hpc/tasks.py`, not in a separate file. |
 
 Parse `$ARGUMENTS` before Step 1; skip ahead if intent is already clear.
 
@@ -44,7 +44,7 @@ What do you want to build?
   (b) Scaffold a fresh executor from the hpc-mapreduce template
 ```
 
-If the user wants to wrap an existing script that doesn't match the grid-param CLI conventions, **redirect them to `/submit`**: under the `.hpc/tasks.py` model the parallelization axis is expressed in user-written Python during `/submit` Step 6, not via a separate shim file. There is no longer a "build a shim" mode.
+If the user wants to wrap an existing script that doesn't match the grid-param CLI conventions, **redirect them to `/submit`**: the parallelization axis is expressed in user-written Python during `/submit` Step 6 (`.hpc/tasks.py`), not via a separate file produced by this command.
 
 If `discover_executors` returns an empty list, skip the (a) option and note the directory was empty.
 
@@ -92,20 +92,9 @@ or with grid overrides:
   /submit run <new_name> horizon=[1,5,25]
 ```
 
-For a shim, make the instruction explicit:
-
-```
-Shim generated at shims/<script>_shim.py. /submit will auto-detect it when
-the profile's run command is set to:
-  run: "python3 shims/<script>_shim.py -- python3 <user_script>"
-```
-
 ## Step 6: Cache and Report
 
-Save to Claude Code memory for this project:
-
-- The directory where the new executor landed (so `/submit`'s discovery finds it next time).
-- If (c): the mapping from downstream script -> shim path.
+Save to Claude Code memory for this project: the directory where the new executor landed (so `/submit`'s discovery finds it next time).
 
 End with a concise report: what was created, where, and the `/submit` command that exercises it.
 
@@ -157,5 +146,5 @@ parser.add_argument("--output-file", required=True)
 ## Do Not
 
 - Do not create or edit files under the `hpc_mapreduce/` package, the `templates/` directory, or the `commands/` directory of the framework repo. Those are framework sources.
-- Do not invent new protocols, ABCs, or required helper functions for the generated executor. The contract remains `argparse --help` + optional shim.
+- Do not invent new protocols, ABCs, or required helper functions for the generated executor. The contract is just `argparse --help`.
 - Do not run the downstream training loop during smoke-testing — `--help` only.

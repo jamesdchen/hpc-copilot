@@ -44,7 +44,7 @@ def test_check_results_from_tasks_finds_completed(tmp_path):
 
     results = check_results_from_tasks(tasks_data, file_glob="*.json")
 
-    # Manifest IDs are 0-based, results dict is 1-based
+    # Per-task dict IDs are 0-based, results dict is 1-based
     assert 1 in results
     assert 3 in results
     assert 2 not in results

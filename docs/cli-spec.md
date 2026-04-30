@@ -429,11 +429,10 @@ Type → starter template:
 |---|---|
 | `plain` | `executor_template.py` |
 
-The legacy `chunked`, `date-window`, and `shim` types are gone — those
-axes are now expressed inline in `.hpc/tasks.py` (`itertools.product`,
-slicing, date-window comprehensions). The canonical reference is
-`hpc_mapreduce/templates/tasks_example.py`; the agent walks the user
-through adapting it during `/submit` Step 6.
+Per-task fan-out is expressed inline in `.hpc/tasks.py`
+(`itertools.product`, slicing, date-window comprehensions). The
+canonical reference is `hpc_mapreduce/templates/tasks_example.py`; the
+agent walks the user through adapting it during `/submit` Step 6.
 
 `data` shape: `{"path": "/abs/.../<name>.py", "type": "plain", "source": "/abs/.../executor_template.py"}`.
 

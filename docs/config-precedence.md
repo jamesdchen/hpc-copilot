@@ -73,10 +73,6 @@ Notes:
   exposing `total()` and `resolve(task_id)`. Authored once via
   `/submit` Step 6's scaffolding flow; thereafter committed to git and
   reused on every submit.
-- **Layer 2 (legacy migration only)**: `hpc.yaml`'s `chunking:` /
-  `backtest:` blocks, when present, are translated into Python and
-  stripped from the spec by `/submit` Step 6 the first time. They are
-  not interpreted at runtime by the framework.
 - **No env override** — the axis is part of the experiment's source
   code, not its environment.
 - There is no longer an `expand-grid` CLI subcommand. Cartesian
