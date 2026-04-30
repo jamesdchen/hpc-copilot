@@ -15,7 +15,6 @@ contract lives under `hpc_mapreduce/schemas/`:
 - `status.output.json` — `status` data block.
 - `capabilities.output.json` — `capabilities` data block.
 - `preflight.output.json` — `preflight` data block.
-- `expand_grid.input.json` — `expand-grid --spec` shape.
 - `resubmit.input.json` — `resubmit --spec` shape.
 
 Agents constructing/validating envelopes should validate against the
@@ -44,7 +43,7 @@ JSON Schema, not parse this markdown.
 ```json
 {
   "ok": false,
-  "error_code": "<one of 9>",
+  "error_code": "<one of 12>",
   "message": "<human-readable>",
   "category": "user|cluster|network|internal",
   "retry_safe": <bool>,
@@ -62,8 +61,8 @@ Wired in `hpc_mapreduce/cli.py` (`_EXIT_CODE_BY_CATEGORY`).
 | Exit | Category | Meaning | error_codes that map here |
 |---|---|---|---|
 | 0 | — | success | (no error envelope) |
-| 1 | `user` | caller-fixable | `manifest_invalid`, `executor_not_found`, `cluster_unknown`, `config_invalid` |
-| 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `scheduler_throttled`, `remote_command_failed` |
+| 1 | `user` | caller-fixable | `spec_invalid`, `executor_not_found`, `cluster_unknown`, `config_invalid` |
+| 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `scheduler_throttled`, `remote_command_failed`, `combiner_failed`, `cluster_timeout`, `outputs_missing` |
 | 3 | `internal` | bug in framework or corrupt state | `journal_corrupt`, `internal` |
 
 `preflight` returns 2 when any check fails (it is a `cluster`-class
@@ -198,23 +197,6 @@ root-level `probe.py` (Tier-1) — never `src/`, MARs's modules-only dir.
 
 Idempotent: yes. Error codes: `internal` only. Exit: 0.
 
-### `expand-grid`
-
-Purpose: Cartesian-product expansion of a grid spec. Pure compute.
-
-Args: `--spec spec.json` (required), `--experiment-dir`.
-
-`--spec` shape (validated against `schemas/expand_grid.input.json`):
-
-```json
-{"grid": {"lr": [0.01, 0.001], "seed": [1, 2, 3]}}
-```
-
-`data` shape: `{"points": [{"lr": 0.01, "seed": 1}, ...], "total": 6}`.
-
-Idempotent: yes. Error codes: `manifest_invalid` (missing/malformed
-`grid`), `config_invalid` (unreadable spec file). Exit: 0 / 1.
-
 ### `list-in-flight`
 
 Purpose: list every journal record in `--experiment-dir` whose
@@ -281,9 +263,9 @@ Purpose: record a submission in the journal. The actual `qsub`/`sbatch`
 is the caller's responsibility — `submit` only persists the bookkeeping
 needed for `/status` to pick up the run later.
 
-Idempotent on `(profile, manifest_sha)`: a retried call with the same
-`run_id` returns the existing record with `deduped: true` and emits no
-new side effects. See `slash_commands/runner.py:submit_and_record`.
+Idempotent on `run_id`: a retried call with the same `run_id` returns
+the existing record with `deduped: true` and emits no new side effects.
+See `slash_commands/runner.py:submit_and_record`.
 
 Args:
 
@@ -303,27 +285,26 @@ Args:
   "ssh_target": "user@host",
   "remote_path": "/u/home/user/myexp",
   "job_name": "sweep-2026-04-28",
-  "manifest_filename": "manifest.3a7b8c9d.json",
+  "run_id": "sweep-20260428-153012-3a7b8c9d",
   "job_ids": ["12345"],
   "total_tasks": 24,
-  "run_id": null,
   "runtime": null
 }
 ```
 
-Optional `runtime` accepts `"uv"` or `null` (default). When `"uv"`, the
-caller is expected to have built the manifest with
-`build_task_manifest(runtime="uv")` so every task `cmd` is prefixed with
-`uv run`, and to ensure `HPC_RUNTIME=uv` is exported into the job
-environment so the template's `uv sync` preamble fires before dispatch.
+`run_id` is the primary (and only) identity field; the per-run sidecar
+lives at `.hpc/runs/<run_id>.json`.
+
+Optional `runtime` accepts `"uv"` or `null` (default). When `"uv"`,
+`HPC_RUNTIME=uv` is exported into the job environment so the template's
+`uv sync` preamble fires before dispatch.
 
 `data` shape (validated against `schemas/submit.output.json`):
 
 ```json
 {
-  "run_id": "sweep_3a7b8c9d",
+  "run_id": "sweep-20260428-153012-3a7b8c9d",
   "job_ids": ["12345"],
-  "manifest": "manifest.3a7b8c9d.json",
   "total_tasks": 24,
   "deduped": false
 }
@@ -333,10 +314,10 @@ environment so the template's `uv sync` preamble fires before dispatch.
 
 ```json
 {"would_launch": 24, "profile": "sweep", "cluster": "hoffman2",
- "manifest": "manifest.3a7b8c9d.json", "dry_run": true}
+ "run_id": "sweep-20260428-153012-3a7b8c9d", "dry_run": true}
 ```
 
-Idempotent: yes. Error codes: `manifest_invalid` (missing required
+Idempotent: yes. Error codes: `spec_invalid` (missing required
 fields), `config_invalid` (spec unreadable), `journal_corrupt`. Exit: 0 / 1 / 3.
 
 ### `aggregate`
@@ -368,7 +349,7 @@ Args:
 ```
 
 Idempotent: yes on success (`combined=true` is recorded once). Error
-codes: `journal_corrupt` (no record), `manifest_invalid` (missing
+codes: `journal_corrupt` (no record), `spec_invalid` (missing
 `--wave`), `ssh_unreachable`, `remote_command_failed`. Exit: 0 on
 success, 2 if combiner failed.
 
@@ -402,7 +383,7 @@ Args: `--experiment-dir`, `--run-id <id>` (required), `--spec spec.json` (requir
 ```
 
 Idempotent: **no** — each call increments per-task `attempts`. Error
-codes: `manifest_invalid` (empty `failed_task_ids`, missing `category`),
+codes: `spec_invalid` (empty `failed_task_ids`, missing `category`),
 `journal_corrupt` (no record). Exit: 0 / 1 / 3.
 
 ### `reconcile`
@@ -431,8 +412,7 @@ Idempotent: yes. Error codes: `journal_corrupt`, `ssh_unreachable`,
 
 ### `build-executor`
 
-Purpose: scaffold a new executor or shim file from a starter template
-in `hpc_mapreduce/templates/starters/`.
+Purpose: scaffold a new executor file from `hpc_mapreduce/templates/starters/`.
 
 Args:
 
@@ -440,7 +420,7 @@ Args:
 |---|---|---|
 | `--name <stem>` | yes | output filename stem (no `.py`) |
 | `--output-dir <dir>` | no | default CWD |
-| `--type {plain,chunked,date-window,shim}` | no | default `plain` |
+| `--type {plain}` | no | default `plain` |
 | `--force` | no | overwrite existing destination |
 
 Type → starter template:
@@ -448,13 +428,15 @@ Type → starter template:
 | Type | Source file (under `hpc_mapreduce/templates/starters/`) |
 |---|---|
 | `plain` | `executor_template.py` |
-| `chunked` | `chunking_shim.py` |
-| `date-window` | `date_window_shim.py` |
-| `shim` | `shim_template.py` |
+
+Per-task fan-out is expressed inline in `.hpc/tasks.py`
+(`itertools.product`, slicing, date-window comprehensions). The
+canonical reference is `hpc_mapreduce/templates/tasks_example.py`; the
+agent walks the user through adapting it during `/submit` Step 6.
 
 `data` shape: `{"path": "/abs/.../<name>.py", "type": "plain", "source": "/abs/.../executor_template.py"}`.
 
 Idempotent: **no** — file creation has side effects, refuses to
-overwrite without `--force`. Error codes: `manifest_invalid` (unknown
+overwrite without `--force`. Error codes: `spec_invalid` (unknown
 type, refusing overwrite), `config_invalid` (template missing on disk).
 Exit: 0 / 1.

@@ -1,35 +1,77 @@
 """Failure-mode coverage for the on-cluster combiner (``hpc_mapreduce/map/combiner.py``).
 
 The combiner is exercised as a fresh subprocess (matching cluster execution).
-Only the env-var invocation (``HPC_WAVE`` / ``HPC_MANIFEST``) is pinned here —
-argparse flags such as ``--wave``/``--manifest``/``--force`` are owned by a
-different test file to avoid ownership conflicts.
+The new model uses ``--run-id`` + a sidecar at ``.hpc/runs/<id>.json`` plus
+the user's ``.hpc/tasks.py`` for per-task kwargs.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
-if TYPE_CHECKING:
-    from pathlib import Path
+import hpc_mapreduce
 
-COMBINER_MODULE = "hpc_mapreduce.map.combiner"
+
+def _materialize_cluster_layout(
+    tmp_path: Path,
+    *,
+    kwargs_per_task: list[dict],
+    result_dirs: list[Path],
+    run_id: str = "test_run",
+) -> Path:
+    """Set up tmp_path/.hpc/ as if rsync + deploy_runtime had run.
+
+    Returns the path to the combiner script the test should invoke.
+    """
+    hpc = tmp_path / ".hpc"
+    (hpc / "runs").mkdir(parents=True)
+
+    # Write tasks.py — the user's per-experiment task definitions.
+    tasks_py = hpc / "tasks.py"
+    tasks_py.write_text(
+        "import json\n"
+        f"_TASKS = {json.dumps(kwargs_per_task)}\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n"
+    )
+
+    # Write the per-run sidecar. result_dir_template uses {task_id} so each
+    # entry in result_dirs has to live at a path that the template renders to.
+    # For tests we just plant {task_id} into each rdir name and use a flat
+    # template.
+    sidecar = hpc / "runs" / f"{run_id}.json"
+    sidecar.write_text(json.dumps({
+        "sidecar_schema_version": 1,
+        "run_id": run_id,
+        "cmd_sha": "deadbeef" * 8,
+        "claude_hpc_version": "0.0.0+test",
+        "submitted_at": "2026-01-01T00:00:00Z",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "task_{task_id}"),
+        "task_count": len(kwargs_per_task),
+        "tasks_py_sha": "abc",
+        "wave_map": {"0": list(range(len(kwargs_per_task)))},
+    }))
+
+    # Place the combiner script as the cluster does.
+    combiner_dst = hpc / "_hpc_combiner.py"
+    pkg_combiner = Path(hpc_mapreduce.__file__).parent / "map" / "combiner.py"
+    shutil.copyfile(pkg_combiner, combiner_dst)
+    return combiner_dst
 
 
 def _run_combiner(
-    *,
-    cwd: Path,
-    env: dict[str, str],
+    *, combiner_path: Path, cwd: Path, env: dict[str, str], extra_args: list[str] = ()
 ) -> subprocess.CompletedProcess[str]:
-    """Invoke the combiner as a subprocess with *env* (PATH injected)."""
     full_env = {"PATH": "/usr/bin:/bin:/usr/local/bin", **env}
     return subprocess.run(
-        [sys.executable, "-m", COMBINER_MODULE],
+        [sys.executable, str(combiner_path), *extra_args],
         cwd=str(cwd),
         env=full_env,
         capture_output=True,
@@ -38,69 +80,52 @@ def _run_combiner(
     )
 
 
-def _write_manifest(path: Path, manifest: dict) -> Path:
-    path.write_text(json.dumps(manifest))
-    return path
-
-
-def _basic_manifest(result_dirs: dict[str, Path]) -> dict:
-    """Build a minimal manifest with a single wave covering every task id."""
-    tasks = {
-        tid: {
-            "params": {"model": "ridge", "horizon": "1"},
-            "result_dir": str(rdir),
-        }
-        for tid, rdir in result_dirs.items()
-    }
-    return {
-        "tasks": tasks,
-        "wave_map": {"0": list(result_dirs.keys())},
-    }
-
-
 class TestMissingEnvVars:
     def test_missing_hpc_wave_exits_1(self, tmp_path: Path) -> None:
-        manifest_path = _write_manifest(tmp_path / "m.json", _basic_manifest({}))
-
+        combiner = _materialize_cluster_layout(
+            tmp_path, kwargs_per_task=[], result_dirs=[]
+        )
         proc = _run_combiner(
+            combiner_path=combiner,
             cwd=tmp_path,
-            env={"HPC_MANIFEST": str(manifest_path)},
+            env={"HPC_RUN_ID": "test_run"},
         )
         assert proc.returncode == 1
-        assert "HPC_WAVE" in proc.stderr
+        assert "HPC_WAVE" in proc.stderr or "--wave" in proc.stderr
 
 
-class TestMissingManifest:
-    def test_missing_manifest_exits_1(self, tmp_path: Path) -> None:
+class TestMissingSidecar:
+    def test_missing_sidecar_exits_1(self, tmp_path: Path) -> None:
+        combiner = _materialize_cluster_layout(
+            tmp_path, kwargs_per_task=[{}], result_dirs=[tmp_path / "task_0"]
+        )
+        # Remove the sidecar to force the failure.
+        (tmp_path / ".hpc" / "runs" / "test_run.json").unlink()
         proc = _run_combiner(
+            combiner_path=combiner,
             cwd=tmp_path,
-            env={
-                "HPC_WAVE": "0",
-                "HPC_MANIFEST": str(tmp_path / "does_not_exist.json"),
-            },
+            env={"HPC_WAVE": "0", "HPC_RUN_ID": "test_run"},
         )
         assert proc.returncode == 1
-        assert "manifest not found" in proc.stderr
+        assert "sidecar not found" in proc.stderr
 
 
 class TestMissingWaveInMap:
     def test_wave_not_in_wave_map_lists_available(self, tmp_path: Path) -> None:
-        r0 = tmp_path / "task_0"
-        r0.mkdir()
-        manifest = _basic_manifest({"0": r0})  # wave_map only contains "0"
-        manifest_path = _write_manifest(tmp_path / "m.json", manifest)
-
+        (tmp_path / "task_0").mkdir()
+        combiner = _materialize_cluster_layout(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge"}],
+            result_dirs=[tmp_path / "task_0"],
+        )
         proc = _run_combiner(
+            combiner_path=combiner,
             cwd=tmp_path,
-            env={
-                "HPC_WAVE": "99",
-                "HPC_MANIFEST": str(manifest_path),
-            },
+            env={"HPC_WAVE": "99", "HPC_RUN_ID": "test_run"},
         )
         assert proc.returncode == 1
-        # Error must mention the missing wave and enumerate what IS available.
         assert "99" in proc.stderr
-        assert "0" in proc.stderr  # the sole available wave
+        assert "0" in proc.stderr
 
 
 class TestMalformedMetricsOneTask:
@@ -109,16 +134,18 @@ class TestMalformedMetricsOneTask:
         r1 = tmp_path / "task_1"
         r0.mkdir()
         r1.mkdir()
-        # Task 0 is fine; task 1 has malformed metrics.json.
         (r0 / "metrics.json").write_text(json.dumps({"mse": 0.1, "n_samples": 10}))
         (r1 / "metrics.json").write_text("{not valid json")
 
-        manifest = _basic_manifest({"0": r0, "1": r1})
-        manifest_path = _write_manifest(tmp_path / "m.json", manifest)
-
+        combiner = _materialize_cluster_layout(
+            tmp_path,
+            kwargs_per_task=[{"model": "a"}, {"model": "b"}],
+            result_dirs=[r0, r1],
+        )
         proc = _run_combiner(
+            combiner_path=combiner,
             cwd=tmp_path,
-            env={"HPC_WAVE": "0", "HPC_MANIFEST": str(manifest_path)},
+            env={"HPC_WAVE": "0", "HPC_RUN_ID": "test_run"},
         )
         assert proc.returncode == 0, (
             f"combiner must tolerate one malformed file: "
@@ -126,9 +153,8 @@ class TestMalformedMetricsOneTask:
         )
 
         out = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
-        # Malformed task is in errors[] ...
         assert any("task 1" in e for e in out["errors"]), out["errors"]
-        # ... but the other task still aggregated into a grid point.
+        # Distinct kwargs ⇒ distinct grid_keys.
         assert len(out["grid_points"]) == 1
         gp = next(iter(out["grid_points"].values()))
         assert gp["n_samples"] == 10
@@ -140,15 +166,17 @@ class TestMissingMetricsOneTask:
         r1 = tmp_path / "task_1"
         r0.mkdir()
         r1.mkdir()
-        # Only task 0 has metrics.json; task 1's result_dir is empty.
         (r0 / "metrics.json").write_text(json.dumps({"mse": 0.2, "n_samples": 20}))
 
-        manifest = _basic_manifest({"0": r0, "1": r1})
-        manifest_path = _write_manifest(tmp_path / "m.json", manifest)
-
+        combiner = _materialize_cluster_layout(
+            tmp_path,
+            kwargs_per_task=[{"model": "a"}, {"model": "b"}],
+            result_dirs=[r0, r1],
+        )
         proc = _run_combiner(
+            combiner_path=combiner,
             cwd=tmp_path,
-            env={"HPC_WAVE": "0", "HPC_MANIFEST": str(manifest_path)},
+            env={"HPC_WAVE": "0", "HPC_RUN_ID": "test_run"},
         )
         assert proc.returncode == 0, (
             f"combiner must tolerate a missing metrics.json: "
@@ -159,7 +187,6 @@ class TestMissingMetricsOneTask:
         assert any("task 1" in e and "metrics.json not found" in e for e in out["errors"]), out[
             "errors"
         ]
-        # The good task is still aggregated.
         assert len(out["grid_points"]) == 1
         gp = next(iter(out["grid_points"].values()))
         assert gp["n_samples"] == 20

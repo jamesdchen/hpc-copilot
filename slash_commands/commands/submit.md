@@ -11,15 +11,36 @@ Read cluster definitions:
 
 Check for existing context (in priority order):
 
+**Migration check (legacy `_hpc_dispatch.json`):** Before any of the
+priority checks below, look for a top-level `_hpc_dispatch.json` (or
+`manifest.<sha8>.json`, or `manifest.json`) in the experiment dir. These
+are artifacts of the pre-`.hpc/tasks.py` model that no longer drive the
+framework. If any are present, surface a one-time migration message:
+
+> "I found a legacy dispatch manifest at `_hpc_dispatch.json`. The
+> framework no longer reads manifests — task definitions live in
+> `.hpc/tasks.py` and per-run state in `.hpc/runs/<run_id>.json`. I'll
+> walk you through writing `.hpc/tasks.py` once at Step 6 (using your
+> existing manifest as a translation hint if helpful), then we can move
+> the old manifest aside. OK to proceed?"
+
+If the user agrees, continue to priority 0 below; the manifest's
+existing `tasks[*].cmd` and `tasks[*].params` are useful context for
+Step 6's scaffolding conversation but are not consumed by the framework.
+Once the new `.hpc/tasks.py` is committed, suggest the user `git mv
+_hpc_dispatch.json .hpc/legacy/` (or simply delete it). Don't proceed
+silently — a stale `_hpc_dispatch.json` next to a fresh `.hpc/tasks.py`
+is confusing on inspection.
+
 0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /status, or start a new submission?"
    - This only handles the case where the user wants to switch context away from a fresh `/submit` toward picking up an existing run; otherwise fall through to priority 1.
 
-1. **Previous submission**: If `_hpc_dispatch.json` exists locally, read it. Offer: "Previous submission: [summary of grid, tasks, cluster]. Resubmit same, modify, or start fresh?"
-   - **Resubmit same** → skip to Step 5 (sync + submit)
-   - **Modify** → pre-populate from dispatch manifest, go to Step 3 (adjust grid/config)
-   - **Start fresh** → continue to Step 1
+1. **Previous run**: If `.hpc/tasks.py` exists, the experiment has already been scaffolded. List the per-run sidecars under `.hpc/runs/` (newest-first via `find_existing_runs(experiment_dir)` from `hpc_mapreduce`) and offer: "Previous run: [run_id, profile, tasks, cluster, age]. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?"
+   - **Resubmit same** → reuse the existing `.hpc/tasks.py`, recompute `cmd_sha` (it'll match because `tasks.py` is unchanged), skip to Step 5 (sync + submit). The new sidecar's `run_id` differs but `cmd_sha` matches the prior run.
+   - **Modify** → tell the user to edit `.hpc/tasks.py` directly (`_TASKS = [...]`), commit the change, and re-run `/submit`. The new `cmd_sha` will be different, so it's a fresh run.
+   - **Start fresh** → only reachable when the user wants a clean reset; offer to delete `.hpc/tasks.py` so the scaffolding flow at Step 6 fires again.
 
-2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `grid`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation (a `backtest:` block, if present, is translated to a generated date-window shim at Step 3 — see below).
+2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation.
 
 3. **Neither exists**: Continue to Step 1 (full discovery).
 
@@ -71,52 +92,40 @@ Parse `$ARGUMENTS` or the user's natural language request:
 | "run ridge" | Select `ml_ridge.py` |
 | "all ML models" | Select all `ml_*.py` executors |
 | "subgroup analysis with ridge and xgboost" | Select `ml_ridge.py` + `ml_xgboost.py`, grid over subgroups |
-| "sweep horizons 1, 5, 25 on lightgbm" | Select `ml_lightgbm.py`, grid: horizon=[1, 5, 25] |
+| "sweep horizons 1, 5, 25 on lightgbm" | Select `ml_lightgbm.py`, fan out over `horizon ∈ [1, 5, 25]` (3 tasks) |
 
 **Flags:**
 - `--no-canary` — skip the Step 7b 1-task canary submission. Default behavior is canary-on; only skip when the user has already smoke-tested the pipeline within the last session or is deliberately re-submitting a known-good pipeline.
 
-For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Build a dispatch manifest per job.
+For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Each gets its own `run_id` and per-run sidecar at `.hpc/runs/<run_id>.json`; the same `.hpc/tasks.py` is reused if the parallelization axis matches, otherwise the agent writes a new one (the file is the single seam between executors and the framework).
 
-## Step 3: Build Grid
+## Step 3: Plan the parallelization axis
 
-Before materializing the manifest, check the projected task count:
+In the new model, the **task list lives in user-written `.hpc/tasks.py`**: a small Python module exposing `total()` and `resolve(task_id)`. Step 6 walks the user through writing it once per experiment, adapting from the canonical example at `hpc_mapreduce/templates/tasks_example.py`. From then on, the file is committed to git and reused on every submit.
 
-1. Compute `total_tasks(grid)` from `hpc_mapreduce.job.grid` on the proposed grid.
-2. If the count exceeds the cluster's `constraints.max_tasks` advisory (when set) or a common-sense threshold of 1000, surface it and ask: `"This will produce N tasks. Confirm? [y/N]"`.
-3. When building the manifest, pass `max_tasks=None` to `build_task_manifest` if the user has confirmed a count above 10_000; otherwise leave the default so `build_task_manifest` raises on accidental explosion.
+Step 3's job is to gather enough context that Step 6 can write a sensible first draft. From executor CLI args and the user's intent, propose:
 
-From executor CLI args and user intent, propose grid dimensions:
+- **The shape of the axis**: Cartesian product over named hyperparameters? Chunking by row count? Date-window backtest? Something else?
+- **The kwargs `resolve(task_id)` should return**: e.g. `{"seed": ..., "model": ...}` for a grid; `{"chunk_id": ..., "total_chunks": ...}` for chunking; `{"window_start": ..., "window_end": ...}` for backtests.
+- **The expected task count** so we can sanity-check before writing.
+
+Present a draft outline:
 
 ```
 Running ml_ridge.py and ml_xgboost.py.
 
-Grid parameters (from CLI --help):
-  horizon: [1]
+Proposed parallelization (one tasks.py per executor):
+  Axis:        Cartesian product over horizon + chunk-id
+  Kwargs:      {"horizon": int, "chunk_id": int, "total_chunks": int}
+  Cardinality: 3 horizons × 10 chunks = 30 tasks per executor
+  Total:       60 tasks
 
-Date windows: 10 periods via date_window_shim.py (chunk-id grid dim).
-
-Per executor:
-  ml_ridge.py:    10 tasks
-  ml_xgboost.py:  10 tasks
-  Total: 20 tasks
-
-Adjust grid, or confirm?
+Adjust the axis, or confirm?
 ```
 
-The user can add dimensions: "also sweep horizon=[1, 5, 25]" → grid becomes 30 tasks per executor (3 horizons × 10 chunk-ids).
+If the projected task count (per executor or overall) exceeds the cluster's `constraints.max_tasks` advisory (when set) or a common-sense threshold of ~1000, surface it explicitly: `"This will produce N tasks. Confirm? [y/N]"`. The actual cardinality is whatever `tasks.total()` returns once `.hpc/tasks.py` is written — Step 6 verifies it matches the user's intent before submission.
 
-### Backtest (date-window) handling
-
-When the selected profile has a `backtest:` block (`start`, `end`, `chunk_duration`, optional `start_arg`/`end_arg`), translate it into a generated shim instead of passing the block into the framework core:
-
-1. Instantiate `templates/starters/date_window_shim.py` (resolve via `_PACKAGE_ROOT / "templates" / "starters" / "date_window_shim.py"`), filling in the five module-level constants (`START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG`) from the yaml block.
-2. Route the shim through the existing Step 6 shim-cache machinery (`shim_cache_key` / `load_cached_shim` / `save_shim`) — reuse that block; do NOT duplicate the code here.
-3. Prepend `python3 <materialized_shim_path> --` to the profile's `run` command.
-4. Add `chunk-id: [0..N-1]` as a grid dimension where `N` is the period count computed from the `backtest` block (same arithmetic as `date_window_shim._periods()`).
-5. Call `build_task_manifest(run, grid, result_dir_template)` — no `backtest=` kwarg. Periods are now simply grid-chunk-id cardinality and are already counted in the grid total.
-
-When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in --help), flag it: "ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"
+When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in `--help`), flag it: `"ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"`.
 
 ## Step 4: Auto-Configure Environment
 
@@ -161,10 +170,10 @@ Present defaults and let user override: "Resources per task: 1 CPU, 16G, 4h. Adj
 ### Rsync Excludes
 Build exclude list from:
 1. `.gitignore` patterns (if file exists)
-2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`, `.hpc_cache/`
+2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`
 3. Result directories (e.g., `results/`)
 
-The `.hpc_cache/` directory holds the content-addressed shim cache (see Step 6). It is local-only — the materialized shim at `src/hpc_chunking_shim.py` is what gets rsynced to the cluster.
+The local `.hpc/` directory **does** ride rsync (so the cluster receives `tasks.py` and the in-flight `runs/<run_id>.json` sidecar). Don't add `.hpc/` to the exclude list. The framework files inside the cluster-side `.hpc/` (`_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are placed there separately by `deploy_runtime` and are protected from rsync `--delete` via `DEFAULT_RSYNC_EXCLUDES` in `hpc_mapreduce.infra.remote`.
 
 ## Step 4b: Compute Throughput Plan
 
@@ -185,7 +194,7 @@ Throughput Plan:
   Wave 2:     tasks 177-264, 265-350  (after wave 1)
 ```
 
-5. **Embed wave map**: Call `build_wave_map(plan)` to generate a wave-to-task mapping, then call `attach_wave_map(manifest, wave_map)` to embed it in the manifest before writing `_hpc_dispatch.json`. This allows the on-cluster combiner to know which tasks belong to each wave.
+5. **Embed wave map**: Call `build_wave_map(plan)` to generate a wave-to-task mapping. The map is then passed into `write_run_sidecar(..., wave_map=wave_map)` at Step 6d so it lives in `.hpc/runs/<run_id>.json`. The cluster-side combiner reads it from there to know which tasks belong to each wave.
 
 If constraints are not configured for the cluster or profile, skip this step and submit as a single array (existing behavior).
 
@@ -202,20 +211,18 @@ Present the full submission plan:
   Remote:     <remote_path>
   
   Job 1: ml_ridge
-    Executor:   python3 src/date_window_shim.py -- python3 src/ml_ridge.py
-    Grid:       horizon=[1], chunk-id=[0..9] → 10 grid points
-    Date windows: 10 periods via date_window_shim.py (chunk-id grid dim).
-    Tasks:      10
-    Resources:  1 CPU, 16G, 4:00:00
-    Env:        modules=python/3.11.9
+    Executor:    python3 src/ml_ridge.py
+    tasks.py:    .hpc/tasks.py — kwargs = {horizon, window_start, window_end} per task
+    Cardinality: 1 horizon × 10 date windows = 10 tasks
+    Resources:   1 CPU, 16G, 4:00:00
+    Env:         modules=python/3.11.9
 
   Job 2: ml_xgboost
-    Executor:   python3 src/date_window_shim.py -- python3 src/ml_xgboost.py
-    Grid:       horizon=[1], chunk-id=[0..9] → 10 grid points
-    Date windows: 10 periods via date_window_shim.py (chunk-id grid dim).
-    Tasks:      10
-    Resources:  1 CPU, 16G, 4:00:00
-    Env:        modules=python/3.11.9
+    Executor:    python3 src/ml_xgboost.py
+    tasks.py:    .hpc/tasks.py — kwargs = {horizon, window_start, window_end} per task
+    Cardinality: 1 horizon × 10 date windows = 10 tasks
+    Resources:   1 CPU, 16G, 4:00:00
+    Env:         modules=python/3.11.9
 
   Total tasks: 20
 
@@ -224,148 +231,166 @@ Present the full submission plan:
 Confirm?
 ```
 
-## Step 6: Generate Dispatch Manifests
+## Step 6: Scaffold (or reuse) `.hpc/tasks.py` and write the per-run sidecar
 
-For each job, use `hpc_mapreduce.job.grid.build_task_manifest()` to generate a `_hpc_dispatch.json` file locally. This JSON maps each task ID (0-based) to its full command string and result directory.
+This is the **central agent-driven moment** that makes claude-hpc different from a generic mapreduce library. Instead of the framework guessing parallelization axes from a YAML schema, the LLM walks the user through writing a small `total()` / `resolve(task_id)` module **once per experiment**, then commits it. From then on, every submission reuses it byte-for-byte.
 
-`_hpc_dispatch.json` is the recoverable artifact for `/status` and `/aggregate`; it must persist between waves and across resubmissions (both locally and on the cluster).
-
-For multi-executor submissions, generate one manifest per executor. Name them `_hpc_dispatch_{executor_name}.json` or use separate subdirectories.
-
-### Step 6a: Resume-vs-fresh check (content-hashed manifest)
-
-Before writing the manifest to disk, guard against silently overwriting a prior identical run:
-
-1. Compute the run-level `cmd_sha` from the freshly-built manifest via
-   `hpc_mapreduce.job.manifest.aggregate_cmd_sha(manifest)`.
-2. Look for an existing content-addressed manifest with the matching prefix
-   in the experiment directory:
-
-   ```python
-   from hpc_mapreduce.job.manifest import (
-       aggregate_cmd_sha,
-       find_manifest_by_cmd_sha,
-       write_manifest,
-       build_manifest_with_resume,
-   )
-
-   cmd_sha = aggregate_cmd_sha(manifest)
-   prior = find_manifest_by_cmd_sha(experiment_dir, cmd_sha)
-   ```
-
-3. If `prior is not None`, **stop and ask the user**:
-
-   ```
-   I found an existing run with matching cmd_sha: <prior.name>.
-   Resume (re-dispatch only failed tasks) or fresh (new run_id)?
-   ```
-
-   - **Resume**: call `/status` (or `hpc_mapreduce.report_status_from_manifest`)
-     against `prior` to get the list of failing task IDs, then call
-     `build_manifest_with_resume(manifest, resume_from=prior, failed_task_ids=[...])`
-     which delegates to `hpc_mapreduce.job.resubmit.resubmit_plan` on the
-     prior manifest. Submit the returned `ResubmitPlan` via
-     `backend.submit_plan(...)` with the failing IDs.
-   - **Fresh**: regenerate a new run_id (e.g. incorporate `{date}` /
-     `{git_sha}` / a timestamp suffix into `result_dir`), then continue with
-     a new `cmd_sha` so the manifest filename is distinct. The prior
-     manifest is untouched; retention (default N=10) will age it out over
-     time.
-
-4. If `prior is None`, proceed normally.
-
-The Python layer never prompts interactively — this step is the LLM's
-responsibility. Once a choice is made, pass it into subsequent calls:
-
-```python
-# Fresh path (no prior, or user chose "fresh")
-path = write_manifest(experiment_dir, manifest, cmd_sha=cmd_sha)
-
-# Resume path (user chose "resume")
-plan = build_manifest_with_resume(
-    manifest,
-    resume_from=prior,
-    failed_task_ids=<from /status status>,
-    overrides=<optional resource bumps>,
-)
-# plan is a ResubmitPlan — submit via backend.submit_plan(plan, ...)
-```
-
-`write_manifest` also keeps a `manifest.json` symlink/alias pointing at the
-most recent file (for back-compat with anything that opens `manifest.json`
-directly) and prunes old manifests past `MAX_MANIFESTS` (default 10).
-
-### Interface mismatch → generate a shim
-
-In Step 1, you ran `--help` on each executor. If an executor doesn't accept `--chunk-id`/`--total-chunks` but does accept some form of data slicing (`--start`/`--end`, file lists, date windows), generate a shim.
-
-**Shim template selection.** Pick the starting template based on the kind of parallelism the user wants:
-
-- **Date-window parallelism** (yaml has a `backtest:` block, or the user asked for "split by date range", "6M/1Y periods", etc.) → `templates/starters/date_window_shim.py`. Fill in the `START`, `END`, `CHUNK_DUR`, `START_ARG`, `END_ARG` module-level constants from the yaml block (or the user's described date range + chunk duration).
-- **Row-index chunking** (executor accepts `--start`/`--end` as row indices, or the user wants "split by N chunks of data") → `templates/starters/chunking_shim.py`. Fill in `_compute_total_items()` and `translate()`.
-- **Anything else** (file lists, GPU device IDs, task-specific seeds, ad-hoc fan-out axes) → start from the blank `templates/starters/shim_template.py` and hand-write the translation.
-
-**Cache-check precondition.** Before generating, check the content-addressed shim cache — re-running for an unchanged executor must produce a byte-identical shim.
+### Step 6a: Reuse if `.hpc/tasks.py` exists
 
 ```python
 from pathlib import Path
-from hpc_mapreduce import shim_cache_key, load_cached_shim, save_shim
+from hpc_mapreduce import (
+    framework_subdir, tasks_path, load_tasks_module, compute_cmd_sha,
+)
 
-executor_path = Path("src/<executor>.py")
-template_path = Path("<path from _PACKAGE_ROOT / 'templates' / 'starters' / 'chunking_shim.py'>")
-cache_dir = Path(".hpc_cache")
-materialize_at = Path("src/hpc_chunking_shim.py")  # or "src/hpc_<task>_shim.py"
-
-key = shim_cache_key(executor_path, template_path)
-cached = load_cached_shim(cache_dir, key)
+experiment_dir = Path.cwd()
+framework_subdir(experiment_dir)        # mkdir .hpc/, write .hpc/.gitignore
+tp = tasks_path(experiment_dir)         # .hpc/tasks.py
 ```
 
-- If `cached is not None`: copy `cached` to `materialize_at` (overwriting only if the existing file at `materialize_at` starts with `# hpc-shim-key: <key>` — a matching stamp means the on-disk file is a prior cache copy, so it's safe to overwrite). If the existing file has a different stamp or no stamp, treat it as user-edited and do NOT overwrite. Report "shim cache hit: <key>" and skip to the `run:` configuration below.
-- If `cached is None`: proceed with generation below. After generating the shim source, call `save_shim(cache_dir, key, shim_source, executor_path=executor_path, template_path=template_path, materialize_at=materialize_at)` to persist it. The helper prepends the `# hpc-shim-key:` stamp automatically.
+If `tp.exists()`, the experiment was already scaffolded. **Read it as-is**, never regenerate:
 
-**Generation (cache miss only).** Read the template at `templates/starters/chunking_shim.py` (resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "templates" / "starters" / "chunking_shim.py")'`). Fill in:
-
-- `_compute_total_items()` — read the executor source, replicate its data pipeline up to the point where the array length is known
-- `translate()` — adjust the return args if the executor uses something other than `--start`/`--end`
-- `_CACHE_FILE` — name appropriately or set to `None` to disable
-
-Point the profile's `run` at the shim:
-
-```yaml
-run: "python3 src/hpc_chunking_shim.py -- python3 src/executor.py"
-chunking:
-  total: 100
+```python
+tasks = load_tasks_module(tp)
+n = tasks.total()
+sample = tasks.resolve(0)               # sanity-check signature
+print(f"reusing existing .hpc/tasks.py: total()={n}, resolve(0)={sample}")
 ```
 
-The cache layer guarantees that repeat submissions for the same executor and template reuse the exact same shim bytes, regardless of which Claude session runs `/submit`. A user-edited shim (stamp mismatch) is never overwritten.
+If the user wants to change the axis, tell them to edit `.hpc/tasks.py` directly and re-run `/submit`. The framework never overwrites a user-authored file. Skip to Step 6c.
 
-Also copy `hpc_mapreduce/map/dispatch.py` to `_hpc_dispatch.py` in the project root.
+### Step 6b: Scaffold from the canonical example (first submit only)
+
+If `tp.exists()` is False, enter the scaffolding sub-flow:
+
+1. **Read the canonical example.** Resolve `hpc_mapreduce/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
+
+2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and the experiment's `hpc.yaml`/`meta.json` for axis hints (parameter names, ranges, chunking intent, date windows).
+
+3. **Walk the user through writing the file.** This is conversational, not template substitution. The agent:
+   - Re-states the axis from Step 3 in concrete terms (e.g. "We're going to materialize a list of {seed, model} dicts, one per task — 4 tasks total. Sound right?").
+   - Drafts a minimal `_TASKS` for that axis and shows it to the user.
+   - Lets the user paste a snippet, describe in prose, or point at existing code; the agent translates that into `_TASKS`, `total()`, `resolve(task_id)`.
+   - Iterates. The user is the source of truth on what the axis means.
+
+   Eager memoization is the **convention, not a choice**: `_TASKS` is materialized at module load, `total()` returns `len(_TASKS)`, `resolve(i)` returns `_TASKS[i]`. This gives free `cmd_sha`, submit-time error catching, and laptop-inspectability. Lazy variants are not encouraged.
+
+4. **Write the file and commit it.**
+
+   ```python
+   tp.write_text(final_source)          # the full tasks.py text
+   import subprocess
+   subprocess.run(["git", "add", str(tp)], check=True)
+   subprocess.run(
+       ["git", "commit", "-m", f"Add .hpc/tasks.py for {executor_name}"],
+       check=True,
+   )
+   ```
+
+   Print the commit SHA. **No push** — the user controls when their work goes upstream. If the working tree is detached or the directory is not a git repo, warn the user and continue (the file still gets written; commit is best-effort). Subsequent submits hit Step 6a and skip this entire sub-flow.
+
+### Step 6c: Compute `cmd_sha` and check for resume
+
+The materialized task list is the source of identity for the run:
+
+```python
+from hpc_mapreduce import (
+    compute_cmd_sha, compute_tasks_py_sha, find_run_by_cmd_sha,
+    write_run_sidecar, runs_subdir,
+)
+from datetime import datetime, timezone
+import subprocess
+
+tasks = load_tasks_module(tp)
+cmd_sha = compute_cmd_sha(tasks)        # SHA-256 over normalized resolve(i) dicts
+tasks_py_sha = compute_tasks_py_sha(tp)
+prior = find_run_by_cmd_sha(experiment_dir, cmd_sha)
+```
+
+If `prior is not None`, **stop and ask the user**:
+
+```
+I found a prior run with the same cmd_sha: <prior.stem>.
+Resume (re-dispatch only failed tasks) or fresh (new run_id)?
+```
+
+- **Resume**: call `/status --run-id <prior.stem>` (or `report_status` directly) to enumerate failing task IDs, then build a `ResubmitPlan` via `resubmit_plan(task_count=tasks.total(), failed_task_ids=[...])` and submit via `backend.submit_plan(plan, ...)`. The new sidecar (written below) carries the same `cmd_sha` but a fresh `run_id` — both runs share provenance via the SHA.
+- **Fresh**: ask the user how they want the new run distinguished (e.g. a different result_dir suffix, a profile name change, or simply accept that the new sidecar is a deliberate rerun). The new `cmd_sha` will only differ if `tasks.py` itself changes.
+
+### Step 6d: Compute the throughput plan and write the sidecar
+
+With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Then write the per-run sidecar — this is the audit-trail artifact `/status` and `/aggregate` read on the cluster:
+
+```python
+run_id = f"{profile}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{cmd_sha[:8]}"
+git_sha = subprocess.run(
+    ["git", "rev-parse", "--short", "HEAD"],
+    capture_output=True, text=True,
+).stdout.strip() or "nogit"
+
+sidecar_path = write_run_sidecar(
+    experiment_dir,
+    run_id=run_id,
+    cmd_sha=cmd_sha,
+    claude_hpc_version=__import__("hpc_mapreduce").__version__,
+    submitted_at=datetime.now(timezone.utc).isoformat(),
+    executor=run_cmd,                            # full shell cmd, e.g. "python3 scripts/train.py"
+    result_dir_template=result_dir_template,     # e.g. "results/{git_sha}/task_{task_id}"
+    task_count=tasks.total(),
+    tasks_py_sha=tasks_py_sha,
+    wave_map=wave_map,                           # from Step 4b's build_wave_map(plan)
+    extra={"git_sha": git_sha, "profile": profile},
+)
+```
+
+For multi-executor submissions, write one sidecar per executor — `run_id` and `executor` differ, but `tasks.py` is per-experiment and may be shared if the axes match.
+
+`write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 10). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
 
 ## Step 7: Sync to Cluster
 
-Push local code + dispatch files to the cluster:
+Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework files** — `deploy_runtime` does that via scp, and rsync would otherwise overwrite the cluster-side `.hpc/_hpc_dispatch.py` etc. with files that don't exist locally.
 
+1. **`rsync_push`** ships your code plus the local `.hpc/` (which contains only `tasks.py` and `runs/<run_id>.json` — no framework files):
+
+   ```bash
+   rsync -az --delete \
+       --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
+       --exclude='hpc_mapreduce/' \
+       --exclude='.hpc/_hpc_dispatch.py' \
+       --exclude='.hpc/_hpc_combiner.py' \
+       --exclude='.hpc/templates/' \
+       # ... plus any project-specific excludes ...
+       . $SSH_TARGET:$REMOTE_PATH/
+   ```
+
+   The `.hpc/_hpc_*.py` and `.hpc/templates/` excludes prevent `--delete` from wiping the framework files that `deploy_runtime` placed on the cluster. `DEFAULT_RSYNC_EXCLUDES` in `hpc_mapreduce.infra.remote` has these baked in; if you call `rsync_push` directly, you get them for free.
+
+2. **`deploy_runtime`** scp's the framework files into `{remote_path}/.hpc/`:
+   - `_hpc_dispatch.py` (the framework executor)
+   - `_hpc_combiner.py`
+   - `templates/{cpu_array,gpu_array}.{sh,slurm}`
+   - and the importable stubs `hpc_mapreduce/map/{context,metrics_io}.py` (these go to `{remote_path}/hpc_mapreduce/map/`, not `.hpc/`)
+
+   ```python
+   from hpc_mapreduce import deploy_runtime
+   deploy_runtime(host=cluster.host, user=cluster.user, remote_path=remote_path)
+   ```
+
+   Run **after** `rsync_push` (rsync's `--delete` would otherwise blow away the freshly-scp'd files; the excludes above protect them, but ordering remains important on every submit).
+
+Verify deployment — existence check (paths are now under `.hpc/`):
 ```bash
-rsync -az --delete \
-    --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' --exclude='hpc_mapreduce/' \
-    # ... add each rsync exclude pattern ...
-    . $SSH_TARGET:$REMOTE_PATH/
+ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/.hpc/tasks.py '"$REMOTE_PATH"'/.hpc/runs/<run_id>.json '"$REMOTE_PATH"'/.hpc/_hpc_dispatch.py'
 ```
 
-Note: `deploy_runtime()` now also deploys `_hpc_combiner.py` alongside the existing dispatch script.
-
-Verify deployment — existence check:
-```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_hpc_dispatch.json '"$REMOTE_PATH"'/_hpc_dispatch.py'
-```
-
-**Verify content, not just existence.** `rsync` exit 0 is necessary but not sufficient: a WSL/DNS hiccup or stale SSH config can cause rsync to silently transfer nothing while still returning success. Before submitting a full array, spot-check the hash of 2–3 files that *should* have just changed (e.g., a source file and the manifest):
+**Verify content, not just existence.** `rsync` exit 0 is necessary but not sufficient: a WSL/DNS hiccup or stale SSH config can cause rsync to silently transfer nothing while still returning success. Before submitting a full array, spot-check the hash of 2–3 files that *should* have just changed (e.g., a source file and `tasks.py`):
 
 ```bash
 # Local hashes
-md5sum _hpc_dispatch.json src/<changed_file>.py
+md5sum .hpc/tasks.py src/<changed_file>.py
 # Remote hashes
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && md5sum _hpc_dispatch.json src/<changed_file>.py'
+ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && md5sum .hpc/tasks.py src/<changed_file>.py'
 ```
 
 If any hash differs, STOP — re-run rsync with verbose flags (`-avz`) and investigate DNS/ssh-config issues before submitting.
@@ -378,12 +403,13 @@ If any hash differs, STOP — re-run rsync with verbose flags (`-avz`) and inves
 # SGE canary
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && qsub -t 1-1 -N <job_name>_canary -o logs -j y \
     -l <resource_key>=<resource_val> ... \
-    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,HPC_MANIFEST=...,TOTAL_TASKS=1,TASK_OFFSET=0 \
-    <template_path>'
+    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n>,TASK_OFFSET=0 \
+    .hpc/templates/<template>'
 
 # SLURM canary
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch --array=1-1 --job-name=<job_name>_canary ... \
-    --export=...,TOTAL_TASKS=1,TASK_OFFSET=0 <template_path>'
+    --export=EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n>,TASK_OFFSET=0 \
+    .hpc/templates/<template>'
 ```
 
 Wait for the canary to reach a terminal state (`sacct -j <jobid>` / `qacct -j <jobid>`), then verify:
@@ -402,66 +428,72 @@ If a throughput plan was computed in Step 4b, use `backend.submit_plan(plan, ...
 
 If no plan is available (constraints not configured), fall back to the standard single-array submission below.
 
-Determine template from resources (GPU present → `gpu_array`, else `cpu_array`).
+Determine template from resources (GPU present → `gpu_array`, else `cpu_array`). The template path is **cluster-relative**: `.hpc/templates/cpu_array.sh` (SGE) or `.hpc/templates/cpu_array.slurm` (SLURM); `deploy_runtime` placed it there. Don't pass an absolute or local path.
 
 Build env vars:
-- `EXECUTOR=python3 _hpc_dispatch.py`
-- `HPC_MANIFEST=_hpc_dispatch.json`
+- `EXECUTOR=python3 .hpc/_hpc_dispatch.py` — the framework executor scp'd by `deploy_runtime`
+- `HPC_RUN_ID=<run_id>` — locates the per-run sidecar at `.hpc/runs/<run_id>.json`
+- `HPC_CMD_SHA=<cmd_sha>` — hash of the materialized `tasks.py` task list (provenance only)
+- `HPC_TASK_COUNT=<task_count>` — scheduler array length, equal to `tasks.total()`
 - `REPO_DIR=<remote_path>`
 - `MODULES=<detected modules>`
 - `CONDA_SOURCE=<cluster.conda_source>` (if conda env needed)
 - `CONDA_ENV=<detected/selected conda_env>` (if needed)
-- `TOTAL_TASKS=<total_tasks>`
+
+The cluster-side template translates the scheduler's per-task index (`SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`) into `HPC_TASK_ID` (0-based) before exec'ing `$EXECUTOR`, which then imports `.hpc/tasks.py`, calls `tasks.resolve(HPC_TASK_ID)`, and runs the executor command from the sidecar with kwargs merged into the env.
 
 **Building the job_env (with runtime support)**
 
-When the manifest carries `runtime: "uv"` (set by `build_task_manifest(runtime="uv")` per Tier 1), `HPC_RUNTIME=uv` MUST be in the job's env so the cluster-side template's `uv sync` preamble fires. Constructing this by hand is easy to forget; instead, call the `build_job_env` helper which threads the manifest's runtime field into the env automatically:
+When the user's spec carries `runtime: "uv"`, `HPC_RUNTIME=uv` MUST be in the job's env so the cluster-side template's `uv sync` preamble fires. The `build_job_env` helper takes a runtime-tagged dict and threads it through:
 
 ```python
 from slash_commands.runner import build_job_env
 base_env = {
-    "EXECUTOR": "python3 _hpc_dispatch.py",
-    "HPC_MANIFEST": "_hpc_dispatch.json",
+    "EXECUTOR": "python3 .hpc/_hpc_dispatch.py",
+    "HPC_RUN_ID": run_id,
+    "HPC_CMD_SHA": cmd_sha,
+    "HPC_TASK_COUNT": str(tasks.total()),
     "REPO_DIR": remote_path,
     "MODULES": ...,
     "CONDA_SOURCE": ...,
     "CONDA_ENV": ...,
-    "TOTAL_TASKS": str(total_tasks),
 }
-job_env = build_job_env(manifest, base_env)  # adds HPC_RUNTIME if needed
+# Pass {"runtime": "uv"} to enable HPC_RUNTIME forwarding; an empty dict
+# leaves base_env untouched.
+job_env = build_job_env({"runtime": runtime} if runtime else {}, base_env)
 ```
 
-> **NOTE:** when using `SGEBackend(pass_env_keys=...)`, the tuple MUST include `"HPC_RUNTIME"` so the qsub `-v` filter forwards it. The SLURM backend forwards everything in `job_env` automatically.
+> **NOTE:** when using `SGEBackend(pass_env_keys=...)`, the tuple MUST include `"HPC_RUN_ID"`, `"HPC_CMD_SHA"`, `"HPC_TASK_COUNT"`, and (if applicable) `"HPC_RUNTIME"` so the qsub `-v` filter forwards them. The SLURM backend forwards everything in `job_env` automatically.
 
 ### SGE Submission
 
 ```bash
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && qsub \
-    -t 1-<total_tasks> \
+    -t 1-<task_count> \
     -N <job_name> \
     -o logs -j y \
     -l <resource_key>=<resource_val> \
     ... \
-    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,TOTAL_TASKS=... \
-    <template_path>'
+    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n> \
+    .hpc/templates/cpu_array.sh'
 ```
 
-For GPU jobs: `-l gpu,<gpu_type>,cuda=<count>`.
+For GPU jobs: `-l gpu,<gpu_type>,cuda=<count>`, and use `.hpc/templates/gpu_array.sh`.
 
 ### SLURM Submission
 
 ```bash
 ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch \
-    --array=1-<total_tasks> \
+    --array=1-<task_count> \
     --job-name=<job_name> \
     --output=logs/%x_%A_%a.out \
     --error=logs/%x_%A_%a.err \
     --mem=<mem> --time=<walltime> --cpus-per-task=<cpus> \
-    --export=CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=...,TOTAL_TASKS=... \
-    <template_path>'
+    --export=CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n> \
+    .hpc/templates/cpu_array.slurm'
 ```
 
-For GPU jobs: `--gres=gpu:<count>` and appropriate partition.
+For GPU jobs: `--gres=gpu:<count>`, appropriate partition, and use `.hpc/templates/gpu_array.slurm`.
 
 ## Step 9: Cache and Report
 
@@ -469,7 +501,7 @@ For GPU jobs: `--gres=gpu:<count>` and appropriate partition.
 Save to Claude Code memory for this project:
 - Executor directory, cluster, remote_path
 - Environment: modules, conda_env per executor type (CPU/GPU)
-- Default resources, generated shim path
+- Default resources
 
 ### Report
 After submission:
@@ -479,8 +511,7 @@ After submission:
 
 ## Step 10: Record the submission in the run journal
 
-After the manifest is written locally and rsync'd to the cluster, persist the
-bootstrap context for cold-session resume:
+After the per-run sidecar is written locally and rsync'd to the cluster, persist the bootstrap context for cold-session resume:
 
 ```python
 from pathlib import Path
@@ -493,24 +524,21 @@ record, deduped = runner.submit_and_record(
     ssh_target=f"{cluster.user}@{cluster.host}",
     remote_path=<remote_path>,
     job_name=<job_name>,
-    manifest_filename=<manifest filename written by write_manifest, e.g. "manifest.abc12345.json">,
+    run_id=<run_id from Step 6d, e.g. "ml_ridge-20260429-153012-abc12345">,
     job_ids=<list of job IDs returned by backend.submit_plan>,
-    total_tasks=<total_tasks>,
+    total_tasks=tasks.total(),
 )
 # `deduped == True` means a journal record for this run_id already existed
-# (deterministic on profile + manifest sha) and the call was a no-op replay.
-# When that happens, do NOT call backend.submit_plan again — the original
-# cluster jobs are already running. Just resume monitoring.
+# and the call was a no-op replay. When that happens, do NOT call
+# backend.submit_plan again — the original cluster jobs are already running.
+# Just resume monitoring.
 ```
 
-The journal entry lets a future `/status` (no args) auto-discover this run
-and resume monitoring with one keystroke instead of re-asking for cluster /
-job_ids / etc. Slash commands MUST call `slash_commands.runner.submit_and_record`
-rather than writing to `slash_commands.session` directly — the bundled helper guards
-the journal write under a flock and keeps the run record consistent.
+`submit_and_record` is keyed on `run_id` (the timestamp + cmd_sha8 string from Step 6d); a retry with the same run_id deduplicates without re-submitting. The journal entry lets a future `/status` (no args) auto-discover this run and resume monitoring with one keystroke instead of re-asking for cluster / job_ids / etc.
 
-For multi-executor submissions (one manifest per executor), call
-`submit_and_record` once per submitted job.
+Slash commands MUST call `slash_commands.runner.submit_and_record` rather than writing to `slash_commands.session` directly — the bundled helper guards the journal write under a flock and keeps the run record consistent.
+
+For multi-executor submissions (one sidecar per executor), call `submit_and_record` once per submitted job.
 
 ## Common Failure Modes
 

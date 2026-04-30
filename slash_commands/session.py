@@ -2,7 +2,7 @@
 
 Persists the bootstrap context for an in-flight `/submit` so a fresh Claude
 Code session can pick up `/status` without re-deriving the cluster, job
-IDs, manifest filename, combined-wave list, retry history, etc.
+IDs, run_id, combined-wave list, retry history, etc.
 
 Storage layout (one tree per experiment cwd):
 
@@ -28,7 +28,6 @@ import hashlib
 import json
 import logging
 import os
-import sys
 import tempfile
 import warnings
 from datetime import datetime, timezone
@@ -87,7 +86,6 @@ class RunRecord:
     remote_path: str
     job_name: str
     job_ids: list[str]
-    manifest: str
     total_tasks: int
     submitted_at: str
     experiment_dir: str

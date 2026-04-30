@@ -44,7 +44,7 @@ def test_help_lists_every_subcommand() -> None:
     rc, out, _ = _run_cli("--help")
     assert rc == 0
     for cmd in (
-        "capabilities", "preflight", "discover", "expand-grid",
+        "capabilities", "preflight", "discover",
         "clusters", "list-in-flight", "status", "submit", "aggregate",
         "resubmit", "reconcile", "build-executor",
     ):
@@ -106,16 +106,6 @@ def test_clusters_list_returns_known_clusters() -> None:
     assert names, "no clusters defined; check hpc_mapreduce/config/clusters.yaml"
 
 
-def test_expand_grid_returns_cartesian_product(tmp_path: Path) -> None:
-    spec = tmp_path / "grid.json"
-    spec.write_text(json.dumps({"grid": {"a": [1, 2], "b": ["x", "y"]}}))
-    rc, out, _ = _run_cli("expand-grid", "--spec", str(spec))
-    assert rc == 0
-    env = _parse_envelope(out)
-    assert env["ok"] is True
-    assert env["data"]["total"] == 4
-
-
 # ─── error envelope shape and exit codes ───────────────────────────────────
 
 
@@ -131,9 +121,15 @@ def test_unknown_cluster_returns_user_error() -> None:
 
 
 def test_malformed_spec_returns_user_error(tmp_path: Path) -> None:
+    """An unparseable --spec file must surface as config_invalid, not crash."""
     spec = tmp_path / "bad.json"
     spec.write_text("not json {")
-    rc, out, _ = _run_cli("expand-grid", "--spec", str(spec))
+    rc, out, _ = _run_cli(
+        "submit",
+        "--experiment-dir", str(tmp_path),
+        "--spec", str(spec),
+        "--dry-run",
+    )
     assert rc == 1
     env = _parse_envelope(out)
     assert env["ok"] is False
@@ -152,7 +148,7 @@ def test_missing_spec_required_field_returns_user_error(tmp_path: Path) -> None:
     assert rc == 1
     env = _parse_envelope(out)
     assert env["ok"] is False
-    assert env["error_code"] == "manifest_invalid"
+    assert env["error_code"] == "spec_invalid"
 
 
 # ─── submit dry-run + dedup contract ───────────────────────────────────────
@@ -164,7 +160,7 @@ SUBMIT_SPEC = {
     "ssh_target": "user@hoffman2.idre.ucla.edu",
     "remote_path": "/u/scratch/exp",
     "job_name": "ml",
-    "manifest_filename": "manifest.abcd1234.json",
+    "run_id": "ml-20260429-153012-abcd1234",
     "job_ids": ["12345"],
     "total_tasks": 6,
 }
@@ -241,7 +237,7 @@ def test_list_in_flight_finds_submitted_run(tmp_path: Path) -> None:
     assert rc == 0
     env_resp = _parse_envelope(out)
     runs = env_resp["data"]["runs"]
-    assert any(r["run_id"] == "ml_abcd1234" for r in runs)
+    assert any(r["run_id"] == SUBMIT_SPEC["run_id"] for r in runs)
 
 
 # ─── envelope schema validation (structural) ───────────────────────────────
@@ -316,7 +312,6 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
         remote_path="/x",
         job_name="j",
         job_ids=["1"],
-        manifest="manifest.abcd1234.json",
         total_tasks=1,
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
@@ -424,7 +419,7 @@ def test_submit_spec_with_wrong_type_fails_with_schema_message(tmp_path: Path) -
     )
     assert rc != 0
     payload = _parse_envelope(out)
-    assert payload["error_code"] == "manifest_invalid"
+    assert payload["error_code"] == "spec_invalid"
 
 
 # ─── Bug 17: cmd_resubmit rejects categories outside the documented enum ─
@@ -453,7 +448,7 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     )
     assert rc != 0
     payload = _parse_envelope(out)
-    assert payload["error_code"] == "manifest_invalid"
+    assert payload["error_code"] == "spec_invalid"
 
 
 # ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
@@ -519,81 +514,6 @@ def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
     assert payload["error_code"] == "ssh_unreachable"
 
 
-# ─── expand-grid cost estimate ────────────────────────────────────────────
-
-
-def test_expand_grid_without_walltime_omits_cost_estimate(tmp_path: Path) -> None:
-    spec = tmp_path / "g.json"
-    spec.write_text(json.dumps({"grid": {"a": [1, 2], "b": ["x"]}}))
-    rc, out, _ = _run_cli("expand-grid", "--spec", str(spec))
-    assert rc == 0
-    data = _parse_envelope(out)["data"]
-    assert data["total"] == 2
-    assert "cost_estimate" not in data
-
-
-def test_expand_grid_with_walltime_emits_cost_estimate(tmp_path: Path) -> None:
-    spec = tmp_path / "g.json"
-    spec.write_text(json.dumps({"grid": {"a": [1, 2, 3, 4]}}))
-    rc, out, _ = _run_cli(
-        "expand-grid",
-        "--spec", str(spec),
-        "--per-task-walltime", "4h",
-        "--per-task-cpus", "2",
-        "--per-task-gpus", "1",
-    )
-    assert rc == 0
-    cost = _parse_envelope(out)["data"]["cost_estimate"]
-    assert cost["per_task_walltime_seconds"] == 4 * 3600
-    assert cost["per_task_cpus"] == 2
-    assert cost["per_task_gpus"] == 1
-    assert cost["total_tasks"] == 4
-    assert cost["total_cpu_hours"] == 4 * 4 * 2  # 32 CPU-hours
-    assert cost["total_gpu_hours"] == 4 * 4 * 1  # 16 GPU-hours
-
-
-def test_expand_grid_walltime_hh_mm_ss_format(tmp_path: Path) -> None:
-    spec = tmp_path / "g.json"
-    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
-    rc, out, _ = _run_cli(
-        "expand-grid",
-        "--spec", str(spec),
-        "--per-task-walltime", "1:30:00",
-    )
-    assert rc == 0
-    cost = _parse_envelope(out)["data"]["cost_estimate"]
-    assert cost["per_task_walltime_seconds"] == 5400  # 1h30m
-
-
-def test_expand_grid_with_max_concurrent_estimates_walltime(tmp_path: Path) -> None:
-    """100 tasks, 4h each, max 25 concurrent => ceil(100/25) = 4 waves * 4h = 16h."""
-    spec = tmp_path / "g.json"
-    spec.write_text(json.dumps({"grid": {"a": list(range(100))}}))
-    rc, out, _ = _run_cli(
-        "expand-grid",
-        "--spec", str(spec),
-        "--per-task-walltime", "4h",
-        "--max-concurrent-tasks", "25",
-    )
-    assert rc == 0
-    cost = _parse_envelope(out)["data"]["cost_estimate"]
-    assert cost["estimated_walltime_hours"] == 16.0
-    assert cost["max_concurrent_tasks"] == 25
-
-
-def test_expand_grid_invalid_walltime_format_returns_user_error(tmp_path: Path) -> None:
-    spec = tmp_path / "g.json"
-    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
-    rc, out, _ = _run_cli(
-        "expand-grid",
-        "--spec", str(spec),
-        "--per-task-walltime", "not-a-walltime",
-    )
-    assert rc != 0
-    payload = _parse_envelope(out)
-    assert payload["error_code"] == "manifest_invalid"
-
-
 # ─── logs subcommand ──────────────────────────────────────────────────────
 
 
@@ -615,12 +535,12 @@ def test_logs_requires_task_id_or_all_failed(tmp_path: Path) -> None:
     rc, out, _ = _run_cli(
         "logs",
         "--experiment-dir", str(tmp_path),
-        "--run-id", "ml_abcd1234",
+        "--run-id", SUBMIT_SPEC["run_id"],
         env=env_vars,
     )
     assert rc != 0
     payload = _parse_envelope(out)
-    assert payload["error_code"] == "manifest_invalid"
+    assert payload["error_code"] == "spec_invalid"
 
 
 def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
@@ -643,7 +563,6 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
         remote_path="/exp",
         job_name="ml",
         job_ids=["12345"],
-        manifest="manifest.abcd1234.json",
         total_tasks=10,
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
@@ -742,7 +661,6 @@ def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
         remote_path="/exp",
         job_name="ml",
         job_ids=["12345"],
-        manifest="manifest.abcd1234.json",
         total_tasks=2,
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
@@ -859,7 +777,6 @@ def test_aggregate_envelope_carries_provenance_on_success(
     prov = payload["data"]["provenance"]
     assert prov["run_id"] == "ml_abcd1234"
     assert prov["wave"] == 0
-    assert prov["manifest"] == "manifest.abcd1234.json"
     assert prov["profile"] == "ml"
     assert prov["cluster"] == "hoffman2"
     assert "combined_at" in prov
@@ -958,8 +875,8 @@ def test_aggregate_writes_sidecar_when_expect_output_set(
 
 
 def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
-    """`capabilities`, `expand-grid`, `clusters list`, `submit --dry-run`,
-    and `submit` (journal-only) must not be gated by SSH_AUTH_SOCK."""
+    """`capabilities`, `clusters list`, `submit --dry-run`, and `submit`
+    (journal-only) must not be gated by SSH_AUTH_SOCK."""
     env = _env_without_ssh_agent()
     env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
 
@@ -967,11 +884,6 @@ def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
     assert rc == 0
 
     rc, _, _ = _run_cli("clusters", "list", env=env)
-    assert rc == 0
-
-    spec = tmp_path / "grid.json"
-    spec.write_text(json.dumps({"grid": {"a": [1, 2]}}))
-    rc, _, _ = _run_cli("expand-grid", "--spec", str(spec), env=env)
     assert rc == 0
 
     submit_spec = tmp_path / "spec.json"
@@ -1010,7 +922,7 @@ class TestSubmitFromMeta:
             "cluster": "hoffman2",
             "ssh_target": "user@host",
             "remote_path": "/u/scratch/exp",
-            "manifest_filename": "manifest.abcd1234.json",
+            "run_id": "run-20260429-153012-abcd1234",
             "job_ids": ["12345"],
             "total_tasks": 4,
         }
@@ -1043,7 +955,14 @@ class TestSubmitFromMeta:
         assert rc == 0, out
         env = _parse_envelope(out)
         assert env["ok"] is True
-        assert env["data"]["run_id"].startswith("run-001-foo_")
+        # run_id is now spec-supplied directly; --from-meta only fills
+        # the profile + job_name fields.  Verify by reading the journal.
+        from slash_commands import session
+        monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        record = session.load_run(tmp_path, env["data"]["run_id"])
+        assert record is not None
+        assert record.profile == "run-001-foo"
+        assert record.job_name == "run-001-foo"
 
     def test_from_meta_does_not_overwrite_present_fields(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1059,7 +978,12 @@ class TestSubmitFromMeta:
         )
         assert rc == 0, out
         env = _parse_envelope(out)
-        assert env["data"]["run_id"].startswith("explicit_")
+        from slash_commands import session
+        monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        record = session.load_run(tmp_path, env["data"]["run_id"])
+        assert record is not None
+        assert record.profile == "explicit"
+        assert record.job_name == "explicit"
 
     def test_from_meta_no_op_without_meta_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1075,7 +999,11 @@ class TestSubmitFromMeta:
         )
         assert rc == 0, out
         env = _parse_envelope(out)
-        assert env["data"]["run_id"].startswith("p_")
+        from slash_commands import session
+        monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        record = session.load_run(tmp_path, env["data"]["run_id"])
+        assert record is not None
+        assert record.profile == "p"
 
     def test_from_meta_no_op_when_meta_lacks_experiment_id(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1089,18 +1017,18 @@ class TestSubmitFromMeta:
             "--from-meta",
             env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
         )
-        # Spec is incomplete and no overlay applied; expect manifest_invalid.
+        # Spec is incomplete and no overlay applied; expect spec_invalid.
         assert rc == 1, out
         env = _parse_envelope(out)
         assert env["ok"] is False
-        assert env["error_code"] == "manifest_invalid"
+        assert env["error_code"] == "spec_invalid"
 
     def test_from_meta_off_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         spec = self._write_spec(tmp_path)  # no profile, no job_name
         self._write_meta(tmp_path, experiment_id="run-001-foo")
-        # Flag NOT set: existing behavior (incomplete spec → manifest_invalid).
+        # Flag NOT set: existing behavior (incomplete spec → spec_invalid).
         rc, out, _ = _run_cli(
             "submit",
             "--experiment-dir", str(tmp_path),
@@ -1110,4 +1038,4 @@ class TestSubmitFromMeta:
         assert rc == 1, out
         env = _parse_envelope(out)
         assert env["ok"] is False
-        assert env["error_code"] == "manifest_invalid"
+        assert env["error_code"] == "spec_invalid"

@@ -1,9 +1,8 @@
 """UTC timestamp helper shared across the package.
 
-Centralised so timestamps in journal records, status reports, and shim
-metadata all use the same canonical format (ISO-8601 with explicit
-``+00:00`` offset). Previously each call site rolled its own; some used
-local time without a TZ offset, which caused cross-host disagreement.
+Centralised so timestamps in journal records, status reports, and
+per-run sidecars all use the same canonical format (ISO-8601 with
+explicit ``+00:00`` offset).
 """
 
 from __future__ import annotations

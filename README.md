@@ -1,8 +1,8 @@
 # claude-hpc
 
-HPC orchestrator for parameter-grid experiments on SGE/SLURM clusters. Two surfaces over one core:
+HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
-- **Slash commands for humans** in Claude Code (`/submit`, `/status`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, prompts you for cluster + grid params.
+- **Slash commands for humans** in Claude Code (`/submit`, `/status`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, walks you through choosing a cluster and authoring `.hpc/tasks.py`.
 - **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs).
 
 Both go through the same atomic-ops layer (`slash_commands/runner.py`), so cross-surface state (in-flight runs, journal records) is shared automatically.
@@ -73,7 +73,7 @@ Each executor accepts experiment-specific arguments (`--horizon`, `--start`, `--
 
 ```
 /preflight → verify SSH agent + cluster reachability before first submit
-/submit    → discovers executors, builds grid conversationally, syncs code, submits
+/submit    → discovers executors, walks you through .hpc/tasks.py, syncs code, submits
 /status    → tracks completion per grid point, diagnoses failures, auto-resubmits
 /aggregate → validates completeness, runs aggregation, downloads summaries
 ```
@@ -105,16 +105,16 @@ No config files required. Claude discovers your executors by reading their sourc
 
 The boundary between claude-hpc and your experiment repo is documented in [`docs/boundary-contract.md`](docs/boundary-contract.md) and enforced by `tests/test_boundary_contract.py`.
 
-1. Claude reads your executor scripts and their `--help` output
-2. You describe what to run in natural language — Claude builds the grid
-3. A `_hpc_dispatch.json` manifest maps each task ID to its full command
-4. A standalone `_hpc_dispatch.py` script (zero dependencies) is deployed to the cluster
-5. The job template runs the dispatch script, which looks up the command for its task ID
-6. Your code runs with the right params — no HPC awareness needed
+1. Claude reads your executor scripts and their `--help` output.
+2. You describe what to run in natural language — Claude walks you through writing `.hpc/tasks.py` once: a small Python module exposing `total()` and `resolve(task_id)` that returns the per-task kwargs. The file is committed to git and reused on every subsequent submit.
+3. A per-run sidecar `.hpc/runs/<run_id>.json` records the executor command, result-dir template, `cmd_sha`, and wave map for this particular submission.
+4. The framework executor `_hpc_dispatch.py` (zero deps, stdlib-only) is deployed to the cluster's `.hpc/` by `deploy_runtime`.
+5. The job template runs the dispatcher, which imports your `.hpc/tasks.py`, calls `resolve(task_id)`, formats the result_dir, and execs your executor command with kwargs as env vars.
+6. Your executor reads kwargs as ordinary env vars (uppercased + `HPC_KW_*`) — no HPC awareness needed.
 
 ### Parallelism Model
 
-Grid parameters are expanded via Cartesian product. Each combination becomes one HPC task. Executors receive all parameters as CLI arguments — no HPC awareness needed.
+The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_mapreduce/templates/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
 
 ### Throughput Optimization
 
@@ -135,7 +135,7 @@ Configure constraints in `clusters.yaml` (cluster-level) or `hpc.yaml` profiles 
 | `/submit` | Discover executors, build grid conversationally, sync code, submit array jobs |
 | `/status` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
-| `/build-executor` | Scaffold a new executor or shim from a starter template |
+| `/build-executor` | Scaffold a new executor from `templates/starters/executor_template.py` |
 ## Configuration
 
 ### `clusters.yaml` (required)
@@ -160,7 +160,7 @@ If you prefer declarative config over conversational setup, add `hpc.yaml` to yo
 
 ### Caching
 
-Claude remembers your preferences (cluster, executor directory, environment, resources) across conversations via Claude Code memory. The `_hpc_dispatch.json` manifest serves as the submission record for monitoring and resubmission.
+Claude remembers your preferences (cluster, executor directory, environment, resources) across conversations via Claude Code memory. The `.hpc/runs/<run_id>.json` sidecars (paired with `.hpc/tasks.py`) serve as the submission record for monitoring and resubmission.
 
 ## Job Templates
 
@@ -183,8 +183,18 @@ Cluster connection details are in `hpc_mapreduce/config/clusters.yaml` (or whate
 ## Python API
 
 ```python
-from hpc_mapreduce import expand_grid, build_task_manifest, total_tasks
-from hpc_mapreduce import ClusterConstraints, parse_constraints
-from hpc_mapreduce import load_clusters_config, get_template_path, _PACKAGE_ROOT
+from hpc_mapreduce import (
+    # Framework subdirectory layout
+    framework_subdir, runs_subdir, tasks_path, load_tasks_module,
+    # Per-run sidecars
+    compute_cmd_sha, write_run_sidecar, read_run_sidecar,
+    find_run_by_cmd_sha, find_existing_runs,
+    # Cluster config
+    load_clusters_config, get_template_path, _PACKAGE_ROOT,
+    # Submission
+    ClusterConstraints, parse_constraints,
+    WorkloadSpec, compute_submission_plan, build_wave_map,
+    deploy_runtime, run_combiner_checked,
+)
 from hpc_mapreduce.infra.backends import get_backend
 ```

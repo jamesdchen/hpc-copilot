@@ -20,8 +20,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from hpc_mapreduce import _PACKAGE_ROOT
 from hpc_mapreduce.job.discover import (
     ExecutorInfo,
@@ -126,16 +124,30 @@ class TestIsExecutorSource:
 # ─── Template parseability ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "template_name",
-    ["executor_template.py", "chunking_shim.py", "shim_template.py"],
-)
-def test_template_is_valid_python(template_name: str) -> None:
-    path = TEMPLATES_DIR / template_name
+def test_executor_template_is_valid_python() -> None:
+    path = TEMPLATES_DIR / "executor_template.py"
     assert path.is_file(), f"missing template: {path}"
-    source = path.read_text(encoding="utf-8")
     # Must parse cleanly — /build-executor copies this verbatim.
+    ast.parse(path.read_text(encoding="utf-8"))
+
+
+def test_tasks_example_is_valid_python_and_exposes_total_resolve() -> None:
+    """The canonical .hpc/tasks.py reference must parse cleanly and expose
+    total() / resolve(task_id) — the agent reads it as the teaching
+    example during /submit Step 6.
+    """
+    import importlib.util
+    path = TEMPLATES_DIR.parent / "tasks_example.py"
+    assert path.is_file(), f"missing canonical example: {path}"
+    source = path.read_text(encoding="utf-8")
     ast.parse(source)
+    spec = importlib.util.spec_from_file_location("tasks_example_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert callable(mod.total)
+    assert callable(mod.resolve)
+    assert mod.total() > 0
+    assert isinstance(mod.resolve(0), dict)
 
 
 def test_executor_template_is_self_classified_as_executor() -> None:

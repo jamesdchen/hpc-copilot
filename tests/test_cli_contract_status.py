@@ -3,6 +3,10 @@
 Asserts stdout JSON has exactly the pinned 4 top-level keys
 (summary, tasks, rollup, errors) with the right types, so the LLM
 orchestrator's parser can rely on that shape on every poll.
+
+The CLI reads ``.hpc/runs/<run_id>.json`` for the run sidecar and
+``.hpc/tasks.py`` for the per-task kwargs; both must exist relative
+to the cwd the subprocess runs in.
 """
 
 from __future__ import annotations
@@ -13,62 +17,63 @@ import sys
 from pathlib import Path
 
 
-def _build_minimal_manifest(tmp_path: Path) -> Path:
-    """Three tasks over two grid points; only task 0 has a completed result."""
+def _build_minimal_run(tmp_path: Path, *, run_id: str = "test_run") -> tuple[Path, Path]:
+    """Materialize tmp_path/.hpc/{tasks.py, runs/<id>.json}.
+
+    Three tasks over two grid points (model=ridge for tasks 0–1,
+    model=xgb for task 2); only task 0's result_dir has a completed
+    artifact, so the reporter should mark task 1 complete (1-based).
+    Returns (cwd_for_subprocess, sidecar_path).
+    """
     r0 = tmp_path / "task_0"
     r1 = tmp_path / "task_1"
     r2 = tmp_path / "task_2"
     for r in (r0, r1, r2):
         r.mkdir()
-    # Mark task 0 complete.
-    (r0 / "done.json").write_text("{}")
+    (r0 / "done.json").write_text("{}")  # mark task 0 complete
 
-    manifest = {
-        "total_tasks": 3,
-        "grid_size": 2,
-        "grid_keys": ["model"],
-        "tasks": {
-            "0": {
-                "cmd": "echo 0",
-                "result_dir": str(r0),
-                "params": {"model": "ridge"},
-                "cmd_sha": "deadbeef00",
-            },
-            "1": {
-                "cmd": "echo 1",
-                "result_dir": str(r1),
-                "params": {"model": "ridge"},
-                "cmd_sha": "deadbeef01",
-            },
-            "2": {
-                "cmd": "echo 2",
-                "result_dir": str(r2),
-                "params": {"model": "xgb"},
-                # No cmd_sha on task 2 -> should serialize as null.
-            },
-        },
-    }
-    path = tmp_path / "manifest.json"
-    path.write_text(json.dumps(manifest))
-    return path
+    hpc = tmp_path / ".hpc"
+    (hpc / "runs").mkdir(parents=True)
+    (hpc / "tasks.py").write_text(
+        '_TASKS = ['
+        '{"model": "ridge"}, {"model": "ridge"}, {"model": "xgb"}'
+        "]\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n"
+    )
+    sidecar = hpc / "runs" / f"{run_id}.json"
+    # result_dir_template renders to tmp_path/task_0, task_1, task_2 by
+    # using {task_id} (consuming the literal index) — matches the dirs
+    # we created above.
+    sidecar.write_text(json.dumps({
+        "sidecar_schema_version": 1,
+        "run_id": run_id,
+        "cmd_sha": "deadbeef" * 8,
+        "claude_hpc_version": "0.0.0+test",
+        "submitted_at": "2026-01-01T00:00:00Z",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "task_{task_id}"),
+        "task_count": 3,
+        "tasks_py_sha": "abc",
+    }))
+    return tmp_path, sidecar
 
 
-def _run_status(manifest_path: Path) -> tuple[int, str, str]:
-    """Invoke the status CLI in a subprocess; return (returncode, stdout, stderr)."""
-    repo_root = Path(__file__).resolve().parent.parent
+def _run_status(cwd: Path, run_id: str = "test_run") -> tuple[int, str, str]:
+    """Invoke the status CLI as a subprocess from *cwd*."""
     proc = subprocess.run(
         [
             sys.executable,
             "-m",
             "hpc_mapreduce.reduce.status",
-            "--manifest",
-            str(manifest_path),
+            "--run-id",
+            run_id,
             "--scheduler",
             "slurm",
             "--file-glob",
             "*.json",
         ],
-        cwd=str(repo_root),
+        cwd=str(cwd),
         capture_output=True,
         text=True,
         timeout=60,
@@ -78,8 +83,8 @@ def _run_status(manifest_path: Path) -> tuple[int, str, str]:
 
 class TestStatusCliContract:
     def test_stdout_is_valid_json_with_pinned_top_level_keys(self, tmp_path):
-        manifest_path = _build_minimal_manifest(tmp_path)
-        rc, out, err = _run_status(manifest_path)
+        cwd, _ = _build_minimal_run(tmp_path)
+        rc, out, err = _run_status(cwd)
         assert rc == 0, f"stderr={err}"
 
         doc = json.loads(out)
@@ -90,8 +95,8 @@ class TestStatusCliContract:
             assert k in doc, f"missing pinned key: {k}"
 
     def test_top_level_types_match_contract(self, tmp_path):
-        manifest_path = _build_minimal_manifest(tmp_path)
-        rc, out, _ = _run_status(manifest_path)
+        cwd, _ = _build_minimal_run(tmp_path)
+        rc, out, _ = _run_status(cwd)
         assert rc == 0
         doc = json.loads(out)
 
@@ -115,24 +120,30 @@ class TestStatusCliContract:
             assert "code" in e and isinstance(e["code"], str)
             assert "detail" in e and isinstance(e["detail"], str)
 
-    def test_cmd_sha_passed_through_when_present(self, tmp_path):
-        manifest_path = _build_minimal_manifest(tmp_path)
-        rc, out, _ = _run_status(manifest_path)
+    def test_per_task_cmd_sha_is_null_in_new_model(self, tmp_path):
+        """``cmd_sha`` lives at the run level (sidecar) now — per-task
+        entries always serialize ``null``."""
+        cwd, _ = _build_minimal_run(tmp_path)
+        rc, out, _ = _run_status(cwd)
         assert rc == 0
         doc = json.loads(out)
+        for tid, info in doc["tasks"].items():
+            assert info.get("cmd_sha") is None, f"task {tid} cmd_sha not null"
 
-        # Task 1 (1-based) corresponds to manifest index "0" which had cmd_sha.
-        assert doc["tasks"]["1"].get("cmd_sha") == "deadbeef00"
-        # Task 3 (manifest index "2") had no cmd_sha -> null in JSON.
-        assert doc["tasks"]["3"].get("cmd_sha") is None
-
-    def test_missing_manifest_still_emits_pinned_shape(self, tmp_path):
-        bogus = tmp_path / "does_not_exist.json"
-        rc, out, _ = _run_status(bogus)
-        # Non-zero exit, but stdout should still be the 4-key JSON doc
-        # so the orchestrator can parse it unconditionally.
+    def test_missing_sidecar_still_emits_pinned_shape(self, tmp_path):
+        """Even on a sidecar lookup miss, the JSON envelope must keep
+        its 4-key shape so the orchestrator can parse it unconditionally."""
+        # Materialize .hpc/tasks.py but no sidecar.
+        hpc = tmp_path / ".hpc"
+        (hpc / "runs").mkdir(parents=True)
+        (hpc / "tasks.py").write_text(
+            "_TASKS = [{}]\n"
+            "def total(): return 1\n"
+            "def resolve(i): return _TASKS[0]\n"
+        )
+        rc, out, _ = _run_status(tmp_path, run_id="does-not-exist")
         assert rc != 0
         doc = json.loads(out)
         for k in ("summary", "tasks", "rollup", "errors"):
             assert k in doc
-        assert doc["errors"], "expected at least one error for missing manifest"
+        assert doc["errors"], "expected at least one error for missing sidecar"

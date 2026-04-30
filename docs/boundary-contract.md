@@ -50,20 +50,58 @@ invariants in [`docs/sync-checklist.md`](sync-checklist.md) bind both.
 - `rsync_pull` — pull a remote directory to local.
 - `deploy_runtime` — stage the framework's runtime files on the cluster.
 
+### Framework subdirectory layout
+
+Every framework-generated artifact in an experiment repo lives under
+`.hpc/`. The only file the user is expected to author there is
+`tasks.py`; per-run sidecars in `.hpc/runs/` are generated and
+gitignored.
+
+- `HPC_SUBDIR` — `".hpc"`. The directory name itself; reserved (see
+  *Reserved filenames* below).
+- `TASKS_FILENAME` — `"tasks.py"`. The single file the user owns inside
+  `.hpc/`.
+- `RUNS_SUBDIR` — `"runs"`. Per-run sidecars live here.
+- `framework_subdir` — return `experiment_dir/.hpc`, mkdir it, and
+  write `.hpc/.gitignore` (ignoring `runs/`) on first call.
+- `runs_subdir` — return `experiment_dir/.hpc/runs`, mkdir it.
+- `tasks_path` — return `experiment_dir/.hpc/tasks.py` (does not create).
+- `load_tasks_module` — importlib helper that imports a `tasks.py` from
+  an arbitrary path; verifies the module exposes `total()` and
+  `resolve(task_id)`.
+
+### Per-run sidecars
+
+A sidecar `.hpc/runs/<run_id>.json` carries per-run state for one
+submission: `run_id`, `cmd_sha`, `claude_hpc_version`, `submitted_at`,
+`executor`, `result_dir_template`, `task_count`, `tasks_py_sha`,
+optional `wave_map`.
+
+- `MAX_RUNS` — maximum sidecars retained before pruning.
+- `SIDECAR_SCHEMA_VERSION` — current sidecar schema version.
+- `compute_cmd_sha` — hash the materialized task list of a `tasks.py`
+  module — the source of truth for run identity.
+- `compute_tasks_py_sha` — diagnostic hash of `tasks.py`'s bytes.
+- `write_run_sidecar` — write `.hpc/runs/<run_id>.json`.
+- `read_run_sidecar` — load a sidecar by run_id.
+- `find_existing_runs` — list sidecars newest-first.
+- `find_run_by_cmd_sha` — locate the newest sidecar matching a cmd_sha.
+- `prune_old_runs` — keep only the most recent `MAX_RUNS`.
+- `run_sidecar_path` — canonical path for a run_id (does not create).
+
 ### Job status & results
 
 - `check_results` — count completed/failed result files for a run.
-- `check_results_from_manifest` — same, keyed off a dispatch manifest.
+- `check_results_from_tasks` — same, but driven by a per-task dict
+  (synthesized from a per-run sidecar + `.hpc/tasks.py` by
+  `_build_per_task_dict_from_sidecar`). Used internally by the
+  cluster-side status reporter.
 - `report_status` — formatted status report for a submitted job.
-- `report_status_from_manifest` — manifest-driven variant.
+- `report_status_from_tasks` — same, but driven by the per-task dict
+  synthesized from sidecar + tasks.py. Used by the cluster-side
+  reporter and the live TUI.
 - `rollup_by_grid_point` — group per-task status into per-grid-point status.
 - `detect_scheduler` — identify the scheduler family on a remote host.
-
-### Shim cache
-
-- `shim_cache_key` — hash of the inputs that uniquely identify a shim.
-- `load_cached_shim` — fetch a previously-generated shim from the cache.
-- `save_shim` — store a generated shim under its cache key.
 
 ### GPU selection
 
@@ -78,30 +116,6 @@ invariants in [`docs/sync-checklist.md`](sync-checklist.md) bind both.
 - `reduce_partials` — fold partial / streaming metric files.
 - `reduce_resource_usage` — summarise CPU/mem/GPU usage across tasks.
 - `classify_failure` — categorise a task failure from its log.
-
-### Grid API
-
-- `expand_grid` — Cartesian product of a grid spec into per-task parameter
-  dicts.
-- `build_task_manifest` — produce the `_hpc_dispatch.json` manifest for a run.
-- `total_tasks` — count tasks in a grid spec.
-- `attach_wave_map` — annotate a manifest with throughput-optimizer waves.
-- `MANIFEST_SCHEMA_VERSION` — current schema version of the manifest format.
-- `resolve_git_sha` — short git SHA of the experiment repo (or `"nogit"`).
-- `validate_result_dir_template` — check `results.dir` placeholders resolve.
-
-### Manifest filenames & resume
-
-- `MAX_MANIFESTS` — maximum kept manifests before pruning.
-- `MANIFEST_ALIAS` — canonical alias filename pointing at the active manifest.
-- `manifest_filename_for_sha` — deterministic manifest filename for a cmd SHA.
-- `aggregate_cmd_sha` — content hash of the aggregation command.
-- `write_manifest` — persist a manifest to disk.
-- `find_existing_manifests` — list manifests in a result directory.
-- `find_manifest_by_cmd_sha` — locate a manifest by its cmd SHA.
-- `prune_old_manifests` — keep only the most recent `MAX_MANIFESTS`.
-- `build_manifest_with_resume` — manifest builder that reuses prior task IDs
-  on resubmit.
 
 ### Executor discovery
 
@@ -126,7 +140,7 @@ invariants in [`docs/sync-checklist.md`](sync-checklist.md) bind both.
 - `compact_task_ids` — collapse a task-id list into scheduler array syntax.
 - `ResubmitBatch` — one batch in a resubmit plan.
 - `ResubmitPlan` — full plan for resubmitting failed/missing tasks.
-- `resubmit_plan` — build a `ResubmitPlan` from a manifest + status.
+- `resubmit_plan` — build a `ResubmitPlan` from a `task_count` plus a list of `failed_task_ids`.
 
 ### Combiner
 
@@ -175,38 +189,39 @@ Everything outside the framework's public API. Concretely:
   put it).
 - **`hpc.yaml`** — optional per-experiment profile config (see
   [`docs/schema.md`](schema.md)).
-- **Generated shims** — `date_window_shim.py`, `chunking_shim.py`, or any
-  custom shim the LLM writes from the templates in
-  `hpc_mapreduce/templates/starters/`. These live in the experiment
-  repo, are versioned there, and are user-editable.
+- **`.hpc/tasks.py`** — the user-written Python module exposing
+  `total()` and `resolve(task_id)`. Authored once via `/submit`
+  Step 6's scaffolding flow (adapting the canonical example at
+  `hpc_mapreduce/templates/tasks_example.py`), git-tracked, and
+  user-editable. The bridge between the framework's task-id contract
+  and whatever parallelization axis the experiment needs.
 - **Domain-specific aggregation** — any `aggregate_cmd` the experiment
   defines for fan-in.
 
-A small set of files are **framework-generated artifacts** that land in the
-experiment repo at submit time but are not authored there:
-`_hpc_dispatch.json`, `_hpc_dispatch.py`, `_hpc_combiner.py`, and
-`hpc_chunking_shim.py`. They are produced by the framework, deployed to the
-cluster alongside the experiment code, and overwritten on each `/submit`.
+All framework-generated artifacts live under the **reserved
+directory `.hpc/`**:
 
-## Reserved filenames
+- `.hpc/tasks.py` — user-authored, git-tracked, the only file the user
+  edits in there.
+- `.hpc/runs/<run_id>.json` — per-run sidecar (gitignored).
+- `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py`,
+  `.hpc/templates/{cpu,gpu}_array.{sh,slurm}` — placed on the **cluster**
+  copy of `.hpc/` by `deploy_runtime`. They are not present in the
+  local `.hpc/` and are protected from rsync `--delete` by
+  `DEFAULT_RSYNC_EXCLUDES`.
 
-The framework reserves the following basenames inside experiment repos.
-Experiment authors must not create files with these names; the discovery
-scanner skips them so they are never misclassified as executors. The current
-source of truth is `_SKIP_BASENAMES` in
-[`hpc_mapreduce/job/discover.py`](../hpc_mapreduce/job/discover.py).
+## Reserved directories
 
-- `_hpc_dispatch.py` — the standalone dispatch script written by the
-  framework at submit time.
-- `_hpc_combiner.py` — the standalone combiner script written by the
-  framework when an aggregation step is configured.
-- `hpc_chunking_shim.py` — the framework's row-index chunking shim when the
-  user opts into chunked parallelism.
+The framework reserves the **`.hpc/` directory** inside experiment
+repos. The discovery scanner skips this directory wholesale via
+`_SKIP_DIRS` in
+[`hpc_mapreduce/job/discover.py`](../hpc_mapreduce/job/discover.py), so
+nothing inside it is misclassified as an executor. Experiment authors
+must not place user-code files (executors, libraries) under `.hpc/`.
 
-`__init__.py` also appears in `_SKIP_BASENAMES`, but that is a Python package
-convention (the discovery scanner skips it because package markers are not
-runnable executors), not a framework reservation. Experiment repos may use
-`__init__.py` freely.
+`_SKIP_BASENAMES` retains `__init__.py` so package markers are not
+treated as runnable executors. That is a Python package convention, not
+a framework reservation; experiment repos may use `__init__.py` freely.
 
 ## Import directions (allowed)
 

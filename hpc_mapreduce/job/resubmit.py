@@ -7,17 +7,21 @@ batching logic that lives in :mod:`hpc_mapreduce.job.throughput`.
 
 This module provides:
 
-* :func:`compact_task_ids` — pack a sorted list of 1-based task IDs into an
+* :func:`compact_task_ids` — pack a sorted list of task IDs into an
   ``sbatch``/``qsub`` array expression (``"3,7,12-14"`` etc.).
 * :class:`ResubmitPlan` / :class:`ResubmitBatch` — the resubmission
   analogue of :class:`~hpc_mapreduce.job.throughput.SubmissionPlan`, whose
   ``task_range`` strings can be *non-contiguous* since the failed IDs are
   arbitrary.
-* :func:`resubmit_plan` — build a :class:`ResubmitPlan` from a manifest and
-  a list of failed task IDs, reusing
+* :func:`resubmit_plan` — build a :class:`ResubmitPlan` from a known task
+  count and a list of failed task IDs, reusing
   :func:`~hpc_mapreduce.job.throughput.compute_submission_plan` to split the
   failures into batches that honour the cluster's ``max_array_size`` and
   ``max_concurrent_jobs`` limits.
+
+The framework executor still resolves per-task kwargs at runtime via
+``tasks.resolve(task_id)``, so resubmit doesn't need to know what the
+tasks actually are — only how many exist and which ones to retry.
 
 Only stdlib imports — keeps the library dep-free.
 """
@@ -38,7 +42,7 @@ __all__ = [
 
 
 def compact_task_ids(ids: list[int]) -> str:
-    """Compact a sorted list of 1-based task IDs into an array expression.
+    """Compact a sorted list of task IDs into an array expression.
 
     Examples
     --------
@@ -82,7 +86,7 @@ class ResubmitBatch:
     """
 
     batch_index: int
-    task_ids: tuple[int, ...]  # 1-based, sorted
+    task_ids: tuple[int, ...]  # sorted ascending
     wave: int
 
     @property
@@ -113,7 +117,8 @@ class ResubmitPlan:
 
 
 def resubmit_plan(
-    manifest: dict,
+    *,
+    task_count: int,
     failed_task_ids: list[int],
     overrides: dict | None = None,
     constraints: ClusterConstraints | None = None,
@@ -122,21 +127,19 @@ def resubmit_plan(
 
     Parameters
     ----------
-    manifest:
-        The original task manifest (as produced by
-        :func:`~hpc_mapreduce.job.grid.build_task_manifest`).  Used only to
-        validate that every ``failed_task_id`` is known — commands and
-        ``result_dir`` entries are reused directly by the backend at
-        submit time.
+    task_count:
+        Total number of tasks in the original run (i.e. ``tasks.total()``
+        materialized at submit time, mirrored in the per-run sidecar's
+        ``task_count`` field).  Used only to validate that every
+        ``failed_task_id`` is in ``range(task_count)``.
     failed_task_ids:
-        List of 1-based (or 0-based — see note) task IDs to retry.  The
-        manifest uses string keys; IDs are converted to strings when
-        looking them up.  Must be non-empty.
+        List of task IDs to retry.  Must be non-empty.  IDs are validated
+        as integers in ``[0, task_count)``.
     overrides:
         Optional scheduler overrides (e.g. ``{"mem": "32G",
-        "walltime": "12:00:00"}``) to be attached as metadata on the
-        returned plan.  The caller/backend is responsible for applying
-        these to the job template.
+        "walltime": "12:00:00"}``) attached as metadata on the returned
+        plan.  The caller/backend is responsible for applying these to
+        the job template.
     constraints:
         Optional cluster constraints governing batching.  Defaults to
         :class:`~hpc_mapreduce.job.constraints.ClusterConstraints` (i.e.
@@ -152,8 +155,8 @@ def resubmit_plan(
     Raises
     ------
     ValueError
-        If ``failed_task_ids`` is empty, or if any ID is absent from
-        ``manifest["tasks"]``.
+        If ``failed_task_ids`` is empty, or if any ID is outside
+        ``[0, task_count)``.
 
     Notes
     -----
@@ -161,30 +164,24 @@ def resubmit_plan(
     :func:`~hpc_mapreduce.job.throughput.compute_submission_plan`: we
     submit a :class:`~hpc_mapreduce.job.throughput.WorkloadSpec` with
     ``total_tasks = len(failed_task_ids)``, then map each resulting
-    ``JobBatch``'s contiguous ``task_start..task_end`` window (which
-    indexes into the sorted failed list, 1-based) back to the original
-    task IDs.  This avoids duplicating wave/max_array_size logic.
+    ``JobBatch``'s contiguous ``task_start..task_end`` window (1-based
+    indexes into the sorted failed list) back to the original task IDs.
     """
     if not failed_task_ids:
         raise ValueError("resubmit_plan requires at least one failed task id")
+    if task_count < 0:
+        raise ValueError(f"task_count must be non-negative, got {task_count}")
 
-    tasks = manifest.get("tasks", {})
-
-    # Validate every failed id is known in the manifest.
-    unknown: list[int] = []
-    for tid in failed_task_ids:
-        if str(tid) not in tasks:
-            unknown.append(tid)
+    unknown = [tid for tid in failed_task_ids if not 0 <= int(tid) < task_count]
     if unknown:
-        raise ValueError(f"failed_task_ids not present in manifest: {unknown}")
+        raise ValueError(
+            f"failed_task_ids out of range [0, {task_count}): {unknown}"
+        )
 
-    sorted_ids = sorted(failed_task_ids)
+    sorted_ids = sorted(int(tid) for tid in failed_task_ids)
     if constraints is None:
         constraints = ClusterConstraints()
 
-    # Delegate batching to the throughput planner.  It treats the failed
-    # count as a fresh workload of N contiguous tasks; we then translate
-    # each batch's 1-based index window back to the actual IDs.
     inner = compute_submission_plan(
         constraints,
         WorkloadSpec(total_tasks=len(sorted_ids)),
@@ -193,7 +190,7 @@ def resubmit_plan(
     batches: list[ResubmitBatch] = []
     for jb in inner.batches:
         # jb.task_start/task_end are 1-based inclusive indexes into the
-        # *sorted failed list* — not into the original manifest.
+        # *sorted failed list* — not into the original task space.
         slice_ids = tuple(sorted_ids[jb.task_start - 1 : jb.task_end])
         batches.append(
             ResubmitBatch(

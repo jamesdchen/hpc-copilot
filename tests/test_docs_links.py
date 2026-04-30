@@ -37,7 +37,7 @@ _BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 _DOC_VOCABULARY = {
     # Subcommands
     "submit", "status", "aggregate", "reconcile", "resubmit", "preflight",
-    "discover", "expand-grid", "list-in-flight", "clusters", "capabilities",
+    "discover", "list-in-flight", "clusters", "capabilities",
     "build-executor",
     # Envelope keys
     "ok", "data", "error_code", "category", "retry_safe", "remediation",
@@ -45,9 +45,10 @@ _DOC_VOCABULARY = {
     # Status fields
     "deduped", "lifecycle_state", "in_flight", "complete", "failed",
     "abandoned", "all_ok", "checks", "stderr_tail", "stdout_tail",
-    "ssh_auth_sock", "cluster_tcp_22", "experiment_id", "manifest_sha",
-    "run_id", "job_ids", "manifest_filename", "total_tasks", "profile",
+    "ssh_auth_sock", "cluster_tcp_22", "experiment_id",
+    "run_id", "job_ids", "total_tasks", "profile",
     "ssh_target", "remote_path", "job_name", "wave", "seed",
+    "executor", "cmd_sha", "tasks.py", "_TASKS", "lr", "i",
     "timestamp", "models", "rankings", "statistical_tests",
     "qsub", "sbatch",
     "last_status",
@@ -58,12 +59,12 @@ _DOC_VOCABULARY = {
     "true", "false", "null",
     # Tier names
     "scripts", "src", "probe.py", "meta.json", "metrics.json",
-    "results/metrics.json", "manifest.<sha8>.json",
+    "results/metrics.json",
     # Capabilities additions
     "mars_skill_paths", "required_env",
     # Categories
     "user", "cluster", "network", "internal",
-    # Manifest / submit-spec fields
+    # Submit-spec fields
     "cmd", "request_id",
 }
 
@@ -106,7 +107,7 @@ def test_mars_integration_error_codes_match_code() -> None:
     must_document = {
         "ssh_unreachable",
         "scheduler_throttled",
-        "manifest_invalid",
+        "spec_invalid",
         "cluster_unknown",
     }
     missing = must_document - seen_error_codes
@@ -133,7 +134,6 @@ def test_mars_docs_env_vars_match_capabilities() -> None:
 
     # Re-execute capabilities in-process to get the canonical list.
     import argparse
-    import json
     from unittest.mock import patch
 
     captured: list[dict] = []
@@ -173,9 +173,11 @@ def test_mars_snippet_does_not_claim_resubmit_non_idempotent() -> None:
 
 
 def test_mars_integration_does_not_track_uv_as_known_gap() -> None:
-    """``runtime: uv`` is honored end-to-end since MARs compat Tier 1
-    (build_task_manifest prefix + uv sync template preamble); the
-    integration doc must not still call it a 'known gap'."""
+    """``runtime: uv`` is honored end-to-end (the agent writes
+    ``uv run python ...`` into the per-run sidecar's ``executor`` field
+    and the four shipped templates run a ``uv sync`` preamble gated on
+    ``HPC_RUNTIME=uv``); the integration doc must not still call it a
+    'known gap'."""
     text = _doc_text(MARS_INTEGRATION)
     assert "track this as a known gap" not in text, (
         "docs/mars-integration.md still calls cluster-side uv run a "

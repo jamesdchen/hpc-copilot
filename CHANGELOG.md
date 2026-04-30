@@ -2,15 +2,35 @@
 
 ## Unreleased
 
+### Changed — major refactor: `.hpc/tasks.py` task model
+
+- **Collapsed the manifest + per-axis shim model into a single
+  user-written `.hpc/tasks.py`** exposing `total()` and
+  `resolve(task_id)`. The framework no longer ships a manifest format,
+  a `_hpc_dispatch.json`, a `MANIFEST_ALIAS`, a chunking shim, a
+  date-window shim, or any axis-enum spec block (`grid:`, `chunking:`,
+  `backtest:`). Per-experiment task definitions live as plain Python
+  the agent walks the user through writing once, committed to git in
+  `.hpc/tasks.py`. Per-run state moves to `.hpc/runs/<run_id>.json`
+  sidecars. Generic framework artifacts (`_hpc_dispatch.py`,
+  `_hpc_combiner.py`, scheduler templates) ship with the package and
+  are scp'd directly to the cluster's `.hpc/` by `deploy_runtime` —
+  the experiment repo never holds a copy.
+- **`error_code: "manifest_invalid"` renamed to `"spec_invalid"`** to
+  match the new layer it covers (the per-run sidecar plus
+  `tasks.py`). `HpcError` subclass `ManifestInvalid` renamed to
+  `SpecInvalid`. No back-compat alias — there are no MARs consumers
+  yet to break.
+- **Build-executor types reduced to `plain`.** The `chunked`,
+  `date-window`, and `shim` starter templates and matching
+  `--type` argparse values are gone; per-task fan-out lives inline in
+  `.hpc/tasks.py`, scaffolded by `/submit` Step 6 from the canonical
+  reference at `hpc_mapreduce/templates/tasks_example.py`.
+- **CLI flag rename.** `--manifest <path>` is now `--run-id <id>` on
+  every subcommand that addresses a per-run record.
+
 ### Added — reliability / correctness
 
-- **Pre-submit manifest sanity.** `submit` now validates the dispatch
-  manifest before recording the submission: schema_version, JSON
-  parseability, every task has a non-empty `cmd` and `result_dir` with
-  no `{placeholder}` remnants, `total_tasks` matches `len(tasks)`,
-  `wave_map` (if present) exactly covers tasks. Catches the entire
-  class of "looked fine locally, crashed mid-run" failures. Opt-out via
-  `--skip-manifest-check`.
 - **Stale-cache age field.** `status` and `list-in-flight` envelopes
   now carry `last_status_age_seconds` so consumers (humans + agents)
   can flag stale snapshots without changing freshness contracts.
@@ -28,15 +48,6 @@
   (timestamps, abs paths, pids, hex pointers), fingerprints the last
   non-empty line, and groups tasks sharing a fingerprint into clusters
   tagged with a category (`gpu_oom`, `walltime`, `import_error`, etc.).
-
-### Added — ergonomics
-
-- **Cost estimate on `expand-grid`.** New `--per-task-walltime`,
-  `--per-task-cpus`, `--per-task-gpus`, `--max-concurrent-tasks` flags
-  add a `cost_estimate` block to the envelope: total CPU-hours,
-  GPU-hours, and (when concurrency is provided) estimated wall-clock.
-  Lets users catch a 5000-CPU-hour grid before it lands on the
-  scheduler.
 
 ### Added — robustness
 
@@ -83,9 +94,9 @@
   `experiment_id`. Removes the manual overlay step from the MARs
   experiment-runner snippet.
 - **`HPC_RUNTIME` job-env wiring.** New
-  `slash_commands.runner.build_job_env(manifest, base_env)` returns
+  `slash_commands.runner.build_job_env(spec, base_env)` returns
   `base_env` augmented with `HPC_RUNTIME=uv` when `runtime: "uv"` is
-  on the manifest. The `/submit` slash command now constructs the
+  on the submit spec. The `/submit` slash command now constructs the
   `qsub` / `sbatch` env via this helper instead of inlining the gate
   logic. Closes the dangling end of Tier 1's `runtime: uv` work.
 - **Doc refresh + drift guards.** Removed two stale claims from the
@@ -111,11 +122,11 @@
   entrypoints) and the root-level `probe.py` (Tier-1) — never `src/`,
   honoring MARs's modules-only contract for that directory. Default
   behavior unchanged when the marker is absent.
-- **`runtime: uv` profile** in `build_task_manifest`. Opt-in cluster-side
-  `uv run` for every task command, with a `uv sync` preamble in all four
-  shipped job templates (SGE CPU/GPU, SLURM CPU/GPU) gated on the
-  `HPC_RUNTIME=uv` env var. Honors MARs's #1 invariant ("ALWAYS `uv run`
-  … NEVER `pip`"). Templates exit 2 with a clear diagnostic when uv is
+- **`runtime: uv` profile.** Opt-in cluster-side `uv run` for every
+  task command, with a `uv sync` preamble in all four shipped job
+  templates (SGE CPU/GPU, SLURM CPU/GPU) gated on the `HPC_RUNTIME=uv`
+  env var. Honors MARs's #1 invariant ("ALWAYS `uv run` … NEVER
+  `pip`"). Templates exit 2 with a clear diagnostic when uv is
   missing — much clearer than running tasks with the wrong Python.
 - **`schemas/discover.output.json`**: new file pinning the discover
   envelope's data shape (`executors` required, `meta` optional).
@@ -144,7 +155,7 @@
     that exits 0 but writes nothing now surfaces as `combiner_failed`
     immediately instead of producing a silent "successful" aggregate.
   - **Provenance** — the success envelope's `data` block always carries
-    a `provenance` object: `{run_id, manifest, wave, profile, cluster,
+    a `provenance` object: `{run_id, wave, profile, cluster,
     combined_at}`. When `--expect-output` is set, claude-hpc also
     writes a `_provenance.json` sidecar next to the output on the
     cluster (best-effort; envelope is the source of truth).

@@ -54,15 +54,14 @@ def _default_candidate_dirs(root: Path) -> tuple[str, ...]:
         return _MARS_CANDIDATE_DIRS
     return _DEFAULT_CANDIDATE_DIRS
 
-# Files we always skip — framework plumbing, caches, tests.
-_SKIP_BASENAMES = frozenset(
-    {
-        "__init__.py",
-        "_hpc_dispatch.py",
-        "_hpc_combiner.py",
-        "hpc_chunking_shim.py",
-    }
-)
+# Files we always skip — only ``__init__.py`` is interesting now that all
+# framework artifacts live under ``.hpc/`` (which is excluded wholesale by
+# the directory-name check in ``discover_executors``).
+_SKIP_BASENAMES = frozenset({"__init__.py"})
+
+# Directory names whose contents are never user code — framework
+# scaffolding, caches, build artifacts.
+_SKIP_DIRS = frozenset({".hpc", ".git", "__pycache__", ".mypy_cache"})
 
 
 @dataclass(frozen=True)
@@ -202,6 +201,10 @@ def discover_executors(
         iterator = d.rglob("*.py") if recursive else d.glob("*.py")
         for py in iterator:
             if py.name in _SKIP_BASENAMES:
+                continue
+            # Skip framework subdirs entirely — both reserved (.hpc/) and
+            # build/cache dirs that occasionally contain Python files.
+            if any(part in _SKIP_DIRS for part in py.parts):
                 continue
             resolved = py.resolve()
             if resolved in seen:

@@ -4,12 +4,11 @@
   "title": "submit output data",
   "description": "Shape of the `data` field on a successful `submit` envelope.",
   "type": "object",
-  "required": ["run_id", "job_ids", "manifest", "total_tasks", "deduped"],
+  "required": ["run_id", "job_ids", "total_tasks", "deduped"],
   "additionalProperties": false,
   "properties": {
-    "run_id":      { "type": "string", "pattern": "^[A-Za-z0-9_-]+_[0-9a-f]{8}$" },
+    "run_id":      { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
     "job_ids":     { "type": "array", "items": { "type": "string" } },
-    "manifest":    { "type": "string" },
     "total_tasks": { "type": "integer", "minimum": 0 },
     "deduped":     { "type": "boolean" }
   }
