@@ -100,7 +100,7 @@ End with a concise report: what was created, where, and the `/submit` command th
 
 ## Common executor patterns
 
-`templates/starters/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit`'s grid expansion treats any of these flags as grid-able when their values are passed as lists.
+`templates/starters/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit` Step 6 wires whichever of these flags the user wants to fan out across into `.hpc/tasks.py`'s `resolve()`.
 
 **(a) ML training executor** — fit on a date/index window, score against a horizon, write a metric.
 

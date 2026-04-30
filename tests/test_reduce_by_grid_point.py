@@ -191,9 +191,8 @@ class TestReducePartials:
         # reduce_partials path — simulate combiner output for same data
         combiner_dir = tmp_path / "_combiner"
         # Wave 0 has task 0, wave 1 has task 1.
-        # Inlined run_id (formerly hpc_mapreduce.job.grid.run_id) — the
-        # combiner's _grid_key has the same semantics; we use a local copy
-        # here to keep the test self-contained.
+        # Local copy of the combiner's _grid_key semantics, kept inline so
+        # the test stays self-contained.
         import re as _re
 
         def run_id(params):

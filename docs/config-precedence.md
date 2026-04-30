@@ -75,9 +75,9 @@ Notes:
   reused on every submit.
 - **No env override** — the axis is part of the experiment's source
   code, not its environment.
-- There is no longer an `expand-grid` CLI subcommand. Cartesian
-  products are the user's responsibility — write `itertools.product`
-  inline in `.hpc/tasks.py` if that's the axis you want.
+- Cartesian products, chunking, etc. are the user's responsibility —
+  write `itertools.product`, slicing, or whatever shape fits inside
+  `.hpc/tasks.py`. The framework provides no axis primitives.
 
 ### Resource overrides (mem, walltime, gpus, gpu_type)
 
