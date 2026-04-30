@@ -1,6 +1,6 @@
 """Per-run sidecars and ``cmd_sha`` computation.
 
-Replaces the old manifest model. Each ``/submit`` writes a JSON sidecar to
+Each ``/submit`` writes a JSON sidecar to
 ``$EXPERIMENT/.hpc/runs/<run_id>.json`` carrying audit-trail metadata for
 the run: identity, executor command, result-dir template, materialized
 task count, and the wave map computed by the throughput optimizer.

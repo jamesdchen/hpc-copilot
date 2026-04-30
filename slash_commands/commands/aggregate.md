@@ -31,7 +31,7 @@ Determine cluster and connection:
 
 Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
 
-Load the run's identity and task definition. Two files together carry what used to live in the dispatch manifest:
+Load the run's identity and task definition. Two files together describe the run:
 
 - `.hpc/runs/<run_id>.json` — the per-run sidecar: cmd_sha, executor, `result_dir_template`, task_count, wave_map.
 - `.hpc/tasks.py` — the user's `total()` / `resolve(task_id)` module. Per-task kwargs (the "grid point") come from `tasks.resolve(i)`; per-task `result_dir` is the sidecar's template formatted against `task_id` + `run_id` + kwargs.

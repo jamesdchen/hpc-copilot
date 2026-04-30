@@ -352,7 +352,7 @@ sidecar_path = write_run_sidecar(
 
 For multi-executor submissions, write one sidecar per executor — `run_id` and `executor` differ, but `tasks.py` is per-experiment and may be shared if the axes match.
 
-`write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 10). The framework does **not** maintain a `manifest.json` symlink anymore — there is no manifest. Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
+`write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 10). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
 
 ## Step 7: Sync to Cluster
 

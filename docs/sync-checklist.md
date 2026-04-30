@@ -19,9 +19,8 @@ update both surfaces and bump the version.
 - **Validation**: `hpc_mapreduce.job.runs.run_sidecar_path` accepts any
   string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
   sidecars sorted chronologically by mtime ↔ filename.
-- **Defined in**: `slash_commands/runner.py:submit_and_record` (callers
-  pass `run_id` directly; the legacy `manifest_filename` derivation
-  remains for back-compat with old CLI specs).
+- **Defined in**: `slash_commands/runner.py:submit_and_record` —
+  `run_id` is a required keyword.
 - **Public contract**: MARs and orchestrator agents may key state on
   this. Renaming the format breaks every downstream consumer.
 
@@ -135,8 +134,8 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
   root; see `docs/boundary-contract.md`.
 - **Retention**: `MAX_RUNS = 10`, oldest by mtime evicted on every
   write.
-- **No alias**: there is no `manifest.json` symlink. Run identity is
-  the `run_id` string, addressable directly at `.hpc/runs/<run_id>.json`.
+- **Identity**: the `run_id` string is the sole identifier; sidecars
+  are addressable directly at `.hpc/runs/<run_id>.json`.
 
 ## How to extend
 

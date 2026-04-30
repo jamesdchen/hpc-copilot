@@ -72,11 +72,10 @@ gitignored.
 
 ### Per-run sidecars
 
-A sidecar `.hpc/runs/<run_id>.json` carries per-run state previously
-embedded in the manifest header (`run_id`, `cmd_sha`,
-`claude_hpc_version`, `submitted_at`, `executor`,
-`result_dir_template`, `task_count`, `tasks_py_sha`, optional
-`wave_map`).
+A sidecar `.hpc/runs/<run_id>.json` carries per-run state for one
+submission: `run_id`, `cmd_sha`, `claude_hpc_version`, `submitted_at`,
+`executor`, `result_dir_template`, `task_count`, `tasks_py_sha`,
+optional `wave_map`.
 
 - `MAX_RUNS` — maximum sidecars retained before pruning.
 - `SIDECAR_SCHEMA_VERSION` — current sidecar schema version.
