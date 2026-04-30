@@ -1,8 +1,8 @@
 # claude-hpc
 
-HPC orchestrator for parameter-grid experiments on SGE/SLURM clusters. Two surfaces over one core:
+HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
-- **Slash commands for humans** in Claude Code (`/submit`, `/status`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, prompts you for cluster + grid params.
+- **Slash commands for humans** in Claude Code (`/submit`, `/status`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, walks you through choosing a cluster and authoring `.hpc/tasks.py`.
 - **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs).
 
 Both go through the same atomic-ops layer (`slash_commands/runner.py`), so cross-surface state (in-flight runs, journal records) is shared automatically.
@@ -73,7 +73,7 @@ Each executor accepts experiment-specific arguments (`--horizon`, `--start`, `--
 
 ```
 /preflight → verify SSH agent + cluster reachability before first submit
-/submit    → discovers executors, builds grid conversationally, syncs code, submits
+/submit    → discovers executors, walks you through .hpc/tasks.py, syncs code, submits
 /status    → tracks completion per grid point, diagnoses failures, auto-resubmits
 /aggregate → validates completeness, runs aggregation, downloads summaries
 ```

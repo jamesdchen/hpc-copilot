@@ -1,8 +1,9 @@
 """hpc-mapreduce: MapReduce-style HPC orchestrator for Claude Code.
 
 Provides pluggable HPC backends (SGE, SLURM), remote execution utilities,
-GPU selection, and experiment-agnostic grid dispatch. Cluster infrastructure
-is configured via clusters.yaml; experiment setup is conversational.
+GPU selection, and array-batch dispatch driven by a user-written
+``.hpc/tasks.py``. Cluster infrastructure is configured via
+``clusters.yaml``; experiment setup is conversational.
 """
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version

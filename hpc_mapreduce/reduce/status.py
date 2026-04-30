@@ -47,14 +47,11 @@ __all__ = [
 
 import glob
 import json
-import logging
 import os
 import subprocess
 from pathlib import Path
 
 from hpc_mapreduce._time import utcnow_iso
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Result checking

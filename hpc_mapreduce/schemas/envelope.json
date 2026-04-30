@@ -33,6 +33,7 @@
             "config_invalid",
             "combiner_failed",
             "cluster_timeout",
+            "outputs_missing",
             "internal"
           ]
         },
