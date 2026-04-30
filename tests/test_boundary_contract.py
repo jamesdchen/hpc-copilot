@@ -244,7 +244,7 @@ def _imported_dotted_modules(path: Path) -> set[str]:
 
     Like :func:`_imported_top_level_modules` but returns the full dotted name
     so callers can distinguish ``hpc_mapreduce.map.metrics_io`` (a deployed
-    runtime module) from ``hpc_mapreduce.job.grid`` (framework-internal).
+    runtime module) from ``hpc_mapreduce.job.runs`` (framework-internal).
     """
     source = path.read_text(encoding="utf-8")
     try:

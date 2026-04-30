@@ -92,7 +92,7 @@ Parse `$ARGUMENTS` or the user's natural language request:
 | "run ridge" | Select `ml_ridge.py` |
 | "all ML models" | Select all `ml_*.py` executors |
 | "subgroup analysis with ridge and xgboost" | Select `ml_ridge.py` + `ml_xgboost.py`, grid over subgroups |
-| "sweep horizons 1, 5, 25 on lightgbm" | Select `ml_lightgbm.py`, grid: horizon=[1, 5, 25] |
+| "sweep horizons 1, 5, 25 on lightgbm" | Select `ml_lightgbm.py`, fan out over `horizon ∈ [1, 5, 25]` (3 tasks) |
 
 **Flags:**
 - `--no-canary` — skip the Step 7b 1-task canary submission. Default behavior is canary-on; only skip when the user has already smoke-tested the pipeline within the last session or is deliberately re-submitting a known-good pipeline.
