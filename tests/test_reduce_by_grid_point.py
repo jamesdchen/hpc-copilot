@@ -32,7 +32,7 @@ class TestReduceByGridPoint:
         _write_metrics(r1, {"mse": 0.10, "n_samples": 100})
         _write_metrics(r2, {"mse": 0.20, "n_samples": 100})
 
-        manifest = {
+        tasks_data = {
             "tasks": {
                 "0": {
                     "params": {"model": "ridge", "horizon": "1"},
@@ -47,7 +47,7 @@ class TestReduceByGridPoint:
             }
         }
 
-        result = reduce_by_grid_point(manifest)
+        result = reduce_by_grid_point(tasks_data)
         assert len(result) == 1
         key = list(result.keys())[0]
         # Weighted average of 0.10 and 0.20 with equal weights
@@ -62,19 +62,19 @@ class TestReduceByGridPoint:
         _write_metrics(r1, {"mse": 0.10, "n_samples": 50})
         _write_metrics(r2, {"mse": 0.30, "n_samples": 50})
 
-        manifest = {
+        tasks_data = {
             "tasks": {
                 "0": {"params": {"model": "ridge"}, "result_dir": str(r1)},
                 "1": {"params": {"model": "xgb"}, "result_dir": str(r2)},
             }
         }
 
-        result = reduce_by_grid_point(manifest)
+        result = reduce_by_grid_point(tasks_data)
         assert len(result) == 2
 
     def test_missing_metrics_returns_empty(self, tmp_path):
         """Grid points with no metrics.json get empty dicts."""
-        manifest = {
+        tasks_data = {
             "tasks": {
                 "0": {
                     "params": {"model": "ridge"},
@@ -82,7 +82,7 @@ class TestReduceByGridPoint:
                 },
             }
         }
-        result = reduce_by_grid_point(manifest)
+        result = reduce_by_grid_point(tasks_data)
         assert len(result) == 1
         assert result[list(result.keys())[0]] == {}
 
@@ -94,7 +94,7 @@ class TestReduceByGridPoint:
         _write_metrics(r1, {"mse": 0.10, "n_samples": 100})
         _write_metrics(r2, {"mse": 0.30, "n_samples": 300})
 
-        manifest = {
+        tasks_data = {
             "tasks": {
                 "0": {
                     "params": {"model": "ridge"},
@@ -109,7 +109,7 @@ class TestReduceByGridPoint:
             }
         }
 
-        result = reduce_by_grid_point(manifest)
+        result = reduce_by_grid_point(tasks_data)
         key = list(result.keys())[0]
         # Weighted: (0.10*100 + 0.30*300) / 400 = 100/400 = 0.25
         assert abs(result[key]["mse"] - 0.25) < 1e-9
@@ -172,7 +172,7 @@ class TestReducePartials:
         _write_metrics(r2, {"mse": 0.30, "n_samples": 300})
 
         # reduce_by_grid_point path
-        manifest = {
+        tasks_data = {
             "tasks": {
                 "0": {
                     "params": {"model": "ridge"},
@@ -186,7 +186,7 @@ class TestReducePartials:
                 },
             }
         }
-        bt_result = reduce_by_grid_point(manifest)
+        bt_result = reduce_by_grid_point(tasks_data)
 
         # reduce_partials path — simulate combiner output for same data
         combiner_dir = tmp_path / "_combiner"

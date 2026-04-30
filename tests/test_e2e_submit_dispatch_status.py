@@ -5,8 +5,8 @@ subprocess-invoking the deployed ``.hpc/_hpc_dispatch.py`` with
 ``HPC_TASK_ID`` / ``HPC_RUN_ID`` env vars. Exercises the full primitive
 chain in a single pytest run.
 
-The reporting side still consumes a manifest-shaped dict;
-``_synthetic_manifest`` builds one from the sidecar + tasks.py the same
+The reporting side still consumes a per-task dict;
+``_synthetic_per_task_dict`` builds one from the sidecar + tasks.py the same
 way ``hpc_mapreduce.reduce.status._build_per_task_dict_from_sidecar``
 does on the cluster, so the existing ``check_results_from_tasks``
 contract is unchanged.
@@ -88,7 +88,7 @@ def _materialize_run(
     return dispatch_dst, kwargs_per_task, result_dir_template
 
 
-def _synthetic_manifest(
+def _synthetic_per_task_dict(
     kwargs_per_task: list[dict],
     *,
     result_dir_template: str,
@@ -138,22 +138,22 @@ def pipeline(tmp_path: Path) -> dict:
             f"dispatch failed for task {tid}: stdout={proc.stdout!r} stderr={proc.stderr!r}"
         )
 
-    manifest = _synthetic_manifest(
+    tasks_data = _synthetic_per_task_dict(
         kwargs_per_task, result_dir_template=result_dir_template
     )
     return {
         "tmp_path": tmp_path,
-        "manifest": manifest,
+        "tasks_data": tasks_data,
         "kwargs_per_task": kwargs_per_task,
     }
 
 
 class TestPipelineAllComplete:
     def test_every_task_reports_complete(self, pipeline: dict) -> None:
-        manifest = pipeline["manifest"]
-        results = check_results_from_tasks(manifest, file_glob="*.csv")
+        tasks_data = pipeline["tasks_data"]
+        results = check_results_from_tasks(tasks_data, file_glob="*.csv")
         # check_results_from_tasks returns 1-based task IDs.
-        expected = set(range(1, manifest["total_tasks"] + 1))
+        expected = set(range(1, tasks_data["total_tasks"] + 1))
         assert set(results) == expected, (
             f"expected complete tids {sorted(expected)}, got {sorted(results)}"
         )
@@ -175,17 +175,17 @@ class TestSidecarLayout:
 
 class TestPoisonedTaskDetected:
     def test_deleting_one_result_flips_status(self, pipeline: dict) -> None:
-        manifest = pipeline["manifest"]
+        tasks_data = pipeline["tasks_data"]
 
-        initial = check_results_from_tasks(manifest, file_glob="*.csv")
-        assert len(initial) == manifest["total_tasks"]
+        initial = check_results_from_tasks(tasks_data, file_glob="*.csv")
+        assert len(initial) == tasks_data["total_tasks"]
 
         # Poison task 0 by removing its result file.
-        task0 = manifest["tasks"]["0"]
+        task0 = tasks_data["tasks"]["0"]
         victim = Path(task0["result_dir"]) / "results.csv"
         assert victim.exists(), "pre-condition: stub must have produced results.csv"
         victim.unlink()
 
-        after = check_results_from_tasks(manifest, file_glob="*.csv")
+        after = check_results_from_tasks(tasks_data, file_glob="*.csv")
         assert 1 not in after, f"task 1 should no longer be complete after poisoning, got {after}"
-        assert len(after) == manifest["total_tasks"] - 1
+        assert len(after) == tasks_data["total_tasks"] - 1
