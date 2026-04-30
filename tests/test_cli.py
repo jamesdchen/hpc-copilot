@@ -148,7 +148,7 @@ def test_missing_spec_required_field_returns_user_error(tmp_path: Path) -> None:
     assert rc == 1
     env = _parse_envelope(out)
     assert env["ok"] is False
-    assert env["error_code"] == "manifest_invalid"
+    assert env["error_code"] == "spec_invalid"
 
 
 # ─── submit dry-run + dedup contract ───────────────────────────────────────
@@ -419,7 +419,7 @@ def test_submit_spec_with_wrong_type_fails_with_schema_message(tmp_path: Path) -
     )
     assert rc != 0
     payload = _parse_envelope(out)
-    assert payload["error_code"] == "manifest_invalid"
+    assert payload["error_code"] == "spec_invalid"
 
 
 # ─── Bug 17: cmd_resubmit rejects categories outside the documented enum ─
@@ -448,7 +448,7 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     )
     assert rc != 0
     payload = _parse_envelope(out)
-    assert payload["error_code"] == "manifest_invalid"
+    assert payload["error_code"] == "spec_invalid"
 
 
 # ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
@@ -540,7 +540,7 @@ def test_logs_requires_task_id_or_all_failed(tmp_path: Path) -> None:
     )
     assert rc != 0
     payload = _parse_envelope(out)
-    assert payload["error_code"] == "manifest_invalid"
+    assert payload["error_code"] == "spec_invalid"
 
 
 def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
@@ -1017,18 +1017,18 @@ class TestSubmitFromMeta:
             "--from-meta",
             env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
         )
-        # Spec is incomplete and no overlay applied; expect manifest_invalid.
+        # Spec is incomplete and no overlay applied; expect spec_invalid.
         assert rc == 1, out
         env = _parse_envelope(out)
         assert env["ok"] is False
-        assert env["error_code"] == "manifest_invalid"
+        assert env["error_code"] == "spec_invalid"
 
     def test_from_meta_off_by_default(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         spec = self._write_spec(tmp_path)  # no profile, no job_name
         self._write_meta(tmp_path, experiment_id="run-001-foo")
-        # Flag NOT set: existing behavior (incomplete spec → manifest_invalid).
+        # Flag NOT set: existing behavior (incomplete spec → spec_invalid).
         rc, out, _ = _run_cli(
             "submit",
             "--experiment-dir", str(tmp_path),
@@ -1038,4 +1038,4 @@ class TestSubmitFromMeta:
         assert rc == 1, out
         env = _parse_envelope(out)
         assert env["ok"] is False
-        assert env["error_code"] == "manifest_invalid"
+        assert env["error_code"] == "spec_invalid"

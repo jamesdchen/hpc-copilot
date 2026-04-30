@@ -29,7 +29,7 @@ Invoke the on-cluster combiner for one wave of a run, pull the combined artifact
 
 6. On error envelopes:
    - `journal_corrupt` — `run_id` not found. Stop.
-   - `manifest_invalid` (user) — `--wave` missing or non-int. Fix arguments.
+   - `spec_invalid` (user) — `--wave` missing or non-int. Fix arguments.
    - `ssh_unreachable` (network, retry_safe: true) — retry after preflight.
    - `remote_command_failed` (cluster) — same as `data.combined: false`; treat as combiner failure.
 

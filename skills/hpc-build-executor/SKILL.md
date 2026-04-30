@@ -28,7 +28,7 @@ Materialize one of the bundled starter templates (`plain` executor, `chunked` sh
    - `data.source` — path of the template the bytes came from.
 
 5. On error envelopes:
-   - `manifest_invalid` (user) — destination already exists and `--force` not set, or `--type` is unrecognized. Either pick a new `--name` or pass `--force`.
+   - `spec_invalid` (user) — destination already exists and `--force` not set, or `--type` is unrecognized. Either pick a new `--name` or pass `--force`.
    - `config_invalid` — template missing on disk (a packaging bug). Surface to caller; do not retry.
    - `executor_not_found` — the `--output-dir` parent path is unwritable.
 
@@ -46,4 +46,4 @@ Materialize one of the bundled starter templates (`plain` executor, `chunked` sh
 - Not idempotent: each successful call writes a file. Re-running with `--force` overwrites; without `--force` it errors. The envelope reports `idempotent: false`.
 - Read-only with respect to the cluster — no SSH, no journal writes, no qsub. SSH env passthrough is not required for this skill.
 - After scaffolding and customizing, the executor is auto-discovered by `hpc-discover` / `hpc-submit` if it lands in `executors/`, `scripts/`, or `src/` and has both an `if __name__ == "__main__":` guard and a CLI import (argparse/click/typer/fire).
-- Exit codes: 0 ok, 1 user error (`manifest_invalid`, `executor_not_found`), 3 internal.
+- Exit codes: 0 ok, 1 user error (`spec_invalid`, `executor_not_found`), 3 internal.

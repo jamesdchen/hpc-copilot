@@ -103,7 +103,7 @@ def test_submit_and_record_dedups_replay(journal_home, experiment):
 
 def test_submit_and_record_rejects_empty_run_id(journal_home, experiment):
     """An empty run_id is a programmer error and must surface immediately."""
-    with pytest.raises(errors.ManifestInvalid, match="non-empty run_id"):
+    with pytest.raises(errors.SpecInvalid, match="non-empty run_id"):
         runner.submit_and_record(
             experiment,
             profile="ml_ridge",

@@ -34,7 +34,7 @@ Submit a recorded run via the `hpc-mapreduce` CLI. The CLI is idempotent on `run
    ```bash
    hpc-mapreduce submit --spec spec.json --dry-run --experiment-dir <path>
    ```
-   On `ok: true`, `data.would_launch` reports the task count. On `ok: false` with `error_code: manifest_invalid`, fix the spec.
+   On `ok: true`, `data.would_launch` reports the task count. On `ok: false` with `error_code: spec_invalid`, fix the spec.
 
 7. Submit for real:
    ```bash
@@ -47,7 +47,7 @@ Submit a recorded run via the `hpc-mapreduce` CLI. The CLI is idempotent on `run
 8. On error envelopes, decide by `error_code`:
    - `ssh_unreachable` (category: network, retry_safe: true) — re-run preflight; retry after fix.
    - `scheduler_throttled` (cluster, retry_safe: true) — wait at least 1s, retry the same spec (idempotency protects against double-submit).
-   - `manifest_invalid` (user, retry_safe: false) — fix the spec; do not retry as-is.
+   - `spec_invalid` (user, retry_safe: false) — fix the spec; do not retry as-is.
    - `cluster_unknown` (user) — fix the cluster name in spec.
    - `internal` — surface to the caller; do not retry.
 

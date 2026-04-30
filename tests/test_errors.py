@@ -22,7 +22,7 @@ DOCUMENTED_ERROR_CODES = frozenset(
     {
         "ssh_unreachable",
         "scheduler_throttled",
-        "manifest_invalid",
+        "spec_invalid",
         "executor_not_found",
         "cluster_unknown",
         "journal_corrupt",
@@ -39,7 +39,7 @@ DOCUMENTED_ERROR_CODES = frozenset(
 EXPECTED_SUBCLASSES = {
     "ssh_unreachable": errors.SshUnreachable,
     "scheduler_throttled": errors.SchedulerThrottled,
-    "manifest_invalid": errors.ManifestInvalid,
+    "spec_invalid": errors.SpecInvalid,
     "executor_not_found": errors.ExecutorNotFound,
     "cluster_unknown": errors.ClusterUnknown,
     "journal_corrupt": errors.JournalCorrupt,

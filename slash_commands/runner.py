@@ -86,7 +86,7 @@ def submit_and_record(
     returned ``deduped`` flag before issuing them.
     """
     if not run_id:
-        raise errors.ManifestInvalid("submit_and_record requires a non-empty run_id")
+        raise errors.SpecInvalid("submit_and_record requires a non-empty run_id")
 
     existing = session.load_run(experiment_dir, run_id)
     if existing is not None:
