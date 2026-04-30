@@ -26,7 +26,7 @@ update both surfaces and bump the version.
 
 ### `error_code` enum
 
-The full set of 9 values that may appear in an error envelope's
+The full set of 12 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
 `slash_commands/errors.py`.
 
@@ -40,6 +40,9 @@ The full set of 9 values that may appear in an error envelope's
 | `journal_corrupt` | `JournalCorrupt` | internal | no |
 | `remote_command_failed` | `RemoteCommandFailed` | cluster | no |
 | `config_invalid` | `ConfigInvalid` | user | no |
+| `combiner_failed` | `CombinerFailed` | cluster | yes |
+| `cluster_timeout` | `ClusterTimeout` | cluster | yes |
+| `outputs_missing` | `OutputsMissing` | cluster | yes |
 | `internal` | `HpcError` (base / catch-all) | internal | no |
 
 The same enum appears in `hpc_mapreduce/schemas/envelope.json`. Adding

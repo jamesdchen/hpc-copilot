@@ -20,8 +20,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from hpc_mapreduce import _PACKAGE_ROOT
 from hpc_mapreduce.job.discover import (
     ExecutorInfo,
@@ -126,13 +124,11 @@ class TestIsExecutorSource:
 # ─── Template parseability ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("template_name", ["executor_template.py"])
-def test_template_is_valid_python(template_name: str) -> None:
-    path = TEMPLATES_DIR / template_name
+def test_executor_template_is_valid_python() -> None:
+    path = TEMPLATES_DIR / "executor_template.py"
     assert path.is_file(), f"missing template: {path}"
-    source = path.read_text(encoding="utf-8")
     # Must parse cleanly — /build-executor copies this verbatim.
-    ast.parse(source)
+    ast.parse(path.read_text(encoding="utf-8"))
 
 
 def test_tasks_example_is_valid_python_and_exposes_total_resolve() -> None:

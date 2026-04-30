@@ -43,7 +43,7 @@ JSON Schema, not parse this markdown.
 ```json
 {
   "ok": false,
-  "error_code": "<one of 9>",
+  "error_code": "<one of 12>",
   "message": "<human-readable>",
   "category": "user|cluster|network|internal",
   "retry_safe": <bool>,
@@ -62,7 +62,7 @@ Wired in `hpc_mapreduce/cli.py` (`_EXIT_CODE_BY_CATEGORY`).
 |---|---|---|---|
 | 0 | — | success | (no error envelope) |
 | 1 | `user` | caller-fixable | `spec_invalid`, `executor_not_found`, `cluster_unknown`, `config_invalid` |
-| 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `scheduler_throttled`, `remote_command_failed` |
+| 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `scheduler_throttled`, `remote_command_failed`, `combiner_failed`, `cluster_timeout`, `outputs_missing` |
 | 3 | `internal` | bug in framework or corrupt state | `journal_corrupt`, `internal` |
 
 `preflight` returns 2 when any check fails (it is a `cluster`-class
