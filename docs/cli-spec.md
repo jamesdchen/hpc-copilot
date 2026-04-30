@@ -61,7 +61,7 @@ Wired in `hpc_mapreduce/cli.py` (`_EXIT_CODE_BY_CATEGORY`).
 | Exit | Category | Meaning | error_codes that map here |
 |---|---|---|---|
 | 0 | — | success | (no error envelope) |
-| 1 | `user` | caller-fixable | `manifest_invalid`, `executor_not_found`, `cluster_unknown`, `config_invalid` |
+| 1 | `user` | caller-fixable | `spec_invalid`, `executor_not_found`, `cluster_unknown`, `config_invalid` |
 | 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `scheduler_throttled`, `remote_command_failed` |
 | 3 | `internal` | bug in framework or corrupt state | `journal_corrupt`, `internal` |
 
@@ -317,7 +317,7 @@ Optional `runtime` accepts `"uv"` or `null` (default). When `"uv"`,
  "run_id": "sweep-20260428-153012-3a7b8c9d", "dry_run": true}
 ```
 
-Idempotent: yes. Error codes: `manifest_invalid` (missing required
+Idempotent: yes. Error codes: `spec_invalid` (missing required
 fields), `config_invalid` (spec unreadable), `journal_corrupt`. Exit: 0 / 1 / 3.
 
 ### `aggregate`
@@ -349,7 +349,7 @@ Args:
 ```
 
 Idempotent: yes on success (`combined=true` is recorded once). Error
-codes: `journal_corrupt` (no record), `manifest_invalid` (missing
+codes: `journal_corrupt` (no record), `spec_invalid` (missing
 `--wave`), `ssh_unreachable`, `remote_command_failed`. Exit: 0 on
 success, 2 if combiner failed.
 
@@ -383,7 +383,7 @@ Args: `--experiment-dir`, `--run-id <id>` (required), `--spec spec.json` (requir
 ```
 
 Idempotent: **no** — each call increments per-task `attempts`. Error
-codes: `manifest_invalid` (empty `failed_task_ids`, missing `category`),
+codes: `spec_invalid` (empty `failed_task_ids`, missing `category`),
 `journal_corrupt` (no record). Exit: 0 / 1 / 3.
 
 ### `reconcile`
@@ -438,6 +438,6 @@ through adapting it during `/submit` Step 6.
 `data` shape: `{"path": "/abs/.../<name>.py", "type": "plain", "source": "/abs/.../executor_template.py"}`.
 
 Idempotent: **no** — file creation has side effects, refuses to
-overwrite without `--force`. Error codes: `manifest_invalid` (unknown
+overwrite without `--force`. Error codes: `spec_invalid` (unknown
 type, refusing overwrite), `config_invalid` (template missing on disk).
 Exit: 0 / 1.

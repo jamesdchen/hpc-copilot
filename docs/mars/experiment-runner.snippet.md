@@ -173,7 +173,7 @@ After all waves are combined, read the per-task outputs from
 | `cluster_timeout`       | Backoff 4s → 8s → 16s, max 3 retries.                        |
 | `combiner_failed`       | Single retry after inspecting `stderr_tail`; else surface.   |
 | `remote_command_failed` | Surface with `stderr_tail`; do not auto-retry.               |
-| `manifest_invalid`      | Surface; the spec is wrong. Regenerate.                      |
+| `spec_invalid`      | Surface; the spec is wrong. Regenerate.                      |
 | `executor_not_found`    | Surface; check executor path under `scripts/`.               |
 | `cluster_unknown`       | Surface; run `clusters list` to recover.                     |
 | `config_invalid`        | Surface; clusters.yaml or hpc.yaml is malformed.             |

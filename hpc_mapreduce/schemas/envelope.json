@@ -25,7 +25,7 @@
           "enum": [
             "ssh_unreachable",
             "scheduler_throttled",
-            "manifest_invalid",
+            "spec_invalid",
             "executor_not_found",
             "cluster_unknown",
             "journal_corrupt",

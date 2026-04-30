@@ -34,7 +34,7 @@ The full set of 9 values that may appear in an error envelope's
 |---|---|---|---|
 | `ssh_unreachable` | `SshUnreachable` | network | yes |
 | `scheduler_throttled` | `SchedulerThrottled` | cluster | yes |
-| `manifest_invalid` | `ManifestInvalid` | user | no |
+| `spec_invalid` | `SpecInvalid` | user | no |
 | `executor_not_found` | `ExecutorNotFound` | user | no |
 | `cluster_unknown` | `ClusterUnknown` | user | no |
 | `journal_corrupt` | `JournalCorrupt` | internal | no |

@@ -107,7 +107,7 @@ def test_mars_integration_error_codes_match_code() -> None:
     must_document = {
         "ssh_unreachable",
         "scheduler_throttled",
-        "manifest_invalid",
+        "spec_invalid",
         "cluster_unknown",
     }
     missing = must_document - seen_error_codes

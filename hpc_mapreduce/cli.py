@@ -130,7 +130,7 @@ def _load_spec(
     Validation is opt-in via *schema_name* so callers without a matching
     schema (e.g. ad-hoc dicts) still work, but every CLI subcommand that
     has one in ``hpc_mapreduce/schemas/<name>.input.json`` should pass
-    it.  Validation failures map to ``ManifestInvalid`` with the schema
+    it.  Validation failures map to ``SpecInvalid`` with the schema
     field path in the message — far more useful to a calling agent than
     the Python ``int("abc")`` traceback we used to surface.
     """
@@ -156,7 +156,7 @@ def _load_spec(
 def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
     """Validate *payload* against ``hpc_mapreduce/schemas/<schema_name>.input.json``.
 
-    Raises :class:`errors.ManifestInvalid` on schema mismatch.  When the
+    Raises :class:`errors.SpecInvalid` on schema mismatch.  When the
     ``jsonschema`` library is unavailable (older installs that haven't
     picked up the runtime dep), this falls back to a no-op so the CLI
     keeps working — schema validation is defence in depth, not the only
@@ -177,7 +177,7 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
         jsonschema.validate(payload, schema)
     except jsonschema.ValidationError as exc:
         path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"--spec failed schema {schema_name}.input.json at {path}: {exc.message}"
         ) from exc
 
@@ -494,7 +494,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "run_id", "job_ids", "total_tasks")
     missing = [k for k in required if k not in spec]
     if missing:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"--spec missing required fields: {missing}. See docs/cli-spec.md."
         )
 
@@ -633,7 +633,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
             f"no journal record for run_id {args.run_id!r}"
         )
     if args.wave is None:
-        raise errors.ManifestInvalid("aggregate requires --wave <int>")
+        raise errors.SpecInvalid("aggregate requires --wave <int>")
 
     # Resolve aggregate flags: explicit CLI > hpc.yaml > none.
     # ``getattr`` keeps in-process callers (tests, slash-command shims)
@@ -743,15 +743,15 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
     failed = spec.get("failed_task_ids")
     category = spec.get("category")
     if not isinstance(failed, list) or not failed:
-        raise errors.ManifestInvalid("--spec.failed_task_ids must be a non-empty list")
+        raise errors.SpecInvalid("--spec.failed_task_ids must be a non-empty list")
     if not isinstance(category, str):
-        raise errors.ManifestInvalid("--spec.category must be a string")
+        raise errors.SpecInvalid("--spec.category must be a string")
     # Belt-and-braces: schema validation also enforces this enum, but
     # ``_validate_against_schema`` is a no-op when ``jsonschema`` is not
     # installed.  Keep the local check so the seven-category contract
     # holds either way.
     if category not in _VALID_RESUBMIT_CATEGORIES:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; "
             f"got {category!r}"
         )
@@ -850,13 +850,13 @@ def cmd_logs(args: argparse.Namespace) -> int:
         try:
             task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
         except ValueError as exc:
-            raise errors.ManifestInvalid(
+            raise errors.SpecInvalid(
                 f"--task-id must be comma-separated integers: {exc}"
             ) from exc
         if not task_ids:
-            raise errors.ManifestInvalid("--task-id is empty")
+            raise errors.SpecInvalid("--task-id is empty")
     else:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             "logs requires --task-id <ids> or --all-failed"
         )
 
@@ -995,7 +995,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
     }
     deprecated_types = {"chunked", "date-window", "shim"}
     if args.type in deprecated_types:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"--type {args.type!r} is no longer supported. The chunking / "
             f"date-window / generic-shim axes are now expressed inline in "
             f".hpc/tasks.py; the agent walks you through writing it during "
@@ -1004,7 +1004,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
             f"scaffold a regular executor."
         )
     if args.type not in template_map:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"unknown --type {args.type!r}; choose from {sorted(template_map)}"
         )
     src = template_map[args.type]
@@ -1012,7 +1012,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
         raise errors.ConfigInvalid(f"template missing on disk: {src}")
     dest = (args.output_dir / args.name).with_suffix(".py")
     if dest.exists() and not args.force:
-        raise errors.ManifestInvalid(
+        raise errors.SpecInvalid(
             f"refusing to overwrite {dest}; pass --force to overwrite"
         )
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -1277,7 +1277,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         return _err(
-            error_code="manifest_invalid",
+            error_code="spec_invalid",
             message=str(exc),
             category="user",
             retry_safe=False,

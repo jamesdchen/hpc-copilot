@@ -14,7 +14,7 @@ __all__ = [
     "HpcError",
     "SshUnreachable",
     "SchedulerThrottled",
-    "ManifestInvalid",
+    "SpecInvalid",
     "ExecutorNotFound",
     "ClusterUnknown",
     "JournalCorrupt",
@@ -66,16 +66,15 @@ class SchedulerThrottled(HpcError):
     remediation = "Serialize submissions to this cluster; most schedulers cap at ~1/sec."
 
 
-class ManifestInvalid(HpcError):
+class SpecInvalid(HpcError):
     """Run definition is malformed or fails validation.
 
-    Despite the name (kept for back-compat with downstream callers and
-    serialized error envelopes), this now covers the per-run sidecar at
-    ``.hpc/runs/<run_id>.json`` and the user's ``.hpc/tasks.py`` —
-    whichever the framework was reading at the time of the failure.
+    Covers the per-run sidecar at ``.hpc/runs/<run_id>.json`` and the
+    user's ``.hpc/tasks.py`` — whichever the framework was reading at
+    the time of the failure.
     """
 
-    error_code = "manifest_invalid"
+    error_code = "spec_invalid"
     retry_safe = False
     category = "user"
     remediation = (

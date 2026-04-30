@@ -203,7 +203,7 @@ Source of truth: [`/slash_commands/errors.py`](../slash_commands/errors.py).
 | `cluster_timeout` | cluster | true | Backoff (4s → 8s → 16s, max 3 retries). Likely NFS stall. |
 | `combiner_failed` | cluster | true | Single retry after inspecting `stderr_tail`; if it persists, surface to operator. |
 | `remote_command_failed` | cluster | false | Surface to operator with `stderr_tail`. Don't auto-retry. |
-| `manifest_invalid` | user | false | Surface; the spec is wrong. The agent must regenerate it. |
+| `spec_invalid` | user | false | Surface; the spec is wrong. The agent must regenerate it. |
 | `executor_not_found` | user | false | Surface; the executor path is wrong. |
 | `cluster_unknown` | user | false | Surface; the cluster name is wrong. Run `clusters list` to recover. |
 | `config_invalid` | user | false | Surface; clusters.yaml or hpc.yaml is malformed. |
