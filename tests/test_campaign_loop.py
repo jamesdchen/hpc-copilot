@@ -247,3 +247,163 @@ def test_concurrency_must_be_at_least_one() -> None:
 
     with pytest.raises(ValueError, match="concurrency"):
         asyncio.run(driver())
+
+
+# ---------------------------------------------------------------------------
+# on_iteration_done callback (strategy hook)
+# ---------------------------------------------------------------------------
+
+
+def test_on_iteration_done_fires_per_iteration_with_status_complete(tmp_path) -> None:
+    """The callback fires once per iteration with status='complete' for
+    successful iterations and the iteration's run_id."""
+    from hpc_mapreduce.job.runs import write_run_sidecar
+
+    submit = _id_factory()
+    counter = {"n": 0}
+
+    async def submit_with_sidecar() -> str:
+        counter["n"] += 1
+        run_id = f"run_{counter['n']:04d}"
+        write_run_sidecar(
+            tmp_path,
+            run_id=run_id,
+            cmd_sha="0" * 64,
+            claude_hpc_version="0.2.0",
+            submitted_at="2026-01-01T00:00:00Z",
+            executor="python3 stub.py",
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=1,
+            tasks_py_sha="1" * 64,
+        )
+        return run_id
+
+    seen: list[tuple[str, str, dict]] = []
+
+    async def driver():
+        return await run_campaign(
+            concurrency=1,
+            submit_one=submit_with_sidecar,
+            await_completion=lambda _rid: asyncio.sleep(0),
+            should_submit=lambda: counter["n"] < 3,
+            on_iteration_done=lambda rid, status, raw: seen.append((rid, status, raw)),
+            experiment_dir=tmp_path,
+        )
+
+    asyncio.run(driver())
+    # Quiet "submit" used; signal we're not asserting against this
+    del submit
+    assert [(rid, st) for rid, st, _ in seen] == [
+        ("run_0001", "complete"),
+        ("run_0002", "complete"),
+        ("run_0003", "complete"),
+    ]
+
+
+def test_on_iteration_done_fires_with_status_failed_and_empty_metrics(tmp_path) -> None:
+    """Failed iterations get status='failed' and raw_metrics={}."""
+    submit = _id_factory()
+    counter = {"n": 0}
+
+    async def maybe_fail(rid: str) -> None:
+        if rid == "run_0001":
+            raise RuntimeError("boom")
+
+    seen: list[tuple[str, str, dict]] = []
+
+    def gate() -> bool:
+        if counter["n"] >= 2:
+            return False
+        counter["n"] += 1
+        return True
+
+    async def driver():
+        return await run_campaign(
+            concurrency=1,
+            submit_one=submit,
+            await_completion=maybe_fail,
+            should_submit=gate,
+            on_iteration_done=lambda rid, status, raw: seen.append((rid, status, raw)),
+            experiment_dir=tmp_path,
+        )
+
+    asyncio.run(driver())
+    statuses = {rid: (status, raw) for rid, status, raw in seen}
+    assert statuses["run_0001"] == ("failed", {})
+    assert statuses["run_0002"][0] == "complete"
+
+
+def test_on_iteration_done_carries_reduced_metrics(tmp_path) -> None:
+    """When the executor wrote metrics.json, the callback receives the
+    reduced dict so the strategy adapter can `study.tell()`."""
+    import json as _json
+
+    from hpc_mapreduce.job.runs import write_run_sidecar
+
+    counter = {"n": 0}
+
+    async def submit_with_metrics() -> str:
+        counter["n"] += 1
+        run_id = f"run_{counter['n']:04d}"
+        write_run_sidecar(
+            tmp_path,
+            run_id=run_id,
+            cmd_sha="0" * 64,
+            claude_hpc_version="0.2.0",
+            submitted_at="2026-01-01T00:00:00Z",
+            executor="python3 stub.py",
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=1,
+            tasks_py_sha="1" * 64,
+        )
+        # Lay down a metrics.json so reduce_metrics returns something.
+        rd = tmp_path / "results" / run_id / "task_0"
+        rd.mkdir(parents=True, exist_ok=True)
+        (rd / "metrics.json").write_text(_json.dumps({"loss": 0.1 * counter["n"], "n_samples": 1}))
+        return run_id
+
+    seen: list[dict] = []
+
+    async def driver():
+        return await run_campaign(
+            concurrency=1,
+            submit_one=submit_with_metrics,
+            await_completion=lambda _rid: asyncio.sleep(0),
+            should_submit=lambda: counter["n"] < 3,
+            on_iteration_done=lambda _rid, _st, raw: seen.append(raw),
+            experiment_dir=tmp_path,
+        )
+
+    asyncio.run(driver())
+    losses = [s["loss"] for s in seen]
+    assert losses == pytest.approx([0.1, 0.2, 0.3])
+
+
+def test_on_iteration_done_empty_metrics_when_no_experiment_dir() -> None:
+    """Without experiment_dir we can't read sidecars; raw_metrics={}.
+    The callback still fires so the user can detect completion."""
+    submit = _id_factory()
+    counter = {"n": 0}
+    seen: list[tuple[str, str, dict]] = []
+
+    def gate() -> bool:
+        if counter["n"] >= 1:
+            return False
+        counter["n"] += 1
+        return True
+
+    async def driver():
+        return await run_campaign(
+            concurrency=1,
+            submit_one=submit,
+            await_completion=lambda _rid: asyncio.sleep(0),
+            should_submit=gate,
+            on_iteration_done=lambda rid, status, raw: seen.append((rid, status, raw)),
+            # experiment_dir intentionally omitted
+        )
+
+    asyncio.run(driver())
+    assert len(seen) == 1
+    rid, status, raw = seen[0]
+    assert status == "complete"
+    assert raw == {}

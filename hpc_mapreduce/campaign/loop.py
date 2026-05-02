@@ -66,6 +66,8 @@ async def run_campaign(
     await_completion: Callable[[str], Awaitable[None]],
     should_submit: Callable[[], Awaitable[bool] | bool],
     on_event: Callable[[dict[str, Any]], None] | None = None,
+    on_iteration_done: Callable[[str, str, dict[str, Any]], None] | None = None,
+    experiment_dir: Any = None,
     wall_clock_budget_seconds: float | None = None,
 ) -> CampaignResult:
     """Run a closed-loop campaign with at most *concurrency* in-flight submits.
@@ -96,6 +98,22 @@ async def run_campaign(
         ``submitted`` / ``completed`` / ``stopped`` / ``budget_exceeded``).
         The loop never relies on the callback's side effects, so a no-op
         is safe.
+    on_iteration_done:
+        Optional callback fired once per iteration as it reaches terminal
+        state. Signature: ``(run_id, status, raw_metrics)`` where
+        ``status`` is ``"complete"`` or ``"failed"`` and ``raw_metrics``
+        is the dict produced by :func:`reduce_metrics` over the
+        iteration's result directories (empty dict for failed iterations
+        or when *experiment_dir* is not given). This is the strategy
+        adapter's hook to mark a trial done in its own state store
+        (e.g. Optuna's ``study.tell()``) without polling externally.
+        Strategy-blind — the loop computes ``raw_metrics`` via the v2
+        sidecar pipeline; the callback decides what to do with it.
+    experiment_dir:
+        Optional path used to resolve ``raw_metrics`` for
+        *on_iteration_done*. When ``None`` (default) the callback fires
+        with an empty ``raw_metrics`` dict; the iteration's outcome can
+        still be inspected via ``status``.
     wall_clock_budget_seconds:
         If set, the loop exits with ``terminated_reason="wall_clock_budget"``
         once this many seconds have elapsed since the call started. New
@@ -120,6 +138,30 @@ async def run_campaign(
     def _emit(event: dict[str, Any]) -> None:
         if on_event is not None:
             on_event(event)
+
+    def _compute_raw_metrics(run_id: str) -> dict[str, Any]:
+        """Read the iteration's sidecar and reduce its result_dirs.
+
+        Returns an empty dict on any failure (sidecar absent, malformed,
+        or no metrics.json files yet) so the callback's contract stays
+        simple: failed iterations always see ``{}``.
+        """
+        if experiment_dir is None:
+            return {}
+        try:
+            from hpc_mapreduce.job.runs import read_run_sidecar
+            from hpc_mapreduce.reduce.history import result_dirs_for_sidecar
+            from hpc_mapreduce.reduce.metrics import reduce_metrics
+        except ImportError:
+            return {}
+        try:
+            sidecar = read_run_sidecar(experiment_dir, run_id)
+        except (FileNotFoundError, OSError, ValueError):
+            return {}
+        dirs = result_dirs_for_sidecar(experiment_dir, sidecar)
+        if not dirs:
+            return {}
+        return reduce_metrics(dirs)
 
     async def _should_submit() -> bool:
         result = should_submit()
@@ -172,8 +214,14 @@ async def run_campaign(
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                     )
+                    iteration_status = "failed"
+                    raw_metrics: dict[str, Any] = {}
                 else:
                     _emit({"event": "completed", "run_id": run_id})
+                    iteration_status = "complete"
+                    raw_metrics = _compute_raw_metrics(run_id)
+                if on_iteration_done is not None:
+                    on_iteration_done(run_id, iteration_status, raw_metrics)
                 completed.append(run_id)
     except asyncio.CancelledError:
         terminated_reason = "cancelled"
