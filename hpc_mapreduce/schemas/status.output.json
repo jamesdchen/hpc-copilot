@@ -21,6 +21,10 @@
       "description": "Age of last_status.checked_at in seconds; null when unavailable. Callers may treat any value above their threshold as stale."
     },
     "combined_waves": { "type": "array", "items": { "type": "integer" } },
-    "failed_waves":   { "type": "array", "items": { "type": "integer" } }
+    "failed_waves":   { "type": "array", "items": { "type": "integer" } },
+    "campaign_id":    {
+      "type": "string",
+      "description": "Closed-loop campaign tag. Present only when this run is part of a campaign; absent for open-loop submits."
+    }
   }
 }

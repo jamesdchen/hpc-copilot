@@ -308,6 +308,33 @@ def test_list_in_flight_finds_submitted_run(tmp_path: Path) -> None:
     assert any(r["run_id"] == SUBMIT_SPEC["run_id"] for r in runs)
 
 
+def test_list_in_flight_surfaces_campaign_id_when_tagged(tmp_path: Path) -> None:
+    """A submit with campaign_id should appear in list-in-flight with the tag.
+    Open-loop submits should NOT carry the field at all (kept absent to keep
+    envelopes compact)."""
+    import os
+
+    # Tagged submit.
+    tagged_spec = {**SUBMIT_SPEC, "run_id": "tagged-run-1234", "campaign_id": "qa_q1"}
+    spec = tmp_path / "tagged.json"
+    spec.write_text(json.dumps(tagged_spec))
+    journal = tmp_path / "journal"
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
+    _run_cli("submit", "--experiment-dir", str(tmp_path), "--spec", str(spec), env=env_vars)
+
+    # Open-loop submit (no campaign_id).
+    untagged_spec = {**SUBMIT_SPEC, "run_id": "untagged-run-5678"}
+    spec2 = tmp_path / "untagged.json"
+    spec2.write_text(json.dumps(untagged_spec))
+    _run_cli("submit", "--experiment-dir", str(tmp_path), "--spec", str(spec2), env=env_vars)
+
+    rc, out, _ = _run_cli("list-in-flight", "--experiment-dir", str(tmp_path), env=env_vars)
+    assert rc == 0
+    runs = {r["run_id"]: r for r in _parse_envelope(out)["data"]["runs"]}
+    assert runs["tagged-run-1234"]["campaign_id"] == "qa_q1"
+    assert "campaign_id" not in runs["untagged-run-5678"]
+
+
 # ─── envelope schema validation (structural) ───────────────────────────────
 
 
