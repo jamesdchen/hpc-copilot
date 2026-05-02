@@ -122,7 +122,14 @@ class TestPlanSubmit:
         a100 = next(c for c in out["candidates"] if c["constraint"] == "a100")
         assert a100["healthy_nodes"] == []
         assert len(a100["blacklisted_nodes"]) == 1
-        assert a100["blacklisted_nodes"][0]["node"] == "d11-07"
+        entry = a100["blacklisted_nodes"][0]
+        # Deeper assertion than just node name — the planner is supposed
+        # to surface evidence_count and added_h_ago so the slash command
+        # can show "added 8h ago, 1 prior SEGV" rather than a bare name.
+        assert entry["node"] == "d11-07"
+        assert entry["evidence_count"] == 1
+        assert isinstance(entry["added_h_ago"], (int, float))
+        assert entry["expires_at"] is not None
 
     def test_stressed_node_surfaces_co_tenants(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
@@ -160,6 +167,34 @@ class TestPlanSubmit:
         assert out["needs_canary"] is False
         c = out["candidates"][0]
         assert c["runtime_prior_quantiles_sec"]["a100"]["n_samples"] == 5
+
+
+class TestBuildCanaryPlan:
+    def test_picks_lowest_eta_when_known(self):
+        candidates = [
+            {"constraint": "a100", "eta_sec_via_test_only": 600},
+            {"constraint": "v100", "eta_sec_via_test_only": 100},
+        ]
+        plan = planner._build_canary_plan(candidates, profile="p", cluster="c")
+        assert plan["constraint"] == "v100"
+
+    def test_handles_all_unknown_etas(self):
+        # When the scheduler returns no ETA for any candidate (typical on
+        # SGE clusters where --test-only doesn't apply), the planner must
+        # still pick a constraint deterministically rather than raising.
+        candidates = [
+            {"constraint": "a100", "eta_sec_via_test_only": None},
+            {"constraint": "v100", "eta_sec_via_test_only": None},
+        ]
+        plan = planner._build_canary_plan(candidates, profile="p", cluster="c")
+        # Stable sort preserves the input order; the first candidate wins.
+        assert plan["constraint"] == "a100"
+        assert plan["task_count"] == 1
+
+    def test_empty_candidate_list_returns_note(self):
+        plan = planner._build_canary_plan([], profile="p", cluster="c")
+        assert plan["constraint"] is None
+        assert "no candidates" in plan["note"]
 
 
 class TestNodesForConstraint:

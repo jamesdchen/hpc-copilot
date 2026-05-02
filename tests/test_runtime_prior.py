@@ -178,6 +178,35 @@ class TestBoundedGrowth:
         assert {s["task_id"] for s in samples} == {3, 4, 5, 6, 7}
 
 
+class TestIdempotencyUnderCap:
+    def test_replace_after_eviction(self, tmp_path, monkeypatch):
+        # The dedup-by-(run_id, task_id) and the MAX_SAMPLES cap interact:
+        # if many newer samples push an old (r1, 0) record off the back,
+        # a re-write of (r1, 0) should append (it's no longer present),
+        # not silently fail. Confirms the two contracts compose correctly.
+        monkeypatch.setattr(rp, "MAX_SAMPLES", 3)
+        # Seed: (r1, 0).
+        rp.append_sample(
+            tmp_path, profile="p", cluster="c", run_id="r1", task_id=0,
+            gpu_type="a100", node="n1", elapsed_sec=100,
+        )
+        # Push it off the back with three newer samples.
+        for tid in (1, 2, 3):
+            rp.append_sample(
+                tmp_path, profile="p", cluster="c", run_id="r1", task_id=tid,
+                gpu_type="a100", node="n1", elapsed_sec=200 + tid,
+            )
+        # Now (r1, 0) is gone. Re-writing it should append a fresh copy.
+        rp.append_sample(
+            tmp_path, profile="p", cluster="c", run_id="r1", task_id=0,
+            gpu_type="a100", node="n1", elapsed_sec=999,
+        )
+        samples = rp.read_samples(tmp_path, profile="p", cluster="c")
+        # Cap is 3; the just-appended (r1, 0) plus the two most recent.
+        assert len(samples) == 3
+        assert any(s["task_id"] == 0 and s["elapsed_sec"] == 999 for s in samples)
+
+
 class TestPathNormalization:
     def test_relative_and_absolute_resolve_to_same_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

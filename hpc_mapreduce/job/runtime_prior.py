@@ -49,10 +49,12 @@ import json
 import os
 import statistics
 import tempfile
-from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 SCHEMA_VERSION: int = 1
 
@@ -242,7 +244,7 @@ def read_samples(
 ) -> list[dict[str, Any]]:
     """Return the (optionally filtered) sample list."""
     doc = _read_doc(runtime_path(experiment_dir, profile, cluster), profile, cluster)
-    samples = doc["samples"]
+    samples: list[dict[str, Any]] = list(doc["samples"])
     if only_successful:
         samples = [s for s in samples if int(s.get("exit_code", 0)) == 0]
     if cmd_sha is not None:
