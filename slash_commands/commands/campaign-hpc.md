@@ -34,106 +34,21 @@ This slug will be threaded through every subsequent submit's sidecar and exporte
 
 ## Step 2: Confirm or scaffold `.hpc/tasks.py`
 
-A campaign-aware `tasks.py` reads prior iterations' reduced metrics to decide what to run next. Three patterns are common — show the user the starter versions below and let them pick. Full versions (with Optuna replay, sidecar lookup, etc.) live in `docs/campaign.md`.
+A campaign-aware `tasks.py` reads prior iterations' reduced metrics to decide what to run next. **Read [`docs/campaign.md`](../../docs/campaign.md)** (`Read` tool — it's local) for the working code. The "`tasks.py` recipes" section there contains three full patterns plus the shared `_PRIOR` bootstrap; pick whichever matches the user's intent:
 
-Every campaign-aware `tasks.py` starts with the same bootstrap, regardless of pattern:
+- **Recipe 1: Random search** — stdlib only; `random.uniform` over a parameter space; stops after `_MAX_ITER`. Use when the user has no library preference and just wants exploration.
+- **Recipe 2: Optuna ask/tell** — requires `pip install optuna` in the user's env (framework does not bundle it). Use when the user mentions Optuna, TPE, or "I want a smart sampler." The doc covers the `_PRIOR`-replay block that backfills Optuna's view after a fresh checkout.
+- **Recipe 3: Walk-forward backtesting** — deterministic schedule; iteration N submits window N; no randomness. Use for time-series sweeps where the schedule is fixed up front.
 
-```python
-# .hpc/tasks.py
-import os
-from hpc_mapreduce.reduce.history import prior
+All three share the same `_PRIOR` bootstrap (`prior(".", os.environ["HPC_CAMPAIGN_ID"])` — see doc); copy whichever recipe block fits, then tweak the parameters / search space / window definition with the user.
 
-_PRIOR = prior(".", os.environ["HPC_CAMPAIGN_ID"]) if "HPC_CAMPAIGN_ID" in os.environ else []
-```
-
-Open-loop submits leave `_PRIOR == []`, so the same `tasks.py` works for one-shot `/submit-hpc` invocations too — fully backward-compatible.
-
-### Pattern A: Random search (stdlib only)
-
-```python
-import random
-random.seed(42)
-
-_MAX_ITER = 200
-_LR_LO, _LR_HI = 1e-5, 1e-1
-
-def _sample() -> dict:
-    return {
-        "lr": 10 ** random.uniform(-5, -1),
-        "n_layers": random.randint(1, 6),
-        "optimizer": random.choice(("adam", "sgd")),
-    }
-
-def total() -> int:
-    return 0 if len(_PRIOR) >= _MAX_ITER else 1
-
-def resolve(i: int) -> dict:
-    return _sample()
-```
-
-One task per iteration; stops after `_MAX_ITER`. No third-party deps.
-
-### Pattern B: Optuna ask/tell
-
-Requires `pip install optuna` in the user's env (framework does not bundle it).
-
-```python
-import optuna
-from hpc_mapreduce.campaign import campaign_dir
-
-_STORAGE = f"sqlite:///{campaign_dir('.', os.environ['HPC_CAMPAIGN_ID'])}/optuna.db"
-_MAX_TRIALS = 200
-
-_study = optuna.create_study(
-    storage=_STORAGE,
-    study_name=os.environ["HPC_CAMPAIGN_ID"],
-    direction="minimize",
-    load_if_exists=True,
-)
-# (see docs/campaign.md for the full _PRIOR-replay block that backfills
-# Optuna's view of past iterations after a fresh-checkout / DB reset.)
-
-def total() -> int:
-    return 0 if len(_PRIOR) >= _MAX_TRIALS else 1
-
-def resolve(i: int) -> dict:
-    trial = _study.ask()
-    return {**trial.params, "_optuna_trial_number": trial.number}
-```
-
-The executor (or the campaign driver's `await_completion`) must call `study.tell(trial_number, value)` after the task writes its metric. Either side works; pick whichever matches your existing executor convention.
-
-### Pattern C: Walk-forward backtesting (deterministic schedule)
-
-```python
-from datetime import date, timedelta
-
-_START, _END = date(2026, 1, 1), date(2026, 12, 31)
-_WINDOW, _STRIDE = timedelta(weeks=4), timedelta(weeks=2)
-
-def _windows() -> list[dict]:
-    out, t = [], _START
-    while t + _WINDOW <= _END:
-        out.append({"window_start": t.isoformat(), "window_end": (t + _WINDOW).isoformat()})
-        t += _STRIDE
-    return out
-
-_WINDOWS = _windows()
-
-def total() -> int:
-    return 0 if len(_PRIOR) >= len(_WINDOWS) else 1
-
-def resolve(i: int) -> dict:
-    return _WINDOWS[len(_PRIOR)]
-```
-
-Iteration N submits the Nth window; `total()` returns 0 once every window is done. No randomness, no third-party libs.
+The chosen pattern fills the body of `.hpc/tasks.py`'s `total()` and `resolve(i)` — same convention as today, just with the prior-reading bootstrap up top.
 
 ### Converting an existing `tasks.py` to a campaign
 
 If the user already has a working open-loop `tasks.py` (with `_TASKS = [...]` materialized) and wants to convert it to closed-loop, the minimum diff is two additions:
 
-1. The `_PRIOR` bootstrap (same line as above) at the top of the module.
+1. The `_PRIOR` bootstrap (one line — see doc) at the top of the module.
 2. A `len(_PRIOR) >= N` stopping check inside `total()` so the campaign loop knows when to exit.
 
 Don't rewrite their `resolve(i)` body without permission — preserving their kwargs shape is what keeps the executor's CLI contract stable.
