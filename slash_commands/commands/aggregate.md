@@ -62,7 +62,7 @@ $ARGUMENTS formats:
 
 ## Step 0: Check for Combiner Partials (Fast Path)
 
-If the `/status` command ran combiners during job execution, per-wave partial aggregates may already exist on the cluster in the `_combiner/` directory.
+If the `/monitor-hpc` command ran combiners during job execution, per-wave partial aggregates may already exist on the cluster in the `_combiner/` directory.
 
 Check for combiner output:
 ```bash
@@ -156,7 +156,7 @@ Task completeness:
 1. Identify which task IDs are missing by cross-referencing `tasks.total()` with existing result directories (one per `tasks.resolve(i)` formatted through the sidecar's `result_dir_template`).
 2. Check job accounting for failure reasons (qacct for SGE, sacct for SLURM).
 3. Check error logs (tail -50).
-4. Report findings and suggest resubmitting via `/submit` or monitoring via `/status` for gaps.
+4. Report findings and suggest resubmitting via `/submit` or monitoring via `/monitor-hpc` for gaps.
 5. Wait for resubmitted jobs, then re-validate before aggregating.
 
 **Partial aggregation:** Only proceed when all expected task results are present, unless the user explicitly asks to aggregate partial results. If partial, note the missing count and percentage per grid point.
@@ -218,7 +218,7 @@ Cluster cost: 47.2 CPU-hours, 3.1 GPU-hours (60 tasks counted)
 
 ### Cluster cost rollup
 
-`/status`'s status report exposes a top-level `resource_usage` key:
+`/monitor-hpc`'s status report exposes a top-level `resource_usage` key:
 
 ```json
 {"cpu_hours": 47.2, "gpu_hours": 3.1, "elapsed_hours": 12.4, "tasks_counted": 60}
@@ -241,7 +241,7 @@ When interpreting:
 
 After aggregation succeeds and summaries are downloaded, finalize the run
 journal so `find_in_flight_runs` no longer surfaces this run on the next
-`/status` invocation:
+`/monitor-hpc` invocation:
 
 ````python
 from pathlib import Path
