@@ -160,6 +160,25 @@ class TestGetActive:
         assert bl.get_active(tmp_path, "discovery") == []
 
 
+class TestPathNormalization:
+    def test_relative_and_absolute_resolve_to_same_file(self, tmp_path, monkeypatch):
+        # Writer invoked from a child dir (relative path) and reader
+        # invoked from the project root (absolute path) must land on
+        # the same blacklist file.
+        monkeypatch.chdir(tmp_path)
+        bl.record_segv(
+            ".",
+            cluster="discovery",
+            node="d11-03",
+            run_id="r1",
+            job_id="999",
+            task_id=7,
+        )
+        active_via_abs = bl.get_active(tmp_path, "discovery")
+        assert len(active_via_abs) == 1
+        assert active_via_abs[0]["node"] == "d11-03"
+
+
 class TestPruneExpired:
     def test_record_segv_prunes_expired_inline(self, tmp_path):
         # Recording a fresh SEGV implicitly drops every expired entry on

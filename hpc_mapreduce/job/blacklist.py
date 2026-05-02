@@ -35,6 +35,7 @@ __all__ = [
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -45,8 +46,13 @@ MAX_EVIDENCE_PER_NODE: int = 5
 
 
 def blacklist_path(experiment_dir: Path, cluster: str) -> Path:
-    """Return the canonical blacklist file path for *cluster*."""
-    return Path(experiment_dir) / ".hpc" / f"bad_nodes.{cluster}.json"
+    """Return the canonical blacklist file path for *cluster*.
+
+    Resolves *experiment_dir* to an absolute path so a writer invoking
+    from a child directory and a reader invoking from the project root
+    see the same file. Symlinks are resolved too.
+    """
+    return Path(experiment_dir).resolve() / ".hpc" / f"bad_nodes.{cluster}.json"
 
 
 def _now() -> datetime:
@@ -101,17 +107,28 @@ def _read_doc(path: Path) -> dict[str, Any]:
 def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
     """Atomically write *doc* to *path* with a flock-guarded swap.
 
-    1. Acquire an exclusive lock on a sidecar lock file.
-    2. Write JSON to a temp file in the same directory.
-    3. Rename over the target (POSIX-atomic).
-    4. Release the lock.
+    Backwards-compat shim retained for tests / external callers. Prefer
+    :func:`_with_locked_doc` for new code so the read happens inside the
+    lock — otherwise two concurrent writers can each read a stale doc,
+    mutate independently, and one's update will silently overwrite the
+    other's.
+    """
+    _with_locked_doc(path, lambda _existing: doc)
 
-    The lock file is left on disk; subsequent writers reuse it.
+
+def _with_locked_doc(
+    path: Path,
+    mutate: "Callable[[dict[str, Any]], dict[str, Any]]",
+) -> dict[str, Any]:
+    """Acquire ``path``'s flock, read the current doc, apply ``mutate``,
+    and atomically replace ``path`` with the returned doc.
+
+    The read happens **inside** the lock so concurrent writers see a
+    serialized view. Returns the new document so callers can return it
+    without a second read.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
-    # Open the lock; on Windows fcntl is unavailable but this codebase
-    # targets POSIX clusters / WSL, so we depend on it.
     try:
         import fcntl  # noqa: PLC0415 — POSIX-only import
     except ImportError:
@@ -120,7 +137,9 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
     try:
         if fcntl is not None:
             fcntl.flock(fd, fcntl.LOCK_EX)
-        # Write to temp + rename.
+        # Read inside the lock — this is the whole point of this helper.
+        existing = _read_doc(path)
+        new_doc = mutate(existing)
         tmp = tempfile.NamedTemporaryFile(
             "w",
             delete=False,
@@ -130,7 +149,7 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
             encoding="utf-8",
         )
         try:
-            json.dump(doc, tmp, indent=2, sort_keys=True)
+            json.dump(new_doc, tmp, indent=2, sort_keys=True)
             tmp.flush()
             os.fsync(tmp.fileno())
             tmp.close()
@@ -144,6 +163,7 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
         finally:
             if not tmp.closed:
                 tmp.close()
+        return new_doc
     finally:
         if fcntl is not None:
             try:
@@ -178,15 +198,22 @@ def read_raw(experiment_dir: Path, cluster: str) -> dict[str, Any]:
 
 
 def prune_expired(experiment_dir: Path, cluster: str) -> int:
-    """Drop expired entries from the file. Returns count removed."""
+    """Drop expired entries from the file. Returns count removed.
+
+    The whole read-filter-write happens inside the per-file flock so a
+    concurrent ``record_segv`` cannot resurrect a just-pruned entry.
+    """
     path = blacklist_path(experiment_dir, cluster)
-    doc = _read_doc(path)
-    before = len(doc["entries"])
-    doc["entries"] = _filter_expired(doc["entries"], _now())
-    after = len(doc["entries"])
-    if after != before:
-        _atomic_write_locked(path, doc)
-    return before - after
+    counts = {"removed": 0}
+
+    def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
+        before = len(doc.get("entries", []))
+        doc["entries"] = _filter_expired(doc.get("entries", []), _now())
+        counts["removed"] = before - len(doc["entries"])
+        return doc
+
+    _with_locked_doc(path, _mutate)
+    return counts["removed"]
 
 
 def get_active(
@@ -240,49 +267,51 @@ def record_segv(
     ts_now = now or _now()
     expires_at = ts_now + timedelta(days=ttl_days)
     path = blacklist_path(experiment_dir, cluster)
-    doc = _read_doc(path)
 
-    # Drop expired entries on every write — keeps the file bounded.
-    doc["entries"] = _filter_expired(doc["entries"], ts_now)
+    # Capture the target across the lock so we can return it.
+    target_box: dict[str, Any] = {}
 
-    # Find existing entry for this node (case-sensitive match).
-    target: dict[str, Any] | None = None
-    for e in doc["entries"]:
-        if e.get("node") == node and e.get("cluster", cluster) == cluster:
-            target = e
-            break
-    if target is None:
-        target = {
-            "node": node,
-            "cluster": cluster,
-            "added_at": _iso(ts_now),
-            "expires_at": _iso(expires_at),
-            "evidence": [],
+    def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
+        # Drop expired entries on every write — keeps the file bounded.
+        doc["entries"] = _filter_expired(doc.get("entries", []), ts_now)
+
+        target: dict[str, Any] | None = None
+        for e in doc["entries"]:
+            if e.get("node") == node and e.get("cluster", cluster) == cluster:
+                target = e
+                break
+        if target is None:
+            target = {
+                "node": node,
+                "cluster": cluster,
+                "added_at": _iso(ts_now),
+                "expires_at": _iso(expires_at),
+                "evidence": [],
+            }
+            doc["entries"].append(target)
+        else:
+            # Existing entry: refresh expiry. Don't backdate added_at.
+            target["expires_at"] = _iso(expires_at)
+
+        new_ev = {
+            "run_id": run_id,
+            "job_id": str(job_id),
+            "task_id": int(task_id),
+            "exit_code": exit_code,
+            "signal": signal,
+            "ts": _iso(ts_now),
+            "host_allocmem_pct": host_allocmem_pct,
+            "cpu_load_frac": cpu_load_frac,
+            "concurrent_jobs": list(concurrent_jobs or []),
         }
-        doc["entries"].append(target)
-    else:
-        # Existing entry: refresh expiry. Don't backdate added_at.
-        target["expires_at"] = _iso(expires_at)
+        if not any(
+            ev.get("run_id") == new_ev["run_id"] and ev.get("task_id") == new_ev["task_id"]
+            for ev in target["evidence"]
+        ):
+            target["evidence"].append(new_ev)
+        target["evidence"] = target["evidence"][-MAX_EVIDENCE_PER_NODE:]
+        target_box["target"] = target
+        return doc
 
-    # Idempotent evidence append.
-    new_ev = {
-        "run_id": run_id,
-        "job_id": str(job_id),
-        "task_id": int(task_id),
-        "exit_code": exit_code,
-        "signal": signal,
-        "ts": _iso(ts_now),
-        "host_allocmem_pct": host_allocmem_pct,
-        "cpu_load_frac": cpu_load_frac,
-        "concurrent_jobs": list(concurrent_jobs or []),
-    }
-    if not any(
-        ev.get("run_id") == new_ev["run_id"] and ev.get("task_id") == new_ev["task_id"]
-        for ev in target["evidence"]
-    ):
-        target["evidence"].append(new_ev)
-    # Cap the list to the most-recent N entries.
-    target["evidence"] = target["evidence"][-MAX_EVIDENCE_PER_NODE:]
-
-    _atomic_write_locked(path, doc)
-    return target
+    _with_locked_doc(path, _mutate)
+    return target_box["target"]

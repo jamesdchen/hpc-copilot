@@ -83,11 +83,14 @@ Args: none.
 ```json
 {
   "version": "0.2.0",
-  "subcommands": ["submit", "status", "...", "build-executor"],
+  "subcommands": ["submit", "status", "...", "build-executor",
+                  "inspect-cluster", "plan-submit", "runtime-prior"],
   "supported_schedulers": ["sge", "slurm"],
   "schemas_dir": "/abs/path/hpc_mapreduce/schemas",
   "journal_dir": "/abs/path/.claude/hpc",
-  "ssh_multiplexing": true
+  "ssh_multiplexing": true,
+  "mars_skill_paths": {"hpc-submit": "/abs/path/skills/hpc-submit/SKILL.md"},
+  "required_env": ["SSH_AUTH_SOCK", "HPC_JOURNAL_DIR", "HPC_CLUSTERS_CONFIG"]
 }
 ```
 
@@ -438,12 +441,18 @@ Args: `--experiment-dir`, `--run-id <id>` (required), `--spec spec.json` (requir
 {
   "run_id": "sweep_3a7b8c9d",
   "retries": {"3": {"attempts": 1, "category": "gpu_oom", "overrides": {"mem": "32G"}}},
-  "job_ids": ["12346"]
+  "job_ids": ["12346"],
+  "request_id": "auto-derived-or-caller-supplied",
+  "deduped": false
 }
 ```
 
-Idempotent: **no** — each call increments per-task `attempts`. Error
-codes: `spec_invalid` (empty `failed_task_ids`, missing `category`),
+Idempotent: **yes** — keyed on `request_id`. When omitted, the CLI
+derives a deterministic id from `(sorted failed_task_ids, category,
+sorted overrides)`. A second call with the same `request_id` returns
+`deduped: true` and does NOT increment per-task `attempts`. Error
+codes: `spec_invalid` (empty `failed_task_ids`, missing `category`,
+unknown category — note the enum gained `segv` for node-level faults),
 `journal_corrupt` (no record). Exit: 0 / 1 / 3.
 
 ### `reconcile`
