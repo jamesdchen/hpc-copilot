@@ -532,37 +532,33 @@ def cmd_submit(args: argparse.Namespace) -> int:
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
 
 
-def _hpc_yaml_auto_retry(experiment_dir: Path, profile: str | None) -> dict[str, dict[str, Any]]:
-    """Read ``profiles[profile].auto_retry`` from hpc.yaml.
+def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str, Any]]:
+    """Resolve the auto-retry policy for a run.
 
-    Returns the raw nested dict (category -> policy fields). Empty when
-    hpc.yaml is missing, malformed, or has no ``auto_retry`` block.
+    Precedence: per-run sidecar override (``auto_retry`` field, populated
+    by /submit when the user supplies a custom policy) > framework
+    defaults (:data:`runner.DEFAULT_AUTO_RETRY_POLICY`).
+
+    Always returns a non-empty dict so callers can rely on advice being
+    computed for every run.
     """
-    hpc_yaml = experiment_dir / "hpc.yaml"
-    if not hpc_yaml.is_file():
-        return {}
     try:
-        import yaml  # type: ignore[import-untyped]
+        from hpc_mapreduce.job.runs import read_run_sidecar
     except ImportError:
-        return {}
+        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
     try:
-        data = yaml.safe_load(hpc_yaml.read_text()) or {}
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    profiles = data.get("profiles") or {}
-    if profile and isinstance(profiles, dict) and profile in profiles:
-        block = (profiles[profile] or {}).get("auto_retry") or {}
-    elif not profiles:
-        block = data.get("auto_retry") or {}
-    else:
-        return {}
-    if not isinstance(block, dict):
-        return {}
-    return {
-        cat: pol for cat, pol in block.items() if isinstance(cat, str) and isinstance(pol, dict)
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+    user_policy = sidecar.get("auto_retry")
+    if not isinstance(user_policy, dict):
+        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+    valid = {
+        cat: pol
+        for cat, pol in user_policy.items()
+        if isinstance(cat, str) and isinstance(pol, dict)
     }
+    return valid or dict(runner.DEFAULT_AUTO_RETRY_POLICY)
 
 
 def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, str]:
@@ -918,12 +914,13 @@ def cmd_failures(args: argparse.Namespace) -> int:
     )
     clusters = runner.cluster_failures_by_fingerprint(logs)
 
-    # Auto-retry policy from hpc.yaml: annotate each cluster with which
-    # task ids are still eligible for an automated retry per the
-    # configured per-category max_attempts.  Purely advisory — the actual
+    # Auto-retry policy: resolve per-run sidecar override + framework
+    # defaults (runner.DEFAULT_AUTO_RETRY_POLICY). Annotate each cluster
+    # with which task ids are still eligible for an automated retry per
+    # the per-category max_attempts. Purely advisory — the actual
     # resubmit remains the caller's job (matches existing /resubmit
     # semantics).
-    auto_retry = _hpc_yaml_auto_retry(args.experiment_dir, record.profile)
+    auto_retry = _resolve_auto_retry(args.experiment_dir, args.run_id)
     if auto_retry:
         clusters = runner.annotate_clusters_with_retry_advice(
             clusters,
