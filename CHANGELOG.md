@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Changed — `hpc.yaml` absorbed into the per-run sidecar
+
+- **`hpc.yaml` is gone.** Every load-bearing field has moved into the
+  per-run sidecar at `.hpc/runs/<run_id>.json` (sidecar schema bumped to
+  v2): `cluster`, `profile`, `project`, `remote_path`, `resources`,
+  `env`, `env_group`, `constraints`, `gpu_fallback`, `max_retries`,
+  `runtime`, `auto_retry`, `aggregate_defaults`. Multi-stage DAGs move
+  to `.hpc/stages.py` (Python file exposing `def stages() -> list[dict]`,
+  validated against `hpc_mapreduce/schemas/stages.input.json`). Auto-retry
+  caps that used to live in `hpc.yaml profiles[*].auto_retry` now have
+  conservative hardcoded defaults in
+  `slash_commands.runner.DEFAULT_AUTO_RETRY_POLICY` with per-run override
+  via the sidecar. `cmd_aggregate` reads `aggregate_defaults` from the
+  sidecar instead of the yaml.
+- **No deprecation cycle.** Old `hpc.yaml` files in user repos are now
+  silently ignored — the agent never reads them. Users who hand-edited
+  `hpc.yaml` should re-run `/submit` once; the new sidecar will capture
+  their resolved config from then on.
+- **Deleted**: `_hpc_yaml_auto_retry`, `_hpc_yaml_aggregate_defaults`,
+  `docs/schema.md`, `tests/fixtures/hpc_multistage.yaml`,
+  `tests/test_hpc_yaml.py`. The README's `hpc.yaml` section is removed.
+- **v1 sidecars on disk continue to load** with v2 keys backfilled to
+  `None`, so existing journals are not broken.
+
 ### Changed — major refactor: `.hpc/tasks.py` task model
 
 - **Collapsed the manifest + per-axis shim model into a single

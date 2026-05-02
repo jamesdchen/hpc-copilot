@@ -25,7 +25,7 @@ Read cluster definitions:
 
 Determine cluster and connection:
 - If `$ARGUMENTS` contains `--cluster <name>`, use that cluster
-- Else if `hpc.yaml` exists, read `cluster` field
+- Else read `cluster` from the most recent matching `.hpc/runs/<run_id>.json` sidecar
 - Else check Claude Code memory for cached cluster preference
 - Else ask the user
 
@@ -115,7 +115,7 @@ Submission summary (from sidecar + tasks.py):
 
 If `$ARGUMENTS` specifies an executor or result directory, use it. Otherwise, present the kwargs structure from `tasks.py` and ask what to aggregate.
 
-If `hpc.yaml` exists and has `results.aggregate_cmd` for a matching profile, use it. Otherwise, discover aggregation scripts in the repo or ask the user what aggregation command to run.
+If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for a matching profile, use it. Otherwise, discover aggregation scripts in the repo or ask the user what aggregation command to run.
 
 ## Step 2: Check Job Status
 
@@ -130,18 +130,11 @@ The CLI accepts `--require-outputs <template>` (with `{task_id}` placeholder)
 which resolves the template against the run sidecar's `wave_map`,
 SSH-checks every per-task output, and refuses to combine if any are
 missing. The error envelope reports `error_code: outputs_missing` with the
-list of absent paths. Set the default once per repo in `hpc.yaml` under
-`results.require_outputs` so every aggregate is guarded automatically:
+list of absent paths. Set the default per-run via `write_run_sidecar(...,
+aggregate_defaults={"require_outputs": "...", "expect_output": "..."})`
+at /submit time so every aggregate is guarded automatically.
 
-```yaml
-profiles:
-  ml_ridge:
-    results:
-      require_outputs: "results/{run_id}/metrics.{task_id}.json"
-      expect_output: "results/{run_id}/metrics.json"
-```
-
-When you must validate manually (e.g., older repos without `hpc.yaml`):
+When you must validate manually (e.g., older repos without sidecar defaults):
 
 ```bash
 # For each task, check if result files exist
@@ -173,7 +166,7 @@ Task completeness:
 ## Step 4: Aggregate on Cluster
 
 Determine the aggregation command:
-1. If `hpc.yaml` exists and defines `results.aggregate_cmd` for the relevant profile → use it
+1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it
 2. Else look for aggregation scripts in the repo (e.g., `scripts/aggregate.py`, `src/evaluation.py`)
 3. Else ask the user: "What command should I run to aggregate results?"
 
@@ -240,7 +233,7 @@ conversion, just hours.
 When interpreting:
 - Lead with the most important metric or finding
 - Flag anomalies (empty results, unexpected values, low sample counts)
-- If `hpc.yaml` defines a `metrics` section, use those metric names and their sort order
+- Sort metrics alphabetically by default; CLI flags or memory may override the order
 - Compare against any baseline results if available
 - Group results by grid dimensions for readability (e.g., by model, by feature set)
 

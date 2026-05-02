@@ -1,9 +1,8 @@
 """Tests for the auto-retry policy resolver and hardcoded defaults.
 
-Replaces the legacy ``_hpc_yaml_auto_retry`` lookup that read from
-``hpc.yaml``. The resolver now combines a per-run sidecar override
-(populated at /submit time) with framework defaults defined in
-``slash_commands.runner.DEFAULT_AUTO_RETRY_POLICY``.
+The resolver combines a per-run sidecar override (populated at /submit
+time when the user supplies a custom policy) with framework defaults
+defined in ``slash_commands.runner.DEFAULT_AUTO_RETRY_POLICY``.
 """
 
 from __future__ import annotations
