@@ -1,6 +1,6 @@
 # /preflight — Verify the local environment can submit HPC jobs
 
-Run this BEFORE the first `/submit` of a session, or any time submissions
+Run this BEFORE the first `/submit-hpc` of a session, or any time submissions
 mysteriously hang. Catches the most common first-time-user failure mode:
 SSH credentials not forwarded into the current shell.
 
@@ -33,7 +33,7 @@ SSH credentials not forwarded into the current shell.
 4. If `data.all_ok` is true, summarise the green checks for the user and
    continue with the workflow they originally invoked. If false, list the
    failing checks with their `detail` fields and stop. Do not advance to
-   `/submit`.
+   `/submit-hpc`.
 
 ## Notes
 

@@ -1,4 +1,4 @@
-Help the user scaffold a new HPC executor for their experiment repo. The command is conversational: discover what's already there, ask what they want to build, produce the file, smoke-test it, and tell them the exact `/submit` command that will now work.
+Help the user scaffold a new HPC executor for their experiment repo. The command is conversational: discover what's already there, ask what they want to build, produce the file, smoke-test it, and tell them the exact `/submit-hpc` command that will now work.
 
 CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
@@ -6,7 +6,7 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
 Files produced by this command land in the **experiment repo** — the user's current working directory when they invoked `/build-executor`. They do NOT land in the `claude-hpc` framework repo. The templates under `templates/` in the framework repo are *sources* to copy from; never edit them in place.
 
-Discovery uses the same contract as `/submit`: a file is an executor iff it parses and has (a) an `if __name__ == "__main__":` guard and (b) a CLI import (`argparse`, `click`, `typer`, or `fire`). No ABCs, no registry, no plugin protocol — `--help` is the interface.
+Discovery uses the same contract as `/submit-hpc`: a file is an executor iff it parses and has (a) an `if __name__ == "__main__":` guard and (b) a CLI import (`argparse`, `click`, `typer`, or `fire`). No ABCs, no registry, no plugin protocol — `--help` is the interface.
 
 ## Arguments
 
@@ -17,13 +17,13 @@ Discovery uses the same contract as `/submit`: a file is an executor iff it pars
 | (empty) | Start from Step 1, ask the user what to build |
 | `"ml_elasticnet from ml_ridge"` | Mode (a): clone `ml_ridge.py` to `ml_elasticnet.py`, modify |
 | `"scaffold ml_lasso"` | Mode (b): start from `templates/starters/executor_template.py` |
-| `"wrap scripts/my_train.py"` | Redirect to `/submit` Step 6 — per-task fan-out is expressed in `.hpc/tasks.py`, not in a separate file. |
+| `"wrap scripts/my_train.py"` | Redirect to `/submit-hpc` Step 6 — per-task fan-out is expressed in `.hpc/tasks.py`, not in a separate file. |
 
 Parse `$ARGUMENTS` before Step 1; skip ahead if intent is already clear.
 
 ## Step 1: Discover Existing Executors
 
-Determine the experiment-repo root (the user's CWD). Then call the shared discovery helper — identical to what `/submit` uses so both commands see the same set of executors:
+Determine the experiment-repo root (the user's CWD). Then call the shared discovery helper — identical to what `/submit-hpc` uses so both commands see the same set of executors:
 
 ```python
 from hpc_mapreduce import discover_executors
@@ -44,7 +44,7 @@ What do you want to build?
   (b) Scaffold a fresh executor from the hpc-mapreduce template
 ```
 
-If the user wants to wrap an existing script that doesn't match the grid-param CLI conventions, **redirect them to `/submit`**: the parallelization axis is expressed in user-written Python during `/submit` Step 6 (`.hpc/tasks.py`), not via a separate file produced by this command.
+If the user wants to wrap an existing script that doesn't match the grid-param CLI conventions, **redirect them to `/submit-hpc`**: the parallelization axis is expressed in user-written Python during `/submit-hpc` Step 6 (`.hpc/tasks.py`), not via a separate file produced by this command.
 
 If `discover_executors` returns an empty list, skip the (a) option and note the directory was empty.
 
@@ -83,24 +83,24 @@ If the smoke test fails (ImportError, SyntaxError, `--help` non-zero exit), read
 
 ## Step 5: Tell the User How to Submit
 
-Print the exact `/submit` invocation that will now work with the new executor. Examples:
+Print the exact `/submit-hpc` invocation that will now work with the new executor. Examples:
 
 ```
 Ready. Try:
-  /submit run <new_name>
+  /submit-hpc run <new_name>
 or with grid overrides:
-  /submit run <new_name> horizon=[1,5,25]
+  /submit-hpc run <new_name> horizon=[1,5,25]
 ```
 
 ## Step 6: Cache and Report
 
-Save to Claude Code memory for this project: the directory where the new executor landed (so `/submit`'s discovery finds it next time).
+Save to Claude Code memory for this project: the directory where the new executor landed (so `/submit-hpc`'s discovery finds it next time).
 
-End with a concise report: what was created, where, and the `/submit` command that exercises it.
+End with a concise report: what was created, where, and the `/submit-hpc` command that exercises it.
 
 ## Common executor patterns
 
-`templates/starters/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit` Step 6 wires whichever of these flags the user wants to fan out across into `.hpc/tasks.py`'s `resolve()`.
+`templates/starters/executor_template.py` ships with the contract scaffold (just `--output-file` plus a generic `compute()` stub). When customizing for a specific domain, consult these patterns for which CLI flags to add. `/submit-hpc` Step 6 wires whichever of these flags the user wants to fan out across into `.hpc/tasks.py`'s `resolve()`.
 
 **(a) ML training executor** — fit on a date/index window, score against a horizon, write a metric.
 

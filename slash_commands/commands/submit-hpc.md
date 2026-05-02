@@ -33,12 +33,12 @@ silently — a stale `_hpc_dispatch.json` next to a fresh `.hpc/tasks.py`
 is confusing on inspection.
 
 0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /monitor-hpc, or start a new submission?"
-   - This only handles the case where the user wants to switch context away from a fresh `/submit` toward picking up an existing run; otherwise fall through to priority 1.
-   - **Group by `campaign_id` when displaying multiple in-flight runs.** Each `RunRecord` carries a `campaign_id` field (empty string for open-loop submits). When the user has more than ~3 in-flight runs and at least one has a non-empty `campaign_id`, render the offer grouped: "Found 3 in-flight campaigns and 2 standalone runs: campaign `ml_ridge_q1` (4 iterations in flight, last completed iteration's loss=0.42), campaign `walk_forward_2026q1` (1 iteration in flight), …, plus 2 standalone runs (`<run_id_1>`, `<run_id_2>`). Resume one with /monitor-hpc / /campaign status, or start a new submission?" The flat list is fine for ≤3 runs.
+   - This only handles the case where the user wants to switch context away from a fresh `/submit-hpc` toward picking up an existing run; otherwise fall through to priority 1.
+   - **Group by `campaign_id` when displaying multiple in-flight runs.** Each `RunRecord` carries a `campaign_id` field (empty string for open-loop submits). When the user has more than ~3 in-flight runs and at least one has a non-empty `campaign_id`, render the offer grouped: "Found 3 in-flight campaigns and 2 standalone runs: campaign `ml_ridge_q1` (4 iterations in flight, last completed iteration's loss=0.42), campaign `walk_forward_2026q1` (1 iteration in flight), …, plus 2 standalone runs (`<run_id_1>`, `<run_id_2>`). Resume one with /monitor-hpc / /campaign-hpc status, or start a new submission?" The flat list is fine for ≤3 runs.
 
 1. **Previous run**: If `.hpc/tasks.py` exists, the experiment has already been scaffolded. List the per-run sidecars under `.hpc/runs/` (newest-first via `find_existing_runs(experiment_dir)` from `hpc_mapreduce`) and offer: "Previous run: [run_id, profile, tasks, cluster, age]. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?"
    - **Resubmit same** → reuse the existing `.hpc/tasks.py`, recompute `cmd_sha` (it'll match because `tasks.py` is unchanged), skip to Step 5 (sync + submit). The new sidecar's `run_id` differs but `cmd_sha` matches the prior run.
-   - **Modify** → tell the user to edit `.hpc/tasks.py` directly (`_TASKS = [...]`), commit the change, and re-run `/submit`. The new `cmd_sha` will be different, so it's a fresh run.
+   - **Modify** → tell the user to edit `.hpc/tasks.py` directly (`_TASKS = [...]`), commit the change, and re-run `/submit-hpc`. The new `cmd_sha` will be different, so it's a fresh run.
    - **Start fresh** → only reachable when the user wants a clean reset; offer to delete `.hpc/tasks.py` so the scaffolding flow at Step 6 fires again.
 
 2. **No tasks.py yet**: Continue to Step 1 (full discovery).
@@ -71,7 +71,7 @@ For each executor, run `python3 <info.path> --help` to map its CLI interface (th
 - Data arguments (`--data-path`, `--horizon`, `--start`, `--end`)
 - Output arguments (`--output-file`)
 
-Present the inventory (use `info.name` and `info.path` as the identifiers; `info.docstring` is handy for the one-line summary). Examples are illustrative — `/submit` works with any executor that accepts grid-shaped CLI flags.
+Present the inventory (use `info.name` and `info.path` as the identifiers; `info.docstring` is handy for the one-line summary). Examples are illustrative — `/submit-hpc` works with any executor that accepts grid-shaped CLI flags.
 
 ```
 Executors found in src/ (illustrative — names, flags, and domain are per-experiment):
@@ -258,7 +258,7 @@ sample = tasks.resolve(0)               # sanity-check signature
 print(f"reusing existing .hpc/tasks.py: total()={n}, resolve(0)={sample}")
 ```
 
-If the user wants to change the axis, tell them to edit `.hpc/tasks.py` directly and re-run `/submit`. The framework never overwrites a user-authored file. Skip to Step 6c.
+If the user wants to change the axis, tell them to edit `.hpc/tasks.py` directly and re-run `/submit-hpc`. The framework never overwrites a user-authored file. Skip to Step 6c.
 
 ### Step 6b: Scaffold from the canonical example (first submit only)
 
@@ -320,7 +320,7 @@ Resume (re-dispatch only failed tasks) or fresh (new run_id)?
 
 ### Step 6d: Compute the throughput plan and write the sidecar
 
-With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Then write the per-run sidecar — this is the audit-trail artifact `/monitor-hpc` and `/aggregate` read on the cluster:
+With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Then write the per-run sidecar — this is the audit-trail artifact `/monitor-hpc` and `/aggregate-hpc` read on the cluster:
 
 ```python
 run_id = f"{profile}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{cmd_sha[:8]}"
@@ -358,7 +358,7 @@ sidecar_path = write_run_sidecar(
 )
 ```
 
-Pass `None` (or omit) for any v2 field that doesn't apply — they're all optional and absent keys are stripped from the on-disk JSON. Subsequent `/aggregate` and `/monitor-hpc` invocations read these fields back so the user never has to re-answer the interview.
+Pass `None` (or omit) for any v2 field that doesn't apply — they're all optional and absent keys are stripped from the on-disk JSON. Subsequent `/aggregate-hpc` and `/monitor-hpc` invocations read these fields back so the user never has to re-answer the interview.
 
 For multi-executor submissions, write one sidecar per executor — `run_id` and `executor` differ, but `tasks.py` is per-experiment and may be shared if the axes match.
 
@@ -437,7 +437,7 @@ Wait for the canary to reach a terminal state (`sacct -j <jobid>` / `qacct -j <j
 
 **Only if all three pass, proceed to Step 8 (full array submission).** If the canary fails, the fix cost is 1 task; skipping the canary and discovering a bad pipeline after 5000 tasks wastes hours of cluster time and poisons the queue for other users.
 
-To opt out (e.g., already smoke-tested in the last 10 minutes or single-task submission anyway), pass `--no-canary` to `/submit`. Default is canary-on.
+To opt out (e.g., already smoke-tested in the last 10 minutes or single-task submission anyway), pass `--no-canary` to `/submit-hpc`. Default is canary-on.
 
 ## Step 8: Submit
 
@@ -539,7 +539,7 @@ ssh $SSH_TARGET 'qstat -j '"$JOB_IDS"' 2>&1 | head -40; \
 
 If the first query shows an ID as unknown, retry **once** after a brief pause (busy SLURM controllers can lag a second or two before `squeue` reflects a new submission). If still unknown, treat as failed.
 
-On failure: surface the scheduler's reason verbatim (`qstat -j <id>` line `error reason 1:` for SGE, `sacct -j <id> -o JobID,State,Reason` for SLURM), tell the user which job ID is bad, and stop. Do not run Step 9 or Step 10 — the partial state is recoverable only if nothing was journaled. The user can then either fix the underlying issue (resources, queue, env) and re-run `/submit`, or, for SGE-specific transient `Eqw`, run `qmod -cj <jobid>` and re-verify.
+On failure: surface the scheduler's reason verbatim (`qstat -j <id>` line `error reason 1:` for SGE, `sacct -j <id> -o JobID,State,Reason` for SLURM), tell the user which job ID is bad, and stop. Do not run Step 9 or Step 10 — the partial state is recoverable only if nothing was journaled. The user can then either fix the underlying issue (resources, queue, env) and re-run `/submit-hpc`, or, for SGE-specific transient `Eqw`, run `qmod -cj <jobid>` and re-verify.
 
 If the canary in Step 7b just succeeded, this verification almost always passes; the value is catching the rare case where the full-array submit hits a quota/AR/queue limit the canary did not.
 

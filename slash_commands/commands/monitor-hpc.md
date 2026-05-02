@@ -29,7 +29,7 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
    > "Found 5 in-flight runs across 2 campaigns + 1 standalone:
    >  • campaign `ml_ridge_q1` (3 iterations in flight; last completed
-   >    iteration's `loss=0.42`); resume with `/campaign status
+   >    iteration's `loss=0.42`); resume with `/campaign-hpc status
    >    --campaign-id ml_ridge_q1` for the full history.
    >  • campaign `walk_forward_2026q1` (1 iteration in flight).
    >  • standalone run `<run_id>` ({profile} on {cluster}, last status
@@ -87,7 +87,7 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
       mkdir -p .hpc/runs
       rsync -az $SSH_TARGET:$REMOTE_PATH/.hpc/runs/<run_id>.json ./.hpc/runs/<run_id>.json
       ```
-   2. `.hpc/tasks.py` should already be in your local repo (it's git-tracked). If it's missing, the experiment was never properly scaffolded — re-run `/submit` and follow Step 6's scaffolding flow.
+   2. `.hpc/tasks.py` should already be in your local repo (it's git-tracked). If it's missing, the experiment was never properly scaffolded — re-run `/submit-hpc` and follow Step 6's scaffolding flow.
    3. If both are missing on the cluster too, fall back to reading `logs/<job_name>_<job_id>_<task_id>.out` for each task as the last-resort artifact and surface the gap to the user — monitoring can only be partial without the sidecar.
 
 ## SSH Quoting
@@ -201,7 +201,7 @@ print(sc["sidecar_schema_version"], sc["task_count"])
 print(load_tasks_module(tasks_path(".")).total())'
 ```
 
-Verify `sidecar_schema_version >= 1` and `task_count` matches both `tasks.total()` and the value the user passed (or the sum of array sizes from squeue/qstat). A mismatch suggests the local `.hpc/tasks.py` was edited after submission; re-run `/submit` to write a fresh sidecar with the current task list.
+Verify `sidecar_schema_version >= 1` and `task_count` matches both `tasks.total()` and the value the user passed (or the sum of array sizes from squeue/qstat). A mismatch suggests the local `.hpc/tasks.py` was edited after submission; re-run `/submit-hpc` to write a fresh sidecar with the current task list.
 
 ### 0.5c — Executor imports cleanly
 
@@ -453,7 +453,7 @@ After aggregation:
 
 ### Multi-Stage Progression
 
-If the current stage completes and another stage has `depends_on` pointing to this stage, check the `depends_on` graph for newly unblocked stages. For each unblocked stage, prompt: "Stage `<next_stage>` is now unblocked (depends on `<this_stage>`). Submit it? (`/submit <profile_name>.<next_stage>`)"
+If the current stage completes and another stage has `depends_on` pointing to this stage, check the `depends_on` graph for newly unblocked stages. For each unblocked stage, prompt: "Stage `<next_stage>` is now unblocked (depends on `<this_stage>`). Submit it? (`/submit-hpc <profile_name>.<next_stage>`)"
 
 ## Step 5: Schedule the Next Tick
 
