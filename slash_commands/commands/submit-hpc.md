@@ -364,6 +364,34 @@ For multi-executor submissions, write one sidecar per executor — `run_id` and 
 
 `write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 500; override via `HPC_MAX_RUNS`). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
 
+## Step 6b: Pre-flight Gate
+
+Verify the local environment can submit to `<cluster>` BEFORE any SSH/rsync. Used to live as a standalone `/preflight` command; now folded in here with a per-cluster cache so it only re-checks when stale.
+
+Cache marker: `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` with `{checked_at, all_ok, cluster}`. TTL 24 h. If the marker exists, `all_ok=true`, and `checked_at` is < 24 h old, log `preflight: cached <N>m ago — OK` and skip to Step 7.
+
+Otherwise, run the CLI and parse the JSON envelope:
+
+```bash
+python -m hpc_mapreduce preflight --cluster <name>
+```
+
+On `data.all_ok == true`: write/update the marker (`checked_at = now()`), continue to Step 7.
+
+On any check failure: do NOT write the marker, do NOT proceed to Step 7. Surface the failing checks with their `detail` fields verbatim (don't paraphrase — the user needs the raw error to fix it). Standard remediations to suggest:
+
+| Failed check | Remediation |
+|---|---|
+| `ssh_auth_sock` | `ssh-add ~/.ssh/<key>`; check tmux/screen `SSH_AUTH_SOCK` forwarding |
+| `ssh_on_path` / `rsync_on_path` | install via system package manager |
+| `clusters_yaml_parses` | fix the YAML parse error first; nothing else will work |
+| `cluster_known` | typo in `--cluster` vs. `clusters.yaml` entry |
+| `cluster_tcp_22` | cluster offline or hostname wrong; do NOT retry blindly |
+
+The sidecar from Step 6 is already on disk, so re-running `/submit-hpc` after the user fixes the env will land in Setup priority 1 ("Previous run") and offer "Resubmit same" — they don't have to re-do the interview.
+
+The user can still invoke `/preflight --cluster <name>` standalone (e.g., to ad-hoc verify SSH agent forwarding without a pending submission); that command writes the same marker, so a recent standalone run satisfies this gate too.
+
 ## Step 7: Sync to Cluster
 
 Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework files** — `deploy_runtime` does that via scp, and rsync would otherwise overwrite the cluster-side `.hpc/_hpc_dispatch.py` etc. with files that don't exist locally.
