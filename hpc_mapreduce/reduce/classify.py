@@ -15,6 +15,7 @@ import re
 CATEGORIES = (
     "gpu_oom",
     "system_oom",
+    "segv",
     "walltime",
     "node_failure",
     "queue_stall",
@@ -44,6 +45,17 @@ _SYSTEM_OOM = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _QUEUE_STALL = re.compile(r"queue[_\s-]?stall|stalled in queue", re.IGNORECASE)
+# Tagged separately from node_failure so /monitor-hpc can record an entry to
+# the per-cluster blacklist (hpc_mapreduce.job.blacklist) — a SEGV without a
+# Python traceback is the strongest "node may be silently degraded" signal.
+_SEGV = re.compile(
+    r"Segmentation fault"
+    r"|SIGSEGV"
+    r"|signal\s*(?:11|SEGV)"
+    r"|exit\s*-?11\b"
+    r"|core dumped",
+    re.IGNORECASE,
+)
 _TRACEBACK = re.compile(r"Traceback \(most recent call last\):")
 
 
@@ -56,8 +68,9 @@ def classify_failure(log_text: str) -> str:
     traceback check so that e.g. a ``torch.cuda.OutOfMemoryError`` traceback
     classifies as ``"gpu_oom"`` rather than ``"code_bug"``.
 
-    Returns one of: ``"gpu_oom"``, ``"system_oom"``, ``"walltime"``,
-    ``"node_failure"``, ``"queue_stall"``, ``"code_bug"``, ``"unknown"``.
+    Returns one of: ``"gpu_oom"``, ``"system_oom"``, ``"segv"``,
+    ``"walltime"``, ``"node_failure"``, ``"queue_stall"``, ``"code_bug"``,
+    ``"unknown"``.
     """
     if not log_text:
         return "unknown"
@@ -70,6 +83,10 @@ def classify_failure(log_text: str) -> str:
         return "node_failure"
     if _SYSTEM_OOM.search(log_text):
         return "system_oom"
+    # SEGV check before queue_stall and Traceback: a segfault often emits
+    # no Python frames and would otherwise fall through to "unknown".
+    if _SEGV.search(log_text):
+        return "segv"
     if _QUEUE_STALL.search(log_text):
         return "queue_stall"
     if _TRACEBACK.search(log_text):

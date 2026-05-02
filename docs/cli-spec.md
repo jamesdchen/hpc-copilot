@@ -295,7 +295,7 @@ cache file next to the journal record.
 
 Args: `--experiment-dir`, `--run-id <id>` (required).
 
-`data` shape (validated against `schemas/monitor-hpc.output.json`):
+`data` shape (validated against `schemas/status.output.json`):
 
 ```json
 {
