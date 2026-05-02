@@ -467,11 +467,11 @@ def _parse_qstat_full(text: str) -> dict[str, list[dict[str, Any]]]:
         stripped = line.strip()
         if not stripped:
             continue
+        first_token = stripped.split()[0]
         # Queue-instance header lines look like:
         # all.q@compute-001.local             BIP   0/4/16         1.23     ...
-        if "@" in stripped.split()[0] if stripped.split() else False:
-            qi = stripped.split()[0]
-            current_host = qi.split("@", 1)[1].split(".", 1)[0]
+        if "@" in first_token:
+            current_host = first_token.split("@", 1)[1].split(".", 1)[0]
             seen_jobs_per_host.setdefault(current_host, set())
             continue
         # Job lines look like (after the queue-instance header):
@@ -544,6 +544,14 @@ class _CommandRunner:
             return cp.returncode, cp.stdout or "", cp.stderr or ""
         except TimeoutError as exc:
             return 124, "", str(exc)
+        except FileNotFoundError as exc:
+            # ssh binary missing on this host — same shape as a remote
+            # `command not found` so callers don't need a separate branch.
+            return 127, "", f"missing binary: {exc}"
+        except OSError as exc:
+            # Other OS-level failures (broken pipe, etc.) — surface as a
+            # generic non-zero rather than letting them propagate.
+            return 1, "", f"os error: {exc}"
 
 
 # --- public entry ---------------------------------------------------------

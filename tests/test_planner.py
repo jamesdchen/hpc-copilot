@@ -147,6 +147,33 @@ class TestPlanSubmit:
         assert c["runtime_prior_quantiles_sec"]["a100"]["n_samples"] == 5
 
 
+class TestNodesForConstraint:
+    def test_substring_overmatch_avoided(self):
+        # `a10` must not match a node whose Gres advertises `a100`. The
+        # naive substring-in approach would silently include this node;
+        # the token-aware match correctly excludes it.
+        from hpc_mapreduce.infra.inspect import NodeSnapshot
+
+        a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
+        out = planner._nodes_for_constraint([a100_node], gpu_types=["a10"])
+        assert out == []
+
+    def test_exact_match_still_works(self):
+        from hpc_mapreduce.infra.inspect import NodeSnapshot
+
+        a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
+        out = planner._nodes_for_constraint([a100_node], gpu_types=["a100"])
+        assert out == [a100_node]
+
+    def test_active_features_fallback(self):
+        # Some clusters expose the GPU type as a feature, not a GRES type.
+        from hpc_mapreduce.infra.inspect import NodeSnapshot
+
+        node = NodeSnapshot(name="d11-08", gres="gpu:1", active_features=["v100"])
+        out = planner._nodes_for_constraint([node], gpu_types=["v100"])
+        assert out == [node]
+
+
 class TestTestOnlyEtaParser:
     def test_parses_iso_timestamp(self):
         from datetime import datetime, timedelta, timezone
