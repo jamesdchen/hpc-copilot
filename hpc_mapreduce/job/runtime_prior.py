@@ -49,20 +49,36 @@ import json
 import os
 import statistics
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION: int = 1
 
+# Per-(profile, cluster) sample-count cap. Override via HPC_MAX_RUNTIME_SAMPLES.
+# A long campaign easily produces hundreds of thousands of tasks; the prior is
+# advisory not audit, so trimming oldest-first is safe.
+MAX_SAMPLES: int = int(os.environ.get("HPC_MAX_RUNTIME_SAMPLES", "10000"))
+
 
 def runtime_path(experiment_dir: Path, profile: str, cluster: str) -> Path:
+    """Return the runtime-priors file path for ``(profile, cluster)``.
+
+    Resolves *experiment_dir* to an absolute path so writers and readers
+    invoked from different working directories see the same file.
+    """
     if not profile:
         raise ValueError("profile must be non-empty")
     if not cluster:
         raise ValueError("cluster must be non-empty")
     safe_profile = profile.replace("/", "_")
-    return Path(experiment_dir) / ".hpc" / "runtimes" / f"{safe_profile}.{cluster}.json"
+    return (
+        Path(experiment_dir).resolve()
+        / ".hpc"
+        / "runtimes"
+        / f"{safe_profile}.{cluster}.json"
+    )
 
 
 def _empty_doc(profile: str, cluster: str) -> dict[str, Any]:
@@ -95,8 +111,17 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
     return doc
 
 
-def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
-    """Atomic write under flock — same pattern as blacklist.py."""
+def _with_locked_doc(
+    path: Path,
+    profile: str,
+    cluster: str,
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """Read-modify-write inside a single flock so concurrent writers
+    serialize. The read happens *inside* the lock to prevent the
+    classic "two writers each see stale state, one's append is lost"
+    race.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     try:
@@ -107,6 +132,8 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
     try:
         if fcntl is not None:
             fcntl.flock(fd, fcntl.LOCK_EX)
+        existing = _read_doc(path, profile, cluster)
+        new_doc = mutate(existing)
         tmp = tempfile.NamedTemporaryFile(
             "w",
             delete=False,
@@ -116,7 +143,7 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
             encoding="utf-8",
         )
         try:
-            json.dump(doc, tmp, indent=2, sort_keys=True)
+            json.dump(new_doc, tmp, indent=2, sort_keys=True)
             tmp.flush()
             os.fsync(tmp.fileno())
             tmp.close()
@@ -130,6 +157,7 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
         finally:
             if not tmp.closed:
                 tmp.close()
+        return new_doc
     finally:
         if fcntl is not None:
             try:
@@ -163,9 +191,15 @@ def append_sample(
     Idempotent on ``(run_id, task_id)``: a duplicate call replaces the
     existing record rather than appending a second copy. This protects
     against monitor-replay scenarios.
+
+    Concurrency: the read-filter-append-write happens inside a single
+    flock so two concurrent writers cannot lose each other's appends.
+
+    Bounded growth: the samples list is capped at :data:`MAX_SAMPLES`
+    (default 10k, override via ``HPC_MAX_RUNTIME_SAMPLES``). Oldest-
+    first eviction — the priors are advisory, not audit-grade.
     """
     path = runtime_path(experiment_dir, profile, cluster)
-    doc = _read_doc(path, profile, cluster)
     sample = {
         "run_id": run_id,
         "task_id": int(task_id),
@@ -181,15 +215,20 @@ def append_sample(
         "concurrent_user_count_at_start": concurrent_user_count_at_start,
         "walltime_requested_sec": walltime_requested_sec,
     }
-    # De-dup: replace any existing same-(run_id, task_id) record.
-    samples = [
-        s
-        for s in doc["samples"]
-        if not (s.get("run_id") == run_id and s.get("task_id") == int(task_id))
-    ]
-    samples.append(sample)
-    doc["samples"] = samples
-    _atomic_write_locked(path, doc)
+
+    def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
+        samples = [
+            s
+            for s in doc.get("samples", [])
+            if not (s.get("run_id") == run_id and s.get("task_id") == int(task_id))
+        ]
+        samples.append(sample)
+        if len(samples) > MAX_SAMPLES:
+            samples = samples[-MAX_SAMPLES:]
+        doc["samples"] = samples
+        return doc
+
+    _with_locked_doc(path, profile, cluster, _mutate)
     return path
 
 

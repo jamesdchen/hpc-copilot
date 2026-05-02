@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from hpc_mapreduce.job import runtime_prior as rp
 
 
@@ -153,3 +155,63 @@ class TestRollUp:
             tmp_path, profile="ml_ridge", cluster="discovery"
         )
         assert out["needs_canary"] is True
+
+
+class TestBoundedGrowth:
+    def test_max_samples_caps_oldest_first(self, tmp_path, monkeypatch):
+        # Force a small cap so the test is fast and deterministic.
+        monkeypatch.setattr(rp, "MAX_SAMPLES", 5)
+        for tid in range(8):
+            rp.append_sample(
+                tmp_path,
+                profile="p",
+                cluster="c",
+                run_id="r1",
+                task_id=tid,
+                gpu_type="a100",
+                node="n1",
+                elapsed_sec=100 + tid,
+            )
+        samples = rp.read_samples(tmp_path, profile="p", cluster="c")
+        assert len(samples) == 5
+        # FIFO: oldest (tid=0..2) dropped, newest (tid=3..7) survive.
+        assert {s["task_id"] for s in samples} == {3, 4, 5, 6, 7}
+
+
+class TestPathNormalization:
+    def test_relative_and_absolute_resolve_to_same_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # Write via relative path, read via absolute path — must be the
+        # same file.
+        rp.append_sample(
+            ".",
+            profile="p",
+            cluster="c",
+            run_id="r1",
+            task_id=0,
+            gpu_type="a100",
+            node="n1",
+            elapsed_sec=100,
+        )
+        from_abs = rp.read_samples(tmp_path, profile="p", cluster="c")
+        assert len(from_abs) == 1
+
+
+class TestDocFileShape:
+    def test_round_trip_via_disk(self, tmp_path):
+        rp.append_sample(
+            tmp_path,
+            profile="p",
+            cluster="c",
+            run_id="r1",
+            task_id=0,
+            gpu_type="a100",
+            node="n1",
+            elapsed_sec=100,
+        )
+        path = rp.runtime_path(tmp_path, "p", "c")
+        doc = json.loads(path.read_text())
+        assert doc["schema_version"] == rp.SCHEMA_VERSION
+        assert doc["profile"] == "p"
+        assert doc["cluster"] == "c"
+        assert isinstance(doc["samples"], list)

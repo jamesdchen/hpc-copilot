@@ -248,22 +248,25 @@ No runtime priors exist for this `(profile, cluster)`. Don't try to score — su
    )
    ```
 
-5. On SEGV: record to the blacklist and surface to the user. **Do not auto-retry on a different node** — the failure is informative; re-running blindly may mask whether the workload itself is buggy.
+5. On SEGV: record to the blacklist and **stop the smart-planning flow** — surface the failure to the user with the canary's stderr tail and the SEGV node. Do NOT auto-retry on a different node (the failure is informative; re-running blindly may mask whether the workload itself is buggy) and do NOT keep looping into a fresh canary (without a successful canary the priors stay empty, so a re-entry would just request another canary and the loop would never terminate). The user decides whether to retry, fix the executor, or extend the blacklist manually.
 
    ```python
    from hpc_mapreduce.job.blacklist import record_segv
    record_segv(
-       experiment_dir=Path("."),
+       experiment_dir,                    # absolute path; same root used by /hpc-monitor
        cluster=cluster,
        node=node, run_id=canary_run_id, job_id=job_id, task_id=0,
        exit_code=exit_code, signal=-11,
-       host_allocmem_pct=...,         # from inspect-cluster snapshot at SEGV time
+       host_allocmem_pct=...,             # from inspect-cluster snapshot at SEGV time
        concurrent_jobs=[...],
    )
    ```
 
-6. On timeout: bump walltime 2× and retry once. After two timeouts, surface to the user.
-7. After ingestion, re-run `plan-submit` and proceed to 4c-B.
+6. On timeout: bump walltime 2× and retry the canary **once**. After two timeouts, surface to the user. Track the per-(profile, cluster) timeout count in the run sidecar's `extra` block so a cold-session resume sees the prior attempt count.
+
+7. After a *successful* canary, re-run `plan-submit` and proceed to 4c-B. The re-call sees one sample of the same `cmd_sha` and now returns scored candidates.
+
+> **Path consistency:** `record_segv()` and `append_sample()` both resolve `experiment_dir` to an absolute path internally, so a writer invoked from the project root and a reader invoked from a child directory hit the same `.hpc/bad_nodes.<cluster>.json` / `.hpc/runtimes/<profile>.<cluster>.json`.
 
 ### 4c-B: `needs_canary: false` (priors exist)
 

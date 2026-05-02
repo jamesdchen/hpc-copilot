@@ -440,18 +440,20 @@ def _parse_qhost(text: str) -> list[NodeSnapshot]:
                 current.alloc_mem_pct = round(mem_used / current.real_mem_mb, 4)
             nodes.append(current)
         else:
-            # Resource attribute line for the current host (e.g. "    hl:gpu=2").
-            # Match `gpu_used=N` and `gpu=N` separately so a line that contains
-            # both forms (`hl:gpu=2 gl:gpu_used=1`) routes each value to the
-            # right field. Substring-checking the whole line miscategorizes
-            # the free-GPU value as `gres_used` in that case.
+            # Resource attribute line for the current host. Accepts both
+            # the prefixed form (e.g. ``hl:gpu=2``, ``gl:gpu_used=1``)
+            # used by most SGE installs and the bare form (``gpu=2``)
+            # some clusters emit. Two scoped searches so a line that
+            # carries both routes each value to the correct field —
+            # substring-checking the whole line miscategorizes one of
+            # the two values.
             if current is None:
                 continue
             text_line = line.strip()
-            m_used = re.search(r"[A-Za-z]+:gpu_used=(\S+)", text_line)
+            m_used = re.search(r"(?:[A-Za-z]+:)?gpu_used=(\S+)", text_line)
             if m_used:
                 current.gres_used = f"gpu:{m_used.group(1)}"
-            m_free = re.search(r"(?<!_)[A-Za-z]+:gpu=(\S+)", text_line)
+            m_free = re.search(r"(?<![A-Za-z_])(?:[A-Za-z]+:)?gpu=(\S+)", text_line)
             if m_free:
                 current.gres = f"gpu:{m_free.group(1)}"
     return nodes

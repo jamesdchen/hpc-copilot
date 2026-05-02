@@ -119,6 +119,36 @@ class TestSacctParser:
 # --- nodelist expansion ---------------------------------------------------
 
 
+class TestQhostBareGpu:
+    def test_bare_gpu_without_prefix(self):
+        # Some SGE installs emit `gpu=2` directly under the host without
+        # the `hl:` / `gl:` prefix. The parser must still capture it.
+        text = (
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
+            "----------------------------------------------------------------------------------------------\n"
+            "global                  -               -    -    -    -     -       -       -       -       -\n"
+            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"
+            "    gpu=4\n"
+            "    gpu_used=1\n"
+        )
+        nodes = ins._parse_qhost(text)
+        assert len(nodes) == 1
+        assert nodes[0].gres == "gpu:4"
+        assert nodes[0].gres_used == "gpu:1"
+
+    def test_prefixed_gpu_still_works(self):
+        text = (
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
+            "----------------------------------------------------------------------------------------------\n"
+            "compute-002             lx-amd64       32    2   16   32  5.20  512.0G  100.0G   16.0G    1.0G\n"
+            "    hl:gpu=8\n"
+            "    gl:gpu_used=2\n"
+        )
+        nodes = ins._parse_qhost(text)
+        assert nodes[0].gres == "gpu:8"
+        assert nodes[0].gres_used == "gpu:2"
+
+
 class TestNodelistExpansion:
     def test_single_node(self):
         assert ins._expand_slurm_nodelist("d11-03") == ["d11-03"]
