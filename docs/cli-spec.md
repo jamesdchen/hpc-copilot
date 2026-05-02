@@ -1,7 +1,7 @@
 # `hpc-mapreduce` CLI Specification
 
 Authoritative contract for the shell CLI shipped at
-`hpc_mapreduce/cli.py` (entry point `hpc-mapreduce`). This is the
+`hpc_mapreduce/agent_cli.py` (entry point `hpc-mapreduce`). This is the
 agent-facing surface — designed to be invoked by Bash from MARs
 orchestrators, scripts, and cron. The slash-command surface in
 `slash_commands/commands/` is documented elsewhere; both surfaces share
@@ -58,7 +58,7 @@ Source of truth: `hpc_mapreduce/schemas/envelope.json` and the
 
 ## Exit code → error_code mapping
 
-Wired in `hpc_mapreduce/cli.py` (`_EXIT_CODE_BY_CATEGORY`).
+Wired in `hpc_mapreduce/agent_cli.py` (`_EXIT_CODE_BY_CATEGORY`).
 
 | Exit | Category | Meaning | error_codes that map here |
 |---|---|---|---|

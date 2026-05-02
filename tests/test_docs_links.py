@@ -130,7 +130,7 @@ def test_mars_snippet_error_codes_match_code() -> None:
 
 def test_mars_docs_env_vars_match_capabilities() -> None:
     """Env vars mentioned in docs must match capabilities.required_env."""
-    from hpc_mapreduce.cli import _MARS_SKILL_NAMES  # noqa: F401  (just to ensure import)
+    from hpc_mapreduce.agent_cli import _MARS_SKILL_NAMES  # noqa: F401  (just to ensure import)
 
     # Re-execute capabilities in-process to get the canonical list.
     import argparse
@@ -141,7 +141,7 @@ def test_mars_docs_env_vars_match_capabilities() -> None:
     def fake_emit(payload):
         captured.append(payload)
 
-    from hpc_mapreduce import cli
+    from hpc_mapreduce import agent_cli as cli
 
     with patch.object(cli, "_emit", side_effect=fake_emit):
         cli.cmd_capabilities(argparse.Namespace())

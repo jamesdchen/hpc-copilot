@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce import cli
+from hpc_mapreduce import agent_cli as cli
 
 
 def _run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:

@@ -19,7 +19,7 @@ package. Groupings mirror those in
 [`hpc_mapreduce/__init__.py`](../hpc_mapreduce/__init__.py).
 
 The public boundary also now includes the **shell CLI** at
-`hpc_mapreduce/cli.py` (entry point `hpc-mapreduce`). Its envelope
+`hpc_mapreduce/agent_cli.py` (entry point `hpc-mapreduce`). Its envelope
 shape, subcommand list, and exit-code contract are documented in
 [`docs/cli-spec.md`](cli-spec.md) and the JSON Schemas under
 `hpc_mapreduce/schemas/`. The CLI calls into the same atomic-ops layer
