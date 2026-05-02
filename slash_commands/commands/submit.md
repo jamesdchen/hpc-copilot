@@ -339,13 +339,29 @@ sidecar_path = write_run_sidecar(
     task_count=tasks.total(),
     tasks_py_sha=tasks_py_sha,
     wave_map=wave_map,                           # from Step 4b's build_wave_map(plan)
-    extra={"git_sha": git_sha, "profile": profile},
+    extra={"git_sha": git_sha},
+    # ----- v2 config snapshot — populate everything that applies -----
+    cluster=cluster_name,                        # e.g. "hoffman2" / "discovery"
+    profile=profile,                             # the label distinguishing this submission shape
+    project=project,                             # short project name from the interview
+    remote_path=remote_path,
+    resources=resources,                         # {"cpus": 8, "mem": "64G", "walltime": "...", ...}
+    env=env,                                     # {"modules": "...", "conda_env": "..."}
+    env_group=env_group,                         # clusters.yaml env_group key, if used
+    constraints=resolved_constraints,            # the per-experiment overlay on clusters.yaml
+    gpu_fallback=gpu_fallback,                   # ordered GPU types if applicable
+    max_retries=max_retries,
+    runtime=runtime,                             # "uv" if requested
+    auto_retry=auto_retry,                       # per-category override; None = use defaults
+    aggregate_defaults=aggregate_defaults,       # {"require_outputs": "...", "expect_output": "...", "aggregate_cmd": "..."}
 )
 ```
 
+Pass `None` (or omit) for any v2 field that doesn't apply — they're all optional and absent keys are stripped from the on-disk JSON. Subsequent `/aggregate` and `/status` invocations read these fields back so the user never has to re-answer the interview.
+
 For multi-executor submissions, write one sidecar per executor — `run_id` and `executor` differ, but `tasks.py` is per-experiment and may be shared if the axes match.
 
-`write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 10). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
+`write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 500; override via `HPC_MAX_RUNS`). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
 
 ## Step 7: Sync to Cluster
 
