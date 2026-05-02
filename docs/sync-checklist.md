@@ -125,7 +125,7 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 
 - **Documented in**: `docs/cli-spec.md` ("Exit code → error_code
   mapping" section).
-- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `hpc_mapreduce/cli.py`.
+- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `hpc_mapreduce/agent_cli.py`.
 
 ### Last-status cache file
 

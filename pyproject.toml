@@ -28,7 +28,7 @@ tui = [
 ]
 
 [project.scripts]
-hpc-mapreduce = "hpc_mapreduce.cli:main"
+hpc-mapreduce = "hpc_mapreduce.agent_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["hpc_mapreduce*", "slash_commands*"]

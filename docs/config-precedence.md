@@ -111,7 +111,7 @@ Notes:
 |---|---|---|---|
 | `HPC_JOURNAL_DIR` | `~/.claude/hpc` | `slash_commands/session.py` | Redirect journal storage. |
 | `HPC_CLUSTERS_CONFIG` | (package default) | `hpc_mapreduce/infra/clusters.py` | Use alternate `clusters.yaml`. |
-| `HPC_NO_SSH_MULTIPLEX` | unset | `hpc_mapreduce/cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
+| `HPC_NO_SSH_MULTIPLEX` | unset | `hpc_mapreduce/agent_cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
 | `SSH_AUTH_SOCK` | (set by ssh-agent) | `cmd_preflight` | Required for SSH auth; preflight fails if missing. |
 | `HPC_MAX_RUNS` | `500` | `hpc_mapreduce/job/runs.py` | Override the per-experiment cap on retained run sidecars. |
 | `HPC_RUN_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py` | Locates `.hpc/runs/<run_id>.json`. |
