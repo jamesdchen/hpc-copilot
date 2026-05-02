@@ -2,21 +2,24 @@
 
 Covers:
 
-* ``discover_executors`` — the shared helper used by both ``/submit`` and
-  ``/build-executor`` to enumerate runnable scripts in an experiment repo.
-* Template parseability — the files under ``templates/`` that
-  ``/build-executor`` copies must remain importable Python so the smoke
-  test in Step 4 can succeed.
-* Dry-run scaffold — simulates mode (b) of the command by copying
+* ``discover_executors`` — the shared helper used by both ``/submit-hpc``
+  and ``/build-executor-hpc`` to enumerate runnable executors in an
+  experiment repo. Recognizes both contracts: new
+  (``compute(args)`` exported) and old (``__main__`` + argparse).
+* Template parseability — the files under ``templates/`` that the
+  scaffold step copies must remain importable Python so the post-copy
+  smoke test can succeed.
+* Dry-run scaffold — simulates the new-executor flow by copying
   ``executor_template.py`` into a fresh tmp directory and verifying the
-  file lands at the user-chosen path.
+  file lands at the user-chosen path and remains call-able.
 """
 
 from __future__ import annotations
 
+import argparse
 import ast
+import importlib.util
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -26,6 +29,14 @@ from hpc_mapreduce.job.discover import (
     discover_executors,
     is_executor_source,
 )
+
+
+def _load_template_module(path: Path):
+    spec = importlib.util.spec_from_file_location(f"_loaded_{path.stem}", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mock_experiment"
 TEMPLATES_DIR = _PACKAGE_ROOT / "templates" / "starters"
@@ -96,6 +107,28 @@ class TestDiscoverExecutors:
         infos = discover_executors(tmp_path)
         assert [i.name for i in infos] == ["rev"]
 
+    def test_recognizes_new_compute_contract(self, tmp_path: Path) -> None:
+        """New contract: a file exporting ``compute(args)`` is an executor
+        even without a ``__main__`` guard or CLI framework import. The
+        dispatcher in .hpc/cli.py provides argv parsing and entry point."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "ml_ridge.py").write_text("def compute(args):\n    pass\n")
+        infos = discover_executors(tmp_path)
+        assert [i.name for i in infos] == ["ml_ridge"]
+        info = infos[0]
+        assert info.has_compute_function is True
+        assert info.has_main_guard is False
+        assert info.cli_framework is None
+        assert info.is_executor is True
+
+    def test_rejects_zero_arg_compute(self, tmp_path: Path) -> None:
+        """``def compute():`` (no positional args) does not match the
+        contract — most likely a coincidence, not the dispatcher entry
+        point. The dispatcher always calls ``compute(args)``."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "noop.py").write_text("def compute():\n    pass\n")
+        assert discover_executors(tmp_path) == []
+
 
 class TestIsExecutorSource:
     def test_positive(self) -> None:
@@ -157,17 +190,16 @@ def test_executor_template_is_self_classified_as_executor() -> None:
     assert is_executor_source(source) is True
 
 
-def test_executor_template_help_runs() -> None:
-    """Step 4 of the command spec runs `--help` on the scaffold; make sure
-    that contract holds before any customization happens."""
-    result = subprocess.run(
-        [sys.executable, str(TEMPLATES_DIR / "executor_template.py"), "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    assert "--output-file" in result.stdout
+def test_executor_template_compute_runs_standalone(tmp_path: Path) -> None:
+    """Under the new contract the template has no ``__main__`` block (the
+    .hpc/cli.py dispatcher is the entry point). What every scaffolded
+    executor must still satisfy is: ``compute(args)`` is callable with
+    a minimal Namespace and writes the per-task output file. This is
+    the standalone smoke test for fresh-template state."""
+    mod = _load_template_module(TEMPLATES_DIR / "executor_template.py")
+    out = tmp_path / "out.csv"
+    mod.compute(argparse.Namespace(output_file=str(out)))
+    assert out.is_file()
 
 
 # ─── Dry-run scaffold ────────────────────────────────────────────────────
@@ -191,11 +223,8 @@ def test_scaffold_from_template_copies_into_experiment_repo(tmp_path: Path) -> N
     infos = discover_executors(experiment_repo)
     assert [i.name for i in infos] == ["my_new_model"]
 
-    # And it must still pass --help.
-    result = subprocess.run(
-        [sys.executable, str(target), "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
+    # And it must still expose a callable compute(args) post-copy.
+    mod = _load_template_module(target)
+    out = tmp_path / "scaffold_out.csv"
+    mod.compute(argparse.Namespace(output_file=str(out)))
+    assert out.is_file()

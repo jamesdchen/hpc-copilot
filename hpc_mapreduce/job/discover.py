@@ -1,16 +1,20 @@
 """Experiment-executor discovery.
 
-Shared helpers used by both ``/submit`` (when scanning a repo for runnable
-scripts) and ``/build-executor`` (when deciding which existing executor to
-clone). The contract is intentionally minimal:
+Shared helpers used by ``/submit-hpc`` (when scanning a repo for runnable
+executors). The contract is intentionally minimal — an **executor** is a
+``.py`` file matching either of two patterns:
 
-- An **executor** is a ``.py`` file that has both an ``argparse``-style CLI
-  (it imports ``argparse`` or uses ``click``/``typer``) and an
-  ``if __name__ == "__main__":`` entry point.
-- A **shared utility** is a ``.py`` file with neither.
+- **New contract (preferred):** exports ``compute(args) -> None``. CLI
+  dispatch lives in the auto-generated ``.hpc/cli.py``; the executor is
+  pure compute. No ``__main__`` block needed.
+- **Old contract (transitional):** has both an ``argparse``-style CLI
+  (``argparse`` / ``click`` / ``typer`` / ``fire``) AND an
+  ``if __name__ == "__main__":`` block. Self-dispatching script.
+
+A **shared utility** is a ``.py`` file matching neither.
 
 No registry, no ABC, no plugin hooks — just a filesystem scan plus a light
-source parse. Any Python CLI script works.
+source parse. Any Python file with the right shape qualifies.
 """
 
 from __future__ import annotations
@@ -76,12 +80,17 @@ class ExecutorInfo:
         Stem of the filename (e.g. ``ml_ridge`` for ``ml_ridge.py``).
     has_main_guard:
         Whether the module has an ``if __name__ == "__main__":`` block.
+        Only relevant for the old self-dispatching contract.
     cli_framework:
         Name of the detected CLI module (``"argparse"``, ``"click"``,
         ``"typer"``, ``"fire"``) or ``None`` if none was found.
+        Only relevant for the old self-dispatching contract.
+    has_compute_function:
+        Whether the module exports ``compute(args)`` at the top level
+        (the new pure-compute contract; CLI lives in ``.hpc/cli.py``).
     imports:
-        Deduplicated top-level imports, used by ``/submit`` to classify the
-        executor as CPU/GPU/DL.
+        Deduplicated top-level imports, used by ``/submit-hpc`` to
+        classify the executor as CPU/GPU/DL.
     docstring:
         The module docstring's first line, if any — handy for summaries.
     """
@@ -92,10 +101,20 @@ class ExecutorInfo:
     cli_framework: str | None
     imports: tuple[str, ...] = field(default_factory=tuple)
     docstring: str | None = None
+    has_compute_function: bool = False
 
     @property
     def is_executor(self) -> bool:
-        """An executor has BOTH a main guard and a recognized CLI framework."""
+        """True under either the new or old executor contract.
+
+        New (preferred): exports ``compute(args)`` — the dispatcher in
+        ``.hpc/cli.py`` provides argv parsing and entry-point.
+
+        Old (transitional): has ``__main__`` guard plus a recognized
+        CLI framework — self-dispatching script.
+        """
+        if self.has_compute_function:
+            return True
         return self.has_main_guard and self.cli_framework is not None
 
 
@@ -147,12 +166,11 @@ def detect_mars_tier(experiment_dir: Path | str) -> int | None:
 def is_executor_source(source: str) -> bool:
     """Quick check on raw Python source text.
 
-    Returns ``True`` iff the source parses and has (a) a top-level
-    ``if __name__ == "__main__"`` guard and (b) an import of a recognized
-    CLI framework.
+    Returns ``True`` iff the source parses and matches either the new
+    contract (top-level ``compute(args)`` function) or the old contract
+    (``__main__`` guard plus a recognized CLI framework import).
     """
-    info = _parse_source(source)
-    return info.has_main_guard and info.cli_framework is not None
+    return _parse_source(source).is_executor
 
 
 def discover_executors(
@@ -243,6 +261,7 @@ def _parse_source(source: str, *, path: Path | None = None) -> ExecutorInfo:
     imports: list[str] = []
     cli_framework: str | None = None
     has_main_guard = False
+    has_compute_function = False
 
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Import):
@@ -258,6 +277,15 @@ def _parse_source(source: str, *, path: Path | None = None) -> ExecutorInfo:
                 cli_framework = top
         elif isinstance(node, ast.If) and _is_main_guard(node.test):
             has_main_guard = True
+        elif (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "compute"
+            # New contract requires compute to take parsed args as a
+            # positional parameter; reject zero-arg ``def compute():``
+            # (most likely a coincidence, not the executor entry point).
+            and node.args.args
+        ):
+            has_compute_function = True
 
     docstring = ast.get_docstring(tree)
     first_line = docstring.splitlines()[0].strip() if docstring else None
@@ -269,6 +297,7 @@ def _parse_source(source: str, *, path: Path | None = None) -> ExecutorInfo:
         cli_framework=cli_framework,
         imports=tuple(dict.fromkeys(imports)),  # dedup, preserve order
         docstring=first_line,
+        has_compute_function=has_compute_function,
     )
 
 
