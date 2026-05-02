@@ -220,6 +220,7 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "build-executor",
                 "logs",
                 "failures",
+                "campaign",
             ],
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
@@ -410,6 +411,58 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
                 for r in records
             ]
         },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
+# ─── subcommand: campaign status / list ────────────────────────────────────
+
+
+def cmd_campaign_status(args: argparse.Namespace) -> int:
+    """Read-only summary of a closed-loop campaign.
+
+    Walks every sidecar tagged with ``--campaign-id`` and reports the
+    per-iteration reduced metrics dicts (``history.prior``) plus an
+    in-flight count (sidecars whose journal status is still
+    ``in_flight``). No SSH, no scheduler — pure local filesystem read.
+    """
+    from hpc_mapreduce.reduce.history import find_sidecars_by_campaign, prior
+
+    sidecars = find_sidecars_by_campaign(args.experiment_dir, args.campaign_id)
+    history = prior(args.experiment_dir, args.campaign_id)
+    in_flight_records = session.find_runs_by_campaign(args.experiment_dir, args.campaign_id)
+    in_flight = sum(1 for r in in_flight_records if r.status == "in_flight")
+    _ok(
+        {
+            "campaign_id": args.campaign_id,
+            "iterations": len(sidecars),
+            "in_flight": in_flight,
+            "history": history,
+            "run_ids": [s["run_id"] for s in sidecars],
+        },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
+def cmd_campaign_list(args: argparse.Namespace) -> int:
+    """List every campaign with at least one sidecar in this experiment."""
+    from collections import Counter
+
+    from hpc_mapreduce.job.runs import find_existing_runs, read_run_sidecar
+
+    counts: Counter[str] = Counter()
+    for path in find_existing_runs(args.experiment_dir):
+        try:
+            data = read_run_sidecar(args.experiment_dir, path.stem)
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            continue
+        cid = data.get("campaign_id")
+        if isinstance(cid, str) and cid:
+            counts[cid] += 1
+    _ok(
+        {"campaigns": [{"campaign_id": cid, "iterations": n} for cid, n in sorted(counts.items())]},
         idempotent=True,
     )
     return EXIT_OK
@@ -1026,6 +1079,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_lif)
     p_lif.set_defaults(func=cmd_list_in_flight)
+
+    # campaign — closed-loop campaign read-only commands
+    p_camp = sub.add_parser(
+        "campaign",
+        help="Closed-loop campaign read-only commands (status, list).",
+    )
+    p_camp_sub = p_camp.add_subparsers(dest="action", required=True)
+
+    p_camp_st = p_camp_sub.add_parser(
+        "status",
+        help=(
+            "Report per-iteration reduced metrics for one campaign. "
+            "Walks every sidecar tagged with --campaign-id, runs "
+            "reduce_metrics on each, and emits the history dict-list."
+        ),
+    )
+    _add_experiment_dir(p_camp_st)
+    p_camp_st.add_argument("--campaign-id", required=True)
+    p_camp_st.set_defaults(func=cmd_campaign_status)
+
+    p_camp_ls = p_camp_sub.add_parser(
+        "list",
+        help="List every campaign with at least one sidecar in this experiment.",
+    )
+    _add_experiment_dir(p_camp_ls)
+    p_camp_ls.set_defaults(func=cmd_campaign_list)
 
     # status
     p_st = sub.add_parser(

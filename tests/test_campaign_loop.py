@@ -11,6 +11,7 @@ test runtime stdlib-only (no pytest-asyncio dependency).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 import pytest
 
@@ -193,10 +194,8 @@ def test_wall_clock_budget_stops_new_submits_then_drains() -> None:
             )
         finally:
             release_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await release_task
-            except asyncio.CancelledError:
-                pass
 
     result = asyncio.run(driver())
     assert result.terminated_reason == "wall_clock_budget"

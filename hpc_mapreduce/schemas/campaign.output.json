@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/campaign.output.json",
+  "title": "campaign envelope data shape",
+  "description": "Schema for the `data` block of `campaign status` / `campaign list` envelopes (the outer envelope follows envelope.json).",
+  "oneOf": [
+    { "$ref": "#/$defs/status_data" },
+    { "$ref": "#/$defs/list_data" }
+  ],
+  "$defs": {
+    "status_data": {
+      "type": "object",
+      "required": ["campaign_id", "iterations", "history"],
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id":    { "type": "string", "minLength": 1 },
+        "iterations":     { "type": "integer", "minimum": 0 },
+        "in_flight":      { "type": "integer", "minimum": 0 },
+        "history":        {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true },
+          "description": "Per-iteration reduced metrics dicts, oldest-first."
+        },
+        "run_ids":        {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Sidecars matching this campaign, oldest-first."
+        }
+      }
+    },
+    "list_data": {
+      "type": "object",
+      "required": ["campaigns"],
+      "additionalProperties": false,
+      "properties": {
+        "campaigns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["campaign_id", "iterations"],
+            "additionalProperties": false,
+            "properties": {
+              "campaign_id": { "type": "string" },
+              "iterations":  { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
