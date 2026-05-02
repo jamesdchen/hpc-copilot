@@ -249,3 +249,45 @@ class TestInspectClusterEntry:
         snap = ins.inspect_cluster("discovery", runner=runner, use_cache=False)
         assert snap.nodes == []
         assert snap.errors and snap.errors[0]["code"] == "scontrol_failed"
+
+    def test_sge_happy_path(self, tmp_path, monkeypatch):
+        # Verify the SGE branch end-to-end: inspect_cluster routes to
+        # _sge_inspect, which invokes qhost + qstat. Mirrors the SLURM
+        # happy-path coverage above.
+        cfg = _write_clusters(tmp_path, scheduler="sge")
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+        ins._CACHE.clear()
+        qhost_out = (
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
+            "----------------------------------------------------------------------------------------------\n"
+            "global                  -               -    -    -    -     -       -       -       -       -\n"
+            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"
+            "    hl:gpu=4\n"
+            "    gl:gpu_used=1\n"
+        )
+        runner = _FakeRunner(
+            {
+                "qhost": (0, qhost_out, ""),
+                "qstat": (0, "", ""),
+            }
+        )
+        snap = ins.inspect_cluster("discovery", runner=runner, use_cache=False)
+        assert snap.scheduler_kind == "sge"
+        assert {n.name for n in snap.nodes} == {"compute-001"}
+        assert snap.nodes[0].gres == "gpu:4"
+        assert snap.nodes[0].gres_used == "gpu:1"
+
+    def test_runner_invocation_shape_recorded(self, tmp_path, monkeypatch):
+        # Defense-in-depth: confirm the SUT actually issues the expected
+        # commands rather than relying on the substring-match fake to
+        # silently accept whatever the SUT sends. Catches regressions
+        # where someone renames `scontrol show node` to `scontrol list`.
+        cfg = _write_clusters(tmp_path)
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+        ins._CACHE.clear()
+        runner = _FakeRunner(
+            {"scontrol show node": (0, _SCONTROL_FIXTURE, ""), "sacct": (0, "", "")}
+        )
+        ins.inspect_cluster("discovery", runner=runner, use_cache=False)
+        assert any(c.startswith("scontrol show node") for c in runner.calls)
+        assert any(c.startswith("sacct -N") for c in runner.calls)

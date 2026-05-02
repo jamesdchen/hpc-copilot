@@ -36,6 +36,7 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce.infra.clusters import load_clusters_config
@@ -233,7 +234,7 @@ def _slurm_inspect(
     sacct_window_hours: int,
     stress_alloc_mem_pct: float,
     stress_cpu_load_frac: float,
-    runner: "_CommandRunner",
+    runner: _CommandRunner,
 ) -> ClusterSnapshot:
     errors: list[dict[str, str]] = []
     snap = ClusterSnapshot(
@@ -367,7 +368,7 @@ def _sge_inspect(
     *,
     stress_alloc_mem_pct: float,
     stress_cpu_load_frac: float,
-    runner: "_CommandRunner",
+    runner: _CommandRunner,
 ) -> ClusterSnapshot:
     """SGE inspection via qhost (resource state) + qstat (co-tenants).
 
@@ -566,7 +567,7 @@ class _CommandRunner:
 def inspect_cluster(
     cluster_name: str,
     *,
-    config_path: str | None = None,
+    config_path: str | Path | None = None,
     sacct_window_hours: int = 24,
     stress_alloc_mem_pct: float = 0.80,
     stress_cpu_load_frac: float = 0.80,
@@ -582,7 +583,7 @@ def inspect_cluster(
     Stress thresholds are tunable so the planner can experiment with
     cost-function knobs without code changes.
     """
-    clusters = load_clusters_config(config_path)
+    clusters = load_clusters_config(Path(config_path) if config_path is not None else None)
     if cluster_name not in clusters:
         raise KeyError(f"unknown cluster {cluster_name!r}; check clusters.yaml")
     cfg = clusters[cluster_name]

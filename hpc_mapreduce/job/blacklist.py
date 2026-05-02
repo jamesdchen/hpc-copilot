@@ -35,10 +35,12 @@ __all__ = [
 import json
 import os
 import tempfile
-from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 SCHEMA_VERSION: int = 1
 DEFAULT_TTL_DAYS: int = 7
@@ -118,7 +120,7 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
 
 def _with_locked_doc(
     path: Path,
-    mutate: "Callable[[dict[str, Any]], dict[str, Any]]",
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> dict[str, Any]:
     """Acquire ``path``'s flock, read the current doc, apply ``mutate``,
     and atomically replace ``path`` with the returned doc.
@@ -314,4 +316,5 @@ def record_segv(
         return doc
 
     _with_locked_doc(path, _mutate)
-    return target_box["target"]
+    target: dict[str, Any] = target_box["target"]
+    return target

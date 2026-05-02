@@ -36,8 +36,10 @@ __all__ = ["plan_submit"]
 import re
 import subprocess
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from hpc_mapreduce.infra.inspect import NodeSnapshot, inspect_cluster
@@ -299,10 +301,13 @@ def _build_canary_plan(
     The slash command runs the canary, ingests the result into the
     runtime priors, then re-calls plan_submit which scores normally.
     """
-    by_eta = sorted(
-        candidate_reports,
-        key=lambda r: (r.get("eta_sec_via_test_only") if r.get("eta_sec_via_test_only") is not None else 10**9),
-    )
+    def _eta_key(r: dict[str, Any]) -> int:
+        eta = r.get("eta_sec_via_test_only")
+        # Sentinel for "ETA unknown" — sort to the back. Plain int so mypy
+        # sees a concrete comparable type for the sorted() key.
+        return int(eta) if isinstance(eta, (int, float)) else 10**9
+
+    by_eta = sorted(candidate_reports, key=_eta_key)
     pick = by_eta[0] if by_eta else None
     if pick is None:
         return {
