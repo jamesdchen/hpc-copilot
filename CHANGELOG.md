@@ -2,6 +2,120 @@
 
 ## Unreleased
 
+### Added — campaign helper layer (Optuna-recipe ergonomics)
+
+Five small, strategy-blind additions surfaced by walking through the
+end-to-end Optuna recipe in `docs/campaign.md`. None bind the framework
+to a specific tuning library; they collapse boilerplate the previous
+shape made every user write themselves.
+
+- **`hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)`** —
+  canonical scratch directory `.hpc/campaigns/<cid>/`. Created
+  idempotently. Reserved for strategy libraries to put state files
+  (Optuna SQLite, PBT checkpoints, walk-forward cursor); the framework
+  writes nothing inside.
+- **`hpc_mapreduce.campaign.defaults`** — three curried-function defaults
+  for `run_campaign`'s callbacks:
+  - `tasks_py_total_predicate(experiment_dir)` — re-imports `tasks.py`
+    each call and returns `total() > 0`.
+  - `poll_until_terminal(experiment_dir, poll_interval_seconds=30)` —
+    awaits one run via subprocess `hpc-mapreduce status` until the
+    lifecycle state is terminal.
+  - `submit_via_cli(spec_builder, experiment_dir)` — builds a spec via
+    user callback, writes it to the campaign dir, shells out to
+    `hpc-mapreduce submit`. Returns the new run_id.
+  Together they collapse a typical campaign driver from ~80 lines to ~5.
+- **`on_iteration_done` callback on `run_campaign`** — fires once per
+  iteration with `(run_id, status, raw_metrics)` so strategy libraries
+  can wire their "tell" call (Optuna's `study.tell()`, PBT's drop, etc.)
+  without polling externally. Optional; the framework computes
+  `raw_metrics` via the v2 sidecar pipeline when `experiment_dir` is
+  provided. Empty dict for failed iterations.
+- **`hpc_mapreduce.map.metrics_io.read_kw_env()`** — executor-side helper
+  that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env
+  var the dispatcher exported. Stdlib-only; deployed alongside the
+  executor.
+- **Documented `cmd_sha` collision pattern** — for stochastic
+  strategies (Optuna TPE, evolutionary), `resolve()` should include a
+  unique-per-iteration value (e.g. `_optuna_trial_number`) so cmd_sha
+  differs even when the strategy re-proposes the same params. Otherwise
+  the framework dedups the submission silently. Doc-only fix.
+
+### Added — closed-loop campaign primitive
+
+The framework gains a small new primitive for adaptive iteration: a
+**campaign** is a sequence of `/submit` invocations sharing a
+`campaign_id` tag. The user's `.hpc/tasks.py` reads
+`hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
+module load to learn what prior iterations of the same campaign produced
+and decide what to run next. Strategies (Optuna, RandomSearch,
+walk-forward, PBT, …) live as Python libraries the user imports inside
+their own `tasks.py` — the framework ships **zero** strategy code.
+
+Surface area:
+
+- **`campaign_id`** — first-class field on the v2 sidecar and on the
+  journal `RunRecord`. Set via `--campaign-id` on submit specs;
+  filterable via `session.find_runs_by_campaign`.
+- **`HPC_CAMPAIGN_ID`** — env var forwarded by every scheduler template
+  (SGE/SLURM × CPU/GPU). Read by the user's `tasks.py` and executor on
+  the cluster.
+- **`hpc_mapreduce.reduce.history`** — read-only accessor:
+  - `prior(experiment_dir, campaign_id)` returns per-iteration reduced
+    metric dicts, oldest-first. Pending iterations contribute `{}`.
+  - `find_sidecars_by_campaign` and `result_dirs_for_sidecar` for
+    callers that need the underlying primitives. None of these import
+    `.hpc/tasks.py` (the loop's calling module), so no recursion.
+- **`hpc_mapreduce.campaign.run_campaign`** — asyncio in-flight queue.
+  Maintains *concurrency* live submits, awaits the next-finished one
+  (FIRST_COMPLETED), repeats until the user's `should_submit` predicate
+  flips to False or a wall-clock budget elapses. Fully IO-injected
+  (`submit_one`, `await_completion`, `should_submit`); no fixed
+  Strategy/Context Protocol.
+- **`hpc-mapreduce campaign status` / `hpc-mapreduce campaign list`** —
+  read-only CLI subcommands, JSON envelopes pinned by
+  `schemas/campaign.output.json`.
+- **`/campaign`** — slash command with the conversational interview;
+  scaffolds a campaign-aware `tasks.py` from the recipes in
+  `docs/campaign.md` (random search, Optuna ask/tell, walk-forward).
+
+Resume semantics: sidecars on disk are the only durable state. After a
+network drop or laptop sleep, re-running the loop re-discovers in-flight
+runs via `find_runs_by_campaign`, polls them to terminal state, and
+continues. No separate state file.
+
+Failure semantics: a single iteration's failure surfaces via `on_event`
+with an `error` field; the loop continues. Reissuing failed iterations
+is the strategy library's call.
+
+Out of scope: cluster-side queue (one array job draining a shared-FS
+task queue), cluster-resident campaign driver, per-campaign retention.
+All future work.
+
+### Changed — `hpc.yaml` absorbed into the per-run sidecar
+
+- **`hpc.yaml` is gone.** Every load-bearing field has moved into the
+  per-run sidecar at `.hpc/runs/<run_id>.json` (sidecar schema bumped to
+  v2): `cluster`, `profile`, `project`, `remote_path`, `resources`,
+  `env`, `env_group`, `constraints`, `gpu_fallback`, `max_retries`,
+  `runtime`, `auto_retry`, `aggregate_defaults`. Multi-stage DAGs move
+  to `.hpc/stages.py` (Python file exposing `def stages() -> list[dict]`,
+  validated against `hpc_mapreduce/schemas/stages.input.json`). Auto-retry
+  caps that used to live in `hpc.yaml profiles[*].auto_retry` now have
+  conservative hardcoded defaults in
+  `slash_commands.runner.DEFAULT_AUTO_RETRY_POLICY` with per-run override
+  via the sidecar. `cmd_aggregate` reads `aggregate_defaults` from the
+  sidecar instead of the yaml.
+- **No deprecation cycle.** Old `hpc.yaml` files in user repos are now
+  silently ignored — the agent never reads them. Users who hand-edited
+  `hpc.yaml` should re-run `/submit` once; the new sidecar will capture
+  their resolved config from then on.
+- **Deleted**: `_hpc_yaml_auto_retry`, `_hpc_yaml_aggregate_defaults`,
+  `docs/schema.md`, `tests/fixtures/hpc_multistage.yaml`,
+  `tests/test_hpc_yaml.py`. The README's `hpc.yaml` section is removed.
+- **v1 sidecars on disk continue to load** with v2 keys backfilled to
+  `None`, so existing journals are not broken.
+
 ### Changed — major refactor: `.hpc/tasks.py` task model
 
 - **Collapsed the manifest + per-axis shim model into a single

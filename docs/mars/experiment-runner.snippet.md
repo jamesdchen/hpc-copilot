@@ -176,7 +176,7 @@ After all waves are combined, read the per-task outputs from
 | `spec_invalid`      | Surface; the spec is wrong. Regenerate.                      |
 | `executor_not_found`    | Surface; check executor path under `scripts/`.               |
 | `cluster_unknown`       | Surface; run `clusters list` to recover.                     |
-| `config_invalid`        | Surface; clusters.yaml or hpc.yaml is malformed.             |
+| `config_invalid`        | Surface; clusters.yaml is malformed.                         |
 | `journal_corrupt`       | Surface; investigate `$HPC_JOURNAL_DIR`.                     |
 
 Exit codes: 0 ok, 1 user error (fix and retry), 2 cluster/network (per

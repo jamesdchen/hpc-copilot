@@ -11,7 +11,7 @@ explicitly noted.
 ```
 1. Explicit CLI flag / function kwarg
 2. --spec spec.json field (CLI) or interactive answer (slash command)
-3. hpc.yaml in the experiment dir
+3. Most recent matching `.hpc/runs/<run_id>.json` sidecar (per-experiment, per-profile)
 4. Env var (HPC_JOURNAL_DIR, HPC_CLUSTERS_CONFIG, ...)
 5. Built-in default (clusters.yaml shipped in the package)
 ```
@@ -19,8 +19,12 @@ explicitly noted.
 Notes:
 
 - Layers 1–2 are *call-site* config. They override anything persisted.
-- Layer 3 (`hpc.yaml`) is *repo-level* config. Lives in the experiment
-  repo, versioned alongside the experiment code.
+- Layer 3 (per-run sidecars) is *repo-level* persistence written by
+  every successful `/submit`. The v2 schema captures resources, env,
+  constraints, profile name, runtime, auto_retry, and aggregate defaults
+  so subsequent commands rebuild full context without an external config
+  file. Conversational generation only — there is no user-authored
+  experiment-config yaml.
 - Layer 4 (env vars) is *operator* config. Used by MARs and CI to point
   the framework at non-default state directories or alternate cluster
   catalogs.
@@ -49,7 +53,7 @@ Notes:
 - **Override**: env var `HPC_JOURNAL_DIR=/some/dir`. Read at import
   time in `slash_commands/session.py:HPC_HOMEDIR`. MARs that want
   isolated state per agent set this to a per-agent path.
-- **No CLI flag, no `hpc.yaml` field** — journal location is operator
+- **No CLI flag, no sidecar field** — journal location is operator
   config, not experiment config.
 
 ### Executor discovery
@@ -63,7 +67,7 @@ Notes:
   treated as user executors.
 - **Reserved filenames**: `__init__.py` (Python convention; same
   `_SKIP_BASENAMES`).
-- **Override path**: there is no `hpc.yaml` field for this; experiment
+- **Override path**: there is no config file for this; experiment
   authors influence discovery by where they put their `.py` files. The
   `hpc-mapreduce discover` subcommand exposes the result for inspection.
 
@@ -83,22 +87,22 @@ Notes:
 
 - **Layer 1**: `--spec.overrides` on `hpc-mapreduce resubmit`, or an
   interactive answer in `/submit`.
-- **Layer 2**: `hpc.yaml` profile's `resources:` block (see
-  `docs/schema.md`).
+- **Layer 3**: most recent matching run sidecar's `resources` block —
+  the resolved values from a prior submit, available for reuse.
 - **Layer 5**: cluster-level defaults baked into `clusters.yaml` (e.g.
-  scheduler-specific module loads, default GPU types). Profile-level
+  scheduler-specific module loads, default GPU types). Sidecar-level
   resources do not inherit field-by-field from the cluster — only
-  `constraints` (throughput limits) merge field-wise per `hpc.yaml`'s
-  documented behavior.
+  `constraints` (throughput limits) merge field-wise per the documented
+  behavior in `parse_constraints`.
 
 ### Cluster constraints (throughput optimizer inputs)
 
-- **Layer 2**: `hpc.yaml` profile's `constraints:` block (per-experiment
-  override).
+- **Layer 3**: most recent matching run sidecar's `constraints` block
+  (per-experiment override resolved at the prior submit).
 - **Layer 5**: `clusters.yaml`'s `constraints:` block (cluster-level
   default).
-- Profile-level keys override cluster-level keys **field-by-field**;
-  unset profile keys fall back to the cluster default. Implemented in
+- Sidecar-level keys override cluster-level keys **field-by-field**;
+  unset sidecar keys fall back to the cluster default. Implemented in
   `hpc_mapreduce.job.constraints.parse_constraints`.
 
 ## Env vars consumed
@@ -109,9 +113,11 @@ Notes:
 | `HPC_CLUSTERS_CONFIG` | (package default) | `hpc_mapreduce/infra/clusters.py` | Use alternate `clusters.yaml`. |
 | `HPC_NO_SSH_MULTIPLEX` | unset | `hpc_mapreduce/cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
 | `SSH_AUTH_SOCK` | (set by ssh-agent) | `cmd_preflight` | Required for SSH auth; preflight fails if missing. |
+| `HPC_MAX_RUNS` | `500` | `hpc_mapreduce/job/runs.py` | Override the per-experiment cap on retained run sidecars. |
 | `HPC_RUN_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py` | Locates `.hpc/runs/<run_id>.json`. |
 | `HPC_TASK_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py` | 0-based task index. `TASK_ID` is accepted as a fallback for the env-var transition. |
 | `HPC_TASKS_PATH` | sibling of `_hpc_dispatch.py` | cluster-side `.hpc/_hpc_dispatch.py` | Override path to user's `tasks.py`. |
+| `HPC_CAMPAIGN_ID` | unset | scheduler templates → cluster-side dispatcher → user `tasks.py` | When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` calls `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to get prior iterations' reduced metrics. |
 | `HPC_WAVE` | (none) | cluster-side `.hpc/_hpc_combiner.py` | Wave index when `--wave` is absent. |
 | `HPC_RUNTIME` | unset | scheduler templates | When `uv`, the template runs `uv sync` before dispatch. |
 

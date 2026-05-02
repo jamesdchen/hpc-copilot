@@ -123,12 +123,12 @@ class RemoteCommandFailed(HpcError):
 
 
 class ConfigInvalid(HpcError):
-    """clusters.yaml or hpc.yaml is malformed."""
+    """clusters.yaml is malformed."""
 
     error_code = "config_invalid"
     retry_safe = False
     category = "user"
-    remediation = "Validate the yaml against docs/schema.md."
+    remediation = "Validate clusters.yaml against the schema published with the package."
 
 
 class CombinerFailed(HpcError):

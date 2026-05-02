@@ -40,6 +40,7 @@ __all__ = [
     "fingerprint_stderr_tail",
     "derive_resubmit_request_id",
     "annotate_clusters_with_retry_advice",
+    "DEFAULT_AUTO_RETRY_POLICY",
 ]
 
 
@@ -69,6 +70,7 @@ def submit_and_record(
     run_id: str,
     job_ids: list[str],
     total_tasks: int,
+    campaign_id: str = "",
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
@@ -77,6 +79,10 @@ def submit_and_record(
     the cluster-side dispatcher and combiner consume; the journal record
     is the laptop-side bookkeeping that lets a future ``/status`` resume
     monitoring without re-asking the user for cluster / job_ids.
+
+    *campaign_id* tags the run as part of a closed-loop campaign so
+    :func:`session.find_runs_by_campaign` can pick it up on resume.
+    Defaults to an empty string for open-loop submits.
 
     Returns ``(record, deduped)`` where ``deduped`` is True if a record
     with this ``run_id`` already existed and the call was a no-op replay.
@@ -103,14 +109,13 @@ def submit_and_record(
         total_tasks=int(total_tasks),
         submitted_at=_utcnow_iso(),
         experiment_dir=str(Path(experiment_dir).resolve()),
+        campaign_id=campaign_id,
     )
     session.upsert_run(experiment_dir, record)
     return record, False
 
 
-def build_job_env(
-    runtime_spec: dict[str, Any], base_env: dict[str, str]
-) -> dict[str, str]:
+def build_job_env(runtime_spec: dict[str, Any], base_env: dict[str, str]) -> dict[str, str]:
     """Return *base_env* augmented with runtime-derived env vars.
 
     *runtime_spec* is a small dict carrying any runtime selector the
@@ -167,8 +172,7 @@ def _ssh_status_report(
         return json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
         raise RemoteCommandFailed(
-            f"status reporter returned invalid JSON: {exc}; first 200 chars: "
-            f"{proc.stdout[:200]!r}"
+            f"status reporter returned invalid JSON: {exc}; first 200 chars: {proc.stdout[:200]!r}"
         ) from exc
 
 
@@ -352,9 +356,7 @@ def resubmit_failed(
     return updated, False, rid
 
 
-def _ssh_list_combined_waves(
-    *, ssh_target: str, remote_path: str
-) -> list[int]:
+def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     """Derive ``combined_waves`` from cluster artifacts.
 
     The combiner writes ``_combiner/wave_<N>.json`` per successful run
@@ -362,10 +364,7 @@ def _ssh_list_combined_waves(
     that file as the success marker.
     """
     user, host = _split_ssh_target(ssh_target)
-    cmd = (
-        f"cd {shlex.quote(remote_path)} && "
-        "ls _combiner/wave_*.json 2>/dev/null || true"
-    )
+    cmd = f"cd {shlex.quote(remote_path)} && ls _combiner/wave_*.json 2>/dev/null || true"
     proc = ssh_run(cmd, host=host, user=user)
     if proc.returncode != 0:
         return []
@@ -409,8 +408,7 @@ def _ssh_alive_job_ids(
         cmd = (
             "{ "
             + "; ".join(
-                f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 "
-                f"&& echo __ALIVE__{jid}"
+                f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 && echo __ALIVE__{jid}"
                 for jid in job_ids
             )
             + "; } || true"
@@ -523,9 +521,7 @@ def reconcile(
     # Only mark abandoned when the alive check actually ran and found
     # nothing — never on SSH failure of the alive check itself.
     if record.job_ids and not alive and not alive_check_failed:
-        updated = session.mark_run(
-            experiment_dir, run_id, status="abandoned"
-        )
+        updated = session.mark_run(experiment_dir, run_id, status="abandoned")
     return updated
 
 
@@ -575,10 +571,7 @@ def fetch_task_logs(
             if scheduler == "sge":
                 path = f"{remote_path.rstrip('/')}/{job_name}.o{job_id}.{tid}"
             else:
-                path = (
-                    f"{remote_path.rstrip('/')}"
-                    f"/_hpc_logs/{job_name}_{job_id}_{tid}.err"
-                )
+                path = f"{remote_path.rstrip('/')}/_hpc_logs/{job_name}_{job_id}_{tid}.err"
             quoted = shlex.quote(path)
             script = (
                 f"if [ -f {quoted} ]; then "
@@ -615,8 +608,16 @@ def fetch_task_logs(
 _FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
     ("system_oom", re.compile(r"\boom-killer\b|\bMemoryError\b|killed.*signal 9", re.I)),
-    ("walltime", re.compile(r"\bDUE TO TIME LIMIT\b|wall.?time.*exceeded|signal SIGTERM.*15", re.I)),
-    ("node_failure", re.compile(r"NODE_FAIL|node failed|connection (closed|reset by peer)|ssh: connect.*refused", re.I)),
+    (
+        "walltime",
+        re.compile(r"\bDUE TO TIME LIMIT\b|wall.?time.*exceeded|signal SIGTERM.*15", re.I),
+    ),
+    (
+        "node_failure",
+        re.compile(
+            r"NODE_FAIL|node failed|connection (closed|reset by peer)|ssh: connect.*refused", re.I
+        ),
+    ),
     ("import_error", re.compile(r"\bImportError\b|\bModuleNotFoundError\b", re.I)),
     ("file_not_found", re.compile(r"\bFileNotFoundError\b|No such file or directory", re.I)),
     ("permission_denied", re.compile(r"\bPermissionError\b|Permission denied", re.I)),
@@ -629,13 +630,13 @@ _FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # single failure mode into many "unique" fingerprints.
 _FINGERPRINT_NOISE: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[^\s]*"),  # ISO timestamps
-    re.compile(r"\b/(?:home|u|scratch|tmp)/[^\s:]+"),             # absolute paths
+    re.compile(r"\b/(?:home|u|scratch|tmp)/[^\s:]+"),  # absolute paths
     re.compile(r"\bpid[=: ]\d+\b", re.I),
     re.compile(r"\bjob[_ ]?id[=: ]\d+\b", re.I),
     re.compile(r"\btask[_ ]?id[=: ]\d+\b", re.I),
     re.compile(r"\bline \d+"),
-    re.compile(r"\b0x[0-9a-fA-F]+\b"),                            # hex pointers
-    re.compile(r"\b\d{8,}\b"),                                    # long ints (job ids, pids)
+    re.compile(r"\b0x[0-9a-fA-F]+\b"),  # hex pointers
+    re.compile(r"\b\d{8,}\b"),  # long ints (job ids, pids)
 )
 
 
@@ -671,24 +672,40 @@ def _categorize(content: str | None) -> str:
     return "unknown"
 
 
+# Default per-failure-category retry policy. Conservative caps so an
+# auto-retry never compounds a real bug into many wasted submissions; users
+# can override per-run by passing ``auto_retry={...}`` to write_run_sidecar
+# at /submit time. cmd_failures resolves: sidecar override > these defaults.
+DEFAULT_AUTO_RETRY_POLICY: dict[str, dict[str, Any]] = {
+    "gpu_oom": {"max_attempts": 1, "mem_multiplier": 1.5},
+    "system_oom": {"max_attempts": 1, "mem_multiplier": 1.5},
+    "walltime": {"max_attempts": 1, "walltime_multiplier": 2.0},
+    "node_failure": {"max_attempts": 2},
+}
+
+
 def annotate_clusters_with_retry_advice(
     clusters: list[dict[str, Any]],
     *,
     auto_retry_policy: dict[str, dict[str, Any]],
     record: RunRecord,
 ) -> list[dict[str, Any]]:
-    """Tag each failure cluster with retry eligibility per hpc.yaml policy.
+    """Tag each failure cluster with retry eligibility per the supplied policy.
 
-    *auto_retry_policy* is the parsed ``profiles[profile].auto_retry``
-    block (see docs/schema.md). Schema:
+    *auto_retry_policy* maps failure-category strings to per-category
+    policy dicts. Default categories and shape:
 
-    .. code-block:: yaml
+    .. code-block:: python
 
-        auto_retry:
-          gpu_oom:        { max_attempts: 1, mem_multiplier: 1.5 }
-          system_oom:     { max_attempts: 1, mem_multiplier: 1.5 }
-          walltime:       { max_attempts: 1, walltime_multiplier: 2.0 }
-          node_failure:   { max_attempts: 2 }
+        {
+            "gpu_oom":      {"max_attempts": 1, "mem_multiplier": 1.5},
+            "system_oom":   {"max_attempts": 1, "mem_multiplier": 1.5},
+            "walltime":     {"max_attempts": 1, "walltime_multiplier": 2.0},
+            "node_failure": {"max_attempts": 2},
+        }
+
+    See :data:`DEFAULT_AUTO_RETRY_POLICY` for the framework's hardcoded
+    fallback when no per-run override is set on the sidecar.
 
     For each cluster, looks up ``record.retries[tid].attempts`` and tags
     task ids as ``eligible_task_ids`` (attempts < max_attempts) or
@@ -789,9 +806,7 @@ def cluster_failures_by_fingerprint(
 # Both /aggregate and `hpc-mapreduce aggregate` use them.
 
 
-def _read_remote_sidecar(
-    *, ssh_target: str, remote_path: str, run_id: str
-) -> dict[str, Any]:
+def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> dict[str, Any]:
     """SSH-cat the per-run sidecar at ``.hpc/runs/<run_id>.json``."""
     user, host = _split_ssh_target(ssh_target)
     sidecar_rel = f".hpc/runs/{run_id}.json"
@@ -862,11 +877,10 @@ def verify_per_task_outputs(
     proc = ssh_run(script, host=host, user=user)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
-            f"per-task output existence check failed: "
-            f"{proc.stderr.strip()[:500]}"
+            f"per-task output existence check failed: {proc.stderr.strip()[:500]}"
         )
     return [
-        line[len("MISSING:"):].strip()
+        line[len("MISSING:") :].strip()
         for line in proc.stdout.splitlines()
         if line.startswith("MISSING:")
     ]
@@ -899,9 +913,7 @@ def verify_combiner_artifact(
             f"&& echo OK || echo INVALID_JSON"
         )
     else:
-        script = (
-            f"[ -f {shlex.quote(full_path)} ] && echo OK || echo MISSING"
-        )
+        script = f"[ -f {shlex.quote(full_path)} ] && echo OK || echo MISSING"
     proc = ssh_run(script, host=host, user=user)
     out_tail = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
     if out_tail == "OK":
@@ -951,15 +963,14 @@ def write_remote_provenance(
     payload = json.dumps(provenance, sort_keys=True)
     # Ferry the JSON via base64 to dodge quoting hazards.
     import base64
+
     b64 = base64.b64encode(payload.encode("utf-8")).decode("ascii")
     script = (
-        f"mkdir -p {shlex.quote(output_dir)} && "
-        f"echo {b64} | base64 -d > {shlex.quote(sidecar)}"
+        f"mkdir -p {shlex.quote(output_dir)} && echo {b64} | base64 -d > {shlex.quote(sidecar)}"
     )
     proc = ssh_run(script, host=host, user=user)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
-            f"failed to write provenance sidecar at {sidecar}: "
-            f"{proc.stderr.strip()[:500]}"
+            f"failed to write provenance sidecar at {sidecar}: {proc.stderr.strip()[:500]}"
         )
     return sidecar

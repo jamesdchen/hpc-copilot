@@ -16,6 +16,8 @@ contract lives under `hpc_mapreduce/schemas/`:
 - `capabilities.output.json` — `capabilities` data block.
 - `preflight.output.json` — `preflight` data block.
 - `resubmit.input.json` — `resubmit --spec` shape.
+- `campaign.output.json` — `campaign status` / `campaign list` data block.
+- `stages.input.json` — output shape of `.hpc/stages.py::stages()` (loaded by `hpc_mapreduce.job.stages.load_stages`; not a CLI input but agents authoring `stages.py` should validate against this).
 
 Agents constructing/validating envelopes should validate against the
 JSON Schema, not parse this markdown.
@@ -225,6 +227,64 @@ Args: `--experiment-dir`.
 
 Idempotent: yes. Error codes: `journal_corrupt` if a run file has a
 mismatched `schema_version`. Exit: 0 / 3.
+
+### `campaign status`
+
+Purpose: report per-iteration reduced metrics for one closed-loop
+campaign. Walks every sidecar tagged with `--campaign-id`, runs
+`reduce_metrics` on each iteration's result directories, and emits the
+history dict-list. Pure local read; no SSH, no scheduler.
+
+Args: `--experiment-dir`, `--campaign-id <id>` (required).
+
+`data` shape (validated against `schemas/campaign.output.json`'s
+`status_data`):
+
+```json
+{
+  "campaign_id": "ml_ridge_optuna_q1",
+  "iterations": 12,
+  "in_flight": 0,
+  "history": [
+    {"loss": 0.5, "n_samples": 1},
+    {"loss": 0.42, "n_samples": 1},
+    "..."
+  ],
+  "run_ids": [
+    "20260101-000000-aaaaaaa",
+    "20260101-000001-bbbbbbb",
+    "..."
+  ]
+}
+```
+
+`history` is oldest-first; pending iterations whose result directories
+don't exist yet contribute `{}`. `in_flight` counts journal records with
+this campaign tag still in `in_flight` status.
+
+Idempotent: yes. Exit: 0.
+
+### `campaign list`
+
+Purpose: list every campaign with at least one sidecar in this
+experiment, with iteration counts. Untagged (open-loop) sidecars are
+excluded.
+
+Args: `--experiment-dir`.
+
+`data` shape (validated against `schemas/campaign.output.json`'s
+`list_data`):
+
+```json
+{
+  "campaigns": [
+    {"campaign_id": "ml_ridge_optuna_q1", "iterations": 12},
+    {"campaign_id": "walk_forward_2026q1", "iterations": 26}
+  ]
+}
+```
+
+Idempotent: yes. Exit: 0.
 
 ### `status`
 

@@ -22,6 +22,26 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
    > status {complete}/{total} complete @ {age(checked_at)} ago, waves
    > combined {combined_waves}. Resume? [Y/n]"
 
+   **Group by `campaign_id` when displaying multiple in-flight runs.**
+   Each `RunRecord` carries a `campaign_id` field; empty string for
+   open-loop submits. When more than ~3 runs are in flight and at least
+   one carries a campaign tag, render the offer grouped:
+
+   > "Found 5 in-flight runs across 2 campaigns + 1 standalone:
+   >  • campaign `ml_ridge_q1` (3 iterations in flight; last completed
+   >    iteration's `loss=0.42`); resume with `/campaign status
+   >    --campaign-id ml_ridge_q1` for the full history.
+   >  • campaign `walk_forward_2026q1` (1 iteration in flight).
+   >  • standalone run `<run_id>` ({profile} on {cluster}, last status
+   >    {complete}/{total} @ {age} ago); resume with `/status --run-id
+   >    <run_id>`.
+   > Pick one, or skip to start fresh?"
+
+   The flat per-run offer is fine for ≤3 in-flight; the campaign
+   grouping kicks in for the long-running tuning / sweep cases where
+   the flat list would be noisy. `slash_commands.session.find_runs_by_campaign(cwd, cid)`
+   gives you the per-campaign record list when you need it.
+
    On `Y` (default on empty), hydrate `cluster`, `ssh_target`, `remote_path`,
    `job_name`, `job_ids`, `run_id`, `combined_waves`, `failed_waves`,
    `retries` from the run record. Skip the cluster prompt below. The
@@ -43,7 +63,7 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 3. **No journal hit — fall back to existing context sources** (priority order):
 
    - If `$ARGUMENTS` contains `--cluster <name>`, use that cluster.
-   - Else if `hpc.yaml` exists, read `cluster` field.
+   - Else read `cluster` from the most recent matching `.hpc/runs/<run_id>.json` sidecar.
    - Else check Claude Code memory for cached cluster preference.
    - Else ask the user.
 

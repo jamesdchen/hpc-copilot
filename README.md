@@ -125,7 +125,7 @@ claude-hpc automatically optimizes job submissions for cluster constraints. When
 - Waves are staggered via scheduler dependencies (SLURM `--dependency`, SGE `-hold_jid`)
 - Total wall-clock time is estimated when per-task duration is known
 
-Configure constraints in `clusters.yaml` (cluster-level) or `hpc.yaml` profiles (per-experiment overrides).
+Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrides resolved at `/submit` time are persisted to the run sidecar at `.hpc/runs/<run_id>.json`.
 
 ## Commands
 
@@ -136,6 +136,7 @@ Configure constraints in `clusters.yaml` (cluster-level) or `hpc.yaml` profiles 
 | `/status` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
 | `/build-executor` | Scaffold a new executor from `templates/starters/executor_template.py` |
+| `/campaign` | Closed-loop iteration: tag submits, read prior history, run an asyncio in-flight queue. See [`docs/campaign.md`](docs/campaign.md). |
 ## Configuration
 
 ### `clusters.yaml` (required)
@@ -153,10 +154,6 @@ hoffman2:
   conda_envs: [<your_env>]          # optional — Claude presents these as options
   gpu_types: [a100, h200, a6000]
 ```
-
-### `hpc.yaml` (optional)
-
-If you prefer declarative config over conversational setup, add `hpc.yaml` to your experiment repo. Claude will read it as pre-populated preferences. See [`docs/schema.md`](docs/schema.md) for the full spec.
 
 ### Caching
 

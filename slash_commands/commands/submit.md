@@ -34,15 +34,16 @@ is confusing on inspection.
 
 0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /status, or start a new submission?"
    - This only handles the case where the user wants to switch context away from a fresh `/submit` toward picking up an existing run; otherwise fall through to priority 1.
+   - **Group by `campaign_id` when displaying multiple in-flight runs.** Each `RunRecord` carries a `campaign_id` field (empty string for open-loop submits). When the user has more than ~3 in-flight runs and at least one has a non-empty `campaign_id`, render the offer grouped: "Found 3 in-flight campaigns and 2 standalone runs: campaign `ml_ridge_q1` (4 iterations in flight, last completed iteration's loss=0.42), campaign `walk_forward_2026q1` (1 iteration in flight), …, plus 2 standalone runs (`<run_id_1>`, `<run_id_2>`). Resume one with /status / /campaign status, or start a new submission?" The flat list is fine for ≤3 runs.
 
 1. **Previous run**: If `.hpc/tasks.py` exists, the experiment has already been scaffolded. List the per-run sidecars under `.hpc/runs/` (newest-first via `find_existing_runs(experiment_dir)` from `hpc_mapreduce`) and offer: "Previous run: [run_id, profile, tasks, cluster, age]. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?"
    - **Resubmit same** → reuse the existing `.hpc/tasks.py`, recompute `cmd_sha` (it'll match because `tasks.py` is unchanged), skip to Step 5 (sync + submit). The new sidecar's `run_id` differs but `cmd_sha` matches the prior run.
    - **Modify** → tell the user to edit `.hpc/tasks.py` directly (`_TASKS = [...]`), commit the change, and re-run `/submit`. The new `cmd_sha` will be different, so it's a fresh run.
    - **Start fresh** → only reachable when the user wants a clean reset; offer to delete `.hpc/tasks.py` so the scaffolding flow at Step 6 fires again.
 
-2. **hpc.yaml exists**: Read it as optional context. If it has `profiles`, offer: "I see profiles: [list]. Use one, or build a new submission?" If using a profile, extract its `run`, `constraints`, `env_group`, and `resources` as defaults and skip to Step 3 for confirmation.
+2. **No tasks.py yet**: Continue to Step 1 (full discovery).
 
-3. **Neither exists**: Continue to Step 1 (full discovery).
+   When prompting the user about reuse vs. fresh, list the distinct `(profile, cluster)` pairs from recent run sidecars (via `find_existing_runs(experiment_dir)`) so they can pick "same as last `ml_ridge` submission" without re-answering interview questions. Each sidecar carries the full v2 config snapshot — resources, env, constraints, runtime — so reuse is a one-line copy from the matching sidecar.
 
 ## SSH Quoting
 
@@ -179,7 +180,7 @@ The local `.hpc/` directory **does** ride rsync (so the cluster receives `tasks.
 
 After grid expansion produces total_tasks, compute an optimized submission plan:
 
-1. **Load constraints**: `from hpc_mapreduce import ClusterConstraints, parse_constraints` — read constraints from `clusters.yaml` for the selected cluster, then overlay any per-profile constraints from `hpc.yaml` (profile-level fields override cluster-level fields).
+1. **Load constraints**: `from hpc_mapreduce import ClusterConstraints, parse_constraints` — read constraints from `clusters.yaml` for the selected cluster, then overlay any per-profile constraints the user supplied in this submit interview (the resolved overrides will be persisted to the run sidecar's `constraints` field).
 
 2. **Build workload**: `from hpc_mapreduce.job.throughput import WorkloadSpec, compute_submission_plan` — construct a `WorkloadSpec` using `total_tasks` from grid expansion, plus `est_task_duration` if configured in the profile.
 
@@ -265,7 +266,7 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 
 1. **Read the canonical example.** Resolve `hpc_mapreduce/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
 
-2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and the experiment's `hpc.yaml`/`meta.json` for axis hints (parameter names, ranges, chunking intent, date windows).
+2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and any `meta.json` at the experiment root for axis hints (parameter names, ranges, chunking intent, date windows). Recent run sidecars under `.hpc/runs/` are also a useful source — they capture the full kwargs dict from any previous `tasks.resolve(i)` materializations.
 
 3. **Walk the user through writing the file.** This is conversational, not template substitution. The agent:
    - Re-states the axis from Step 3 in concrete terms (e.g. "We're going to materialize a list of {seed, model} dicts, one per task — 4 tasks total. Sound right?").
@@ -339,13 +340,29 @@ sidecar_path = write_run_sidecar(
     task_count=tasks.total(),
     tasks_py_sha=tasks_py_sha,
     wave_map=wave_map,                           # from Step 4b's build_wave_map(plan)
-    extra={"git_sha": git_sha, "profile": profile},
+    extra={"git_sha": git_sha},
+    # ----- v2 config snapshot — populate everything that applies -----
+    cluster=cluster_name,                        # e.g. "hoffman2" / "discovery"
+    profile=profile,                             # the label distinguishing this submission shape
+    project=project,                             # short project name from the interview
+    remote_path=remote_path,
+    resources=resources,                         # {"cpus": 8, "mem": "64G", "walltime": "...", ...}
+    env=env,                                     # {"modules": "...", "conda_env": "..."}
+    env_group=env_group,                         # clusters.yaml env_group key, if used
+    constraints=resolved_constraints,            # the per-experiment overlay on clusters.yaml
+    gpu_fallback=gpu_fallback,                   # ordered GPU types if applicable
+    max_retries=max_retries,
+    runtime=runtime,                             # "uv" if requested
+    auto_retry=auto_retry,                       # per-category override; None = use defaults
+    aggregate_defaults=aggregate_defaults,       # {"require_outputs": "...", "expect_output": "...", "aggregate_cmd": "..."}
 )
 ```
 
+Pass `None` (or omit) for any v2 field that doesn't apply — they're all optional and absent keys are stripped from the on-disk JSON. Subsequent `/aggregate` and `/status` invocations read these fields back so the user never has to re-answer the interview.
+
 For multi-executor submissions, write one sidecar per executor — `run_id` and `executor` differ, but `tasks.py` is per-experiment and may be shared if the axes match.
 
-`write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 10). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
+`write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 500; override via `HPC_MAX_RUNS`). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
 
 ## Step 7: Sync to Cluster
 

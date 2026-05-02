@@ -25,7 +25,7 @@ Each `/submit` writes a per-run sidecar to `.hpc/runs/<run_id>.json`:
 
 ```json
 {
-  "sidecar_schema_version": 1,
+  "sidecar_schema_version": 2,
   "run_id": "ml_ridge-20260429-153012-abc12345",
   "cmd_sha": "...",
   "claude_hpc_version": "0.5.0",
@@ -34,7 +34,25 @@ Each `/submit` writes a per-run sidecar to `.hpc/runs/<run_id>.json`:
   "result_dir_template": "results/{model}_{seed}",
   "task_count": 24,
   "tasks_py_sha": "...",
-  "wave_map": {"0": [0, 1, ...]}
+  "wave_map": {"0": [0, 1, ...]},
+
+  "cluster": "hoffman2",
+  "profile": "ml_ridge",
+  "campaign_id": "ml_ridge_optuna_q1",
+  "project": "ml-ridge",
+  "remote_path": "/u/scratch/u/me/ml_ridge",
+  "resources": {"cpus": 4, "mem": "16G", "walltime": "02:00:00"},
+  "env": {"modules": "python/3.11.9", "conda_env": "ml"},
+  "env_group": "default",
+  "constraints": {"max_array_size": 500},
+  "gpu_fallback": ["a100", "h100"],
+  "max_retries": 3,
+  "runtime": "uv",
+  "auto_retry": {"oom": {"max_attempts": 2}},
+  "aggregate_defaults": {
+    "require_outputs": "results/{run_id}/metrics.{task_id}.json",
+    "expect_output": "results/{run_id}/metrics.json"
+  }
 }
 ```
 
@@ -45,9 +63,21 @@ Each `/submit` writes a per-run sidecar to `.hpc/runs/<run_id>.json`:
 - The user's task definition lives in `.hpc/tasks.py` (a Python module
   exposing `total()` and `resolve(task_id)`); the sidecar references it
   but does not duplicate per-task data.
-- Retention: at most `hpc_mapreduce.job.runs.MAX_RUNS` (default 10)
-  sidecars are kept per experiment directory. Oldest by mtime are evicted
-  on every write.
+- The block from `cluster` through `aggregate_defaults` is the **v2
+  config snapshot**: every successful `/submit` captures the full config
+  it ran under so subsequent commands (`/aggregate`, `/status`,
+  `/resubmit`, `/campaign`) read context from the sidecar instead of an
+  external config file. All v2 fields are optional at write time;
+  `read_run_sidecar` backfills missing keys with `None` so callers see a
+  uniform shape regardless of when the sidecar was written.
+- `campaign_id` tags the run as part of a closed-loop campaign. The
+  `HPC_CAMPAIGN_ID` env var is forwarded to the cluster by every
+  scheduler template; the user's `tasks.py` reads it back via
+  `os.environ` to call `hpc_mapreduce.reduce.history.prior` on the
+  campaign's prior iterations.
+- Retention: at most `hpc_mapreduce.job.runs.MAX_RUNS` (default 500;
+  override via `HPC_MAX_RUNS` env var) sidecars are kept per experiment
+  directory. Oldest by mtime are evicted on every write.
 
 When resuming a prior run, `/submit` matches the recomputed `cmd_sha`
 against existing sidecars via `find_run_by_cmd_sha` and delegates to
@@ -191,3 +221,62 @@ def run_combiner_checked(
 - `stdout` is the combiner's JSON (when produced) or empty.
 - `stderr` should be captured into the `/status` state blob on failure so the
   user can see why a wave did not combine.
+
+## `hpc_mapreduce.reduce.history`
+
+The campaign read-side accessor. Read-only; pure local filesystem walk.
+
+```python
+def find_sidecars_by_campaign(
+    experiment_dir: Path, campaign_id: str
+) -> list[dict[str, Any]]:
+    """Sidecars matching campaign_id, oldest-first by mtime."""
+
+def result_dirs_for_sidecar(
+    experiment_dir: Path, sidecar: dict[str, Any]
+) -> list[Path]:
+    """Per-task result dirs for one sidecar — formats the
+    result_dir_template against {run_id, task_id} and globs unknown
+    {var} placeholders. Does NOT import .hpc/tasks.py."""
+
+def prior(
+    experiment_dir: Path, campaign_id: str
+) -> list[dict[str, Any]]:
+    """Per-iteration reduced-metric dicts, oldest-first. Each entry is
+    reduce_metrics() over the iteration's result dirs. Pending
+    iterations contribute {} so callers can filter with `not entry`."""
+```
+
+The non-import-tasks.py guarantee matters because closed-loop callers
+invoke `prior()` from inside their own `tasks.py` module body; an inner
+load would deadlock or recurse.
+
+## `hpc_mapreduce.campaign.run_campaign`
+
+The asyncio in-flight queue. Maintains *concurrency* live submits via
+fully-injected callbacks.
+
+```python
+async def run_campaign(
+    *,
+    concurrency: int,
+    submit_one: Callable[[], Awaitable[str]],          # returns run_id
+    await_completion: Callable[[str], Awaitable[None]],
+    should_submit: Callable[[], Awaitable[bool] | bool],
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    wall_clock_budget_seconds: float | None = None,
+) -> CampaignResult:
+    """Drive a closed-loop campaign with at most *concurrency* live submits.
+
+    Stops when should_submit returns False (user's tasks.py signals
+    termination via total() == 0) or wall_clock_budget_seconds elapses.
+    Iteration failures land as on_event entries with `error`; the loop
+    continues so a single bad iteration doesn't bring down the campaign.
+    """
+```
+
+`CampaignResult` carries `completed: list[str]`, `terminated_reason: str`
+(`"tasks_exhausted" | "wall_clock_budget" | "cancelled"`),
+`iterations_submitted: int`, `iterations_completed: int`,
+`elapsed_seconds: float`. See `slash_commands/commands/campaign.md` and
+`docs/campaign.md` for the calling convention and recipe library.
