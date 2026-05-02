@@ -277,6 +277,10 @@ total_etc(c)  = eta_sec_via_test_only(c) + p95(c) + p_fail(c) * (eta_sec(c) + p9
 
 Pick the candidate with smallest `total_etc`. For tie-breaking, prefer the narrower constraint (smaller `pool_size`).
 
+**Empty-quantiles edge case**: a candidate's `runtime_prior_quantiles_sec` may be empty even when the rollup is non-empty (e.g. priors exist for `a100` but the candidate constraint is `v100`). Skip such candidates from scoring; if they're the *only* candidates available for the user's intent, drop back to the canary path (4c-A) for that constraint.
+
+**Empty-ETA edge case**: when `eta_sec_via_test_only` is `null` (sbatch `--test-only` failed or scheduler is SGE), substitute the cluster's typical queue depth or just `0` and continue — the runtime prior dominates the cost most of the time.
+
 For each candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly:
 
 - Co-tenant has been running >12h *and* holds >50% of CPU / mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).

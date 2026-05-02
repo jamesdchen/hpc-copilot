@@ -158,18 +158,21 @@ def _nodes_for_constraint(
     Matching uses the ``Gres`` advertisement when present and the
     ``ActiveFeatures`` list as a fallback (some SLURM configurations
     expose the GPU type as a constraint feature, not a GRES type).
+
+    Token-aware: ``a10`` will not match ``gpu:a100:2``. We split the
+    GRES string on ``:`` and ``,`` and require an exact token match,
+    since substring matching mis-classifies clusters that ship multiple
+    GPU types whose names share prefixes.
     """
     if not gpu_types:
         return list(nodes)
     out: list[NodeSnapshot] = []
     for n in nodes:
-        gres = (n.gres or "").lower()
-        features = {f.lower() for f in n.active_features}
-        for gpu in gpu_types:
-            gpu_l = gpu.lower()
-            if gpu_l in gres or gpu_l in features:
-                out.append(n)
-                break
+        gres_tokens = {t.lower() for t in re.split(r"[:,\s]+", n.gres or "") if t}
+        feature_tokens = {f.lower() for f in n.active_features}
+        node_tokens = gres_tokens | feature_tokens
+        if any(gpu.lower() in node_tokens for gpu in gpu_types):
+            out.append(n)
     return out
 
 
