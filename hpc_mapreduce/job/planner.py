@@ -226,15 +226,17 @@ def _eta_via_test_only(scheduler: str, constraint: str, cluster_cfg: dict[str, A
     except ImportError:
         return None
 
-    # Build a minimal sbatch --test-only invocation: we ask for a 1-task
-    # array reserving a single node and the requested constraint. The
-    # scheduler returns "Job N to start at <iso> using ..." or similar.
+    # Build a minimal sbatch --test-only invocation. We omit --array
+    # because we only need the ETA for a single-task job, and the
+    # combination of --wrap and --array can be rejected by some SLURM
+    # configurations. --test-only never submits; it returns the
+    # scheduler's prediction.
     if constraint == "<cpu-only>":
         constraint_flag = ""
     else:
         constraint_flag = f"--constraint={constraint!r}"
     cmd = (
-        f"sbatch --test-only --array=1-1 --time=00:01:00 --mem=1G "
+        f"sbatch --test-only --time=00:01:00 --mem=1G "
         f"{constraint_flag} --wrap='true' 2>&1 || true"
     )
     try:
