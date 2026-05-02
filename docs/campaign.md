@@ -8,7 +8,10 @@ A campaign is a sequence of `/submit` invocations sharing a `campaign_id` tag. T
 | `--campaign-id` field on the submit spec | Sets the tag at submit time; threaded through `runner.submit_and_record` → `RunRecord.campaign_id`. |
 | `HPC_CAMPAIGN_ID` env var | Forwarded by every scheduler template (SGE / SLURM, CPU / GPU). The user's `tasks.py` (and the executor) read it on the cluster. |
 | `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` | Walks matching sidecars, runs `reduce_metrics` on each iteration's result_dirs, returns the per-iteration reduced-metric dicts oldest-first. Pure local read; no SSH. |
-| `hpc_mapreduce.campaign.run_campaign(...)` | Asyncio in-flight queue. Maintains *concurrency* live submits; user-supplied `submit_one`, `await_completion`, `should_submit` callbacks. Stops when `should_submit` returns False or a wall-clock budget elapses. |
+| `hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)` | Returns `.hpc/campaigns/<cid>/`, creating it idempotently. Reserved for strategy libraries to put their state files (Optuna SQLite, PBT checkpoints, walk-forward cursor, etc.). The framework writes nothing inside. |
+| `hpc_mapreduce.campaign.run_campaign(...)` | Asyncio in-flight queue. Maintains *concurrency* live submits; user-supplied `submit_one`, `await_completion`, `should_submit` callbacks plus optional `on_iteration_done(run_id, status, raw_metrics)` strategy hook. Stops when `should_submit` returns False or a wall-clock budget elapses. |
+| `hpc_mapreduce.campaign.defaults` | `tasks_py_total_predicate`, `poll_until_terminal`, `submit_via_cli` — curried-function defaults that wrap the existing CLI so a campaign driver collapses to ~5 lines for the common case. Strategy-blind. |
+| `hpc_mapreduce.map.metrics_io.read_kw_env()` | Executor-side helper that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env var the dispatcher exported. Stdlib-only; deployed alongside the executor. |
 | `hpc-mapreduce campaign status / list` | Read-only CLI inspection. |
 | `slash_commands/commands/campaign.md` | Conversational interview that scaffolds a campaign-aware `tasks.py`. |
 
@@ -138,6 +141,135 @@ def resolve(i: int) -> dict:
 ```
 
 Iteration N submits the Nth window. `total()` returns 0 when every window has been processed. No randomness, no third-party libraries.
+
+## Driver script template
+
+The slash command (`/campaign`) and the docs above show what `tasks.py` does. The other half is the driver — the Python script that calls `run_campaign` with the right callbacks. The framework ships strategy-blind defaults so the driver collapses to roughly five lines:
+
+```python
+# .hpc/campaigns/ml_ridge_optuna_q1/run.py
+import asyncio
+from datetime import datetime, timezone
+
+from hpc_mapreduce import compute_cmd_sha, load_tasks_module, tasks_path
+from hpc_mapreduce.campaign import run_campaign
+from hpc_mapreduce.campaign.defaults import (
+    poll_until_terminal,
+    submit_via_cli,
+    tasks_py_total_predicate,
+)
+
+CAMPAIGN_ID = "ml_ridge_optuna_q1"
+PROFILE = "ml_ridge"
+
+
+def build_spec() -> dict:
+    """Construct one iteration's submission spec.
+
+    Re-imports tasks.py so the strategy library (Optuna here) proposes
+    fresh params for this iteration. Adapt the cluster / ssh / paths to
+    your repo — typically you'd derive these from the most recent
+    matching sidecar via find_existing_runs() rather than hardcode.
+    """
+    mod = load_tasks_module(tasks_path("."))
+    cmd_sha = compute_cmd_sha(mod)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = f"{CAMPAIGN_ID}-{ts}-{cmd_sha[:8]}"
+    return {
+        "profile": PROFILE,
+        "cluster": "hoffman2",
+        "ssh_target": "user@hoffman2.idre.ucla.edu",
+        "remote_path": "/u/scratch/u/user/ml_ridge",
+        "job_name": PROFILE,
+        "run_id": run_id,
+        "job_ids": [],            # filled by your real qsub; placeholder OK for journal
+        "total_tasks": int(mod.total()),
+        "campaign_id": CAMPAIGN_ID,
+    }
+
+
+async def main() -> None:
+    result = await run_campaign(
+        concurrency=4,
+        submit_one=submit_via_cli(build_spec),
+        await_completion=poll_until_terminal("."),
+        should_submit=tasks_py_total_predicate("."),
+        wall_clock_budget_seconds=24 * 3600,
+    )
+    print(result)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+Custom callbacks are still supported — pass your own `submit_one` / `await_completion` / `should_submit` if your repo's submit pipeline does something the defaults don't (e.g. you SSH the qsub yourself rather than going through the CLI).
+
+### Wiring strategy state via `on_iteration_done`
+
+For strategies whose state lives in their own backend (Optuna's SQLite, PBT's checkpoints), you can wire the strategy's "tell" call as a `run_campaign` callback rather than burying it in the executor:
+
+```python
+import optuna
+from hpc_mapreduce.campaign import campaign_dir
+
+_DB = campaign_dir(".", CAMPAIGN_ID) / "optuna.db"
+_STUDY = optuna.create_study(
+    storage=f"sqlite:///{_DB}", study_name=CAMPAIGN_ID,
+    direction="minimize", load_if_exists=True,
+)
+
+
+def _trial_number_from_run_id(run_id: str) -> int:
+    """Recover the Optuna trial number stashed in the sidecar.
+    See the cmd_sha collision section below for why we stash it."""
+    from hpc_mapreduce.job.runs import read_run_sidecar
+    sidecar = read_run_sidecar(".", run_id)
+    return int(sidecar.get("extra", {}).get("optuna_trial_number"))
+
+
+def tell_optuna(run_id: str, status: str, raw_metrics: dict) -> None:
+    trial_no = _trial_number_from_run_id(run_id)
+    if status == "failed":
+        _STUDY.tell(trial_no, state=optuna.trial.TrialState.FAIL)
+    else:
+        _STUDY.tell(trial_no, raw_metrics["val_loss"])
+
+
+# In main():
+result = await run_campaign(
+    ...,
+    on_iteration_done=tell_optuna,
+    experiment_dir=".",         # required for the loop to compute raw_metrics
+)
+```
+
+The framework knows nothing about Optuna here — `on_iteration_done` is just a hook the loop fires once per iteration with `(run_id, status, raw_metrics)`. Strategy libraries decide what to do with it. Walk-forward users ignore the callback. PBT users use it to drop dead population members.
+
+## Avoiding `cmd_sha` collisions in stochastic strategies
+
+The framework derives a run's identity (`cmd_sha`) from the SHA-256 of the materialized task list — `[resolve(i) for i in range(total())]`. This is the right behavior for static `tasks.py` (resubmits dedup automatically), but it's a **footgun for stochastic strategies**: if Optuna proposes the same params twice (TPE explores; this happens), the cmd_sha matches a prior trial, the framework dedups the submission, and from Optuna's perspective the trial silently never starts.
+
+**The fix is one line in `resolve()`**: include a unique-per-iteration value in the returned dict so cmd_sha differs even for identical params.
+
+```python
+def resolve(i: int) -> dict:
+    return {
+        **_NEXT_PARAMS,
+        "_optuna_trial_number": _NEXT.number,   # unique per Optuna ask()
+    }
+```
+
+Strategy-specific naming variants:
+
+- **Optuna:** `_optuna_trial_number` (assigned by `study.ask()`)
+- **PBT:** `_population_index`, `_generation`
+- **Random search:** `_iteration_index = len(_PRIOR)`
+- **Walk-forward:** Already unique (the window itself differs per iteration); no need.
+
+The leading underscore is convention so the executor knows it's framework-bookkeeping and can ignore it. The value also lands in the sidecar's `extra` dict (or `extra.optuna_params` if you prefer), which the `on_iteration_done` callback can read back to resolve `run_id → trial_number`.
+
+This is a doc convention, not a framework change — there's nothing strategy-specific the framework can do here without breaking the experiment-agnostic property.
 
 ## CLI inspection
 

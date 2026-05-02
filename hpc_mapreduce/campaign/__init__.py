@@ -22,9 +22,13 @@ inside their own ``tasks.py``.
 
 from __future__ import annotations
 
+from hpc_mapreduce.campaign import defaults
+from hpc_mapreduce.campaign.dirs import campaign_dir
 from hpc_mapreduce.campaign.loop import CampaignResult, run_campaign
 
 __all__ = [
     "CampaignResult",
+    "campaign_dir",
+    "defaults",
     "run_campaign",
 ]

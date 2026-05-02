@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Added — campaign helper layer (Optuna-recipe ergonomics)
+
+Five small, strategy-blind additions surfaced by walking through the
+end-to-end Optuna recipe in `docs/campaign.md`. None bind the framework
+to a specific tuning library; they collapse boilerplate the previous
+shape made every user write themselves.
+
+- **`hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)`** —
+  canonical scratch directory `.hpc/campaigns/<cid>/`. Created
+  idempotently. Reserved for strategy libraries to put state files
+  (Optuna SQLite, PBT checkpoints, walk-forward cursor); the framework
+  writes nothing inside.
+- **`hpc_mapreduce.campaign.defaults`** — three curried-function defaults
+  for `run_campaign`'s callbacks:
+  - `tasks_py_total_predicate(experiment_dir)` — re-imports `tasks.py`
+    each call and returns `total() > 0`.
+  - `poll_until_terminal(experiment_dir, poll_interval_seconds=30)` —
+    awaits one run via subprocess `hpc-mapreduce status` until the
+    lifecycle state is terminal.
+  - `submit_via_cli(spec_builder, experiment_dir)` — builds a spec via
+    user callback, writes it to the campaign dir, shells out to
+    `hpc-mapreduce submit`. Returns the new run_id.
+  Together they collapse a typical campaign driver from ~80 lines to ~5.
+- **`on_iteration_done` callback on `run_campaign`** — fires once per
+  iteration with `(run_id, status, raw_metrics)` so strategy libraries
+  can wire their "tell" call (Optuna's `study.tell()`, PBT's drop, etc.)
+  without polling externally. Optional; the framework computes
+  `raw_metrics` via the v2 sidecar pipeline when `experiment_dir` is
+  provided. Empty dict for failed iterations.
+- **`hpc_mapreduce.map.metrics_io.read_kw_env()`** — executor-side helper
+  that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env
+  var the dispatcher exported. Stdlib-only; deployed alongside the
+  executor.
+- **Documented `cmd_sha` collision pattern** — for stochastic
+  strategies (Optuna TPE, evolutionary), `resolve()` should include a
+  unique-per-iteration value (e.g. `_optuna_trial_number`) so cmd_sha
+  differs even when the strategy re-proposes the same params. Otherwise
+  the framework dedups the submission silently. Doc-only fix.
+
 ### Added — closed-loop campaign primitive
 
 The framework gains a small new primitive for adaptive iteration: a
