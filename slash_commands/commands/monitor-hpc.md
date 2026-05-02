@@ -328,12 +328,37 @@ Classify the failure:
 | `CUDA out of memory` / `OutOfMemoryError` | GPU OOM | Resubmit with more memory + smaller batch |
 | High memory usage + exit !=0 | System OOM | Resubmit with higher memory limit |
 | Time limit exceeded | Walltime | Resubmit with longer walltime |
-| Node failure / `Eqw` / `NODE_FAIL` | Infra issue | Resubmit as-is |
+| Node failure / `Eqw` / `NODE_FAIL` | Infra issue | Resubmit as-is — and call `record_segv` (see below) |
+| `exit -11` / SIGSEGV / no traceback | Node SEGV | Record to blacklist via `record_segv`, resubmit on a different node |
 | All tasks pending >15min / unchanged across 2 checks | Queue stall | Delete stalled job, resubmit with GPU fallback |
 | Python traceback with clear bug | Code bug | **STOP. Report to user. Do NOT resubmit.** |
 | Unrecognized error | Unknown | **STOP. Read full log, report to user.** |
 
 **AUTONOMY RULE**: For OOM, walltime, node failures, and queue stalls — act immediately. Only STOP for code bugs and unrecognized errors.
+
+### Recording node SEGVs to the blacklist
+
+When a task ends with `NODE_FAIL` or signals SEGV (`exit -11`, `signal: Segmentation fault`, or sacct `ExitCode=139`), append to the per-cluster blacklist so future `/submit-hpc` runs steer around the node:
+
+```python
+from hpc_mapreduce.job.blacklist import record_segv
+from hpc_mapreduce.infra.inspect import inspect_cluster
+
+snap = inspect_cluster(cluster, use_cache=False)   # capture contention at SEGV time
+node_state = next((n for n in snap.nodes if n.name == failed_node), None)
+record_segv(
+    experiment_dir,                                # set at Step 0; same root used by sidecars
+    cluster=cluster,
+    node=failed_node,
+    run_id=run_id, job_id=job_id, task_id=failed_task_id,
+    exit_code=exit_code, signal=-11,
+    host_allocmem_pct=getattr(node_state, "alloc_mem_pct", None),
+    cpu_load_frac=getattr(node_state, "cpu_load_frac", None),
+    concurrent_jobs=getattr(node_state, "co_tenants", []) or [],
+)
+```
+
+The entry has a 7-day TTL by default; repeated SEGVs on the same node refresh it. The entry is read by the next `/submit-hpc` Phase 4c planner (see `slash_commands/commands/submit-hpc.md`) which always-excludes it. **Do not** clear blacklist entries automatically — the file is per-project and intentionally outlives any single run.
 
 ## Step 3: Resubmit Failed Tasks
 

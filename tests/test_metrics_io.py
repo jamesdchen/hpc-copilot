@@ -75,26 +75,30 @@ class TestExecutorTemplateEmitsMetrics:
         # The contract scaffold's compute() returns a domain-neutral
         # {"value": 0.0, "n_samples": 0} placeholder -- enough to exercise
         # the CSV + metrics.json write path without any domain assumptions.
-        import runpy
+        # Per commit 08b3c4f the template no longer ships an __main__
+        # block (the dispatcher is the entry point), so the test imports
+        # compute() directly and invokes it with a hand-built Namespace.
+        import argparse
+        import importlib.util
 
         rdir = tmp_path / "rdir"
         rdir.mkdir()
         out_csv = tmp_path / "out.csv"
 
         monkeypatch.setenv("RESULT_DIR", str(rdir))
-        monkeypatch.setattr(
-            "sys.argv",
-            ["executor_template.py", "--output-file", str(out_csv)],
-        )
 
-        # Locate the template relative to this test file.
         template_path = (
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             + "/hpc_mapreduce/templates/starters/executor_template.py"
         )
-        with pytest.raises(SystemExit) as exc:
-            runpy.run_path(template_path, run_name="__main__")
-        assert exc.value.code == 0
+        spec = importlib.util.spec_from_file_location(
+            "executor_template_under_test", template_path
+        )
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        mod.compute(argparse.Namespace(output_file=str(out_csv)))
 
         metrics_path = rdir / "metrics.json"
         assert metrics_path.exists()

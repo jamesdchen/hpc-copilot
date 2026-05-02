@@ -156,6 +156,27 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 - `compute_submission_plan` — derive a `SubmissionPlan` from constraints.
 - `build_wave_map` — assign each task to a wave for staggered submission.
 
+### Smart-submit data layer
+
+Resource-quality-aware constraint planning. These functions back the
+`hpc-mapreduce inspect-cluster` / `runtime-prior` / `plan-submit` CLI
+subcommands and the `/hpc-submit` Step 4c smart-planning flow. State
+lives under the experiment's `.hpc/`: `bad_nodes.<cluster>.json` (SEGV
+blacklist) and `runtimes/<profile>.<cluster>.json` (runtime samples).
+
+- `inspect_cluster` — read-only per-node snapshot of a cluster
+  (alloc-mem%, CPU load, GRES, co-tenants, drain). 60s in-process cache.
+- `record_segv` — append a SEGV record to the per-cluster blacklist
+  with a 7-day TTL (refreshed on repeats); flock-guarded atomic write.
+- `get_active_blacklist` — read currently-active blacklist entries
+  (TTL-filtered).
+- `append_runtime_sample` — append one task's elapsed-time + node +
+  gpu_type to the runtime priors log; idempotent on `(run_id, task_id)`.
+- `roll_up_runtime_quantiles` — group samples by `gpu_type`, return
+  p50/p95/p99/mean/n_samples plus a `needs_canary` flag.
+- `plan_submit` — emit the candidate-constraint scorecard JSON the
+  slash command hands to Claude for cost-model judgment.
+
 ### Resubmit
 
 - `compact_task_ids` — collapse a task-id list into scheduler array syntax.

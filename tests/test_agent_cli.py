@@ -55,6 +55,9 @@ def test_help_lists_every_subcommand() -> None:
         "resubmit",
         "reconcile",
         "build-executor",
+        "inspect-cluster",
+        "runtime-prior",
+        "plan-submit",
     ):
         assert cmd in out, f"--help missing subcommand {cmd!r}"
 

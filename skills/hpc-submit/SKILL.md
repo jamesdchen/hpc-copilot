@@ -6,6 +6,32 @@ allowed-tools: Bash Read Write
 
 Submit a recorded run via the `hpc-mapreduce` CLI. The CLI is idempotent on `run_id`: a replay returns `data.deduped: true` and does NOT re-issue qsub.
 
+## Smart-planning step (resource-quality aware)
+
+Before constructing the spec, ask the planner for a per-candidate-constraint scorecard so the constraint and walltime aren't picked blind. This is the cost-model judgment step described in the design doc.
+
+```bash
+hpc-mapreduce plan-submit --profile <profile> --cluster <cluster> --experiment-dir <path>
+```
+
+The envelope's `data` is the planner output. Three branches:
+
+1. **`needs_canary: true`** — no runtime priors exist for this `(profile, cluster)`. Read `data.canary_plan.constraint`, submit a single-task canary using that constraint, wait for it to complete, then ingest the elapsed time into `<repo>/.hpc/runtimes/<profile>.<cluster>.json` (use `hpc_mapreduce.job.runtime_prior.append_sample`). Re-call `plan-submit`. Now you have priors and the next call returns scored candidates.
+
+2. **`needs_canary: false`** — score each candidate using:
+   ```
+   total_etc(c) = eta_sec(c) + p95_runtime(c) + p_fail(c) * (eta_sec(c) + p95_runtime(c))
+   ```
+   where `p95_runtime(c) = max(quantiles[gpu]['p95'] for gpu in c)` (worst-case among GPU types admitted by the constraint). Pick the candidate with smallest `total_etc`.
+
+3. For each candidate's `stressed_nodes`, decide per-node whether to soft-exclude based on `co_tenants` context. Heuristic: a co-tenant job that has been running >12h with high CPU/mem share is unlikely to clear before our submit completes — exclude. Short / low-resource co-tenants are usually fine. Always exclude every entry in `blacklisted_nodes` (rule, not judgment).
+
+4. Set `--time=` (walltime) to `chosen.p95_runtime * safety_margin` (default 1.3) so the budget covers the worst GPU type the constraint admits without ballooning.
+
+5. Write the decision to `<experiment-dir>/.hpc/runs/<run_id>.decision.json` after sbatch returns, capturing the candidates considered and the chosen plan + Claude's free-form rationale. This is the audit trail.
+
+If the planner errors (cluster unreachable, scheduler version skew, etc.), surface the error and fall back to the static-constraint flow described in the slash command.
+
 ## Steps
 
 1. Run `hpc-preflight` skill first if it has not already been run this session. Abort if it fails.

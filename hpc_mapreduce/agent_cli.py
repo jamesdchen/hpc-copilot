@@ -222,6 +222,9 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "logs",
                 "failures",
                 "campaign",
+                "inspect-cluster",
+                "plan-submit",
+                "runtime-prior",
             ],
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
@@ -340,6 +343,69 @@ def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
 
 
 # ─── subcommand: clusters ──────────────────────────────────────────────────
+
+
+# ─── subcommand: inspect-cluster ───────────────────────────────────────────
+
+
+def cmd_inspect_cluster(args: argparse.Namespace) -> int:
+    """Read-only snapshot of a cluster's node states.
+
+    Used by /hpc-submit Phase 4 (planner) to see allocation pressure,
+    co-tenants, and drain/down state. Useful standalone for ad-hoc
+    debugging when a job is queueing slowly or running on a hot node.
+    """
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
+    from hpc_mapreduce.infra.inspect import inspect_cluster
+
+    snap = inspect_cluster(
+        args.cluster,
+        sacct_window_hours=args.sacct_window_hours,
+        stress_alloc_mem_pct=args.stress_alloc_mem_pct,
+        stress_cpu_load_frac=args.stress_cpu_load_frac,
+        use_cache=not args.no_cache,
+    )
+    _ok(snap.to_dict(), idempotent=True)
+    return EXIT_OK
+
+
+# ─── subcommand: runtime-prior ─────────────────────────────────────────────
+
+
+def cmd_runtime_prior(args: argparse.Namespace) -> int:
+    from hpc_mapreduce.job.runtime_prior import roll_up_quantiles
+
+    out = roll_up_quantiles(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        cmd_sha=args.cmd_sha,
+    )
+    _ok(out, idempotent=True)
+    return EXIT_OK
+
+
+# ─── subcommand: plan-submit ───────────────────────────────────────────────
+
+
+def cmd_plan_submit(args: argparse.Namespace) -> int:
+    if (rc := _require_ssh_agent()) is not None:
+        return rc
+    from hpc_mapreduce.job.planner import plan_submit
+
+    candidates: list[str] | None = None
+    if args.candidates:
+        candidates = [c.strip() for c in args.candidates.split(",") if c.strip()]
+    out = plan_submit(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        candidates=candidates,
+        cmd_sha=args.cmd_sha,
+    )
+    _ok(out, idempotent=True)
+    return EXIT_OK
 
 
 def cmd_clusters_list(_args: argparse.Namespace) -> int:
@@ -754,6 +820,7 @@ _VALID_RESUBMIT_CATEGORIES = frozenset(
     {
         "gpu_oom",
         "system_oom",
+        "segv",
         "walltime",
         "node_failure",
         "queue_stall",
@@ -1065,6 +1132,83 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_disc)
     p_disc.set_defaults(func=cmd_discover)
+
+    # inspect-cluster
+    p_ic = sub.add_parser(
+        "inspect-cluster",
+        help=(
+            "Snapshot a cluster's per-node state (alloc mem, CPU load, "
+            "co-tenants, drain). Read-only; output is the planner's input."
+        ),
+    )
+    p_ic.add_argument("--cluster", required=True, help="Cluster name from clusters.yaml.")
+    p_ic.add_argument(
+        "--sacct-window-hours",
+        type=int,
+        default=24,
+        help="Look-back window for co-tenant attribution (default 24h).",
+    )
+    p_ic.add_argument(
+        "--stress-alloc-mem-pct",
+        type=float,
+        default=0.80,
+        help="AllocMem fraction above which a node is flagged is_stressed.",
+    )
+    p_ic.add_argument(
+        "--stress-cpu-load-frac",
+        type=float,
+        default=0.80,
+        help="CPULoad/CPUTot fraction above which a node is flagged is_stressed.",
+    )
+    p_ic.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the 60s in-process cache and re-poll the cluster.",
+    )
+    p_ic.set_defaults(func=cmd_inspect_cluster)
+
+    # plan-submit
+    p_ps = sub.add_parser(
+        "plan-submit",
+        help=(
+            "Score candidate constraints for a submit. Combines inspect-cluster, "
+            "runtime priors, and the SEGV blacklist. Output is JSON the slash "
+            "command hands to Claude for cost-model judgment."
+        ),
+    )
+    _add_experiment_dir(p_ps)
+    p_ps.add_argument("--profile", required=True)
+    p_ps.add_argument("--cluster", required=True)
+    p_ps.add_argument(
+        "--candidates",
+        default=None,
+        help=(
+            "Optional comma-separated list of constraint expressions to evaluate "
+            "(e.g. 'a100,a40|a100,a40|a100|v100'). Defaults to single-GPU + "
+            "all-GPU-types from clusters.yaml."
+        ),
+    )
+    p_ps.add_argument(
+        "--cmd-sha",
+        default=None,
+        help="If set, filter runtime priors to samples with this cmd_sha.",
+    )
+    p_ps.set_defaults(func=cmd_plan_submit)
+
+    # runtime-prior
+    p_rp = sub.add_parser(
+        "runtime-prior",
+        help="Quantile rollup of runtime samples for a (profile, cluster).",
+    )
+    _add_experiment_dir(p_rp)
+    p_rp.add_argument("--profile", required=True)
+    p_rp.add_argument("--cluster", required=True)
+    p_rp.add_argument(
+        "--cmd-sha",
+        default=None,
+        help="Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes).",
+    )
+    p_rp.set_defaults(func=cmd_runtime_prior)
 
     # clusters
     p_cl = sub.add_parser("clusters", help="Introspect available cluster definitions.")
