@@ -5,7 +5,8 @@
   "type": "object",
   "required": [
     "version", "subcommands", "supported_schedulers",
-    "schemas_dir", "journal_dir", "ssh_multiplexing"
+    "schemas_dir", "journal_dir", "ssh_multiplexing",
+    "mars_skill_paths", "required_env"
   ],
   "additionalProperties": false,
   "properties": {

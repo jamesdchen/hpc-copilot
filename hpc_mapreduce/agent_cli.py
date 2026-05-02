@@ -820,6 +820,7 @@ _VALID_RESUBMIT_CATEGORIES = frozenset(
     {
         "gpu_oom",
         "system_oom",
+        "segv",
         "walltime",
         "node_failure",
         "queue_stall",
