@@ -111,7 +111,10 @@ echo "============================================"
 # --- Execute ---
 # HPC_RUN_ID arrives via sbatch --export from the submit-side env;
 # re-exported here so the dispatcher inside $EXECUTOR sees it.
-export TASK_ID HPC_TASK_ID HPC_RUN_ID RESULT_DIR GPU_COUNT
+# HPC_CAMPAIGN_ID is optional — present when the run is part of a
+# closed-loop campaign — and lets the user's tasks.py call
+# hpc_mapreduce.reduce.history.prior() for the campaign's history.
+export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR GPU_COUNT
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."
