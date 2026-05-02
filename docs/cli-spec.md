@@ -295,7 +295,7 @@ cache file next to the journal record.
 
 Args: `--experiment-dir`, `--run-id <id>` (required).
 
-`data` shape (validated against `schemas/status.output.json`):
+`data` shape (validated against `schemas/monitor-hpc.output.json`):
 
 ```json
 {
@@ -321,7 +321,7 @@ hpc-mapreduce status --run-id sweep_3a7b8c9d
 
 Purpose: record a submission in the journal. The actual `qsub`/`sbatch`
 is the caller's responsibility — `submit` only persists the bookkeeping
-needed for `/status` to pick up the run later.
+needed for `/monitor-hpc` to pick up the run later.
 
 Idempotent on `run_id`: a retried call with the same `run_id` returns
 the existing record with `deduped: true` and emits no new side effects.

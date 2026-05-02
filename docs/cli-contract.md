@@ -65,7 +65,7 @@ Each `/submit` writes a per-run sidecar to `.hpc/runs/<run_id>.json`:
   but does not duplicate per-task data.
 - The block from `cluster` through `aggregate_defaults` is the **v2
   config snapshot**: every successful `/submit` captures the full config
-  it ran under so subsequent commands (`/aggregate`, `/status`,
+  it ran under so subsequent commands (`/aggregate`, `/monitor-hpc`,
   `/resubmit`, `/campaign`) read context from the sidecar instead of an
   external config file. All v2 fields are optional at write time;
   `read_run_sidecar` backfills missing keys with `None` so callers see a
@@ -144,7 +144,7 @@ kwargs, and execs the resolved command.
 
 Exit codes: `0` on task success, non-zero on setup or dispatch failure.
 
-Stderr messages that `/status` greps for:
+Stderr messages that `/monitor-hpc` greps for:
 - `HPC_TASK_ID env var not set`
 - `HPC_RUN_ID env var not set`
 - `tasks.py not found`
@@ -176,7 +176,7 @@ Env fallbacks when args are absent: `HPC_WAVE`, `HPC_RUN_ID`.
 ```
 
 Exit `0` on success (wave combined), non-zero on failure (e.g. missing task
-results, reducer raised). Stderr carries a short excerpt `/status` can show.
+results, reducer raised). Stderr carries a short excerpt `/monitor-hpc` can show.
 
 ## `hpc_mapreduce.infra.backends.query.query_sacct`, `query_sge`
 
@@ -219,7 +219,7 @@ def run_combiner_checked(
 
 - `ok` is `True` iff the underlying SSH process exits 0.
 - `stdout` is the combiner's JSON (when produced) or empty.
-- `stderr` should be captured into the `/status` state blob on failure so the
+- `stderr` should be captured into the `/monitor-hpc` state blob on failure so the
   user can see why a wave did not combine.
 
 ## `hpc_mapreduce.reduce.history`

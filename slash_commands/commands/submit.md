@@ -32,9 +32,9 @@ _hpc_dispatch.json .hpc/legacy/` (or simply delete it). Don't proceed
 silently — a stale `_hpc_dispatch.json` next to a fresh `.hpc/tasks.py`
 is confusing on inspection.
 
-0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /status, or start a new submission?"
+0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /monitor-hpc, or start a new submission?"
    - This only handles the case where the user wants to switch context away from a fresh `/submit` toward picking up an existing run; otherwise fall through to priority 1.
-   - **Group by `campaign_id` when displaying multiple in-flight runs.** Each `RunRecord` carries a `campaign_id` field (empty string for open-loop submits). When the user has more than ~3 in-flight runs and at least one has a non-empty `campaign_id`, render the offer grouped: "Found 3 in-flight campaigns and 2 standalone runs: campaign `ml_ridge_q1` (4 iterations in flight, last completed iteration's loss=0.42), campaign `walk_forward_2026q1` (1 iteration in flight), …, plus 2 standalone runs (`<run_id_1>`, `<run_id_2>`). Resume one with /status / /campaign status, or start a new submission?" The flat list is fine for ≤3 runs.
+   - **Group by `campaign_id` when displaying multiple in-flight runs.** Each `RunRecord` carries a `campaign_id` field (empty string for open-loop submits). When the user has more than ~3 in-flight runs and at least one has a non-empty `campaign_id`, render the offer grouped: "Found 3 in-flight campaigns and 2 standalone runs: campaign `ml_ridge_q1` (4 iterations in flight, last completed iteration's loss=0.42), campaign `walk_forward_2026q1` (1 iteration in flight), …, plus 2 standalone runs (`<run_id_1>`, `<run_id_2>`). Resume one with /monitor-hpc / /campaign status, or start a new submission?" The flat list is fine for ≤3 runs.
 
 1. **Previous run**: If `.hpc/tasks.py` exists, the experiment has already been scaffolded. List the per-run sidecars under `.hpc/runs/` (newest-first via `find_existing_runs(experiment_dir)` from `hpc_mapreduce`) and offer: "Previous run: [run_id, profile, tasks, cluster, age]. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?"
    - **Resubmit same** → reuse the existing `.hpc/tasks.py`, recompute `cmd_sha` (it'll match because `tasks.py` is unchanged), skip to Step 5 (sync + submit). The new sidecar's `run_id` differs but `cmd_sha` matches the prior run.
@@ -315,12 +315,12 @@ I found a prior run with the same cmd_sha: <prior.stem>.
 Resume (re-dispatch only failed tasks) or fresh (new run_id)?
 ```
 
-- **Resume**: call `/status --run-id <prior.stem>` (or `report_status` directly) to enumerate failing task IDs, then build a `ResubmitPlan` via `resubmit_plan(task_count=tasks.total(), failed_task_ids=[...])` and submit via `backend.submit_plan(plan, ...)`. The new sidecar (written below) carries the same `cmd_sha` but a fresh `run_id` — both runs share provenance via the SHA.
+- **Resume**: call `/monitor-hpc --run-id <prior.stem>` (or `report_status` directly) to enumerate failing task IDs, then build a `ResubmitPlan` via `resubmit_plan(task_count=tasks.total(), failed_task_ids=[...])` and submit via `backend.submit_plan(plan, ...)`. The new sidecar (written below) carries the same `cmd_sha` but a fresh `run_id` — both runs share provenance via the SHA.
 - **Fresh**: ask the user how they want the new run distinguished (e.g. a different result_dir suffix, a profile name change, or simply accept that the new sidecar is a deliberate rerun). The new `cmd_sha` will only differ if `tasks.py` itself changes.
 
 ### Step 6d: Compute the throughput plan and write the sidecar
 
-With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Then write the per-run sidecar — this is the audit-trail artifact `/status` and `/aggregate` read on the cluster:
+With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Then write the per-run sidecar — this is the audit-trail artifact `/monitor-hpc` and `/aggregate` read on the cluster:
 
 ```python
 run_id = f"{profile}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{cmd_sha[:8]}"
@@ -358,7 +358,7 @@ sidecar_path = write_run_sidecar(
 )
 ```
 
-Pass `None` (or omit) for any v2 field that doesn't apply — they're all optional and absent keys are stripped from the on-disk JSON. Subsequent `/aggregate` and `/status` invocations read these fields back so the user never has to re-answer the interview.
+Pass `None` (or omit) for any v2 field that doesn't apply — they're all optional and absent keys are stripped from the on-disk JSON. Subsequent `/aggregate` and `/monitor-hpc` invocations read these fields back so the user never has to re-answer the interview.
 
 For multi-executor submissions, write one sidecar per executor — `run_id` and `executor` differ, but `tasks.py` is per-experiment and may be shared if the axes match.
 
@@ -514,7 +514,7 @@ For GPU jobs: `--gres=gpu:<count>`, appropriate partition, and use `.hpc/templat
 
 ## Step 8b: Verify the array is actually queued/running
 
-`qsub`/`sbatch` returning a job ID is necessary but not sufficient — the scheduler can still place the array into an error state (`Eqw` on SGE, `BOOT_FAIL`/`NODE_FAIL` on SLURM) or, on a wedged controller, drop the registration entirely. Confirm each returned job ID is alive on the cluster **before** reporting success (Step 9) or writing the journal record (Step 10). A poisoned run that lands in the journal is worse than a clean failure here, because `/status` will keep latching onto a dead job ID.
+`qsub`/`sbatch` returning a job ID is necessary but not sufficient — the scheduler can still place the array into an error state (`Eqw` on SGE, `BOOT_FAIL`/`NODE_FAIL` on SLURM) or, on a wedged controller, drop the registration entirely. Confirm each returned job ID is alive on the cluster **before** reporting success (Step 9) or writing the journal record (Step 10). A poisoned run that lands in the journal is worse than a clean failure here, because `/monitor-hpc` will keep latching onto a dead job ID.
 
 Query the scheduler for every job ID returned by `backend.submit_array` / `backend.submit_plan`:
 
@@ -555,7 +555,7 @@ Save to Claude Code memory for this project:
 After submission **and the Step 8b verification**:
 1. Parse the job ID from submission output
 2. Report: job ID, executor(s), grid dimensions, total tasks, cluster, and the verified scheduler state (e.g. "all 4 array jobs PENDING/RUNNING")
-3. Suggest running `/status` to track progress
+3. Suggest running `/monitor-hpc` to track progress
 
 ## Step 10: Record the submission in the run journal
 
@@ -582,7 +582,7 @@ record, deduped = runner.submit_and_record(
 # Just resume monitoring.
 ```
 
-`submit_and_record` is keyed on `run_id` (the timestamp + cmd_sha8 string from Step 6d); a retry with the same run_id deduplicates without re-submitting. The journal entry lets a future `/status` (no args) auto-discover this run and resume monitoring with one keystroke instead of re-asking for cluster / job_ids / etc.
+`submit_and_record` is keyed on `run_id` (the timestamp + cmd_sha8 string from Step 6d); a retry with the same run_id deduplicates without re-submitting. The journal entry lets a future `/monitor-hpc` (no args) auto-discover this run and resume monitoring with one keystroke instead of re-asking for cluster / job_ids / etc.
 
 Slash commands MUST call `slash_commands.runner.submit_and_record` rather than writing to `slash_commands.session` directly — the bundled helper guards the journal write under a flock and keeps the run record consistent.
 
