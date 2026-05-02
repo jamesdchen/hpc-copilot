@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed — `/status` slash command renamed to `/monitor-hpc`
+
+The interactive Claude Code slash command at
+`slash_commands/commands/status.md` is renamed to
+`slash_commands/commands/monitor-hpc.md`. Users invoke it as
+`/monitor-hpc` instead of `/status`. The CLI subcommand
+(`hpc-mapreduce status`) is unchanged — only the human-facing slash
+command was renamed; programmatic callers (MARs, scripts, and the rest
+of the slash-command pipeline) continue to use the same JSON envelope
+and exit-code contract.
+
+Every cross-reference in the slash-command markdown, the docs
+(`cli-spec.md`, `cli-contract.md`, `sync-checklist.md`,
+`migration-from-hpc-yaml.md`), and `README.md` was updated. The skill
+at `skills/hpc-status/` keeps its name; the MARs skill-name registry
+(`_MARS_SKILL_NAMES`) is unchanged.
+
 ### Added — campaign helper layer (Optuna-recipe ergonomics)
 
 Five small, strategy-blind additions surfaced by walking through the

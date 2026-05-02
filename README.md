@@ -2,7 +2,7 @@
 
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
-- **Slash commands for humans** in Claude Code (`/submit`, `/status`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, walks you through choosing a cluster and authoring `.hpc/tasks.py`.
+- **Slash commands for humans** in Claude Code (`/submit`, `/monitor-hpc`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, walks you through choosing a cluster and authoring `.hpc/tasks.py`.
 - **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs).
 
 Both go through the same atomic-ops layer (`slash_commands/runner.py`), so cross-surface state (in-flight runs, journal records) is shared automatically.
@@ -17,7 +17,7 @@ pip install -e .
 Open the repo in Claude Code, then:
 - `/preflight` — verify SSH agent + cluster reachability.
 - `/submit` — answer prompts about cluster, executor, grid params.
-- `/status` to monitor, `/aggregate` to collect results.
+- `/monitor-hpc` to monitor, `/aggregate` to collect results.
 
 ### For agents and automation
 
@@ -74,7 +74,7 @@ Each executor accepts experiment-specific arguments (`--horizon`, `--start`, `--
 ```
 /preflight → verify SSH agent + cluster reachability before first submit
 /submit    → discovers executors, walks you through .hpc/tasks.py, syncs code, submits
-/status    → tracks completion per grid point, diagnoses failures, auto-resubmits
+/monitor-hpc    → tracks completion per grid point, diagnoses failures, auto-resubmits
 /aggregate → validates completeness, runs aggregation, downloads summaries
 ```
 
@@ -96,7 +96,7 @@ Proposed plan:
 
 You: yes
 
-Claude: Submitted job 12345678 (6 tasks). Run /status to track progress.
+Claude: Submitted job 12345678 (6 tasks). Run /monitor-hpc to track progress.
 ```
 
 No config files required. Claude discovers your executors by reading their source and `--help`, then suggests resources conversationally based on the executor and your input.
@@ -133,7 +133,7 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 |---------|-------------|
 | `/preflight` | Verify SSH agent, ssh/rsync on PATH, clusters.yaml parses, cluster reachable |
 | `/submit` | Discover executors, build grid conversationally, sync code, submit array jobs |
-| `/status` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
+| `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
 | `/build-executor` | Scaffold a new executor from `templates/starters/executor_template.py` |
 | `/campaign` | Closed-loop iteration: tag submits, read prior history, run an asyncio in-flight queue. See [`docs/campaign.md`](docs/campaign.md). |

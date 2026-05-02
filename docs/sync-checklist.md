@@ -51,7 +51,7 @@ a value requires updating both files.
 ### `failure_category` enum
 
 Values returned by `hpc_mapreduce.reduce.classify.classify_failure`.
-Used by `/status` (slash) and any agent that wants to drive auto-retry
+Used by `/monitor-hpc` (slash) and any agent that wants to drive auto-retry
 policy. The complete list (`CATEGORIES` constant in
 `hpc_mapreduce/reduce/classify.py`):
 

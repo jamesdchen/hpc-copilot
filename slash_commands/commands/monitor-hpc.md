@@ -33,7 +33,7 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
    >    --campaign-id ml_ridge_q1` for the full history.
    >  • campaign `walk_forward_2026q1` (1 iteration in flight).
    >  • standalone run `<run_id>` ({profile} on {cluster}, last status
-   >    {complete}/{total} @ {age} ago); resume with `/status --run-id
+   >    {complete}/{total} @ {age} ago); resume with `/monitor-hpc --run-id
    >    <run_id>`.
    > Pick one, or skip to start fresh?"
 
@@ -111,7 +111,7 @@ Run `python -m <executor_module> --help` (extract the module from the profile's 
 
 1. **Sanity-check before and after.** Run Step 0.5 pre-flight before arming the Monitor; run Step 4a post-flight before aggregating in Step 4b. File counts lie and stale job IDs waste hours — never skip these gates.
 2. **Act autonomously on known failures.** For OOM, walltime, and node failures, immediately resubmit with appropriate resource overrides. Do NOT ask for permission. Only pause for code bugs or unrecognized errors.
-3. **Stream, don't poll-loop.** Arm the Claude Code `Monitor` tool once (Step 5) with a script that emits one stdout line per state change. React to events as they arrive in chat — do **not** re-run `/status` from cron.
+3. **Stream, don't poll-loop.** Arm the Claude Code `Monitor` tool once (Step 5) with a script that emits one stdout line per state change. React to events as they arrive in chat — do **not** re-run `/monitor-hpc` from cron.
 
 ## Arguments
 
@@ -138,7 +138,7 @@ The TUI reuses the same `report_status` code path (with the run_id-keyed
 sidecar adapter on the cluster), so the JSON contract described below
 is unchanged. Rich is an optional dep (`pip install 'claude-hpc[tui]'`);
 if it's missing, `--tui` prints a short install hint and exits 2, and
-plain `/status` continues to work.
+plain `/monitor-hpc` continues to work.
 
 Keybinds:
 
@@ -170,7 +170,7 @@ live CPU-hour / GPU-hour totals from `resource_usage`.
 
 ## Step 0.5: Pre-flight Sanity Checks
 
-Run **once** per `/status` invocation, immediately after Step 0 and **before** Step 1. If any check fails, report the specific failure and stop — do NOT proceed to Step 1 and do NOT arm the Monitor in Step 5.
+Run **once** per `/monitor-hpc` invocation, immediately after Step 0 and **before** Step 1. If any check fails, report the specific failure and stop — do NOT proceed to Step 1 and do NOT arm the Monitor in Step 5.
 
 Emit a single line `pre-flight: OK` on success, or `pre-flight FAILED: <which check>` on the first failure.
 
@@ -459,7 +459,7 @@ If the current stage completes and another stage has `depends_on` pointing to th
 
 **Skip if state is `all_complete` (Step 4b done) or fully abandoned.** Report done and stop.
 
-Otherwise, arm the Claude Code `Monitor` tool **once** with a poll script that streams state changes back to chat. Do **not** re-run `/status` from cron — react to events as they arrive.
+Otherwise, arm the Claude Code `Monitor` tool **once** with a poll script that streams state changes back to chat. Do **not** re-run `/monitor-hpc` from cron — react to events as they arrive.
 
 ### When to (re)arm
 
@@ -560,8 +560,8 @@ Always end with a concise summary:
 
 ## Context Management
 
-1. **Single in-session loop**: One `/status` invocation arms one Monitor and stays in the same conversation until `TERMINAL`. There is no cron handoff and no fresh-context replay — the Monitor stream IS the loop.
+1. **Single in-session loop**: One `/monitor-hpc` invocation arms one Monitor and stays in the same conversation until `TERMINAL`. There is no cron handoff and no fresh-context replay — the Monitor stream IS the loop.
 2. **Don't re-poll on a tick.** The Monitor script is the only thing polling. The agent reacts to events; it does not run its own status reporter on a timer.
 3. **Compact event log**: When summarizing for the user, collapse repeated `STATE …` lines into deltas; surface only `NEW_FAILURE`, `WAVE_READY`, and `TERMINAL` lines verbatim.
 4. **Minimize tool output**: Use `tail -20` for logs. Prefer compact status commands over verbose output.
-5. **If the session ends**: monitoring stops. Re-run `/status` (no args) — the run journal at `~/.claude/hpc/<repo_hash>/` will surface the in-flight run with last-known status; on Y, `runner.reconcile` re-derives ground truth before re-arming the Monitor.
+5. **If the session ends**: monitoring stops. Re-run `/monitor-hpc` (no args) — the run journal at `~/.claude/hpc/<repo_hash>/` will surface the in-flight run with last-known status; on Y, `runner.reconcile` re-derives ground truth before re-arming the Monitor.
