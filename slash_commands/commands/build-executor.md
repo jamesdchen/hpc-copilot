@@ -69,7 +69,7 @@ If the user is ambiguous ("make a ridge executor"), infer: existing `ml_ridge.py
    ```
 2. Ask the user for the target path (e.g. `src/my_executor.py` or `executors/foo.py`).
 3. Copy the template into the experiment repo at that path.
-4. Walk the file and fill in every `# TODO:` marker based on what the user described — model type, data source, feature engineering, metric, etc. Keep the standard CLI args (`--data-path`, `--horizon`, `--start`, `--end`, `--output-file`) unless the user explicitly wants different flags.
+4. Walk the file and fill in every `# TODO:` marker based on what the user described. Ask the user what flags their executor needs — the only contract requirement is `--output-file`. The template's other flags are illustrative; drop or replace any that don't fit the user's domain. See the "Common executor patterns" section below for three reference shapes (time-series ML, simulation/seed-sweep, sharded data-processing) — pick whichever matches, or invent the right one.
 5. Jump to Step 4 (verify).
 
 ## Step 4: Smoke-Test
@@ -88,9 +88,11 @@ Print the exact `/submit-hpc` invocation that will now work with the new executo
 ```
 Ready. Try:
   /submit-hpc run <new_name>
-or with grid overrides:
-  /submit-hpc run <new_name> horizon=[1,5,25]
+or with grid overrides (use whichever flag(s) the new executor exposes):
+  /submit-hpc run <new_name> <flag>=[<v1>,<v2>,...]
 ```
+
+Examples by domain: `horizon=[1,5,25]` for time-series ML, `seed=[0,1,2,3]` for simulations, `shard_id=[0..15]` for sharded data jobs.
 
 ## Step 6: Cache and Report
 
