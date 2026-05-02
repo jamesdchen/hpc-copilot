@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/stages.input.json",
+  "title": "stages spec",
+  "description": "Output shape of `.hpc/stages.py::stages()`. Each entry describes one stage in a multi-stage DAG. Stage names must be unique within the list. `depends_on` references must resolve to other entries in the same list.",
+  "type": "array",
+  "items": { "$ref": "#/$defs/stage" },
+  "minItems": 1,
+  "$defs": {
+    "stage": {
+      "type": "object",
+      "required": ["name", "run"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_\\-]*$",
+          "description": "Stage identifier; unique within the DAG."
+        },
+        "run": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shell command (executor invocation) for this stage."
+        },
+        "depends_on": {
+          "oneOf": [
+            { "type": "string", "minLength": 1 },
+            {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          ],
+          "description": "Stage(s) that must complete before this one starts. String or list of strings."
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "cpus":     { "type": "integer", "minimum": 1 },
+            "mem":      { "type": "string",  "minLength": 1 },
+            "walltime": { "type": "string",  "minLength": 1 },
+            "gpus":     { "type": "integer", "minimum": 0 },
+            "gpu_type": { "type": "string",  "minLength": 1 }
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "modules":   { "type": "string" },
+            "conda_env": { "type": "string" }
+          }
+        },
+        "env_group": { "type": "string", "minLength": 1 },
+        "constraints": { "type": "object", "additionalProperties": true },
+        "results": { "type": "object", "additionalProperties": true },
+        "runtime": { "type": "string", "enum": ["uv"] },
+        "max_retries": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}
