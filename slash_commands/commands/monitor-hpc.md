@@ -341,14 +341,13 @@ Classify the failure:
 When a task ends with `NODE_FAIL` or signals SEGV (`exit -11`, `signal: Segmentation fault`, or sacct `ExitCode=139`), append to the per-cluster blacklist so future `/submit-hpc` runs steer around the node:
 
 ```python
-from pathlib import Path
 from hpc_mapreduce.job.blacklist import record_segv
 from hpc_mapreduce.infra.inspect import inspect_cluster
 
 snap = inspect_cluster(cluster, use_cache=False)   # capture contention at SEGV time
 node_state = next((n for n in snap.nodes if n.name == failed_node), None)
 record_segv(
-    Path.cwd(),
+    experiment_dir,                                # set at Step 0; same root used by sidecars
     cluster=cluster,
     node=failed_node,
     run_id=run_id, job_id=job_id, task_id=failed_task_id,

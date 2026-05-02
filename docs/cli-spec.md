@@ -500,3 +500,108 @@ Idempotent: **no** — file creation has side effects, refuses to
 overwrite without `--force`. Error codes: `spec_invalid` (unknown
 type, refusing overwrite), `config_invalid` (template missing on disk).
 Exit: 0 / 1.
+
+### `inspect-cluster`
+
+Purpose: read-only snapshot of a cluster's per-node state — alloc-mem
+pressure, CPU load, advertised vs. allocated GRES, drain/down flag, and
+a co-tenant list from `sacct -N` / `qstat`. Used by `plan-submit` and
+useful standalone for ad-hoc cluster debugging.
+
+Args:
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--cluster <name>` | yes | cluster key from `clusters.yaml` |
+| `--sacct-window-hours <H>` | no | co-tenant look-back (default 24) |
+| `--stress-alloc-mem-pct <f>` | no | AllocMem fraction above which `is_stressed=true` (default 0.80) |
+| `--stress-cpu-load-frac <f>` | no | CPULoad/CPUTot fraction above which `is_stressed=true` (default 0.80) |
+| `--no-cache` | no | bypass the 60s in-process snapshot cache |
+
+`data` shape:
+
+```json
+{
+  "cluster": "discovery", "scheduler_kind": "slurm", "now_iso": "...",
+  "nodes": [{"name": "d11-03", "alloc_mem_pct": 0.86, "cpu_load_frac": 0.69,
+             "gres": "gpu:v100:2", "gres_used": "gpu:v100:1",
+             "active_features": ["v100"], "co_tenants": [...],
+             "is_stressed": true, "is_drained": false, ...}],
+  "errors": []
+}
+```
+
+Idempotent: yes. Touches the cluster (SSH); requires `SSH_AUTH_SOCK`.
+Error codes: `ssh_unreachable`, `cluster_unknown`, `internal`. Exit: 0 / 2 / 3.
+
+### `runtime-prior`
+
+Purpose: roll up `<repo>/.hpc/runtimes/<profile>.<cluster>.json` samples
+into per-`gpu_type` quantiles (p50, p95, p99, mean, n_samples). Read-only,
+local — no SSH.
+
+Args:
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--profile <name>` | yes | run profile / experiment label |
+| `--cluster <name>` | yes | cluster key from `clusters.yaml` |
+| `--cmd-sha <sha>` | no | filter samples to one cmd_sha (recommended after `.hpc/tasks.py` edits) |
+| `--experiment-dir <path>` | no | default CWD |
+
+`data` shape:
+
+```json
+{
+  "profile": "ml_ridge", "cluster": "discovery", "now_iso": "...",
+  "needs_canary": false,
+  "quantiles": {"a100": {"p50": 4200, "p95": 5400, "p99": 6500,
+                          "n_samples": 12, "min_sec": 3000, "max_sec": 6700,
+                          "mean_sec": 4350}},
+  "total_samples": 12, "filtered_by_cmd_sha": null
+}
+```
+
+Idempotent: yes. Error codes: `spec_invalid`, `internal`. Exit: 0 / 1 / 3.
+
+### `plan-submit`
+
+Purpose: emit a candidate-constraint scorecard combining a live cluster
+snapshot, the SEGV blacklist, and runtime priors. The slash command
+hands this JSON to Claude for cost-model judgment.
+
+Args:
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `--profile <name>` | yes | run profile |
+| `--cluster <name>` | yes | cluster key |
+| `--candidates a,b\|c,...` | no | comma-separated constraint expressions; default = each gpu_type plus union |
+| `--cmd-sha <sha>` | no | runtime-prior filter |
+| `--experiment-dir <path>` | no | default CWD |
+
+`data` shape (top-level keys):
+
+```json
+{
+  "profile": "...", "cluster": "...", "now_iso": "...",
+  "scheduler_kind": "slurm", "blacklist_active_count": 0,
+  "needs_canary": false, "canary_plan": null,
+  "candidates": [
+    {"constraint": "a100", "pool_size": 4,
+     "healthy_nodes": [...], "stressed_nodes": [...],
+     "blacklisted_nodes": [...],
+     "eta_sec_via_test_only": 300,
+     "runtime_prior_quantiles_sec": {"a100": {"p50": 4200, "p95": 5400, ...}},
+     "p_fail_30d": {"a100": 0.0}}
+  ]
+}
+```
+
+When `needs_canary: true`, `canary_plan` carries a 1-task probe spec —
+the slash command submits the canary, ingests its result via
+`runtime-prior`, then re-calls `plan-submit` to score normally.
+
+Idempotent: yes. Touches the cluster; requires `SSH_AUTH_SOCK`. Error
+codes: `ssh_unreachable`, `cluster_unknown`, `spec_invalid`, `internal`.
+Exit: 0 / 1 / 2 / 3.

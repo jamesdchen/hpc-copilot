@@ -4,10 +4,25 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from hpc_mapreduce.infra import inspect as ins
 from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
 from hpc_mapreduce.job import blacklist as bl
 from hpc_mapreduce.job import planner
 from hpc_mapreduce.job import runtime_prior as rp
+
+
+@pytest.fixture(autouse=True)
+def _clear_inspect_cache():
+    """Drop the module-global inspect cache between tests.
+
+    The planner consults ``inspect_cluster`` whose 60s in-process cache
+    would otherwise let one test's snapshot leak into the next.
+    """
+    ins._CACHE.clear()
+    yield
+    ins._CACHE.clear()
 
 
 def _write_clusters(tmp_path, scheduler="slurm"):

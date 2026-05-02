@@ -441,15 +441,19 @@ def _parse_qhost(text: str) -> list[NodeSnapshot]:
             nodes.append(current)
         else:
             # Resource attribute line for the current host (e.g. "    hl:gpu=2").
+            # Match `gpu_used=N` and `gpu=N` separately so a line that contains
+            # both forms (`hl:gpu=2 gl:gpu_used=1`) routes each value to the
+            # right field. Substring-checking the whole line miscategorizes
+            # the free-GPU value as `gres_used` in that case.
             if current is None:
                 continue
             text_line = line.strip()
-            m = re.match(r"[A-Za-z]+:gpu(?:_used)?=(\S+)", text_line)
-            if m:
-                if "gpu_used" in text_line:
-                    current.gres_used = f"gpu:{m.group(1)}"
-                else:
-                    current.gres = f"gpu:{m.group(1)}"
+            m_used = re.search(r"[A-Za-z]+:gpu_used=(\S+)", text_line)
+            if m_used:
+                current.gres_used = f"gpu:{m_used.group(1)}"
+            m_free = re.search(r"(?<!_)[A-Za-z]+:gpu=(\S+)", text_line)
+            if m_free:
+                current.gres = f"gpu:{m_free.group(1)}"
     return nodes
 
 
@@ -709,25 +713,10 @@ def _hours_since(iso_or_slurm: str) -> float | None:
 
 
 def _parse_gpu_count_from_tres(tres: str) -> int:
-    """Mirror ``backends/query.parse_gpu_count_from_tres`` for local use."""
-    if not tres:
-        return 0
-    total = 0
-    for part in tres.split(","):
-        part = part.strip()
-        if not part.startswith("gres/gpu"):
-            continue
-        _, _, rhs = part.partition("=")
-        rhs = rhs.strip()
-        if not rhs:
-            continue
-        m = re.match(r"(\d+)", rhs)
-        if m:
-            try:
-                total += int(m.group(1))
-            except ValueError:
-                continue
-    return total
+    """Re-export from ``backends.query`` to keep the parser single-sourced."""
+    from hpc_mapreduce.infra.backends.query import parse_gpu_count_from_tres
+
+    return parse_gpu_count_from_tres(tres)
 
 
 def _is_stressed(

@@ -71,6 +71,13 @@ __all__ = [
     "SubmissionPlan",
     "compute_submission_plan",
     "build_wave_map",
+    # Smart-submit data layer
+    "inspect_cluster",
+    "record_segv",
+    "get_active_blacklist",
+    "append_runtime_sample",
+    "roll_up_runtime_quantiles",
+    "plan_submit",
     # Resubmit
     "compact_task_ids",
     "ResubmitBatch",
@@ -126,6 +133,16 @@ from hpc_mapreduce.job.throughput import (
     WorkloadSpec,
     build_wave_map,
     compute_submission_plan,
+)
+from hpc_mapreduce.infra.inspect import inspect_cluster
+from hpc_mapreduce.job.blacklist import (
+    get_active as get_active_blacklist,
+    record_segv,
+)
+from hpc_mapreduce.job.planner import plan_submit
+from hpc_mapreduce.job.runtime_prior import (
+    append_sample as append_runtime_sample,
+    roll_up_quantiles as roll_up_runtime_quantiles,
 )
 from hpc_mapreduce.map.metrics_io import write_metrics
 from hpc_mapreduce.reduce.classify import classify_failure

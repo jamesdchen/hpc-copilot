@@ -154,10 +154,16 @@ def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
 
 
 def _filter_expired(entries: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """Drop entries whose ``expires_at`` is unparseable or in the past.
+
+    A missing / corrupt ``expires_at`` is treated as expired (drop it),
+    not as immortal — otherwise a single bad write would create a
+    permanent blacklist entry.
+    """
     kept: list[dict[str, Any]] = []
     for e in entries:
         exp = _parse_iso(e.get("expires_at", ""))
-        if exp is None or exp > now:
+        if exp is not None and exp > now:
             kept.append(e)
     return kept
 
