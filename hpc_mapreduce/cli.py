@@ -516,6 +516,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         job_ids=list(spec["job_ids"]),
         total_tasks=int(spec["total_tasks"]),
         run_id=spec["run_id"],
+        campaign_id=spec.get("campaign_id") or "",
     )
     _ok(
         {

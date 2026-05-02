@@ -195,7 +195,10 @@ def test_concurrent_writers_serialize(journal_home, experiment):
             session.update_run_status(experiment, record.run_id, **{field: value})
 
     t1 = threading.Thread(target=writer, args=("combined_waves", [0, 1]))
-    t2 = threading.Thread(target=writer, args=("retries", {"7": {"attempts": 1, "category": "system_oom", "overrides": {}}}))
+    t2 = threading.Thread(
+        target=writer,
+        args=("retries", {"7": {"attempts": 1, "category": "system_oom", "overrides": {}}}),
+    )
     t1.start()
     t2.start()
     t1.join()
@@ -304,3 +307,50 @@ def test_last_status_files_not_returned_by_all_run_files(journal_home, experimen
     files = session._all_run_files(experiment)
     assert cache not in files
     assert any(p.name == f"{rec.run_id}.json" for p in files)
+
+
+# ---------------------------------------------------------------------------
+# Closed-loop campaigns: campaign_id field + find_runs_by_campaign
+# ---------------------------------------------------------------------------
+
+
+def test_campaign_id_default_is_empty_string(journal_home, experiment):
+    """Open-loop submits leave campaign_id empty so they don't get matched
+    by find_runs_by_campaign."""
+    rec = _make_record()
+    assert rec.campaign_id == ""
+    session.upsert_run(experiment, rec)
+    loaded = session.load_run(experiment, rec.run_id)
+    assert loaded is not None
+    assert loaded.campaign_id == ""
+
+
+def test_campaign_id_round_trips_through_journal(journal_home, experiment):
+    rec = _make_record(campaign_id="ml_ridge_q1")
+    session.upsert_run(experiment, rec)
+    loaded = session.load_run(experiment, rec.run_id)
+    assert loaded is not None
+    assert loaded.campaign_id == "ml_ridge_q1"
+
+
+def test_find_runs_by_campaign_filters_and_orders_oldest_first(journal_home, experiment):
+    import time
+
+    session.upsert_run(experiment, _make_record(run_id="r1", campaign_id="A"))
+    time.sleep(0.01)
+    session.upsert_run(experiment, _make_record(run_id="r2", campaign_id="B"))
+    time.sleep(0.01)
+    session.upsert_run(experiment, _make_record(run_id="r3", campaign_id="A"))
+
+    matched = session.find_runs_by_campaign(experiment, "A")
+    assert [r.run_id for r in matched] == ["r1", "r3"]
+
+
+def test_find_runs_by_campaign_empty_id_returns_empty(journal_home, experiment):
+    session.upsert_run(experiment, _make_record(campaign_id="A"))
+    assert session.find_runs_by_campaign(experiment, "") == []
+
+
+def test_find_runs_by_campaign_unknown_id_returns_empty(journal_home, experiment):
+    session.upsert_run(experiment, _make_record(campaign_id="A"))
+    assert session.find_runs_by_campaign(experiment, "B") == []

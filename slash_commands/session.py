@@ -57,9 +57,7 @@ __all__ = [
 SCHEMA_VERSION = 1
 # Resolve at import time. MARs (and any caller that wants its own state tree)
 # can set HPC_JOURNAL_DIR before importing this module to redirect the journal.
-HPC_HOMEDIR = Path(
-    os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc")
-)
+HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
 TERMINAL_STATUSES = frozenset({"complete", "failed", "abandoned"})
 _UPDATABLE_FIELDS = frozenset(
     {
@@ -96,6 +94,12 @@ class RunRecord:
     stage: str = "monitor"
     status: str = "in_flight"
     last_resubmit_request_id: str = ""
+    # Closed-loop campaign tag. Empty string for open-loop submits.
+    # Populated when /submit was invoked with --campaign-id (or with
+    # campaign_id set on the submit spec). The asyncio campaign loop
+    # uses ``find_runs_by_campaign`` to discover its in-flight set on
+    # resume.
+    campaign_id: str = ""
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -170,9 +174,7 @@ def _locked(target: Path) -> Iterator[None]:
 def _atomic_write_json(path: Path, payload: dict) -> None:
     """Write *payload* to *path* atomically (tmp + os.replace)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
-    )
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(payload, fh, indent=2, sort_keys=True)
@@ -272,8 +274,7 @@ def _all_run_files(experiment_dir: Path) -> list[Path]:
     return [
         p
         for p in rdir.glob("*.json")
-        if not p.name.endswith(".tmp")
-        and not p.name.endswith(".last_status.json")
+        if not p.name.endswith(".tmp") and not p.name.endswith(".last_status.json")
     ]
 
 
@@ -347,6 +348,28 @@ def find_in_flight_runs(experiment_dir: Path) -> list[RunRecord]:
         records.append((path.stat().st_mtime, record))
     records.sort(key=lambda item: item[0], reverse=True)
     return [r for _, r in records]
+
+
+def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRecord]:
+    """Return every run whose ``campaign_id`` matches, oldest-first.
+
+    Used by the asyncio campaign loop on resume to discover its in-flight
+    set without re-asking the user. Empty *campaign_id* returns ``[]`` —
+    open-loop submits never match a campaign.
+    """
+    if not campaign_id:
+        return []
+    if not HPC_HOMEDIR.exists() or not journal_dir(experiment_dir).exists():
+        return []
+    files = _all_run_files(experiment_dir)
+    matched: list[tuple[float, RunRecord]] = []
+    for path in files:
+        record = load_run(experiment_dir, path.stem)
+        if record is None or record.campaign_id != campaign_id:
+            continue
+        matched.append((path.stat().st_mtime, record))
+    matched.sort(key=lambda item: item[0])  # oldest-first
+    return [r for _, r in matched]
 
 
 def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
