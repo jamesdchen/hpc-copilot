@@ -215,6 +215,120 @@ Throughput Plan:
 
 If constraints are not configured for the cluster or profile, skip this step and submit as a single array (existing behavior).
 
+## Step 4c: Smart constraint planner (resource-quality aware)
+
+The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, the planner combines a live snapshot of the cluster, the SEGV blacklist, and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric and picks one.
+
+Run the planner:
+
+```bash
+python -m hpc_mapreduce plan-submit --profile <profile> --cluster <cluster> --experiment-dir .
+```
+
+The envelope's `data` carries the candidate scorecards. Three branches:
+
+### 4c-A: `needs_canary: true` (cold start)
+
+No runtime priors exist for this `(profile, cluster)`. Don't try to score — submit a 1-task canary first:
+
+1. Read `data.canary_plan.constraint` (lowest-ETA candidate).
+2. Build a normal submission spec with `total_tasks=1` and the canary constraint, run through Steps 5–10 with `--no-canary` (we **are** the canary; nesting a canary inside a canary is double work).
+3. Wait for terminal state. Capture `gpu_type`, `node`, `elapsed_sec`, `exit_code` from sacct/qacct.
+4. On success, append a runtime sample:
+
+   ```python
+   from hpc_mapreduce.job.runtime_prior import append_sample
+   append_sample(
+       experiment_dir=Path("."),
+       profile=profile, cluster=cluster,
+       run_id=canary_run_id, task_id=0,
+       gpu_type=gpu_type, node=node,
+       elapsed_sec=elapsed_sec, exit_code=0,
+       cmd_sha=cmd_sha, started_at=..., ended_at=...,
+   )
+   ```
+
+5. On SEGV: record to the blacklist and surface to the user. **Do not auto-retry on a different node** — the failure is informative; re-running blindly may mask whether the workload itself is buggy.
+
+   ```python
+   from hpc_mapreduce.job.blacklist import record_segv
+   record_segv(
+       experiment_dir=Path("."),
+       cluster=cluster,
+       node=node, run_id=canary_run_id, job_id=job_id, task_id=0,
+       exit_code=exit_code, signal=-11,
+       host_allocmem_pct=...,         # from inspect-cluster snapshot at SEGV time
+       concurrent_jobs=[...],
+   )
+   ```
+
+6. On timeout: bump walltime 2× and retry once. After two timeouts, surface to the user.
+7. After ingestion, re-run `plan-submit` and proceed to 4c-B.
+
+### 4c-B: `needs_canary: false` (priors exist)
+
+Score each `data.candidates[i]` using:
+
+```
+p95(c)        = max(quantiles[gpu]['p95'] for gpu in c.runtime_prior_quantiles_sec)
+p_fail(c)     = max(c.p_fail_30d.values(), default=0.0)
+total_etc(c)  = eta_sec_via_test_only(c) + p95(c) + p_fail(c) * (eta_sec(c) + p95(c))
+```
+
+Pick the candidate with smallest `total_etc`. For tie-breaking, prefer the narrower constraint (smaller `pool_size`).
+
+For each candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly:
+
+- Co-tenant has been running >12h *and* holds >50% of CPU / mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).
+- Co-tenant is recently-started or holds little of the node's resources ⇒ allow.
+- Multiple co-tenants on a node with combined high resource share ⇒ exclude.
+
+Every entry in `blacklisted_nodes` is **always** excluded (rule, not judgment).
+
+Build the resulting `--exclude=<node1>,<node2>,...` flag and add it to the sbatch invocation in Step 8.
+
+Set walltime: `chosen.p95(c) * safety_margin` (default `1.3`). This covers the worst GPU type the constraint admits without ballooning the budget.
+
+### 4c-C: planner errors
+
+If the `plan-submit` envelope is `ok: false`, fall back to the static-constraint flow: take the constraint from `clusters.yaml`'s `gpu_constraint`, walltime from `clusters.yaml`'s `constraints.max_walltime`, and proceed without an exclude list. Surface the planner error verbatim so the user knows quality awareness is degraded.
+
+### Audit file
+
+After Step 8 returns job IDs, write the decision to `.hpc/runs/<run_id>.decision.json` so the choice is replayable:
+
+```python
+import json
+from pathlib import Path
+from datetime import datetime, timezone
+decision = {
+    "schema_version": 1,
+    "run_id": run_id,
+    "profile": profile,
+    "cluster": cluster,
+    "submitted_at": datetime.now(timezone.utc).isoformat(),
+    "candidates_considered": [
+        {
+            "constraint": c["constraint"],
+            "eta_sec": c["eta_sec_via_test_only"],
+            "walltime_required_sec": ...,    # the p95 you computed
+            "p_fail": ...,                   # max p_fail across gpus
+            "total_etc_sec": ...,            # the cost score
+        }
+        for c in data["candidates"]
+    ],
+    "chosen": {
+        "constraint": chosen_constraint,
+        "walltime_sec": chosen_walltime,
+        "exclude_nodes": chosen_excludes,
+        "rationale": claude_free_form_text,  # which signals tipped the choice
+    },
+    "job_ids": job_ids,
+}
+Path(".hpc/runs") .mkdir(parents=True, exist_ok=True)
+Path(f".hpc/runs/{run_id}.decision.json").write_text(json.dumps(decision, indent=2, sort_keys=True))
+```
+
 ## Step 5: Confirm Run Plan
 
 Present the full submission plan:
