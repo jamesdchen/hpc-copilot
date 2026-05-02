@@ -109,9 +109,9 @@ Run `python -m <executor_module> --help` (extract the module from the profile's 
 
 ## Operating Principles
 
-1. **Sanity-check before and after.** Run Step 0.5 pre-flight before arming the Monitor; run Step 4a post-flight before aggregating in Step 4b. File counts lie and stale job IDs waste hours — never skip these gates.
+1. **Sanity-check before and after.** Run Step 0.5 pre-flight before scheduling the next tick; run Step 4a post-flight before aggregating in Step 4b. File counts lie and stale job IDs waste hours — never skip these gates.
 2. **Act autonomously on known failures.** For OOM, walltime, and node failures, immediately resubmit with appropriate resource overrides. Do NOT ask for permission. Only pause for code bugs or unrecognized errors.
-3. **Stream, don't poll-loop.** Arm the Claude Code `Monitor` tool once (Step 5) with a script that emits one stdout line per state change. React to events as they arrive in chat — do **not** re-run `/monitor-hpc` from cron.
+3. **Adaptive re-invocation, not streaming.** After each tick, schedule exactly one follow-up via `ScheduleWakeup` (one-shot) or have the user run `/loop <interval> /monitor-hpc <args>` (recurring). Pick the delay from Step 5's adaptive table. Do **not** arm a persistent `Monitor` subprocess — for hour-scale HPC queue waits it wastes the 5-min prompt cache and burns an idle process; for sub-minute waits there's nothing to react to anyway. State is recovered from the run journal at each tick.
 
 ## Arguments
 
@@ -170,7 +170,7 @@ live CPU-hour / GPU-hour totals from `resource_usage`.
 
 ## Step 0.5: Pre-flight Sanity Checks
 
-Run **once** per `/monitor-hpc` invocation, immediately after Step 0 and **before** Step 1. If any check fails, report the specific failure and stop — do NOT proceed to Step 1 and do NOT arm the Monitor in Step 5.
+Run **once** per `/monitor-hpc` invocation, immediately after Step 0 and **before** Step 1. If any check fails, report the specific failure and stop — do NOT proceed to Step 1 and do NOT schedule a follow-up tick in Step 5.
 
 Emit a single line `pre-flight: OK` on success, or `pre-flight FAILED: <which check>` on the first failure.
 
@@ -455,100 +455,59 @@ After aggregation:
 
 If the current stage completes and another stage has `depends_on` pointing to this stage, check the `depends_on` graph for newly unblocked stages. For each unblocked stage, prompt: "Stage `<next_stage>` is now unblocked (depends on `<this_stage>`). Submit it? (`/submit <profile_name>.<next_stage>`)"
 
-## Step 5: Arm the Monitor
+## Step 5: Schedule the Next Tick
 
-**Skip if state is `all_complete` (Step 4b done) or fully abandoned.** Report done and stop.
+**Skip if state is `all_complete` (Step 4b done), fully abandoned, or `has_failures` with no auto-recoverable category.** Report done and stop.
 
-Otherwise, arm the Claude Code `Monitor` tool **once** with a poll script that streams state changes back to chat. Do **not** re-run `/monitor-hpc` from cron — react to events as they arrive.
+Otherwise, schedule exactly **one** follow-up tick. Two valid mechanisms:
 
-### When to (re)arm
+- **`ScheduleWakeup`** (default for in-session ticks): one-shot self-firing wake-up.
+  ```
+  ScheduleWakeup(
+      delaySeconds=<adaptive — see table below>,
+      prompt="/monitor-hpc <same args you were invoked with>",
+      reason="<one sentence: what we're waiting for>",
+  )
+  ```
+- **`/loop <interval> /monitor-hpc <args>`** (when the user wants to detach): a recurring self-pacing loop the user can ctrl-c. Use this when ticks will exceed an interactive session's lifetime (multi-hour HPC queues).
 
-- After Step 1 baseline if state is `still_running`.
-- After every Step 3 resubmission (job IDs change → call `TaskStop` on the prior monitor first, then arm a fresh one with the new `$JOB_IDS`).
-- After Step 1c combiner runs (wave list updated, but job IDs unchanged → reuse the existing monitor; only restart if it has already exited).
+Then exit. The next invocation re-enters from Setup, hydrates state from the run journal (`session.find_in_flight_runs`), and runs Step 0.5 → Step 1 again.
 
-### Adaptive poll interval
+### Adaptive delay table
 
-Pick the `sleep` value baked into the script using Step 1's baseline:
+Pick `delaySeconds` from Step 1's baseline. Two regimes — sub-cache (stays warm, cheap) and super-cache (one cache miss buys a much longer wait). **Avoid 300–900s** — that range pays the cache miss without amortizing it.
 
-| Condition | Interval |
-|-----------|----------|
-| < 10% complete | 60s |
-| ETA < 10 min | 60s |
-| ETA 10–30 min, stable pace | 180s |
-| ETA 10–30 min, unstable pace | 90s |
-| ETA > 30 min, stable pace | 300s |
-| ETA > 30 min, unstable pace | 180s |
+| Condition | Delay | Cache regime |
+|---|---|---|
+| ETA < 10 min, anything running | 60s | warm |
+| ETA 10–30 min, stable pace | 180s | warm |
+| ETA 10–30 min, unstable pace | 90s | warm |
+| ETA > 30 min, stable pace | 270s | warm (just under 5-min cache TTL) |
+| All-pending or queue waits >30 min | 1200–1800s | super-cache, one miss amortized over a long wait |
+| Hour-scale HPC queue (cluster congested) | 3600s | super-cache |
+| All tasks pending >15 min, unchanged 2 ticks | go to Step 2 (`queue_stall`) instead of rescheduling | — |
 
-Fallback (no progress data): 90s if anything is running, 180s if all pending.
+Fallback (no progress data): 90s if anything is running, 1800s if all pending.
 
-### Monitor script
+### Reacting on the next tick
 
-Fill in `$SSH_TARGET`, `$REMOTE_PATH`, `$JOB_IDS`, `$NAME`, `$INTERVAL` at arm-time, then pass the resulting command to the `Monitor` tool with `persistent: true` and `description: "HPC <profile> state changes"`.
+The follow-up `/monitor-hpc` invocation re-runs Step 1 and **diffs against the last journal snapshot** (the previous tick's `summary` and `tasks` recorded by `runner.reconcile`). React based on the diff:
 
-The script emits one stdout line **only when state changes** — task transitions, new failures, newly-complete waves, terminal state, or a status-query failure. Silence means "no change since last tick," not "still running with nothing happening."
+| Diff | Action |
+|---|---|
+| Newly-failed task IDs | Step 2 (diagnose) → Step 3 (resubmit if auto-handled) → Step 5 (reschedule with new job IDs). |
+| Newly-complete wave | Step 1c (combiner) → Step 5 (reschedule, same job IDs). |
+| `summary.complete == total` | Step 4a (post-flight) → Step 4b (aggregate) → Step 6 (report) → `runner.mark_terminal(..., status='complete')`. Do NOT reschedule. |
+| `failed > 0` and `running == 0` and no auto-handled category | Step 2 (diagnose) → escalate to user. Leave run `in_flight` unless user abandons (`runner.mark_terminal(..., status='failed')`). Do NOT reschedule. |
+| State unchanged AND all-pending AND ≥2 ticks since last change | Treat as `queue_stall` (Step 2). Do NOT reschedule blindly — diagnose first. |
+| State unchanged otherwise | Reschedule one more tick at the adaptive delay. |
 
-```bash
-prev=""
-prev_failed=0
-prev_complete=0
-while true; do
-  raw=$(ssh -o IdentitiesOnly=yes "$SSH_TARGET" "cd $REMOTE_PATH && \
-    python -m hpc_mapreduce.reduce.status \
-      --run-id <run_id> \
-      --job-ids $JOB_IDS --job-name $NAME --log-dir logs" 2>&1) \
-    || { echo "STATUS_QUERY_FAILED $(printf %s "$raw" | head -1)"; sleep "$INTERVAL"; continue; }
+### When the follow-up fires
 
-  cur=$(jq -rc '.summary | "c=\(.complete) r=\(.running) p=\(.pending) f=\(.failed)"' <<<"$raw" 2>/dev/null) \
-    || { echo "STATUS_PARSE_FAILED"; sleep "$INTERVAL"; continue; }
+- **In-session** (chat is still open): `ScheduleWakeup` resumes the same conversation with the journal as ground truth — no re-explanation needed.
+- **Cold session** (user reopens later, or `/loop` cron-like fires): the resume path in Setup hydrates from `session.find_in_flight_runs` and runs `runner.reconcile` before Step 0.5.
 
-  if [ "$cur" != "$prev" ]; then
-    echo "STATE $cur"
-
-    new_failed=$(jq '.summary.failed' <<<"$raw")
-    if [ "$new_failed" -gt "$prev_failed" ]; then
-      jq -r '.tasks | to_entries[] | select(.value.status=="failed") | .key' <<<"$raw" \
-        | tail -$(( new_failed - prev_failed )) \
-        | sed 's/^/NEW_FAILURE tid=/'
-    fi
-
-    jq -r '.rollup | to_entries[]
-        | select(.value.complete == .value.total and .value.total > 0)
-        | "WAVE_READY \(.key)"' <<<"$raw"
-
-    prev=$cur
-    prev_failed=$new_failed
-    prev_complete=$(jq '.summary.complete' <<<"$raw")
-  fi
-
-  total=$(jq '.summary | (.complete+.running+.pending+.failed+.unknown)' <<<"$raw")
-  done=$(jq  '.summary.complete' <<<"$raw")
-  run=$(jq   '.summary.running'  <<<"$raw")
-  fail=$(jq  '.summary.failed'   <<<"$raw")
-
-  [ "$done" = "$total" ]               && { echo "TERMINAL all_complete"; break; }
-  [ "$fail" -gt 0 ] && [ "$run" = 0 ]  && { echo "TERMINAL has_failures"; break; }
-
-  sleep "$INTERVAL"
-done
-```
-
-### Reacting to events
-
-When a notification arrives:
-
-| Event | Action |
-|-------|--------|
-| `STATE c=… r=… p=… f=…` | Update internal counters; no action unless paired with another event below. |
-| `NEW_FAILURE tid=<n>` | Read `.err`/`.out` for that task (Step 2), classify with `classify_failure`, and resubmit per Step 3 if the category is auto-handled. After resubmit, `TaskStop` this monitor and re-arm with new `$JOB_IDS`. |
-| `WAVE_READY <grid_point_key>` | Run the on-cluster combiner (Step 1c). Update `combined_waves`. |
-| `TERMINAL all_complete` | Go to Step 4a (post-flight verification), then Step 4b (aggregate), then Step 6 (report). Then call `runner.mark_terminal(Path.cwd(), run_id, status='complete', stage='aggregate')` so the journal reflects the terminal state and `find_in_flight_runs` no longer returns this run. |
-| `TERMINAL has_failures` | Go to Step 2 (diagnose), then Step 3 (resubmit) or escalate. If the user explicitly abandons the run, call `runner.mark_terminal(Path.cwd(), run_id, status='failed')`. Otherwise leave the status as `in_flight` so the next session can resume. |
-| `STATUS_QUERY_FAILED …` / `STATUS_PARSE_FAILED` | Transient — first occurrence: ignore. Second consecutive: investigate (SSH dead? cluster down?) before re-arming. |
-
-### Stall detection
-
-The Monitor's silence is now meaningful: if no event arrives for **15 × `$INTERVAL`** (or 15 minutes, whichever is greater) AND Step 1 baseline showed all-pending/zero-running, treat as queue stall (existing Step 2 category). Use a `ScheduleWakeup` to check back at that horizon if you have other work to do meanwhile.
+Either way the slash command is responsible for its own state — never assume a long-lived in-memory variable persists across ticks.
 
 ## Step 6: Report
 
@@ -560,8 +519,8 @@ Always end with a concise summary:
 
 ## Context Management
 
-1. **Single in-session loop**: One `/monitor-hpc` invocation arms one Monitor and stays in the same conversation until `TERMINAL`. There is no cron handoff and no fresh-context replay — the Monitor stream IS the loop.
-2. **Don't re-poll on a tick.** The Monitor script is the only thing polling. The agent reacts to events; it does not run its own status reporter on a timer.
-3. **Compact event log**: When summarizing for the user, collapse repeated `STATE …` lines into deltas; surface only `NEW_FAILURE`, `WAVE_READY`, and `TERMINAL` lines verbatim.
-4. **Minimize tool output**: Use `tail -20` for logs. Prefer compact status commands over verbose output.
-5. **If the session ends**: monitoring stops. Re-run `/monitor-hpc` (no args) — the run journal at `~/.claude/hpc/<repo_hash>/` will surface the in-flight run with last-known status; on Y, `runner.reconcile` re-derives ground truth before re-arming the Monitor.
+1. **Each tick is independent.** One `/monitor-hpc` invocation = one tick (Setup → preflight → status → react → schedule next → exit). State persists in the run journal, not in the conversation.
+2. **One status query per tick.** Pre-flight + Step 1 reporter run once. The agent does NOT loop internally; the next tick comes from `ScheduleWakeup` or `/loop`.
+3. **Report deltas only.** Compare Step 1's `summary`/`tasks` against the prior tick's journal snapshot. Surface newly-complete task IDs, new failures, newly-complete waves, terminal flips. If state is fully unchanged, a one-line "no change since {age}; rescheduling +{delay}" is enough.
+4. **Minimize tool output.** Use `tail -20` for logs. Prefer compact status commands over verbose output.
+5. **If the session ends:** in-session `ScheduleWakeup`s die with the session. Re-run `/monitor-hpc` (no args) — the run journal at `~/.claude/hpc/<repo_hash>/` will surface the in-flight run with last-known status; on Y, `runner.reconcile` re-derives ground truth before Step 0.5. For overnight or multi-hour waits, prefer `/loop <interval> /monitor-hpc <args>` so the cadence survives session boundaries.
