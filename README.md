@@ -23,10 +23,13 @@ Open the repo in Claude Code, then:
 
 ```bash
 pip install claude-hpc
-hpc-mapreduce preflight --cluster hoffman2     # health check
-hpc-mapreduce submit --spec spec.json          # JSON envelope on stdout
-hpc-mapreduce status --run-id <id>             # one-shot snapshot; poll as needed
-hpc-mapreduce aggregate --run-id <id> --wave 1 # combiner + result pull
+hpc-mapreduce preflight --cluster hoffman2                    # health check
+hpc-mapreduce submit --spec spec.json                          # JSON envelope on stdout
+hpc-mapreduce status --run-id <id>                             # one-shot snapshot; poll as needed
+hpc-mapreduce aggregate --run-id <id> --wave 1                 # combiner + result pull
+hpc-mapreduce inspect-cluster --cluster <c>                    # per-node alloc/load/co-tenant snapshot
+hpc-mapreduce runtime-prior --profile <p> --cluster <c>        # quantile rollup of past task runtimes
+hpc-mapreduce plan-submit --profile <p> --cluster <c>          # constraint scorecard for /submit-hpc
 ```
 Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/cli-spec.md`](docs/cli-spec.md); JSON Schema files for runtime validation under `hpc_mapreduce/schemas/`.
 

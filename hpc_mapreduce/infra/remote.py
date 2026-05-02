@@ -286,6 +286,13 @@ def deploy_runtime(
             raise TimeoutError(
                 f"scp to {host} timed out after {SSH_TIMEOUT_SEC}s: {src.name}"
             ) from exc
+        except FileNotFoundError as exc:
+            # scp binary missing on the local host. Surface as
+            # FileNotFoundError so callers can distinguish "no scp on
+            # PATH" from a remote authentication failure.
+            raise FileNotFoundError(
+                f"scp binary not found while copying {src.name}: {exc}"
+            ) from exc
 
     # Importable stubs (used inside cluster jobs by user executors).
     _scp(pkg_dir / "map" / "context.py", "hpc_mapreduce/map/context.py")

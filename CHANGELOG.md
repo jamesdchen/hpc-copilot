@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Added — Smart `/hpc-submit`: resource-quality-aware constraint planning
+
+`/hpc-submit` previously chose its `--constraint=` and `--time=` from
+static cluster config. The new path consults a snapshot of the cluster
+plus per-(profile, cluster) runtime priors plus a SEGV blacklist, then
+hands the scorecard to Claude for cost-model judgment over candidate
+constraints.
+
+Three independently shippable Python modules and one planner integrate
+into a single `plan-submit` CLI subcommand:
+
+- **`hpc_mapreduce.infra.inspect`** — `inspect-cluster --cluster <c>`
+  returns a per-node snapshot (`AllocMem%`, `CPULoad%`, `Gres`,
+  `GresUsed`, `ActiveFeatures`, `State`, plus a co-tenant list from
+  `sacct -N` / `qstat`). `is_stressed` is set when `AllocMem >= 0.80`
+  or `CPULoad/CPUTot >= 0.80` (both tunable). 60s in-process cache so a
+  single submit cycle pays the SSH cost once. Both SLURM and SGE are
+  supported.
+- **`hpc_mapreduce.job.blacklist`** — append-only SEGV journal at
+  `<repo>/.hpc/bad_nodes.<cluster>.json`. 7-day TTL, refreshed on
+  repeat SEGVs. Atomic write under `fcntl.flock`. Evidence list capped
+  at 5 most-recent entries per node. `record_segv()` is called by
+  `/hpc-monitor` on `NODE_FAIL` / `exit -11`; `get_active()` is called
+  by the planner with TTL filtering.
+- **`hpc_mapreduce.job.runtime_prior`** — append-only sample log at
+  `<repo>/.hpc/runtimes/<profile>.<cluster>.json`. `roll_up_quantiles()`
+  groups by `gpu_type` and computes p50 / p95 / p99 / mean / n_samples,
+  with optional `cmd_sha` filter so a `.hpc/tasks.py` change can
+  invalidate stale priors.
+- **`hpc_mapreduce.job.planner`** — `plan-submit --profile <p>
+  --cluster <c>` combines all three into the scorecard JSON the slash
+  command hands to Claude. When no priors exist, `needs_canary: true`
+  and `canary_plan` describes the 1-task probe to seed the priors.
+- **CLI**: three new subcommands on `hpc-mapreduce`: `inspect-cluster`,
+  `runtime-prior`, `plan-submit`.
+- **Slash commands**: `submit-hpc.md` gains a Step 4c describing the
+  canary path and the cost rubric Claude applies. `monitor-hpc.md`
+  gains a SEGV-detection branch that calls `record_segv()` so the
+  blacklist is populated for future submits.
+
+Tests in `tests/test_inspect_cluster.py`, `tests/test_blacklist.py`,
+`tests/test_runtime_prior.py`, `tests/test_planner.py` cover the
+parsing edge cases, TTL math, atomic write contract, quantile
+computation with mixed sample counts, and an end-to-end planner shape
+test using a fake cluster snapshot.
+
 ### Changed — `/status` slash command renamed to `/monitor-hpc`
 
 The interactive Claude Code slash command at

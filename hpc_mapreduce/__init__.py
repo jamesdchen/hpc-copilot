@@ -6,7 +6,8 @@ GPU selection, and array-batch dispatch driven by a user-written
 ``clusters.yaml``; experiment setup is conversational.
 """
 
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 try:
     __version__ = _pkg_version("claude-hpc")
@@ -71,6 +72,13 @@ __all__ = [
     "SubmissionPlan",
     "compute_submission_plan",
     "build_wave_map",
+    # Smart-submit data layer
+    "inspect_cluster",
+    "record_segv",
+    "get_active_blacklist",
+    "append_runtime_sample",
+    "roll_up_runtime_quantiles",
+    "plan_submit",
     # Resubmit
     "compact_task_ids",
     "ResubmitBatch",
@@ -89,6 +97,7 @@ from types import ModuleType
 
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from hpc_mapreduce.infra.gpu import pick_gpu
+from hpc_mapreduce.infra.inspect import inspect_cluster
 from hpc_mapreduce.infra.remote import (
     deploy_runtime,
     rsync_pull,
@@ -97,12 +106,15 @@ from hpc_mapreduce.infra.remote import (
     run_combiner_checked,
     ssh_run,
 )
+from hpc_mapreduce.job.blacklist import get_active as get_active_blacklist
+from hpc_mapreduce.job.blacklist import record_segv
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 from hpc_mapreduce.job.discover import (
     ExecutorInfo,
     discover_executors,
     is_executor_source,
 )
+from hpc_mapreduce.job.planner import plan_submit
 from hpc_mapreduce.job.resubmit import (
     ResubmitBatch,
     ResubmitPlan,
@@ -121,6 +133,8 @@ from hpc_mapreduce.job.runs import (
     run_sidecar_path,
     write_run_sidecar,
 )
+from hpc_mapreduce.job.runtime_prior import append_sample as append_runtime_sample
+from hpc_mapreduce.job.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
 from hpc_mapreduce.job.throughput import (
     SubmissionPlan,
     WorkloadSpec,
