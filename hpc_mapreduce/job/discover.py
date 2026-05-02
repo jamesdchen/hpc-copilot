@@ -1,8 +1,10 @@
 """Experiment-executor discovery.
 
-Shared helpers used by ``/submit-hpc`` (when scanning a repo for runnable
-executors). The contract is intentionally minimal — an **executor** is a
-``.py`` file matching either of two patterns:
+Shared helpers used by ``/submit-hpc`` Step 1 (scanning the repo for
+runnable executors) and the ``hpc-mapreduce build-executor`` CLI
+subcommand (used by MARs orchestrators that scaffold experiments
+programmatically). The contract is intentionally minimal — an
+**executor** is a ``.py`` file matching either of two patterns:
 
 - **New contract (preferred):** exports ``compute(args) -> None``. CLI
   dispatch lives in the auto-generated ``.hpc/cli.py``; the executor is

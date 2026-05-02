@@ -2,7 +2,7 @@
 
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
-- **Slash commands for humans** in Claude Code (`/submit`, `/monitor-hpc`, `/aggregate`, `/build-executor`, `/preflight`) — interactive, walks you through choosing a cluster and authoring `.hpc/tasks.py`.
+- **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/preflight`) — interactive, walks you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1; preflight is folded into `/submit-hpc` Step 6b as an idempotent gate (with `/preflight` still available as a standalone diagnostic).
 - **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs).
 
 Both go through the same atomic-ops layer (`slash_commands/runner.py`), so cross-surface state (in-flight runs, journal records) is shared automatically.
@@ -15,9 +15,9 @@ Both go through the same atomic-ops layer (`slash_commands/runner.py`), so cross
 pip install -e .
 ```
 Open the repo in Claude Code, then:
-- `/preflight` — verify SSH agent + cluster reachability.
-- `/submit` — answer prompts about cluster, executor, grid params.
-- `/monitor-hpc` to monitor, `/aggregate` to collect results.
+- `/preflight` (optional) — verify SSH agent + cluster reachability. `/submit-hpc` auto-runs this as a cached gate, so you only need it for ad-hoc diagnostics.
+- `/submit-hpc` — answer prompts about cluster, executor, grid params. Scaffolds the executor inline if none exists.
+- `/monitor-hpc` to monitor, `/aggregate-hpc` to collect results.
 
 ### For agents and automation
 
@@ -131,12 +131,11 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 
 | Command | What it does |
 |---------|-------------|
-| `/preflight` | Verify SSH agent, ssh/rsync on PATH, clusters.yaml parses, cluster reachable |
-| `/submit` | Discover executors, build grid conversationally, sync code, submit array jobs |
+| `/preflight` | Standalone: verify SSH agent, ssh/rsync on PATH, clusters.yaml parses, cluster reachable. `/submit-hpc` auto-runs the same checks as a 24h-cached gate, so direct invocation is mostly for ad-hoc diagnostics. |
+| `/submit-hpc` | Discover executors (scaffolds inline if none found), build grid conversationally, write `.hpc/tasks.py` with FLAGS dict + `.hpc/cli.py` dispatcher, sync code, submit array jobs |
 | `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
-| `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
-| `/build-executor` | Scaffold a new executor from `templates/starters/executor_template.py` |
-| `/campaign` | Closed-loop iteration: tag submits, read prior history, run an asyncio in-flight queue. See [`docs/campaign.md`](docs/campaign.md). |
+| `/aggregate-hpc` | Validate completeness, run aggregation on cluster, download summaries |
+| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, run an asyncio in-flight queue. See [`docs/campaign.md`](docs/campaign.md). |
 ## Configuration
 
 ### `clusters.yaml` (required)

@@ -1,17 +1,20 @@
-"""Tests backing the `/build-executor` slash command.
+"""Tests backing executor discovery + the starter template.
 
-Covers:
+The standalone ``/build-executor`` slash command was retired once
+``/submit-hpc`` Step 1 absorbed the scaffolding interview, but the
+underlying primitives this file tests are still load-bearing:
 
-* ``discover_executors`` — the shared helper used by both ``/submit-hpc``
-  and ``/build-executor-hpc`` to enumerate runnable executors in an
-  experiment repo. Recognizes both contracts: new
-  (``compute(args)`` exported) and old (``__main__`` + argparse).
-* Template parseability — the files under ``templates/`` that the
-  scaffold step copies must remain importable Python so the post-copy
-  smoke test can succeed.
+* ``discover_executors`` — used by ``/submit-hpc`` Step 1 and the
+  ``hpc-mapreduce build-executor`` CLI subcommand (still exposed for
+  MARs orchestrators) to enumerate runnable executors in an experiment
+  repo. Recognizes both contracts: new (``compute(args)`` exported)
+  and old (``__main__`` + argparse).
+* Template parseability — ``templates/starters/executor_template.py``
+  must remain importable Python so the post-copy smoke test can
+  succeed.
 * Dry-run scaffold — simulates the new-executor flow by copying
-  ``executor_template.py`` into a fresh tmp directory and verifying the
-  file lands at the user-chosen path and remains call-able.
+  ``executor_template.py`` into a fresh tmp directory and verifying
+  the file lands at the user-chosen path and remains call-able.
 """
 
 from __future__ import annotations
@@ -160,7 +163,7 @@ class TestIsExecutorSource:
 def test_executor_template_is_valid_python() -> None:
     path = TEMPLATES_DIR / "executor_template.py"
     assert path.is_file(), f"missing template: {path}"
-    # Must parse cleanly — /build-executor copies this verbatim.
+    # Must parse cleanly — /submit-hpc Step 1 scaffolding copies this verbatim.
     ast.parse(path.read_text(encoding="utf-8"))
 
 
@@ -206,7 +209,7 @@ def test_executor_template_compute_runs_standalone(tmp_path: Path) -> None:
 
 
 def test_scaffold_from_template_copies_into_experiment_repo(tmp_path: Path) -> None:
-    """Simulates mode (b): user invokes /build-executor and picks a new path
+    """Simulates the /submit-hpc Step 1 scaffold path: user picks a new path
     inside their experiment repo. The template must land at that exact path
     and remain runnable."""
     experiment_repo = tmp_path / "my_experiment"
