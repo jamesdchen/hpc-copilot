@@ -46,7 +46,7 @@ multi-stage DAGs.
    interview asks the same questions the yaml answered (cluster,
    profile, resources, env, etc.) and writes the resolved values to the
    per-run sidecar at `.hpc/runs/<run_id>.json`. Subsequent commands
-   (`/aggregate`, `/status`, `/resubmit`, `/campaign`) read context from
+   (`/aggregate`, `/monitor-hpc`, `/resubmit`, `/campaign`) read context from
    the sidecar rather than the yaml.
 3. **For multi-stage `stages:` DAGs, port to `.hpc/stages.py`.** The
    helper `hpc_mapreduce.job.stages.from_yaml_dict` is *not* shipped —

@@ -61,7 +61,7 @@ CLUSTER = "<your cluster>"
 SSH_TARGET = "<user@host>"
 REMOTE_PATH = "/u/scratch/.../<exp>"
 
-# `submit_one` and `await_completion` wrap the same /submit and /status
+# `submit_one` and `await_completion` wrap the same /submit and /monitor-hpc
 # pipelines you use today. Build them however your repo prefers — e.g.
 # subprocess.run(["hpc-mapreduce", "submit", ...]) or direct Python calls
 # into runner.submit_and_record + runner.record_status. The framework
@@ -106,7 +106,7 @@ Reports per-iteration reduced metrics (oldest-first), in-flight count, and the l
 
 - See how many iterations have completed and what they produced.
 - Decide whether to extend the campaign by re-running Step 3 (the loop will pick up where it left off — `prior()` reads sidecars on disk, no separate state file).
-- Investigate failures by feeding individual `run_id`s into `/status` or `/aggregate`.
+- Investigate failures by feeding individual `run_id`s into `/monitor-hpc` or `/aggregate`.
 
 Resume after a network drop / laptop sleep: just re-run the Step 3 Python. The asyncio driver re-discovers in-flight runs via `session.find_runs_by_campaign(experiment_dir, CAMPAIGN_ID)`, polls them to terminal state, and continues launching new iterations. Sidecars on disk are the only durable state.
 
