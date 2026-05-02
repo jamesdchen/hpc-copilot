@@ -239,6 +239,43 @@ def test_submit_dedup_envelope_marks_replay(tmp_path: Path) -> None:
     assert env2["data"]["run_id"] == env1["data"]["run_id"]
 
 
+def test_submit_persists_campaign_id_to_journal(tmp_path: Path) -> None:
+    """A spec with `campaign_id` lands on the RunRecord and is later
+    discoverable via session.find_runs_by_campaign."""
+    import os
+
+    spec_payload = {**SUBMIT_SPEC, "campaign_id": "ml_ridge_q1"}
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps(spec_payload))
+    journal = tmp_path / "journal"
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
+
+    rc, out, _ = _run_cli(
+        "submit",
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
+        env=env_vars,
+    )
+    assert rc == 0
+    env_resp = _parse_envelope(out)
+    assert env_resp["ok"] is True
+
+    # Confirm the journal carries the tag and the campaign filter sees it.
+    from slash_commands import session
+
+    # Redirect HPC_HOMEDIR for this in-process check the same way the CLI did.
+    saved = session.HPC_HOMEDIR
+    try:
+        session.HPC_HOMEDIR = journal  # type: ignore[misc]
+        matched = session.find_runs_by_campaign(tmp_path, "ml_ridge_q1")
+    finally:
+        session.HPC_HOMEDIR = saved  # type: ignore[misc]
+    assert len(matched) == 1
+    assert matched[0].campaign_id == "ml_ridge_q1"
+
+
 # ─── list-in-flight recovery path ──────────────────────────────────────────
 
 

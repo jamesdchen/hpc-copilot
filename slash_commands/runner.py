@@ -70,6 +70,7 @@ def submit_and_record(
     run_id: str,
     job_ids: list[str],
     total_tasks: int,
+    campaign_id: str = "",
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
@@ -78,6 +79,10 @@ def submit_and_record(
     the cluster-side dispatcher and combiner consume; the journal record
     is the laptop-side bookkeeping that lets a future ``/status`` resume
     monitoring without re-asking the user for cluster / job_ids.
+
+    *campaign_id* tags the run as part of a closed-loop campaign so
+    :func:`session.find_runs_by_campaign` can pick it up on resume.
+    Defaults to an empty string for open-loop submits.
 
     Returns ``(record, deduped)`` where ``deduped`` is True if a record
     with this ``run_id`` already existed and the call was a no-op replay.
@@ -104,6 +109,7 @@ def submit_and_record(
         total_tasks=int(total_tasks),
         submitted_at=_utcnow_iso(),
         experiment_dir=str(Path(experiment_dir).resolve()),
+        campaign_id=campaign_id,
     )
     session.upsert_run(experiment_dir, record)
     return record, False

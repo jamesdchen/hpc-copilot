@@ -18,6 +18,7 @@
     "run_id":            { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
     "job_ids":           { "type": "array", "items": { "type": "string" }, "minItems": 1 },
     "total_tasks":       { "type": "integer", "minimum": 1 },
-    "runtime":           { "type": ["string", "null"], "enum": ["uv", null] }
+    "runtime":           { "type": ["string", "null"], "enum": ["uv", null] },
+    "campaign_id":       { "type": ["string", "null"], "pattern": "^[A-Za-z0-9._\\-]+$" }
   }
 }
