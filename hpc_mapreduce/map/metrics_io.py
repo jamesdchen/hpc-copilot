@@ -12,12 +12,39 @@ aggregate metrics per grid point.
 
 from __future__ import annotations
 
-__all__ = ["write_metrics"]
+__all__ = ["read_kw_env", "write_metrics"]
 
 import contextlib
 import json
 import os
 import tempfile
+
+# Per-task kwargs are exported by the dispatcher as ``HPC_KW_<UPPER>=<value>``.
+# The value carries no type information — everything arrives as a string. The
+# executor is responsible for the cast (``int(env["lr"])`` etc.) because only
+# the executor knows the intended type. Strategy libraries (Optuna, etc.) that
+# care about types should pass through their own typed value to the dispatcher
+# rather than relying on this helper to round-trip them.
+_KW_PREFIX = "HPC_KW_"
+
+
+def read_kw_env() -> dict[str, str]:
+    """Return a dict of ``{lowercase_name: str_value}`` for every ``HPC_KW_*``
+    env var the dispatcher exported for this task.
+
+    Strips the ``HPC_KW_`` prefix, lowercases the key, and leaves the value
+    as the str the env carries. Empty when no ``HPC_KW_*`` vars are set
+    (open-loop task with no kwargs, or running outside the dispatcher).
+
+    Stdlib-only; safe to import from an executor running on a cluster
+    compute node without the full ``hpc_mapreduce`` install — same
+    deployment guarantee as :func:`write_metrics`.
+    """
+    return {
+        k.removeprefix(_KW_PREFIX).lower(): v
+        for k, v in os.environ.items()
+        if k.startswith(_KW_PREFIX)
+    }
 
 
 def write_metrics(metrics: dict, *, result_dir: str | None = None) -> str:

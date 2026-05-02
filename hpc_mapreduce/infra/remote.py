@@ -5,7 +5,8 @@ executed from a local machine without paramiko or other dependencies.
 
 All functions require explicit ``host``, ``user``, and ``remote_path``
 parameters - there are no hardcoded defaults. Callers obtain these
-values from ``clusters.yaml`` + ``hpc.yaml``.
+values from ``clusters.yaml`` plus the per-run sidecar at
+``.hpc/runs/<run_id>.json``.
 
 Every subprocess invocation in this module enforces a timeout so a flaky
 cluster connection or paused rsync cannot block ``/submit``, ``/status``,
@@ -61,10 +62,14 @@ def _ssh_multiplex_opts() -> list[str]:
         return []
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     return [
-        "-o", "ControlMaster=auto",
-        "-o", f"ControlPath={runtime_dir}/hpc-cm-%C",
-        "-o", "ControlPersist=10m",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        f"ControlPath={runtime_dir}/hpc-cm-%C",
+        "-o",
+        "ControlPersist=10m",
     ]
+
 
 # Sentinel marker meaning "caller did not specify a timeout".  We need a
 # distinct value (not ``None``) because ``timeout=None`` is the documented

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -36,11 +37,16 @@ __all__ = [
 
 # Maximum number of per-experiment run sidecars retained on disk.
 # Oldest-first eviction by mtime. Module-level so callers (and tests) can
-# monkeypatch.
-MAX_RUNS: int = 10
+# monkeypatch. Default raised from 10 to 500 (long campaigns); ``HPC_MAX_RUNS``
+# env var overrides at module load.
+MAX_RUNS: int = int(os.environ.get("HPC_MAX_RUNS", "500"))
 
-# Sidecar JSON schema version. Bump on incompatible changes.
-SIDECAR_SCHEMA_VERSION: int = 1
+# Sidecar JSON schema version. v2 adds first-class config-snapshot fields
+# (resources/env/env_group/constraints/cluster/profile/campaign_id/...) so
+# every successful submit captures the full config it ran under and
+# subsequent commands have no need for a separate experiment-config file.
+# v1 sidecars on disk continue to load via ``read_run_sidecar`` backfill.
+SIDECAR_SCHEMA_VERSION: int = 2
 
 # A run_id is a timestamp-prefixed identifier produced by the slash command
 # layer. Format: ``YYYYMMDD-HHMMSS-<short_sha>``. We only validate loosely
@@ -83,9 +89,7 @@ def compute_cmd_sha(tasks_module: Any) -> str:
     for i in range(n):
         kwargs = tasks_module.resolve(i)
         if not isinstance(kwargs, dict):
-            raise TypeError(
-                f"tasks.resolve({i}) must return a dict, got {type(kwargs).__name__}"
-            )
+            raise TypeError(f"tasks.resolve({i}) must return a dict, got {type(kwargs).__name__}")
         parts.append(json.dumps(kwargs, sort_keys=True, separators=(",", ":")))
     joined = "\n".join(parts).encode()
     return hashlib.sha256(joined).hexdigest()
@@ -94,6 +98,46 @@ def compute_cmd_sha(tasks_module: Any) -> str:
 def compute_tasks_py_sha(tasks_py_path: Path) -> str:
     """Return SHA-256 of ``tasks.py``'s bytes — diagnostic only."""
     return hashlib.sha256(Path(tasks_py_path).read_bytes()).hexdigest()
+
+
+# v2 first-class config-snapshot fields. All optional; absent keys are
+# omitted from the written sidecar and backfilled to ``None`` (or the
+# empty container) on read.
+_V2_CONFIG_FIELDS: tuple[str, ...] = (
+    "cluster",  # str — cluster key from clusters.yaml
+    "profile",  # str — label distinguishing this submission shape
+    "campaign_id",  # str — closed-loop campaign tag
+    "project",  # str — short project name (paths, logs)
+    "remote_path",  # str — absolute path on the remote cluster
+    "resources",  # dict — cpus/mem/walltime/gpus/gpu_type
+    "env",  # dict — modules/conda_env
+    "env_group",  # str — clusters.yaml env_group key
+    "constraints",  # dict — overrides on clusters.yaml constraints
+    "gpu_fallback",  # list — ordered GPU types to try
+    "max_retries",  # int — auto-resubmission cap
+    "runtime",  # str — "uv" or omitted
+    "auto_retry",  # dict — per-category retry policy
+    "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
+)
+
+# Backfill defaults for v1→v2 read. Containers default to empty so callers
+# can use ``or {}`` patterns; scalars default to ``None``.
+_V2_BACKFILL_DEFAULTS: dict[str, Any] = {
+    "cluster": None,
+    "profile": None,
+    "campaign_id": None,
+    "project": None,
+    "remote_path": None,
+    "resources": None,
+    "env": None,
+    "env_group": None,
+    "constraints": None,
+    "gpu_fallback": None,
+    "max_retries": None,
+    "runtime": None,
+    "auto_retry": None,
+    "aggregate_defaults": None,
+}
 
 
 def write_run_sidecar(
@@ -109,6 +153,21 @@ def write_run_sidecar(
     tasks_py_sha: str,
     wave_map: dict[str, list[int]] | None = None,
     extra: dict[str, Any] | None = None,
+    # ----- v2 config-snapshot fields (all optional) -----
+    cluster: str | None = None,
+    profile: str | None = None,
+    campaign_id: str | None = None,
+    project: str | None = None,
+    remote_path: str | None = None,
+    resources: dict[str, Any] | None = None,
+    env: dict[str, Any] | None = None,
+    env_group: str | None = None,
+    constraints: dict[str, Any] | None = None,
+    gpu_fallback: list[str] | None = None,
+    max_retries: int | None = None,
+    runtime: str | None = None,
+    auto_retry: dict[str, Any] | None = None,
+    aggregate_defaults: dict[str, Any] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -116,8 +175,14 @@ def write_run_sidecar(
     optimizer's task-id-to-wave assignment (str-keyed for JSON
     round-tripping). *extra* is a free-form pocket for callers that want
     to record additional run-scoped metadata without bumping the schema.
+
+    The remaining kwargs (cluster, profile, resources, …) are the v2
+    config-snapshot fields. They are all optional at the call site but
+    every successful ``/submit`` should populate the ones that apply, so
+    subsequent commands (``/aggregate``, ``/status``, ``/resubmit``) can
+    rebuild full context without consulting any external config file.
     """
-    sidecar = {
+    sidecar: dict[str, Any] = {
         "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
         "run_id": run_id,
         "cmd_sha": cmd_sha,
@@ -132,6 +197,26 @@ def write_run_sidecar(
         sidecar["wave_map"] = {str(k): list(v) for k, v in wave_map.items()}
     if extra:
         sidecar["extra"] = extra
+    # v2 fields — only write keys with non-None values to keep sidecars compact.
+    v2_values: dict[str, Any] = {
+        "cluster": cluster,
+        "profile": profile,
+        "campaign_id": campaign_id,
+        "project": project,
+        "remote_path": remote_path,
+        "resources": resources,
+        "env": env,
+        "env_group": env_group,
+        "constraints": constraints,
+        "gpu_fallback": gpu_fallback,
+        "max_retries": max_retries,
+        "runtime": runtime,
+        "auto_retry": auto_retry,
+        "aggregate_defaults": aggregate_defaults,
+    }
+    for k, v in v2_values.items():
+        if v is not None:
+            sidecar[k] = v
     target = run_sidecar_path(experiment_dir, run_id)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(sidecar, indent=2, sort_keys=True))
@@ -142,6 +227,10 @@ def write_run_sidecar(
 def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     """Load and return a run's sidecar dict.
 
+    v1 sidecars are backfilled with v2 config-snapshot keys defaulting to
+    ``None`` so callers can rely on the v2 shape regardless of when the
+    sidecar was written.
+
     Raises
     ------
     FileNotFoundError
@@ -150,7 +239,11 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     target = run_sidecar_path(experiment_dir, run_id)
     if not target.is_file():
         raise FileNotFoundError(f"run sidecar not found: {target}")
-    return json.loads(target.read_text())
+    data: dict[str, Any] = json.loads(target.read_text())
+    # Backfill missing v2 fields so callers see a uniform shape.
+    for k, default in _V2_BACKFILL_DEFAULTS.items():
+        data.setdefault(k, default)
+    return data
 
 
 def find_existing_runs(experiment_dir: Path) -> list[Path]:

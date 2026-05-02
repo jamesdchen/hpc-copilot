@@ -122,9 +122,7 @@ def _add_experiment_dir(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _load_spec(
-    spec_path: Path | None, *, schema_name: str | None = None
-) -> dict[str, Any]:
+def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dict[str, Any]:
     """Load and (optionally) JSON-Schema-validate ``--spec`` input.
 
     Validation is opt-in via *schema_name* so callers without a matching
@@ -141,13 +139,9 @@ def _load_spec(
     except FileNotFoundError as exc:
         raise errors.ConfigInvalid(f"--spec file not found: {spec_path}") from exc
     except json.JSONDecodeError as exc:
-        raise errors.ConfigInvalid(
-            f"--spec is not valid JSON ({spec_path}): {exc}"
-        ) from exc
+        raise errors.ConfigInvalid(f"--spec is not valid JSON ({spec_path}): {exc}") from exc
     if not isinstance(loaded, dict):
-        raise errors.ConfigInvalid(
-            f"--spec must be a JSON object; got {type(loaded).__name__}"
-        )
+        raise errors.ConfigInvalid(f"--spec must be a JSON object; got {type(loaded).__name__}")
     if schema_name is not None:
         _validate_against_schema(loaded, schema_name)
     return loaded
@@ -191,6 +185,7 @@ _MARS_SKILL_NAMES = (
     "hpc-preflight",
     "hpc-aggregate",
     "hpc-build-executor",
+    "hpc-campaign",
 )
 
 
@@ -226,6 +221,7 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "build-executor",
                 "logs",
                 "failures",
+                "campaign",
             ],
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
@@ -259,9 +255,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         checks.append(_check("ssh_auth_sock", False, "SSH_AUTH_SOCK is not set"))
     else:
         try:
-            agent = subprocess.run(
-                ["ssh-add", "-l"], capture_output=True, text=True, timeout=5
-            )
+            agent = subprocess.run(["ssh-add", "-l"], capture_output=True, text=True, timeout=5)
             has_keys = agent.returncode == 0 and bool(agent.stdout.strip())
             checks.append(
                 _check(
@@ -281,9 +275,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     # Clusters config parseable
     try:
         clusters = load_clusters_config()
-        checks.append(
-            _check("clusters_yaml_parses", True, f"{len(clusters)} clusters defined")
-        )
+        checks.append(_check("clusters_yaml_parses", True, f"{len(clusters)} clusters defined"))
     except (OSError, Exception) as exc:  # noqa: BLE001
         clusters = {}
         checks.append(_check("clusters_yaml_parses", False, str(exc)))
@@ -292,9 +284,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     cluster_name = getattr(args, "cluster", None)
     if cluster_name:
         if cluster_name not in clusters:
-            checks.append(
-                _check("cluster_known", False, f"{cluster_name!r} not in clusters.yaml")
-            )
+            checks.append(_check("cluster_known", False, f"{cluster_name!r} not in clusters.yaml"))
         else:
             host = clusters[cluster_name].get("host")
             try:
@@ -394,6 +384,7 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
         return None
     try:
         from datetime import datetime, timezone
+
         ts = datetime.fromisoformat(iso)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
@@ -405,22 +396,73 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
 
 def cmd_list_in_flight(args: argparse.Namespace) -> int:
     records = session.find_in_flight_runs(args.experiment_dir)
+
+    def _row(r: session.RunRecord) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "run_id": r.run_id,
+            "profile": r.profile,
+            "cluster": r.cluster,
+            "job_ids": r.job_ids,
+            "total_tasks": r.total_tasks,
+            "submitted_at": r.submitted_at,
+            "last_status": r.last_status,
+            "last_status_age_seconds": _last_status_age_seconds(r.last_status),
+        }
+        if r.campaign_id:
+            d["campaign_id"] = r.campaign_id
+        return d
+
+    _ok({"runs": [_row(r) for r in records]}, idempotent=True)
+    return EXIT_OK
+
+
+# ─── subcommand: campaign status / list ────────────────────────────────────
+
+
+def cmd_campaign_status(args: argparse.Namespace) -> int:
+    """Read-only summary of a closed-loop campaign.
+
+    Walks every sidecar tagged with ``--campaign-id`` and reports the
+    per-iteration reduced metrics dicts (``history.prior``) plus an
+    in-flight count (sidecars whose journal status is still
+    ``in_flight``). No SSH, no scheduler — pure local filesystem read.
+    """
+    from hpc_mapreduce.reduce.history import find_sidecars_by_campaign, prior
+
+    sidecars = find_sidecars_by_campaign(args.experiment_dir, args.campaign_id)
+    history = prior(args.experiment_dir, args.campaign_id)
+    in_flight_records = session.find_runs_by_campaign(args.experiment_dir, args.campaign_id)
+    in_flight = sum(1 for r in in_flight_records if r.status == "in_flight")
     _ok(
         {
-            "runs": [
-                {
-                    "run_id": r.run_id,
-                    "profile": r.profile,
-                    "cluster": r.cluster,
-                    "job_ids": r.job_ids,
-                    "total_tasks": r.total_tasks,
-                    "submitted_at": r.submitted_at,
-                    "last_status": r.last_status,
-                    "last_status_age_seconds": _last_status_age_seconds(r.last_status),
-                }
-                for r in records
-            ]
+            "campaign_id": args.campaign_id,
+            "iterations": len(sidecars),
+            "in_flight": in_flight,
+            "history": history,
+            "run_ids": [s["run_id"] for s in sidecars],
         },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
+def cmd_campaign_list(args: argparse.Namespace) -> int:
+    """List every campaign with at least one sidecar in this experiment."""
+    from collections import Counter
+
+    from hpc_mapreduce.job.runs import find_existing_runs, read_run_sidecar
+
+    counts: Counter[str] = Counter()
+    for path in find_existing_runs(args.experiment_dir):
+        try:
+            data = read_run_sidecar(args.experiment_dir, path.stem)
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            continue
+        cid = data.get("campaign_id")
+        if isinstance(cid, str) and cid:
+            counts[cid] += 1
+    _ok(
+        {"campaigns": [{"campaign_id": cid, "iterations": n} for cid, n in sorted(counts.items())]},
         idempotent=True,
     )
     return EXIT_OK
@@ -445,23 +487,24 @@ def cmd_status(args: argparse.Namespace) -> int:
         job_ids=record.job_ids,
         job_name=record.job_name,
     )
-    _ok(
-        {
-            "run_id": updated.run_id,
-            "lifecycle_state": updated.status,
-            "last_status": updated.last_status,
-            "last_status_age_seconds": _last_status_age_seconds(updated.last_status),
-            "combined_waves": updated.combined_waves,
-            "failed_waves": updated.failed_waves,
-        },
-        idempotent=True,
-    )
+    data: dict[str, Any] = {
+        "run_id": updated.run_id,
+        "lifecycle_state": updated.status,
+        "last_status": updated.last_status,
+        "last_status_age_seconds": _last_status_age_seconds(updated.last_status),
+        "combined_waves": updated.combined_waves,
+        "failed_waves": updated.failed_waves,
+    }
+    # Surface the campaign tag so a caller seeing /status output knows
+    # this run is part of a closed-loop campaign without separately
+    # querying `campaign list` / `campaign status`.
+    if updated.campaign_id:
+        data["campaign_id"] = updated.campaign_id
+    _ok(data, idempotent=True)
     return EXIT_OK
 
 
-def _overlay_meta_on_spec(
-    spec: dict[str, Any], experiment_dir: Path
-) -> dict[str, Any]:
+def _overlay_meta_on_spec(spec: dict[str, Any], experiment_dir: Path) -> dict[str, Any]:
     """Overlay missing ``profile`` / ``job_name`` from ``meta.json``.
 
     Uses ``setdefault`` semantics — never overwrites a caller-supplied
@@ -490,8 +533,16 @@ def cmd_submit(args: argparse.Namespace) -> int:
     if getattr(args, "from_meta", False):
         spec = _overlay_meta_on_spec(spec, args.experiment_dir)
     _validate_against_schema(spec, "submit")
-    required = ("profile", "cluster", "ssh_target", "remote_path", "job_name",
-                "run_id", "job_ids", "total_tasks")
+    required = (
+        "profile",
+        "cluster",
+        "ssh_target",
+        "remote_path",
+        "job_name",
+        "run_id",
+        "job_ids",
+        "total_tasks",
+    )
     missing = [k for k in required if k not in spec]
     if missing:
         raise errors.SpecInvalid(
@@ -521,6 +572,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         job_ids=list(spec["job_ids"]),
         total_tasks=int(spec["total_tasks"]),
         run_id=spec["run_id"],
+        campaign_id=spec.get("campaign_id") or "",
     )
     _ok(
         {
@@ -537,79 +589,55 @@ def cmd_submit(args: argparse.Namespace) -> int:
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
 
 
-def _hpc_yaml_auto_retry(
-    experiment_dir: Path, profile: str | None
-) -> dict[str, dict[str, Any]]:
-    """Read ``profiles[profile].auto_retry`` from hpc.yaml.
+def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str, Any]]:
+    """Resolve the auto-retry policy for a run.
 
-    Returns the raw nested dict (category -> policy fields). Empty when
-    hpc.yaml is missing, malformed, or has no ``auto_retry`` block.
+    Precedence: per-run sidecar override (``auto_retry`` field, populated
+    by /submit when the user supplies a custom policy) > framework
+    defaults (:data:`runner.DEFAULT_AUTO_RETRY_POLICY`).
+
+    Always returns a non-empty dict so callers can rely on advice being
+    computed for every run.
     """
-    hpc_yaml = experiment_dir / "hpc.yaml"
-    if not hpc_yaml.is_file():
-        return {}
     try:
-        import yaml  # type: ignore[import-untyped]
+        from hpc_mapreduce.job.runs import read_run_sidecar
+    except ImportError:
+        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+    user_policy = sidecar.get("auto_retry")
+    if not isinstance(user_policy, dict):
+        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+    valid = {
+        cat: pol
+        for cat, pol in user_policy.items()
+        if isinstance(cat, str) and isinstance(pol, dict)
+    }
+    return valid or dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+
+
+def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, str]:
+    """Read ``aggregate_defaults.{require_outputs,expect_output}`` from the run sidecar.
+
+    Returns an empty dict when the sidecar is missing, malformed, or has
+    no ``aggregate_defaults`` block. Silent failure is intentional —
+    config validity is enforced by ``/submit``, not the aggregate path.
+    """
+    try:
+        from hpc_mapreduce.job.runs import read_run_sidecar
     except ImportError:
         return {}
     try:
-        data = yaml.safe_load(hpc_yaml.read_text()) or {}
-    except yaml.YAMLError:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
         return {}
-    if not isinstance(data, dict):
-        return {}
-    profiles = data.get("profiles") or {}
-    if profile and isinstance(profiles, dict) and profile in profiles:
-        block = (profiles[profile] or {}).get("auto_retry") or {}
-    elif not profiles:
-        block = data.get("auto_retry") or {}
-    else:
-        return {}
+    block = sidecar.get("aggregate_defaults") or {}
     if not isinstance(block, dict):
         return {}
     return {
-        cat: pol
-        for cat, pol in block.items()
-        if isinstance(cat, str) and isinstance(pol, dict)
-    }
-
-
-def _hpc_yaml_aggregate_defaults(
-    experiment_dir: Path, profile: str | None
-) -> dict[str, str]:
-    """Read ``profiles[profile].results.{require_outputs,expect_output}``.
-
-    Returns an empty dict when hpc.yaml is missing, malformed, or the
-    profile has no aggregate defaults.  Silent failure is intentional —
-    config validity is enforced by ``/submit``, not the aggregate path.
-    """
-    hpc_yaml = experiment_dir / "hpc.yaml"
-    if not hpc_yaml.is_file():
-        return {}
-    try:
-        import yaml  # type: ignore[import-untyped]
-    except ImportError:
-        return {}
-    try:
-        data = yaml.safe_load(hpc_yaml.read_text()) or {}
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    profiles = data.get("profiles") or {}
-    if profile and isinstance(profiles, dict) and profile in profiles:
-        results_block = (profiles[profile] or {}).get("results") or {}
-    elif not profiles:
-        # Single-profile shorthand: results at top level
-        results_block = data.get("results") or {}
-    else:
-        return {}
-    if not isinstance(results_block, dict):
-        return {}
-    return {
-        k: results_block[k]
-        for k in ("require_outputs", "expect_output")
-        if isinstance(results_block.get(k), str)
+        k: block[k] for k in ("require_outputs", "expect_output") if isinstance(block.get(k), str)
     }
 
 
@@ -623,22 +651,20 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     #                                   artifact at <path> (postcondition)
     #   provenance                    : metadata block in envelope.data and
     #                                   sidecar file when --expect-output set
-    # Defaults for require/expect can be set in hpc.yaml under
-    # ``results.require_outputs`` / ``results.expect_output``.
+    # Defaults for require/expect can be set per-run in the sidecar's
+    # ``aggregate_defaults`` block, populated by /submit. CLI flags win.
     if (rc := _require_ssh_agent()) is not None:
         return rc
     record = session.load_run(args.experiment_dir, args.run_id)
     if record is None:
-        raise errors.JournalCorrupt(
-            f"no journal record for run_id {args.run_id!r}"
-        )
+        raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
     if args.wave is None:
         raise errors.SpecInvalid("aggregate requires --wave <int>")
 
-    # Resolve aggregate flags: explicit CLI > hpc.yaml > none.
+    # Resolve aggregate flags: explicit CLI > sidecar aggregate_defaults > none.
     # ``getattr`` keeps in-process callers (tests, slash-command wrappers)
     # working even when they hand-build a Namespace without these keys.
-    defaults = _hpc_yaml_aggregate_defaults(args.experiment_dir, record.profile)
+    defaults = _sidecar_aggregate_defaults(args.experiment_dir, args.run_id)
     require_outputs = getattr(args, "require_outputs", None) or defaults.get("require_outputs")
     expect_output = getattr(args, "expect_output", None) or defaults.get("expect_output")
 
@@ -716,8 +742,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     # human-readable message so the caller can grep it.
     return _err_from_hpc(
         errors.CombinerFailed(
-            f"combiner returned non-zero for wave {args.wave}; "
-            f"stderr tail: {stderr[-500:]!r}"
+            f"combiner returned non-zero for wave {args.wave}; stderr tail: {stderr[-500:]!r}"
         )
     )
 
@@ -752,8 +777,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
     # holds either way.
     if category not in _VALID_RESUBMIT_CATEGORIES:
         raise errors.SpecInvalid(
-            f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; "
-            f"got {category!r}"
+            f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
 
     record, deduped, request_id = runner.resubmit_failed(
@@ -819,9 +843,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
 
     record = session.load_run(args.experiment_dir, args.run_id)
     if record is None:
-        raise errors.JournalCorrupt(
-            f"no journal record for run_id {args.run_id!r}"
-        )
+        raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
 
     # Resolve task ids.
     task_ids: list[int] = []
@@ -850,15 +872,11 @@ def cmd_logs(args: argparse.Namespace) -> int:
         try:
             task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
         except ValueError as exc:
-            raise errors.SpecInvalid(
-                f"--task-id must be comma-separated integers: {exc}"
-            ) from exc
+            raise errors.SpecInvalid(f"--task-id must be comma-separated integers: {exc}") from exc
         if not task_ids:
             raise errors.SpecInvalid("--task-id is empty")
     else:
-        raise errors.SpecInvalid(
-            "logs requires --task-id <ids> or --all-failed"
-        )
+        raise errors.SpecInvalid("logs requires --task-id <ids> or --all-failed")
 
     # Cluster-side scheduler.
     try:
@@ -905,9 +923,7 @@ def cmd_failures(args: argparse.Namespace) -> int:
 
     record = session.load_run(args.experiment_dir, args.run_id)
     if record is None:
-        raise errors.JournalCorrupt(
-            f"no journal record for run_id {args.run_id!r}"
-        )
+        raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
 
     # Fresh poll: enumerate failed tasks.
     report = runner._ssh_status_report(
@@ -955,12 +971,13 @@ def cmd_failures(args: argparse.Namespace) -> int:
     )
     clusters = runner.cluster_failures_by_fingerprint(logs)
 
-    # Auto-retry policy from hpc.yaml: annotate each cluster with which
-    # task ids are still eligible for an automated retry per the
-    # configured per-category max_attempts.  Purely advisory — the actual
+    # Auto-retry policy: resolve per-run sidecar override + framework
+    # defaults (runner.DEFAULT_AUTO_RETRY_POLICY). Annotate each cluster
+    # with which task ids are still eligible for an automated retry per
+    # the per-category max_attempts. Purely advisory — the actual
     # resubmit remains the caller's job (matches existing /resubmit
     # semantics).
-    auto_retry = _hpc_yaml_auto_retry(args.experiment_dir, record.profile)
+    auto_retry = _resolve_auto_retry(args.experiment_dir, args.run_id)
     if auto_retry:
         clusters = runner.annotate_clusters_with_retry_advice(
             clusters,
@@ -997,9 +1014,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
         raise errors.ConfigInvalid(f"template missing on disk: {src}")
     dest = (args.output_dir / args.name).with_suffix(".py")
     if dest.exists() and not args.force:
-        raise errors.SpecInvalid(
-            f"refusing to overwrite {dest}; pass --force to overwrite"
-        )
+        raise errors.SpecInvalid(f"refusing to overwrite {dest}; pass --force to overwrite")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     dest.write_text(src.read_text())
     _ok(
@@ -1068,6 +1083,32 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_lif)
     p_lif.set_defaults(func=cmd_list_in_flight)
 
+    # campaign — closed-loop campaign read-only commands
+    p_camp = sub.add_parser(
+        "campaign",
+        help="Closed-loop campaign read-only commands (status, list).",
+    )
+    p_camp_sub = p_camp.add_subparsers(dest="action", required=True)
+
+    p_camp_st = p_camp_sub.add_parser(
+        "status",
+        help=(
+            "Report per-iteration reduced metrics for one campaign. "
+            "Walks every sidecar tagged with --campaign-id, runs "
+            "reduce_metrics on each, and emits the history dict-list."
+        ),
+    )
+    _add_experiment_dir(p_camp_st)
+    p_camp_st.add_argument("--campaign-id", required=True)
+    p_camp_st.set_defaults(func=cmd_campaign_status)
+
+    p_camp_ls = p_camp_sub.add_parser(
+        "list",
+        help="List every campaign with at least one sidecar in this experiment.",
+    )
+    _add_experiment_dir(p_camp_ls)
+    p_camp_ls.set_defaults(func=cmd_campaign_list)
+
     # status
     p_st = sub.add_parser(
         "status", help="Poll cluster status for a run_id; one-shot, returns snapshot."
@@ -1123,8 +1164,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Path template (with {task_id}) checked on the cluster before "
             "the combiner runs. Refuses to combine if any task in this "
-            "wave is missing its expected output. Default reads from "
-            "hpc.yaml's results.require_outputs."
+            "wave is missing its expected output. Default reads from the "
+            "run sidecar's aggregate_defaults.require_outputs."
         ),
     )
     p_agg.add_argument(
@@ -1133,8 +1174,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Remote path (relative to remote_path) that the combiner must "
             "produce. Verified after the combiner exits 0; .json files "
-            "are also checked for parseability. Default reads from "
-            "hpc.yaml's results.expect_output."
+            "are also checked for parseability. Default reads from the "
+            "run sidecar's aggregate_defaults.expect_output."
         ),
     )
     p_agg.set_defaults(func=cmd_aggregate)
