@@ -132,7 +132,7 @@ SSH-checks every per-task output, and refuses to combine if any are
 missing. The error envelope reports `error_code: outputs_missing` with the
 list of absent paths. Set the default per-run via `write_run_sidecar(...,
 aggregate_defaults={"require_outputs": "...", "expect_output": "..."})`
-at /submit time so every aggregate is guarded automatically.
+at /submit-hpc time so every aggregate is guarded automatically.
 
 When you must validate manually (e.g., older repos without sidecar defaults):
 
@@ -156,7 +156,7 @@ Task completeness:
 1. Identify which task IDs are missing by cross-referencing `tasks.total()` with existing result directories (one per `tasks.resolve(i)` formatted through the sidecar's `result_dir_template`).
 2. Check job accounting for failure reasons (qacct for SGE, sacct for SLURM).
 3. Check error logs (tail -50).
-4. Report findings and suggest resubmitting via `/submit` or monitoring via `/monitor-hpc` for gaps.
+4. Report findings and suggest resubmitting via `/submit-hpc` or monitoring via `/monitor-hpc` for gaps.
 5. Wait for resubmitted jobs, then re-validate before aggregating.
 
 **Partial aggregation:** Only proceed when all expected task results are present, unless the user explicitly asks to aggregate partial results. If partial, note the missing count and percentage per grid point.
@@ -266,7 +266,7 @@ if run_id is not None:
 
 If aggregation FAILS (e.g., cluster aggregate command exits non-zero, summary
 files are missing, key metrics fail validation), do NOT call `mark_terminal`.
-Leave the journal entry as `in_flight` so the user can re-run `/aggregate`
+Leave the journal entry as `in_flight` so the user can re-run `/aggregate-hpc`
 once the issue is fixed, or transition to manual triage.
 
 For multi-executor submissions (one journal entry per submitted job), call

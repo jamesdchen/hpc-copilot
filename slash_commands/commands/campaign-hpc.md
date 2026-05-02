@@ -1,16 +1,16 @@
-Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit` invocations that share a `campaign_id` tag; each iteration's `tasks.py` reads `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to learn what prior iterations produced and decide what to run next.
+Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit-hpc` invocations that share a `campaign_id` tag; each iteration's `tasks.py` reads `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to learn what prior iterations produced and decide what to run next.
 
-The framework is intentionally tiny here: there is no `Strategy` Protocol, no `Context` Protocol, no state file. The user's `tasks.py` does the strategy work using whatever Python library suits — `random`, `optuna`, `nevergrad`, `scikit-optimize`, walk-forward indexing, custom PBT — by import. The framework just maintains the in-flight queue (`hpc_mapreduce.campaign.run_campaign`), tags sidecars (`/submit --campaign-id`), and reports history (`/campaign status`).
+The framework is intentionally tiny here: there is no `Strategy` Protocol, no `Context` Protocol, no state file. The user's `tasks.py` does the strategy work using whatever Python library suits — `random`, `optuna`, `nevergrad`, `scikit-optimize`, walk-forward indexing, custom PBT — by import. The framework just maintains the in-flight queue (`hpc_mapreduce.campaign.run_campaign`), tags sidecars (`/submit-hpc --campaign-id`), and reports history (`/campaign-hpc status`).
 
 CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
 ## When to use this command
 
 - The user mentions hyperparameter tuning, walk-forward backtesting, active learning, population-based training, adaptive grid refinement, or any pattern where iteration N's submission depends on iteration N-1's results.
-- The user has run `/submit` before and wants to follow up by adapting the next submission to the last result.
+- The user has run `/submit-hpc` before and wants to follow up by adapting the next submission to the last result.
 - The user explicitly asks to "set up a campaign" or "tag these submissions as part of a study."
 
-If the user just wants one-shot parallel work with no feedback loop, use `/submit` directly.
+If the user just wants one-shot parallel work with no feedback loop, use `/submit-hpc` directly.
 
 ## Setup
 
@@ -46,7 +46,7 @@ If the user has an existing `.hpc/tasks.py` and is converting it to a campaign, 
 
 ## Step 3: Run the loop
 
-`/campaign` does not bake the asyncio loop into a CLI subcommand — instead, the user invokes it via Python from inside their experiment repo so they can wire any custom callbacks. Show this template (adapt to the user's submit setup):
+`/campaign-hpc` does not bake the asyncio loop into a CLI subcommand — instead, the user invokes it via Python from inside their experiment repo so they can wire any custom callbacks. Show this template (adapt to the user's submit setup):
 
 ```python
 import asyncio
@@ -61,7 +61,7 @@ CLUSTER = "<your cluster>"
 SSH_TARGET = "<user@host>"
 REMOTE_PATH = "/u/scratch/.../<exp>"
 
-# `submit_one` and `await_completion` wrap the same /submit and /monitor-hpc
+# `submit_one` and `await_completion` wrap the same /submit-hpc and /monitor-hpc
 # pipelines you use today. Build them however your repo prefers — e.g.
 # subprocess.run(["hpc-mapreduce", "submit", ...]) or direct Python calls
 # into runner.submit_and_record + runner.record_status. The framework
@@ -106,7 +106,7 @@ Reports per-iteration reduced metrics (oldest-first), in-flight count, and the l
 
 - See how many iterations have completed and what they produced.
 - Decide whether to extend the campaign by re-running Step 3 (the loop will pick up where it left off — `prior()` reads sidecars on disk, no separate state file).
-- Investigate failures by feeding individual `run_id`s into `/monitor-hpc` or `/aggregate`.
+- Investigate failures by feeding individual `run_id`s into `/monitor-hpc` or `/aggregate-hpc`.
 
 Resume after a network drop / laptop sleep: just re-run the Step 3 Python. The asyncio driver re-discovers in-flight runs via `session.find_runs_by_campaign(experiment_dir, CAMPAIGN_ID)`, polls them to terminal state, and continues launching new iterations. Sidecars on disk are the only durable state.
 
@@ -114,4 +114,4 @@ Resume after a network drop / laptop sleep: just re-run the Step 3 Python. The a
 
 Campaigns share the per-experiment sidecar retention cap (`MAX_RUNS=500` by default; `HPC_MAX_RUNS` env override). Long-running campaigns may bump up against it; raise `HPC_MAX_RUNS` if `prior()` is missing iterations near the start of a long run.
 
-There is no separate `/campaign delete` — terminating a campaign is just stopping the loop and ignoring the tag from then on. The sidecars remain for future inspection.
+There is no separate `/campaign-hpc delete` — terminating a campaign is just stopping the loop and ignoring the tag from then on. The sidecars remain for future inspection.
