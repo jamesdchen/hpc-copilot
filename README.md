@@ -136,6 +136,7 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 | `/status` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate` | Validate completeness, run aggregation on cluster, download summaries |
 | `/build-executor` | Scaffold a new executor from `templates/starters/executor_template.py` |
+| `/campaign` | Closed-loop iteration: tag submits, read prior history, run an asyncio in-flight queue. See [`docs/campaign.md`](docs/campaign.md). |
 ## Configuration
 
 ### `clusters.yaml` (required)
