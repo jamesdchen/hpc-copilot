@@ -55,34 +55,50 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
 
 ## Step 1: Discover Executors
 
-Call the shared discovery helper — identical to what `/build-executor` uses so both commands see the same set of executors:
+Call the shared discovery helper — used by both `/submit-hpc` and the (deprecated) `/build-executor-hpc` so both see the same set of executors:
 
 ```python
 from hpc_mapreduce import discover_executors
 execs = discover_executors(".")   # returns list[ExecutorInfo]
 ```
 
-`discover_executors` scans `executors/`, `scripts/`, and `src/` (in that order, collecting from every one that exists) and falls back to the repo root if none are present. The contract is: a file is an executor iff it parses and has both an `if __name__ == "__main__":` guard and a CLI import (`argparse`, `click`, `typer`, or `fire`) — utilities, `__init__.py`, and reserved HPC filenames are filtered out automatically. Each returned `ExecutorInfo` has `path`, `name`, `cli_framework`, `imports`, and `docstring`.
+`discover_executors` scans `executors/`, `scripts/`, and `src/` (in that order, collecting from every one that exists) and falls back to the repo root if none are present. An **executor** is a `.py` file matching either of two contracts:
+
+- **New (preferred):** exports `compute(args) -> None` at the top level. CLI dispatch lives in the auto-generated `.hpc/cli.py`; the executor file is pure compute.
+- **Old (transitional):** has both an `if __name__ == "__main__":` guard and a CLI import (`argparse`, `click`, `typer`, or `fire`). Self-dispatching script.
+
+Utilities, `__init__.py`, and reserved HPC filenames are filtered out automatically. Each `ExecutorInfo` has `path`, `name`, `has_compute_function`, `has_main_guard`, `cli_framework`, `imports`, and `docstring`.
 
 Cache the resolved directory in Claude Code memory for this project. If the cached directory differs from the defaults, pass it through `search_dirs=(...)`. If the user explicitly names a different directory, honor it the same way.
 
-For each executor, run `python3 <info.path> --help` to map its CLI interface (the helper parses source but does not execute it). Parse:
+How to map each executor's flag set depends on which contract it satisfies:
+
+- **New-contract executors** (`info.has_compute_function`): the flag list lives in `.hpc/tasks.py` `FLAGS[<info.name>'s module path]`, not in the executor file. If `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If it doesn't exist yet (first submit), capture the intended flags during the Step 6b interview and write them into the FLAGS dict you generate.
+- **Old-contract executors** (`info.has_main_guard` only): run `python3 <info.path> --help` to map the CLI interface (argparse-style scripts respond to `--help` even before the framework is installed).
+
+Parse the typical axes either way:
 - Grid-able parameters (model hyperparams, feature types, etc.)
 - Data arguments (`--data-path`, `--horizon`, `--start`, `--end`)
-- Output arguments (`--output-file`)
+- Output arguments (`--output-file` is contractual)
 
-Present the inventory (use `info.name` and `info.path` as the identifiers; `info.docstring` is handy for the one-line summary). Examples are illustrative — `/submit-hpc` works with any executor that accepts grid-shaped CLI flags.
+Present the inventory (use `info.name` and `info.path` as identifiers; `info.docstring` is handy for the one-line summary). Examples are illustrative — `/submit-hpc` works with any executor that satisfies either contract.
 
 ```
 Executors found in src/ (illustrative — names, flags, and domain are per-experiment):
-  ml_ridge.py     — args: --horizon, --data-path, --train-window, --start, --end, --output-file
-  ml_xgboost.py   — args: --horizon, --data-path, --train-window, --start, --end, --output-file
-  dl_patchts.py   — args: --horizon, --data-path, --gpu-count, --start, --end, --output-file
+  ml_ridge.py     — flags: --horizon, --data-path, --train-window, --start, --end, --output-file
+  ml_xgboost.py   — flags: --horizon, --data-path, --train-window, --start, --end, --output-file
+  dl_patchts.py   — flags: --horizon, --data-path, --gpu-count, --start, --end, --output-file
 
 Which do you want to run?
 ```
 
-If `discover_executors` returns an empty list, tell the user no executors were found and point them at `/build-executor` to scaffold one.
+If `discover_executors` returns an empty list, pivot to a scaffolding sub-interview right here (this absorbs what `/build-executor-hpc` used to be):
+
+1. Ask: "No executors found in `executors/` / `scripts/` / `src/`. Want me to scaffold one — what should it do?"
+2. Copy `hpc_mapreduce/templates/starters/executor_template.py` to a user-chosen path (default: `src/<name>.py`).
+3. Walk the user through filling in `compute(args)` based on what they described — model fit/predict, simulation step, data transform, etc.
+4. Capture the flag set the user wants (this becomes that executor's entry in the FLAGS dict during Step 6b).
+5. Re-run `discover_executors` to confirm the new file is recognized, then continue to Step 2.
 
 ## Step 2: Understand User Intent
 
@@ -212,15 +228,15 @@ Present the full submission plan:
   Remote:     <remote_path>
   
   Job 1: ml_ridge
-    Executor:    python3 src/ml_ridge.py
-    tasks.py:    .hpc/tasks.py — kwargs = {horizon, window_start, window_end} per task
+    Executor:    python -m cli src.ml_ridge        # new-contract; old-contract would be `python3 src/ml_ridge.py`
+    tasks.py:    .hpc/tasks.py — FLAGS["src.ml_ridge"] + kwargs={horizon, window_start, window_end} per task
     Cardinality: 1 horizon × 10 date windows = 10 tasks
     Resources:   1 CPU, 16G, 4:00:00
     Env:         modules=python/3.11.9
 
   Job 2: ml_xgboost
-    Executor:    python3 src/ml_xgboost.py
-    tasks.py:    .hpc/tasks.py — kwargs = {horizon, window_start, window_end} per task
+    Executor:    python -m cli src.ml_xgboost
+    tasks.py:    .hpc/tasks.py — FLAGS["src.ml_xgboost"] + kwargs={horizon, window_start, window_end} per task
     Cardinality: 1 horizon × 10 date windows = 10 tasks
     Resources:   1 CPU, 16G, 4:00:00
     Env:         modules=python/3.11.9
@@ -264,31 +280,47 @@ If the user wants to change the axis, tell them to edit `.hpc/tasks.py` directly
 
 If `tp.exists()` is False, enter the scaffolding sub-flow:
 
-1. **Read the canonical example.** Resolve `hpc_mapreduce/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
+1. **Read the canonical example.** Resolve `hpc_mapreduce/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
 
 2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and any `meta.json` at the experiment root for axis hints (parameter names, ranges, chunking intent, date windows). Recent run sidecars under `.hpc/runs/` are also a useful source — they capture the full kwargs dict from any previous `tasks.resolve(i)` materializations.
 
 3. **Walk the user through writing the file.** This is conversational, not template substitution. The agent:
    - Re-states the axis from Step 3 in concrete terms (e.g. "We're going to materialize a list of {seed, model} dicts, one per task — 4 tasks total. Sound right?").
    - Drafts a minimal `_TASKS` for that axis and shows it to the user.
-   - Lets the user paste a snippet, describe in prose, or point at existing code; the agent translates that into `_TASKS`, `total()`, `resolve(task_id)`.
+   - Builds the `FLAGS` dict — one entry per executor module path the user might run from this repo (at minimum, the executor picked in Step 1; can include siblings discovered in the same dir for forward-readiness). Each flag list uses `from hpc_mapreduce.executor_cli import flag, generic_args, gpu_args` and follows the example pattern: `[*generic_args(), flag("horizon", int, default=1), ...]`.
+   - Lets the user paste a snippet, describe in prose, or point at existing code; the agent translates that into `_TASKS`, `total()`, `resolve(task_id)`, and the FLAGS dict.
    - Iterates. The user is the source of truth on what the axis means.
 
    Eager memoization is the **convention, not a choice**: `_TASKS` is materialized at module load, `total()` returns `len(_TASKS)`, `resolve(i)` returns `_TASKS[i]`. This gives free `cmd_sha`, submit-time error catching, and laptop-inspectability. Lazy variants are not encouraged.
 
-4. **Write the file and commit it.**
+   The kwargs returned by `resolve(task_id)` must use names that match the FLAGS list's `flag(name, ...)` entries (with underscores; argparse converts to `--hyphenated` automatically). A typo here surfaces as `argparse: unrecognized arguments` on the cluster — not as a friendly KeyError.
+
+4. **Copy the dispatcher.** Whether or not the experiment is using the new `compute(args)` contract, drop in the framework's static dispatcher so the cluster job script can invoke `python -m cli <executor_module> ...`:
+
+   ```python
+   import shutil
+   from hpc_mapreduce import _PACKAGE_ROOT
+   shutil.copy(
+       _PACKAGE_ROOT / "templates" / "cli_dispatcher.py",
+       experiment_dir / ".hpc" / "cli.py",
+   )
+   ```
+
+   This file is one-time scaffolding — never regenerated even when `tasks.py FLAGS` changes (the dispatcher reads FLAGS at runtime).
+
+5. **Write the tasks.py and commit both files.**
 
    ```python
    tp.write_text(final_source)          # the full tasks.py text
    import subprocess
-   subprocess.run(["git", "add", str(tp)], check=True)
+   subprocess.run(["git", "add", str(tp), str(experiment_dir / ".hpc" / "cli.py")], check=True)
    subprocess.run(
-       ["git", "commit", "-m", f"Add .hpc/tasks.py for {executor_name}"],
+       ["git", "commit", "-m", f"Scaffold .hpc/tasks.py + cli.py for {executor_name}"],
        check=True,
    )
    ```
 
-   Print the commit SHA. **No push** — the user controls when their work goes upstream. If the working tree is detached or the directory is not a git repo, warn the user and continue (the file still gets written; commit is best-effort). Subsequent submits hit Step 6a and skip this entire sub-flow.
+   Print the commit SHA. **No push** — the user controls when their work goes upstream. If the working tree is detached or the directory is not a git repo, warn the user and continue (the files still get written; commit is best-effort). Subsequent submits hit Step 6a and skip this entire sub-flow.
 
 ### Step 6c: Compute `cmd_sha` and check for resume
 
@@ -335,7 +367,7 @@ sidecar_path = write_run_sidecar(
     cmd_sha=cmd_sha,
     claude_hpc_version=__import__("hpc_mapreduce").__version__,
     submitted_at=datetime.now(timezone.utc).isoformat(),
-    executor=run_cmd,                            # full shell cmd, e.g. "python3 scripts/train.py"
+    executor=run_cmd,                            # full shell cmd. New-contract: "python -m cli src.ml_ridge". Old-contract: "python3 src/ml_ridge.py".
     result_dir_template=result_dir_template,     # e.g. "results/{git_sha}/task_{task_id}"
     task_count=tasks.total(),
     tasks_py_sha=tasks_py_sha,
