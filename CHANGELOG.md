@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+### Added — closed-loop campaign primitive
+
+The framework gains a small new primitive for adaptive iteration: a
+**campaign** is a sequence of `/submit` invocations sharing a
+`campaign_id` tag. The user's `.hpc/tasks.py` reads
+`hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
+module load to learn what prior iterations of the same campaign produced
+and decide what to run next. Strategies (Optuna, RandomSearch,
+walk-forward, PBT, …) live as Python libraries the user imports inside
+their own `tasks.py` — the framework ships **zero** strategy code.
+
+Surface area:
+
+- **`campaign_id`** — first-class field on the v2 sidecar and on the
+  journal `RunRecord`. Set via `--campaign-id` on submit specs;
+  filterable via `session.find_runs_by_campaign`.
+- **`HPC_CAMPAIGN_ID`** — env var forwarded by every scheduler template
+  (SGE/SLURM × CPU/GPU). Read by the user's `tasks.py` and executor on
+  the cluster.
+- **`hpc_mapreduce.reduce.history`** — read-only accessor:
+  - `prior(experiment_dir, campaign_id)` returns per-iteration reduced
+    metric dicts, oldest-first. Pending iterations contribute `{}`.
+  - `find_sidecars_by_campaign` and `result_dirs_for_sidecar` for
+    callers that need the underlying primitives. None of these import
+    `.hpc/tasks.py` (the loop's calling module), so no recursion.
+- **`hpc_mapreduce.campaign.run_campaign`** — asyncio in-flight queue.
+  Maintains *concurrency* live submits, awaits the next-finished one
+  (FIRST_COMPLETED), repeats until the user's `should_submit` predicate
+  flips to False or a wall-clock budget elapses. Fully IO-injected
+  (`submit_one`, `await_completion`, `should_submit`); no fixed
+  Strategy/Context Protocol.
+- **`hpc-mapreduce campaign status` / `hpc-mapreduce campaign list`** —
+  read-only CLI subcommands, JSON envelopes pinned by
+  `schemas/campaign.output.json`.
+- **`/campaign`** — slash command with the conversational interview;
+  scaffolds a campaign-aware `tasks.py` from the recipes in
+  `docs/campaign.md` (random search, Optuna ask/tell, walk-forward).
+
+Resume semantics: sidecars on disk are the only durable state. After a
+network drop or laptop sleep, re-running the loop re-discovers in-flight
+runs via `find_runs_by_campaign`, polls them to terminal state, and
+continues. No separate state file.
+
+Failure semantics: a single iteration's failure surfaces via `on_event`
+with an `error` field; the loop continues. Reissuing failed iterations
+is the strategy library's call.
+
+Out of scope: cluster-side queue (one array job draining a shared-FS
+task queue), cluster-resident campaign driver, per-campaign retention.
+All future work.
+
 ### Changed — `hpc.yaml` absorbed into the per-run sidecar
 
 - **`hpc.yaml` is gone.** Every load-bearing field has moved into the

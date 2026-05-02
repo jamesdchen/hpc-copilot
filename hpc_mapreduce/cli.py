@@ -185,6 +185,7 @@ _MARS_SKILL_NAMES = (
     "hpc-preflight",
     "hpc-aggregate",
     "hpc-build-executor",
+    "hpc-campaign",
 )
 
 
@@ -395,24 +396,23 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
 
 def cmd_list_in_flight(args: argparse.Namespace) -> int:
     records = session.find_in_flight_runs(args.experiment_dir)
-    _ok(
-        {
-            "runs": [
-                {
-                    "run_id": r.run_id,
-                    "profile": r.profile,
-                    "cluster": r.cluster,
-                    "job_ids": r.job_ids,
-                    "total_tasks": r.total_tasks,
-                    "submitted_at": r.submitted_at,
-                    "last_status": r.last_status,
-                    "last_status_age_seconds": _last_status_age_seconds(r.last_status),
-                }
-                for r in records
-            ]
-        },
-        idempotent=True,
-    )
+
+    def _row(r: session.RunRecord) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "run_id": r.run_id,
+            "profile": r.profile,
+            "cluster": r.cluster,
+            "job_ids": r.job_ids,
+            "total_tasks": r.total_tasks,
+            "submitted_at": r.submitted_at,
+            "last_status": r.last_status,
+            "last_status_age_seconds": _last_status_age_seconds(r.last_status),
+        }
+        if r.campaign_id:
+            d["campaign_id"] = r.campaign_id
+        return d
+
+    _ok({"runs": [_row(r) for r in records]}, idempotent=True)
     return EXIT_OK
 
 
@@ -487,17 +487,20 @@ def cmd_status(args: argparse.Namespace) -> int:
         job_ids=record.job_ids,
         job_name=record.job_name,
     )
-    _ok(
-        {
-            "run_id": updated.run_id,
-            "lifecycle_state": updated.status,
-            "last_status": updated.last_status,
-            "last_status_age_seconds": _last_status_age_seconds(updated.last_status),
-            "combined_waves": updated.combined_waves,
-            "failed_waves": updated.failed_waves,
-        },
-        idempotent=True,
-    )
+    data: dict[str, Any] = {
+        "run_id": updated.run_id,
+        "lifecycle_state": updated.status,
+        "last_status": updated.last_status,
+        "last_status_age_seconds": _last_status_age_seconds(updated.last_status),
+        "combined_waves": updated.combined_waves,
+        "failed_waves": updated.failed_waves,
+    }
+    # Surface the campaign tag so a caller seeing /status output knows
+    # this run is part of a closed-loop campaign without separately
+    # querying `campaign list` / `campaign status`.
+    if updated.campaign_id:
+        data["campaign_id"] = updated.campaign_id
+    _ok(data, idempotent=True)
     return EXIT_OK
 
 

@@ -73,17 +73,23 @@ gitignored.
 ### Per-run sidecars
 
 A sidecar `.hpc/runs/<run_id>.json` carries per-run state for one
-submission: `run_id`, `cmd_sha`, `claude_hpc_version`, `submitted_at`,
-`executor`, `result_dir_template`, `task_count`, `tasks_py_sha`,
-optional `wave_map`.
+submission. Identity fields: `run_id`, `cmd_sha`, `claude_hpc_version`,
+`submitted_at`, `executor`, `result_dir_template`, `task_count`,
+`tasks_py_sha`, optional `wave_map`. Plus the v2 config snapshot
+(populated by `/submit`; absent v2 fields default to `None` on read):
+`cluster`, `profile`, `campaign_id`, `project`, `remote_path`,
+`resources`, `env`, `env_group`, `constraints`, `gpu_fallback`,
+`max_retries`, `runtime`, `auto_retry`, `aggregate_defaults`. v1
+sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 
-- `MAX_RUNS` — maximum sidecars retained before pruning.
-- `SIDECAR_SCHEMA_VERSION` — current sidecar schema version.
+- `MAX_RUNS` — maximum sidecars retained before pruning (default 500;
+  override via `HPC_MAX_RUNS` env var at module load).
+- `SIDECAR_SCHEMA_VERSION` — current sidecar schema version (2).
 - `compute_cmd_sha` — hash the materialized task list of a `tasks.py`
   module — the source of truth for run identity.
 - `compute_tasks_py_sha` — diagnostic hash of `tasks.py`'s bytes.
 - `write_run_sidecar` — write `.hpc/runs/<run_id>.json`.
-- `read_run_sidecar` — load a sidecar by run_id.
+- `read_run_sidecar` — load a sidecar by run_id; backfills v2 keys.
 - `find_existing_runs` — list sidecars newest-first.
 - `find_run_by_cmd_sha` — locate the newest sidecar matching a cmd_sha.
 - `prune_old_runs` — keep only the most recent `MAX_RUNS`.
@@ -116,6 +122,21 @@ optional `wave_map`.
 - `reduce_partials` — fold partial / streaming metric files.
 - `reduce_resource_usage` — summarise CPU/mem/GPU usage across tasks.
 - `classify_failure` — categorise a task failure from its log.
+
+### Closed-loop campaigns
+
+- `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` —
+  read-only per-iteration reduced metrics for a campaign, oldest-first.
+  Pure local filesystem walk. Does not import `.hpc/tasks.py`.
+- `hpc_mapreduce.reduce.history.find_sidecars_by_campaign` /
+  `result_dirs_for_sidecar` — underlying primitives.
+- `hpc_mapreduce.campaign.run_campaign` — asyncio in-flight queue (the
+  closed-loop driver). Fully IO-injected; user supplies `submit_one`,
+  `await_completion`, `should_submit` callbacks.
+- **`HPC_CAMPAIGN_ID` env var** — forwarded by every scheduler template
+  (SGE/SLURM × CPU/GPU) alongside `HPC_RUN_ID`. Read by the user's
+  `tasks.py` and executor on the cluster to call `prior()` for the
+  campaign's history. Empty (unset) for open-loop submits.
 
 ### Executor discovery
 
