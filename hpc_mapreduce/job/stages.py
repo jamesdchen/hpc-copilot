@@ -1,10 +1,7 @@
 """Multi-stage DAG loader for ``.hpc/stages.py``.
 
-The closed-loop refactor (see ``i-want-to-run-quizzical-hammock`` plan)
-absorbs every load-bearing field of the legacy ``hpc.yaml`` into a
-non-yaml home. Multi-stage DAGs — the only legacy field with no sidecar
-home — move to ``.hpc/stages.py``, mirroring the existing ``.hpc/tasks.py``
-convention:
+Multi-stage DAGs are expressed in Python alongside ``.hpc/tasks.py``,
+mirroring the same convention:
 
     def stages() -> list[dict]:
         return [

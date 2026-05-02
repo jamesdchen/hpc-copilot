@@ -187,14 +187,16 @@ Everything outside the framework's public API. Concretely:
   CLI and an `if __name__ == "__main__":` guard — see `discover.py`).
 - **Shared utility code** under `lib/` (or wherever the experiment chooses to
   put it).
-- **`hpc.yaml`** — optional per-experiment profile config (see
-  [`docs/schema.md`](schema.md)).
 - **`.hpc/tasks.py`** — the user-written Python module exposing
   `total()` and `resolve(task_id)`. Authored once via `/submit`
   Step 6's scaffolding flow (adapting the canonical example at
   `hpc_mapreduce/templates/tasks_example.py`), git-tracked, and
   user-editable. The bridge between the framework's task-id contract
   and whatever parallelization axis the experiment needs.
+- **`.hpc/stages.py`** (optional) — the user-written Python module
+  exposing `stages() -> list[dict]` for multi-stage DAG submissions.
+  Validated against `hpc_mapreduce/schemas/stages.input.json` at load
+  time. Same conversational-generation pattern as `.hpc/tasks.py`.
 - **Domain-specific aggregation** — any `aggregate_cmd` the experiment
   defines for fan-in.
 
@@ -262,11 +264,13 @@ framework, and adding a new cluster never requires touching any experiment.
 - **`hpc_mapreduce/config/clusters.yaml`** — cluster infrastructure
   (host, scheduler, scratch path, modules, conda envs, GPU types,
   throughput constraints). Ships with `claude-hpc`. See
-  [`README.md`](../README.md) lines 95–109.
-- **`hpc.yaml`** — optional per-experiment profile config (project name,
-  grid, resources, results layout). Lives in the experiment repo. See
-  [`README.md`](../README.md) lines 111–117 and
-  [`docs/schema.md`](schema.md) line 3.
+  [`README.md`](../README.md).
+- **Per-run sidecars at `.hpc/runs/<run_id>.json`** — the v2 schema
+  captures the full per-experiment config snapshot (resources, env,
+  constraints, profile name, runtime, auto_retry, aggregate defaults)
+  for each successful submit. Subsequent commands read it instead of a
+  separate experiment-config file. Conversational `/submit` writes one;
+  there is no user-authored experiment-config yaml.
 
 The lint test `test_clusters_yaml_is_infra_only` enforces that
 `hpc_mapreduce/config/clusters.yaml` only contains infrastructure-shaped

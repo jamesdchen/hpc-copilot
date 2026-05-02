@@ -206,7 +206,7 @@ Source of truth: [`/slash_commands/errors.py`](../slash_commands/errors.py).
 | `spec_invalid` | user | false | Surface; the spec is wrong. The agent must regenerate it. |
 | `executor_not_found` | user | false | Surface; the executor path is wrong. |
 | `cluster_unknown` | user | false | Surface; the cluster name is wrong. Run `clusters list` to recover. |
-| `config_invalid` | user | false | Surface; clusters.yaml or hpc.yaml is malformed. |
+| `config_invalid` | user | false | Surface; clusters.yaml is malformed. |
 | `journal_corrupt` | internal | false | Surface; investigate `$HPC_JOURNAL_DIR`. |
 | `internal` | internal | false | Surface; bug report. |
 
@@ -264,9 +264,10 @@ These are the substantive code items that depend on maintainer feedback,
 deferred until adoption is agreed:
 
 1. **`uv run` in the cluster-side dispatch script and job templates.** Today
-   templates use plain `python3 -m …`. A `runtime: "uv"` field in the
-   spec / hpc.yaml would emit `uv run python …` on the cluster after a
-   `uv sync` preamble. Requires uv to be installed on the cluster.
+   templates use plain `python3 -m …`. A `runtime: "uv"` field on the
+   submit spec (persisted to the run sidecar) would emit `uv run python …`
+   on the cluster after a `uv sync` preamble. Requires uv to be installed
+   on the cluster.
 2. **`meta.json`-aware discovery filter.** When `meta.json` exists, treat
    the directory as MARs Tier-2 and exclude `src/` from executor scanning
    (per MARs's "src is modules, not entrypoints" contract).

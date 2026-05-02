@@ -43,7 +43,7 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 3. **No journal hit — fall back to existing context sources** (priority order):
 
    - If `$ARGUMENTS` contains `--cluster <name>`, use that cluster.
-   - Else if `hpc.yaml` exists, read `cluster` field.
+   - Else read `cluster` from the most recent matching `.hpc/runs/<run_id>.json` sidecar.
    - Else check Claude Code memory for cached cluster preference.
    - Else ask the user.
 

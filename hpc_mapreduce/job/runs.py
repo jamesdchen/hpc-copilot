@@ -43,7 +43,8 @@ MAX_RUNS: int = int(os.environ.get("HPC_MAX_RUNS", "500"))
 
 # Sidecar JSON schema version. v2 adds first-class config-snapshot fields
 # (resources/env/env_group/constraints/cluster/profile/campaign_id/...) so
-# every successful submit captures everything ``hpc.yaml`` used to provide.
+# every successful submit captures the full config it ran under and
+# subsequent commands have no need for a separate experiment-config file.
 # v1 sidecars on disk continue to load via ``read_run_sidecar`` backfill.
 SIDECAR_SCHEMA_VERSION: int = 2
 
@@ -101,8 +102,7 @@ def compute_tasks_py_sha(tasks_py_path: Path) -> str:
 
 # v2 first-class config-snapshot fields. All optional; absent keys are
 # omitted from the written sidecar and backfilled to ``None`` (or the
-# empty container) on read. Names match the legacy ``hpc.yaml`` field
-# names so callers can rename mechanically.
+# empty container) on read.
 _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "cluster",  # str — cluster key from clusters.yaml
     "profile",  # str — label distinguishing this submission shape

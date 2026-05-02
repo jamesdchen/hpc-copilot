@@ -99,13 +99,27 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
   split". Allowed keys enforced by
   `tests/test_boundary_contract.py:test_clusters_yaml_is_infra_only`.
 
-### `hpc.yaml` schema
+### Per-run sidecar v2 schema
 
-- **Lives in**: the experiment repo (optional file).
-- **Schema**: documented in `docs/schema.md` (top-level fields,
-  profiles, single- vs multi-stage, env, resources, results,
-  constraints, cluster_envs). The parallelization axis lives in
-  `.hpc/tasks.py`, not in the spec.
+- **Lives in**: `<experiment>/.hpc/runs/<run_id>.json`.
+- **Writer**: `hpc_mapreduce.job.runs.write_run_sidecar`.
+- **Reader**: `hpc_mapreduce.job.runs.read_run_sidecar` (backfills v1
+  records with v2 keys defaulted to None).
+- **Fields**: identity (`run_id`, `cmd_sha`, `tasks_py_sha`,
+  `submitted_at`, `claude_hpc_version`), executor (`executor`,
+  `result_dir_template`, `task_count`), wave map, plus the v2
+  config-snapshot block (`cluster`, `profile`, `campaign_id`, `project`,
+  `remote_path`, `resources`, `env`, `env_group`, `constraints`,
+  `gpu_fallback`, `max_retries`, `runtime`, `auto_retry`,
+  `aggregate_defaults`).
+
+### Multi-stage DAG schema
+
+- **Lives in**: `<experiment>/.hpc/stages.py` (Python file exposing
+  `def stages() -> list[dict]`).
+- **JSON Schema**: `hpc_mapreduce/schemas/stages.input.json`.
+- **Loader**: `hpc_mapreduce.job.stages.load_stages` (validates against
+  the schema and enforces unique names + resolved `depends_on`).
 
 ### Exit-code → error_code mapping
 
