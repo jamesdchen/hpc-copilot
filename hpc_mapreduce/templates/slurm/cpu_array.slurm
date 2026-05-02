@@ -66,7 +66,9 @@ fi
 
 # --- Working Directory ---
 cd "$REPO_DIR"
-export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+# .hpc/ on PYTHONPATH so `python -m cli` resolves the dispatcher
+# generated at .hpc/cli.py by /submit-hpc Step 6.
+export PYTHONPATH="$REPO_DIR:$REPO_DIR/.hpc:${PYTHONPATH:-}"
 
 # --- Runtime (uv) ---
 # Opt-in via HPC_RUNTIME=uv. Sync the project's uv-managed venv before
