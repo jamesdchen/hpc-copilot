@@ -1,8 +1,12 @@
 # /preflight — Verify the local environment can submit HPC jobs
 
-Run this BEFORE the first `/submit-hpc` of a session, or any time submissions
-mysteriously hang. Catches the most common first-time-user failure mode:
-SSH credentials not forwarded into the current shell.
+`/submit-hpc` Step 6b auto-runs this same gate (cached per cluster for 24 h via `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json`), so you usually don't need to invoke `/preflight` directly. Reasons to invoke it standalone:
+
+- Cluster diagnostics without a pending submission ("is Hoffman2 up?")
+- Force-refresh the cache after fixing your SSH agent (this command writes the same marker `/submit-hpc` reads)
+- First-time-user smoke test on a new machine before any executor or `tasks.py` exists
+
+Catches the most common first-time-user failure mode: SSH credentials not forwarded into the current shell.
 
 ## Steps
 
@@ -31,9 +35,24 @@ SSH credentials not forwarded into the current shell.
      hostname is wrong; do NOT try to submit.
 
 4. If `data.all_ok` is true, summarise the green checks for the user and
-   continue with the workflow they originally invoked. If false, list the
-   failing checks with their `detail` fields and stop. Do not advance to
-   `/submit-hpc`.
+   write the shared marker so `/submit-hpc`'s Step 6b gate skips the
+   re-check for the next 24 h:
+
+   ```python
+   from datetime import datetime, timezone
+   from pathlib import Path
+   import json
+   marker = Path.home() / ".claude/hpc" / repo_hash / f"preflight-{cluster}.json"
+   marker.parent.mkdir(parents=True, exist_ok=True)
+   marker.write_text(json.dumps({
+       "checked_at": datetime.now(timezone.utc).isoformat(),
+       "all_ok": True,
+       "cluster": cluster,
+   }))
+   ```
+
+   If false, list the failing checks with their `detail` fields and stop.
+   Do not write the marker. Do not advance to `/submit-hpc`.
 
 ## Notes
 
