@@ -44,9 +44,17 @@ def test_help_lists_every_subcommand() -> None:
     rc, out, _ = _run_cli("--help")
     assert rc == 0
     for cmd in (
-        "capabilities", "preflight", "discover",
-        "clusters", "list-in-flight", "status", "submit", "aggregate",
-        "resubmit", "reconcile", "build-executor",
+        "capabilities",
+        "preflight",
+        "discover",
+        "clusters",
+        "list-in-flight",
+        "status",
+        "submit",
+        "aggregate",
+        "resubmit",
+        "reconcile",
+        "build-executor",
     ):
         assert cmd in out, f"--help missing subcommand {cmd!r}"
 
@@ -126,8 +134,10 @@ def test_malformed_spec_returns_user_error(tmp_path: Path) -> None:
     spec.write_text("not json {")
     rc, out, _ = _run_cli(
         "submit",
-        "--experiment-dir", str(tmp_path),
-        "--spec", str(spec),
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
         "--dry-run",
     )
     assert rc == 1
@@ -142,8 +152,10 @@ def test_missing_spec_required_field_returns_user_error(tmp_path: Path) -> None:
     spec.write_text(json.dumps({"profile": "x"}))  # missing required fields
     rc, out, _ = _run_cli(
         "submit",
-        "--experiment-dir", str(tmp_path),
-        "--spec", str(spec),
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
     )
     assert rc == 1
     env = _parse_envelope(out)
@@ -174,11 +186,14 @@ def test_submit_dry_run_does_not_touch_journal(tmp_path: Path) -> None:
     env_with_journal = {"HPC_JOURNAL_DIR": str(journal), "PATH": ""}
     # Need PATH for ssh-add etc., but not really for dry-run; pull from os.
     import os
+
     env_with_journal["PATH"] = os.environ.get("PATH", "")
     rc, out, _ = _run_cli(
         "submit",
-        "--experiment-dir", str(tmp_path),
-        "--spec", str(spec),
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
         "--dry-run",
         env=env_with_journal,
     )
@@ -192,13 +207,18 @@ def test_submit_dry_run_does_not_touch_journal(tmp_path: Path) -> None:
 def test_submit_dedup_envelope_marks_replay(tmp_path: Path) -> None:
     """Second submit with the same spec returns deduped=True."""
     import os
+
     spec = tmp_path / "spec.json"
     spec.write_text(json.dumps(SUBMIT_SPEC))
     journal = tmp_path / "journal"
     env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
 
     rc1, out1, _ = _run_cli(
-        "submit", "--experiment-dir", str(tmp_path), "--spec", str(spec),
+        "submit",
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
         env=env_vars,
     )
     assert rc1 == 0
@@ -206,7 +226,11 @@ def test_submit_dedup_envelope_marks_replay(tmp_path: Path) -> None:
     assert env1["data"]["deduped"] is False
 
     rc2, out2, _ = _run_cli(
-        "submit", "--experiment-dir", str(tmp_path), "--spec", str(spec),
+        "submit",
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
         env=env_vars,
     )
     assert rc2 == 0
@@ -221,17 +245,24 @@ def test_submit_dedup_envelope_marks_replay(tmp_path: Path) -> None:
 def test_list_in_flight_finds_submitted_run(tmp_path: Path) -> None:
     """After a submit, list-in-flight must surface the run."""
     import os
+
     spec = tmp_path / "spec.json"
     spec.write_text(json.dumps(SUBMIT_SPEC))
     journal = tmp_path / "journal"
     env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
 
     _run_cli(
-        "submit", "--experiment-dir", str(tmp_path), "--spec", str(spec),
+        "submit",
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
         env=env_vars,
     )
     rc, out, _ = _run_cli(
-        "list-in-flight", "--experiment-dir", str(tmp_path),
+        "list-in-flight",
+        "--experiment-dir",
+        str(tmp_path),
         env=env_vars,
     )
     assert rc == 0
@@ -329,10 +360,13 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
     def fake_emit(payload):
         captured.append(json.dumps(payload))
 
-    with patch(
-        "slash_commands.runner.combine_wave",
-        return_value=(False, "", "boom: missing metrics"),
-    ), patch.object(cli, "_emit", side_effect=fake_emit):
+    with (
+        patch(
+            "slash_commands.runner.combine_wave",
+            return_value=(False, "", "boom: missing metrics"),
+        ),
+        patch.object(cli, "_emit", side_effect=fake_emit),
+    ):
         rc = cli.cmd_aggregate(args)
 
     assert rc != 0  # exit code reflects failure
@@ -364,9 +398,12 @@ def test_main_routes_journal_corrupt_for_missing_run(tmp_path: Path) -> None:
 
     rc, out, _ = _run_cli(
         "aggregate",
-        "--experiment-dir", str(tmp_path),
-        "--run-id", "definitely_not_a_run",
-        "--wave", "0",
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        "definitely_not_a_run",
+        "--wave",
+        "0",
         env=env_vars,
     )
     assert rc != 0
@@ -390,8 +427,9 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
     def fake_emit(payload):
         captured.append(payload)
 
-    with patch.object(cli, "_emit", side_effect=fake_emit), patch.object(
-        cli, "cmd_capabilities", side_effect=boom
+    with (
+        patch.object(cli, "_emit", side_effect=fake_emit),
+        patch.object(cli, "cmd_capabilities", side_effect=boom),
     ):
         rc = cli.main(["capabilities"])
     assert rc == cli.EXIT_INTERNAL
@@ -414,7 +452,11 @@ def test_submit_spec_with_wrong_type_fails_with_schema_message(tmp_path: Path) -
     env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
 
     rc, out, _ = _run_cli(
-        "submit", "--experiment-dir", str(tmp_path), "--spec", str(spec),
+        "submit",
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(spec),
         env=env_vars,
     )
     assert rc != 0
@@ -433,17 +475,24 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     import os
 
     spec = tmp_path / "rs.json"
-    spec.write_text(json.dumps({
-        "failed_task_ids": [1],
-        "category": "totally_made_up",
-    }))
+    spec.write_text(
+        json.dumps(
+            {
+                "failed_task_ids": [1],
+                "category": "totally_made_up",
+            }
+        )
+    )
     env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
 
     rc, out, _ = _run_cli(
         "resubmit",
-        "--experiment-dir", str(tmp_path),
-        "--run-id", "doesnt_matter",
-        "--spec", str(spec),
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        "doesnt_matter",
+        "--spec",
+        str(spec),
         env=env_vars,
     )
     assert rc != 0
@@ -472,7 +521,11 @@ def test_ssh_gate_status_fails_fast_without_agent(tmp_path: Path) -> None:
     env = _env_without_ssh_agent()
     env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
     rc, out, _ = _run_cli(
-        "status", "--experiment-dir", str(tmp_path), "--run-id", "x",
+        "status",
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        "x",
         env=env,
     )
     assert rc == 2, "ssh_unreachable is category=network → exit 2"
@@ -489,9 +542,12 @@ def test_ssh_gate_aggregate_fails_fast_without_agent(tmp_path: Path) -> None:
     env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
     rc, out, _ = _run_cli(
         "aggregate",
-        "--experiment-dir", str(tmp_path),
-        "--run-id", "x",
-        "--wave", "0",
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        "x",
+        "--wave",
+        "0",
         env=env,
     )
     assert rc == 2
@@ -504,9 +560,12 @@ def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
     env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
     rc, out, _ = _run_cli(
         "reconcile",
-        "--experiment-dir", str(tmp_path),
-        "--run-id", "x",
-        "--scheduler", "sge",
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        "x",
+        "--scheduler",
+        "sge",
         env=env,
     )
     assert rc == 2
@@ -534,8 +593,10 @@ def test_logs_requires_task_id_or_all_failed(tmp_path: Path) -> None:
 
     rc, out, _ = _run_cli(
         "logs",
-        "--experiment-dir", str(tmp_path),
-        "--run-id", SUBMIT_SPEC["run_id"],
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        SUBMIT_SPEC["run_id"],
         env=env_vars,
     )
     assert rc != 0
@@ -586,9 +647,10 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
             "content": "boom\n",
         }
     ]
-    with patch.object(
-        cli.runner, "fetch_task_logs", return_value=fake_logs
-    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+    with (
+        patch.object(cli.runner, "fetch_task_logs", return_value=fake_logs),
+        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+    ):
         rc = cli.cmd_logs(args)
 
     assert rc == 0
@@ -635,9 +697,7 @@ def test_list_in_flight_envelope_includes_age_field(tmp_path: Path) -> None:
     env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(journal)}
 
     _run_cli("submit", "--experiment-dir", str(tmp_path), "--spec", str(spec), env=env_vars)
-    rc, out, _ = _run_cli(
-        "list-in-flight", "--experiment-dir", str(tmp_path), env=env_vars
-    )
+    rc, out, _ = _run_cli("list-in-flight", "--experiment-dir", str(tmp_path), env=env_vars)
     assert rc == 0
     runs = _parse_envelope(out)["data"]["runs"]
     assert len(runs) == 1
@@ -690,14 +750,14 @@ def test_aggregate_precondition_blocks_combine_on_missing_outputs(
         expect_output=None,
     )
     captured: list[dict] = []
-    with patch.object(
-        cli.runner,
-        "verify_per_task_outputs",
-        return_value=["results/metrics.1.json"],
-    ), patch.object(
-        cli.runner, "combine_wave"
-    ) as combine_mock, patch.object(
-        cli, "_emit", side_effect=lambda p: captured.append(p)
+    with (
+        patch.object(
+            cli.runner,
+            "verify_per_task_outputs",
+            return_value=["results/metrics.1.json"],
+        ),
+        patch.object(cli.runner, "combine_wave") as combine_mock,
+        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
     ):
         rc = cli.cmd_aggregate(args)
 
@@ -730,13 +790,15 @@ def test_aggregate_postcondition_fails_when_combiner_artifact_missing(
         expect_output="results/metrics.json",
     )
     captured: list[dict] = []
-    with patch.object(
-        cli.runner, "combine_wave", return_value=(True, "ok", "")
-    ), patch.object(
-        cli.runner,
-        "verify_combiner_artifact",
-        return_value=(False, "is missing at /exp/results/metrics.json"),
-    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+    with (
+        patch.object(cli.runner, "combine_wave", return_value=(True, "ok", "")),
+        patch.object(
+            cli.runner,
+            "verify_combiner_artifact",
+            return_value=(False, "is missing at /exp/results/metrics.json"),
+        ),
+        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+    ):
         rc = cli.cmd_aggregate(args)
 
     assert rc != 0
@@ -746,9 +808,7 @@ def test_aggregate_postcondition_fails_when_combiner_artifact_missing(
     assert "results/metrics.json" in payload["message"]
 
 
-def test_aggregate_envelope_carries_provenance_on_success(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_aggregate_envelope_carries_provenance_on_success(tmp_path: Path, monkeypatch) -> None:
     """Successful aggregate must embed provenance metadata in envelope.data."""
     import argparse
     from unittest.mock import patch
@@ -766,9 +826,10 @@ def test_aggregate_envelope_carries_provenance_on_success(
         expect_output=None,
     )
     captured: list[dict] = []
-    with patch.object(
-        cli.runner, "combine_wave", return_value=(True, "ok", "")
-    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+    with (
+        patch.object(cli.runner, "combine_wave", return_value=(True, "ok", "")),
+        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+    ):
         rc = cli.cmd_aggregate(args)
 
     assert rc == 0
@@ -782,24 +843,35 @@ def test_aggregate_envelope_carries_provenance_on_success(
     assert "combined_at" in prov
 
 
-def test_aggregate_reads_hpc_yaml_defaults_for_require_and_expect(
+def test_aggregate_reads_sidecar_defaults_for_require_and_expect(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """When the CLI flags are omitted, hpc.yaml's results.{require_outputs,
-    expect_output} must be honored under the matching profile."""
+    """When the CLI flags are omitted, the sidecar's aggregate_defaults.
+    {require_outputs, expect_output} must be honored."""
     import argparse
     from unittest.mock import patch
+
+    from hpc_mapreduce.job.runs import write_run_sidecar
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
     _seed_aggregate_run(tmp_path)
 
-    (tmp_path / "hpc.yaml").write_text(
-        "profiles:\n"
-        "  ml:\n"
-        "    results:\n"
-        "      require_outputs: 'results/metrics.{task_id}.json'\n"
-        "      expect_output: 'results/metrics.json'\n"
+    write_run_sidecar(
+        tmp_path,
+        run_id="ml_abcd1234",
+        cmd_sha="0" * 64,
+        claude_hpc_version="0.2.0",
+        submitted_at="2026-04-28T00:00:00+00:00",
+        executor="python -m ml.train",
+        result_dir_template="results/{seed}",
+        task_count=2,
+        tasks_py_sha="1" * 64,
+        profile="ml",
+        aggregate_defaults={
+            "require_outputs": "results/metrics.{task_id}.json",
+            "expect_output": "results/metrics.json",
+        },
     )
 
     args = argparse.Namespace(
@@ -822,25 +894,23 @@ def test_aggregate_reads_hpc_yaml_defaults_for_require_and_expect(
         seen_expect.append(expect_output)
         return True, "ok"
 
-    with patch.object(
-        cli.runner, "verify_per_task_outputs", side_effect=fake_verify_outputs
-    ), patch.object(
-        cli.runner, "verify_combiner_artifact", side_effect=fake_verify_artifact
-    ), patch.object(
-        cli.runner, "combine_wave", return_value=(True, "ok", "")
-    ), patch.object(
-        cli.runner, "write_remote_provenance", return_value="/exp/results/_provenance.json"
-    ), patch.object(cli, "_emit"):
+    with (
+        patch.object(cli.runner, "verify_per_task_outputs", side_effect=fake_verify_outputs),
+        patch.object(cli.runner, "verify_combiner_artifact", side_effect=fake_verify_artifact),
+        patch.object(cli.runner, "combine_wave", return_value=(True, "ok", "")),
+        patch.object(
+            cli.runner, "write_remote_provenance", return_value="/exp/results/_provenance.json"
+        ),
+        patch.object(cli, "_emit"),
+    ):
         rc = cli.cmd_aggregate(args)
 
-    assert rc == 0, "hpc.yaml-defaulted aggregate should succeed"
+    assert rc == 0, "sidecar-defaulted aggregate should succeed"
     assert seen_template == ["results/metrics.{task_id}.json"]
     assert seen_expect == ["results/metrics.json"]
 
 
-def test_aggregate_writes_sidecar_when_expect_output_set(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_aggregate_writes_sidecar_when_expect_output_set(tmp_path: Path, monkeypatch) -> None:
     """When --expect-output is set, the envelope reports the sidecar path."""
     import argparse
     from unittest.mock import patch
@@ -858,15 +928,16 @@ def test_aggregate_writes_sidecar_when_expect_output_set(
         expect_output="results/metrics.json",
     )
     captured: list[dict] = []
-    with patch.object(
-        cli.runner, "combine_wave", return_value=(True, "ok", "")
-    ), patch.object(
-        cli.runner, "verify_combiner_artifact", return_value=(True, "ok")
-    ), patch.object(
-        cli.runner,
-        "write_remote_provenance",
-        return_value="/exp/results/_provenance.json",
-    ), patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)):
+    with (
+        patch.object(cli.runner, "combine_wave", return_value=(True, "ok", "")),
+        patch.object(cli.runner, "verify_combiner_artifact", return_value=(True, "ok")),
+        patch.object(
+            cli.runner,
+            "write_remote_provenance",
+            return_value="/exp/results/_provenance.json",
+        ),
+        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+    ):
         rc = cli.cmd_aggregate(args)
 
     assert rc == 0
@@ -890,8 +961,10 @@ def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
     submit_spec.write_text(json.dumps(SUBMIT_SPEC))
     rc, out, _ = _run_cli(
         "submit",
-        "--experiment-dir", str(tmp_path),
-        "--spec", str(submit_spec),
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(submit_spec),
         "--dry-run",
         env=env,
     )
@@ -900,8 +973,10 @@ def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
     # Real submit is journal-only, no SSH — must succeed without agent.
     rc, out, _ = _run_cli(
         "submit",
-        "--experiment-dir", str(tmp_path),
-        "--spec", str(submit_spec),
+        "--experiment-dir",
+        str(tmp_path),
+        "--spec",
+        str(submit_spec),
         env=env,
     )
     assert rc == 0, _parse_envelope(out)
@@ -918,6 +993,7 @@ class TestSubmitFromMeta:
     @staticmethod
     def _write_spec(tmp_path: Path, **overrides: object) -> Path:
         import json
+
         spec = {
             "cluster": "hoffman2",
             "ssh_target": "user@host",
@@ -934,6 +1010,7 @@ class TestSubmitFromMeta:
     @staticmethod
     def _write_meta(experiment_dir: Path, experiment_id: str | None) -> None:
         import json
+
         payload: dict = {"seed": 42, "purpose": "test"}
         if experiment_id is not None:
             payload["experiment_id"] = experiment_id
@@ -947,8 +1024,10 @@ class TestSubmitFromMeta:
         self._write_meta(tmp_path, experiment_id="run-001-foo")
         rc, out, _ = _run_cli(
             "submit",
-            "--experiment-dir", str(tmp_path),
-            "--spec", str(spec),
+            "--experiment-dir",
+            str(tmp_path),
+            "--spec",
+            str(spec),
             "--from-meta",
             env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
         )
@@ -958,6 +1037,7 @@ class TestSubmitFromMeta:
         # run_id is now spec-supplied directly; --from-meta only fills
         # the profile + job_name fields.  Verify by reading the journal.
         from slash_commands import session
+
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
@@ -971,14 +1051,17 @@ class TestSubmitFromMeta:
         self._write_meta(tmp_path, experiment_id="other")
         rc, out, _ = _run_cli(
             "submit",
-            "--experiment-dir", str(tmp_path),
-            "--spec", str(spec),
+            "--experiment-dir",
+            str(tmp_path),
+            "--spec",
+            str(spec),
             "--from-meta",
             env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
         )
         assert rc == 0, out
         env = _parse_envelope(out)
         from slash_commands import session
+
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
@@ -992,14 +1075,17 @@ class TestSubmitFromMeta:
         # No meta.json on disk.
         rc, out, _ = _run_cli(
             "submit",
-            "--experiment-dir", str(tmp_path),
-            "--spec", str(spec),
+            "--experiment-dir",
+            str(tmp_path),
+            "--spec",
+            str(spec),
             "--from-meta",
             env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
         )
         assert rc == 0, out
         env = _parse_envelope(out)
         from slash_commands import session
+
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
@@ -1012,8 +1098,10 @@ class TestSubmitFromMeta:
         self._write_meta(tmp_path, experiment_id=None)  # meta lacks experiment_id
         rc, out, _ = _run_cli(
             "submit",
-            "--experiment-dir", str(tmp_path),
-            "--spec", str(spec),
+            "--experiment-dir",
+            str(tmp_path),
+            "--spec",
+            str(spec),
             "--from-meta",
             env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
         )
@@ -1031,8 +1119,10 @@ class TestSubmitFromMeta:
         # Flag NOT set: existing behavior (incomplete spec → spec_invalid).
         rc, out, _ = _run_cli(
             "submit",
-            "--experiment-dir", str(tmp_path),
-            "--spec", str(spec),
+            "--experiment-dir",
+            str(tmp_path),
+            "--spec",
+            str(spec),
             env={**__import__("os").environ, "HPC_JOURNAL_DIR": str(tmp_path / "journal")},
         )
         assert rc == 1, out
