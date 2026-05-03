@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/aggregate_flow.output.json",
+  "title": "aggregate-flow output data",
+  "description": "Shape of the `data` field on a successful `aggregate-flow` envelope.",
+  "type": "object",
+  "required": ["run_id", "combined_waves", "failed_waves", "combiner_dir_local", "aggregated_metrics", "waves_combined_this_call"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id":               { "type": "string" },
+    "combined_waves":       { "type": "array", "items": { "type": "integer" } },
+    "failed_waves":         { "type": "array", "items": { "type": "integer" } },
+    "waves_combined_this_call": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Waves that combine-flow combined during this invocation (vs already-combined entering the call). Useful for caller logging."
+    },
+    "combiner_dir_local":   {
+      "type": "string",
+      "description": "Local path where the cluster's `_combiner/` directory was rsync'd."
+    },
+    "aggregated_metrics":   {
+      "type": "object",
+      "description": "Output of reduce_partials over the pulled combiner_dir_local. Mapping of run_id (or grid-point key) to aggregated metric dict. Empty when no waves combined successfully."
+    },
+    "summaries_dir_local":  {
+      "type": ["string", "null"],
+      "description": "Local path where per-task summary files were pulled. Null when pull_summaries=false."
+    },
+    "escalation_reason":    {
+      "type": ["string", "null"],
+      "description": "When non-null, indicates partial success — typically 'combiner_failed_max_retries:waves=...'. The caller may inspect failed_waves and decide whether the partial aggregation is acceptable. Null when every wave combined cleanly."
+    }
+  }
+}

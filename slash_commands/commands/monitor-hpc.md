@@ -1,21 +1,14 @@
 Monitor running HPC jobs via SSH and take corrective action.
 
-CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+Per-operation contracts live in `docs/primitives/` — this skill composes the [poll-run-status](../../docs/primitives/poll-run-status.md), [combine-wave](../../docs/primitives/combine-wave.md), [resubmit-failed](../../docs/primitives/resubmit-failed.md), [reconcile-journal](../../docs/primitives/reconcile-journal.md), [mark-run-terminal](../../docs/primitives/mark-run-terminal.md), and [record-segv-blacklist](../../docs/primitives/record-segv-blacklist.md) primitives behind a tick-driven adaptive monitoring loop. For envelope/exit-code shapes see `docs/cli-spec.md`.
 
 ## Setup
 
 1. **Resolve experiment dir**: `experiment_dir = cwd`.
 
-2. **Check the run journal first** (cold-session resume path):
+2. **Check the run journal first** (cold-session resume path): invoke the [list-in-flight](../../docs/primitives/list-in-flight.md) primitive (`session.find_in_flight_runs(Path.cwd())` is the Python entry point).
 
-   ```python
-   from pathlib import Path
-   from slash_commands import session, runner
-
-   in_flight = session.find_in_flight_runs(Path.cwd())
-   ```
-
-   If `$ARGUMENTS` is empty AND `in_flight` is non-empty, present a one-line
+   If `$ARGUMENTS` is empty AND in-flight is non-empty, present a one-line
    resume offer per candidate (most recent first):
 
    > "Found in-flight run: {profile} on {cluster}, jobs {job_ids}, last
@@ -49,14 +42,7 @@ CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
    executor, result_dir_template, and wave_map; `.hpc/tasks.py` carries
    the per-task kwargs.
 
-   Then call `runner.reconcile(Path.cwd(), run_id, scheduler=<scheduler>)`
-   BEFORE Step 0.5. Reconcile re-derives ground truth from the cluster
-   (fresh status report, canonical `combined_waves` from `_combiner/wave_*.json`,
-   alive job-ID check) and writes it back to the journal in three parallel
-   SSH calls. If `reconcile` flips status to `'abandoned'` (zero recorded
-   job_ids known to the scheduler), prompt the user: "Recorded jobs no longer
-   exist. Mark abandoned, or start fresh?" — never silently mutate scheduler
-   state.
+   Then invoke the [reconcile-journal](../../docs/primitives/reconcile-journal.md) primitive BEFORE Step 0.5 — re-derives ground truth from the cluster and writes it back. If the primitive returns `lifecycle_state == "abandoned"` (zero recorded job_ids known to the scheduler), prompt the user: "Recorded jobs no longer exist. Mark abandoned, or start fresh?" — never silently mutate scheduler state.
 
    On `n`, fall through to step 3 below.
 
@@ -112,6 +98,33 @@ Run `python -m <executor_module> --help` (extract the module from the profile's 
 1. **Sanity-check before and after.** Run Step 0.5 pre-flight before scheduling the next tick; run Step 4a post-flight before aggregating in Step 4b. File counts lie and stale job IDs waste hours — never skip these gates.
 2. **Act autonomously on known failures.** For OOM, walltime, and node failures, immediately resubmit with appropriate resource overrides. Do NOT ask for permission. Only pause for code bugs or unrecognized errors.
 3. **Adaptive re-invocation, not streaming.** After each tick, schedule exactly one follow-up via `ScheduleWakeup` (one-shot) or have the user run `/loop <interval> /monitor-hpc <args>` (recurring). Pick the delay from Step 5's adaptive table. Do **not** arm a persistent `Monitor` subprocess — for hour-scale HPC queue waits it wastes the 5-min prompt cache and burns an idle process; for sub-minute waits there's nothing to react to anyway. State is recovered from the run journal at each tick.
+4. **Silent-by-default tick output.** Each tick writes a structured record to `.hpc/runs/<run_id>.monitor.jsonl` (the **tick log**, see next section) and produces **no console output** unless an action was taken (auto-resubmit), a terminal state was reached (`complete` / `failed` / `abandoned`), or the user must intervene (code bug, unknown failure, second-strike combiner failure). All status / rollup / pre-flight / post-flight observations go to the JSONL — they are never narrated to the conversation. Token cost adds up across hour-scale monitoring; the silent-by-default policy keeps it bounded. When the user comes back and asks "what happened" / "status" / "summarize", switch into **Summary mode** (Step 7) which reads the JSONL and produces a single digest.
+
+## Tick log
+
+Path: `.hpc/runs/<run_id>.monitor.jsonl` (newline-delimited JSON, one record per tick, append-only).
+
+Per-record schema (all fields required unless marked optional):
+
+```json
+{
+  "tick_id": "2026-05-02T20:50:12Z",
+  "run_id": "ml_xgboost-20260502-204000-a1b2c3d4",
+  "summary": {"complete": 47, "running": 3, "pending": 0, "failed": 0, "unknown": 0},
+  "diff_from_prev": {"newly_complete": [42, 43], "newly_failed": [], "newly_combined_waves": [4]},
+  "preflight": "ok",
+  "actions": [
+    {"kind": "resubmit", "task_ids": [42], "category": "system_oom", "overrides": {"mem": "8G"}, "new_job_ids": ["7591234.1"]}
+  ],
+  "lifecycle_state": "in_flight",
+  "next_tick_seconds": 270,
+  "console_emitted": false
+}
+```
+
+Append-only via small Python snippet (do NOT use `>>` from a shell — concurrent ticks would interleave bytes; the per-run sidecar lock in `runner` already serializes monitor invocations on the same run_id). Every step that today says "report to user" or "format ... into the user-facing table" instead writes its observations into the next tick record and emits nothing to the console.
+
+The first tick on a fresh run creates the file; subsequent ticks read the **last record** (the previous tick's snapshot) for the diff computation in Step 1, then append their own. There is no compaction, no rotation — at typical 5-minute monitoring cadences a 24-hour run produces ~290 lines (~80KB), well below any reasonable limit.
 
 ## Arguments
 
@@ -170,9 +183,9 @@ live CPU-hour / GPU-hour totals from `resource_usage`.
 
 ## Step 0.5: Pre-flight Sanity Checks
 
-Run **once** per `/monitor-hpc` invocation, immediately after Step 0 and **before** Step 1. If any check fails, report the specific failure and stop — do NOT proceed to Step 1 and do NOT schedule a follow-up tick in Step 5.
+Run **once** per `/monitor-hpc` invocation, immediately after Step 0 and **before** Step 1. If any check fails, write `preflight: "failed:<which check>"` into the tick record, **emit one console line** `pre-flight FAILED: <which check>`, and stop — do NOT proceed to Step 1 and do NOT schedule a follow-up tick in Step 5.
 
-Emit a single line `pre-flight: OK` on success, or `pre-flight FAILED: <which check>` on the first failure.
+On success, write `preflight: "ok"` into the tick record. **Emit nothing to console.**
 
 ### 0.5a — Job IDs are real
 
@@ -229,81 +242,45 @@ ssh $SSH_TARGET 'parent=$(dirname '"$RESULT_DIR"'); [ -d "$parent" ] && [ -w "$p
 
 Anything other than `OK` → abort.
 
-## Step 1: Check Status
+## Step 1: Poll + auto-combine via `monitor-flow`
 
-> **Anti-pattern (critical):** Do NOT use `ls logs/ | wc -l` or `find results/ -name '*.csv' | wc -l` as a success proxy. **Failed tasks produce logs and partial output too** — an `ImportError` still leaves an `.o*` file; a mid-run crash still leaves a `_wip_*` directory. Counting these as "progress" has led to hours of wasted cluster time discovering 100% failure rates after submission. Always either (a) invoke the status reporter below, or (b) `grep -clE 'Error|Traceback|ImportError' logs/*` and compute error-rate alongside any file count. **File existence is not success.**
+> **Anti-pattern (critical):** Do NOT use `ls logs/ | wc -l` or `find results/ -name '*.csv' | wc -l` as a success proxy. **Failed tasks produce logs and partial output too** — an `ImportError` still leaves an `.o*` file; a mid-run crash still leaves a `_wip_*` directory. Counting these as "progress" has led to hours of wasted cluster time discovering 100% failure rates after submission. The `monitor-flow` workflow atom invoked below uses the deterministic cluster-side status reporter; trust its envelope, not file counts.
 
-Run the deterministic status reporter on the cluster. It reads `.hpc/runs/<run_id>.json` and `.hpc/tasks.py`, computes each task's `result_dir` from the sidecar's `result_dir_template` + `tasks.resolve(i)`, queries the scheduler (sacct for SLURM, qstat for SGE) for in-flight tasks, and emits a single JSON blob:
+The slash command's tick body is **one `monitor-flow` invocation**. The atom does the poll (Step 1's old job), the wave combination (the old Step 1c), the tick log write (the old Step 6), and returns when terminal OR when its budget elapses. The slash command branches on the returned `lifecycle_state`.
 
 ```bash
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m hpc_mapreduce.reduce.status \
-    --run-id <run_id> \
-    --job-ids <comma_separated_job_ids> \
-    --job-name <profile_name> \
-    --log-dir logs \
-    --file-glob "<results.summary_pattern or *>"'
+hpc-mapreduce monitor-flow --spec .hpc/runs/<run_id>.monitor.spec.json --experiment-dir .
 ```
 
-The returned JSON has:
-- `summary`: `{complete, running, pending, failed, unknown}` counts across all tasks
-- `tasks`: per-task `{status, ...}` with 1-based task IDs
-- `rollup`: per-grid-point counts (grouped by the kwargs returned by `tasks.resolve(i)`), keyed by a stable `k=v` string
+Spec shape (matches `schemas/monitor_flow.input.json`):
 
-Format the `rollup` and `summary` into the user-facing table:
-
-```
-Grid point status:
-  ridge_h1_2020-01:   complete
-  ridge_h1_2020-07:   complete
-  ridge_h5_2020-01:   running
-  xgboost_h1_2020-01: failed
-
-Overall: 3/6 tasks complete, 2 running, 1 failed
+```json
+{
+  "run_id": "<run_id>",
+  "poll_interval_seconds": 60,
+  "wall_clock_budget_seconds": <adaptive — see Step 5 table>,
+  "auto_combine_waves": true,
+  "combiner_max_retries": 1,
+  "file_glob": "<results.summary_pattern or *>"
+}
 ```
 
-Do NOT re-count result files via `ls | wc -l`; the reporter already does this deterministically and the LLM's role here is presentation, not counting.
+Set `wall_clock_budget_seconds` to the adaptive delay from Step 5's table (60s–3600s). The atom polls at `poll_interval_seconds` until terminal or budget; each poll appends one record to `.hpc/runs/<run_id>.monitor.jsonl` (the same tick log that summary mode reads).
 
-Parse the `summary` to determine state:
+Branch on `data.lifecycle_state`:
 
-| Condition | State | Action |
-|-----------|-------|--------|
-| completed == total_tasks | `all_complete` | Go to Step 4a |
-| running > 0 or pending > 0 | `still_running` | Check for stalls (Step 1b), then Step 5 |
-| failed > 0 and running == 0 | `has_failures` | Go to Step 2 |
-| completed == 0 and running == 0 | `all_failed` | Go to Step 2 (triage carefully) |
+| `lifecycle_state` | Meaning | Action |
+|---|---|---|
+| `complete` | Every task reported complete; `mark_terminal(complete)` was called | Go to Step 4a (post-flight verification) |
+| `failed` | Failures with no work left; `escalation_reason` set | Go to Step 2 (diagnose) |
+| `abandoned` | Recorded jobs no longer on scheduler | Re-invoke `reconcile-journal`; surface to user |
+| `timeout` | Budget elapsed; cluster jobs still running | Go to Step 5 (schedule next tick) |
 
-### Step 1b: Detect Queue Stalls
+`data.failed_waves` non-empty (with any lifecycle) means at least one combiner hit `combiner_max_retries` — surface one console line `combine_wave: max retries on waves <list>, see .hpc/runs/<run_id>.monitor.jsonl` and continue.
 
-**Stall heuristic**: If ALL tasks have been pending for >15 minutes with zero running, or if the state is unchanged across 2 consecutive checks, treat as a stall. Go to Step 2 with category `queue_stall`.
+### Step 1b: Stall detection (advisory; not in the atom)
 
-### Step 1c: Run Combiners for Completed Waves
-
-If the run sidecar contains a `wave_map` field, run the on-cluster combiner for each newly-completed wave. This aggregates metrics on the cluster while later waves are still running (pipeline parallelism).
-
-1. Read `wave_map` from the sidecar to determine which task IDs belong to each wave
-2. Cross-reference with the Step 1 reporter's `tasks` dict: a wave is **complete** when every task ID in the wave has `status == "complete"` in the `tasks` dict (no separate re-count needed)
-3. Check `combined_waves` from the monitor state to skip waves already combined
-4. For each newly-complete wave not yet combined, invoke `runner.combine_wave`. The wrapper records `combined_waves`/`failed_waves` atomically — the slash command must NOT call `update_run_status` directly for these fields:
-   ```python
-   from pathlib import Path
-   from slash_commands import runner
-
-   ok, stdout, stderr = runner.combine_wave(
-       Path.cwd(), run_id,
-       wave=N,
-       ssh_target=SSH_TARGET,
-       remote_path=REMOTE_PATH,
-   )
-   ```
-5. On `ok=True`, the wrapper has already appended the wave to `combined_waves`. Report:
-   `"Combiner: wave <N> aggregated — <grid_point>: <key_metric>=<value>, ..."`
-6. On `ok=False`, the wrapper has already appended the wave to `failed_waves` with the stderr excerpt. **Never** mark a failed wave as combined.
-
-**Failure policy:**
-- 1st failure: retry automatically on the next monitoring tick via `runner.combine_wave(..., force=True)`.
-- 2nd failure: surface to the user with the stderr excerpt and stop retrying until the user intervenes.
-
-If the sidecar has no `wave_map` field, skip this step (backward compatibility with older submissions).
+If three consecutive `monitor-flow` ticks return `lifecycle_state: "timeout"` with the same `last_status` counts AND all tasks are pending/queued, that's a stall. Treat as Step 2 category `queue_stall`. (The atom doesn't classify stalls — that's judgment that lives in the slash command.)
 
 ## Step 2: Diagnose Failures
 
@@ -338,27 +315,7 @@ Classify the failure:
 
 ### Recording node SEGVs to the blacklist
 
-When a task ends with `NODE_FAIL` or signals SEGV (`exit -11`, `signal: Segmentation fault`, or sacct `ExitCode=139`), append to the per-cluster blacklist so future `/submit-hpc` runs steer around the node:
-
-```python
-from hpc_mapreduce.job.blacklist import record_segv
-from hpc_mapreduce.infra.inspect import inspect_cluster
-
-snap = inspect_cluster(cluster, use_cache=False)   # capture contention at SEGV time
-node_state = next((n for n in snap.nodes if n.name == failed_node), None)
-record_segv(
-    experiment_dir,                                # set at Step 0; same root used by sidecars
-    cluster=cluster,
-    node=failed_node,
-    run_id=run_id, job_id=job_id, task_id=failed_task_id,
-    exit_code=exit_code, signal=-11,
-    host_allocmem_pct=getattr(node_state, "alloc_mem_pct", None),
-    cpu_load_frac=getattr(node_state, "cpu_load_frac", None),
-    concurrent_jobs=getattr(node_state, "co_tenants", []) or [],
-)
-```
-
-The entry has a 7-day TTL by default; repeated SEGVs on the same node refresh it. The entry is read by the next `/submit-hpc` Phase 4c planner (see `slash_commands/commands/submit-hpc.md`) which always-excludes it. **Do not** clear blacklist entries automatically — the file is per-project and intentionally outlives any single run.
+When a task ends with `NODE_FAIL` or signals SEGV (`exit -11`, `signal: Segmentation fault`, or sacct `ExitCode=139`), invoke the [inspect-cluster](../../docs/primitives/inspect-cluster.md) primitive (with `no_cache=true` to capture contention at SEGV time) to get the failed node's `alloc_mem_pct`, `cpu_load_frac`, and `co_tenants`, then call the [record-segv-blacklist](../../docs/primitives/record-segv-blacklist.md) primitive with that context. The entry is read by the next `/submit-hpc` Step 4c planner which always-excludes the node.
 
 ## Step 3: Resubmit Failed Tasks
 
@@ -378,21 +335,9 @@ Build the resubmission command using the same dispatch mechanism. The task IDs i
 
 **Update your job-ids list** for subsequent status checks.
 
-After the resubmission backend call returns the new job IDs, record the retry attempt in the journal:
+After the resubmission backend call returns the new job IDs, invoke the [resubmit-failed](../../docs/primitives/resubmit-failed.md) primitive with the failed task IDs, the failure category from `classify_failure`, the resource overrides applied, and the new job IDs. The primitive increments `retries[tid].attempts` and records category + overrides; a future cold session sees the retry count and won't blow past `max_retries`.
 
-```python
-from slash_commands import runner
-
-runner.resubmit_failed(
-    Path.cwd(), run_id,
-    failed_task_ids=<list of task ids being resubmitted>,
-    category=<failure category from classify_failure, e.g. "system_oom">,
-    overrides=<resource overrides applied>,
-    new_job_ids=<list of new job ids returned by the backend>,
-)
-```
-
-The wrapper increments `retries[tid].attempts` and records category + overrides. A future cold session sees the retry count and won't blow past `max_retries`.
+**Console output for an auto-resubmit: exactly one line.** Example: `[monitor] resubmit task_ids=[42,51] category=system_oom overrides={mem:8G} new_jobs=[7591234.1]`. Set `console_emitted: true` in the tick record so summary mode knows the user already saw something for this tick. For escalations (code bug, unknown error, max_retries exceeded), emit a multi-line report with the traceback excerpt and explicit "needs your input" — these are the only times tick-time console output is allowed to be more than one line.
 
 ## Step 4a: Post-flight Verification
 
@@ -402,17 +347,7 @@ This guards against the "file count lies" failure mode (see anti-pattern at Step
 
 ### 4a.1 — Non-empty rows
 
-Re-run the status reporter with `--min-rows N` (the existing CLI flag — see `docs/cli-contract.md`) where `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count).
-
-```bash
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && python -m hpc_mapreduce.reduce.status \
-    --run-id <run_id> \
-    --job-ids '"$JOB_IDS"' --job-name '"$NAME"' --log-dir logs \
-    --file-glob "'"$SUMMARY_PATTERN"'" \
-    --min-rows '"$MIN_ROWS"
-```
-
-Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
+Re-invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive's underlying cluster-side reporter with `--min-rows N` (a flag of the on-cluster `python -m hpc_mapreduce.reduce.status` script that the primitive wraps; see `docs/cli-contract.md` for the cluster-side script's args). `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count). Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
 
 ### 4a.2 — Spot-check 3 tasks
 
@@ -534,18 +469,51 @@ The follow-up `/monitor-hpc` invocation re-runs Step 1 and **diffs against the l
 
 Either way the slash command is responsible for its own state — never assume a long-lived in-memory variable persists across ticks.
 
-## Step 6: Report
+## Step 6: Tick record (handled by `monitor-flow`)
 
-Always end with a concise summary:
-- Grid point completion breakdown
-- Tasks: X/Y complete, Z running, W failed
-- Actions taken this iteration (if any)
-- Next: waiting / needs attention / done
+`monitor-flow` writes one JSONL record per internal poll to `.hpc/runs/<run_id>.monitor.jsonl` — the slash command no longer writes the tick log directly. After `monitor-flow` returns, the slash command may APPEND additional `actions` entries to the most recent record IF it took action this tick (e.g. an auto-resubmit from Step 3) by re-opening the JSONL and rewriting the last line. Otherwise the atom's record is the truth and the slash command writes nothing.
+
+**Console output rule (load-bearing — this is what makes /monitor-hpc cheap to run on long jobs):**
+
+| Condition | Console |
+|---|---|
+| `monitor-flow` returned `timeout`, no diff vs prior tick, no slash-command actions | **silent**; schedule next tick |
+| `monitor-flow` returned `timeout`, diff present (waves combined, etc.) | **silent**; schedule next tick |
+| Auto-resubmit fired (Step 3) | one line: `[monitor] resubmit ...` |
+| Combiner 2nd failure (`failed_waves` non-empty after this tick) | one line + `STOP: needs user` |
+| Code bug / unknown failure / max_retries exceeded | full report, multi-line |
+| `monitor-flow` returned `complete` / `failed` / `abandoned` | one line: `[monitor] <state> run_id=<id> — /monitor-hpc <run_id> summary for digest` |
+| Pre-flight failed (Step 0.5) | one line: `pre-flight FAILED: <which>` |
+
+**The default is silent.** Token cost is the reason — at 5-minute monitoring on a 24-hour run, a single chatty tick × 290 ticks adds up fast.
+
+## Step 7: Summary mode
+
+Triggered by either:
+
+- `$ARGUMENTS` ends in the literal token `summary` (e.g. `/monitor-hpc summary`, `/monitor-hpc <run_id> summary`), OR
+- The user's natural-language message asks "what happened" / "how's it going" / "status" / "summarize" while there is at least one in-flight run with a tick log on disk.
+
+In this mode, do **not** run Step 0.5 / Step 1 / SSH polling. Do NOT contact the cluster. Read `.hpc/runs/<run_id>.monitor.jsonl` and emit a digest:
+
+```
+Run <run_id>  ({lifecycle_state}, {age_since_first_tick})
+  Ticks: {N} over {wall_clock_observed}
+  Last summary: {complete}/{total} complete, {running} running, {pending} pending, {failed} failed
+  Throughput: {complete_delta_per_minute_recent} complete/min (last 30 min)
+  Actions taken: {grouped: e.g. "3 auto-resubmits (system_oom×2, walltime×1), 2 waves combined"}
+  Recent escalations: {if any console_emitted ticks with multi-line output, surface their tick_ids}
+  Next tick: in {next_tick_seconds}s (or "terminal — no further ticks")
+```
+
+If the run is terminal, also include the final post-flight outcome (read from the last tick record's `actions`).
+
+Summary mode is the **only** time `/monitor-hpc` is allowed to be verbose. Don't repeat it across consecutive turns unless the user asks again.
 
 ## Context Management
 
-1. **Each tick is independent.** One `/monitor-hpc` invocation = one tick (Setup → preflight → status → react → schedule next → exit). State persists in the run journal, not in the conversation.
+1. **Each tick is independent.** One `/monitor-hpc` invocation = one tick (Setup → preflight → status → react → write tick record → schedule next → exit). State persists in the run journal + the tick log, not in the conversation.
 2. **One status query per tick.** Pre-flight + Step 1 reporter run once. The agent does NOT loop internally; the next tick comes from `ScheduleWakeup` or `/loop`.
-3. **Report deltas only.** Compare Step 1's `summary`/`tasks` against the prior tick's journal snapshot. Surface newly-complete task IDs, new failures, newly-complete waves, terminal flips. If state is fully unchanged, a one-line "no change since {age}; rescheduling +{delay}" is enough.
+3. **Diffs go in the tick record, not the console.** Compare Step 1's `summary`/`tasks` against the prior tick's record (last line of the JSONL). Populate `diff_from_prev`. If state is fully unchanged the diff is empty arrays — that's fine; the JSONL grows but the console stays silent.
 4. **Minimize tool output.** Use `tail -20` for logs. Prefer compact status commands over verbose output.
 5. **If the session ends:** in-session `ScheduleWakeup`s die with the session. Re-run `/monitor-hpc` (no args) — the run journal at `~/.claude/hpc/<repo_hash>/` will surface the in-flight run with last-known status; on Y, `runner.reconcile` re-derives ground truth before Step 0.5. For overnight or multi-hour waits, prefer `/loop <interval> /monitor-hpc <args>` so the cadence survives session boundaries.

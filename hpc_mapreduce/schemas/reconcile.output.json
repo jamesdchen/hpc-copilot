@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/reconcile.output.json",
+  "title": "reconcile output data",
+  "description": "Shape of the `data` field on a successful `reconcile --run-id <id> --scheduler {sge|slurm}` envelope.",
+  "type": "object",
+  "required": ["run_id", "lifecycle_state", "combined_waves", "failed_waves", "last_status"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id":          { "type": "string" },
+    "lifecycle_state": {
+      "type": "string",
+      "enum": ["in_flight", "complete", "failed", "abandoned"],
+      "description": "Reconcile flips to 'abandoned' when recorded job_ids are non-empty but none are alive on the scheduler."
+    },
+    "combined_waves":  { "type": "array", "items": { "type": "integer" } },
+    "failed_waves":    { "type": "array", "items": { "type": "integer" } },
+    "last_status":     {
+      "type": "object",
+      "description": "Refreshed snapshot from the cluster-side reporter. Same shape as poll-run-status's last_status."
+    }
+  }
+}

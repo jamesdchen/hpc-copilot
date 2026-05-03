@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/build_executor.output.json",
+  "title": "build-executor output data",
+  "description": "Shape of the `data` field on a successful `build-executor --name <stem>` envelope.",
+  "type": "object",
+  "required": ["path", "type", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "path":   { "type": "string", "description": "Absolute path of the new file." },
+    "type":   { "type": "string", "enum": ["plain"] },
+    "source": { "type": "string", "description": "Absolute path of the starter template the new file was copied from." }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/plan_submit.output.json",
+  "title": "plan-submit (score-submit-plan) output data",
+  "description": "Shape of the `data` field on a successful `plan-submit --profile <p> --cluster <c>` envelope. The slash command applies the cost rubric (see docs/primitives/score-submit-plan.md) to the candidates list and picks one constraint.",
+  "type": "object",
+  "required": ["profile", "cluster", "now_iso", "scheduler_kind", "blacklist_active_count", "needs_canary", "candidates"],
+  "additionalProperties": false,
+  "properties": {
+    "profile":                 { "type": "string" },
+    "cluster":                 { "type": "string" },
+    "now_iso":                 { "type": "string" },
+    "scheduler_kind":          { "type": "string", "enum": ["sge", "slurm"] },
+    "blacklist_active_count":  { "type": "integer", "minimum": 0 },
+    "needs_canary":            { "type": "boolean" },
+    "canary_plan":             {
+      "type": ["object", "null"],
+      "description": "When needs_canary=true, a 1-task probe spec (constraint, walltime). Null when scoring is possible."
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["constraint"],
+        "additionalProperties": true,
+        "properties": {
+          "constraint":                  { "type": "string" },
+          "pool_size":                   { "type": "integer", "minimum": 0 },
+          "healthy_nodes":               { "type": "array", "items": { "type": "string" } },
+          "stressed_nodes":              { "type": "array", "items": { "type": "string" } },
+          "blacklisted_nodes":           { "type": "array", "items": { "type": "string" } },
+          "eta_sec_via_test_only":       { "type": ["number", "null"] },
+          "runtime_prior_quantiles_sec": {
+            "type": "object",
+            "description": "Per-gpu_type quantiles from runtime-prior; empty when this candidate has no priors.",
+            "additionalProperties": true
+          },
+          "p_fail_30d":                  {
+            "type": "object",
+            "description": "Per-gpu_type failure probability over the last 30 days.",
+            "additionalProperties": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    }
+  }
+}

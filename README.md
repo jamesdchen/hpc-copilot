@@ -138,7 +138,7 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 | `/submit-hpc` | Discover executors (scaffolds inline if none found), build grid conversationally, write `.hpc/tasks.py` with FLAGS dict + `.hpc/cli.py` dispatcher, sync code, submit array jobs |
 | `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate-hpc` | Validate completeness, run aggregation on cluster, download summaries |
-| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, run an asyncio in-flight queue. See [`docs/campaign.md`](docs/campaign.md). |
+| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. See [`docs/campaign.md`](docs/campaign.md). |
 ## Configuration
 
 ### `clusters.yaml` (required)

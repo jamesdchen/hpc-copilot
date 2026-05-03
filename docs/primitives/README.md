@@ -1,0 +1,125 @@
+# Primitives
+
+A **primitive** is the smallest agent-and-human-shareable operation: one verb, one input contract, one output contract, one set of error codes, one declared side-effect class. Both `slash_commands/commands/*.md` (human-facing, interactive) and `skills/hpc-*/SKILL.md` (agent-facing, terse) **compose** from this catalog instead of describing the same operations from scratch.
+
+Why this layer exists:
+
+- **Single source of truth.** "How to submit a spec" lives in exactly one file. Today the same flow is described in `slash_commands/commands/submit-hpc.md` (770 lines, interactive) and `skills/hpc-submit/SKILL.md` (88 lines, terse) — and the two drift independently.
+- **Composability.** A skill or slash command body becomes a short pipeline of primitive calls plus the surface-specific glue (interactive prompts for slash commands; defaults + envelope-parsing for skills). When a primitive's contract changes, only the primitive doc moves; consumers re-validate against the new contract.
+- **Discoverability.** One catalog the agent can scan to find "what produces a sidecar" / "what's idempotent" / "what's safe to retry" without grepping prose.
+
+## Primitive contract (frontmatter)
+
+Every primitive file ships YAML frontmatter with **behavioral metadata only**. Field-level contracts (input/output shapes) live in JSON Schemas under `hpc_mapreduce/schemas/`; the primitive's `backed_by` field points at the schema-validated CLI/Python entry point.
+
+```yaml
+---
+name: submit-spec                         # kebab-case, unique
+verb: submit                              # one of: query, validate, mutate, submit, scaffold, workflow
+side_effects:                             # what changes outside the agent's view
+  - writes: .hpc/runs/<run_id>.json
+  - writes: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
+idempotent: true                          # safe to replay with same inputs?
+idempotency_key: spec.run_id              # what makes a replay equivalent
+error_codes:                              # what callers should handle
+  - code: spec_invalid
+    category: user
+    retry_safe: false
+  - code: ssh_unreachable
+    category: network
+    retry_safe: true
+backed_by:                                # implementation + field-level contract source
+  cli: hpc-mapreduce submit --spec <path>
+  python: slash_commands.runner.submit_and_record
+---
+```
+
+The body covers Purpose (one paragraph), Compose with (predecessor/successor primitives), and Notes (caveats, gotchas, idempotency reasoning). The body NEVER describes interactive flows — that lives in the slash command. It NEVER restates field-level contracts — those live in the JSON schema.
+
+**Why no `inputs:` / `outputs:` blocks?** Earlier iterations of this catalog included field-level contracts in frontmatter, then a validator script cross-checked them against schemas. Both layers are now obsolete: schemas are the single source of truth for field-level shapes, frontmatter is for behavioral metadata, and the validator was deleted (nothing to validate against). Keeping both was just maintaining duplicate contracts.
+
+## Catalog
+
+Auto-generated from frontmatter, grouped by `verb` — run `uv run python scripts/build_primitive_index.py` after adding or editing a primitive. CI gates on `--check` so the table can never drift from the source.
+
+The verb partitions primitives into bands the reader can scan independently:
+
+- **`query`** — read-only, no side effects, freely composable
+- **`validate`** — read + binary health check (preflight)
+- **`mutate`** — write to journal / sidecar / blacklist; need flock + idempotency-key consideration
+- **`submit`** — record a new submission (sidecar write + journal entry)
+- **`scaffold`** — create new files (e.g. starter executor templates)
+- **`workflow`** — end-to-end pipelines composing other primitives; same envelope shape so they're indistinguishable to higher-level callers (the Composite property)
+
+<!-- BEGIN PRIMITIVE CATALOG -->
+### `query` primitives
+
+| Primitive | Idempotent | Side effects | CLI |
+|---|---|---|---|
+| [campaign-list](campaign-list.md) | yes | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` |
+| [campaign-status](campaign-status.md) | yes | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` |
+| [capabilities](capabilities.md) | yes | _none_ | `hpc-mapreduce capabilities` |
+| [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-mapreduce clusters describe <name>` |
+| [clusters-list](clusters-list.md) | yes | _none_ | `hpc-mapreduce clusters list` |
+| [discover-executors](discover-executors.md) | yes | _none_ | `hpc-mapreduce discover --experiment-dir <path>` |
+| [inspect-cluster](inspect-cluster.md) | yes | ssh: `cluster`; cache: `in-process` | `hpc-mapreduce inspect-cluster --cluster <name> [...]` |
+| [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` |
+| [poll-run-status](poll-run-status.md) | yes | writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.last_status.json`; ssh: `cluster` | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` |
+| [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
+| [score-submit-plan](score-submit-plan.md) | yes | ssh: `cluster` | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` |
+
+### `validate` primitives
+
+| Primitive | Idempotent | Side effects | CLI |
+|---|---|---|---|
+| [check-preflight](check-preflight.md) | yes | _none_ | `hpc-mapreduce preflight [--cluster <name>]` |
+
+### `mutate` primitives
+
+| Primitive | Idempotent | Side effects | CLI |
+|---|---|---|---|
+| [combine-wave](combine-wave.md) | yes | ssh: `cluster`; runs: `cluster-side`; writes: `<output_dir>/_combiner/wave_<N>.json`; mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
+| [mark-run-terminal](mark-run-terminal.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; mutates: `<experiment_dir>/.hpc/runs/<run_id>.json` | `(none — Python-only primitive)` |
+| [reconcile-journal](reconcile-journal.md) | yes | ssh: `3`; mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
+| [record-segv-blacklist](record-segv-blacklist.md) | yes | mutates: `<experiment_dir>/.hpc/blacklist/<cluster>.json` | `(none — Python-only primitive)` |
+| [resubmit-failed](resubmit-failed.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; mutates: `<experiment_dir>/.hpc/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
+
+### `submit` primitives
+
+| Primitive | Idempotent | Side effects | CLI |
+|---|---|---|---|
+| [submit-spec](submit-spec.md) | yes | writes: `<experiment_dir>/.hpc/runs/<run_id>.json`; writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; rsyncs: `<experiment_dir>`; submits: `scheduler` | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
+
+### `scaffold` primitives
+
+| Primitive | Idempotent | Side effects | CLI |
+|---|---|---|---|
+| [build-executor](build-executor.md) | no | writes: `<output_dir>/<name>.py` | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
+
+### `workflow` primitives
+
+| Primitive | Idempotent | Side effects | CLI |
+|---|---|---|---|
+| [aggregate-flow](aggregate-flow.md) | yes | mutates: `combined_waves`; writes: `<output_dir>/_combiner/`; writes: `<output_dir>/summaries/` | `hpc-mapreduce aggregate-flow --spec <path>` |
+| [monitor-flow](monitor-flow.md) | yes | mutates: `per-run`; writes: `<experiment_dir>/.hpc/runs/<run_id>.monitor.jsonl`; mutates: `combined_waves`; mutates: `lifecycle_state` | `hpc-mapreduce monitor-flow --spec <path>` |
+| [submit-flow](submit-flow.md) | yes | rsyncs: `<experiment_dir>`; submits: `scheduler`; writes: `per-run` | `hpc-mapreduce submit-flow --spec <path>` |
+<!-- END PRIMITIVE CATALOG -->
+
+## How slash commands and skills consume primitives
+
+Both surfaces compose from the same catalog but with different concerns layered on top:
+
+**Slash command body** (human-facing): pre-amble that asks the user about choices → invoke primitive → present results in human-readable form → ask whether to continue → next primitive.
+
+**Skill body** (agent-facing): preconditions check → invoke primitive → parse the JSON envelope → branch on `error_code` → next primitive. No interactive prompts. The body is mostly a pipeline declaration.
+
+When the same operation is needed from both surfaces, both files reference the primitive — they don't restate the contract. Drift is bounded to surface-specific concerns (interactive prompts for slash commands; envelope-parsing recipes for skills).
+
+## Adding a primitive
+
+1. Identify a single operation that maps cleanly to one CLI subcommand or one Python function in `slash_commands.runner` / `hpc_mapreduce`. If it doesn't, the operation is too large; split it.
+2. Write `docs/primitives/<name>.md` with the frontmatter contract and a short body.
+3. Update consumers (slash commands, skills) to point at the primitive instead of restating its contract.
+4. Run `uv run python scripts/build_primitive_index.py` — the catalog table above regenerates from frontmatter; no hand-editing.
+
+The bar is "would this contract be useful to a caller that doesn't care how it's implemented?" If yes, it's a primitive. If the operation is just "the agent does some reasoning and writes a file", that's not a primitive — that's surface-specific glue.

@@ -204,11 +204,16 @@ def _mars_skill_paths() -> dict[str, str]:
 
 
 def cmd_capabilities(_args: argparse.Namespace) -> int:
+    from hpc_mapreduce.operations import operations_catalog
+
     _ok(
         {
             "version": hpc_mapreduce.__version__,
             "subcommands": [
                 "submit",
+                "submit-flow",
+                "monitor-flow",
+                "aggregate-flow",
                 "status",
                 "aggregate",
                 "reconcile",
@@ -236,6 +241,7 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
                 "HPC_JOURNAL_DIR",
                 "HPC_CLUSTERS_CONFIG",
             ],
+            "operations": operations_catalog(),
         },
         idempotent=True,
     )
@@ -649,6 +655,149 @@ def cmd_submit(args: argparse.Namespace) -> int:
         },
         idempotent=True,  # honest now that submit_and_record dedups
     )
+    return EXIT_OK
+
+
+# ─── subcommand: submit-flow ───────────────────────────────────────────────
+
+
+def cmd_submit_flow(args: argparse.Namespace) -> int:
+    """Workflow atom — pre-flight + rsync + deploy + qsub + record in one shot.
+
+    See ``hpc_mapreduce/job/submit_flow.py`` for the pipeline contract
+    and ``schemas/submit_flow.{input,output}.json`` for the envelope
+    shapes. Idempotent on ``run_id`` via the same dedup mechanism as
+    ``submit``.
+    """
+    from hpc_mapreduce.job.submit_flow import submit_flow
+
+    spec = _load_spec(args.spec, schema_name=None)
+    _validate_against_schema(spec, "submit_flow")
+
+    if args.dry_run:
+        _ok(
+            {
+                "would_launch": int(spec["total_tasks"]),
+                "profile": spec["profile"],
+                "cluster": spec["cluster"],
+                "run_id": spec["run_id"],
+                "canary": bool(spec.get("canary", True)),
+                "dry_run": True,
+            },
+            idempotent=True,
+        )
+        return EXIT_OK
+
+    result = submit_flow(
+        experiment_dir=args.experiment_dir,
+        profile=spec["profile"],
+        cluster=spec["cluster"],
+        ssh_target=spec["ssh_target"],
+        remote_path=spec["remote_path"],
+        job_name=spec["job_name"],
+        run_id=spec["run_id"],
+        total_tasks=int(spec["total_tasks"]),
+        backend=spec["backend"],
+        script=spec["script"],
+        job_env=dict(spec["job_env"]),
+        pass_env_keys=spec.get("pass_env_keys"),
+        canary=bool(spec.get("canary", True)),
+        campaign_id=spec.get("campaign_id") or "",
+        runtime=spec.get("runtime"),
+        rsync_excludes=spec.get("rsync_excludes"),
+        skip_preflight=bool(spec.get("skip_preflight", False)),
+        slurm_account=spec.get("slurm_account"),
+        slurm_cluster=spec.get("slurm_cluster"),
+    )
+    _ok(result.to_envelope_data(), idempotent=True)
+    return EXIT_OK
+
+
+# ─── subcommand: monitor-flow ──────────────────────────────────────────────
+
+
+def cmd_monitor_flow(args: argparse.Namespace) -> int:
+    """Workflow atom — poll a run to terminal-or-budget; auto-combine waves.
+
+    See ``hpc_mapreduce/job/monitor_flow.py`` for the loop contract and
+    ``schemas/monitor_flow.{input,output}.json`` for the envelope shapes.
+    Internal poll loop runs to terminal lifecycle, wall-clock budget,
+    or escalation; emits one envelope at the end. Pairs with
+    ``submit-flow`` for the campaign composition pattern
+    ``submit-flow → monitor-flow → next iteration``.
+    """
+    from hpc_mapreduce.job.monitor_flow import monitor_flow
+
+    spec = _load_spec(args.spec, schema_name=None)
+    _validate_against_schema(spec, "monitor_flow")
+
+    if args.dry_run:
+        _ok(
+            {
+                "run_id": spec["run_id"],
+                "poll_interval_seconds": spec.get("poll_interval_seconds", 60),
+                "wall_clock_budget_seconds": spec.get("wall_clock_budget_seconds", 86400),
+                "auto_combine_waves": spec.get("auto_combine_waves", True),
+                "dry_run": True,
+            },
+            idempotent=True,
+        )
+        return EXIT_OK
+
+    result = monitor_flow(
+        experiment_dir=args.experiment_dir,
+        run_id=spec["run_id"],
+        poll_interval_seconds=float(spec.get("poll_interval_seconds", 60.0)),
+        wall_clock_budget_seconds=float(spec.get("wall_clock_budget_seconds", 86400.0)),
+        auto_combine_waves=bool(spec.get("auto_combine_waves", True)),
+        combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
+        file_glob=spec.get("file_glob", "*"),
+    )
+    _ok(result.to_envelope_data(), idempotent=True)
+    return EXIT_OK
+
+
+# ─── subcommand: aggregate-flow ────────────────────────────────────────────
+
+
+def cmd_aggregate_flow(args: argparse.Namespace) -> int:
+    """Workflow atom — ensure all waves combined, pull partials, reduce locally.
+
+    See ``hpc_mapreduce/job/aggregate_flow.py`` for the pipeline contract
+    and ``schemas/aggregate_flow.{input,output}.json`` for the envelope
+    shapes. Pairs with submit-flow + monitor-flow as the third workflow
+    atom — the campaign loop's per-iteration tail is
+    ``submit-flow → monitor-flow → aggregate-flow → next iter``.
+    """
+    from hpc_mapreduce.job.aggregate_flow import aggregate_flow
+
+    spec = _load_spec(args.spec, schema_name=None)
+    _validate_against_schema(spec, "aggregate_flow")
+
+    if args.dry_run:
+        _ok(
+            {
+                "run_id": spec["run_id"],
+                "ensure_all_combined": spec.get("ensure_all_combined", True),
+                "pull_summaries": spec.get("pull_summaries", False),
+                "output_dir": spec.get("output_dir"),
+                "dry_run": True,
+            },
+            idempotent=True,
+        )
+        return EXIT_OK
+
+    result = aggregate_flow(
+        experiment_dir=args.experiment_dir,
+        run_id=spec["run_id"],
+        output_dir=spec.get("output_dir"),
+        ensure_all_combined=bool(spec.get("ensure_all_combined", True)),
+        combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
+        pull_summaries=bool(spec.get("pull_summaries", False)),
+        summary_glob=spec.get("summary_glob"),
+        results_subdir=spec.get("results_subdir", "results"),
+    )
+    _ok(result.to_envelope_data(), idempotent=True)
     return EXIT_OK
 
 
@@ -1288,6 +1437,73 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_sub.set_defaults(func=cmd_submit)
+
+    # submit-flow
+    p_sf = sub.add_parser(
+        "submit-flow",
+        help=(
+            "Workflow atom: pre-flight + rsync + deploy + qsub + record in "
+            "one shot. Lets higher-level workflows (campaigns, sweeps) "
+            "compose the submit pipeline as a single CLI call instead of "
+            "agent-driving /submit-hpc. Idempotent on run_id."
+        ),
+    )
+    _add_experiment_dir(p_sf)
+    p_sf.add_argument(
+        "--spec", type=Path, required=True, help="JSON spec file (schemas/submit_flow.input.json)"
+    )
+    p_sf.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate the spec and report what would be launched; no SSH/rsync/qsub.",
+    )
+    p_sf.set_defaults(func=cmd_submit_flow)
+
+    # monitor-flow
+    p_mf = sub.add_parser(
+        "monitor-flow",
+        help=(
+            "Workflow atom: poll a run to terminal lifecycle (or wall-clock "
+            "budget); auto-combine waves as they finish; write the same "
+            ".monitor.jsonl tick log /monitor-hpc writes. Pairs with "
+            "submit-flow for the campaign loop composition. MVP does not "
+            "auto-resubmit failed tasks."
+        ),
+    )
+    _add_experiment_dir(p_mf)
+    p_mf.add_argument(
+        "--spec", type=Path, required=True, help="JSON spec file (schemas/monitor_flow.input.json)"
+    )
+    p_mf.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate the spec and report what would be polled; no SSH.",
+    )
+    p_mf.set_defaults(func=cmd_monitor_flow)
+
+    # aggregate-flow
+    p_af = sub.add_parser(
+        "aggregate-flow",
+        help=(
+            "Workflow atom: ensure all waves combined on the cluster, "
+            "rsync the _combiner/ partials locally, reduce_partials over "
+            "them, optionally pull per-task summaries. Third atom in the "
+            "submit-flow → monitor-flow → aggregate-flow campaign chain."
+        ),
+    )
+    _add_experiment_dir(p_af)
+    p_af.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="JSON spec file (schemas/aggregate_flow.input.json)",
+    )
+    p_af.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate the spec and report what would be aggregated; no SSH.",
+    )
+    p_af.set_defaults(func=cmd_aggregate_flow)
 
     # aggregate
     p_agg = sub.add_parser(

@@ -1,49 +1,37 @@
 ---
 name: hpc-status
-description: "Poll the status of an in-flight HPC run and return a one-shot snapshot."
+description: "Poll the status of an in-flight HPC run. Single snapshot via poll-run-status, or wait-until-terminal via monitor-flow."
 allowed-tools: Bash Read Write
 ---
 
-One-shot status poll for a `run_id` produced by `hpc-submit`. Returns lifecycle state, last status snapshot, and combined/failed wave lists. Does not loop — caller decides cadence.
+Agent-facing composition over two primitives that share the same observation surface but differ in scope:
+
+- **One-shot snapshot** → invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive. Returns the current `last_status` and `lifecycle_state`. Use when the agent wants a single check ("is it done yet?") and will decide cadence itself.
+- **Wait until terminal (or budget)** → invoke the [monitor-flow](../../docs/primitives/monitor-flow.md) workflow atom. Internal poll loop; auto-combines waves; returns when `lifecycle_state` reaches `complete`/`failed`/`abandoned` or `wall_clock_budget_seconds` elapses. Use when the agent wants to wait synchronously for a run to finish (the canonical campaign-loop case).
+
+Both write the same journal `last_status` and the same `.monitor.jsonl` tick log; they're interchangeable views of the same operation.
 
 ## Steps
 
-1. If `run_id` is unknown, list in-flight runs:
-   ```bash
-   hpc-mapreduce list-in-flight --experiment-dir <path>
-   ```
-   Pick the matching `data.runs[].run_id` (filter by `profile`, `cluster`, or `submitted_at`).
+1. **If `run_id` is unknown**, invoke [list-in-flight](../../docs/primitives/list-in-flight.md) first; pick the matching `data.runs[].run_id` (filter by `profile`, `cluster`, or `submitted_at`).
 
-2. Poll status:
-   ```bash
-   hpc-mapreduce status --run-id <rid> --experiment-dir <path>
-   ```
+2. **Pick the surface** based on the caller's need:
+   - Snapshot: `hpc-mapreduce status --run-id <id>`. Returns immediately.
+   - Wait-until-terminal: `hpc-mapreduce monitor-flow --spec foo.json` (with `run_id` + `wall_clock_budget_seconds`). Blocks until terminal/budget.
 
-3. Parse the envelope. On `ok: true`, read `data`:
-   - `lifecycle_state` — one of `in_flight`, `complete`, `failed`, `abandoned`. Drives the next action.
-   - `last_status` — most recent scheduler snapshot (per-task counts: `complete`, `running`, `pending`, `failed`).
-   - `combined_waves` — list of wave numbers already aggregated.
-   - `failed_waves` — list of wave numbers whose combiner failed.
+3. **Parse the envelope** per the chosen primitive's `outputs:` contract: both expose `lifecycle_state`, `last_status`, `combined_waves`, `failed_waves`. `monitor-flow` adds `ticks`, `elapsed_seconds`, `escalation_reason`.
 
-4. Decide next action:
-   - `lifecycle_state == "in_flight"` and `last_status.complete < total_tasks` — caller should wait and re-poll later.
-   - `lifecycle_state == "in_flight"` and a wave number appears in `last_status` as fully complete but not in `combined_waves` — call `hpc-aggregate` for that wave.
-   - `lifecycle_state == "complete"` — terminal; proceed to final aggregation if any waves remain uncombined.
-   - `lifecycle_state == "failed"` or `failed_waves` non-empty — surface to caller; consider `hpc-mapreduce resubmit` or `hpc-mapreduce reconcile`.
-   - `lifecycle_state == "abandoned"` — recorded jobs no longer exist on the scheduler. Run reconcile to confirm:
-     ```bash
-     hpc-mapreduce reconcile --run-id <rid> --scheduler {sge|slurm} --experiment-dir <path>
-     ```
+4. **Decide next action** (this is the agent-specific layer):
+   - `lifecycle_state == "complete"` — terminal; proceed to final aggregation via `hpc-aggregate`.
+   - `lifecycle_state == "failed"` — surface to caller; consider [resubmit-failed](../../docs/primitives/resubmit-failed.md) (if recoverable) or [reconcile-journal](../../docs/primitives/reconcile-journal.md).
+   - `lifecycle_state == "abandoned"` — recorded jobs no longer exist on the scheduler. Invoke [reconcile-journal](../../docs/primitives/reconcile-journal.md) to confirm.
+   - `lifecycle_state == "in_flight"` (poll-run-status only) — caller waits and re-polls later.
+   - `lifecycle_state == "timeout"` (monitor-flow only) — budget elapsed; cluster jobs continue; caller can re-invoke `monitor-flow` to keep watching.
 
-5. On error envelopes:
-   - `journal_corrupt` (internal) — `run_id` not in journal. Re-run `list-in-flight`; verify the caller passed the correct id.
-   - `ssh_unreachable` (network, retry_safe: true) — retry after preflight passes.
-   - `remote_command_failed` (cluster) — surface stderr; the reporter on the cluster failed.
+5. **On error envelopes**, branch by `error_code` per the chosen primitive's frontmatter table.
 
 ## Notes
 
 - **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
-- **One-shot only**: this skill returns a single snapshot. Do NOT loop status calls in tight cadence — sleep at least 60s between polls (300s for runs >30 min ETA). Schedulers and SSH multiplexers throttle aggressive polling.
-- **No cancel/abort**: claude-hpc has no kill command. Receiving `lifecycle_state == "in_flight"` for a bad experiment means the cluster jobs continue to walltime; the caller can stop monitoring but cannot terminate.
-- Idempotent on the journal write side — multiple status calls update `last_status` in place under a flock.
-- Exit codes: 0 ok, 2 cluster/network (retry per `retry_safe`), 3 internal (`journal_corrupt`).
+- **Polling cadence for `poll-run-status`**: do NOT loop in tight cadence — sleep at least 60s between polls (300s for runs >30 min ETA). Schedulers and SSH multiplexers throttle aggressive polling. If you want a loop, use `monitor-flow` instead — it adapts cadence internally and writes one tick log entry per poll.
+- **No cancel/abort**: claude-hpc has no kill primitive. Receiving `lifecycle_state == "in_flight"` for a bad experiment means the cluster jobs continue to walltime; the caller can stop monitoring but cannot terminate.
