@@ -1,6 +1,6 @@
 Help me aggregate, validate, and analyze experiment results using the project configuration.
 
-CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+Per-operation contracts live in `docs/primitives/` — this skill composes [combine-wave](../../docs/primitives/combine-wave.md) (per-wave aggregation) plus the surface-specific multi-wave orchestration, partial-pull, and final-aggregate flow. For envelope/exit-code shapes see `docs/cli-spec.md`.
 
 Aggregation runs on the cluster to avoid transferring many result files. Only summary files are downloaded locally.
 
@@ -60,36 +60,32 @@ $ARGUMENTS formats:
 1. **Profile + stage**: `<profile_name>` or `<profile_name>/<stage_name>`
 2. **Empty**: auto-discover which profiles/stages have completed results ready for aggregation
 
-## Step 0: Check for Combiner Partials (Fast Path)
+## Step 0: Run `aggregate-flow` (combiner partials path)
 
-If the `/monitor-hpc` command ran combiners during job execution, per-wave partial aggregates may already exist on the cluster in the `_combiner/` directory.
+The `/monitor-hpc` loop may have already combined some waves during execution; whatever's missing, the `aggregate-flow` workflow atom finishes. **One CLI call** does: ensure every wave is combined (via `combine-wave` for any missing) → rsync `_combiner/` partials locally → `reduce_partials` to produce aggregated metrics → optionally pull per-task summaries.
 
-Check for combiner output:
 ```bash
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/_combiner/wave_*.json 2>/dev/null | wc -l'
+hpc-mapreduce aggregate-flow --spec .hpc/runs/<run_id>.aggregate.spec.json --experiment-dir .
 ```
 
-Read `.hpc/runs/<run_id>.json` to determine how many waves were in the submission plan (from the sidecar's `wave_map` field).
+Spec shape (matches `schemas/aggregate_flow.input.json`):
 
-**If all waves have combiner output:**
-1. Pull only the combiner partials (small files):
-   ```bash
-   rsync -az $SSH_TARGET:$REMOTE_PATH/_combiner/ ./_combiner/
-   ```
-2. Use `reduce_partials("_combiner/")` to merge per-wave aggregates into final metrics
-3. Report results and skip to Step 6 (Interpret Results)
+```json
+{
+  "run_id": "<run_id>",
+  "ensure_all_combined": true,
+  "combiner_max_retries": 1,
+  "pull_summaries": true,
+  "summary_glob": "<results.summary_pattern>",
+  "results_subdir": "results"
+}
+```
 
-**If combiner output is missing or incomplete:**
-- Optionally run missing combiners on-demand:
-  ```bash
-  ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && HPC_WAVE=<N> HPC_RUN_ID=<run_id> python3 .hpc/_hpc_combiner.py --wave <N> --run-id <run_id>'
-  ```
-  Or, equivalently, from Python:
-  ```python
-  from hpc_mapreduce import run_combiner_checked
-  run_combiner_checked(host=..., user=..., remote_path=..., wave=N, run_id=run_id)
-  ```
-- Or fall through to the standard aggregation flow below
+Parse `data.aggregated_metrics` — that's the cross-wave reduced output. `data.combiner_dir_local` and `data.summaries_dir_local` are the local paths if downstream interpretation needs them.
+
+If `data.escalation_reason` is set (e.g. `combiner_failed_max_retries:waves=3,7`), surface to the user and decide whether the partial aggregation is acceptable. The atom proceeds with whatever waves DID combine; the caller decides whether the result is usable.
+
+**Skip to Step 4** if the profile defines an `aggregate_defaults.aggregate_cmd` (an arbitrary user-defined cluster-side command that the framework doesn't know about) — that's the only step `aggregate-flow` doesn't replace.
 
 ## Step 1: Identify What to Aggregate
 

@@ -1,6 +1,6 @@
-Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit-hpc` invocations that share a `campaign_id` tag; each iteration's `tasks.py` reads `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to learn what prior iterations produced and decide what to run next.
+Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit-hpc` invocations that share a `campaign_id` tag; each iteration's `tasks.py` reads `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to learn what prior iterations produced and decide what to run next. **The loop is you (the assistant) repeatedly invoking `/submit-hpc`** — not a custom Python driver. `/submit-hpc` already owns the rsync + qsub + sidecar pipeline; `/campaign-hpc` reuses it as-is, threading the `campaign_id` through.
 
-The framework is intentionally tiny here: there is no `Strategy` Protocol, no `Context` Protocol, no state file. The user's `tasks.py` does the strategy work using whatever Python library suits — `random`, `optuna`, `nevergrad`, `scikit-optimize`, walk-forward indexing, custom PBT — by import. The framework just maintains the in-flight queue (`hpc_mapreduce.campaign.run_campaign`), tags sidecars (`/submit-hpc --campaign-id`), and reports history (`/campaign-hpc status`).
+The framework is intentionally tiny here: there is no `Strategy` Protocol, no `Context` Protocol, no state file. The user's `tasks.py` does the strategy work using whatever Python library suits — `random`, `optuna`, `nevergrad`, `scikit-optimize`, walk-forward indexing, custom PBT — by import. The framework just tags sidecars (the `campaign_id` field threads through `/submit-hpc` into every per-run sidecar) and reports history (`/campaign-hpc status`).
 
 CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
 
@@ -55,55 +55,81 @@ Don't rewrite their `resolve(i)` body without permission — preserving their kw
 
 ## Step 3: Run the loop
 
-`/campaign-hpc` does not bake the asyncio loop into a CLI subcommand — instead, the user invokes it via Python from inside their experiment repo so they can wire any custom callbacks. Show this template (adapt to the user's submit setup):
+Two paths, depending on whether the agent should drive each iteration interactively or whether the loop should run programmatically:
+
+### Path A: Interactive iterations (`/submit-hpc` per iteration)
+
+When the user wants to be in the loop — review each iteration's plan, see results, decide whether to continue:
+
+1. **Submit**: invoke `/submit-hpc campaign_id=<slug>`. The slash command's interview + scaffold + smart-planner steps run; ultimately it invokes `submit-flow` (Step 7b–8 of `/submit-hpc`) tagged with `campaign_id`.
+2. **Monitor**: `/monitor-hpc <run_id>` until terminal.
+3. **Inspect**: `hpc-mapreduce campaign status --campaign-id <slug>` shows per-iteration reduced metrics + in-flight count.
+4. **Decide**: re-import `tasks.py`; if `tasks.total() > 0`, go to Step 1. Else done.
+
+### Path B: Programmatic iterations (compose `submit-flow` + `monitor-flow`)
+
+When the user wants the campaign to drive itself — no per-iteration interview, no agent in the per-iteration critical path. This is **true workflow composition**: the campaign loop chains two workflow atoms (`submit-flow` to launch, `monitor-flow` to wait for terminal) per iteration. Both atoms emit JSON envelopes; the loop parses one and feeds the next.
+
+Per iteration:
+
+1. **`hpc-mapreduce submit-flow --spec .hpc/campaigns/<slug>/iter-<N>.submit.json`** — pre-flight + rsync + deploy + qsub + record. Envelope's `data.run_id` and `data.job_ids` flow into the next step.
+2. **`hpc-mapreduce monitor-flow --spec .hpc/campaigns/<slug>/iter-<N>.monitor.json`** — internal poll loop until `lifecycle_state` is `complete` / `failed` / `abandoned` / `timeout`. Auto-combines waves as they finish.
+3. Strategy reads results — `tasks.py`'s `_PRIOR = prior(...)` picks up the new sidecar at module-load.
 
 ```python
-import asyncio
+import json, subprocess
+from pathlib import Path
 from hpc_mapreduce import load_tasks_module, tasks_path
-from hpc_mapreduce.campaign import run_campaign
-from hpc_mapreduce.reduce.history import prior
-from slash_commands import runner, session
 
-CAMPAIGN_ID = "<the slug from Step 1>"
-PROFILE = "<your profile name>"   # from a recent run sidecar
-CLUSTER = "<your cluster>"
-SSH_TARGET = "<user@host>"
-REMOTE_PATH = "/u/scratch/.../<exp>"
+def run_one(spec_path, *, verb):
+    """Invoke one workflow atom; return parsed envelope or raise."""
+    out = subprocess.run(
+        ["hpc-mapreduce", verb, "--spec", str(spec_path), "--experiment-dir", "."],
+        capture_output=True, text=True, check=False,
+    )
+    envelope = json.loads(out.stdout.strip().splitlines()[-1])
+    if not envelope["ok"]:
+        raise RuntimeError(f"{verb} failed: {envelope['error_code']}: {envelope.get('message')}")
+    return envelope["data"]
 
-# `submit_one` and `await_completion` wrap the same /submit-hpc and /monitor-hpc
-# pipelines you use today. Build them however your repo prefers — e.g.
-# subprocess.run(["hpc-mapreduce", "submit", ...]) or direct Python calls
-# into runner.submit_and_record + runner.record_status. The framework
-# just needs them to be async callables.
+n = 0
+while load_tasks_module(tasks_path(".")).total() > 0:
+    submit_spec = build_submit_spec(slug, n, base_submit_spec)        # caller helper
+    Path(f".hpc/campaigns/{slug}/iter-{n:04d}.submit.json").write_text(json.dumps(submit_spec))
+    submit_data = run_one(f".hpc/campaigns/{slug}/iter-{n:04d}.submit.json", verb="submit-flow")
+    if submit_data["deduped"]:
+        # Replay — original cluster jobs already running. Skip submit, monitor only.
+        pass
 
-async def submit_one() -> str:
-    # ... your per-iteration submit logic ...
-    # Must end by writing the per-run sidecar with campaign_id=CAMPAIGN_ID
-    # so prior() picks it up next iteration.
-    raise NotImplementedError
+    monitor_spec = {"run_id": submit_data["run_id"], "poll_interval_seconds": 60}
+    Path(f".hpc/campaigns/{slug}/iter-{n:04d}.monitor.json").write_text(json.dumps(monitor_spec))
+    monitor_data = run_one(f".hpc/campaigns/{slug}/iter-{n:04d}.monitor.json", verb="monitor-flow")
 
-async def await_completion(run_id: str) -> None:
-    # ... poll runner.record_status until the run reaches a terminal state ...
-    raise NotImplementedError
+    if monitor_data["lifecycle_state"] == "failed":
+        # MVP monitor-flow doesn't auto-resubmit; campaign decides.
+        # tasks.py can choose to skip failed entries in _PRIOR and try
+        # the next sample, OR the loop can break here for human triage.
+        ...
 
-def should_submit() -> bool:
-    # Re-import tasks.py so the latest _PRIOR is read. total() == 0 stops
-    # the loop.
-    mod = load_tasks_module(tasks_path("."))
-    return mod.total() > 0
-
-result = asyncio.run(run_campaign(
-    concurrency=4,                          # K live submits at a time
-    submit_one=submit_one,
-    await_completion=await_completion,
-    should_submit=should_submit,
-    on_event=lambda e: print(e, flush=True),
-    wall_clock_budget_seconds=86_400,       # optional cap
-))
-print(result)
+    n += 1
 ```
 
-The asyncio loop maintains *concurrency* live submits, asks `should_submit` whether to launch another, awaits the next-finished one (FIRST_COMPLETED), and repeats until either `should_submit` returns False (the user's `tasks.py` signals termination via `total() == 0`) or the wall-clock budget elapses. Failed iterations land as `on_event` entries with `error`; the loop continues so a single bad iteration doesn't bring down the campaign.
+Both atoms emit the same `{"ok": ..., "data": {...}}` shape, so the campaign loop's per-iteration code is a uniform "build spec → invoke atom → parse envelope → branch" pattern. No agent-as-runtime; no slash-command-to-slash-command bridge. The same loop runs in any context — Claude Code conversation, headless cron, external orchestrator (MARs) — because the composition primitives are CLI atoms.
+
+### Concurrency
+
+In either path: invoke another iteration's `submit-flow` before the previous one finishes if you want K-in-flight. The cluster scheduler runs them in parallel. Optuna's `constant_liar=True` and similar mechanisms specifically support this.
+
+### Strategy feedback (telling Optuna / etc. about results)
+
+Two patterns work, pick whichever the user's `tasks.py` is set up for:
+
+- **Tell at module-load** (recommended; idempotent). The next iteration's `tasks.py` re-reads sidecars + per-trial outputs and pushes results into the strategy backend (e.g. `optuna.Study.tell`) before asking for the next batch. No extra orchestration needed — `submit-flow` re-imports `tasks.py` each invocation.
+- **Tell between iterations**. After an iteration lands and before the next, run a small helper (`.hpc/campaigns/<slug>/score_iter.py` or similar) that walks per-task outputs and tells the strategy. Use this when the executor doesn't write per-trial reduce JSONs in a shape your `tasks.py` can read on its own.
+
+### Headless overnight runs
+
+Wrap Path B in `/loop` (or a real cron / systemd timer if the user wants to walk away from Claude Code entirely): `/loop 30m bash .hpc/campaigns/<slug>/iterate.sh`. Stops automatically when `tasks.total() == 0`. Path B is the natural fit here because each iteration is one self-contained CLI call — no agent turn required.
 
 ## Step 4: Status / resume
 
@@ -117,7 +143,7 @@ Reports per-iteration reduced metrics (oldest-first), in-flight count, and the l
 - Decide whether to extend the campaign by re-running Step 3 (the loop will pick up where it left off — `prior()` reads sidecars on disk, no separate state file).
 - Investigate failures by feeding individual `run_id`s into `/monitor-hpc` or `/aggregate-hpc`.
 
-Resume after a network drop / laptop sleep: just re-run the Step 3 Python. The asyncio driver re-discovers in-flight runs via `session.find_runs_by_campaign(experiment_dir, CAMPAIGN_ID)`, polls them to terminal state, and continues launching new iterations. Sidecars on disk are the only durable state.
+Resume after a network drop / laptop sleep: there is nothing to "resume" — the loop is just `/submit-hpc` invocations. Run `hpc-mapreduce campaign status --campaign-id <id>` to see what's complete and what's still in-flight, then invoke `/submit-hpc campaign_id=<id>` again to launch the next iteration. `tasks.py`'s `_PRIOR` reflects whatever sidecars are on disk, so the strategy picks up where it left off. Sidecars on disk are the only durable state.
 
 ## Step 5: Cleanup
 

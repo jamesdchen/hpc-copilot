@@ -130,9 +130,12 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
   Pure local filesystem walk. Does not import `.hpc/tasks.py`.
 - `hpc_mapreduce.reduce.history.find_sidecars_by_campaign` /
   `result_dirs_for_sidecar` — underlying primitives.
-- `hpc_mapreduce.campaign.run_campaign` — asyncio in-flight queue (the
-  closed-loop driver). Fully IO-injected; user supplies `submit_one`,
-  `await_completion`, `should_submit` callbacks.
+- `hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)` —
+  return `experiment_dir/.hpc/campaigns/<campaign_id>/`, creating it
+  idempotently. Reserved for strategy libraries to drop their own state
+  files (Optuna SQLite, PBT checkpoints). The framework writes nothing
+  inside. There is no Python driver; the loop is repeated `/submit-hpc
+  campaign_id=<slug>` invocations from the slash-command surface.
 - **`HPC_CAMPAIGN_ID` env var** — forwarded by every scheduler template
   (SGE/SLURM × CPU/GPU) alongside `HPC_RUN_ID`. Read by the user's
   `tasks.py` and executor on the cluster to call `prior()` for the

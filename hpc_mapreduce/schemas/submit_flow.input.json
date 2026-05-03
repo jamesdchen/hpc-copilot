@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/submit_flow.input.json",
+  "title": "submit-flow input spec",
+  "description": "Spec passed to `hpc-mapreduce submit-flow --spec <file>`. Workflow atom that does pre-flight + rsync + deploy + optional canary + qsub + record in one shot. All judgment (which constraint, which walltime, which executor, scaffold tasks.py) is the caller's responsibility — this atom takes resolved values and executes.",
+  "type": "object",
+  "required": [
+    "profile", "cluster", "ssh_target", "remote_path",
+    "run_id", "total_tasks", "backend", "job_name",
+    "script", "job_env"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile":        { "type": "string", "minLength": 1 },
+    "cluster":        { "type": "string", "minLength": 1 },
+    "ssh_target":     { "type": "string", "pattern": "^[^@]+@[^@]+$" },
+    "remote_path":    { "type": "string", "minLength": 1 },
+    "job_name":       { "type": "string", "minLength": 1 },
+    "run_id":         { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
+    "total_tasks":    { "type": "integer", "minimum": 1 },
+    "backend":        { "type": "string", "enum": ["sge_remote", "slurm"] },
+    "script":         {
+      "type": "string",
+      "description": "Path to the job script ON THE CLUSTER (e.g. .hpc/templates/cpu_array.sh). deploy_runtime places these under remote_path/.hpc/templates/."
+    },
+    "job_env":        {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Env vars forwarded into the cluster job. Caller is responsible for setting EXECUTOR, HPC_RUN_ID, HPC_CMD_SHA, HPC_TASK_COUNT, REPO_DIR, MODULES, CONDA_SOURCE/CONDA_ENV (as needed), HPC_RUNTIME (if uv), HPC_CAMPAIGN_ID (if part of a campaign)."
+    },
+    "pass_env_keys":  {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "SGE-only: which job_env keys to forward via qsub -v. Null = forward every key in job_env. Ignored for SLURM (slurm forwards everything in job_env automatically via --export ALL,...)."
+    },
+    "slurm_account":  {
+      "type": ["string", "null"],
+      "description": "SLURM-only: account to charge (sbatch --account). Defaults to whatever SLURM picks for the user."
+    },
+    "slurm_cluster":  {
+      "type": ["string", "null"],
+      "description": "SLURM-only: cluster name for federated SLURM installations (sbatch --clusters=). Most installs don't need this."
+    },
+    "tasks_per_array": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Batch tasks into arrays of this size. Null = single array of total_tasks."
+    },
+    "canary":         {
+      "type": "boolean",
+      "default": true,
+      "description": "Submit a 1-task canary first; abort if it fails. Skip when caller has just smoke-tested or knows the pipeline is good."
+    },
+    "campaign_id":    { "type": ["string", "null"], "pattern": "^[A-Za-z0-9._\\-]+$" },
+    "runtime":        { "type": ["string", "null"], "enum": ["uv", null] },
+    "rsync_excludes": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults."
+    },
+    "skip_preflight": {
+      "type": "boolean",
+      "default": false,
+      "description": "Skip the pre-flight check (caller has just run it; saves one SSH probe). Use with caution."
+    }
+  }
+}

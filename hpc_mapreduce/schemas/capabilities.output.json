@@ -23,6 +23,25 @@
     "required_env": {
       "type": "array",
       "items": { "type": "string" }
+    },
+    "operations": {
+      "type": "array",
+      "description": "Per-operation catalog. The CLI subcommands listed in `subcommands` are the invocable surface; this `operations` block carries machine-readable metadata about each one (verb tier, idempotency, side-effect class, schema files). Source-tree installs read from docs/primitives/ frontmatter; future wheel installs will read a baked operations.json shipped in the package.",
+      "items": {
+        "type": "object",
+        "required": ["name", "verb", "idempotent", "side_effects"],
+        "additionalProperties": false,
+        "properties": {
+          "name":          { "type": "string" },
+          "verb":          { "type": "string", "enum": ["query", "validate", "mutate", "submit", "scaffold", "workflow"] },
+          "idempotent":    { "type": "boolean" },
+          "side_effects":  { "type": "array", "items": { "type": "string" } },
+          "cli":           { "type": ["string", "null"] },
+          "python":        { "type": ["string", "null"] },
+          "input_schema":  { "type": ["string", "null"] },
+          "output_schema": { "type": ["string", "null"] }
+        }
+      }
     }
   }
 }

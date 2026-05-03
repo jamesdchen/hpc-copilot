@@ -1,45 +1,30 @@
 ---
 name: hpc-aggregate
-description: "Run the on-cluster combiner for a wave and record the outcome to the run journal."
+description: "Finalize a run's aggregated metrics: combine all waves on cluster, pull partials locally, run reduce_partials, optionally pull summary files."
 allowed-tools: Bash Read Write
 ---
 
-Invoke the on-cluster combiner for one wave of a run, pull the combined artifacts to a local output dir, and persist the outcome to the journal. Idempotent on success per wave; failure is retry-safe.
+Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
 
 ## Steps
 
-1. Verify the wave is ready. Call `hpc-status` first; only aggregate waves that appear fully complete in `last_status` and are NOT already in `data.combined_waves`. If the wave is in `failed_waves`, set `--force` deliberately (Step 3) to retry.
+1. **Verify the run is done** (or close enough). Invoke [poll-run-status](../../docs/primitives/poll-run-status.md); only proceed if `lifecycle_state` is `complete` (or the user explicitly wants a partial aggregate). For partial aggregation, pass `ensure_all_combined: false` to `aggregate-flow` to skip combining waves still in flight.
 
-2. Choose an output directory if the default (`<experiment-dir>/_aggregated/<run_id>/`) is not desired. The combiner pulls partials into `<output-dir>`.
+2. **Choose an output directory** if the atom's default (`<experiment-dir>/_aggregated/<run_id>/`) is not desired.
 
-3. Run aggregate:
-   ```bash
-   hpc-mapreduce aggregate --run-id <rid> --wave <N> --experiment-dir <path>
-   ```
-   Add `--output-dir <dir>` to override the destination. Add `--force` to re-run a wave already in `combined_waves` or `failed_waves`.
+3. **Invoke** [aggregate-flow](../../docs/primitives/aggregate-flow.md) with `run_id`. Set `pull_summaries: true` + `summary_glob: "<pattern>"` if the caller needs per-task summary files locally.
 
-4. Parse the envelope. On `ok: true`:
-   - `data.combined: true` — wave aggregated successfully. Journal updated; the wave is now in `combined_waves`.
-   - `data.combined: false` — combiner ran but reported failure. Journal updated; the wave is in `failed_waves`. Inspect `data.stderr_tail` (last 2000 chars) and `data.stdout_tail`.
-   - `data.output_dir` — absolute path where artifacts landed.
+4. **Parse the envelope** per the atom's `outputs:` contract: `aggregated_metrics` is the cross-wave reduced dict (keyed by run_id or grid-point); `combiner_dir_local` is where the partials landed; `summaries_dir_local` is set when `pull_summaries=true`; `waves_combined_this_call` reports which waves the atom combined this invocation (vs already-combined entering the call).
 
-5. On `data.combined: false`, decide retry policy:
-   - First failure: re-run with `--force` once.
-   - Second consecutive failure: surface to caller with the stderr tail; do NOT auto-retry. The combiner script likely has a bug.
+5. **On `escalation_reason` non-null**, the atom completed with at least one wave failing `combiner_max_retries`. Inspect `failed_waves`; the partial `aggregated_metrics` is what DID combine. Decide whether the partial result is acceptable, or invoke [combine-wave](../../docs/primitives/combine-wave.md) directly with `force=true` for the failed waves.
 
-6. On error envelopes:
-   - `journal_corrupt` — `run_id` not found. Stop.
-   - `spec_invalid` (user) — `--wave` missing or non-int. Fix arguments.
-   - `ssh_unreachable` (network, retry_safe: true) — retry after preflight.
-   - `remote_command_failed` (cluster) — same as `data.combined: false`; treat as combiner failure.
+6. **On error envelopes**, branch by `error_code` per the atom's frontmatter (`journal_corrupt` / `spec_invalid` / `ssh_unreachable` / `remote_command_failed`).
 
-7. After the last wave is combined (cross-reference with `wave_map` from the per-run sidecar at `.hpc/runs/<run_id>.json`, or with `hpc-status` output), the caller may mark the run terminal via `hpc-mapreduce` lifecycle helpers (out of scope for this skill).
+7. **Profile-specific aggregate command**: when the per-run sidecar's `aggregate_defaults.aggregate_cmd` is set, run that ON THE CLUSTER after `aggregate-flow` returns — it's an arbitrary user-defined command that the framework doesn't introspect. Out of scope for this skill's automatic flow; surface to the caller.
 
 ## Notes
 
 - **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
-- **No cancel/abort**: aggregate runs the user's combiner script on the cluster; once started, it cannot be stopped from here. Set sensible walltimes in the combiner job itself.
-- Successful aggregation is idempotent per wave: re-running the same `--wave N` after success is a no-op (envelope reports `idempotent: true`). Failure is retry-safe — re-run with `--force`.
-- The CLI does NOT choose the combiner script or output schema; the user's repo provides `_hpc_combiner.py`. This skill only orchestrates the call and records outcomes.
-- Exit codes: 0 ok (whether combined or not — failure is captured in `data.combined`), 1 user error, 2 cluster/network (`ssh_unreachable`, etc.), 3 internal.
-- Aggregating waves out of order is permitted; the journal tracks each wave independently.
+- **Idempotency**: re-invoking `aggregate-flow` on the same `run_id` is safe and cheap. `combine-wave` skips already-combined waves; `rsync_pull` handles the diff; `reduce_partials` is a pure function over the pulled files.
+- **No cancel/abort**: `combine-wave` runs the user's combiner script on the cluster; once started, it cannot be stopped from here. Set sensible walltimes in the combiner job itself.
+- The CLI does NOT choose the combiner script or output schema; the user's repo provides `.hpc/_hpc_combiner.py`. This skill only orchestrates the call and records outcomes via the workflow atom.

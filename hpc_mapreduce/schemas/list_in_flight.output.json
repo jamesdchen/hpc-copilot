@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/list_in_flight.output.json",
+  "title": "list-in-flight output data",
+  "description": "Shape of the `data` field on a successful `list-in-flight` envelope. Recovery path for a fresh agent / Claude Code session: discover what's still running before deciding whether to launch new work or resume monitoring.",
+  "type": "object",
+  "required": ["runs"],
+  "additionalProperties": false,
+  "properties": {
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["run_id", "profile", "cluster", "job_ids", "total_tasks", "submitted_at"],
+        "additionalProperties": true,
+        "properties": {
+          "run_id":       { "type": "string" },
+          "profile":      { "type": "string" },
+          "cluster":      { "type": "string" },
+          "job_ids":      { "type": "array", "items": { "type": "string" } },
+          "total_tasks":  { "type": "integer", "minimum": 1 },
+          "submitted_at": { "type": "string" },
+          "campaign_id":  { "type": ["string", "null"] },
+          "last_status":  { "type": ["object", "null"] }
+        }
+      }
+    }
+  }
+}

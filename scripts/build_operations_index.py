@@ -1,0 +1,139 @@
+"""Generate docs/operations.md from `hpc-mapreduce capabilities`.
+
+Read-time view of the same operation catalog that an external agent
+gets at runtime via the `capabilities` subcommand. Both surfaces consume
+exactly the same data — the script subprocess-calls the CLI and parses
+the JSON envelope, so this doc is provably in sync with what runtime
+introspection returns.
+
+Usage:
+    uv run python scripts/build_operations_index.py [--check]
+
+--check exits non-zero if docs/operations.md is out of date (CI gate).
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+OUT = REPO_ROOT / "docs" / "operations.md"
+
+VERB_ORDER = ["query", "validate", "mutate", "submit", "scaffold", "workflow"]
+VERB_DESCRIPTIONS = {
+    "query": "Read-only, no side effects. Freely composable; cacheable.",
+    "validate": "Read + binary health check. Same composability as `query`.",
+    "mutate": (
+        "Writes to journal / sidecar / blacklist. "
+        "Need flock + idempotency-key consideration."
+    ),
+    "submit": "Records a new submission (sidecar write + journal entry).",
+    "scaffold": "Creates new files (e.g. starter executor templates).",
+    "workflow": (
+        "End-to-end pipelines composing other primitives. Same envelope shape as primitives — "
+        "indistinguishable to higher-level callers (the Composite property)."
+    ),
+}
+
+
+def fetch_operations() -> list[dict]:
+    """Subprocess-call `hpc-mapreduce capabilities` and parse the operations array."""
+    result = subprocess.run(
+        ["hpc-mapreduce", "capabilities"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    envelope = json.loads(result.stdout.strip().splitlines()[-1])
+    if not envelope.get("ok"):
+        raise SystemExit(f"capabilities envelope returned ok=false: {envelope}")
+    return envelope["data"].get("operations", [])
+
+
+def render_row(op: dict) -> str:
+    name = op["name"]
+    cli = op.get("cli") or "_(Python-only)_"
+    py = op.get("python") or "_(none)_"
+    inp = f"`hpc_mapreduce/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
+    out = f"`hpc_mapreduce/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
+    idem = "✓" if op.get("idempotent") else "✗"
+    side_effects = op.get("side_effects") or []
+    sfx = ", ".join(side_effects) if side_effects else "_none_"
+    return (
+        f"| [`{name}`](primitives/{name}.md) | {idem} | {sfx} | `{cli}` | `{py}` | {inp} | {out} |"
+    )
+
+
+def render_section(verb: str, ops: list[dict]) -> str:
+    head = (
+        f"## `{verb}` ({len(ops)})\n\n"
+        f"{VERB_DESCRIPTIONS.get(verb, '')}\n\n"
+        "| Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |\n"
+        "|---|---|---|---|---|---|---|\n"
+    )
+    rows = "\n".join(render_row(op) for op in sorted(ops, key=lambda o: o["name"]))
+    return head + rows + "\n"
+
+
+def build_index(operations: list[dict]) -> str:
+    by_verb: dict[str, list[dict]] = {}
+    for op in operations:
+        by_verb.setdefault(op["verb"], []).append(op)
+
+    sorted_verbs = sorted(
+        by_verb.keys(),
+        key=lambda v: (VERB_ORDER.index(v) if v in VERB_ORDER else len(VERB_ORDER), v),
+    )
+    sections = "\n".join(render_section(v, by_verb[v]) for v in sorted_verbs)
+    workflow_count = len(by_verb.get("workflow", []))
+    primitive_count = len(operations) - workflow_count
+
+    intro = (
+        "# Operations\n\n"
+        "Auto-generated from `hpc-mapreduce capabilities`. Run "
+        "`uv run python scripts/build_operations_index.py` after editing any primitive "
+        "frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope "
+        "an external agent would get at runtime, so this page is provably in sync with "
+        "runtime introspection.\n\n"
+        f"**{len(operations)} operations total**: {primitive_count} primitive atoms + "
+        f"{workflow_count} workflow atoms.\n\n"
+        "## How to read this page\n\n"
+        "Every operation in `claude-hpc` is a CLI atom or a Python-only primitive that emits "
+        "the same `{ok, data, error_code}` envelope shape (see `docs/cli-spec.md`). Workflow "
+        "atoms compose primitive atoms but are externally indistinguishable from primitives — "
+        "that's the Composite property that makes higher-level workflows like campaigns work.\n\n"
+        "**Composability rule**: any operation can invoke any other operation by shelling to "
+        "its CLI form (or importing its Python form). Higher-level workflows (e.g. "
+        "`submit-flow → monitor-flow → aggregate-flow` chained by a campaign loop) are just "
+        "operations that invoke other operations.\n\n"
+        "**Discoverability**: `hpc-mapreduce capabilities` returns this same catalog at "
+        "runtime in `data.operations`. Agents that don't have access to this page can "
+        "introspect the framework via that subprocess call.\n\n"
+    )
+    return intro + sections + "\n"
+
+
+def main() -> int:
+    check = "--check" in sys.argv
+    operations = fetch_operations()
+    new = build_index(operations)
+    if OUT.exists() and OUT.read_text(encoding="utf-8") == new:
+        print(f"operations index up to date ({len(operations)} operations)")
+        return 0
+    if check:
+        print(
+            "ERROR: docs/operations.md out of date — run "
+            "scripts/build_operations_index.py to regenerate",
+            file=sys.stderr,
+        )
+        return 1
+    OUT.write_text(new, encoding="utf-8")
+    print(f"regenerated docs/operations.md ({len(operations)} operations)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

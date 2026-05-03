@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+### Removed — `hpc_mapreduce.campaign.run_campaign` asyncio loop and `defaults` callbacks
+
+The closed-loop driver is now the slash-command surface itself: the
+assistant repeatedly invokes `/submit-hpc campaign_id=<slug>` until
+`tasks.total() == 0`. Concurrency is opt-in by firing more submits
+before earlier ones land; the cluster scheduler runs them in parallel.
+This eliminated three classes of complexity:
+
+- **No asyncio mental model**: no `asyncio.run`, no `Awaitable`
+  callbacks, no FIRST_COMPLETED gymnastics. Each iteration is a
+  self-contained `/submit-hpc` invocation with the same approval
+  prompts and failure surface as a one-shot submission.
+- **No driver state to recover**: `run_campaign` previously needed
+  `session.find_runs_by_campaign` + `await_completion` polling to
+  re-discover in-flight runs after a network drop. The slash-command
+  loop has nothing to recover — sidecars on disk are the only state.
+- **No `submit_one` / `await_completion` / `should_submit` boilerplate**:
+  the framework's `defaults.submit_via_cli` etc. existed only to wrap
+  the CLI as async callables. Invoking the CLI directly works.
+
+Removed:
+- `hpc_mapreduce/campaign/loop.py` (`run_campaign`, `CampaignResult`)
+- `hpc_mapreduce/campaign/defaults.py` (`submit_via_cli`,
+  `poll_until_terminal`, `tasks_py_total_predicate`)
+- `tests/test_campaign_loop.py`, `tests/test_campaign_defaults.py`,
+  `tests/test_campaign_e2e.py`
+
+Kept (the small surface that actually mattered):
+- `campaign_id` field on submit specs and per-run sidecars.
+- `HPC_CAMPAIGN_ID` env var threaded through scheduler templates.
+- `hpc_mapreduce.reduce.history.prior(...)` for reading per-iteration
+  reduced metrics back inside `tasks.py`.
+- `hpc_mapreduce.campaign.campaign_dir(...)` for strategy-state
+  placement (Optuna SQLite, PBT checkpoints).
+- `hpc-mapreduce campaign list / status` CLI inspection.
+
+For the migration story (every capability the asyncio loop offered has
+an equivalent in the slash-command pattern, including K-in-flight,
+FIRST_COMPLETED-style waits via parallel `Bash` calls, wall-clock
+budget caps via env var + `tasks.py`, and headless overnight runs via
+`/loop`), see `docs/campaign.md` and `slash_commands/commands/campaign-hpc.md`.
+
+### Changed — `/monitor-hpc` is now silent-by-default; per-tick observations land in `.hpc/runs/<run_id>.monitor.jsonl`
+
+Each `/monitor-hpc` tick used to emit a multi-line summary every time
+(grid rollup table, `summary` counts, "no change since X" line, etc.).
+At 5-min monitoring on a 24-hour run, that's ~290 ticks of narration
+the user never reads. The skill now writes a structured record per
+tick to a tick-log JSONL file and emits **nothing** to console unless
+an action was taken (auto-resubmit, second-strike combiner failure),
+the lifecycle flipped to a terminal state, or the user must
+intervene (code bug, unknown failure).
+
+When the user comes back and asks "what happened" / "status" /
+"summarize", `/monitor-hpc summary` reads the JSONL and emits a
+single digest. See `slash_commands/commands/monitor-hpc.md` Step 7.
+
 ### Added — Smart `/hpc-submit`: resource-quality-aware constraint planning
 
 `/hpc-submit` previously chose its `--constraint=` and `--time=` from

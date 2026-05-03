@@ -1,0 +1,46 @@
+name: docs
+
+# Gates the primitive catalog + operations index against drift. Both
+# generators ship a --check mode that exits non-zero if the rendered
+# doc disagrees with its source (frontmatter / capabilities envelope).
+# Plus a tiny smoke test that every primitive's frontmatter is parseable.
+#
+# Runs on every push to main / claude/* + every PR. Cheap (<30 seconds
+# total) so no reason not to gate.
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install package
+        # PyYAML for the generators; pytest for the frontmatter smoke
+        # test. The package itself for the `hpc-mapreduce capabilities`
+        # subprocess call that build_operations_index.py depends on.
+        run: pip install -e '.[dev]' pyyaml
+      - name: Primitive catalog up to date
+        # docs/primitives/README.md auto-generated from frontmatter.
+        run: python scripts/build_primitive_index.py --check
+      - name: Operations index up to date
+        # docs/operations.md auto-generated from `hpc-mapreduce capabilities`.
+        # If this fails after a frontmatter edit, regenerate with:
+        #   uv run python scripts/build_operations_index.py
+        run: python scripts/build_operations_index.py --check
+      - name: Primitive frontmatter smoke
+        # Every docs/primitives/*.md has parseable YAML + the required
+        # behavioral fields + a valid verb. Cheap (~0.3s) drift gate.
+        run: pytest -q tests/test_primitive_frontmatter.py

@@ -1,6 +1,6 @@
 Help me submit HPC jobs via SSH. Discovers experiment executors, builds submission plans conversationally, and handles all deployment.
 
-CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+Per-operation contracts (inputs, outputs, error codes, idempotency) live in `docs/primitives/` — this skill composes from those primitives and adds the human-facing interview, confirmation prompts, and decision tables on top. Throughout this file, "invoke <primitive>" means "call the primitive's `backed_by.cli` or `backed_by.python` entry point; see `docs/primitives/<name>.md` for the full contract." For cross-cutting envelope/exit-code shapes see `docs/cli-spec.md`.
 
 All cluster commands run remotely via SSH. Code is synced from the local machine before submission.
 
@@ -55,26 +55,14 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
 
 ## Step 1: Discover Executors
 
-Call the shared discovery helper — used by both `/submit-hpc` and the (deprecated) `/build-executor-hpc` so both see the same set of executors:
-
-```python
-from hpc_mapreduce import discover_executors
-execs = discover_executors(".")   # returns list[ExecutorInfo]
-```
-
-`discover_executors` scans `executors/`, `scripts/`, and `src/` (in that order, collecting from every one that exists) and falls back to the repo root if none are present. An **executor** is a `.py` file matching either of two contracts:
-
-- **New (preferred):** exports `compute(args) -> None` at the top level. CLI dispatch lives in the auto-generated `.hpc/cli.py`; the executor file is pure compute.
-- **Old (transitional):** has both an `if __name__ == "__main__":` guard and a CLI import (`argparse`, `click`, `typer`, or `fire`). Self-dispatching script.
-
-Utilities, `__init__.py`, and reserved HPC filenames are filtered out automatically. Each `ExecutorInfo` has `path`, `name`, `has_compute_function`, `has_main_guard`, `cli_framework`, `imports`, and `docstring`.
+Invoke the [discover-executors](../../docs/primitives/discover-executors.md) primitive (`hpc_mapreduce.discover_executors(".")` returns `list[ExecutorInfo]`). The primitive scans `executors/`, `scripts/`, and `src/` (in that order, falling back to the repo root if none exist), filters out utilities and `__init__.py`, and classifies each executor by contract — see the primitive's Notes for the new-vs-old-contract rules.
 
 Cache the resolved directory in Claude Code memory for this project. If the cached directory differs from the defaults, pass it through `search_dirs=(...)`. If the user explicitly names a different directory, honor it the same way.
 
-How to map each executor's flag set depends on which contract it satisfies:
+How to map each executor's flag set depends on which contract the primitive reported:
 
-- **New-contract executors** (`info.has_compute_function`): the flag list lives in `.hpc/tasks.py` `FLAGS[<info.name>'s module path]`, not in the executor file. If `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If it doesn't exist yet (first submit), capture the intended flags during the Step 6b interview and write them into the FLAGS dict you generate.
-- **Old-contract executors** (`info.has_main_guard` only): run `python3 <info.path> --help` to map the CLI interface (argparse-style scripts respond to `--help` even before the framework is installed).
+- **New-contract** (`info.has_compute_function == true`): if `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If it doesn't exist yet (first submit), capture the intended flags during the Step 6b interview and write them into the FLAGS dict you generate.
+- **Old-contract** (`info.has_main_guard` only): run `python3 <info.path> --help` to map the CLI interface — argparse-style scripts respond to `--help` even before the framework is installed.
 
 Parse the typical axes either way:
 - Grid-able parameters (model hyperparams, feature types, etc.)
@@ -113,6 +101,7 @@ Parse `$ARGUMENTS` or the user's natural language request:
 
 **Flags:**
 - `--no-canary` — skip the Step 7b 1-task canary submission. Default behavior is canary-on; only skip when the user has already smoke-tested the pipeline within the last session or is deliberately re-submitting a known-good pipeline.
+- `campaign_id=<slug>` (or `--campaign-id <slug>`) — tag this submission as one iteration of a closed-loop campaign. Capture the slug verbatim and pass it to `submit_and_record` in Step 10 so the per-run sidecar carries `campaign_id=<slug>`. Required when invoked as part of `/campaign-hpc`; otherwise omitted (open-loop submissions have empty `campaign_id`). The slug also gets exported to the cluster as `HPC_CAMPAIGN_ID` so the executor and any cluster-side tooling see it.
 
 For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Each gets its own `run_id` and per-run sidecar at `.hpc/runs/<run_id>.json`; the same `.hpc/tasks.py` is reused if the parallelization axis matches, otherwise the agent writes a new one (the file is the single seam between executors and the framework).
 
@@ -217,13 +206,7 @@ If constraints are not configured for the cluster or profile, skip this step and
 
 ## Step 4c: Smart constraint planner (resource-quality aware)
 
-The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, the planner combines a live snapshot of the cluster, the SEGV blacklist, and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric and picks one.
-
-Run the planner:
-
-```bash
-python -m hpc_mapreduce plan-submit --profile <profile> --cluster <cluster> --experiment-dir .
-```
+The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, invoke the [score-submit-plan](../../docs/primitives/score-submit-plan.md) primitive (`hpc-mapreduce plan-submit --profile <profile> --cluster <cluster>`); it combines a live snapshot of the cluster, the SEGV blacklist, and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric below and picks one.
 
 The envelope's `data` carries the candidate scorecards. Three branches:
 
@@ -248,53 +231,25 @@ No runtime priors exist for this `(profile, cluster)`. Don't try to score — su
    )
    ```
 
-5. On SEGV: record to the blacklist and **stop the smart-planning flow** — surface the failure to the user with the canary's stderr tail and the SEGV node. Do NOT auto-retry on a different node (the failure is informative; re-running blindly may mask whether the workload itself is buggy) and do NOT keep looping into a fresh canary (without a successful canary the priors stay empty, so a re-entry would just request another canary and the loop would never terminate). The user decides whether to retry, fix the executor, or extend the blacklist manually.
-
-   ```python
-   from hpc_mapreduce.job.blacklist import record_segv
-   record_segv(
-       experiment_dir,                    # absolute path; same root used by /hpc-monitor
-       cluster=cluster,
-       node=node, run_id=canary_run_id, job_id=job_id, task_id=0,
-       exit_code=exit_code, signal=-11,
-       host_allocmem_pct=...,             # from inspect-cluster snapshot at SEGV time
-       concurrent_jobs=[...],
-   )
-   ```
+5. On SEGV: invoke the [record-segv-blacklist](../../docs/primitives/record-segv-blacklist.md) primitive with the failed node + per-node context from the inspect-cluster snapshot at SEGV time, then **stop the smart-planning flow** — surface the failure to the user with the canary's stderr tail and the SEGV node. Do NOT auto-retry on a different node (the failure is informative; re-running blindly may mask whether the workload itself is buggy) and do NOT keep looping into a fresh canary (without a successful canary the priors stay empty, so a re-entry would just request another canary and the loop would never terminate). The user decides whether to retry, fix the executor, or extend the blacklist manually.
 
 6. On timeout: bump walltime 2× and retry the canary **once**. After two timeouts, surface to the user. Track the per-(profile, cluster) timeout count in the run sidecar's `extra` block so a cold-session resume sees the prior attempt count.
 
-7. After a *successful* canary, re-run `plan-submit` and proceed to 4c-B. The re-call sees one sample of the same `cmd_sha` and now returns scored candidates.
-
-> **Path consistency:** `record_segv()` and `append_sample()` both resolve `experiment_dir` to an absolute path internally, so a writer invoked from the project root and a reader invoked from a child directory hit the same `.hpc/bad_nodes.<cluster>.json` / `.hpc/runtimes/<profile>.<cluster>.json`.
+7. After a *successful* canary, re-invoke score-submit-plan and proceed to 4c-B. The re-call sees one sample of the same `cmd_sha` and now returns scored candidates.
 
 ### 4c-B: `needs_canary: false` (priors exist)
 
-Score each `data.candidates[i]` using:
+Score the candidates per the **Scoring rubric** in [score-submit-plan.md](../../docs/primitives/score-submit-plan.md) — formula, tie-break, walltime selection, and the empty-quantiles / empty-ETA edge cases all live in the primitive body. Pick the candidate with smallest `total_etc`.
 
-```
-p95(c)        = max(quantiles[gpu]['p95'] for gpu in c.runtime_prior_quantiles_sec)
-p_fail(c)     = max(c.p_fail_30d.values(), default=0.0)
-total_etc(c)  = eta_sec_via_test_only(c) + p95(c) + p_fail(c) * (eta_sec(c) + p95(c))
-```
-
-Pick the candidate with smallest `total_etc`. For tie-breaking, prefer the narrower constraint (smaller `pool_size`).
-
-**Empty-quantiles edge case**: a candidate's `runtime_prior_quantiles_sec` may be empty even when the rollup is non-empty (e.g. priors exist for `a100` but the candidate constraint is `v100`). Skip such candidates from scoring; if they're the *only* candidates available for the user's intent, drop back to the canary path (4c-A) for that constraint.
-
-**Empty-ETA edge case**: when `eta_sec_via_test_only` is `null` (sbatch `--test-only` failed or scheduler is SGE), substitute the cluster's typical queue depth or just `0` and continue — the runtime prior dominates the cost most of the time.
-
-For each candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly:
+For each chosen candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly, so it stays here in the slash command:
 
 - Co-tenant has been running >12h *and* holds >50% of CPU / mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).
 - Co-tenant is recently-started or holds little of the node's resources ⇒ allow.
 - Multiple co-tenants on a node with combined high resource share ⇒ exclude.
 
-Every entry in `blacklisted_nodes` is **always** excluded (rule, not judgment).
+Every entry in `blacklisted_nodes` is **always** excluded (rule per the primitive — no judgment).
 
 Build the resulting `--exclude=<node1>,<node2>,...` flag and add it to the sbatch invocation in Step 8.
-
-Set walltime: `chosen.p95(c) * safety_margin` (default `1.3`). This covers the worst GPU type the constraint admits without ballooning the budget.
 
 ### 4c-C: planner errors
 
@@ -523,13 +478,7 @@ Verify the local environment can submit to `<cluster>` BEFORE any SSH/rsync. Use
 
 Cache marker: `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` with `{checked_at, all_ok, cluster}`. TTL 24 h. If the marker exists, `all_ok=true`, and `checked_at` is < 24 h old, log `preflight: cached <N>m ago — OK` and skip to Step 7.
 
-Otherwise, run the CLI and parse the JSON envelope:
-
-```bash
-python -m hpc_mapreduce preflight --cluster <name>
-```
-
-On `data.all_ok == true`: write/update the marker (`checked_at = now()`), continue to Step 7.
+Otherwise, invoke the [check-preflight](../../docs/primitives/check-preflight.md) primitive with `--cluster <name>`. On `data.all_ok == true`: write/update the marker (`checked_at = now()`), continue to Step 7.
 
 On any check failure: do NOT write the marker, do NOT proceed to Step 7. Surface the failing checks with their `detail` fields verbatim (don't paraphrase — the user needs the raw error to fix it). Standard remediations to suggest:
 
@@ -593,105 +542,78 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && md5sum .hpc/tasks.py src/<changed_file>.
 
 If any hash differs, STOP — re-run rsync with verbose flags (`-avz`) and investigate DNS/ssh-config issues before submitting.
 
-## Step 7b: Canary Submission
+## Step 7b–8: Invoke `submit-flow` (workflow atom)
 
-**Before submitting the full `-t 1-<total_tasks>` array, submit a 1-task canary** to validate the end-to-end pipeline on the cluster:
+Steps 7 (rsync), 7b (canary), 8 (qsub), and 10 (record) are **one CLI call** to the workflow atom `hpc-mapreduce submit-flow`. The slash command's job is to assemble the spec from the inputs collected in Steps 1–6 and invoke. The atom does pre-flight + rsync + deploy + optional canary + qsub + sidecar/journal write, returning a single JSON envelope.
 
-```bash
-# SGE canary
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && qsub -t 1-1 -N <job_name>_canary -o logs -j y \
-    -l <resource_key>=<resource_val> ... \
-    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n>,TASK_OFFSET=0 \
-    .hpc/templates/<template>'
+Spec shape (matches `schemas/submit_flow.input.json`):
 
-# SLURM canary
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch --array=1-1 --job-name=<job_name>_canary ... \
-    --export=EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n>,TASK_OFFSET=0 \
-    .hpc/templates/<template>'
+```json
+{
+  "profile": "<job_name>",
+  "cluster": "<cluster_name>",
+  "ssh_target": "user@host",
+  "remote_path": "<remote_path>",
+  "job_name": "<job_name>",
+  "run_id": "<run_id from Step 6d>",
+  "total_tasks": <tasks.total()>,
+  "backend": "sge_remote",
+  "script": ".hpc/templates/cpu_array.sh",
+  "job_env": {
+    "EXECUTOR": "python3 .hpc/_hpc_dispatch.py",
+    "HPC_RUN_ID": "<run_id>",
+    "HPC_CMD_SHA": "<cmd_sha>",
+    "HPC_TASK_COUNT": "<total_tasks>",
+    "REPO_DIR": "<remote_path>",
+    "MODULES": "<detected modules>",
+    "CONDA_SOURCE": "<cluster.conda_source>",
+    "CONDA_ENV": "<detected conda_env>"
+  },
+  "pass_env_keys": ["EXECUTOR","HPC_RUN_ID","HPC_CMD_SHA","HPC_TASK_COUNT","REPO_DIR","MODULES","CONDA_SOURCE","CONDA_ENV"],
+  "canary": true,
+  "campaign_id": "<slug>",
+  "runtime": "uv",
+  "skip_preflight": true
+}
 ```
 
-Wait for the canary to reach a terminal state (`sacct -j <jobid>` / `qacct -j <jobid>`), then verify:
-
-1. **Exit code 0** in the log tail (`[dispatch] FAILED` or `ImportError` / `Traceback` = fail).
-2. **Expected output artifacts** exist in the task's `result_dir` (whichever of `results.summary_pattern`, `*_reduce.json`, or `metrics_chunk_*.json` the profile declares).
-3. **Output is well-shaped** — if prior runs exist, compare CSV header/row count to a known-good file.
-
-**Only if all three pass, proceed to Step 8 (full array submission).** If the canary fails, the fix cost is 1 task; skipping the canary and discovering a bad pipeline after 5000 tasks wastes hours of cluster time and poisons the queue for other users.
-
-To opt out (e.g., already smoke-tested in the last 10 minutes or single-task submission anyway), pass `--no-canary` to `/submit-hpc`. Default is canary-on.
-
-## Step 8: Submit
-
-If a throughput plan was computed in Step 4b, use `backend.submit_plan(plan, ...)` instead of `backend.submit_array(...)`. The plan-based submission handles batching tasks into arrays, grouping arrays into waves, and setting up scheduler dependencies between waves (SLURM `--dependency=afterany:...`, SGE `-hold_jid ...`).
-
-If no plan is available (constraints not configured), fall back to the standard single-array submission below.
-
-Determine template from resources (GPU present → `gpu_array`, else `cpu_array`). The template path is **cluster-relative**: `.hpc/templates/cpu_array.sh` (SGE) or `.hpc/templates/cpu_array.slurm` (SLURM); `deploy_runtime` placed it there. Don't pass an absolute or local path.
-
-Build env vars:
-- `EXECUTOR=python3 .hpc/_hpc_dispatch.py` — the framework executor scp'd by `deploy_runtime`
-- `HPC_RUN_ID=<run_id>` — locates the per-run sidecar at `.hpc/runs/<run_id>.json`
-- `HPC_CMD_SHA=<cmd_sha>` — hash of the materialized `tasks.py` task list (provenance only)
-- `HPC_TASK_COUNT=<task_count>` — scheduler array length, equal to `tasks.total()`
-- `REPO_DIR=<remote_path>`
-- `MODULES=<detected modules>`
-- `CONDA_SOURCE=<cluster.conda_source>` (if conda env needed)
-- `CONDA_ENV=<detected/selected conda_env>` (if needed)
+`skip_preflight: true` is correct here because Step 6b's pre-flight gate just ran. The atom honors it to avoid a duplicate SSH probe.
 
 The cluster-side template translates the scheduler's per-task index (`SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`) into `HPC_TASK_ID` (0-based) before exec'ing `$EXECUTOR`, which then imports `.hpc/tasks.py`, calls `tasks.resolve(HPC_TASK_ID)`, and runs the executor command from the sidecar with kwargs merged into the env.
 
-**Building the job_env (with runtime support)**
+For GPU jobs: pick `script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.slurm` (SLURM). The atom doesn't infer this — caller picks based on detected resources.
 
-When the user's spec carries `runtime: "uv"`, `HPC_RUNTIME=uv` MUST be in the job's env so the cluster-side template's `uv sync` preamble fires. The `build_job_env` helper takes a runtime-tagged dict and threads it through:
-
-```python
-from slash_commands.runner import build_job_env
-base_env = {
-    "EXECUTOR": "python3 .hpc/_hpc_dispatch.py",
-    "HPC_RUN_ID": run_id,
-    "HPC_CMD_SHA": cmd_sha,
-    "HPC_TASK_COUNT": str(tasks.total()),
-    "REPO_DIR": remote_path,
-    "MODULES": ...,
-    "CONDA_SOURCE": ...,
-    "CONDA_ENV": ...,
-}
-# Pass {"runtime": "uv"} to enable HPC_RUNTIME forwarding; an empty dict
-# leaves base_env untouched.
-job_env = build_job_env({"runtime": runtime} if runtime else {}, base_env)
-```
-
-> **NOTE:** when using `SGEBackend(pass_env_keys=...)`, the tuple MUST include `"HPC_RUN_ID"`, `"HPC_CMD_SHA"`, `"HPC_TASK_COUNT"`, and (if applicable) `"HPC_RUNTIME"` so the qsub `-v` filter forwards them. The SLURM backend forwards everything in `job_env` automatically.
-
-### SGE Submission
+Invoke:
 
 ```bash
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && qsub \
-    -t 1-<task_count> \
-    -N <job_name> \
-    -o logs -j y \
-    -l <resource_key>=<resource_val> \
-    ... \
-    -v CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n> \
-    .hpc/templates/cpu_array.sh'
+hpc-mapreduce submit-flow --spec spec.json --experiment-dir .
 ```
 
-For GPU jobs: `-l gpu,<gpu_type>,cuda=<count>`, and use `.hpc/templates/gpu_array.sh`.
+Parse the envelope:
+- `data.deduped: true` — a journal record for this `run_id` already exists. The original cluster jobs are running. Do NOT re-invoke. Switch to `/monitor-hpc <run_id>`.
+- `data.deduped: false` — fresh submission. Capture `data.run_id`, `data.job_ids`, and `data.canary_job_ids` (when `canary_done`). Continue to Step 8b.
 
-### SLURM Submission
+On error envelopes, branch by `error_code` per `submit-flow`'s contract (`ssh_unreachable`, `remote_command_failed`, `spec_invalid`).
+
+To opt out of the canary (already smoke-tested or single-task submission), set `"canary": false` in the spec — the slash command's `--no-canary` flag from Step 2 maps directly here.
+
+**Note on canary semantics:** `submit-flow`'s canary is a smoke test of the submission machinery (qsub accepts the spec; scheduler returns a job ID). It does NOT wait for canary completion or verify outputs — that elaborate "wait for terminal + grep logs + check artifacts" protocol stays here in the slash command (see "Canary verification" below) for the human-interactive path. Higher-level workflows like `/campaign-hpc` rely on the lighter check.
+
+### Canary verification (slash-command-only)
+
+When `data.canary_done: true`, the slash command waits for the canary's terminal state and verifies before reporting success:
 
 ```bash
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && sbatch \
-    --array=1-<task_count> \
-    --job-name=<job_name> \
-    --output=logs/%x_%A_%a.out \
-    --error=logs/%x_%A_%a.err \
-    --mem=<mem> --time=<walltime> --cpus-per-task=<cpus> \
-    --export=CONDA_SOURCE=...,CONDA_ENV=...,MODULES=...,EXECUTOR=python3 .hpc/_hpc_dispatch.py,HPC_RUN_ID=<run_id>,HPC_CMD_SHA=<cmd_sha>,HPC_TASK_COUNT=<n> \
-    .hpc/templates/cpu_array.slurm'
+ssh $SSH_TARGET 'sacct -j <canary_job_id> -n -P -o JobID,State,ExitCode'   # SLURM
+ssh $SSH_TARGET 'qacct -j <canary_job_id>'                                  # SGE
 ```
 
-For GPU jobs: `--gres=gpu:<count>`, appropriate partition, and use `.hpc/templates/gpu_array.slurm`.
+Then verify:
+1. **Exit code 0** in the log tail (`[dispatch] FAILED` / `ImportError` / `Traceback` = fail).
+2. **Expected output artifacts** exist in the canary task's `result_dir`.
+3. **Output well-shaped** — compare CSV header/row count to a known-good file if prior runs exist.
+
+If verification fails, surface the canary's stderr tail to the user and stop — do NOT report Step 9 success. The fix cost is 1 task; skipping verification and discovering a bad pipeline after 5000 tasks wastes hours of cluster time.
 
 ## Step 8b: Verify the array is actually queued/running
 
@@ -738,36 +660,9 @@ After submission **and the Step 8b verification**:
 2. Report: job ID, executor(s), grid dimensions, total tasks, cluster, and the verified scheduler state (e.g. "all 4 array jobs PENDING/RUNNING")
 3. Suggest running `/monitor-hpc` to track progress
 
-## Step 10: Record the submission in the run journal
+## Step 10: (folded into Step 7b–8)
 
-After the per-run sidecar is written locally and rsync'd to the cluster, persist the bootstrap context for cold-session resume:
-
-```python
-from pathlib import Path
-from slash_commands import runner
-
-record, deduped = runner.submit_and_record(
-    Path.cwd(),
-    profile=<job_name>,
-    cluster=<cluster_name>,
-    ssh_target=f"{cluster.user}@{cluster.host}",
-    remote_path=<remote_path>,
-    job_name=<job_name>,
-    run_id=<run_id from Step 6d, e.g. "ml_ridge-20260429-153012-abc12345">,
-    job_ids=<list of job IDs returned by backend.submit_plan>,
-    total_tasks=tasks.total(),
-)
-# `deduped == True` means a journal record for this run_id already existed
-# and the call was a no-op replay. When that happens, do NOT call
-# backend.submit_plan again — the original cluster jobs are already running.
-# Just resume monitoring.
-```
-
-`submit_and_record` is keyed on `run_id` (the timestamp + cmd_sha8 string from Step 6d); a retry with the same run_id deduplicates without re-submitting. The journal entry lets a future `/monitor-hpc` (no args) auto-discover this run and resume monitoring with one keystroke instead of re-asking for cluster / job_ids / etc.
-
-Slash commands MUST call `slash_commands.runner.submit_and_record` rather than writing to `slash_commands.session` directly — the bundled helper guards the journal write under a flock and keeps the run record consistent.
-
-For multi-executor submissions (one sidecar per executor), call `submit_and_record` once per submitted job.
+The journal write happens inside `submit-flow` via `runner.submit_and_record`. Nothing additional to do here. For multi-executor submissions (one sidecar per executor), invoke `submit-flow` once per submitted job — each call writes its own sidecar.
 
 ## Common Failure Modes
 

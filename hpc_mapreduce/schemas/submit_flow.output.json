@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/submit_flow.output.json",
+  "title": "submit-flow output data",
+  "description": "Shape of the `data` field on a successful `submit-flow` envelope.",
+  "type": "object",
+  "required": ["run_id", "job_ids", "total_tasks", "deduped", "canary_done"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id":      { "type": "string" },
+    "job_ids":     { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "total_tasks": { "type": "integer", "minimum": 1 },
+    "deduped":     {
+      "type": "boolean",
+      "description": "True when a journal record for run_id already existed and the call was a no-op replay. The original cluster jobs are running; do NOT re-issue qsub. Same semantics as submit-spec.deduped."
+    },
+    "canary_done": {
+      "type": "boolean",
+      "description": "True when a 1-task canary was submitted and verified before the main array. False when canary was skipped via spec.canary=false or when this is a deduped replay."
+    },
+    "canary_run_id": {
+      "type": ["string", "null"],
+      "description": "Run ID of the canary submission (a sibling sidecar). Null when canary skipped."
+    },
+    "canary_job_ids": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "Scheduler IDs for the canary. Null when canary skipped."
+    }
+  }
+}
