@@ -136,11 +136,27 @@ def journal_dir(experiment_dir: Path) -> Path:
 
 
 def runs_dir(experiment_dir: Path) -> Path:
-    return journal_dir(experiment_dir) / "runs"
+    """Deprecated forwarder for ``JournalLayout(experiment_dir).runs``.
+
+    NOTE: this is the **journal** runs directory under
+    ``~/.claude/hpc/<repo_hash>/runs/``, NOT the cluster sidecar runs
+    directory under ``<experiment_dir>/.hpc/runs/`` — that one is
+    :attr:`hpc_mapreduce.layout.RepoLayout.runs` (also exported as
+    :func:`hpc_mapreduce.runs_subdir`). The pre-B1 collision between
+    these two ``runs_*`` names was a P0 bug source; the
+    ``RepoLayout`` / ``JournalLayout`` type split makes it a type
+    error.
+    """
+    from hpc_mapreduce.layout import JournalLayout
+
+    return JournalLayout(experiment_dir).runs
 
 
 def _run_path(experiment_dir: Path, run_id: str) -> Path:
-    return runs_dir(experiment_dir) / f"{run_id}.json"
+    """Deprecated alias for ``JournalLayout(experiment_dir).run_record(run_id)``."""
+    from hpc_mapreduce.layout import JournalLayout
+
+    return JournalLayout(experiment_dir).run_record(run_id)
 
 
 def _lock_path(target: Path) -> Path:

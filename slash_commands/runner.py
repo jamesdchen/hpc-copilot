@@ -52,6 +52,24 @@ def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
     return user, host
 
 
+def _parse_remote_json(stdout: str, *, source_label: str) -> dict[str, Any]:
+    """Parse JSON emitted by a remote process; raise typed error on failure.
+
+    Centralises the ``json.loads + JSONDecodeError → RemoteCommandFailed``
+    pattern that ``_ssh_status_report`` and ``_read_remote_sidecar`` both
+    needed. *source_label* is interpolated into the error message so the
+    caller's diagnostic still pinpoints which remote read failed.
+    """
+    try:
+        result: dict[str, Any] = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        snippet = stdout[:200]
+        raise RemoteCommandFailed(
+            f"{source_label} returned invalid JSON: {exc}; first 200 chars: {snippet!r}"
+        ) from exc
+    return result
+
+
 # Backwards-compatible alias for tests/external imports that referenced
 # the original helper here.  The canonical implementation now lives in
 # ``hpc_mapreduce._time`` so timestamps stay consistent across the
@@ -168,12 +186,7 @@ def _ssh_status_report(
         raise RemoteCommandFailed(
             f"status reporter failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RemoteCommandFailed(
-            f"status reporter returned invalid JSON: {exc}; first 200 chars: {proc.stdout[:200]!r}"
-        ) from exc
+    return _parse_remote_json(proc.stdout, source_label="status reporter")
 
 
 def record_status(
@@ -817,12 +830,9 @@ def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> d
             f"failed to read remote sidecar at {remote_path}/{sidecar_rel}: "
             f"{proc.stderr.strip()[:500]}"
         )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RemoteCommandFailed(
-            f"remote sidecar at {remote_path}/{sidecar_rel} is not valid JSON: {exc}"
-        ) from exc
+    return _parse_remote_json(
+        proc.stdout, source_label=f"remote sidecar at {remote_path}/{sidecar_rel}"
+    )
 
 
 def _wave_task_ids(sidecar: dict[str, Any], wave: int) -> list[int]:
