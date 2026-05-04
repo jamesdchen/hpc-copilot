@@ -159,9 +159,10 @@ overrides still work.
 
 **Cold-start memory buffer in the smart planner.** When no usable
 runtime prior exists for `(profile, cluster, gpu_type)`, the user's
-`--mem` ask is now grown by `(1 + cold_start_mem_buffer)` so the OOM
-daemon doesn't bump the campus user's brand-new run mid-write and
-leave a corrupt result dir behind. This is the cold-start "I have no
+`--mem` ask in MB is grown by `(1 + cold_start_mem_buffer)`, then
+floored to the existing `floor_mb` minimum, so the OOM daemon doesn't
+bump the campus user's brand-new run mid-write and leave a corrupt
+result dir behind. This is the cold-start "I have no
 idea how much memory you'll use" headroom; the smart planner takes
 over once you have ≥5 successful samples per `(profile, cluster,
 gpu_type)`, at which point the quantile-based shrink owns and the
