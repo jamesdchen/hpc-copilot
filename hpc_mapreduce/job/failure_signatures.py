@@ -7,7 +7,7 @@ fix suggestion that the campaign loop can apply automatically.
 
 The catalog is ordered by ``priority`` (descending). The first matching
 entry wins. ``priority=100`` are the high-confidence resource-error
-patterns (OOM, walltime, segv); ``priority=80`` are the user-error
+patterns (OOM, walltime); ``priority=80`` are the user-error
 patterns (import, file_not_found, permission); ``priority=10`` is the
 generic Python traceback fallback.
 
@@ -78,13 +78,6 @@ CATALOG: list[FailureSignature] = [
         ),
         exit_code=271,
         suggested_fix={"action": "increase-walltime", "factor": 1.5},
-        priority=100,
-    ),
-    FailureSignature(
-        error_class="segv",
-        stderr_pattern=re.compile(r"Signal 11|Segmentation fault", re.I),
-        exit_code=139,
-        suggested_fix={"action": "blacklist-node"},
         priority=100,
     ),
     FailureSignature(

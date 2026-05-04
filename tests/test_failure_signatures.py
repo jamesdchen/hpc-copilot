@@ -6,8 +6,9 @@ from hpc_mapreduce.job.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:
-    """The catalog covers the 10 documented failure modes."""
-    assert len(CATALOG) == 10
+    """The catalog covers the 9 documented failure modes (segv was
+    removed when the SEGV blacklist feature was deleted)."""
+    assert len(CATALOG) == 9
 
 
 def test_gpu_oom_matches_cuda_pattern() -> None:
@@ -28,10 +29,13 @@ def test_walltime_matches() -> None:
     assert out["suggested_fix"] == {"action": "increase-walltime", "factor": 1.5}
 
 
-def test_segv_matches() -> None:
+def test_segv_falls_through() -> None:
+    """SEGV entry was removed from the catalog when the SEGV blacklist
+    feature was deleted. A bare 'Segmentation fault' line now falls
+    through to python_traceback or unknown — classify() must not return
+    the deleted 'segv' error_class."""
     out = classify("Segmentation fault (core dumped)", 139)
-    assert out["error_class"] == "segv"
-    assert out["suggested_fix"] == {"action": "blacklist-node"}
+    assert out["error_class"] != "segv"
 
 
 def test_node_failure_matches() -> None:
