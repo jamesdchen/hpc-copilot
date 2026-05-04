@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce._time import utcnow_iso
+from hpc_mapreduce.lifecycle import LifecycleState
 from hpc_mapreduce.job.runs import read_run_sidecar
 from slash_commands import errors, runner, session
 
@@ -219,11 +220,11 @@ def _is_terminal(last_status: dict[str, Any], total_tasks: int) -> tuple[str | N
     failed = int(last_status.get("failed", 0))
 
     if complete >= total_tasks:
-        return ("complete", None)
+        return (LifecycleState.COMPLETE, None)
     if running == 0 and pending == 0 and failed > 0:
         # No work left and at least one failure. MVP doesn't auto-resubmit;
         # surface the failure for the caller to handle.
-        return ("failed", "failed_tasks_no_auto_recover_in_mvp")
+        return (LifecycleState.FAILED, "failed_tasks_no_auto_recover_in_mvp")
     return (None, None)
 
 
@@ -347,20 +348,20 @@ def monitor_flow(
 
         # Terminal check.
         terminal, esc_reason = _is_terminal(last_status, int(record.total_tasks))
-        if terminal == "complete":
-            runner.mark_terminal(experiment_dir, run_id, status="complete")
+        if terminal == LifecycleState.COMPLETE:
+            runner.mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
             _append_tick(
                 experiment_dir,
                 run_id,
                 summary=last_status,
                 diff_from_prev=diff,
                 actions=actions,
-                lifecycle_state="complete",
+                lifecycle_state=LifecycleState.COMPLETE,
                 next_tick_seconds=None,
             )
             return MonitorFlowResult(
                 run_id=run_id,
-                lifecycle_state="complete",
+                lifecycle_state=LifecycleState.COMPLETE,
                 last_status=last_status,
                 combined_waves=state.last_combined_waves,
                 failed_waves=state.last_failed_waves,
@@ -368,19 +369,19 @@ def monitor_flow(
                 elapsed_seconds=elapsed,
                 escalation_reason=None,
             )
-        if terminal == "failed":
+        if terminal == LifecycleState.FAILED:
             _append_tick(
                 experiment_dir,
                 run_id,
                 summary=last_status,
                 diff_from_prev=diff,
                 actions=actions,
-                lifecycle_state="failed",
+                lifecycle_state=LifecycleState.FAILED,
                 next_tick_seconds=None,
             )
             return MonitorFlowResult(
                 run_id=run_id,
-                lifecycle_state="failed",
+                lifecycle_state=LifecycleState.FAILED,
                 last_status=last_status,
                 combined_waves=state.last_combined_waves,
                 failed_waves=state.last_failed_waves,
@@ -397,12 +398,12 @@ def monitor_flow(
                 summary=last_status,
                 diff_from_prev=diff,
                 actions=actions,
-                lifecycle_state="timeout",
+                lifecycle_state=LifecycleState.TIMEOUT,
                 next_tick_seconds=None,
             )
             return MonitorFlowResult(
                 run_id=run_id,
-                lifecycle_state="timeout",
+                lifecycle_state=LifecycleState.TIMEOUT,
                 last_status=last_status,
                 combined_waves=state.last_combined_waves,
                 failed_waves=state.last_failed_waves,
