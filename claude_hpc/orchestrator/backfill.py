@@ -139,28 +139,51 @@ def recommend_mem_mb(
     safety_mult: float = 1.50,
     floor_mb: int = 512,
     min_samples: int = 10,
+    cold_start_buffer: float = 0.0,
 ) -> tuple[int, str]:
     """Recommend ``--mem`` in MB from the host-memory prior.
 
     Footprint shrinking is risky — under-asking host memory triggers an
     OOM kill, not a mere slowdown — so the defaults are conservative:
     ``safety_mult=1.50`` (50% pad over p95) and ``min_samples=10`` (twice
-    the walltime threshold). When no usable prior exists, returns
-    ``(user_default_mb, "no usable prior; kept user default")`` so we
-    only shrink when we have strong evidence.
+    the walltime threshold).
 
-    *user_default_mb* is the floor: we never recommend MORE than the
-    user's ask (this function only shrinks). If the prior would require
-    a larger ask we keep the user's value and surface the discrepancy in
-    the rationale so they can adjust manually.
+    Two regimes:
+
+    * **Priors available** (``≥min_samples`` per GPU type) — quantile-
+      based shrink: pick worst-case p95 across the constraint pool,
+      multiply by ``safety_mult``, never grow past ``user_default_mb``.
+      ``cold_start_buffer`` is *not* applied here; the priors already
+      encode the right safety margin via walltime-drift calibration.
+    * **Cold start** (no usable prior) — the campus user's first run on
+      a fresh ``(profile, cluster, cmd_sha)`` has no idea how much
+      memory the job will use. ``cold_start_buffer`` (0.0–N) multiplies
+      the user's ask by ``(1 + cold_start_buffer)`` so the OOM daemon
+      doesn't bump them mid-write and leave a corrupt result dir
+      behind. Default ``0.0`` preserves legacy behavior; set
+      ``cold_start_buffer=0.15`` for a 15% headroom pad.
+
+    *user_default_mb* is the floor for the prior-driven path: we never
+    *shrink-recommend* more than the user's ask. The cold-start buffer
+    is the only path that grows the ask, and only when we genuinely
+    have no prior to draw from.
     """
     if user_default_mb <= 0:
         raise ValueError("user_default_mb must be positive")
     if safety_mult <= 0:
         raise ValueError("safety_mult must be positive")
+    if cold_start_buffer < 0:
+        raise ValueError("cold_start_buffer must be non-negative")
 
     usable = _gather_usable(mem_quantiles_mb, gpu_types_in_constraint, min_samples)
     if not usable:
+        if cold_start_buffer > 0:
+            buffered = max(int(round(user_default_mb * (1.0 + cold_start_buffer))), floor_mb)
+            return buffered, (
+                f"no usable mem prior (need ≥{min_samples} samples per GPU type); "
+                f"applied cold-start buffer ×{1.0 + cold_start_buffer:.2f} "
+                f"({user_default_mb}MB → {buffered}MB) for OOM-daemon survival"
+            )
         return user_default_mb, (
             f"no usable mem prior (need ≥{min_samples} samples per GPU type); "
             f"kept user default {user_default_mb}MB"

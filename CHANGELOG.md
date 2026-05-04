@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+### Added — template defenses for low-priority campus jobs (PR-B)
+
+Three survival defenses for the campus user submitting low-priority
+jobs to UCLA Hoffman2 (UGE) and USC CARC (Slurm) where higher-priority
+jobs consume most of the resources. These don't make jobs more
+efficient — they help the campus user's *own* jobs survive structural
+disadvantage.
+
+**Thread caps in the shared template preamble.** All four templates
+(SGE/SLURM × CPU/GPU) now source `claude_hpc/mapreduce/templates/common/hpc_preamble.sh`,
+which exports `OMP_NUM_THREADS=1` plus the four sibling caps for MKL,
+OpenBLAS, NumExpr and vecLib. Without this, a campus user running
+NumPy on a 1-core allocation gets BLAS spawning 16 threads, blows past
+the cgroup CPU limit, and gets killed by the OOM daemon. Per-experiment
+override via `$HPC_OMP_NUM_THREADS=N` (and the per-library siblings
+`HPC_MKL_NUM_THREADS` / `HPC_OPENBLAS_NUM_THREADS` / `HPC_NUMEXPR_NUM_THREADS`
+/ `HPC_VECLIB_NUM_THREADS`) in the spec's `job_env`. The CPU/GPU array
+templates' existing re-exports of `OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK`
+/ `$NSLOTS` still take precedence for the multi-threaded case, since
+they run after the preamble.
+
+**NFS staging via `$LOCAL_DATA_DIR`.** When `$HPC_NFS_DATA_DIR` is set
+in the cluster job's env, the preamble rsyncs that directory into
+node-local SSD (`$SLURM_TMPDIR` / `$TMPDIR` / `/tmp`) and exports
+`$LOCAL_DATA_DIR` for user code to read from. The contract is the
+variable name: user executors should prefer `$LOCAL_DATA_DIR` when
+set. Without this, a 200-task array all `open()`ing the same NFS files
+at once is the textbook way to get the array throttled — local SSD
+reads are ~100× faster and scale per-node, not per-cluster. Strictly
+opt-in: users without an NFS dataset pay nothing.
+
+`clusters.yaml` gains an optional `nfs_data_dir:` field per cluster.
+When set, `submit_flow` injects it as `HPC_NFS_DATA_DIR` into the
+cluster job's env so the staging block fires automatically. Caller-
+supplied `job_env` wins via `setdefault`, so per-experiment dataset
+overrides still work.
+
+**Cold-start memory buffer in the smart planner.** When no usable
+runtime prior exists for `(profile, cluster, gpu_type)`, the user's
+`--mem` ask is now grown by `(1 + cold_start_mem_buffer)` so the OOM
+daemon doesn't bump the campus user's brand-new run mid-write and
+leave a corrupt result dir behind. This is the cold-start "I have no
+idea how much memory you'll use" headroom; the smart planner takes
+over once you have ≥5 successful samples per `(profile, cluster,
+gpu_type)`, at which point the quantile-based shrink owns and the
+buffer is no longer applied (the priors already encode the right
+safety margin via `walltime_drift` calibration).
+
+`clusters.yaml` gains an optional `cold_start_mem_buffer:` field per
+cluster (default `0.15` = 15%). Set to `0.0` to opt out and preserve
+the legacy "kept user default" behavior on cold start. New helpers
+`claude_hpc.infra.clusters.get_cold_start_mem_buffer` and
+`get_nfs_data_dir` parse and validate the new fields. Both new keys
+are added to the boundary-contract allowlist as infra-shaped (they
+describe how the cluster is configured, not what work the user wants
+to run).
+
 ### Changed (deprecation) — `hpc_mapreduce` → `claude_hpc` package rename
 
 The package import path has been renamed `hpc_mapreduce` → `claude_hpc`,
