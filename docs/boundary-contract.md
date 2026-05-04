@@ -23,7 +23,7 @@ The public boundary also now includes the **shell CLI** at
 shape, subcommand list, and exit-code contract are documented in
 [`docs/cli-spec.md`](cli-spec.md) and the JSON Schemas under
 `claude_hpc/schemas/`. The CLI calls into the same atomic-ops layer
-(`slash_commands/runner.py`) that the slash commands use, so the
+(`claude_hpc/orchestrator/runner.py`) that the slash commands use, so the
 invariants in [`docs/sync-checklist.md`](sync-checklist.md) bind both.
 
 ### Package root

@@ -86,10 +86,10 @@ def compatibility_check(domain: str, found: int) -> None:
     per-module reader still applies any field-level back-compat
     backfills (e.g. v1 sidecars without ``wave_map``).
     """
-    # Local import: ``slash_commands.errors`` imports nothing from
+    # Local import: ``claude_hpc.errors`` imports nothing else from
     # ``claude_hpc`` so this is safe, but the import is inside the
     # function so module load order is robust to future refactors.
-    from slash_commands import errors as _errors
+    from claude_hpc import errors as _errors
 
     supported = _MANIFEST[domain]
     if found in supported:

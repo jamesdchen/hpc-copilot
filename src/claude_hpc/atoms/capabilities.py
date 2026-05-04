@@ -12,8 +12,8 @@ import os
 from typing import Any
 
 import claude_hpc
+from claude_hpc._internal import session
 from claude_hpc._internal._primitive import primitive
-from slash_commands import session
 
 # Names of the MARs-shipped slash-command skill bundles. Capabilities
 # reports the absolute path to each present ``SKILL.md`` so an
@@ -59,8 +59,8 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     multiplexing flag, MARs skill paths, required env vars, and the
     operations catalog — is computed here.
     """
+    from claude_hpc._internal.operations import operations_catalog
     from claude_hpc.infra.clusters import CLUSTER_YAML_KEYS
-    from claude_hpc.operations import operations_catalog
 
     return {
         "version": claude_hpc.__version__,

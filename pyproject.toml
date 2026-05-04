@@ -46,6 +46,9 @@ claude_hpc = [
     "mapreduce/templates/starters/*.py",
     "py.typed",
 ]
+slash_commands = [
+    "commands/*.md",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

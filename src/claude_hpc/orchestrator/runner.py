@@ -4,7 +4,7 @@ Each public function pairs a cluster-mutating mapreduce primitive with the
 corresponding journal update, so slash commands can't accidentally do one
 without the other (the failure mode that motivated this module).
 
-``slash_commands.session`` stays pure-IO; this module is the seam where SSH calls
+``claude_hpc._internal.session`` stays pure-IO; this module is the seam where SSH calls
 and journal writes meet.
 """
 
@@ -18,13 +18,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from claude_hpc import errors
+from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.session import RunRecord, _atomic_write_json
+from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra.remote import run_combiner_checked, ssh_run
 from claude_hpc.orchestrator.runs import find_run_by_cmd_sha, read_run_sidecar
-from slash_commands import errors, session
-from slash_commands.errors import RemoteCommandFailed
-from slash_commands.session import RunRecord, _atomic_write_json
 
 __all__ = [
     "submit_and_record",

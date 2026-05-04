@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from slash_commands import errors
+from claude_hpc import errors
 
 # error_codes documented in docs/cli-spec.md and shipped as the envelope
 # JSON Schema enum. Source of truth for the contract.

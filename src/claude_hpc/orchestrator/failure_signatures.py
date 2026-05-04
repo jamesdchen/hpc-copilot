@@ -11,7 +11,7 @@ patterns (OOM, walltime); ``priority=80`` are the user-error
 patterns (import, file_not_found, permission); ``priority=10`` is the
 generic Python traceback fallback.
 
-Why a separate module from :mod:`slash_commands.runner._categorize`:
+Why a separate module from :mod:`claude_hpc.orchestrator.runner._categorize`:
 the runner only emits a category string. ``classify()`` returns the
 full ``{error_class, suggested_fix, matched_pattern}`` triple so the
 caller can both display the error and act on the fix recommendation.
