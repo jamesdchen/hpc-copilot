@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/campaign_health.output.json",
+  "title": "campaign-health output (data block)",
+  "description": "Structured run-history aggregation. The suggested_prompt field is ready-to-feed-LLM (callers append no preamble; pass it directly).",
+  "type": "object",
+  "required": [
+    "campaign_id",
+    "since_iso",
+    "n_runs",
+    "n_complete",
+    "n_failed",
+    "walltime_cliff_rate",
+    "queue_wait_quantiles",
+    "failure_breakdown",
+    "gpu_utilization",
+    "suggested_prompt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "since_iso": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "n_runs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "n_complete": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "n_failed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "walltime_cliff_rate": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      }
+    },
+    "queue_wait_quantiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "failure_breakdown": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "gpu_utilization": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "suggested_prompt": {
+      "type": "string"
+    }
+  }
+}

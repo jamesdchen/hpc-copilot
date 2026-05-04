@@ -8,6 +8,12 @@ from hpc_mapreduce.infra.backends import HPCBackend, register
 
 @register("sge")
 class SGEBackend(HPCBackend):
+    # B5: capability metadata. SGE has no ``qsub --test-only``
+    # equivalent so supports_test_only_eta stays False; the planner
+    # falls back to the runtime prior alone.
+    scheduler_name = "sge"
+    template_ext = ".sge"
+    supports_test_only_eta = False
     # qsub prints either ``Your job 12345 ("name") has been submitted``
     # (single jobs) or ``Your job-array 12345.1-10:1 ("name") has been
     # submitted``.  Anchor on that phrase so a stray digit elsewhere in

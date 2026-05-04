@@ -14,6 +14,12 @@ class SlurmBackend(HPCBackend):
     # parse.
     JOB_ID_REGEX = re.compile(r"Submitted batch job\s+(\d+)")
 
+    # B5: capability metadata — replaces ``if scheduler == "slurm"``
+    # branches throughout the framework.
+    scheduler_name = "slurm"
+    template_ext = ".slurm"
+    supports_test_only_eta = True
+
     def __init__(
         self,
         script: str | None = None,
