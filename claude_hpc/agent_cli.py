@@ -613,34 +613,12 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
 # ─── subcommand: campaign status / list ────────────────────────────────────
 
 
-@primitive(
-    name="campaign-status",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_campaign_status(args: argparse.Namespace) -> int:
-    """Read-only summary of a closed-loop campaign.
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_status."""
+    from claude_hpc.atoms.campaign_status import campaign_status
 
-    Walks every sidecar tagged with ``--campaign-id`` and reports the
-    per-iteration reduced metrics dicts (``history.prior``) plus an
-    in-flight count (sidecars whose journal status is still
-    ``in_flight``). No SSH, no scheduler — pure local filesystem read.
-    """
-    from claude_hpc.mapreduce.reduce.history import find_sidecars_by_campaign, prior
-
-    sidecars = find_sidecars_by_campaign(args.experiment_dir, args.campaign_id)
-    history = prior(args.experiment_dir, args.campaign_id)
-    in_flight_records = session.find_runs_by_campaign(args.experiment_dir, args.campaign_id)
-    in_flight = sum(1 for r in in_flight_records if r.status == "in_flight")
     _ok(
-        {
-            "campaign_id": args.campaign_id,
-            "iterations": len(sidecars),
-            "in_flight": in_flight,
-            "history": history,
-            "run_ids": [s["run_id"] for s in sidecars],
-        },
+        campaign_status(experiment_dir=args.experiment_dir, campaign_id=args.campaign_id),
         name="campaign-status",
     )
     return EXIT_OK
