@@ -678,14 +678,19 @@ def _main() -> int:
         return exit_code
 
     # Read .hpc/runs/<run_id>.json + .hpc/tasks.py and synthesize a
-    # task-keyed dict the reporting code consumes.
-    sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
-    if not sidecar_path.is_file():
-        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
-        return _emit_err("sidecar_not_found", str(sidecar_path))
+    # task-keyed dict the reporting code consumes. Use the canonical
+    # hardened reader so wave_map / task_count / result_dir_template are
+    # guaranteed to be present.
+    from hpc_mapreduce.job.runs import read_run_sidecar  # noqa: PLC0415 — lazy
+
     try:
-        sidecar = json.loads(sidecar_path.read_text())
+        sidecar = read_run_sidecar(Path("."), args.run_id)
+    except FileNotFoundError as exc:
+        sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
+        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
+        return _emit_err("sidecar_not_found", str(sidecar_path))  # noqa: B904
     except (OSError, json.JSONDecodeError) as exc:
+        sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
         return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
 
     tasks_py_path = Path(".hpc") / "tasks.py"
