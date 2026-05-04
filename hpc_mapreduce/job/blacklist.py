@@ -48,11 +48,14 @@ MAX_EVIDENCE_PER_NODE: int = 5
 def blacklist_path(experiment_dir: Path, cluster: str) -> Path:
     """Return the canonical blacklist file path for *cluster*.
 
-    Resolves *experiment_dir* to an absolute path so a writer invoking
+    Forwarder for ``RepoLayout(experiment_dir).blacklist(cluster)``.
+    The layout class resolves *experiment_dir* (so a writer invoking
     from a child directory and a reader invoking from the project root
-    see the same file. Symlinks are resolved too.
+    see the same file).
     """
-    return Path(experiment_dir).resolve() / ".hpc" / f"bad_nodes.{cluster}.json"
+    from hpc_mapreduce.layout import RepoLayout
+
+    return RepoLayout(experiment_dir).blacklist(cluster)
 
 
 def _now() -> datetime:
