@@ -4,7 +4,9 @@ Designed to be invoked by automation (MARs orchestrator agents via the
 Bash tool, cron, scripts). Conventions:
 
 - Stdout is exclusively a single-line JSON envelope.
-- Stderr is JSON-per-line log records (debug for humans; agents may ignore).
+- Stderr carries free-form diagnostic prose (e.g. ``[dispatch] ERROR: …``
+  emitted by ``hpc_mapreduce.map.dispatch`` and ``…map.combiner``); it is
+  intended for humans tailing logs. Do not parse it as JSON.
 - Exit codes: 0 success, 1 user error, 2 cluster/network error, 3 internal.
 - Every subcommand accepts ``--experiment-dir`` (defaults to CWD).
 - Subcommands with non-trivial inputs accept ``--spec path/to/spec.json``.
