@@ -1,4 +1,4 @@
-"""Tests for :mod:`hpc_mapreduce.telemetry`.
+"""Tests for :mod:`claude_hpc._internal.telemetry`.
 
 Focused on the two behaviours that matter cross-process:
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce import telemetry
+from claude_hpc._internal import telemetry
 
 
 def test_default_sink_is_silent(capsys, tmp_path: Path) -> None:

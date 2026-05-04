@@ -51,7 +51,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce._io import atomic_locked_update
+from claude_hpc._internal._io import atomic_locked_update
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow_iso
 
 SCHEMA_VERSION: int = 1
@@ -69,7 +69,7 @@ def runtime_path(experiment_dir: Path, profile: str, cluster: str) -> Path:
     cluster)``. The layout class resolves *experiment_dir* and
     sanitizes ``/`` in *profile*; both behaviors are preserved here.
     """
-    from hpc_mapreduce.layout import RepoLayout
+    from claude_hpc._internal.layout import RepoLayout
 
     return RepoLayout(experiment_dir).runtime_prior(profile, cluster)
 
@@ -149,7 +149,7 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
     # B8: cross-domain manifest check. Soft-skip on mismatch — a future
     # writer with a wider schema shouldn't poison the prior; treating
     # the file as empty makes the prior re-learn from fresh samples.
-    from hpc_mapreduce._version import is_compatible as _is_compat
+    from claude_hpc._internal._version import is_compatible as _is_compat
     if isinstance(doc, dict):
         sv = doc.get("schema_version")
         if isinstance(sv, int) and not _is_compat("runtime_prior", sv):

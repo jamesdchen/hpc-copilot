@@ -1288,7 +1288,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 # B2 makes the literal redundant by sourcing from the StrEnum so the
 # drift class cannot recur. test_lifecycle.py asserts the cross-set
 # invariants (classifier emissions ⊆ accepted ⊆ FailureCategory).
-from hpc_mapreduce.lifecycle import FailureCategory as _FailureCategory  # noqa: E402
+from claude_hpc._internal.lifecycle import FailureCategory as _FailureCategory  # noqa: E402
 
 _VALID_RESUBMIT_CATEGORIES = frozenset({fc.value for fc in _FailureCategory})
 

@@ -664,7 +664,7 @@ MAX_HISTORY_SNAPSHOTS: int = int(os.environ.get("HPC_MAX_CLUSTER_HISTORY", "1000
 
 
 def _history_dir(experiment_dir: Path, cluster: str) -> Path:
-    from hpc_mapreduce.layout import RepoLayout
+    from claude_hpc._internal.layout import RepoLayout
 
     return RepoLayout(experiment_dir).cluster_history(cluster)
 

@@ -172,14 +172,14 @@ from hpc_mapreduce._primitive import (
     primitive,
     register_primitives,
 )
-from hpc_mapreduce.layout import JournalLayout, RepoLayout
+from claude_hpc._internal.layout import JournalLayout, RepoLayout
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
 # Framework subdirectory layout (.hpc/)
 #
-# Canonical home: :class:`hpc_mapreduce.layout.RepoLayout`. The three
+# Canonical home: :class:`claude_hpc._internal.layout.RepoLayout`. The three
 # functions below are back-compat forwarders kept so external callers /
 # slash commands that imported them by name continue to work. New code
 # should prefer ``RepoLayout(experiment_dir).hpc`` / ``.runs`` /
