@@ -125,9 +125,7 @@ def get_walltime_arbitrage(
     """
     raw = cluster_config.get("walltime_arbitrage", default)
     if not isinstance(raw, bool):
-        raise ValueError(
-            f"walltime_arbitrage must be a bool, got {raw!r} ({type(raw).__name__})"
-        )
+        raise ValueError(f"walltime_arbitrage must be a bool, got {raw!r} ({type(raw).__name__})")
     return raw
 
 
@@ -156,8 +154,7 @@ def get_auto_daisy_chain(cluster_config: dict[str, Any]) -> bool | None:
         return None
     if not isinstance(raw, bool):
         raise ValueError(
-            f"auto_daisy_chain must be a bool when set, got {raw!r} "
-            f"({type(raw).__name__})"
+            f"auto_daisy_chain must be a bool when set, got {raw!r} ({type(raw).__name__})"
         )
     return raw
 
@@ -180,9 +177,8 @@ def get_max_walltime_sec(
     raw = cluster_config.get("max_walltime_sec", default)
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise ValueError(
-            f"max_walltime_sec must be a positive int, got {raw!r} "
-            f"({type(raw).__name__})"
+            f"max_walltime_sec must be a positive int, got {raw!r} ({type(raw).__name__})"
         )
     if raw <= 0:
         raise ValueError(f"max_walltime_sec must be positive, got {raw}")
-    return raw
+    return int(raw)
