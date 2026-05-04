@@ -267,6 +267,81 @@ class TestRecommendMem:
         assert "v100" in rationale
 
 
+# ─── cold-start memory buffer (PR-B) ───────────────────────────────────────
+
+
+class TestColdStartMemBuffer:
+    """Cold-start (no prior) headroom against the OOM daemon.
+
+    When no usable runtime prior exists, we grow the user's --mem ask
+    by ``(1 + cold_start_buffer)`` so the OOM daemon doesn't bump the
+    campus user's brand-new run mid-write. Once priors land per GPU
+    type the quantile-based shrink takes over and the buffer is no
+    longer applied.
+    """
+
+    def test_no_prior_default_buffer_is_zero(self):
+        """Legacy callers (no buffer kwarg) keep ``user_default_mb`` exactly."""
+        mb, rationale = bf.recommend_mem_mb({}, ["a100"], user_default_mb=16384)
+        assert mb == 16384
+        assert "no usable" in rationale
+        assert "cold-start" not in rationale
+
+    def test_no_prior_with_15pct_buffer_grows_ask(self):
+        """16 GB × 1.15 = 18.4 GB (rounded to 18842 MB)."""
+        mb, rationale = bf.recommend_mem_mb(
+            {}, ["a100"], user_default_mb=16384, cold_start_buffer=0.15
+        )
+        # 16384 * 1.15 = 18841.6 → 18842
+        assert mb == 18842
+        assert "cold-start buffer" in rationale
+        assert "OOM-daemon" in rationale
+
+    def test_no_prior_with_20pct_buffer(self):
+        """20% buffer: 16 GB × 1.20 = 19.2 GB."""
+        mb, _ = bf.recommend_mem_mb({}, ["a100"], user_default_mb=16384, cold_start_buffer=0.20)
+        # 16384 * 1.20 = 19660.8 → 19661
+        assert mb == 19661
+
+    def test_buffer_not_applied_when_prior_exists(self):
+        """When priors exist the quantile shrink owns; buffer is ignored."""
+        q = {"a100": {"p95": 4096, "n_samples": 50}}
+        mb_with = bf.recommend_mem_mb(
+            q, ["a100"], user_default_mb=16384, safety_mult=1.5, cold_start_buffer=0.50
+        )[0]
+        mb_without = bf.recommend_mem_mb(
+            q, ["a100"], user_default_mb=16384, safety_mult=1.5, cold_start_buffer=0.0
+        )[0]
+        # Both paths shrink to 4096 * 1.5 = 6144; the cold-start buffer
+        # MUST NOT inflate this — priors already encode the safety
+        # margin via walltime-drift calibration.
+        assert mb_with == mb_without == 6144
+
+    def test_below_min_samples_uses_buffer(self):
+        """A handful of samples isn't enough — still cold-start."""
+        q = {"a100": {"p95": 4096, "n_samples": 5}}
+        mb, rationale = bf.recommend_mem_mb(
+            q,
+            ["a100"],
+            user_default_mb=16384,
+            min_samples=10,
+            cold_start_buffer=0.15,
+        )
+        assert mb == 18842
+        assert "cold-start buffer" in rationale
+
+    def test_negative_buffer_rejected(self):
+        with pytest.raises(ValueError, match="non-negative"):
+            bf.recommend_mem_mb({}, ["a100"], user_default_mb=16384, cold_start_buffer=-0.1)
+
+    def test_buffer_respects_floor(self):
+        """Tiny user ask + buffer still floors at floor_mb."""
+        mb, _ = bf.recommend_mem_mb(
+            {}, ["a100"], user_default_mb=100, cold_start_buffer=0.15, floor_mb=512
+        )
+        assert mb == 512
+
+
 class TestRecommendCpus:
     def test_no_prior_keeps_user_default(self):
         c, rationale = bf.recommend_cpus({}, ["a100"], user_default_cpus=4)
