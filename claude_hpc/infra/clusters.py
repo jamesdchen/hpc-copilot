@@ -19,6 +19,94 @@ import yaml  # type: ignore[import-untyped]
 from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
 
 
+# B-M4: declarative manifest of per-cluster yaml keys. Mirrors the
+# get_*() validators below; surfaced through cmd_capabilities so a
+# campus user learning the schema by inspection (without reading
+# clusters.py source) can discover every supported field. Add a row
+# here when adding a new validator. The ``required`` flag is False for
+# every survival-shaped field — the cluster works without them; they
+# just opt into specific helps for low-priority jobs.
+CLUSTER_YAML_KEYS: list[dict[str, Any]] = [
+    {
+        "key": "scheduler",
+        "type": "string",
+        "required": True,
+        "description": (
+            "One of 'sge' or 'slurm'. Routes the submission to the right backend."
+        ),
+    },
+    {
+        "key": "ssh_target",
+        "type": "string",
+        "required": False,
+        "description": "Default user@host for ssh; overridable per-spec.",
+    },
+    {
+        "key": "constraints",
+        "type": "object",
+        "required": False,
+        "description": (
+            "Cluster-level resource ceilings (cpus, gpus, mem_mb, walltime_sec). "
+            "Profile-level constraints override field-by-field."
+        ),
+    },
+    {
+        "key": "cold_start_mem_buffer",
+        "type": "number",
+        "default": 0.15,
+        "required": False,
+        "description": (
+            "Fractional headroom grown onto the user's --mem ask when no "
+            "runtime prior exists, so the OOM daemon doesn't bump the "
+            "campus user's brand-new run mid-write."
+        ),
+    },
+    {
+        "key": "nfs_data_dir",
+        "type": "string",
+        "required": False,
+        "description": (
+            "When set, threaded through as $HPC_NFS_DATA_DIR so the template "
+            "preamble copies the dataset into node-local SSD before the "
+            "executor runs — survives NFS throttling when N tasks read the "
+            "same files at once."
+        ),
+    },
+    {
+        "key": "walltime_arbitrage",
+        "type": "boolean",
+        "default": True,
+        "required": False,
+        "description": (
+            "Cold-start walltime trim: shave 15min and floor to a 5min "
+            "boundary so the campus user fits in backfill shadows higher-"
+            "priority jobs don't reach."
+        ),
+    },
+    {
+        "key": "auto_daisy_chain",
+        "type": "boolean | null",
+        "required": False,
+        "description": (
+            "Tri-state: true=always chain on max-walltime overflow, "
+            "false=never (kill switch), absent=defer to "
+            "detect_checkpointing on past runs. Lets long-walltime asks "
+            "survive the cluster's hard ceiling via segmented submission."
+        ),
+    },
+    {
+        "key": "max_walltime_sec",
+        "type": "integer",
+        "default": 86400,
+        "required": False,
+        "description": (
+            "The cluster's hard walltime ceiling in seconds. Auto-daisy-"
+            "chain fires when an ask exceeds max_walltime_sec - 3600."
+        ),
+    },
+]
+
+
 def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
     """Load cluster definitions from clusters.yaml.
 
