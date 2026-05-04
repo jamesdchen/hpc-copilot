@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Added — dispatch resilience for the campus user (PR-A)
+
+Three changes that help low-priority "campus user" jobs survive a
+hostile shared HPC environment, where higher-priority work routinely
+preempts the user's tasks. None of these change framework-internal
+behaviour for non-preempted runs.
+
+* `claude_hpc/mapreduce/dispatch.py` now traps `SIGTERM` from the
+  scheduler. The handler logs `[claude-hpc] SIGTERM received;
+  cluster preemption imminent` to stderr, writes
+  `preempted_at: <utcnow_iso>` to the per-task entry of
+  `<exp>/.hpc/runs/<run_id>.json`, forwards `SIGINT` to the executor
+  subprocess so its except blocks run during the cluster's
+  preemption window, waits up to `HPC_PREEMPT_GRACE_SEC` (default
+  25s) for clean exit, then `sys.exit(130)`. Marks the run as bumped
+  (not failed) so the agent harness can resubmit cleanly without
+  surfacing a real failure to the user. Stays cluster-side
+  stdlib-only.
+* `claude_hpc/mapreduce/dispatch.py` skips invoking the executor on
+  resubmit if `result_dir/metrics.json` already exists with non-zero
+  size — the campus user resubmits a preempted task without redoing
+  already-completed work. Convention: executors that don't call
+  `claude_hpc.mapreduce.metrics_io.write_metrics` won't get
+  free skip-on-resubmit.
+* `slash_commands/errors.Preempted` is the new typed exception
+  (`error_code: preempted`, `category: cluster`, `retry_safe: True`).
+  Wired through the agent envelope (`error_code` enum in
+  `claude_hpc/schemas/envelope.json`), the failure-signatures catalog
+  (exit-code 130 → `error_class: preempted`, `suggested_fix: {action:
+  resubmit-preempted}`), and `cmd_failures` (`preempted_count` /
+  `preempted_task_ids` surfaced at the data top level). Also added to
+  the canonical `FailureCategory` StrEnum so classifier-emits ⊆
+  resubmit-accepts.
+
 ### Changed (deprecation) — `hpc_mapreduce` → `claude_hpc` package rename
 
 The package import path has been renamed `hpc_mapreduce` → `claude_hpc`,
