@@ -108,8 +108,12 @@ def primitives_from_registry() -> list[dict]:
     migration window where some primitives might not be decorated yet.
     """
     sys.path.insert(0, str(REPO_ROOT))
-    from claude_hpc._internal._primitive import get_registry
+    from claude_hpc._internal._primitive import get_registry, register_primitives
 
+    # The registry is now explicit: callers must register primitives
+    # before querying. Without this call, get_registry() raises
+    # RuntimeError. Idempotent — safe to call from anywhere.
+    register_primitives()
     registered = get_registry()
     out: list[dict] = []
     seen: set[str] = set()
