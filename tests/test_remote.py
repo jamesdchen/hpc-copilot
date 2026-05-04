@@ -138,9 +138,10 @@ class TestRsyncPull:
 class TestDeployRuntime:
     """Verify call order: 1 ssh (mkdir), then 1 scp per source file.
 
-    The current code scp's context.py, metrics_io.py, then combiner.py in
-    that order.  If context.py doesn't exist on disk we still test the call
-    sequence that the function emits.
+    The current code scp's metrics_io.py, then combiner.py in that order.
+    (The earlier orphan ``context.py`` push was removed in regfix because
+    the source module never existed on disk; deploy_runtime would have
+    raised FileNotFoundError on the scp call.)
     """
 
     def test_ssh_mkdir_then_scps_in_order(self):
@@ -150,14 +151,14 @@ class TestDeployRuntime:
             remote.deploy_runtime(host="c", user="u", remote_path="/p")
 
         all_calls = mock_run.call_args_list
-        # Expect 11 subprocess.run invocations:
+        # Expect 10 subprocess.run invocations:
         #   1 ssh (mkdir -p hpc_mapreduce/map, .hpc/templates, .hpc/templates/common),
-        #   2 scp into hpc_mapreduce/map/ (context.py, metrics_io.py),
+        #   1 scp into hpc_mapreduce/map/ (metrics_io.py),
         #   1 scp into .hpc/_hpc_dispatch.py,
         #   4 scp into .hpc/templates/ (sge cpu/gpu, slurm cpu/gpu),
         #   2 scp into .hpc/templates/common/ (hpc_preamble.sh, gpu_preamble.sh),
         #   1 scp into .hpc/_hpc_combiner.py.
-        assert len(all_calls) == 11, [c[0][0][:3] for c in all_calls]
+        assert len(all_calls) == 10, [c[0][0][:3] for c in all_calls]
 
         argvs = [c[0][0] for c in all_calls]
 
@@ -167,31 +168,27 @@ class TestDeployRuntime:
         assert ".hpc/templates" in argvs[0][-1]
         assert ".hpc/templates/common" in argvs[0][-1]
 
-        # Importable stubs into hpc_mapreduce/map/
+        # Importable stub into hpc_mapreduce/map/
         assert argvs[1][0] == "scp"
-        assert argvs[1][1].endswith("context.py")
-        assert argvs[1][2].endswith(":/p/hpc_mapreduce/map/context.py")
-
-        assert argvs[2][0] == "scp"
-        assert argvs[2][1].endswith("metrics_io.py")
-        assert argvs[2][2].endswith(":/p/hpc_mapreduce/map/metrics_io.py")
+        assert argvs[1][1].endswith("metrics_io.py")
+        assert argvs[1][2].endswith(":/p/hpc_mapreduce/map/metrics_io.py")
 
         # Framework executor into .hpc/
-        assert argvs[3][0] == "scp"
-        assert argvs[3][1].endswith("dispatch.py")
-        assert argvs[3][2].endswith(":/p/.hpc/_hpc_dispatch.py")
+        assert argvs[2][0] == "scp"
+        assert argvs[2][1].endswith("dispatch.py")
+        assert argvs[2][2].endswith(":/p/.hpc/_hpc_dispatch.py")
 
         # Four templates into .hpc/templates/
-        template_dsts = {argv[2] for argv in argvs[4:8]}
-        assert all(argv[0] == "scp" for argv in argvs[4:8])
+        template_dsts = {argv[2] for argv in argvs[3:7]}
+        assert all(argv[0] == "scp" for argv in argvs[3:7])
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
 
         # Two shared preambles into .hpc/templates/common/
-        common_dsts = {argv[2] for argv in argvs[8:10]}
-        assert all(argv[0] == "scp" for argv in argvs[8:10])
+        common_dsts = {argv[2] for argv in argvs[7:9]}
+        assert all(argv[0] == "scp" for argv in argvs[7:9])
         assert any(
             d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts
         )
@@ -200,9 +197,9 @@ class TestDeployRuntime:
         )
 
         # Combiner is last
-        assert argvs[10][0] == "scp"
-        assert argvs[10][1].endswith("combiner.py")
-        assert argvs[10][2].endswith(":/p/.hpc/_hpc_combiner.py")
+        assert argvs[9][0] == "scp"
+        assert argvs[9][1].endswith("combiner.py")
+        assert argvs[9][2].endswith(":/p/.hpc/_hpc_combiner.py")
 
 
 # ---------------------------------------------------------------------------
