@@ -17,11 +17,13 @@ from pathlib import Path
 
 import pytest
 
+# Import at module load (not lazily inside threads) so the test never
+# trips on a not-yet-installed package state in workers.
+from hpc_mapreduce.job.monitor_flow import _flock_append
+
 
 def _append_one(path: Path, n: int, run_id: str) -> None:
     """Use the production helper directly so the lock pattern is exercised."""
-    from hpc_mapreduce.job.monitor_flow import _flock_append
-
     payload = {"run_id": run_id, "n": n, "padding": "x" * 200}
     with _flock_append(path), path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload) + "\n")
@@ -44,10 +46,7 @@ def test_concurrent_appends_produce_no_torn_lines(tmp_path: Path) -> None:
     t2.join()
 
     lines = target.read_text(encoding="utf-8").splitlines()
-    # Each thread wrote 200, so total must equal 400 — the lock must not
-    # have caused any drops.
     assert len(lines) == 400
-    # And every line must parse — no partial-write torn records.
     for ln in lines:
         json.loads(ln)
 
@@ -55,8 +54,6 @@ def test_concurrent_appends_produce_no_torn_lines(tmp_path: Path) -> None:
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="flock unavailable on Windows")
 def test_lock_sibling_file_created(tmp_path: Path) -> None:
     """The ``.lock`` sibling file is created on first acquire and persists."""
-    from hpc_mapreduce.job.monitor_flow import _flock_append
-
     target = tmp_path / "run.monitor.jsonl"
     with _flock_append(target):
         pass
