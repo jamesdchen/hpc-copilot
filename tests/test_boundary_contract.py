@@ -142,6 +142,13 @@ ALLOWED_CLUSTER_KEYS = frozenset(
         # Present in current config/clusters.yaml; infra-shaped, so allow.
         "account",
         "gpu_constraint",
+        # Survival-defense knobs (PR-B): cold-start mem headroom and
+        # the optional NFS dataset path the templates rsync into local
+        # node SSD before the executor runs. Both are infra-shaped —
+        # they describe how the cluster is configured, not what work
+        # the user wants to run.
+        "cold_start_mem_buffer",
+        "nfs_data_dir",
     }
 )
 
