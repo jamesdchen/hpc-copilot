@@ -96,6 +96,22 @@ class SlurmBackend(HPCBackend):
         import os
         return os.path.join(log_dir, f"{job_name}_{job_id}_{task_id}.err")
 
+    @staticmethod
+    def query_jobs(
+        job_ids: list[str],
+        *,
+        sge_user: str | None = None,
+        slurm_cluster: str | None = None,
+    ) -> dict:
+        """Dispatch to ``query_sacct`` for SLURM job state.
+
+        Unified signature across SGE and SLURM so reduce.status can call
+        ``backend_cls.query_jobs(...)`` without an inline ladder. The
+        unused kwarg is ignored (sge_user is irrelevant for SLURM).
+        """
+        from hpc_mapreduce.infra.backends.query import query_sacct
+        return query_sacct(job_ids, cluster=slurm_cluster)
+
     def _build_command(
         self,
         task_range: str,

@@ -196,18 +196,27 @@ def get_err_log_paths(
     job_name: str = "",
     scratch_dir: str = "",
 ) -> dict[int, str]:
-    """Find the most recent error log path on disk for each task."""
+    """Find the most recent error log path on disk for each task.
+
+    B5-PR2: per-scheduler base path goes through
+    :meth:`HPCBackend.err_log_disk_path`. The SLURM fallback glob (which
+    catches submission scripts that override ``--error`` to a non-canonical
+    name) stays here because it's an on-disk recovery pattern, not a
+    scheduler shape question.
+    """
+    from hpc_mapreduce.infra.backends import get_backend_class
+
+    backend_cls = get_backend_class(scheduler)
     paths: dict[int, str] = {}
     for tid in range(1, total_tasks + 1):
         for job_id in reversed(job_ids):
-            if scheduler == "sge":
-                p = os.path.join(scratch_dir, f"{job_name}.o{job_id}.{tid}")
-            else:
-                p = os.path.join(log_dir, f"{job_name}_{job_id}_{tid}.err")
-                if not os.path.isfile(p):
-                    matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
-                    if matches:
-                        p = max(matches, key=os.path.getmtime)
+            p = backend_cls.err_log_disk_path(
+                log_dir, scratch_dir, job_name, job_id, tid
+            )
+            if scheduler != "sge" and not os.path.isfile(p):
+                matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
+                if matches:
+                    p = max(matches, key=os.path.getmtime)
             if os.path.isfile(p):
                 paths[tid] = p
                 break
@@ -261,7 +270,8 @@ def report_status(
     ``min_rows`` is forwarded to :func:`check_results`; see its docstring for the
     CSV completion semantics.
     """
-    from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
+    # B5-PR2: per-scheduler job-state query goes through backend.query_jobs.
+    from hpc_mapreduce.infra.backends import get_backend_class
 
     csv_results = check_results(result_dir, total_tasks, file_glob=file_glob, min_rows=min_rows)
 
@@ -270,10 +280,9 @@ def report_status(
 
     errors: list[dict] = []
     if job_ids:
-        if scheduler == "sge":
-            query_result = query_sge(job_ids, user=sge_user)
-        else:
-            query_result = query_sacct(job_ids, cluster=slurm_cluster)
+        query_result = get_backend_class(scheduler).query_jobs(
+            job_ids, sge_user=sge_user, slurm_cluster=slurm_cluster
+        )
         job_info = query_result.get("tasks", {}) or {}
         errors.extend(query_result.get("errors", []) or [])
     else:
@@ -434,7 +443,8 @@ def report_status_from_tasks(
     Each task's per-task dict includes ``cmd_sha`` pulled from the task
     entry when present; ``null`` otherwise.
     """
-    from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
+    # B5-PR2: per-scheduler job-state query goes through backend.query_jobs.
+    from hpc_mapreduce.infra.backends import get_backend_class
 
     total = int(tasks_data.get("total_tasks", len(tasks_data.get("tasks", {}))))
     task_entries = tasks_data.get("tasks", {}) or {}
@@ -452,10 +462,9 @@ def report_status_from_tasks(
 
     errors: list[dict] = []
     if job_ids:
-        if scheduler == "sge":
-            query_result = query_sge(job_ids, user=sge_user)
-        else:
-            query_result = query_sacct(job_ids, cluster=slurm_cluster)
+        query_result = get_backend_class(scheduler).query_jobs(
+            job_ids, sge_user=sge_user, slurm_cluster=slurm_cluster
+        )
         job_info = query_result.get("tasks", {}) or {}
         errors.extend(query_result.get("errors", []) or [])
     else:
