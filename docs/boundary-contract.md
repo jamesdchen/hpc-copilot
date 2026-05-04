@@ -16,7 +16,7 @@ here.
 
 The exports below are the entire public surface of the `claude_hpc`
 package. Groupings mirror those in
-[`claude_hpc/__init__.py`](../claude_hpc/__init__.py).
+[`claude_hpc/__init__.py`](../src/claude_hpc/__init__.py).
 
 The public boundary also now includes the **shell CLI** at
 `claude_hpc/agent_cli.py` (entry point `hpc-mapreduce`). Its envelope
@@ -266,7 +266,7 @@ directory `.hpc/`**:
 The framework reserves the **`.hpc/` directory** inside experiment
 repos. The discovery scanner skips this directory wholesale via
 `_SKIP_DIRS` in
-[`claude_hpc/orchestrator/discover.py`](../claude_hpc/orchestrator/discover.py), so
+[`claude_hpc/orchestrator/discover.py`](../src/claude_hpc/orchestrator/discover.py), so
 nothing inside it is misclassified as an executor. Experiment authors
 must not place user-code files (executors, libraries) under `.hpc/`.
 
