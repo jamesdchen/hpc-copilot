@@ -4,12 +4,14 @@
 #
 # Sourced by sge/cpu_array.sh, sge/gpu_array.sh, slurm/cpu_array.slurm,
 # and slurm/gpu_array.slurm before they begin executing the user's
-# command. Owns the three steps that every template needs identically:
+# command. Owns the steps every template needs identically:
 #
 #   1. Module setup (Hoffman2 UGE init + per-cluster $MODULES list)
 #   2. Conda activation ($CONDA_SOURCE + $CONDA_ENV)
 #   3. cd $REPO_DIR + PYTHONPATH export
 #   4. Optional `uv sync` when HPC_RUNTIME=uv
+#   5. Thread caps so BLAS/OpenMP libs don't oversubscribe the cgroup
+#      and get the campus user's job killed by the OOM daemon
 #
 # Reads from the surrounding job's environment:
 #   $MODULES        space-separated module list
@@ -17,6 +19,9 @@
 #   $CONDA_ENV      conda env to activate (optional)
 #   $REPO_DIR       repo root to cd into (defaulted before sourcing)
 #   $HPC_RUNTIME    "uv" to enable uv sync; anything else is no-op
+#   $HPC_OMP_NUM_THREADS / $HPC_MKL_NUM_THREADS / $HPC_OPENBLAS_NUM_THREADS /
+#     $HPC_NUMEXPR_NUM_THREADS / $HPC_VECLIB_NUM_THREADS
+#                   per-library thread cap overrides; default 1 each
 #
 # This file is scp'd to the cluster as .hpc/templates/common/hpc_preamble.sh
 # alongside the per-scheduler templates by deploy_runtime().
@@ -60,3 +65,23 @@ if [ "${HPC_RUNTIME:-}" = "uv" ]; then
     fi
     uv sync || { echo "[template] uv sync failed" >&2; exit 2; }
 fi
+
+# --- Thread caps (survival) ---
+# Survival: cap threads so the campus user's job doesn't get killed by
+# the OOM daemon for oversubscribing the node it was honestly allocated.
+# The scheduler gave us $SLURM_CPUS_PER_TASK / $NSLOTS cores; libraries
+# like OpenBLAS, MKL, NumExpr and vecLib otherwise default to "all CPUs
+# the kernel can see" and will spawn 16+ threads on a 1-core allocation,
+# blowing past the cgroup CPU limit and pinning RSS until the OOM daemon
+# kills the job. Default to 1 thread; user override per-experiment via
+# $HPC_OMP_NUM_THREADS=N (or any of the per-library $HPC_*_NUM_THREADS)
+# in the spec's ``job_env``. The CPU/GPU array templates re-export
+# OMP_NUM_THREADS / MKL_NUM_THREADS to $SLURM_CPUS_PER_TASK / $NSLOTS
+# *after* sourcing this preamble, so multi-threaded workloads still get
+# all their allocated cores — these defaults exist for the much more
+# common single-core, NumPy-via-OpenBLAS case.
+export OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${HPC_OPENBLAS_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${HPC_NUMEXPR_NUM_THREADS:-1}"
+export VECLIB_MAXIMUM_THREADS="${HPC_VECLIB_NUM_THREADS:-1}"
