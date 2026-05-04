@@ -37,6 +37,7 @@ include = ["claude_hpc*", "hpc_mapreduce*", "slash_commands*"]
 claude_hpc = [
     "config/*.yaml",
     "schemas/*.json",
+    "mapreduce/templates/*.py",   # tasks_example.py, cli_dispatcher.py
     "mapreduce/templates/common/*.sh",
     "mapreduce/templates/sge/*",
     "mapreduce/templates/slurm/*",

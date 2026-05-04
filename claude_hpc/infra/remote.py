@@ -312,11 +312,21 @@ def deploy_runtime(
                 f"scp binary not found while copying {src.name}: {exc}"
             ) from exc
 
-    # Importable stubs (used inside cluster jobs by user executors).
-    # Note: ``map/context.py`` was previously pushed here but the source
-    # module never existed on disk; the orphan reference would FileNotFound
-    # at deploy time. Removed in regfix.
+    # Importable stubs (used inside cluster jobs by user code).
+    #
+    # Cluster-side imports we have to support:
+    #   - ``from claude_hpc.mapreduce.metrics_io import write_metrics``
+    #     in user executor scripts (executor_template.py).
+    #   - ``from claude_hpc.executor_cli import flag, generic_args, gpu_args``
+    #     in user .hpc/tasks.py (tasks_example.py). The dispatcher loads
+    #     tasks.py at task time via importlib; the top-level import has
+    #     to resolve or every task ImportErrors before total()/resolve()
+    #     are called.
+    #
+    # Both modules are stdlib-only (verified via AST scan) so they ship
+    # safely without dragging in the rest of the package.
     _scp(pkg_dir / "mapreduce" / "metrics_io.py", "claude_hpc/mapreduce/metrics_io.py")
+    _scp(pkg_dir / "executor_cli.py", "claude_hpc/executor_cli.py")
 
     # Framework executor + combiner inside .hpc/.
     _scp(pkg_dir / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
