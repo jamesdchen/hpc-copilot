@@ -18,6 +18,16 @@ the ``cmd_*`` dispatcher in ``agent_cli.py`` (e.g. ``capabilities``,
 registry treats both shapes uniformly; downstream consumers should not
 assume ``meta.func`` is always at the primitives layer.
 
+Population
+----------
+
+Callers MUST invoke :func:`register_primitives` once at process startup
+before querying :func:`get_registry` / :func:`get_meta`. Querying the
+registry before registration raises ``RuntimeError`` — the previous
+auto-import-on-first-query behaviour silently swallowed
+``ImportError`` and made hard-to-diagnose missing-decorator bugs.
+``register_primitives`` itself is idempotent.
+
 Migration safety
 ----------------
 
@@ -30,7 +40,6 @@ time, not silently absorbed.
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import importlib
 from typing import TYPE_CHECKING, Any, Literal
@@ -79,6 +88,7 @@ class PrimitiveMeta:
 
 
 _REGISTRY: dict[str, PrimitiveMeta] = {}
+_REGISTRATION_DONE: bool = False
 
 
 def primitive(
@@ -167,23 +177,11 @@ def primitive(
     return decorator
 
 
-def get_registry() -> dict[str, PrimitiveMeta]:
-    """Return a snapshot of the registry, importing primitive-bearing modules first."""
-    _ensure_imported()
-    return dict(_REGISTRY)
-
-
-def get_meta(name: str) -> PrimitiveMeta:
-    """Return the :class:`PrimitiveMeta` for ``name`` (KeyError if absent)."""
-    _ensure_imported()
-    return _REGISTRY[name]
-
-
-# Modules listed here are imported on first registry query. Each
-# module-level @primitive(...) call registers itself on import. Any
-# new module that adds @primitive(...) MUST be appended here; a CI lint
-# (``scripts/lint_primitive_modules.py``) catches drift at lint time
-# without paying a runtime auto-discovery cost.
+# Modules listed here are imported once by :func:`register_primitives`.
+# Each module-level @primitive(...) call registers itself on import.
+# Any new module that adds @primitive(...) MUST be appended here; a CI
+# lint (``scripts/lint_primitive_modules.py``) catches drift at lint
+# time without paying any runtime cost.
 #
 # ORDERING: atoms must precede the composites that reference them.
 # Composite ``@primitive(composes=[atom_func, ...])`` decorators look
@@ -209,28 +207,66 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_mapreduce.job.aggregate_flow",
 )
 
-# Recursion guards for ``_ensure_imported``.
-_IMPORTING: bool = False
-_IMPORT_DONE: bool = False
 
+def register_primitives() -> None:
+    """Import every module that decorates a primitive.
 
-def _ensure_imported() -> None:
-    """Force-import every module that registers a primitive."""
-    global _IMPORTING, _IMPORT_DONE
-    if _IMPORT_DONE or _IMPORTING:
+    Must be called once before the registry is queried. Idempotent —
+    re-calling is a no-op. Modules in ``_PRIMITIVE_MODULES`` are imported
+    in order; the import side-effect of each module's @primitive(...)
+    calls populates ``_REGISTRY``.
+
+    Atoms must precede the composites that reference them in the list
+    because composites' @primitive(composes=[atom_func, ...]) decorators
+    look up the atom's ``_primitive_meta`` attribute at decoration time.
+
+    Unlike the previous auto-import path this function does NOT
+    silently swallow ``ImportError`` — a bad primitive module fails the
+    call loudly so the missing decorator surfaces immediately rather
+    than as a downstream "primitive not in registry" error.
+    """
+    global _REGISTRATION_DONE
+    if _REGISTRATION_DONE:
         return
-    _IMPORTING = True
-    try:
-        for modname in _PRIMITIVE_MODULES:
-            with contextlib.suppress(ImportError):
-                importlib.import_module(modname)
-    finally:
-        _IMPORTING = False
-        _IMPORT_DONE = True
+    for modname in _PRIMITIVE_MODULES:
+        importlib.import_module(modname)
+    _REGISTRATION_DONE = True
+
+
+def get_registry() -> dict[str, PrimitiveMeta]:
+    """Return a snapshot of the primitive registry.
+
+    Raises ``RuntimeError`` if :func:`register_primitives` has not yet
+    been called. Tests configure an autouse session fixture; the
+    ``hpc-mapreduce`` CLI invokes it from ``main()`` before subcommand
+    dispatch.
+    """
+    if not _REGISTRATION_DONE:
+        raise RuntimeError(
+            "Primitive registry queried before register_primitives() "
+            "was called. Call hpc_mapreduce.register_primitives() at "
+            "process startup."
+        )
+    return dict(_REGISTRY)
+
+
+def get_meta(name: str) -> PrimitiveMeta:
+    """Return the :class:`PrimitiveMeta` for ``name`` (KeyError if absent)."""
+    if not _REGISTRATION_DONE:
+        raise RuntimeError(
+            "Primitive registry queried before register_primitives() "
+            "was called. Call hpc_mapreduce.register_primitives() at "
+            "process startup."
+        )
+    return _REGISTRY[name]
 
 
 def _reset_for_tests() -> None:
-    """Test helper: clear the registry and reset the import latch."""
-    global _IMPORT_DONE
+    """Test helper: clear the registry and reset the registration latch.
+
+    Not part of the public API. Tests that need a clean registry
+    snapshot call this before re-importing primitive modules.
+    """
+    global _REGISTRATION_DONE
     _REGISTRY.clear()
-    _IMPORT_DONE = False
+    _REGISTRATION_DONE = False

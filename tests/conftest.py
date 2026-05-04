@@ -86,3 +86,20 @@ def write_hpc_tasks(hpc_dir: Path, tasks: list[dict[str, Any]]) -> Path:
         "def resolve(i): return _TASKS[i]\n"
     )
     return tasks_py
+
+
+import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _register_primitives_once() -> None:
+    """Populate the @primitive registry once per pytest session.
+
+    The C\u2032-v2 spine no longer auto-imports primitive-bearing modules
+    on first registry query; ``register_primitives()`` must be called
+    explicitly. Tests that exercise ``get_registry`` / ``get_meta``
+    would otherwise hit the new RuntimeError. Idempotent.
+    """
+    from hpc_mapreduce import register_primitives
+
+    register_primitives()
