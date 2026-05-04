@@ -16,7 +16,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]
-  python: slash_commands.runner.resubmit_failed
+  python: claude_hpc.orchestrator.runner.resubmit_failed
 exit_codes:
 - 0: ok
 - 1: spec_invalid

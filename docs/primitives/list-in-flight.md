@@ -11,7 +11,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-mapreduce list-in-flight --experiment-dir <path>
-  python: slash_commands.session.find_in_flight_runs
+  python: claude_hpc._internal.session.find_in_flight_runs
 exit_codes:
 - 0: ok
 - 3: journal_corrupt
