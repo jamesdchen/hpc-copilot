@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-mapreduce discover --experiment-dir <path>
-  python: hpc_mapreduce.job.discover.discover_executors
+  python: claude_hpc.orchestrator.discover.discover_executors
 exit_codes:
 - 0: ok
 - 3: internal

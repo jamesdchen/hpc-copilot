@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from hpc_mapreduce.job import queue_wait_baseline as qwb
-from hpc_mapreduce.job import runtime_prior as rp
-from hpc_mapreduce.job.queue_features import QueueFeatures
+from claude_hpc.forecast import queue_wait_baseline as qwb
+from claude_hpc.orchestrator import runtime_prior as rp
+from claude_hpc.forecast.queue_features import QueueFeatures
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"

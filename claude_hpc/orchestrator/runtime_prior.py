@@ -30,7 +30,7 @@ Two responsibilities:
    ``cmd_sha`` (when supplied).
 
 This module's responsibilities are distinct from
-``hpc_mapreduce.job.throughput``: throughput.py turns a single
+``claude_hpc.orchestrator.throughput``: throughput.py turns a single
 duration estimate + cluster constraints into a wave-packed plan, while
 this module *produces* the duration estimate from history.
 """
@@ -375,7 +375,7 @@ def roll_up_quantiles(
 def coerce_pos_int(x: Any) -> int | None:
     """Coerce *x* to a positive int or return None. Permissive on garbage.
 
-    Shared with :mod:`hpc_mapreduce.job.calibration` so both modules
+    Shared with :mod:`claude_hpc.orchestrator.calibration` so both modules
     consume the runtime-prior sample dicts through a single coercion.
     """
     if x is None:

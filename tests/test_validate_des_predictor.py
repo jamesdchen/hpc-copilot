@@ -9,7 +9,7 @@ from pathlib import Path
 from claude_hpc.infra.inspect import (
     ClusterSnapshot, NodeSnapshot, persist_snapshot,
 )
-from hpc_mapreduce.job import runtime_prior as rp
+from claude_hpc.orchestrator import runtime_prior as rp
 
 
 def _load_script():

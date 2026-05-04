@@ -1,7 +1,7 @@
 """``aggregate-flow``: workflow atom that finalizes a run's aggregated metrics.
 
-Third workflow atom in the :mod:`hpc_mapreduce.job.submit_flow` /
-:mod:`hpc_mapreduce.job.monitor_flow` family. Pipeline:
+Third workflow atom in the :mod:`claude_hpc.orchestrator.submit_flow` /
+:mod:`claude_hpc.orchestrator.monitor_flow` family. Pipeline:
 
 1. Read the per-run sidecar to discover the wave_map + remote_path.
 2. (Optional, default on) ``ensure_all_combined`` — for every wave in
@@ -36,7 +36,7 @@ from typing import Any
 
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.remote import rsync_pull, split_ssh_target
-from hpc_mapreduce.job.runs import read_run_sidecar
+from claude_hpc.orchestrator.runs import read_run_sidecar
 from claude_hpc.mapreduce.reduce.metrics import reduce_partials
 from slash_commands import errors, runner, session
 from slash_commands.runner import combine_wave, record_status

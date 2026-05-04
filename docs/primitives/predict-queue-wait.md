@@ -31,7 +31,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]
-  python: hpc_mapreduce.job.queue_wait_baseline.predict_queue_wait
+  python: claude_hpc.forecast.queue_wait_baseline.predict_queue_wait
 exit_codes:
 - 0: ok
 - 2: spec_invalid

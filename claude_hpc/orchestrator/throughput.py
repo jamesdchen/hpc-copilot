@@ -12,7 +12,7 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from hpc_mapreduce.job.constraints import ClusterConstraints
+    from claude_hpc.orchestrator.constraints import ClusterConstraints
 
 __all__ = [
     "WorkloadSpec",

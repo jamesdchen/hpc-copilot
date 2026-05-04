@@ -2,7 +2,7 @@
 
 Phase 2b: given a :class:`UserProfile`, predict how much longer a
 currently-running job is likely to keep running. Used by
-:mod:`hpc_mapreduce.job.state_forecast` to project the cluster's
+:mod:`claude_hpc.forecast.state_forecast` to project the cluster's
 free-resource pool ``T`` seconds into the future.
 
 The estimator is a pure function — no I/O, no side effects, deterministic
@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from hpc_mapreduce.job.user_profiles import UserProfile
+    from claude_hpc.forecast.user_profiles import UserProfile
 
 __all__ = ["predict_residual_lifetime", "MIN_OBSERVATIONS_FOR_PROFILE"]
 

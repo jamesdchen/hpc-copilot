@@ -72,7 +72,7 @@ def test_envelope_schema_enum_matches_subclass_inventory() -> None:
     """The error_code enum in envelope.json must match the documented set."""
     schema_path = (
         Path(__file__).parent.parent
-        / "hpc_mapreduce" / "schemas" / "envelope.json"
+        / "claude_hpc" / "schemas" / "envelope.json"
     )
     schema = json.loads(schema_path.read_text())
     # The schema is `oneOf [success, error]`; pull the error variant.

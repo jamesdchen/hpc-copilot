@@ -20,7 +20,7 @@ from typing import Any
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.infra.remote import run_combiner_checked, ssh_run
-from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar
+from claude_hpc.orchestrator.runs import find_run_by_cmd_sha, read_run_sidecar
 from slash_commands import errors, session
 from slash_commands.errors import RemoteCommandFailed
 from slash_commands.session import RunRecord, _atomic_write_json
@@ -886,8 +886,8 @@ def cluster_failures_by_fingerprint(
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather
         # than asking the user. Importable as
-        # ``hpc_mapreduce.job.failure_signatures.classify``.
-        from hpc_mapreduce.job.failure_signatures import classify
+        # ``claude_hpc.orchestrator.failure_signatures.classify``.
+        from claude_hpc.orchestrator.failure_signatures import classify
 
         sig = classify(content, entry.get("exit_code"))
         key = (category, fp)

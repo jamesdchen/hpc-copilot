@@ -1,11 +1,11 @@
-"""Tests for hpc_mapreduce.job.queue_wait_baseline.predict_queue_wait."""
+"""Tests for claude_hpc.forecast.queue_wait_baseline.predict_queue_wait."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from hpc_mapreduce.job import queue_wait_baseline as qwb
-from hpc_mapreduce.job import runtime_prior as rp
+from claude_hpc.forecast import queue_wait_baseline as qwb
+from claude_hpc.orchestrator import runtime_prior as rp
 
 
 PROFILE = "ml_ridge"

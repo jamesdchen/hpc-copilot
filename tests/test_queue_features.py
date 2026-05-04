@@ -1,10 +1,10 @@
-"""Tests for ``hpc_mapreduce.job.queue_features.compute_features``."""
+"""Tests for ``claude_hpc.forecast.queue_features.compute_features``."""
 
 from __future__ import annotations
 
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job.queue_features import compute_features
+from claude_hpc.forecast.queue_features import compute_features
 
 
 def _node(

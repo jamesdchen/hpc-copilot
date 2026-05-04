@@ -114,20 +114,20 @@ from claude_hpc.infra.remote import (
     run_combiner_checked,
     ssh_run,
 )
-from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
-from hpc_mapreduce.job.discover import (
+from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
+from claude_hpc.orchestrator.discover import (
     ExecutorInfo,
     discover_executors,
     is_executor_source,
 )
-from hpc_mapreduce.job.planner import plan_submit
-from hpc_mapreduce.job.resubmit import (
+from claude_hpc.orchestrator.planner import plan_submit
+from claude_hpc.orchestrator.resubmit import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
     resubmit_plan,
 )
-from hpc_mapreduce.job.runs import (
+from claude_hpc.orchestrator.runs import (
     MAX_RUNS,
     SIDECAR_SCHEMA_VERSION,
     compute_cmd_sha,
@@ -139,9 +139,9 @@ from hpc_mapreduce.job.runs import (
     run_sidecar_path,
     write_run_sidecar,
 )
-from hpc_mapreduce.job.runtime_prior import append_sample as append_runtime_sample
-from hpc_mapreduce.job.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
-from hpc_mapreduce.job.throughput import (
+from claude_hpc.orchestrator.runtime_prior import append_sample as append_runtime_sample
+from claude_hpc.orchestrator.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
+from claude_hpc.orchestrator.throughput import (
     SubmissionPlan,
     WorkloadSpec,
     build_wave_map,

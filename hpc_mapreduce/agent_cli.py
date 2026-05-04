@@ -33,9 +33,10 @@ from pathlib import Path
 from typing import Any
 
 import hpc_mapreduce
+import claude_hpc
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
-from hpc_mapreduce.job.discover import (
+from claude_hpc.orchestrator.discover import (
     detect_mars_tier,
     discover_executors,
     read_meta_json,
@@ -274,7 +275,7 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
         return
     try:
         schema_text = (
-            _resource_files("hpc_mapreduce.schemas") / f"{schema_name}.input.json"
+            _resource_files("claude_hpc.schemas") / f"{schema_name}.input.json"
         ).read_text()
     except (FileNotFoundError, ModuleNotFoundError):
         return
@@ -352,7 +353,7 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
             "version": hpc_mapreduce.__version__,
             "subcommands": _live_subcommands(),
             "supported_schedulers": ["sge", "slurm"],
-            "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
+            "schemas_dir": str(claude_hpc._PACKAGE_ROOT / "schemas"),
             "journal_dir": str(session.HPC_HOMEDIR),
             "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
             "mars_skill_paths": _mars_skill_paths(),
@@ -520,7 +521,7 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
     idempotent=True,
 )
 def cmd_runtime_prior(args: argparse.Namespace) -> int:
-    from hpc_mapreduce.job.runtime_prior import roll_up_quantiles
+    from claude_hpc.orchestrator.runtime_prior import roll_up_quantiles
 
     out = roll_up_quantiles(
         args.experiment_dir,
@@ -543,11 +544,11 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
     idempotent=True,
 )
 def cmd_walltime_drift(args: argparse.Namespace) -> int:
-    from hpc_mapreduce.job.calibration import (
+    from claude_hpc.orchestrator.calibration import (
         compute_walltime_drift,
         recommend_safety_mult_adjustment,
     )
-    from hpc_mapreduce.job.runtime_prior import read_samples
+    from claude_hpc.orchestrator.runtime_prior import read_samples
 
     samples = read_samples(
         args.experiment_dir,
@@ -592,7 +593,7 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     consumes the result to suggest "submit now" vs. "wait until
     <hour>".
     """
-    from hpc_mapreduce.job.best_submit_window import best_submit_windows
+    from claude_hpc.forecast.best_submit_window import best_submit_windows
 
     candidates = best_submit_windows(
         args.experiment_dir,
@@ -629,7 +630,7 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     falls back to the diurnal moving-average baseline otherwise. The
     result's ``method`` field reports which backend won.
     """
-    from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
+    from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
     out = predict_queue_wait(
         args.experiment_dir,
@@ -652,8 +653,8 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     idempotent=True,
 )
 def cmd_house_edge(args: argparse.Namespace) -> int:
-    from hpc_mapreduce.job.calibration import compute_house_edge
-    from hpc_mapreduce.job.runtime_prior import read_samples
+    from claude_hpc.orchestrator.calibration import compute_house_edge
+    from claude_hpc.orchestrator.runtime_prior import read_samples
 
     samples = read_samples(
         args.experiment_dir,
@@ -689,7 +690,7 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
 def cmd_plan_submit(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
-    from hpc_mapreduce.job.planner import plan_submit
+    from claude_hpc.orchestrator.planner import plan_submit
 
     candidates: list[str] | None = None
     if args.candidates:
@@ -825,7 +826,7 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
     """List every campaign with at least one sidecar in this experiment."""
     from collections import Counter
 
-    from hpc_mapreduce.job.runs import find_existing_runs, read_run_sidecar
+    from claude_hpc.orchestrator.runs import find_existing_runs, read_run_sidecar
 
     counts: Counter[str] = Counter()
     for path in find_existing_runs(args.experiment_dir):
@@ -972,7 +973,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     shapes. Idempotent on ``run_id`` via the same dedup mechanism as
     ``submit``.
     """
-    from hpc_mapreduce.job.submit_flow import submit_flow
+    from claude_hpc.orchestrator.submit_flow import submit_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
@@ -1036,7 +1037,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
     ``submit-flow`` for the campaign composition pattern
     ``submit-flow → monitor-flow → next iteration``.
     """
-    from hpc_mapreduce.job.monitor_flow import monitor_flow
+    from claude_hpc.orchestrator.monitor_flow import monitor_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     _validate_against_schema(spec, "monitor_flow")
@@ -1079,7 +1080,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
     atom — the campaign loop's per-iteration tail is
     ``submit-flow → monitor-flow → aggregate-flow → next iter``.
     """
-    from hpc_mapreduce.job.aggregate_flow import aggregate_flow
+    from claude_hpc.orchestrator.aggregate_flow import aggregate_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     _validate_against_schema(spec, "aggregate_flow")
@@ -1125,7 +1126,7 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
     computed for every run.
     """
     try:
-        from hpc_mapreduce.job.runs import read_run_sidecar
+        from claude_hpc.orchestrator.runs import read_run_sidecar
     except ImportError:
         return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
     try:
@@ -1151,7 +1152,7 @@ def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, 
     config validity is enforced by ``/submit``, not the aggregate path.
     """
     try:
-        from hpc_mapreduce.job.runs import read_run_sidecar
+        from claude_hpc.orchestrator.runs import read_run_sidecar
     except ImportError:
         return {}
     try:
@@ -1562,11 +1563,11 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     """Aggregate run-history into a campaign-health payload (D2a).
 
     Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
-    decorator lives on ``hpc_mapreduce.job.campaign_health.campaign_health``
+    decorator lives on ``claude_hpc.orchestrator.campaign_health.campaign_health``
     (the module-level implementation), matching the ``backed_by.python``
     pointer in ``docs/primitives/campaign-health.md``.
     """
-    from hpc_mapreduce.job.campaign_health import campaign_health
+    from claude_hpc.orchestrator.campaign_health import campaign_health
 
     try:
         data = campaign_health(
@@ -1602,7 +1603,7 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     idempotent=False,
 )
 def cmd_build_executor(args: argparse.Namespace) -> int:
-    starters = hpc_mapreduce._PACKAGE_ROOT / "templates" / "starters"
+    starters = claude_hpc._PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
     template_map = {
         "plain": starters / "executor_template.py",
     }

@@ -1,4 +1,4 @@
-"""Tests for hpc_mapreduce.job.planner — integration via mocked snapshot."""
+"""Tests for claude_hpc.orchestrator.planner — integration via mocked snapshot."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import pytest
 
 from claude_hpc.infra import inspect as ins
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job import planner
-from hpc_mapreduce.job import runtime_prior as rp
+from claude_hpc.orchestrator import planner
+from claude_hpc.orchestrator import runtime_prior as rp
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +84,7 @@ class TestPlanSubmit:
     def test_needs_canary_when_no_priors(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
                 tmp_path,
                 profile="ml_ridge",
@@ -99,7 +99,7 @@ class TestPlanSubmit:
     def test_candidates_include_default_pair(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
                 tmp_path, profile="x", cluster="discovery", adversarial=False
             )
@@ -112,7 +112,7 @@ class TestPlanSubmit:
     def test_stressed_node_surfaces_co_tenants(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
                 tmp_path,
                 profile="x",
@@ -142,7 +142,7 @@ class TestPlanSubmit:
                 node="d11-07",
                 elapsed_sec=1000 + tid * 100,
             )
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
                 tmp_path,
                 profile="ml_ridge",
@@ -246,7 +246,7 @@ class TestAdversarialPath:
         return f"sbatch: Job 1 to start at {future} using 1 ..."
 
     def test_recommended_tuple_picks_smallest_walltime(self, tmp_path, monkeypatch):
-        from hpc_mapreduce.job import backfill as bf
+        from claude_hpc.orchestrator import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -271,9 +271,9 @@ class TestAdversarialPath:
             return planner._parse_test_only_eta(self._canned_test_only(walltime_sec)), ""
 
         with patch(
-            "hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
         ), patch(
-            "hpc_mapreduce.job.planner._eta_via_test_only_with_resources",
+            "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
             side_effect=fake_probe,
         ):
             out = planner.plan_submit(
@@ -299,7 +299,7 @@ class TestAdversarialPath:
         assert sorted(adversarial_calls) == [1300, 1950, 2600]
 
     def test_falls_back_when_no_priors(self, tmp_path, monkeypatch):
-        from hpc_mapreduce.job import backfill as bf
+        from claude_hpc.orchestrator import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -309,9 +309,9 @@ class TestAdversarialPath:
             return None, ""  # every probe fails
 
         with patch(
-            "hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
         ), patch(
-            "hpc_mapreduce.job.planner._eta_via_test_only_with_resources",
+            "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
             side_effect=fake_probe,
         ):
             out = planner.plan_submit(
@@ -337,7 +337,7 @@ class TestAdversarialPath:
 
 class TestEtaViaDES:
     def test_returns_none_without_snapshot_or_profiles(self, tmp_path):
-        from hpc_mapreduce.job.planner import _eta_via_des
+        from claude_hpc.orchestrator.planner import _eta_via_des
 
         # Empty experiment dir → no DES inputs.
         assert _eta_via_des(tmp_path, "ml_ridge", "discovery") is None
@@ -347,7 +347,7 @@ class TestEtaViaDES:
         from claude_hpc.infra.inspect import (
             ClusterSnapshot, NodeSnapshot, persist_snapshot,
         )
-        from hpc_mapreduce.job.planner import _eta_via_des
+        from claude_hpc.orchestrator.planner import _eta_via_des
 
         snap = ClusterSnapshot(
             cluster="discovery", scheduler_kind="slurm",

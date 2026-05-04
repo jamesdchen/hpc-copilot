@@ -19,7 +19,7 @@ import pytest
 
 # Import at module load (not lazily inside threads) so the test never
 # trips on a not-yet-installed package state in workers.
-from hpc_mapreduce.job.monitor_flow import _flock_append
+from claude_hpc.orchestrator.monitor_flow import _flock_append
 
 
 def _append_one(path: Path, n: int, run_id: str) -> None:

@@ -36,12 +36,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from claude_hpc._internal._time import parse_iso_utc_or_none
 from claude_hpc.infra.inspect import read_cluster_history
-from hpc_mapreduce.job.queue_simulator import SimJob, simulate_distribution
-from hpc_mapreduce.job.queue_simulator_inputs import (
+from claude_hpc.forecast.queue_simulator import SimJob, simulate_distribution
+from claude_hpc.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
-from hpc_mapreduce.job.runtime_prior import read_samples
+from claude_hpc.orchestrator.runtime_prior import read_samples
 
 
 def _percentile(xs: list[float], p: float) -> float:

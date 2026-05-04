@@ -18,7 +18,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce monitor-flow --spec <path>
-  python: hpc_mapreduce.job.monitor_flow.monitor_flow
+  python: claude_hpc.orchestrator.monitor_flow.monitor_flow
 ---
 
 ## Purpose

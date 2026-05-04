@@ -1,9 +1,9 @@
-"""Tests for hpc_mapreduce.job.queue_simulator_inputs (DES sampling helpers)."""
+"""Tests for claude_hpc.forecast.queue_simulator_inputs (DES sampling helpers)."""
 
 from __future__ import annotations
 
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job.queue_simulator_inputs import (
+from claude_hpc.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )

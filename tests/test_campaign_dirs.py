@@ -1,4 +1,4 @@
-"""Tests for ``hpc_mapreduce.campaign.campaign_dir``."""
+"""Tests for ``claude_hpc.orchestrator.campaign.campaign_dir``."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_mapreduce.campaign import campaign_dir
+from claude_hpc.orchestrator.campaign import campaign_dir
 
 if TYPE_CHECKING:
     from pathlib import Path

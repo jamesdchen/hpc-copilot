@@ -20,7 +20,7 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING
 
-from hpc_mapreduce.job.discover import (
+from claude_hpc.orchestrator.discover import (
     detect_mars_tier,
     discover_executors,
     read_meta_json,

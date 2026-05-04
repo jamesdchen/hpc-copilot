@@ -1,12 +1,12 @@
-"""Tests for ``hpc_mapreduce.job.residual_lifetime.predict_residual_lifetime``."""
+"""Tests for ``claude_hpc.forecast.residual_lifetime.predict_residual_lifetime``."""
 
 from __future__ import annotations
 
-from hpc_mapreduce.job.residual_lifetime import (
+from claude_hpc.forecast.residual_lifetime import (
     MIN_OBSERVATIONS_FOR_PROFILE,
     predict_residual_lifetime,
 )
-from hpc_mapreduce.job.user_profiles import UserProfile
+from claude_hpc.forecast.user_profiles import UserProfile
 
 
 def _profile(*, n: int, ratio: float = 0.85) -> UserProfile:

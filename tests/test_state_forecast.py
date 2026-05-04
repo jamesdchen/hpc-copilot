@@ -1,11 +1,11 @@
-"""Tests for ``hpc_mapreduce.job.state_forecast.forecast_state_at``."""
+"""Tests for ``claude_hpc.forecast.state_forecast.forecast_state_at``."""
 
 from __future__ import annotations
 
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job.state_forecast import forecast_state_at
-from hpc_mapreduce.job.user_profiles import UserProfile
+from claude_hpc.forecast.state_forecast import forecast_state_at
+from claude_hpc.forecast.user_profiles import UserProfile
 
 
 def _node(

@@ -21,7 +21,7 @@ ask-vs-actual ratios, job shape, reliability, and a rough
 follow-up-job conditional probability. All fields tolerate sparse
 input — a user with two observations gets a thin profile, but a
 profile nonetheless. Callers (e.g. the residual-lifetime estimator
-in :mod:`hpc_mapreduce.job.residual_lifetime`) gate on
+in :mod:`claude_hpc.forecast.residual_lifetime`) gate on
 ``n_observations >= threshold`` before trusting the medians.
 
 The rolling aggregator does NOT store raw observations — that would
