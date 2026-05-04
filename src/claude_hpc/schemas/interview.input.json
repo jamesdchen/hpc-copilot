@@ -73,14 +73,119 @@
       "description": "Free-form supplementary notes from the interview (caveats, deferred decisions, things the operator said 'maybe' about). Distinct from `transcript` in that notes are the agent's summary, not the literal turns."
     },
     "task_generator": {
-      "type": "object",
-      "description": "RESERVED. Placeholder for a future opt-in: when present, the materializer regenerates tasks.py from a typed recipe (logspace, grid, items_x_seeds, etc.) instead of consuming the agent-written one. Currently ignored; documented here so adding the feature later does not require a schema major-version bump.",
-      "required": ["kind"],
-      "additionalProperties": true,
-      "properties": {
-        "kind":   { "type": "string", "minLength": 1 },
-        "params": { "type": "object" }
-      }
+      "description": "Optional opt-in: when present, the materializer regenerates tasks.py from a typed recipe instead of consuming the agent-written one. The five shapes below cover the common ground without locking out exotic campaigns — anything that doesn't fit drops `task_generator` from intent and the interview agent writes tasks.py by hand. The materializer cross-checks the produced task count against `intent.task_count` before any disk writes, so an off-by-one in the recipe surfaces as spec_invalid rather than as a clobbered tasks.py.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "params"],
+          "properties": {
+            "kind": { "const": "enumerated" },
+            "params": {
+              "type": "object",
+              "required": ["items"],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "object" },
+                  "description": "List of task-kwargs dicts. Most agnostic shape — just stores the list verbatim and resolve(i) returns items[i]."
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "params"],
+          "properties": {
+            "kind": { "const": "cartesian_product" },
+            "params": {
+              "type": "object",
+              "required": ["axes"],
+              "additionalProperties": false,
+              "properties": {
+                "axes": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "type": "array",
+                    "minItems": 1
+                  },
+                  "description": "Named axes; tasks = full Cartesian product. resolve(i) returns a dict with one key per axis."
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "params"],
+          "properties": {
+            "kind": { "const": "items_x_seeds" },
+            "params": {
+              "type": "object",
+              "required": ["items", "seeds"],
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "object" }
+                },
+                "seeds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "integer" }
+                }
+              },
+              "description": "Cross every item with every seed. resolve(i) returns {**items[i // len(seeds)], 'seed': seeds[i % len(seeds)]}. The 'seed' key in items is overwritten."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "params"],
+          "properties": {
+            "kind": { "const": "numeric_logspace" },
+            "params": {
+              "type": "object",
+              "required": ["param", "low", "high", "n"],
+              "additionalProperties": false,
+              "properties": {
+                "param": { "type": "string", "minLength": 1 },
+                "low":   { "type": "number", "exclusiveMinimum": 0 },
+                "high":  { "type": "number", "exclusiveMinimum": 0 },
+                "n":     { "type": "integer", "minimum": 2 },
+                "base":  { "type": "number", "exclusiveMinimum": 1, "default": 10 }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "params"],
+          "properties": {
+            "kind": { "const": "numeric_linspace" },
+            "params": {
+              "type": "object",
+              "required": ["param", "low", "high", "n"],
+              "additionalProperties": false,
+              "properties": {
+                "param": { "type": "string", "minLength": 1 },
+                "low":   { "type": "number" },
+                "high":  { "type": "number" },
+                "n":     { "type": "integer", "minimum": 2 }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "$defs": {

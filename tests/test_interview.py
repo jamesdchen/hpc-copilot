@@ -198,6 +198,151 @@ def test_empty_tasks_py_raises(tmp_path: Path) -> None:
         record_interview(_minimal_intent(1), campaign_dir=tmp_path)
 
 
+# ─── task_generator: typed materializer ────────────────────────────────────
+
+
+def test_generator_enumerated(tmp_path: Path) -> None:
+    """Most agnostic shape: items list verbatim. Covers eval / RL / etc."""
+    intent = _minimal_intent(
+        3,
+        task_kind="llm-eval",
+        task_generator={
+            "kind": "enumerated",
+            "params": {
+                "items": [
+                    {"model": "opus-4.7", "dataset": "mmlu-pro"},
+                    {"model": "sonnet-4.6", "dataset": "mmlu-pro"},
+                    {"model": "haiku-4.5", "dataset": "mmlu-pro"},
+                ]
+            },
+        },
+    )
+    data = record_interview(intent, campaign_dir=tmp_path)
+    assert data["total_tasks"] == 3
+    assert "tasks.py" in data["artifacts"]
+    assert (tmp_path / "tasks.py").is_file()
+    assert data["preview"]["first"] == {"model": "opus-4.7", "dataset": "mmlu-pro"}
+
+
+def test_generator_cartesian_product(tmp_path: Path) -> None:
+    """Cross-product over named axes. resolve(i) is dict-shaped."""
+    intent = _minimal_intent(
+        6,
+        task_generator={
+            "kind": "cartesian_product",
+            "params": {"axes": {"lr": [1e-4, 1e-3, 1e-2], "batch_size": [16, 32]}},
+        },
+    )
+    data = record_interview(intent, campaign_dir=tmp_path)
+    assert data["total_tasks"] == 6
+    assert set(data["preview"]["first"]) == {"lr", "batch_size"}
+
+
+def test_generator_items_x_seeds(tmp_path: Path) -> None:
+    """Cross items × seeds; seed key on items is overwritten by the cross."""
+    intent = _minimal_intent(
+        4,
+        task_generator={
+            "kind": "items_x_seeds",
+            "params": {
+                "items": [{"env": "cartpole"}, {"env": "lunarlander"}],
+                "seeds": [0, 1],
+            },
+        },
+    )
+    data = record_interview(intent, campaign_dir=tmp_path)
+    assert data["total_tasks"] == 4
+    first = data["preview"]["first"]
+    assert "env" in first and "seed" in first
+
+
+def test_generator_numeric_logspace(tmp_path: Path) -> None:
+    """Logspace covers low→high inclusive at endpoints."""
+    intent = _minimal_intent(
+        5,
+        task_generator={
+            "kind": "numeric_logspace",
+            "params": {"param": "lr", "low": 1e-5, "high": 1e-1, "n": 5},
+        },
+    )
+    data = record_interview(intent, campaign_dir=tmp_path)
+    assert data["total_tasks"] == 5
+    assert abs(data["preview"]["first"]["lr"] - 1e-5) < 1e-12
+    assert abs(data["preview"]["last"]["lr"] - 1e-1) < 1e-12
+
+
+def test_generator_numeric_linspace(tmp_path: Path) -> None:
+    intent = _minimal_intent(
+        4,
+        task_generator={
+            "kind": "numeric_linspace",
+            "params": {"param": "alpha", "low": 0.0, "high": 1.0, "n": 4},
+        },
+    )
+    data = record_interview(intent, campaign_dir=tmp_path)
+    assert data["total_tasks"] == 4
+    assert data["preview"]["first"]["alpha"] == 0.0
+    assert data["preview"]["last"]["alpha"] == 1.0
+
+
+def test_generator_count_mismatch_does_not_write_tasks_py(tmp_path: Path) -> None:
+    """Recipe says 5 tasks; intent says 99. Refuse before any disk write."""
+    intent = _minimal_intent(
+        99,  # operator-stated count
+        task_generator={
+            "kind": "numeric_linspace",
+            "params": {"param": "x", "low": 0, "high": 1, "n": 5},  # actually 5 tasks
+        },
+    )
+    with pytest.raises(ValueError, match="recipe and stated count disagree"):
+        record_interview(intent, campaign_dir=tmp_path)
+    assert not (tmp_path / "tasks.py").exists()
+    assert not (tmp_path / "interview.json").exists()
+
+
+def test_generator_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
+    """Generator mode is idempotent: tasks.py bytes don't change on re-run."""
+    intent = _minimal_intent(
+        3,
+        task_generator={
+            "kind": "enumerated",
+            "params": {"items": [{"a": 1}, {"a": 2}, {"a": 3}]},
+        },
+    )
+    record_interview(intent, campaign_dir=tmp_path)
+    first = (tmp_path / "tasks.py").read_bytes()
+    record_interview(intent, campaign_dir=tmp_path)
+    second = (tmp_path / "tasks.py").read_bytes()
+    assert first == second
+
+
+def test_generator_then_validate_mode_picks_up_hand_edits(tmp_path: Path) -> None:
+    """After dropping task_generator from intent, the next interview
+    accepts whatever tasks.py now contains — operator escape hatch."""
+    gen_intent = _minimal_intent(
+        3,
+        task_generator={
+            "kind": "enumerated",
+            "params": {"items": [{"a": 1}, {"a": 2}, {"a": 3}]},
+        },
+    )
+    record_interview(gen_intent, campaign_dir=tmp_path)
+    # Operator hand-edits tasks.py to add a fourth task
+    (tmp_path / "tasks.py").write_text(
+        "_TASKS = [{'a': 1}, {'a': 2}, {'a': 3}, {'a': 4}]\n"
+        "def total(): return len(_TASKS)\n"
+        "def resolve(i): return _TASKS[i]\n"
+    )
+    # Re-interview with task_generator dropped and updated count
+    edit_intent = _minimal_intent(4)
+    data = record_interview(edit_intent, campaign_dir=tmp_path)
+    assert data["total_tasks"] == 4
+    # cmd_sha should differ from the generator-mode run
+    interview_doc = json.loads((tmp_path / "interview.json").read_text())
+    # task_generator key should not be in the persisted interview anymore
+    assert "task_generator" not in interview_doc
+
+
 # ─── idempotency ──────────────────────────────────────────────────────────
 
 

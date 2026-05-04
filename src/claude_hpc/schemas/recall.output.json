@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/recall.output.json",
+  "title": "recall output envelope",
+  "description": "Envelope returned by `hpc-mapreduce recall`. Each campaign summary is a projection over the corresponding interview.json — the recall primitive does not load the full intent, transcript, or any metrics; the calling agent re-reads `<campaign_dir>/interview.json` directly when it needs more.",
+  "type": "object",
+  "required": ["ok", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "ok":   { "type": "boolean", "const": true },
+    "data": {
+      "type": "object",
+      "required": ["campaigns", "total_matching", "showing"],
+      "additionalProperties": false,
+      "properties": {
+        "campaigns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/campaign_summary" }
+        },
+        "total_matching": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of interview.json files that passed every filter, BEFORE truncation by limit. Lets the caller detect 'there are 200 matching campaigns; I should narrow my filter'."
+        },
+        "showing": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of summaries actually included in `campaigns` (== min(total_matching, limit))."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "campaign_summary": {
+      "type": "object",
+      "required": ["campaign_dir", "materialized_at"],
+      "additionalProperties": false,
+      "properties": {
+        "campaign_dir":     { "type": "string" },
+        "goal":             { "type": ["string", "null"] },
+        "task_kind":        { "type": ["string", "null"] },
+        "task_count":       { "type": ["integer", "null"], "minimum": 0 },
+        "operator":         { "type": ["string", "null"] },
+        "produced_by_kind": { "type": ["string", "null"], "enum": ["mars", "human", null] },
+        "materialized_at":  { "type": ["string", "null"], "description": "ISO-8601 timestamp from interview.json._materialized.at." },
+        "cmd_sha":          { "type": ["string", "null"], "pattern": "^[0-9a-f]{8,64}$" }
+      }
+    }
+  }
+}
