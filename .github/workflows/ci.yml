@@ -30,7 +30,7 @@ jobs:
       - name: Ruff format check
         run: ruff format --check .
       - name: Mypy
-        run: mypy hpc_mapreduce
+        run: mypy claude_hpc
       - name: Lint primitive module list
         run: python scripts/lint_primitive_modules.py
       - name: Check primitive frontmatter is regenerated from registry
