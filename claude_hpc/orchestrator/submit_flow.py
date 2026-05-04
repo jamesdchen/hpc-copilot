@@ -278,6 +278,25 @@ def submit_flow(
     if campaign_id:
         job_env_full.setdefault("HPC_CAMPAIGN_ID", campaign_id)
 
+    # NFS-staging survival: if the cluster has nfs_data_dir configured
+    # in clusters.yaml, thread it through as $HPC_NFS_DATA_DIR so the
+    # template preamble copies the dataset into node-local SSD before
+    # the executor runs. Without this, a 200-task array all open()ing
+    # the same NFS files at once is the textbook way to get throttled.
+    # Caller-supplied job_env wins (setdefault), so per-experiment
+    # overrides still work (e.g. swapping in a different dataset).
+    try:
+        from claude_hpc.infra.clusters import get_nfs_data_dir, load_clusters_config
+
+        cluster_cfg = load_clusters_config().get(cluster, {})
+    except (FileNotFoundError, OSError, ValueError):
+        # Cluster config unreadable or absent — staging is opt-in, so
+        # silently fall back to "no NFS staging" rather than raising.
+        cluster_cfg = {}
+    nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
+    if nfs_dir:
+        job_env_full.setdefault("HPC_NFS_DATA_DIR", nfs_dir)
+
     backend_obj = _build_backend(
         backend_name=backend,
         script=script,
