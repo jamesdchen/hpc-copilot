@@ -14,7 +14,7 @@ import dataclasses
 
 import pytest
 
-from hpc_mapreduce import (
+from claude_hpc import (
     PrimitiveMeta,
     SideEffect,
     get_meta,

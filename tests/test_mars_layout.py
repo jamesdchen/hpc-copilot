@@ -137,7 +137,7 @@ class TestReadMetaJson:
 
 def _run_discover(experiment_dir: Path) -> dict:
     proc = subprocess.run(
-        [sys.executable, "-m", "hpc_mapreduce", "discover",
+        [sys.executable, "-m", "claude_hpc", "discover",
          "--experiment-dir", str(experiment_dir)],
         capture_output=True,
         text=True,

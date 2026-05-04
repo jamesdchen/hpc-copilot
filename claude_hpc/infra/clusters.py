@@ -24,7 +24,7 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
         if env_path:
             path = Path(env_path)
         else:
-            from hpc_mapreduce import _PACKAGE_ROOT
+            from claude_hpc import _PACKAGE_ROOT
 
             path = _PACKAGE_ROOT / "config" / "clusters.yaml"
     with open(path) as f:

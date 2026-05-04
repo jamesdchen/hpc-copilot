@@ -710,7 +710,7 @@ def _main() -> int:
     if not tasks_py_path.is_file():
         return _emit_err("tasks_py_not_found", str(tasks_py_path))
     try:
-        from hpc_mapreduce import load_tasks_module
+        from claude_hpc import load_tasks_module
 
         tasks_module = load_tasks_module(tasks_py_path)
     except Exception as exc:

@@ -28,22 +28,20 @@ tui = [
 ]
 
 [project.scripts]
-hpc-mapreduce = "hpc_mapreduce.agent_cli:main"
+hpc-mapreduce = "claude_hpc.agent_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["claude_hpc*", "hpc_mapreduce*", "slash_commands*"]
 
 [tool.setuptools.package-data]
-hpc_mapreduce = [
+claude_hpc = [
     "config/*.yaml",
     "schemas/*.json",
-    "py.typed",
-]
-claude_hpc = [
     "mapreduce/templates/common/*.sh",
     "mapreduce/templates/sge/*",
     "mapreduce/templates/slurm/*",
     "mapreduce/templates/starters/*.py",
+    "py.typed",
 ]
 
 [tool.pytest.ini_options]

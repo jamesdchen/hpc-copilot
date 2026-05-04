@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# ─── inlined from hpc_mapreduce.executor_cli ───────────────────────────────
+# ─── inlined from claude_hpc.executor_cli ───────────────────────────────
 #
 # This file is delivered to the cluster as ``.hpc/cli.py`` and runs in a
 # stdlib-only Python: the package ``hpc_mapreduce`` is NOT installed
@@ -42,7 +42,7 @@ from typing import Any
 # ``executor_cli.py`` module to the cluster, which would widen the
 # remote runtime footprint.
 #
-# Keep this in lock-step with hpc_mapreduce.executor_cli.{Flag,
+# Keep this in lock-step with claude_hpc.executor_cli.{Flag,
 # build_parser_from_flags}; ``tests/test_executor_cli_inline_parity.py``
 # (or equivalent) should AST-compare the two when added.
 
