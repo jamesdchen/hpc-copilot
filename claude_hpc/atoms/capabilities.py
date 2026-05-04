@@ -59,6 +59,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     multiplexing flag, MARs skill paths, required env vars, and the
     operations catalog — is computed here.
     """
+    from claude_hpc.infra.clusters import CLUSTER_YAML_KEYS
     from claude_hpc.operations import operations_catalog
 
     return {
@@ -74,5 +75,11 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
             "HPC_JOURNAL_DIR",
             "HPC_CLUSTERS_CONFIG",
         ],
+        # B-M4: enumerate the per-cluster yaml keys so a campus user
+        # discovering the schema by inspection (rather than reading
+        # claude_hpc/infra/clusters.py source) sees every supported field.
+        # New fields land here automatically when their validators are
+        # added — single source of truth lives next to the validators.
+        "cluster_yaml_keys": list(CLUSTER_YAML_KEYS),
         "operations": operations_catalog(),
     }

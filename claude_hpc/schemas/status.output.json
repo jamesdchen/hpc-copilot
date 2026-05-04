@@ -25,6 +25,17 @@
     "campaign_id":    {
       "type": "string",
       "description": "Closed-loop campaign tag. Present only when this run is part of a campaign; absent for open-loop submits."
+    },
+    "preempted_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of task ids whose per-task sidecar entry carries a `preempt` block (set by dispatch.py's SIGTERM handler). Optional — present only when at least one task was preempted by the cluster scheduler. Lets the agent harness see scheduler pressure on a partially-bumped run while it's still in flight."
+    },
+    "preempted_task_ids": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "uniqueItems": true,
+      "description": "Sorted, deduplicated list of preempted task ids. Optional — present only when preempted_count is also present."
     }
   }
 }

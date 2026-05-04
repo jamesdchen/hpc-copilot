@@ -109,7 +109,30 @@ export VECLIB_MAXIMUM_THREADS="${HPC_VECLIB_NUM_THREADS:-1}"
 # variable name $LOCAL_DATA_DIR is the contract — user executors should
 # prefer $LOCAL_DATA_DIR over the NFS path when set.
 if [ -n "${HPC_NFS_DATA_DIR:-}" ]; then
-    export LOCAL_DATA_DIR="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/claude_hpc_data"
+    # Pick the per-job scratch dir; fall back to /tmp only if neither
+    # the SLURM nor the SGE/Hoffman2 variant is exported. /tmp is a
+    # known footgun on quota'd clusters (Hoffman2 enforces a per-user
+    # /tmp cap; mid-stage failures look like data-corruption to the
+    # campus user). Emit a one-line warning so the failure mode is
+    # diagnosable without spelunking the scheduler env.
+    _hpc_stage_root="${SLURM_TMPDIR:-${TMPDIR:-}}"
+    if [ -z "$_hpc_stage_root" ]; then
+        _hpc_stage_root="/tmp"
+        echo "[claude-hpc] warning: \$SLURM_TMPDIR / \$TMPDIR not set; falling back to /tmp." >&2
+        echo "[claude-hpc]   On clusters with /tmp quotas (e.g. Hoffman2), staging may fail mid-run." >&2
+        echo "[claude-hpc]   Set HPC_NFS_DATA_DIR=\"\" to disable, or have your job export TMPDIR." >&2
+    fi
+    # B-M2: include a hash of $HPC_NFS_DATA_DIR in the path suffix so
+    # two concurrent campaigns (different datasets) on the same node
+    # don't rsync into the same directory and step on each other. Without
+    # the disambiguator, the first campaign's flock-protected rsync
+    # publishes .staged_ok; the second campaign's tasks then read the
+    # WRONG dataset and silently produce garbage. md5sum is universally
+    # available on HPC clusters; 8 hex chars is plenty of entropy for
+    # campus-scale dataset paths.
+    _hpc_data_tag="$(printf '%s' "${HPC_NFS_DATA_DIR}" | md5sum | cut -c1-8)"
+    export LOCAL_DATA_DIR="${_hpc_stage_root}/claude_hpc_data_${_hpc_data_tag}"
+    unset _hpc_stage_root _hpc_data_tag
     mkdir -p "$LOCAL_DATA_DIR"
     # Race + diagnostic guards. 200 array tasks landing on the same node
     # would all rsync into the same $LOCAL_DATA_DIR and step on each

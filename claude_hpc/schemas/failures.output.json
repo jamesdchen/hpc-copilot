@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/failures.output.json",
+  "title": "failures output data",
+  "description": "Shape of the `data` field on a successful `failures` envelope. Source: claude_hpc.atoms.failures.fetch_failures. The `preempted_count` and `preempted_task_ids` fields are present only when at least one task was preempted by the scheduler — they let an agent harness branch on 'campus user got bumped, resubmit cleanly' without parsing per-cluster `error_class` strings.",
+  "type": "object",
+  "required": ["run_id", "failed_count", "clusters"],
+  "additionalProperties": true,
+  "properties": {
+    "run_id": { "type": "string" },
+    "failed_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of failed task ids in the current status report."
+    },
+    "clusters": {
+      "type": "array",
+      "description": "Failure-fingerprint clusters. Each item groups failed task ids by stderr signature.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "error_class": { "type": "string" },
+          "task_ids": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+        }
+      }
+    },
+    "scheduler": {
+      "type": "string",
+      "enum": ["sge", "slurm"],
+      "description": "Per-cluster scheduler driver, surfaced for downstream resubmit shaping."
+    },
+    "preempted_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of task ids whose failure cluster has error_class='preempted'. Optional — present only when > 0. Helps the agent harness route bumped runs (campus user got preempted by higher-priority work) through the clean resubmit path."
+    },
+    "preempted_task_ids": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "uniqueItems": true,
+      "description": "Sorted, deduplicated list of preempted task ids. Optional — present only when at least one preempted task is in the cluster set."
+    },
+    "auto_retry_policy": {
+      "type": "object",
+      "description": "Resolved per-run + framework-default auto-retry policy. Present when annotation succeeded.",
+      "additionalProperties": true
+    },
+    "note": {
+      "type": "string",
+      "description": "Diagnostic note (e.g. 'no failed tasks in current status report')."
+    }
+  }
+}

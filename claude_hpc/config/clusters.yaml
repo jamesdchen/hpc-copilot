@@ -28,6 +28,14 @@ hoffman2:
   # queue-wait buffer) so a long task survives the cluster's hard
   # walltime ceiling.
   max_walltime_sec: 86400
+  # Largest single-node memory ask the cluster will schedule (MB).
+  # When set, the planner clamps the cold-start mem buffer (and any
+  # other grower) so a campus user's run doesn't sit Pending forever
+  # with ReqNodeNotAvail. Hoffman2 has 96/192/384 GB nodes depending on
+  # partition; default to the most permissive (384 GB) so a request
+  # bound for a smaller partition still surfaces a clear "buffer
+  # clamped" rationale instead of silently exceeding partition limits.
+  max_node_mem_mb: 384000
   # Auto-daisy-chain default is detection-driven (absent key here):
   # chain only when past runs of (profile, cluster) produced
   # checkpoint-shaped files; otherwise emit the explanatory error so
@@ -64,6 +72,12 @@ discovery:
   # queue-wait buffer) so a long task survives the cluster's hard
   # walltime ceiling.
   max_walltime_sec: 172800
+  # Largest single-node memory ask the cluster will schedule (MB).
+  # USC CARC Discovery has nodes up to ~256 GB on most partitions;
+  # use a permissive default so requests bound for smaller partitions
+  # surface a clear "buffer clamped" rationale instead of silently
+  # exceeding the per-node limit.
+  max_node_mem_mb: 256000
   # Auto-daisy-chain default is detection-driven (absent key here):
   # chain only when past runs of (profile, cluster) produced
   # checkpoint-shaped files; otherwise emit the explanatory error so

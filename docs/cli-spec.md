@@ -53,7 +53,7 @@ some subcommands keep for back-compat. Consumers should prefer
 ```json
 {
   "ok": false,
-  "error_code": "<one of 12>",
+  "error_code": "<one of 15>",
   "message": "<human-readable>",
   "category": "user|cluster|network|internal",
   "retry_safe": <bool>,
@@ -71,8 +71,8 @@ Wired in `claude_hpc/agent_cli.py` (`_EXIT_CODE_BY_CATEGORY`).
 |---|---|---|---|
 | 0 | — | success | (no error envelope) |
 | 1 | `user` | caller-fixable | `spec_invalid`, `executor_not_found`, `cluster_unknown`, `config_invalid` |
-| 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `scheduler_throttled`, `remote_command_failed`, `combiner_failed`, `cluster_timeout`, `outputs_missing` |
-| 3 | `internal` | bug in framework or corrupt state | `journal_corrupt`, `internal` |
+| 2 | `cluster`, `network` | remote/cluster issue | `ssh_unreachable`, `scheduler_throttled`, `remote_command_failed`, `combiner_failed`, `cluster_timeout`, `outputs_missing`, `cluster_partially_degraded`, `preempted` |
+| 3 | `internal` | bug in framework or corrupt state | `journal_corrupt`, `internal`, `schema_incompat` |
 
 `preflight` returns 2 when any check fails (it is a `cluster`-class diagnostic, even though the envelope is `ok=true`).
 
