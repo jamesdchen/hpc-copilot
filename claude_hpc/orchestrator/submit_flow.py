@@ -285,15 +285,27 @@ def submit_flow(
     # the same NFS files at once is the textbook way to get throttled.
     # Caller-supplied job_env wins (setdefault), so per-experiment
     # overrides still work (e.g. swapping in a different dataset).
-    try:
-        from claude_hpc.infra.clusters import get_nfs_data_dir, load_clusters_config
+    #
+    # B-M3: scope the try/except to JUST the get_nfs_data_dir() call.
+    # Previously it wrapped the whole block, so a malformed
+    # ``nfs_data_dir: ""`` (which raises ValueError from the validator)
+    # would silently zero out the entire cluster config — including
+    # cold_start_mem_buffer, scheduler routing, and other fields the
+    # campus user actually configured. Let load_clusters_config errors
+    # bubble up — they were never silently survivable elsewhere — and
+    # only swallow the narrow "this one optional field is malformed"
+    # case, which preserves the rest of the cluster config so the run
+    # survives the misconfig.
+    from claude_hpc.infra.clusters import get_nfs_data_dir, load_clusters_config
 
-        cluster_cfg = load_clusters_config().get(cluster, {})
-    except (FileNotFoundError, OSError, ValueError):
-        # Cluster config unreadable or absent — staging is opt-in, so
-        # silently fall back to "no NFS staging" rather than raising.
-        cluster_cfg = {}
-    nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
+    cluster_cfg = load_clusters_config().get(cluster, {})
+    try:
+        nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
+    except (ValueError, TypeError):
+        # nfs_data_dir is opt-in survival; a malformed value should not
+        # prevent submission. The rest of cluster_cfg is still available
+        # to the planner/backfill helpers.
+        nfs_dir = None
     if nfs_dir:
         job_env_full.setdefault("HPC_NFS_DATA_DIR", nfs_dir)
 
