@@ -37,44 +37,10 @@ echo "============================================"
 RESULT_DIR="${RESULT_DIR:-.}"
 REPO_DIR="${REPO_DIR:-.}"
 
-# --- Module Setup ---
-# Hoffman2 needs the UGE path; other clusters may not.
-if [ -f /u/local/Modules/default/init/modules.sh ]; then
-    source /u/local/Modules/default/init/modules.sh
-fi
-
-if [ -n "$MODULES" ]; then
-    for mod in $MODULES; do
-        module load "$mod"
-    done
-fi
-
-# --- Conda ---
-if [ -n "$CONDA_SOURCE" ]; then
-    source "$CONDA_SOURCE"
-fi
-if [ -n "$CONDA_ENV" ]; then
-    conda activate "$CONDA_ENV"
-fi
-
-# --- Working Directory ---
-cd "$REPO_DIR"
-# .hpc/ on PYTHONPATH so `python -m cli` resolves the dispatcher
-# generated at .hpc/cli.py by /submit-hpc Step 6.
-export PYTHONPATH="$REPO_DIR:$REPO_DIR/.hpc:${PYTHONPATH:-}"
-
-# --- Runtime (uv) ---
-# Opt-in via HPC_RUNTIME=uv. Sync the project's uv-managed venv before
-# any task runs so the dispatcher's ``uv run python`` resolves to the
-# right interpreter. Fail fast if uv is missing — this is much clearer
-# than running tasks with the wrong Python.
-if [ "${HPC_RUNTIME:-}" = "uv" ]; then
-    if ! command -v uv >/dev/null 2>&1; then
-        echo "[template] HPC_RUNTIME=uv but 'uv' not on PATH" >&2
-        exit 2
-    fi
-    uv sync || { echo "[template] uv sync failed" >&2; exit 2; }
-fi
+# --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---
+# See hpc_mapreduce/templates/common/hpc_preamble.sh — deployed alongside
+# this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.
+source "$(dirname "$0")/common/hpc_preamble.sh"
 
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"

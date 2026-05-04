@@ -36,6 +36,7 @@ include = ["hpc_mapreduce*", "slash_commands*"]
 [tool.setuptools.package-data]
 hpc_mapreduce = [
     "config/*.yaml",
+    "templates/common/*.sh",
     "templates/sge/*",
     "templates/slurm/*",
     "templates/starters/*.py",

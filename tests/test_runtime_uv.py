@@ -25,11 +25,25 @@ TEMPLATES = [
     _PACKAGE_ROOT / "templates" / "slurm" / "gpu_array.slurm",
 ]
 
+# Each per-scheduler template now sources the shared preamble for the
+# uv-sync block. Check the union of the template body + any preamble it
+# sources so the invariants survive the dedup.
+COMMON_PREAMBLE = _PACKAGE_ROOT / "templates" / "common" / "hpc_preamble.sh"
+
+
+def _effective_template_text(template: Path) -> str:
+    """Return the per-template text concatenated with any sourced preamble."""
+    body = template.read_text(encoding="utf-8")
+    sourced = ""
+    if 'source "$(dirname "$0")/common/hpc_preamble.sh"' in body:
+        sourced += "\n" + COMMON_PREAMBLE.read_text(encoding="utf-8")
+    return body + sourced
+
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_template_has_hpc_runtime_gate(template: Path) -> None:
-    """Every template gates uv sync on the HPC_RUNTIME env var."""
-    text = template.read_text(encoding="utf-8")
+    """Every template (or its sourced preamble) gates uv sync on HPC_RUNTIME."""
+    text = _effective_template_text(template)
     assert '"${HPC_RUNTIME:-}" = "uv"' in text, (
         f"{template.name} missing HPC_RUNTIME=uv gate"
     )
@@ -37,8 +51,8 @@ def test_template_has_hpc_runtime_gate(template: Path) -> None:
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_template_runs_uv_sync(template: Path) -> None:
-    """Inside the gate, the template runs ``uv sync``."""
-    text = template.read_text(encoding="utf-8")
+    """Inside the gate, the template (or sourced preamble) runs ``uv sync``."""
+    text = _effective_template_text(template)
     assert "uv sync" in text, f"{template.name} missing uv sync"
 
 
@@ -46,7 +60,7 @@ def test_template_runs_uv_sync(template: Path) -> None:
 def test_template_fails_fast_without_uv(template: Path) -> None:
     """When HPC_RUNTIME=uv is set but uv is missing, exit non-zero with a
     diagnostic. The plan calls for ``exit 2``."""
-    text = template.read_text(encoding="utf-8")
+    text = _effective_template_text(template)
     assert "command -v uv" in text, f"{template.name} missing uv presence check"
     assert "exit 2" in text, f"{template.name} missing exit 2 on missing uv"
 
@@ -54,7 +68,7 @@ def test_template_fails_fast_without_uv(template: Path) -> None:
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_template_documents_hpc_runtime(template: Path) -> None:
     """Header comment block must list HPC_RUNTIME alongside other env vars."""
-    text = template.read_text(encoding="utf-8")
+    text = _effective_template_text(template)
     assert "HPC_RUNTIME" in text
 
 

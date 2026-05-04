@@ -15,3 +15,4 @@ pytest-of-*/
 # Local audit/research scratch files (kept untracked so they don't bloat history).
 AUDIT_CHECKLIST.md
 RESEARCH.md
+DECISIONS.md
