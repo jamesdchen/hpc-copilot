@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from hpc_mapreduce.infra import inspect as ic
-from hpc_mapreduce.layout import RepoLayout
+from claude_hpc._internal.layout import RepoLayout
 
 
 def _mk_snap(cluster: str, *, now_iso: str, nodes: int = 1) -> ic.ClusterSnapshot:

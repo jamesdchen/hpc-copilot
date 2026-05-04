@@ -52,7 +52,7 @@ import subprocess
 from pathlib import Path
 
 from claude_hpc._internal._time import utcnow_iso
-from hpc_mapreduce.lifecycle import TaskStatus
+from claude_hpc._internal.lifecycle import TaskStatus
 
 # ---------------------------------------------------------------------------
 # Result checking
@@ -235,7 +235,7 @@ _FAILED_STATES = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"
 def _empty_summary() -> dict[str, int]:
     """Return the canonical zeroed summary dict (5 int keys, always present).
 
-    Keys derived from :class:`hpc_mapreduce.lifecycle.TaskStatus` (B2).
+    Keys derived from :class:`claude_hpc._internal.lifecycle.TaskStatus` (B2).
     """
     return {ts.value: 0 for ts in TaskStatus}
 

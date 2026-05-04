@@ -1,4 +1,4 @@
-"""Tests for ``hpc_mapreduce.lifecycle``.
+"""Tests for ``claude_hpc._internal.lifecycle``.
 
 The B2 refactor introduced four StrEnums to replace the four scattered,
 drifting string vocabularies. The cross-validation tests here exist
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_mapreduce.lifecycle import (
+from claude_hpc._internal.lifecycle import (
     TERMINAL_STATUSES,
     FailureCategory,
     JournalStatus,

@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
-from hpc_mapreduce.lifecycle import LifecycleState
+from claude_hpc._internal.lifecycle import LifecycleState
 from hpc_mapreduce.job.runs import read_run_sidecar
 from slash_commands import errors, runner, session
 from slash_commands.runner import mark_terminal, record_status
@@ -168,14 +168,14 @@ def _append_tick(
         "console_emitted": False,
     }
     path = _tick_log_path(experiment_dir, run_id)
-    # B7: Route the JSONL append through hpc_mapreduce.telemetry, which
+    # B7: Route the JSONL append through claude_hpc._internal.telemetry, which
     # owns the flock-guarded writer pattern. The local _flock_append /
     # legacy fallback below remain as the on-disk shape -- the only
     # change is that the writer call goes through the canonical sink.
     # Telemetry's monitor-jsonl sink ignores HPC_TELEMETRY_SINK because
     # this caller is the canonical producer.
     try:
-        from hpc_mapreduce.telemetry import record as _telemetry_record
+        from claude_hpc._internal.telemetry import record as _telemetry_record
 
         _telemetry_record(
             "tick", record,

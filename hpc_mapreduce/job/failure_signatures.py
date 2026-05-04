@@ -19,7 +19,7 @@ The runner keeps its old ``_categorize`` shape; new callers consume
 ``classify()`` directly.
 
 The ``error_class`` strings align with
-:class:`hpc_mapreduce.lifecycle.FailureCategory` once that StrEnum is
+:class:`claude_hpc._internal.lifecycle.FailureCategory` once that StrEnum is
 on the branch (B2).
 """
 

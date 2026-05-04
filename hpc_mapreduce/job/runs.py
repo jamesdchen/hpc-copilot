@@ -63,7 +63,7 @@ def _runs_dir(experiment_dir: Path) -> Path:
     callers (``find_existing_runs``, ``prune_old_runs``) already handle
     the absent-directory case by returning ``[]``.
     """
-    from hpc_mapreduce.layout import RepoLayout
+    from claude_hpc._internal.layout import RepoLayout
 
     return RepoLayout(experiment_dir).hpc / "runs"
 
@@ -76,7 +76,7 @@ def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
     (``RepoLayout`` is purely about path arithmetic; the format check is
     a submit-time guard kept here).
     """
-    from hpc_mapreduce.layout import RepoLayout
+    from claude_hpc._internal.layout import RepoLayout
 
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError(f"invalid run_id: {run_id!r}")
@@ -282,13 +282,13 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
         raise FileNotFoundError(f"run sidecar not found: {target}")
     data: dict[str, Any] = json.loads(target.read_text())
     # B8: route the schema-version check through the cross-domain
-    # manifest in hpc_mapreduce._version. Strict here (raises) because
+    # manifest in claude_hpc._internal._version. Strict here (raises) because
     # the sidecar shape is critical to the dispatcher / aggregator —
     # mis-reading a future v3 with a v2 reader would silently corrupt
     # the run. Writer keeps SIDECAR_SCHEMA_VERSION as the value emitted.
     sv = data.get("sidecar_schema_version")
     if isinstance(sv, int):
-        from hpc_mapreduce._version import compatibility_check as _compat
+        from claude_hpc._internal._version import compatibility_check as _compat
         _compat("sidecar", sv)
     # Backfill missing v2 fields so callers see a uniform shape.
     for k, default in _V2_BACKFILL_DEFAULTS.items():

@@ -1,4 +1,4 @@
-"""Tests for :mod:`hpc_mapreduce._version`.
+"""Tests for :mod:`claude_hpc._internal._version`.
 
 The manifest is the cross-domain source of truth for supported schema
 versions. These tests check three things:
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce import _version
+from claude_hpc._internal import _version
 from slash_commands import errors
 
 

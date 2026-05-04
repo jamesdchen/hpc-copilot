@@ -38,7 +38,7 @@ Why we don't migrate ``dispatch.py`` / ``combiner.py``
 
 Those modules execute on the cluster where the framework package is
 not installed (they ship as standalone Python files inside the
-``.hpc/`` payload). Importing :mod:`hpc_mapreduce.telemetry` would
+``.hpc/`` payload). Importing :mod:`claude_hpc._internal.telemetry` would
 break that constraint. They keep their existing
 ``print(..., stderr)`` calls; if a future callsite needs JSONL it
 should inline a tiny ``_record`` helper rather than pull in this
