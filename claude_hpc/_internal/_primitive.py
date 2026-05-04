@@ -198,7 +198,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.orchestrator.campaign_health",
     "claude_hpc.infra.inspect",
     "claude_hpc.infra.clusters",
-    "hpc_mapreduce.agent_cli",
+    "claude_hpc.agent_cli",
     "claude_hpc.atoms.clusters",
     "slash_commands.runner",
     "claude_hpc.orchestrator.validate",

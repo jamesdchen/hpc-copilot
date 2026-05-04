@@ -320,7 +320,7 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     sidecar_version = data.get("claude_hpc_version")
     if isinstance(sidecar_version, str) and sidecar_version:
         try:
-            from hpc_mapreduce import __version__ as _pkg_version
+            from claude_hpc import __version__ as _pkg_version
         except Exception:  # noqa: BLE001 — never let a circular fail the read
             _pkg_version = None
         if _pkg_version and sidecar_version != _pkg_version:

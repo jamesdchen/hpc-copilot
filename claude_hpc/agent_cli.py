@@ -32,7 +32,6 @@ from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Any
 
-import hpc_mapreduce
 import claude_hpc
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
@@ -80,7 +79,7 @@ def _meta_idempotent(name: str) -> bool:
     in tests/test_idempotency.py guards against silent drift).
     """
     try:
-        from hpc_mapreduce.operations import operations_catalog
+        from claude_hpc.operations import operations_catalog
         for entry in operations_catalog():
             if entry.get("name") == name:
                 return bool(entry.get("idempotent", True))
@@ -307,7 +306,7 @@ def _mars_skill_paths() -> dict[str, str]:
     # hpc_mapreduce/ in the source tree). Wheel-only deploys won't ship
     # them — return only entries that resolve to an existing file so a
     # consumer can rely on every value being a real path.
-    skills_root = hpc_mapreduce._PACKAGE_ROOT.parent / "skills"
+    skills_root = claude_hpc._PACKAGE_ROOT.parent / "skills"
     out: dict[str, str] = {}
     for name in _MARS_SKILL_NAMES:
         path = skills_root / name / "SKILL.md"
@@ -338,7 +337,7 @@ def _live_subcommands() -> list[str]:
     idempotent=True,
 )
 def cmd_capabilities(args: argparse.Namespace) -> int:
-    from hpc_mapreduce.operations import operations_catalog, render_llms_full
+    from claude_hpc.operations import operations_catalog, render_llms_full
 
     if getattr(args, "full", False):
         # Human/LLM-mode: emit a multi-section text blob (NOT the JSON
@@ -350,7 +349,7 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
 
     _ok(
         {
-            "version": hpc_mapreduce.__version__,
+            "version": claude_hpc.__version__,
             "subcommands": _live_subcommands(),
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(claude_hpc._PACKAGE_ROOT / "schemas"),
@@ -1641,7 +1640,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"%(prog)s {hpc_mapreduce.__version__}",
+        version=f"%(prog)s {claude_hpc.__version__}",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 

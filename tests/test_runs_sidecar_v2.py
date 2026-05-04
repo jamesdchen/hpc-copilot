@@ -335,7 +335,7 @@ class TestVersionMismatchWarning:
     def test_no_warning_when_versions_match(self, tmp_path: Path) -> None:
         import warnings as _warnings
 
-        from hpc_mapreduce import __version__ as pkg_version
+        from claude_hpc import __version__ as pkg_version
         from claude_hpc.orchestrator import runs as _runs_mod
 
         _runs_mod._warned_version_mismatch.clear()

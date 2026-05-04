@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import itertools
 
-from hpc_mapreduce.executor_cli import flag, generic_args, gpu_args
+from claude_hpc.executor_cli import flag, generic_args, gpu_args
 
 # ─── FLAGS: per-executor argparse declarations ─────────────────────────────
 #

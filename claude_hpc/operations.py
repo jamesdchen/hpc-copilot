@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-import hpc_mapreduce
+import claude_hpc
 from claude_hpc._internal._primitive import get_registry
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 __all__ = ["operations_catalog", "render_llms_full", "schema_for"]
 
-_PACKAGE_ROOT = hpc_mapreduce._PACKAGE_ROOT
+_PACKAGE_ROOT = claude_hpc._PACKAGE_ROOT
 
 
 def _primitives_dir() -> Path | None:
@@ -254,7 +254,7 @@ def render_llms_full() -> str:
     catalog = operations_catalog()
     parts: list[str] = []
     parts.append("# claude-hpc llms-full\n")
-    parts.append(f"_version: {hpc_mapreduce.__version__}_\n")
+    parts.append(f"_version: {claude_hpc.__version__}_\n")
 
     parts.append("\n## Catalog\n\n")
     parts.append(_format_catalog_table(catalog))

@@ -107,7 +107,7 @@ def test_register_primitives_is_idempotent() -> None:
         [
             sys.executable,
             "-c",
-            "import hpc_mapreduce as hp\n"
+            "import claude_hpc as hp\n"
             "hp.register_primitives()\n"
             "first = dict(hp.get_registry())\n"
             "hp.register_primitives()\n"

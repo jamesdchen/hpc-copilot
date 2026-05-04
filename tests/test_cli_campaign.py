@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 def _run_cli(*args: str) -> tuple[int, str, str]:
     proc = subprocess.run(
-        [sys.executable, "-m", "hpc_mapreduce", *args],
+        [sys.executable, "-m", "claude_hpc", *args],
         capture_output=True,
         text=True,
     )

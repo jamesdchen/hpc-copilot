@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-import hpc_mapreduce
+import claude_hpc
 from claude_hpc.orchestrator.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -199,8 +199,8 @@ def _imported_top_level_modules(path: Path) -> set[str]:
 
 
 def test_public_api_matches_contract() -> None:
-    """``hpc_mapreduce.__all__`` must match the allowlist exactly."""
-    actual = set(hpc_mapreduce.__all__)
+    """``claude_hpc.__all__`` must match the allowlist exactly."""
+    actual = set(claude_hpc.__all__)
     expected = set(ALLOWED_EXPORTS)
     assert actual == expected, _diff_message(
         "hpc_mapreduce public API", actual, expected
@@ -307,7 +307,7 @@ def test_templates_do_not_import_core() -> None:
 
 def test_clusters_yaml_is_infra_only() -> None:
     """Each cluster entry in ``hpc_mapreduce/config/clusters.yaml`` must use only infra keys."""
-    clusters_path = REPO_ROOT / "hpc_mapreduce" / "config" / "clusters.yaml"
+    clusters_path = REPO_ROOT / "claude_hpc" / "config" / "clusters.yaml"
     with clusters_path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
 

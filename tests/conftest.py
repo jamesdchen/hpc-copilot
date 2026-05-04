@@ -100,6 +100,6 @@ def _register_primitives_once() -> None:
     explicitly. Tests that exercise ``get_registry`` / ``get_meta``
     would otherwise hit the new RuntimeError. Idempotent.
     """
-    from hpc_mapreduce import register_primitives
+    from claude_hpc import register_primitives
 
     register_primitives()
