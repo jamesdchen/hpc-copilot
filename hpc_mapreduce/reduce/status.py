@@ -52,6 +52,7 @@ import subprocess
 from pathlib import Path
 
 from hpc_mapreduce._time import utcnow_iso
+from hpc_mapreduce.lifecycle import TaskStatus
 
 # ---------------------------------------------------------------------------
 # Result checking
@@ -223,19 +224,22 @@ _FAILED_STATES = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"
 
 
 def _empty_summary() -> dict[str, int]:
-    """Return the canonical zeroed summary dict (5 int keys, always present)."""
-    return {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+    """Return the canonical zeroed summary dict (5 int keys, always present).
+
+    Keys derived from :class:`hpc_mapreduce.lifecycle.TaskStatus` (B2).
+    """
+    return {ts.value: 0 for ts in TaskStatus}
 
 
 def _categorize(state: str) -> str:
-    """Map a scheduler state string to a summary bucket name."""
+    """Map a scheduler state string to a summary bucket name (TaskStatus value)."""
     if state in _ACTIVE_STATES:
-        return "running"
+        return TaskStatus.RUNNING
     if state in _PENDING_STATES:
-        return "pending"
+        return TaskStatus.PENDING
     if state in _FAILED_STATES or state.startswith("CANCELLED"):
-        return "failed"
-    return "unknown"
+        return TaskStatus.FAILED
+    return TaskStatus.UNKNOWN
 
 
 def report_status(
