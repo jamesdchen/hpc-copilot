@@ -2,48 +2,47 @@
 name: house-edge
 verb: query
 inputs:
-  - name: profile
-    type: string
-  - name: cluster
-    type: string
-  - name: cmd_sha
-    type: string
-    description: Filter samples to one cmd_sha (recommended after .hpc/tasks.py edits).
-    default: null
-  - name: experiment_dir
-    type: path
-    default: cwd
+- name: profile
+  type: string
+- name: cluster
+  type: string
+- name: cmd_sha
+  type: string
+  description: Filter samples to one cmd_sha (recommended after .hpc/tasks.py edits).
+  default: null
+- name: experiment_dir
+  type: path
+  default: cwd
 outputs:
-  - name: n_with_prediction
-    type: integer
-    description: How many recent samples carried both a `predicted_eta` and an observed `started_at` for comparison.
-  - name: mean_delta_sec
-    type: number
-    description: Mean of (observed_start_seconds − predicted_start_seconds) across samples.
-  - name: median_delta_sec
-    type: number
-  - name: p95_delta_sec
-    type: number
-  - name: calibration_ratio
-    type: number
-    description: Ratio of observed to predicted Submit→Start latency. >1 means the planner was optimistic; <1 means jobs landed sooner than predicted.
+- name: n_with_prediction
+  type: integer
+  description: How many recent samples carried both a `predicted_eta` and an observed
+    `started_at` for comparison.
+- name: mean_delta_sec
+  type: number
+  description: Mean of (observed_start_seconds − predicted_start_seconds) across samples.
+- name: median_delta_sec
+  type: number
+- name: p95_delta_sec
+  type: number
+- name: calibration_ratio
+  type: number
+  description: Ratio of observed to predicted Submit→Start latency. >1 means the planner
+    was optimistic; <1 means jobs landed sooner than predicted.
 side_effects: []
 idempotent: true
 idempotency_key: none
 error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-  - code: internal
-    category: internal
-    retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]
   python: hpc_mapreduce.agent_cli.cmd_house_edge
 exit_codes:
-  - 0: ok
-  - 1: spec_invalid
-  - 3: internal
+- 0: ok
+- 1: spec_invalid
+- 3: internal
 ---
 
 ## Purpose

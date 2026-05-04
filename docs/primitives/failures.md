@@ -2,53 +2,48 @@
 name: failures
 verb: query
 inputs:
-  - name: run_id
-    type: string
-  - name: experiment_dir
-    type: path
-    default: cwd
-  - name: lines
-    type: integer
-    default: 30
-    description: Per-task stderr tail length used for fingerprinting.
+- name: run_id
+  type: string
+- name: experiment_dir
+  type: path
+  default: cwd
+- name: lines
+  type: integer
+  default: 30
+  description: Per-task stderr tail length used for fingerprinting.
 outputs:
-  - name: run_id
-    type: string
-  - name: failed_count
-    type: integer
-  - name: scheduler
-    type: string
-  - name: clusters
-    type: array
-    description: One element per fingerprint cluster. Each carries `category` (one of the canonical failure categories), `task_ids`, a representative `fingerprint`, and (when an `auto_retry` policy is configured for the run) a list of `retry_eligible_task_ids`.
-  - name: auto_retry_policy
-    type: object
-    description: Echoed only when an auto-retry policy is configured for this run.
-  - name: note
-    type: string
-    description: Present only when the fresh status poll reports zero failed tasks.
+- name: run_id
+  type: string
+- name: failed_count
+  type: integer
+- name: scheduler
+  type: string
+- name: clusters
+  type: array
+  description: One element per fingerprint cluster. Each carries `category` (one of
+    the canonical failure categories), `task_ids`, a representative `fingerprint`,
+    and (when an `auto_retry` policy is configured for the run) a list of `retry_eligible_task_ids`.
+- name: auto_retry_policy
+  type: object
+  description: Echoed only when an auto-retry policy is configured for this run.
+- name: note
+  type: string
+  description: Present only when the fresh status poll reports zero failed tasks.
 side_effects:
-  - reads: SSH to <ssh_target> and re-polls status, then tails per-task stderr files.
+- ssh: <cluster>
 idempotent: true
 idempotency_key: none
 error_codes:
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
-    description: No journal record for `run_id`.
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: remote_command_failed
-    category: cluster
-    retry_safe: false
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
 backed_by:
   cli: hpc-mapreduce failures --run-id <id> [--lines <n>]
   python: hpc_mapreduce.agent_cli.cmd_failures
 exit_codes:
-  - 0: ok
-  - 2: ssh_unreachable / remote_command_failed
-  - 3: journal_corrupt / internal
+- 0: ok
+- 2: ssh_unreachable / remote_command_failed
+- 3: journal_corrupt / internal
 ---
 
 ## Purpose

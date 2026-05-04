@@ -2,24 +2,24 @@
 name: aggregate-flow
 verb: workflow
 side_effects:
-  - mutates: combined_waves / failed_waves on the journal record (per wave combined)
-  - writes: <output_dir>/_combiner/ (rsync'd from cluster)
-  - writes: <output_dir>/summaries/ when pull_summaries=true
+- ssh: <cluster>
+- rsync: <ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
 idempotent: true
-idempotency_key: run_id (re-invoke is cheap; combine-wave dedups already-combined waves)
+idempotency_key: run_id
 error_codes:
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: remote_command_failed
-    category: cluster
-    retry_safe: false
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
+- code: combiner_failed
+  category: cluster
+  retry_safe: true
+- code: outputs_missing
+  category: cluster
+  retry_safe: true
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
 backed_by:
   cli: hpc-mapreduce aggregate-flow --spec <path>
   python: hpc_mapreduce.job.aggregate_flow.aggregate_flow

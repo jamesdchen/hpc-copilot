@@ -2,24 +2,25 @@
 name: resubmit-failed
 verb: mutate
 side_effects:
-  - mutates: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters; appends new_job_ids)
+- scheduler-submit: <cluster>
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters)
 idempotent: true
-idempotency_key: request_id (auto-derived from sorted failed_task_ids + category + sorted overrides when not supplied)
+idempotency_key: request_id
 error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-    description: Empty failed_task_ids, missing category, or unknown category enum value.
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
+  description: Empty failed_task_ids, missing category, or unknown category enum value.
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
 backed_by:
   cli: hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]
   python: slash_commands.runner.resubmit_failed
 exit_codes:
-  - 0: ok
-  - 1: spec_invalid
-  - 3: journal_corrupt
+- 0: ok
+- 1: spec_invalid
+- 3: journal_corrupt
 ---
 
 ## Purpose

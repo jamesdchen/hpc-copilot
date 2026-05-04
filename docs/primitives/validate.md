@@ -2,21 +2,13 @@
 name: validate
 verb: validate
 side_effects:
-  - ssh: scheduler --test-only probe (no submit)
+- ssh: <cluster> (scheduler --test-only probe)
 idempotent: true
 idempotency_key: none
-error_codes:
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: scheduler_throttled
-    category: cluster
-    retry_safe: true
-  - code: internal
-    category: internal
-    retry_safe: false
+error_codes: []
 backed_by:
-  cli: hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>
+  cli: hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb
+    <m> --cpus <c>
   python: hpc_mapreduce.job.validate.validate_submission
 ---
 

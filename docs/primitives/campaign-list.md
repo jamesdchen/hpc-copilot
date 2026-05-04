@@ -4,15 +4,12 @@ verb: query
 side_effects: []
 idempotent: true
 idempotency_key: none
-error_codes:
-  - code: internal
-    category: internal
-    retry_safe: false
+error_codes: []
 backed_by:
   cli: hpc-mapreduce campaign list [--experiment-dir <dir>]
   python: hpc_mapreduce.reduce.history.find_sidecars_by_campaign
 exit_codes:
-  - 0: ok
+- 0: ok
 ---
 
 ## Purpose

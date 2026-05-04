@@ -119,29 +119,15 @@ def operations_catalog() -> list[dict[str, Any]]:
 
     Order: stable, sorted by (verb, name) so consumers can diff.
     """
+    # C′-v2 step 4: registry is the only source of truth. The previous
+    # frontmatter fallback existed during migration; primitives without
+    # decorators are now treated as orphans and ignored. Since the
+    # frontmatter generator (scripts/build_primitive_frontmatter.py)
+    # writes from the registry, an orphan frontmatter file is a
+    # build-process bug, not a primitive worth surfacing here.
     registry_entries = _from_registry()
-    registry_names = {e["name"] for e in registry_entries}
-
-    prims_dir = _primitives_dir()
-    fm_entries: list[dict[str, Any]] = []
-    if prims_dir is not None:
-        for entry in _from_frontmatters(prims_dir):
-            if entry["name"] not in registry_names:
-                # Holdout: not yet decorated. Surface so the next
-                # c-prime decoration commit covers it; the registry
-                # cross-validation test asserts no holdouts at HEAD.
-                import warnings
-                warnings.warn(
-                    f"primitive {entry['name']!r} present in frontmatter but "
-                    "not in @primitive registry; falling back to frontmatter.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-                fm_entries.append(entry)
-
-    if registry_entries or fm_entries:
-        out = registry_entries + fm_entries
-        return sorted(out, key=lambda o: (o["verb"], o["name"]))
+    if registry_entries:
+        return sorted(registry_entries, key=lambda o: (o["verb"], o["name"]))
 
     baked = _baked_path()
     if baked.is_file():
