@@ -46,7 +46,7 @@ __all__ = ["record_interview"]
 
 @primitive(
     name="interview",
-    verb="produce",
+    verb="scaffold",
     side_effects=[SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json}")],
     idempotent=True,
 )

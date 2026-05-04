@@ -2,7 +2,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**29 operations total**: 26 primitive atoms + 3 workflow atoms.
+**31 operations total**: 28 primitive atoms + 3 workflow atoms.
 
 ## How to read this page
 
@@ -12,7 +12,7 @@ Every operation in `claude-hpc` is a CLI atom or a Python-only primitive that em
 
 **Discoverability**: `hpc-mapreduce capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (18)
+## `query` (19)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -34,6 +34,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` | `claude_hpc.orchestrator.runner.record_status` | — | `claude_hpc/schemas/status.output.json` |
 | [`predict-queue-wait`](primitives/predict-queue-wait.md) | ✓ | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` | `claude_hpc.agent_cli.cmd_predict_queue_wait` | `claude_hpc/schemas/predict_queue_wait.input.json` | `claude_hpc/schemas/predict_queue_wait.output.json` |
 | [`read-runtime-prior`](primitives/read-runtime-prior.md) | ✓ | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` | `claude_hpc.agent_cli.cmd_runtime_prior` | — | `claude_hpc/schemas/runtime_prior.output.json` |
+| [`recall`](primitives/recall.md) | ✓ | _none_ | `_(Python-only)_` | `claude_hpc.atoms.recall.recall_campaigns` | `claude_hpc/schemas/recall.input.json` | `claude_hpc/schemas/recall.output.json` |
 | [`score-submit-plan`](primitives/score-submit-plan.md) | ✓ | ssh | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` | `claude_hpc.agent_cli.cmd_plan_submit` | — | `claude_hpc/schemas/plan_submit.output.json` |
 | [`walltime-drift`](primitives/walltime-drift.md) | ✓ | _none_ | `hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` | `claude_hpc.atoms.walltime_drift.walltime_drift` | — | — |
 
@@ -65,13 +66,14 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `claude_hpc.orchestrator.runner.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
 
-## `scaffold` (1)
+## `scaffold` (2)
 
 Creates new files (e.g. starter executor templates).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`build-executor`](primitives/build-executor.md) | ✗ | writes-file | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` | `claude_hpc.agent_cli.cmd_build_executor` | — | `claude_hpc/schemas/build_executor.output.json` |
+| [`interview`](primitives/interview.md) | ✓ | file_write | `_(Python-only)_` | `claude_hpc.atoms.interview.record_interview` | `claude_hpc/schemas/interview.input.json` | `claude_hpc/schemas/interview.output.json` |
 
 ## `workflow` (3)
 
