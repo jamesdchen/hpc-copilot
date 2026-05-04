@@ -16,7 +16,9 @@ from __future__ import annotations
 __all__ = [
     "HPCBackend",
     "get_backend",
+    "get_backend_class",
     "register",
+    "template_ext_for",
 ]
 
 import abc
@@ -312,3 +314,29 @@ def get_backend(name: str = "slurm", **kwargs: object) -> HPCBackend:
     if name not in _REGISTRY:
         raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")
     return _REGISTRY[name](**kwargs)
+
+
+def get_backend_class(name: str) -> type[HPCBackend]:
+    """Return the backend *class* (not an instance) by scheduler name.
+
+    Useful when you need a class-level attribute (``template_ext``,
+    ``scheduler_name``, ``supports_test_only_eta``) or a ``@staticmethod``
+    helper (``build_alive_check_cmd``, ``stderr_log_path``, ...) without
+    paying the constructor's required-kwarg cost. Migrating callers
+    away from inline ``if scheduler == "slurm"`` ladders should use
+    this when the script-path / SSH-target context is not available.
+    """
+    # Lazy imports to populate registry — same pattern as get_backend.
+    from hpc_mapreduce.infra.backends import sge as _sge  # noqa: F401
+    from hpc_mapreduce.infra.backends import sge_remote as _sge_remote  # noqa: F401
+    from hpc_mapreduce.infra.backends import slurm as _slurm  # noqa: F401
+    from hpc_mapreduce.infra.backends import slurm_remote as _slurm_remote  # noqa: F401
+
+    if name not in _REGISTRY:
+        raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")
+    return _REGISTRY[name]
+
+
+def template_ext_for(scheduler: str) -> str:
+    """Convenience accessor for ``get_backend_class(scheduler).template_ext``."""
+    return get_backend_class(scheduler).template_ext
