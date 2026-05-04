@@ -20,6 +20,18 @@
     "request_id": {
       "type": ["string", "null"],
       "description": "Optional dedupe key. When omitted, claude-hpc derives a deterministic id from (sorted failed_task_ids, category, sorted overrides). A second resubmit with the same request_id returns the existing record without incrementing retry counters."
+    },
+    "consult_forecast": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true (the default), claude-hpc consults the queue-wait forecaster before resubmitting and attaches a ResubmitRecommendation envelope to the response. Advisory only — does not block the resubmit. Set to false to skip the forecast call (e.g. tight CI loops)."
+    },
+    "forecast_within_hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 168,
+      "default": 24,
+      "description": "Horizon (hours) for the resubmit-window advisor. Ignored unless consult_forecast is true."
     }
   }
 }
