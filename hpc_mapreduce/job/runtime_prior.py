@@ -190,6 +190,8 @@ def append_sample(
     peak_host_mem_mb: int | None = None,
     cpu_seconds_used: int | None = None,
     cpus_requested: int | None = None,
+    predicted_eta_sec: int | None = None,
+    submitted_at_iso: str | None = None,
 ) -> Path:
     """Append a single runtime sample. Returns the file path written.
 
@@ -227,6 +229,13 @@ def append_sample(
         "peak_host_mem_mb": peak_host_mem_mb,
         "cpu_seconds_used": cpu_seconds_used,
         "cpus_requested": cpus_requested,
+        # House-edge fields. The planner's `--test-only` prediction is
+        # written into a per-run sidecar at submit time
+        # (`calibration.record_prediction_sidecar`); the monitor reads
+        # it back and includes it here so `compute_house_edge` can
+        # measure scheduler calibration without any cross-module state.
+        "predicted_eta_sec": predicted_eta_sec,
+        "submitted_at_iso": submitted_at_iso,
     }
 
     def _mutate(doc: dict[str, Any]) -> dict[str, Any]:

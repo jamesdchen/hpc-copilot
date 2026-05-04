@@ -268,6 +268,28 @@ Fall back to the original walltime/constraint only when:
 
 Pass `--no-adversarial` to `plan-submit` only for debugging or on clusters that throttle `--test-only`.
 
+**Closed-loop calibration**: `plan-submit` automatically reads recent samples for the (profile, cluster) and tunes the walltime safety multiplier:
+
+- The top-level `walltime_drift` field reports `{base_safety_mult, adjusted_safety_mult, rationale}` whenever drift was applied. If the rationale says "loosened", the cluster has been cliff-killing recent jobs and the planner is being more conservative; if "tightened", the planner is being more aggressive because past asks were systematically padded.
+- After submission, write a prediction sidecar so post-completion ingestion can validate calibration:
+
+  ```python
+  from hpc_mapreduce.job.calibration import record_prediction_sidecar
+  record_prediction_sidecar(
+      experiment_dir=Path("."),
+      run_id=run_id,
+      predicted_eta_sec=recommended_tuple["predicted_eta_sec"],
+      constraint=recommended_tuple["constraint"],
+      walltime_sec=recommended_tuple["walltime_sec"],
+      mem_mb=recommended_tuple["mem_mb"],
+      cpus=recommended_tuple["cpus"],
+  )
+  ```
+
+  The monitor reads the sidecar back and includes `predicted_eta_sec` + `submitted_at_iso` when calling `runtime_prior.append_sample`. The `house-edge` subcommand then aggregates predicted-vs-actual queue time so you can see whether `--test-only` is finding real backfill windows.
+
+- Standalone diagnostics: `hpc-mapreduce walltime-drift --profile X --cluster Y` and `hpc-mapreduce house-edge --profile X --cluster Y` surface the per-cluster signals without re-running the full planner.
+
 For each chosen candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly, so it stays here in the slash command:
 
 - Co-tenant has been running >12h *and* holds >50% of CPU / mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).
