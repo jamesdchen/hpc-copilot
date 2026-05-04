@@ -3,7 +3,7 @@
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
 - **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/preflight`) — interactive, walks you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1; preflight is folded into `/submit-hpc` Step 6b as an idempotent gate (with `/preflight` still available as a standalone diagnostic).
-- **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs).
+- **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs). This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/agent-surface.md`](docs/agent-surface.md).
 
 Both go through the same atomic-ops layer (`slash_commands/runner.py`), so cross-surface state (in-flight runs, journal records) is shared automatically.
 
