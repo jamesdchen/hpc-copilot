@@ -632,7 +632,7 @@ def inspect_cluster(
         raise ValueError(
             f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}"
         ) from exc
-    snap = backend_cls.inspect_cluster(
+    snap: ClusterSnapshot = backend_cls.inspect_cluster(
         cluster_name,
         cfg,
         sacct_window_hours=sacct_window_hours,

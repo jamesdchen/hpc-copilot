@@ -82,7 +82,7 @@ class RemoteSlurmBackend(RemoteHPCBackend, SlurmBackend):
             cluster="",
             log_dir=log_dir or f"{remote_repo}/logs",
         )
-        self.account = account
-        self.cluster = cluster
+        self.account = account or ""
+        self.cluster = cluster or ""
         self.ssh_run = ssh_run
         self.remote_repo = remote_repo

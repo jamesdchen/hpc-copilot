@@ -236,11 +236,11 @@ def compute_house_edge(samples: list[dict[str, Any]]) -> HouseEdge:
             p95_delta_sec=None,
             calibration_ratio=None,
         )
-    s = sorted(deltas)
+    sorted_deltas = sorted(deltas)
     mean = sum(deltas) / n
-    median = s[n // 2]
+    median = sorted_deltas[n // 2]
     p95_idx = max(0, min(n - 1, int(round(0.95 * (n - 1)))))
-    p95 = s[p95_idx]
+    p95 = sorted_deltas[p95_idx]
     cal = (sum(ratios) / len(ratios)) if ratios else None
     return HouseEdge(
         n_with_prediction=n,

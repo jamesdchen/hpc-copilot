@@ -529,25 +529,25 @@ def simulate_one_pass(
         if time > max_horizon_sec:
             break
         if kind == _EVT_END:
-            j = job_table.get(jid)
-            if j is None:
+            ev_job = job_table.get(jid)
+            if ev_job is None:
                 continue
-            if j.state != "running":
+            if ev_job.state != "running":
                 continue
             node = placed_node.get(jid, "")
             if node:
-                _release(node, j, free_by_node)
-            j.state = "complete"
+                _release(node, ev_job, free_by_node)
+            ev_job.state = "complete"
             completed += 1
             _policy_loop(time)
         elif kind == _EVT_SUBMIT:
-            j = job_table.get(jid)
-            if j is None:
+            ev_job = job_table.get(jid)
+            if ev_job is None:
                 continue
-            j.state = "queued"
-            if j is not candidate and j.walltime_actual is None:
-                j.walltime_actual = max(1.0, j.walltime_ask * rng.uniform(0.6, 1.0))
-            queued.append(j)
+            ev_job.state = "queued"
+            if ev_job is not candidate and ev_job.walltime_actual is None:
+                ev_job.walltime_actual = max(1.0, ev_job.walltime_ask * rng.uniform(0.6, 1.0))
+            queued.append(ev_job)
             _policy_loop(time)
 
     if candidate_started and candidate_start is not None:

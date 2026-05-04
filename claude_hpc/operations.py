@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 import claude_hpc
 from claude_hpc._internal._primitive import get_registry
