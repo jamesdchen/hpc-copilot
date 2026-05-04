@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from slash_commands import errors, runner, session
+from claude_hpc import errors
+from slash_commands import runner, session
 from slash_commands.session import RunRecord
 
 if TYPE_CHECKING:

@@ -37,7 +37,8 @@ from claude_hpc.orchestrator.discover import (
     discover_executors,
     read_meta_json,
 )
-from slash_commands import errors, runner, session
+from claude_hpc import errors
+from slash_commands import runner, session
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1

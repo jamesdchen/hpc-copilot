@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
-from slash_commands import errors, runner, session
+from claude_hpc import errors
+from slash_commands import runner, session
 
 if TYPE_CHECKING:
     from pathlib import Path
