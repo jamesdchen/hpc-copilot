@@ -108,6 +108,14 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
         doc = json.loads(text)
     except json.JSONDecodeError:
         return _empty_doc(profile, cluster)
+    # B8: cross-domain manifest check. Soft-skip on mismatch — a future
+    # writer with a wider schema shouldn't poison the prior; treating
+    # the file as empty makes the prior re-learn from fresh samples.
+    from hpc_mapreduce._version import is_compatible as _is_compat
+    if isinstance(doc, dict):
+        sv = doc.get("schema_version")
+        if isinstance(sv, int) and not _is_compat("runtime_prior", sv):
+            return _empty_doc(profile, cluster)
     return _normalise(doc, profile, cluster)
 
 
