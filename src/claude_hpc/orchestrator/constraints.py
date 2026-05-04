@@ -5,6 +5,8 @@ from __future__ import annotations
 import dataclasses
 import re
 
+from claude_hpc.infra.parsing import parse_walltime_to_sec
+
 __all__ = ["ClusterConstraints", "parse_constraints"]
 
 
@@ -40,12 +42,7 @@ class ClusterConstraints:
 
     def walltime_seconds(self) -> int:
         """Parse max_walltime HH:MM:SS to total seconds."""
-        parts = self.max_walltime.split(":")
-        if len(parts) == 3:
-            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-        if len(parts) == 2:
-            return int(parts[0]) * 60 + int(parts[1])
-        return int(parts[0])
+        return parse_walltime_to_sec(self.max_walltime)
 
     def spin_up_seconds(self) -> int:
         """Parse est_spin_up duration string (e.g. '5m', '30s', '1h') to seconds."""

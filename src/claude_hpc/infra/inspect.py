@@ -48,6 +48,21 @@ from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 from claude_hpc.infra.cache import TTLCache
 from claude_hpc.infra.clusters import load_clusters_config
+from claude_hpc.infra.parsing import (
+    parse_mem_to_gb as _parse_mem_to_gb,
+)
+from claude_hpc.infra.parsing import (
+    parse_mem_to_mb as _parse_mem_to_mb,
+)
+from claude_hpc.infra.parsing import (
+    parse_walltime_to_sec as _parse_elapsed_to_sec,
+)
+from claude_hpc.infra.parsing import (
+    to_float_or_none as _to_float_or_none,
+)
+from claude_hpc.infra.parsing import (
+    to_int_or_none as _to_int_or_none,
+)
 from slash_commands import errors
 
 if TYPE_CHECKING:
@@ -806,67 +821,6 @@ def _snapshot_from_dict(d: dict[str, Any]) -> ClusterSnapshot:
 
 
 # --- helpers --------------------------------------------------------------
-
-
-def _to_int_or_none(s: Any) -> int | None:
-    if s is None:
-        return None
-    s = str(s).strip()
-    if not s:
-        return None
-    m = re.match(r"-?\d+", s)
-    if not m:
-        return None
-    try:
-        return int(m.group(0))
-    except ValueError:
-        return None
-
-
-def _to_float_or_none(s: Any) -> float | None:
-    if s is None:
-        return None
-    s = str(s).strip()
-    if not s:
-        return None
-    try:
-        return float(s)
-    except ValueError:
-        return None
-
-
-def _parse_mem_to_gb(s: str) -> float | None:
-    """Parse a SLURM/SGE memory token (e.g. ``128G``, ``1024M``) → GB."""
-    if not s:
-        return None
-    m = re.match(r"(\d+(?:\.\d+)?)\s*([KMGTkmgt])?[bB]?", s.strip())
-    if not m:
-        return None
-    val = float(m.group(1))
-    unit = (m.group(2) or "M").upper()
-    factor = {"K": 1 / (1024 * 1024), "M": 1 / 1024, "G": 1.0, "T": 1024.0}.get(unit, 1 / 1024)
-    return round(val * factor, 3)
-
-
-def _parse_mem_to_mb(s: str) -> int | None:
-    gb = _parse_mem_to_gb(s)
-    if gb is None:
-        return None
-    return int(round(gb * 1024))
-
-
-_ELAPSED_RE = re.compile(r"^(?:(?P<d>\d+)-)?(?P<h>\d{1,2}):(?P<m>\d{2}):(?P<s>\d{2})(?:\.\d+)?$")
-
-
-def _parse_elapsed_to_sec(s: str) -> int:
-    """Parse a SLURM elapsed string (``D-HH:MM:SS`` or ``HH:MM:SS``) → seconds."""
-    if not s:
-        return 0
-    m = _ELAPSED_RE.match(s.strip())
-    if not m:
-        return 0
-    days = int(m.group("d") or 0)
-    return days * 86400 + int(m.group("h")) * 3600 + int(m.group("m")) * 60 + int(m.group("s"))
 
 
 def _hours_since(iso_or_slurm: str) -> float | None:
