@@ -1544,12 +1544,27 @@ def cmd_failures(args: argparse.Namespace) -> int:
             record=record,
         )
 
+    # Surface preempted-task count at the top level so a harness can
+    # branch on "campus user got bumped, resubmit cleanly" vs. "real
+    # failure, surface to user" without parsing the cluster
+    # ``error_class`` strings. Sourced from the failure_signatures
+    # catalog entry (exit_code=130 / "[claude-hpc] SIGTERM received"
+    # stderr line) — preempted tasks are guaranteed to land in the
+    # ``preempted`` cluster.
+    preempted_task_ids: list[int] = []
+    for cluster in clusters:
+        if cluster.get("error_class") == "preempted":
+            preempted_task_ids.extend(cluster.get("task_ids") or [])
+
     data: dict[str, Any] = {
         "run_id": args.run_id,
         "failed_count": len(failed_ids),
         "clusters": clusters,
         "scheduler": scheduler,
     }
+    if preempted_task_ids:
+        data["preempted_count"] = len(preempted_task_ids)
+        data["preempted_task_ids"] = sorted(preempted_task_ids)
     if auto_retry:
         data["auto_retry_policy"] = auto_retry
     _ok(data, name="failures")
