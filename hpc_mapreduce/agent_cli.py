@@ -400,12 +400,6 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 # ─── subcommand: discover ──────────────────────────────────────────────────
 
 
-@primitive(
-    name="discover-executors",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_discover(args: argparse.Namespace) -> int:
     infos = discover_executors(args.experiment_dir)
     data: dict[str, Any] = {
