@@ -1205,6 +1205,26 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
                     "work, not failed. Resubmit when scheduler pressure abates."
                 )
 
+    forecast_recommendation: dict | None = None
+    if spec.get("consult_forecast", True):
+        from claude_hpc.forecast.resubmit_advisor import recommend_resubmit_window
+        from claude_hpc.orchestrator.runs import read_run_sidecar as _read_sidecar_fc
+
+        try:
+            sidecar_fc = _read_sidecar_fc(Path(args.experiment_dir), args.run_id)
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            sidecar_fc = None
+        cluster_fc = (sidecar_fc or {}).get("cluster")
+        profile_fc = (sidecar_fc or {}).get("profile")
+        if isinstance(cluster_fc, str) and isinstance(profile_fc, str):
+            rec = recommend_resubmit_window(
+                Path(args.experiment_dir),
+                profile=profile_fc,
+                cluster=cluster_fc,
+                within_hours=int(spec.get("forecast_within_hours", 24)),
+            )
+            forecast_recommendation = rec.to_dict()
+
     record, deduped, request_id = runner.resubmit_failed(
         args.experiment_dir,
         args.run_id,
@@ -1214,14 +1234,17 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
         new_job_ids=spec.get("new_job_ids"),
         request_id=spec.get("request_id"),
     )
+    payload: dict[str, Any] = {
+        "run_id": record.run_id,
+        "retries": record.retries,
+        "job_ids": record.job_ids,
+        "request_id": request_id,
+        "deduped": deduped,
+    }
+    if forecast_recommendation is not None:
+        payload["forecast_recommendation"] = forecast_recommendation
     _ok(
-        {
-            "run_id": record.run_id,
-            "retries": record.retries,
-            "job_ids": record.job_ids,
-            "request_id": request_id,
-            "deduped": deduped,
-        },
+        payload,
         # Honest now that resubmit_failed dedups on request_id: a replay
         # with the same spec is a no-op, just like submit.
         name="resubmit-failed",
