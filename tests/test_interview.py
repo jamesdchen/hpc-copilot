@@ -385,9 +385,7 @@ def test_cli_emits_envelope(tmp_path: Path) -> None:
     spec_path = tmp_path / "intent.json"
     spec_path.write_text(json.dumps(_minimal_intent(3, task_kind="smoke")))
 
-    rc, out, err = _run_cli(
-        "interview", "--spec", str(spec_path), "--campaign-dir", str(tmp_path)
-    )
+    rc, out, err = _run_cli("interview", "--spec", str(spec_path), "--campaign-dir", str(tmp_path))
     assert rc == 0, err
     payload = json.loads(out.strip().splitlines()[-1])
     assert payload["ok"] is True
@@ -401,9 +399,7 @@ def test_cli_schema_violation_maps_to_user_error(tmp_path: Path) -> None:
     spec_path = tmp_path / "intent.json"
     spec_path.write_text(json.dumps({"goal": "x", "task_count": 3}))  # no produced_by
 
-    rc, out, err = _run_cli(
-        "interview", "--spec", str(spec_path), "--campaign-dir", str(tmp_path)
-    )
+    rc, out, err = _run_cli("interview", "--spec", str(spec_path), "--campaign-dir", str(tmp_path))
     assert rc == 1, f"expected EXIT_USER_ERROR; got {rc}; stderr={err}"
     payload = json.loads(out.strip().splitlines()[-1])
     assert payload["ok"] is False

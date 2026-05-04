@@ -364,15 +364,18 @@ def cmd_interview(args: argparse.Namespace) -> int:
 
 def cmd_recall(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.recall."""
-    from claude_hpc.atoms.recall import recall_campaigns
+    from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
 
+    roots = resolve_roots(getattr(args, "root", None))
     try:
         data = recall_campaigns(
-            Path(args.root),
+            roots,
             task_kind=getattr(args, "task_kind", None),
             operator=getattr(args, "operator", None),
             since=getattr(args, "since", None),
             limit=int(getattr(args, "limit", 20)),
+            include_runtime=bool(getattr(args, "include_runtime", False)),
+            include_generator_stats=bool(getattr(args, "include_generator_stats", False)),
         )
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
@@ -1478,8 +1481,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_rc.add_argument(
         "--root",
-        required=True,
-        help="Filesystem directory to walk recursively for interview.json.",
+        help=(
+            "Filesystem directory to walk recursively for interview.json. "
+            "When omitted, falls back to ~/.claude-hpc/config.json:"
+            "experiment_roots; if neither is set, errors."
+        ),
     )
     p_rc.add_argument(
         "--task-kind",
@@ -1498,6 +1504,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=20,
         help="Maximum number of summaries to return (default 20).",
+    )
+    p_rc.add_argument(
+        "--include-runtime",
+        action="store_true",
+        help=(
+            "Tier 2 rollup: walk each matched campaign's .hpc/runtimes/*.json "
+            "and aggregate elapsed_sec / failure rate across all dispatched tasks."
+        ),
+    )
+    p_rc.add_argument(
+        "--include-generator-stats",
+        action="store_true",
+        help=(
+            "Tier 3 rollup: bucket by task_generator.kind and report observed "
+            "parameter envelopes. Most useful with --task-kind also set."
+        ),
     )
     p_rc.set_defaults(func=cmd_recall)
 

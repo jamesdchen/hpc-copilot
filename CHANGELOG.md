@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Changed — `recall` projection broadened, rollup tiers added, config-driven roots
+
+The `recall` primitive grew from "list past campaigns" into the full
+memory layer for next-interview grounding.
+
+**Per-campaign projection** (Fix A) — `recall` summaries now include
+`budget`, `abort_if`, `cluster_target`, and `task_generator: {kind, params}`
+in addition to the existing identity / metadata fields. These are the
+prior-decision fields the next interviewer would otherwise have to
+re-read every interview.json for. `notes` and `transcript` stay out of
+the projection — too verbose; the calling agent re-reads
+`interview.json` directly when it needs them.
+
+**Rollup tiers** (Fix B) — every recall response now carries a
+`rollup` block with cross-campaign aggregations.
+
+* **Tier 1 (always-on)** — `count`, histograms over `task_kind` /
+  `operator` / `produced_by_kind` / `task_generator.kind` / `cluster`,
+  `task_count` quantiles (linear-interp p50/p95/min/max),
+  `materialized_at` envelope (earliest/latest). Computed from the same
+  data already projected; no extra IO.
+* **Tier 2 — `--include-runtime`** — walks each matched campaign's
+  `.hpc/runtimes/*.json` files. Aggregates `elapsed_sec` (quantiles +
+  n_samples) and `failure_rate` from `exit_code != 0` across every
+  dispatched task across every matched campaign. Reports
+  `campaigns_with_no_runtime` so the caller sees how much of the
+  matched set was uninformative.
+* **Tier 3 — `--include-generator-stats`** — buckets matched campaigns
+  by `task_generator.kind` and reports observed parameter envelopes:
+  `numeric_logspace` / `numeric_linspace` get `param_envelopes` (low /
+  high / n ranges per parameter name); `cartesian_product` gets
+  `axis_value_unions` (every value seen on each axis name);
+  `enumerated` / `items_x_seeds` get count only. Most useful with
+  `--task-kind` also set so buckets aren't noisy.
+
+Observed ranges only — no recommendations. Recall is the memory layer;
+reasoning over the ranges stays in the calling agent.
+
+**Config-driven default `--root`** (Fix C) — `--root` is now optional.
+When omitted, the primitive falls back to
+`~/.claude-hpc/config.json:experiment_roots` (a JSON file with an
+`experiment_roots: [path, …]` field). Both empty raises `spec_invalid`
+with a clear message — no implicit cwd default. Multi-root support
+(`recall_campaigns(roots: list[Path], ...)`) means the config can list
+multiple campaign trees and they're walked together.
+
 ### Added — `recall` primitive: query past interview.json files
 
 `hpc-mapreduce recall --root <experiments-dir>` walks the tree for
