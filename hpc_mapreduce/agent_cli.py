@@ -278,6 +278,12 @@ def _live_subcommands() -> list[str]:
     return []
 
 
+@primitive(
+    name="capabilities",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_capabilities(args: argparse.Namespace) -> int:
     from hpc_mapreduce.operations import operations_catalog, render_llms_full
 
@@ -317,6 +323,12 @@ def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     return {"name": name, "ok": ok, "detail": detail}
 
 
+@primitive(
+    name="check-preflight",
+    verb="validate",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_preflight(args: argparse.Namespace) -> int:
     checks: list[dict[str, Any]] = []
 
@@ -372,6 +384,12 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 # ─── subcommand: discover ──────────────────────────────────────────────────
 
 
+@primitive(
+    name="discover-executors",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_discover(args: argparse.Namespace) -> int:
     infos = discover_executors(args.experiment_dir)
     data: dict[str, Any] = {
@@ -540,6 +558,13 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
 # ─── subcommand: plan-submit ───────────────────────────────────────────────
 
 
+@primitive(
+    name="score-submit-plan",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster> (delegates to inspect-cluster)")],
+    error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.ClusterUnknown],
+    idempotent=True,
+)
 def cmd_plan_submit(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -564,6 +589,12 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@primitive(
+    name="clusters-list",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_clusters_list(_args: argparse.Namespace) -> int:
     clusters = load_clusters_config()
     _ok(
@@ -578,6 +609,13 @@ def cmd_clusters_list(_args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@primitive(
+    name="clusters-describe",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.ClusterUnknown],
+    idempotent=True,
+)
 def cmd_clusters_describe(args: argparse.Namespace) -> int:
     clusters = load_clusters_config()
     if args.name not in clusters:
@@ -613,6 +651,12 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     return max(0, int(delta.total_seconds()))
 
 
+@primitive(
+    name="list-in-flight",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_list_in_flight(args: argparse.Namespace) -> int:
     records = session.find_in_flight_runs(args.experiment_dir)
 
@@ -638,6 +682,12 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
 # ─── subcommand: campaign status / list ────────────────────────────────────
 
 
+@primitive(
+    name="campaign-status",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_campaign_status(args: argparse.Namespace) -> int:
     """Read-only summary of a closed-loop campaign.
 
@@ -665,6 +715,12 @@ def cmd_campaign_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@primitive(
+    name="campaign-list",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_campaign_list(args: argparse.Namespace) -> int:
     """List every campaign with at least one sidecar in this experiment."""
     from collections import Counter
@@ -1126,26 +1182,15 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 #   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
 # A test in tests/test_resubmit.py asserts the classifier never emits a
 # category outside this set.
-_VALID_RESUBMIT_CATEGORIES = frozenset(
-    {
-        # Human-supplied taxonomy.
-        "gpu_oom",
-        "system_oom",
-        "segv",
-        "walltime",
-        "node_failure",
-        "queue_stall",
-        "code_bug",
-        "unknown",
-        # Auto-classifier emits these too — accept them so an agent can
-        # round-trip the classifier's output back into a resubmit spec.
-        "import_error",
-        "file_not_found",
-        "permission_denied",
-        "disk_full",
-        "python_traceback",
-    }
-)
+# B2: derived from the canonical FailureCategory StrEnum.
+# Pre-B2 this was a literal frozenset that drifted from the classifier
+# emissions in slash_commands.runner; A4 landed the union as a literal,
+# B2 makes the literal redundant by sourcing from the StrEnum so the
+# drift class cannot recur. test_lifecycle.py asserts the cross-set
+# invariants (classifier emissions ⊆ accepted ⊆ FailureCategory).
+from hpc_mapreduce.lifecycle import FailureCategory as _FailureCategory  # noqa: E402
+
+_VALID_RESUBMIT_CATEGORIES = frozenset({fc.value for fc in _FailureCategory})
 
 
 def cmd_resubmit(args: argparse.Namespace) -> int:
@@ -1192,6 +1237,20 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
 # ─── subcommand: reconcile ─────────────────────────────────────────────────
 
 
+@primitive(
+    name="reconcile-journal",
+    verb="mutate",
+    side_effects=[
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
+        ),
+        SideEffect("ssh", "<cluster>"),
+    ],
+    error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def cmd_reconcile(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -1385,6 +1444,17 @@ def cmd_failures(args: argparse.Namespace) -> int:
 # ─── subcommand: build-executor ────────────────────────────────────────────
 
 
+@primitive(
+    name="build-executor",
+    verb="scaffold",
+    side_effects=[
+        SideEffect(
+            "writes-file",
+            "<output_dir>/<name>.py (refuses to overwrite without --force)",
+        ),
+    ],
+    idempotent=False,
+)
 def cmd_build_executor(args: argparse.Namespace) -> int:
     starters = hpc_mapreduce._PACKAGE_ROOT / "templates" / "starters"
     template_map = {
