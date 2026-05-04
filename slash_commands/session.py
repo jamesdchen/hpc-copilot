@@ -30,7 +30,6 @@ import logging
 import os
 import tempfile
 import warnings
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -111,8 +110,7 @@ class RunRecord:
         return cls(**{k: v for k, v in payload.items() if k in known})
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+from hpc_mapreduce._time import utcnow_iso as _utcnow_iso  # noqa: E402
 
 
 def repo_hash(experiment_dir: Path) -> str:

@@ -521,16 +521,13 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     iso = last_status.get("checked_at")
     if not isinstance(iso, str):
         return None
-    try:
-        from datetime import datetime, timezone
+    from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
 
-        ts = datetime.fromisoformat(iso)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        delta = datetime.now(timezone.utc) - ts
-        return max(0, int(delta.total_seconds()))
-    except (ValueError, TypeError):
+    ts = parse_iso_utc_or_none(iso)
+    if ts is None:
         return None
+    delta = utcnow() - ts
+    return max(0, int(delta.total_seconds()))
 
 
 def cmd_list_in_flight(args: argparse.Namespace) -> int:

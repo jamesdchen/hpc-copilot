@@ -35,9 +35,10 @@ import dataclasses
 import re
 import subprocess
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 
 from hpc_mapreduce.infra.clusters import load_clusters_config
 
@@ -240,7 +241,7 @@ def _slurm_inspect(
     snap = ClusterSnapshot(
         cluster=cluster_name,
         scheduler_kind="slurm",
-        now_iso=datetime.now(timezone.utc).isoformat(),
+        now_iso=utcnow_iso(),
         nodes=[],
     )
     # Step 1: scontrol show node (all nodes; planner filters by candidate
@@ -380,7 +381,7 @@ def _sge_inspect(
     snap = ClusterSnapshot(
         cluster=cluster_name,
         scheduler_kind="sge",
-        now_iso=datetime.now(timezone.utc).isoformat(),
+        now_iso=utcnow_iso(),
         nodes=[],
     )
     rc, out, err = runner.run("qhost -F gpu -q")
@@ -705,13 +706,10 @@ def _hours_since(iso_or_slurm: str) -> float | None:
     """
     if not iso_or_slurm or iso_or_slurm in ("Unknown", "None"):
         return None
-    try:
-        ts = datetime.fromisoformat(iso_or_slurm.replace("Z", "+00:00"))
-    except ValueError:
+    ts = parse_iso_utc_or_none(iso_or_slurm)
+    if ts is None:
         return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    delta = datetime.now(timezone.utc) - ts
+    delta = utcnow() - ts
     return round(delta.total_seconds() / 3600.0, 2)
 
 

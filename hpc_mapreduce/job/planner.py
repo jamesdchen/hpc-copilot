@@ -35,8 +35,9 @@ __all__ = ["plan_submit"]
 
 import re
 import subprocess
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+
+from hpc_mapreduce._time import parse_iso_utc, parse_iso_utc_or_none, utcnow, utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -249,7 +250,7 @@ def plan_submit(
     return {
         "profile": profile,
         "cluster": cluster,
-        "now_iso": datetime.now(timezone.utc).isoformat(),
+        "now_iso": utcnow_iso(),
         "candidates": candidate_reports,
         "needs_canary": needs_canary,
         "canary_plan": canary_plan,
@@ -294,14 +295,11 @@ def _nodes_for_constraint(
 
 
 def _blacklist_summary(entry: dict[str, Any]) -> dict[str, Any]:
-    added = entry.get("added_at", "")
-    try:
-        ts = datetime.fromisoformat(added.replace("Z", "+00:00"))
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        added_h_ago = round((datetime.now(timezone.utc) - ts).total_seconds() / 3600.0, 1)
-    except (ValueError, AttributeError):
+    ts = parse_iso_utc_or_none(entry.get("added_at", ""))
+    if ts is None:
         added_h_ago = None
+    else:
+        added_h_ago = round((utcnow() - ts).total_seconds() / 3600.0, 1)
     return {
         "node": entry.get("node"),
         "added_h_ago": added_h_ago,
@@ -540,12 +538,10 @@ def _parse_test_only_eta(text: str) -> int | None:
     if not m:
         return None
     try:
-        ts = datetime.fromisoformat(m.group(1))
+        ts = parse_iso_utc(m.group(1))
     except ValueError:
         return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    delta = (ts - datetime.now(timezone.utc)).total_seconds()
+    delta = (ts - utcnow()).total_seconds()
     return max(0, int(delta))
 
 

@@ -49,9 +49,10 @@ import json
 import os
 import statistics
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from hpc_mapreduce._time import utcnow_iso
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -358,7 +359,7 @@ def roll_up_quantiles(
     return {
         "profile": profile,
         "cluster": cluster,
-        "now_iso": datetime.now(timezone.utc).isoformat(),
+        "now_iso": utcnow_iso(),
         "needs_canary": len(out_quantiles) == 0,
         "quantiles": out_quantiles,
         # Footprint-shrink rollups. Only populated when samples carry
@@ -373,8 +374,12 @@ def roll_up_quantiles(
     }
 
 
-def _coerce_pos_int(x: Any) -> int | None:
-    """Coerce *x* to a positive int or return None. Permissive on garbage."""
+def coerce_pos_int(x: Any) -> int | None:
+    """Coerce *x* to a positive int or return None. Permissive on garbage.
+
+    Shared with :mod:`hpc_mapreduce.job.calibration` so both modules
+    consume the runtime-prior sample dicts through a single coercion.
+    """
     if x is None:
         return None
     try:
@@ -382,6 +387,10 @@ def _coerce_pos_int(x: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return v if v > 0 else None
+
+
+# Back-compat alias for in-module callers; remove once they migrate.
+_coerce_pos_int = coerce_pos_int
 
 
 def _cores_used_from_sample(s: dict[str, Any], elapsed_sec: int) -> int | None:
