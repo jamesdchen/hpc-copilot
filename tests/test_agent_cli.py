@@ -571,6 +571,61 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     assert payload["error_code"] == "spec_invalid"
 
 
+# ─── A-M1: cmd_status surfaces preempted tasks from sidecar ───────────────
+
+
+def test_status_helper_returns_none_when_no_preempt_marks(tmp_path: Path) -> None:
+    """When no per-task entry carries a preempt block, the helper
+    returns None — /status output then omits the preempted_* keys."""
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True)
+    sidecar = {
+        "sidecar_schema_version": 2,
+        "run_id": "rid",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "out"),
+        "task_count": 1,
+        "tasks_py_sha": "abc",
+        "tasks": {"0": {}},
+    }
+    (runs_dir / "rid.json").write_text(json.dumps(sidecar))
+
+    assert cli._preempted_summary_from_sidecar(tmp_path, "rid") is None
+
+
+def test_status_helper_aggregates_preempted_task_ids(tmp_path: Path) -> None:
+    """When tasks 0 and 2 carry preempt blocks (task 1 doesn't), the
+    helper returns (2, [0, 2]) — caller surfaces those keys on
+    /status so the campus user's harness can see scheduler pressure
+    on a partially-bumped run while it's still in flight."""
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True)
+    sidecar = {
+        "sidecar_schema_version": 2,
+        "run_id": "rid",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "out"),
+        "task_count": 3,
+        "tasks_py_sha": "abc",
+        "tasks": {
+            "0": {"preempt": {"at": "2026-01-01T00:00:00Z", "grace_sec": 25}},
+            "1": {},
+            "2": {"preempt": {"at": "2026-01-01T00:00:01Z", "grace_sec": 25}},
+        },
+    }
+    (runs_dir / "rid.json").write_text(json.dumps(sidecar))
+
+    summary = cli._preempted_summary_from_sidecar(tmp_path, "rid")
+    assert summary == (2, [0, 2])
+
+
+def test_status_helper_returns_none_on_missing_sidecar(tmp_path: Path) -> None:
+    """No sidecar file → None (treated as 'nothing to surface', not an
+    error). Keeps cmd_status robust when called against a run that
+    hasn't completed its first wave yet."""
+    assert cli._preempted_summary_from_sidecar(tmp_path, "missing_run") is None
+
+
 # ─── A-M3: cmd_resubmit surfaces Preempted at envelope level ──────────────
 
 
