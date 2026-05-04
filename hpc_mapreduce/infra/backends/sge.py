@@ -42,6 +42,61 @@ class SGEBackend(HPCBackend):
             return []
         return ["-hold_jid", ",".join(job_ids)]
 
+    # ------------------------------------------------------------------
+    # B5-PR2 capability hooks — pure, scheduler-shape-only helpers.
+    # See SlurmBackend for the design rationale.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_alive_check_cmd(job_ids: list[str]) -> str:
+        """Shell command whose stdout lists ``__ALIVE__<jid>`` per live job.
+
+        Key the marker on ``qstat -j``'s exit code, not on the pipeline
+        tail.  ``qstat | head -1`` would always return 0 (head reads
+        empty stdin successfully), making ``&& echo __ALIVE__`` fire for
+        missing jobs and the alive check meaningless.
+        """
+        import shlex
+        if not job_ids:
+            return "true"
+        return (
+            "{ "
+            + "; ".join(
+                f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 && echo __ALIVE__{jid}"
+                for jid in job_ids
+            )
+            + "; } || true"
+        )
+
+    @staticmethod
+    def parse_alive_output(stdout: str, job_ids: list[str]) -> set[str]:
+        """Extract job ids from ``__ALIVE__<jid>`` markers."""
+        alive: set[str] = set()
+        for line in stdout.splitlines():
+            token = line.strip()
+            if token.startswith("__ALIVE__"):
+                alive.add(token.removeprefix("__ALIVE__"))
+        return alive
+
+    @staticmethod
+    def stderr_log_path(
+        remote_path: str, job_name: str, job_id: str, task_id: int
+    ) -> str:
+        """Cluster-side stderr path for SGE: ``<remote_path>/<job_name>.o<job_id>.<task_id>``.
+
+        SGE uses the ``-j y`` join-stderr-into-stdout convention in the
+        templates, so the ``.o`` (output) file holds both streams.
+        """
+        return f"{remote_path.rstrip('/')}/{job_name}.o{job_id}.{task_id}"
+
+    @staticmethod
+    def err_log_disk_path(
+        log_dir: str, scratch_dir: str, job_name: str, job_id: str, task_id: int
+    ) -> str:
+        """Local-disk path used by ``status.get_err_log_paths`` for SGE."""
+        import os
+        return os.path.join(scratch_dir, f"{job_name}.o{job_id}.{task_id}")
+
     def _build_command(
         self,
         task_range: str,

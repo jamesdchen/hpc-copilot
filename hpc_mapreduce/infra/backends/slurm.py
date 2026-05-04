@@ -39,6 +39,63 @@ class SlurmBackend(HPCBackend):
             return []
         return ["--dependency", f"afterany:{':'.join(job_ids)}"]
 
+    # ------------------------------------------------------------------
+    # B5-PR2 capability hooks — pure, scheduler-shape-only helpers.
+    # Callers (runner.py, status.py) pair these with their own SSH /
+    # subprocess execution so the backend stays transport-agnostic.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_alive_check_cmd(job_ids: list[str]) -> str:
+        """Shell command whose stdout lists the live SLURM job ids.
+
+        Uses ``squeue`` (active states only) so completed/failed jobs do
+        NOT show up — keeping this aligned with sacct would leak history
+        and make abandoned-run detection useless.
+        """
+        import shlex
+        if not job_ids:
+            return "true"
+        csv = ",".join(job_ids)
+        return f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null || true"
+
+    @staticmethod
+    def parse_alive_output(stdout: str, job_ids: list[str]) -> set[str]:
+        """Filter ``squeue`` output to the requested *job_ids*."""
+        alive: set[str] = set()
+        wanted = set(job_ids)
+        for line in stdout.splitlines():
+            token = line.strip()
+            if not token:
+                continue
+            base = token.split(".")[0].split("_")[0]
+            if base in wanted:
+                alive.add(base)
+        return alive
+
+    @staticmethod
+    def stderr_log_path(
+        remote_path: str, job_name: str, job_id: str, task_id: int
+    ) -> str:
+        """Cluster-side path to a single task's stderr log.
+
+        Mirrors the ``--error`` template baked into ``_build_command``:
+        ``<remote_path>/_hpc_logs/<job_name>_<job_id>_<task_id>.err``.
+        Note the ``_hpc_logs`` directory is the convention used by the
+        framework's job templates, NOT ``self.log_dir`` (which on remote
+        backends defaults to ``<remote_repo>/logs`` for sbatch-side
+        plumbing). Keep these in sync if either moves.
+        """
+        return f"{remote_path.rstrip('/')}/_hpc_logs/{job_name}_{job_id}_{task_id}.err"
+
+    @staticmethod
+    def err_log_disk_path(
+        log_dir: str, scratch_dir: str, job_name: str, job_id: str, task_id: int
+    ) -> str:
+        """Local-disk path used by ``status.get_err_log_paths`` for SLURM."""
+        import os
+        return os.path.join(log_dir, f"{job_name}_{job_id}_{task_id}.err")
+
     def _build_command(
         self,
         task_range: str,
