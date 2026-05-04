@@ -691,7 +691,7 @@ def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
         target = d / f"{unix_ts}-{counter}.json"
         counter += 1
     payload = json.dumps(snap.to_dict(), indent=2, sort_keys=True)
-    tmp = tempfile.NamedTemporaryFile(
+    tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 - manual cleanup in try/finally below
         "w",
         delete=False,
         dir=str(d),

@@ -148,7 +148,8 @@ def main() -> None:
         sys.exit(1)
     if not isinstance(kwargs, dict):
         print(
-            f"[dispatch] ERROR: tasks.resolve({task_id}) must return dict, got {type(kwargs).__name__}",
+            f"[dispatch] ERROR: tasks.resolve({task_id}) must return dict, "
+            f"got {type(kwargs).__name__}",
             file=sys.stderr,
         )
         sys.exit(1)

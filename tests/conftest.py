@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -86,9 +88,6 @@ def write_hpc_tasks(hpc_dir: Path, tasks: list[dict[str, Any]]) -> Path:
         "def resolve(i): return _TASKS[i]\n"
     )
     return tasks_py
-
-
-import pytest
 
 
 @pytest.fixture(scope="session", autouse=True)

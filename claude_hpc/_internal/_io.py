@@ -89,7 +89,7 @@ def atomic_locked_update(
             fcntl.flock(fd, fcntl.LOCK_EX)
         existing = _read_json_doc(path)
         new_doc = mutate(existing)
-        tmp = tempfile.NamedTemporaryFile(
+        tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115 - manual cleanup in try/finally below
             "w",
             delete=False,
             dir=str(path.parent),
