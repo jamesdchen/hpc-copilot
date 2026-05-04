@@ -50,7 +50,11 @@ from hpc_mapreduce.job.backfill import (
     cached_probe,
     pick_earliest,
     probe_lattice,
+    recommend_cpus,
+    recommend_mem_mb,
     recommend_walltime_sec,
+    reshape_array_size_for_backfill,
+    split_walltime_into_segments,
 )
 from hpc_mapreduce.job.blacklist import get_active as get_active_blacklist
 from hpc_mapreduce.job.runtime_prior import roll_up_quantiles
@@ -66,8 +70,11 @@ def plan_submit(
     adversarial: bool = True,
     walltime_safety_mult: float = 1.30,
     walltime_ceiling_sec: int | None = None,
-    base_mem_mb: int = 1024,
+    base_mem_mb: int = 16 * 1024,
     base_cpus: int = 1,
+    target_backfill_window_sec: int | None = None,
+    current_max_array_size: int | None = None,
+    est_per_task_sec: int | None = None,
 ) -> dict[str, Any]:
     """Score candidate constraints. Pure function over inputs + cluster snapshot.
 
@@ -116,6 +123,8 @@ def plan_submit(
         experiment_dir, profile=profile, cluster=cluster, cmd_sha=cmd_sha
     )
     quantiles = rollup["quantiles"]
+    mem_quantiles = rollup.get("mem_quantiles_mb") or {}
+    cpu_quantiles = rollup.get("cpu_cores_quantiles") or {}
 
     # Failure rates per GPU type (cluster-wide, last 30 days). Computed
     # lazily on first call; cluster query may fail and silently degrade.
@@ -158,12 +167,15 @@ def plan_submit(
                     constraint=c,
                     gpu_set=gpu_set,
                     quantiles=quantiles,
+                    mem_quantiles=mem_quantiles,
+                    cpu_quantiles=cpu_quantiles,
                     cluster_cfg=cfg,
                     cluster_name=cluster,
                     safety_mult=walltime_safety_mult,
                     walltime_ceiling_sec=walltime_ceiling_sec,
                     base_mem_mb=base_mem_mb,
                     base_cpus=base_cpus,
+                    target_backfill_window_sec=target_backfill_window_sec,
                 )
             )
         candidate_reports.append(report)
@@ -172,6 +184,36 @@ def plan_submit(
     canary_plan: dict[str, Any] | None = None
     if needs_canary:
         canary_plan = _build_canary_plan(candidate_reports, profile=profile, cluster=cluster)
+
+    # Cluster-wide adversarial recommendations: array reshape and walltime
+    # split. These don't depend on the constraint candidate, so they live at
+    # the top level rather than per-candidate. The slash command applies
+    # them once when assembling the final spec.
+    array_reshape: dict[str, Any] | None = None
+    walltime_split: dict[str, Any] | None = None
+    if adversarial and scheduler == "slurm":
+        if current_max_array_size:
+            new_size, reshape_rationale = reshape_array_size_for_backfill(
+                current_max_array_size=current_max_array_size,
+                target_window_sec=target_backfill_window_sec,
+                est_per_task_sec=est_per_task_sec,
+            )
+            array_reshape = {
+                "current_max_array_size": current_max_array_size,
+                "recommended_max_array_size": new_size,
+                "rationale": reshape_rationale,
+            }
+        if target_backfill_window_sec and est_per_task_sec:
+            seg = split_walltime_into_segments(
+                est_per_task_sec, target_backfill_window_sec
+            )
+            walltime_split = {
+                "n_segments": seg.n_segments,
+                "segment_walltime_sec": seg.segment_walltime_sec,
+                "total_walltime_sec": seg.total_walltime_sec,
+                "requires_checkpointing": seg.requires_checkpointing,
+                "rationale": seg.rationale,
+            }
 
     return {
         "profile": profile,
@@ -182,6 +224,8 @@ def plan_submit(
         "canary_plan": canary_plan,
         "scheduler_kind": scheduler,
         "blacklist_active_count": len(bl_entries),
+        "array_reshape": array_reshape,
+        "walltime_split": walltime_split,
     }
 
 
@@ -320,33 +364,62 @@ def _adversarial_report(
     constraint: str,
     gpu_set: list[str],
     quantiles: dict[str, dict[str, int]],
+    mem_quantiles: dict[str, dict[str, int]],
+    cpu_quantiles: dict[str, dict[str, int]],
     cluster_cfg: dict[str, Any],
     cluster_name: str,
     safety_mult: float,
     walltime_ceiling_sec: int | None,
     base_mem_mb: int,
     base_cpus: int,
+    target_backfill_window_sec: int | None = None,
 ) -> dict[str, Any]:
-    """Right-size walltime + probe lattice for a single candidate.
+    """Right-size walltime + footprint, probe lattice for a single candidate.
 
-    Returns the dict slice to merge into the candidate report
-    (``backfill_probes`` + ``recommended_tuple``). On any probe failure
-    we still emit the right-sizing recommendation and rationale, so the
-    slash command can surface "we'd ask 45m" even when the cluster
-    doesn't honor ``--test-only``.
+    Three attack axes:
+
+    1. **Walltime shrink** — recommend p95 × safety_mult, clamp to ceiling.
+    2. **Footprint shrink** — recommend mem (p95 × 1.50) and cpus (p95 + 1)
+       from the prior, only shrinking below the user's defaults.
+    3. **Probe lattice** — sweep ``(walltime × mem)`` and pick the variant
+       SLURM predicts will start earliest.
+
+    Returns the dict slice to merge into the candidate report. On any probe
+    failure we still emit the right-sizing recommendation, so the slash
+    command can use the right-sized base even when ``--test-only`` is
+    throttled.
     """
-    # Step 1: right-size walltime from priors.
-    rec_wt, rec_rationale = recommend_walltime_sec(
+    # Axis 1: walltime shrink.
+    rec_wt, wt_rationale = recommend_walltime_sec(
         quantiles,
         gpu_set or [],
         safety_mult=safety_mult,
         ceiling_sec=walltime_ceiling_sec,
     )
-    base = ResourceTuple(
-        constraint=constraint, walltime_sec=rec_wt, mem_mb=base_mem_mb, cpus=base_cpus
+    # Axis 2: footprint shrink (mem + cpus). Only ever shrinks below the
+    # user-supplied defaults — never grows the ask, since growing
+    # contradicts the goal of fitting more backfill windows.
+    rec_mem, mem_rationale = recommend_mem_mb(
+        mem_quantiles, gpu_set or [], user_default_mb=base_mem_mb
     )
-    # Step 2: build a 3-point lattice (1.0×, 1.5×, 2.0×) clamped to the ceiling.
-    lattice = build_lattice(base, walltime_ceiling_sec=walltime_ceiling_sec)
+    rec_cpus, cpu_rationale = recommend_cpus(
+        cpu_quantiles, gpu_set or [], user_default_cpus=base_cpus
+    )
+    base = ResourceTuple(
+        constraint=constraint,
+        walltime_sec=rec_wt,
+        mem_mb=rec_mem,
+        cpus=rec_cpus,
+    )
+    # Axis 3: multi-dim lattice. Sweep walltime × mem when we have a
+    # right-sized mem (i.e., we shrunk below the default); otherwise fall
+    # back to walltime-only sweep to bound the probe count.
+    mem_mults = (1.0, 1.5) if rec_mem < base_mem_mb else (1.0,)
+    lattice = build_lattice(
+        base,
+        walltime_ceiling_sec=walltime_ceiling_sec,
+        mem_multipliers=mem_mults,
+    )
 
     # Step 3: probe the lattice in parallel with cache wrapping.
     def _probe(t: ResourceTuple) -> BackfillProbe:
@@ -373,6 +446,9 @@ def _adversarial_report(
         }
         for p in probes
     ]
+    combined_rationale = (
+        f"walltime: {wt_rationale} | mem: {mem_rationale} | cpus: {cpu_rationale}"
+    )
     if pick is None:
         recommended: dict[str, Any] | None = {
             "constraint": base.constraint,
@@ -380,7 +456,7 @@ def _adversarial_report(
             "mem_mb": base.mem_mb,
             "cpus": base.cpus,
             "predicted_eta_sec": None,
-            "rationale": rec_rationale + "; no probe ETA available, using right-sized base",
+            "rationale": combined_rationale + "; no probe ETA available, using right-sized base",
         }
     else:
         recommended = {
@@ -389,7 +465,7 @@ def _adversarial_report(
             "mem_mb": pick.tuple_.mem_mb,
             "cpus": pick.tuple_.cpus,
             "predicted_eta_sec": pick.eta_sec,
-            "rationale": rec_rationale,
+            "rationale": combined_rationale,
         }
     return {
         "backfill_probes": probes_out,

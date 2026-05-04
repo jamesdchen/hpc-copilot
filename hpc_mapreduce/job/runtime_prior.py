@@ -187,6 +187,9 @@ def append_sample(
     host_allocmem_pct_at_start: float | None = None,
     concurrent_user_count_at_start: int | None = None,
     walltime_requested_sec: int | None = None,
+    peak_host_mem_mb: int | None = None,
+    cpu_seconds_used: int | None = None,
+    cpus_requested: int | None = None,
 ) -> Path:
     """Append a single runtime sample. Returns the file path written.
 
@@ -216,6 +219,14 @@ def append_sample(
         "host_allocmem_pct_at_start": host_allocmem_pct_at_start,
         "concurrent_user_count_at_start": concurrent_user_count_at_start,
         "walltime_requested_sec": walltime_requested_sec,
+        # Footprint-shrink fields. Optional because not all schedulers /
+        # ingestion paths surface MaxRSS or AveCPU (sacct does on SLURM
+        # post-completion). Adversarial mode reads these via
+        # `roll_up_quantiles` — empty samples just degrade the
+        # recommendation back to the user-supplied default.
+        "peak_host_mem_mb": peak_host_mem_mb,
+        "cpu_seconds_used": cpu_seconds_used,
+        "cpus_requested": cpus_requested,
     }
 
     def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
@@ -296,6 +307,8 @@ def roll_up_quantiles(
         experiment_dir, profile=profile, cluster=cluster, cmd_sha=cmd_sha, only_successful=True
     )
     by_gpu: dict[str, list[int]] = {}
+    mem_by_gpu: dict[str, list[int]] = {}
+    cpu_by_gpu: dict[str, list[int]] = {}
     for s in samples:
         gpu = s.get("gpu_type") or ""
         if not gpu:
@@ -307,6 +320,13 @@ def roll_up_quantiles(
         if elapsed <= 0:
             continue
         by_gpu.setdefault(gpu, []).append(elapsed)
+        # Optional footprint fields — only contribute when present.
+        mem_mb = _coerce_pos_int(s.get("peak_host_mem_mb"))
+        if mem_mb is not None:
+            mem_by_gpu.setdefault(gpu, []).append(mem_mb)
+        cpu_used = _cores_used_from_sample(s, elapsed)
+        if cpu_used is not None:
+            cpu_by_gpu.setdefault(gpu, []).append(cpu_used)
 
     out_quantiles: dict[str, dict[str, int]] = {}
     for gpu, vals in by_gpu.items():
@@ -323,12 +343,69 @@ def roll_up_quantiles(
             entry["mean_sec"] = entry.get("p50", 0)
         out_quantiles[gpu] = entry
 
+    out_mem_quantiles = _quantile_buckets(mem_by_gpu, quantiles)
+    out_cpu_quantiles = _quantile_buckets(cpu_by_gpu, quantiles)
+
     return {
         "profile": profile,
         "cluster": cluster,
         "now_iso": datetime.now(timezone.utc).isoformat(),
         "needs_canary": len(out_quantiles) == 0,
         "quantiles": out_quantiles,
+        # Footprint-shrink rollups. Only populated when samples carry
+        # the optional `peak_host_mem_mb` / `cpu_seconds_used` fields.
+        # The adversarial planner reads these to right-size --mem and
+        # --cpus-per-task; empty rollup → planner falls back to the
+        # user-supplied defaults.
+        "mem_quantiles_mb": out_mem_quantiles,
+        "cpu_cores_quantiles": out_cpu_quantiles,
         "total_samples": len(samples),
         "filtered_by_cmd_sha": cmd_sha,
     }
+
+
+def _coerce_pos_int(x: Any) -> int | None:
+    """Coerce *x* to a positive int or return None. Permissive on garbage."""
+    if x is None:
+        return None
+    try:
+        v = int(x)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _cores_used_from_sample(s: dict[str, Any], elapsed_sec: int) -> int | None:
+    """Estimate effective core count from ``cpu_seconds_used / elapsed_sec``.
+
+    Rounds up so a workload that averaged 2.3 cores comes back as 3 — we
+    must size for the actual peak need, not the time-average. Returns
+    None when the sample lacks the input or the math degenerates.
+    """
+    cpu_sec = _coerce_pos_int(s.get("cpu_seconds_used"))
+    if cpu_sec is None or elapsed_sec <= 0:
+        return None
+    import math as _math
+
+    cores = _math.ceil(cpu_sec / max(1, elapsed_sec))
+    return max(1, int(cores))
+
+
+def _quantile_buckets(
+    by_gpu: dict[str, list[int]],
+    quantiles: tuple[float, ...],
+) -> dict[str, dict[str, int]]:
+    """Bucket-and-quantile a per-GPU integer series. DRY helper for mem/cpu."""
+    out: dict[str, dict[str, int]] = {}
+    for gpu, vals in by_gpu.items():
+        if not vals:
+            continue
+        entry: dict[str, int] = {}
+        for q in quantiles:
+            label = f"p{int(round(q * 100))}"
+            entry[label] = _quantile(vals, q)
+        entry["n_samples"] = len(vals)
+        entry["min"] = int(min(vals))
+        entry["max"] = int(max(vals))
+        out[gpu] = entry
+    return out
