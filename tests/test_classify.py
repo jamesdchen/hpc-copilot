@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from claude_hpc.mapreduce.reduce.classify import CATEGORIES, classify_failure
+from claude_hpc.orchestrator.failure_signatures import classify as classify_signature
 
 
 def test_gpu_oom_torch_message():
@@ -67,3 +68,48 @@ def test_all_returned_labels_are_valid():
     ]
     for s in samples:
         assert classify_failure(s) in CATEGORIES
+
+
+# ---------------------------------------------------------------------------
+# Cross-validation invariant: classify_failure delegates the resource-error
+# categories (gpu_oom, system_oom, walltime, node_failure) to
+# failure_signatures.classify().  Any stderr that the catalog tags with one of
+# those error_class values MUST surface as the same category here -- otherwise
+# the two pattern tables have drifted apart and the dedup is leaking.
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_invariant_resource_categories_agree() -> None:
+    """For every failure_signatures error_class that maps directly to a
+    classify_failure category, a representative stderr sample must produce
+    the same label through both code paths.
+    """
+    cases = [
+        ("CUDA out of memory: tried to allocate 2GB", "gpu_oom"),
+        ("oom-killer killed pid 1234", "system_oom"),
+        ("slurmstepd: error: *** JOB 9 CANCELLED DUE TO TIME LIMIT ***", "walltime"),
+        ("NODE_FAIL on node foo", "node_failure"),
+    ]
+    for stderr, expected in cases:
+        sig = classify_signature(stderr, None)
+        assert sig["error_class"] == expected, (stderr, sig)
+        assert classify_failure(stderr) == expected, (stderr, sig)
+
+
+def test_dedup_invariant_python_traceback_remaps_to_code_bug() -> None:
+    """The catalog's ``python_traceback`` error_class must surface as
+    ``code_bug`` through classify_failure -- the older /status vocabulary."""
+    stderr = "Traceback (most recent call last):\n  File 'x.py', line 1\nKeyError\n"
+    assert classify_signature(stderr, None)["error_class"] == "python_traceback"
+    assert classify_failure(stderr) == "code_bug"
+
+
+def test_dedup_invariant_segv_stays_local() -> None:
+    """SEGV is intentionally absent from the catalog (test_segv_falls_through
+    pins this).  classify_failure keeps its own SEGV regex and must still
+    surface ``segv`` for a bare segfault line."""
+    stderr = "Segmentation fault (core dumped)"
+    # Catalog does NOT classify this as segv (or any specific class).
+    assert classify_signature(stderr, None)["error_class"] != "segv"
+    # But classify_failure does, via the local _SEGV regex.
+    assert classify_failure(stderr) == "segv"
