@@ -28,7 +28,7 @@ adoption split:
    ```
 
 2. Append the cluster-execution section from
-   [`docs/mars/experiment-runner.snippet.md`](mars/experiment-runner.snippet.md)
+   [`docs/workflows/mars/experiment-runner.snippet.md`](mars/experiment-runner.snippet.md)
    to `agents/experiment-runner.md`. Verbatim paste — no rewrite needed.
 
 3. Forward SSH credentials and a couple of env vars when the agent is
@@ -191,7 +191,7 @@ both git-tracked and diffable.
 
 | MARs rule | claude-hpc behavior |
 |---|---|
-| `uv run` for all Python | The integration runs `uv run hpc-mapreduce …` inside MARs's venv. Cluster-side dispatch honors the invariant when callers set `runtime: "uv"` on the submit spec — the agent then writes the per-run sidecar's `executor` field as `uv run python ...`, and the four shipped templates run a `uv sync` preamble gated on `HPC_RUNTIME=uv`. See `docs/cli-spec.md` § submit. |
+| `uv run` for all Python | The integration runs `uv run hpc-mapreduce …` inside MARs's venv. Cluster-side dispatch honors the invariant when callers set `runtime: "uv"` on the submit spec — the agent then writes the per-run sidecar's `executor` field as `uv run python ...`, and the four shipped templates run a `uv sync` preamble gated on `HPC_RUNTIME=uv`. See `docs/reference/cli-spec.md` § submit. |
 | Tier-1 = `probe.py` only | The agent snippet routes Tier-1 to `uv run python probe.py` directly; claude-hpc is never invoked for probes. |
 | Tier-2 entrypoints under `scripts/` | `hpc-mapreduce discover --experiment-dir <run-NNN>` finds `scripts/*.py` (it scans `executors/`, `scripts/`, `src/` today; a `meta.json`-aware filter to skip `src/` is a follow-up). |
 | `meta.json` is authoritative for `experiment_id` and `seed=42` | The agent reads `meta.json` first and threads `--seed 42` (and any experiment params) through the grid spec. claude-hpc treats them as ordinary CLI flags. |
@@ -201,7 +201,7 @@ both git-tracked and diffable.
 ## Error code → MARs retry policy
 
 Source of truth: [`src/claude_hpc/errors.py`](../src/claude_hpc/errors.py).
-The full enum is also documented in [`docs/cli-spec.md`](cli-spec.md).
+The full enum is also documented in [`docs/reference/cli-spec.md`](cli-spec.md).
 
 | `error_code` | `category` | `retry_safe` | What MARs's runner should do |
 |---|---|---|---|
@@ -351,10 +351,10 @@ These are the substantive code items that depend on maintainer feedback:
 
 ## References
 
-- CLI contract: [`docs/cli-spec.md`](cli-spec.md)
-- POSIX-native agent surface design: [`docs/agent-surface.md`](agent-surface.md)
+- CLI contract: [`docs/reference/cli-spec.md`](cli-spec.md)
+- POSIX-native agent surface design: [`docs/reference/agent-surface.md`](agent-surface.md)
 - Reference snippet for `agents/experiment-runner.md`:
-  [`docs/mars/experiment-runner.snippet.md`](mars/experiment-runner.snippet.md)
+  [`docs/workflows/mars/experiment-runner.snippet.md`](mars/experiment-runner.snippet.md)
 - claude-hpc README: [`../README.md`](../README.md)
 - MARs experiment-runner agent (current):
   https://github.com/FredFang1216/MARs/blob/main/agents/experiment-runner.md

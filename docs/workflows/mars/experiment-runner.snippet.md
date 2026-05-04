@@ -4,7 +4,7 @@ This file is a paste-ready section for the MARs `experiment-runner`
 agent. It assumes claude-hpc has been added to MARs's `pyproject.toml`
 (`uv add claude-hpc`) and that the spawn env forwards `SSH_AUTH_SOCK`,
 `SSH_AGENT_PID`, `HPC_JOURNAL_DIR`, `HPC_CLUSTERS_CONFIG`, and `PATH`.
-See [claude-hpc's mars-integration.md](https://github.com/jamesdchen/claude-hpc/blob/main/docs/mars-integration.md)
+See [claude-hpc's mars-integration.md](https://github.com/jamesdchen/claude-hpc/blob/main/docs/workflows/mars-integration.md)
 for the `Bun.spawn` block.
 
 The snippet preserves MARs's existing rules: `uv run` for all Python,

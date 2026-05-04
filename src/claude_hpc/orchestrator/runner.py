@@ -226,7 +226,7 @@ def _ssh_status_report(
 
     The reporter reads ``.hpc/runs/<run_id>.json`` for run metadata and
     ``.hpc/tasks.py`` for per-task kwargs, then emits the JSON envelope
-    pinned by ``docs/cli-contract.md`` (summary / tasks / rollup /
+    pinned by ``docs/reference/cli-contract.md`` (summary / tasks / rollup /
     errors).
     """
     user, host = _split_ssh_target(ssh_target)

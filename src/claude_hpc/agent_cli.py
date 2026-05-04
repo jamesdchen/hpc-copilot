@@ -14,7 +14,7 @@ Bash tool, cron, scripts). Conventions:
 - Every subcommand accepts ``--experiment-dir`` (defaults to CWD).
 - Subcommands with non-trivial inputs accept ``--spec path/to/spec.json``.
 
-The full schema for each subcommand is documented in ``docs/cli-spec.md``
+The full schema for each subcommand is documented in ``docs/reference/cli-spec.md``
 and shipped as JSON Schema files under ``claude_hpc/schemas/``.
 """
 
@@ -46,7 +46,7 @@ EXIT_USER_ERROR = 1
 EXIT_CLUSTER_ERROR = 2
 EXIT_INTERNAL = 3
 
-# error_code → exit code mapping. Stable contract; documented in docs/cli-spec.md.
+# error_code → exit code mapping. Stable contract; documented in docs/reference/cli-spec.md.
 _EXIT_CODE_BY_CATEGORY = {
     "user": EXIT_USER_ERROR,
     "cluster": EXIT_CLUSTER_ERROR,
@@ -162,7 +162,7 @@ def _require_ssh_agent() -> int | None:
             remediation=(
                 "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
                 "environment, then run `hpc-mapreduce preflight` to verify. "
-                "See docs/mars-integration.md for the Bun.spawn env block."
+                "See docs/workflows/mars-integration.md for the Bun.spawn env block."
             ),
         )
     )
@@ -807,7 +807,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     missing = [k for k in required if k not in spec]
     if missing:
         raise errors.SpecInvalid(
-            f"--spec missing required fields: {missing}. See docs/cli-spec.md."
+            f"--spec missing required fields: {missing}. See docs/reference/cli-spec.md."
         )
 
     if args.dry_run:
@@ -1409,7 +1409,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Submit, track status of, and aggregate parameter-grid HPC experiments. "
             "Stdout is a single-line JSON envelope; stderr is JSON-per-line "
-            "log records. See docs/cli-spec.md for full schemas."
+            "log records. See docs/reference/cli-spec.md for full schemas."
         ),
     )
     parser.add_argument(

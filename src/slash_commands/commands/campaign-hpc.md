@@ -2,7 +2,7 @@ Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit-hpc
 
 The framework is intentionally tiny here: there is no `Strategy` Protocol, no `Context` Protocol, no state file. The user's `tasks.py` does the strategy work using whatever Python library suits — `random`, `optuna`, `nevergrad`, `scikit-optimize`, walk-forward indexing, custom PBT — by import. The framework just tags sidecars (the `campaign_id` field threads through `/submit-hpc` into every per-run sidecar) and reports history (`/campaign-hpc status`).
 
-CLI shapes for every tool referenced below: see `docs/cli-contract.md`.
+CLI shapes for every tool referenced below: see `docs/reference/cli-contract.md`.
 
 ## When to use this command
 
@@ -34,7 +34,7 @@ This slug will be threaded through every subsequent submit's sidecar and exporte
 
 ## Step 2: Confirm or scaffold `.hpc/tasks.py`
 
-A campaign-aware `tasks.py` reads prior iterations' reduced metrics to decide what to run next. **Read [`docs/campaign.md`](../../docs/campaign.md)** (`Read` tool — it's local) for the working code. The "`tasks.py` recipes" section there contains three full patterns plus the shared `_PRIOR` bootstrap; pick whichever matches the user's intent:
+A campaign-aware `tasks.py` reads prior iterations' reduced metrics to decide what to run next. **Read [`docs/workflows/campaign.md`](../../docs/workflows/campaign.md)** (`Read` tool — it's local) for the working code. The "`tasks.py` recipes" section there contains three full patterns plus the shared `_PRIOR` bootstrap; pick whichever matches the user's intent:
 
 - **Recipe 1: Random search** — stdlib only; `random.uniform` over a parameter space; stops after `_MAX_ITER`. Use when the user has no library preference and just wants exploration.
 - **Recipe 2: Optuna ask/tell** — requires `pip install optuna` in the user's env (framework does not bundle it). Use when the user mentions Optuna, TPE, or "I want a smart sampler." The doc covers the `_PRIOR`-replay block that backfills Optuna's view after a fresh checkout.

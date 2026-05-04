@@ -8,7 +8,7 @@ that pin its input/output shapes (where they exist).
 Used by :func:`claude_hpc.agent_cli.cmd_capabilities` to expose the
 operation catalog over the JSON envelope, so external agents can
 discover what's invokable without reading any docs. The same data
-drives `docs/operations.md` via `scripts/build_operations_index.py`.
+drives `docs/generated/operations.md` via `scripts/build_operations_index.py`.
 
 For source-tree installs, frontmatters live next to the package at
 `<repo_root>/docs/primitives/`. For future wheel installs, this module
@@ -287,10 +287,10 @@ def render_llms_full() -> str:
     parts.append("\n```\n")
 
     parts.append("\n## Boundary contract\n\n")
-    parts.append(_read_doc_file("docs/boundary-contract.md"))
+    parts.append(_read_doc_file("docs/reference/boundary-contract.md"))
 
     parts.append("\n## CLI spec\n\n")
-    parts.append(_read_doc_file("docs/cli-spec.md"))
+    parts.append(_read_doc_file("docs/reference/cli-spec.md"))
 
     return "".join(parts)
 

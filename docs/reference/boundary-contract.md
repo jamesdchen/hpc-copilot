@@ -21,10 +21,10 @@ package. Groupings mirror those in
 The public boundary also now includes the **shell CLI** at
 `claude_hpc/agent_cli.py` (entry point `hpc-mapreduce`). Its envelope
 shape, subcommand list, and exit-code contract are documented in
-[`docs/cli-spec.md`](cli-spec.md) and the JSON Schemas under
+[`docs/reference/cli-spec.md`](cli-spec.md) and the JSON Schemas under
 `claude_hpc/schemas/`. The CLI calls into the same atomic-ops layer
 (`claude_hpc/orchestrator/runner.py`) that the slash commands use, so the
-invariants in [`docs/sync-checklist.md`](sync-checklist.md) bind both.
+invariants in [`docs/internals/sync-checklist.md`](sync-checklist.md) bind both.
 
 ### Package root
 

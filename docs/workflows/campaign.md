@@ -188,7 +188,7 @@ hpc-mapreduce campaign list --experiment-dir .
 hpc-mapreduce campaign status --campaign-id ml_ridge_optuna_q1 --experiment-dir .
 ```
 
-Both subcommands emit JSON envelopes following `docs/cli-spec.md`; the data block is pinned by `claude_hpc/schemas/campaign.output.json`.
+Both subcommands emit JSON envelopes following `docs/reference/cli-spec.md`; the data block is pinned by `claude_hpc/schemas/campaign.output.json`.
 
 ## Resume semantics
 

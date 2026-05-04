@@ -1,6 +1,6 @@
 Help me submit HPC jobs via SSH. Discovers experiment executors, builds submission plans conversationally, and handles all deployment.
 
-Per-operation contracts (inputs, outputs, error codes, idempotency) live in `docs/primitives/` — this skill composes from those primitives and adds the human-facing interview, confirmation prompts, and decision tables on top. Throughout this file, "invoke <primitive>" means "call the primitive's `backed_by.cli` or `backed_by.python` entry point; see `docs/primitives/<name>.md` for the full contract." For cross-cutting envelope/exit-code shapes see `docs/cli-spec.md`.
+Per-operation contracts (inputs, outputs, error codes, idempotency) live in `docs/primitives/` — this skill composes from those primitives and adds the human-facing interview, confirmation prompts, and decision tables on top. Throughout this file, "invoke <primitive>" means "call the primitive's `backed_by.cli` or `backed_by.python` entry point; see `docs/primitives/<name>.md` for the full contract." For cross-cutting envelope/exit-code shapes see `docs/reference/cli-spec.md`.
 
 All cluster commands run remotely via SSH. Code is synced from the local machine before submission.
 

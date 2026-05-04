@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Changed — `docs/` reorganized; new top-level `README.md` and workflow doc
+
+The `docs/` tree moves from a flat 11-file bag into four purpose-specific
+subdirs plus a top-level navigation index:
+
+```
+docs/
+├── README.md                             (NEW; nav map)
+├── workflows/                            (NEW)
+│   ├── memory-across-campaigns.md       (NEW; interview ↔ recall flow)
+│   ├── campaign.md                      (mv from docs/)
+│   ├── mars-integration.md              (mv from docs/)
+│   ├── migration-from-hpc-yaml.md       (mv from docs/)
+│   └── mars/experiment-runner.snippet.md (mv from docs/mars/)
+├── reference/                            (NEW; wire contracts)
+│   ├── cli-spec.md                      (mv)
+│   ├── cli-contract.md                  (mv)
+│   ├── agent-surface.md                 (mv)
+│   ├── boundary-contract.md             (mv)
+│   └── config-precedence.md             (mv)
+├── internals/                            (NEW)
+│   ├── queue-wait-predictor.md          (mv)
+│   └── sync-checklist.md                (mv)
+├── primitives/                           (kept; hybrid auto/hand)
+└── generated/                            (NEW; whole-file auto-gen)
+    └── operations.md                    (mv from docs/)
+```
+
+`docs/primitives/` stays at top level because it's hybrid (frontmatter
+auto-generated, body hand-written). `docs/generated/` is reserved for
+whole-file auto-generated content; the only file there today is
+`operations.md`, which gains an `<!-- AUTO-GENERATED. DO NOT EDIT BY
+HAND. -->` sentinel at the top.
+
+The `docs/README.md` enumerates the layout, points to entry-point docs
+by audience (new user / MARs integrator / wire-contract reader / primitive
+lookup), and tabulates which files / sections are auto-generated.
+
+`docs/workflows/memory-across-campaigns.md` documents the
+`interview` → `recall` feedback loop end-to-end: what `interview.json`
+captures, the two-mode (validate / generator) operation of the interview
+primitive, the five typed `task_generator` shapes, the three rollup tiers
+recall returns, and the `~/.claude-hpc/config.json:experiment_roots`
+default-root config.
+
+Root `README.md` updated:
+- Agent CLI block adds `interview` and `recall`
+- New "Memory across campaigns" subsection under "How It Works" linking
+  to the workflow doc
+- Configuration section adds `~/.claude-hpc/config.json` entry
+
+Touch-points: 47 files updated for path rewrites (skills, slash commands,
+build scripts, tests, schemas, source comments). Build scripts updated:
+`scripts/build_operations_index.py` writes to `docs/generated/operations.md`;
+the others stay pointing at `docs/primitives/`.
+
 ### Changed — `recall` projection broadened, rollup tiers added, config-driven roots
 
 The `recall` primitive grew from "list past campaigns" into the full
@@ -378,7 +434,7 @@ the feature.
 - **Public API**: `record_segv`, `get_active_blacklist` removed from
   `hpc_mapreduce.__all__`.
 - **Docs**: `docs/primitives/record-segv-blacklist.md` deleted;
-  `docs/operations.md` and `docs/primitives/README.md` regenerated.
+  `docs/generated/operations.md` and `docs/primitives/README.md` regenerated.
 
 ### Added — `hpc_mapreduce.layout` and `hpc_mapreduce.lifecycle` (B1, B2)
 
@@ -501,7 +557,7 @@ For the migration story (every capability the asyncio loop offered has
 an equivalent in the slash-command pattern, including K-in-flight,
 FIRST_COMPLETED-style waits via parallel `Bash` calls, wall-clock
 budget caps via env var + `tasks.py`, and headless overnight runs via
-`/loop`), see `docs/campaign.md` and `slash_commands/commands/campaign-hpc.md`.
+`/loop`), see `docs/workflows/campaign.md` and `slash_commands/commands/campaign-hpc.md`.
 
 ### Changed — `/monitor-hpc` is now silent-by-default; per-tick observations land in `.hpc/runs/<run_id>.monitor.jsonl`
 
@@ -584,7 +640,7 @@ at `skills/hpc-status/` keeps its name; the MARs skill-name registry
 ### Added — campaign helper layer (Optuna-recipe ergonomics)
 
 Five small, strategy-blind additions surfaced by walking through the
-end-to-end Optuna recipe in `docs/campaign.md`. None bind the framework
+end-to-end Optuna recipe in `docs/workflows/campaign.md`. None bind the framework
 to a specific tuning library; they collapse boilerplate the previous
 shape made every user write themselves.
 
@@ -656,7 +712,7 @@ Surface area:
   `schemas/campaign.output.json`.
 - **`/campaign`** — slash command with the conversational interview;
   scaffolds a campaign-aware `tasks.py` from the recipes in
-  `docs/campaign.md` (random search, Optuna ask/tell, walk-forward).
+  `docs/workflows/campaign.md` (random search, Optuna ask/tell, walk-forward).
 
 Resume semantics: sidecars on disk are the only durable state. After a
 network drop or laptop sleep, re-running the loop re-discovers in-flight
@@ -760,10 +816,10 @@ All future work.
 ### Added — MARs integration proposal package
 
 - **MARs integration proposal package.**
-  - `docs/mars-integration.md` — Bun.spawn env block, `error_code` →
+  - `docs/workflows/mars-integration.md` — Bun.spawn env block, `error_code` →
     retry-policy mapping, troubleshooting flow for the silent-hang
     failure mode, journal-coexistence rules.
-  - `docs/mars/experiment-runner.snippet.md` — paste-ready section for
+  - `docs/workflows/mars/experiment-runner.snippet.md` — paste-ready section for
     MARs's `agents/experiment-runner.md` covering preflight → submit →
     status → aggregate, decision rule for delegating to claude-hpc, and
     the full retry table.
@@ -776,7 +832,7 @@ All future work.
   - `required_env` — env vars consumers must forward
     (`SSH_AUTH_SOCK`, `HPC_JOURNAL_DIR`, `HPC_CLUSTERS_CONFIG`).
 - **README**: collapsed the "Using with MARs" section to a link to
-  `docs/mars-integration.md`; kept the SSH-passthrough warning visible.
+  `docs/workflows/mars-integration.md`; kept the SSH-passthrough warning visible.
 
 ### Added — MARs compat Tier 2
 
@@ -872,7 +928,7 @@ commands. Both surfaces share the same atomic-ops layer at
   `list-in-flight`, `clusters list|describe`, `capabilities`, `build-executor`.
   Stdout is a single-line JSON envelope; stderr is JSON-per-line log records.
   Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema
-  in `docs/cli-spec.md`; runtime-validatable JSON Schemas under
+  in `docs/reference/cli-spec.md`; runtime-validatable JSON Schemas under
   `hpc_mapreduce/schemas/`. Both `python -m hpc_mapreduce <cmd>` and
   `hpc-mapreduce <cmd>` work.
 - **`/preflight` slash command** — health check matching the CLI subcommand,
@@ -901,8 +957,8 @@ commands. Both surfaces share the same atomic-ops layer at
     in the package).
 - **`__version__`** on the `hpc_mapreduce` package, `--version` flag on the CLI.
 - **`py.typed`** marker — `hpc_mapreduce` ships type hints to mypy/pyright.
-- **New docs**: `docs/cli-spec.md`, `docs/config-precedence.md`,
-  `docs/sync-checklist.md`.
+- **New docs**: `docs/reference/cli-spec.md`, `docs/reference/config-precedence.md`,
+  `docs/internals/sync-checklist.md`.
 
 ### Changed
 
