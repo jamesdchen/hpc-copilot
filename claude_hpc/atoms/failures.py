@@ -11,12 +11,14 @@ this before delegating, so the atom assumes a usable SSH agent.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._primitive import primitive, SideEffect
+from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
 from slash_commands import errors, runner, session
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str, Any]]:

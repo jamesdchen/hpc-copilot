@@ -7,11 +7,13 @@ shape. No SSH, no scheduler.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import primitive
 from slash_commands import errors
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @primitive(
