@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -147,6 +148,11 @@ _HARDENED_DEFAULTS: dict[str, Any] = {
     "task_count": int,  # 0
     "result_dir_template": str,  # ""
 }
+
+# Module-level dedup for the version-mismatch warning. Keyed on
+# (run_id, sidecar_version) so a long-running monitor that re-reads the
+# same sidecar 1000 times only emits one warning per (run, version).
+_warned_version_mismatch: set[tuple[str, str]] = set()
 
 
 def write_run_sidecar(
@@ -278,6 +284,30 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
                 data[k] = 0
         elif k == "result_dir_template":
             data[k] = existing if isinstance(existing, str) else ""
+
+    # A10: surface a sidecar-vs-package version mismatch once per
+    # (run_id, sidecar_version). ``write_run_sidecar`` records
+    # ``claude_hpc_version`` from the writer's installed package; readers
+    # compare against their own ``hpc_mapreduce.__version__``. Pure
+    # observability — the read still succeeds; the warning lets us find
+    # old sidecars in the wild.
+    sidecar_version = data.get("claude_hpc_version")
+    if isinstance(sidecar_version, str) and sidecar_version:
+        try:
+            from hpc_mapreduce import __version__ as _pkg_version
+        except Exception:  # noqa: BLE001 — never let a circular fail the read
+            _pkg_version = None
+        if _pkg_version and sidecar_version != _pkg_version:
+            key = (run_id, sidecar_version)
+            if key not in _warned_version_mismatch:
+                _warned_version_mismatch.add(key)
+                warnings.warn(
+                    f"sidecar {run_id!r} written by claude-hpc "
+                    f"{sidecar_version!r} but reader is {_pkg_version!r}; "
+                    "shape backfills apply but consider re-submitting if "
+                    "behaviour drifts.",
+                    stacklevel=2,
+                )
     return data
 
 
