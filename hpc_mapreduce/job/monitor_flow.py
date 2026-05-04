@@ -53,6 +53,7 @@ from hpc_mapreduce._time import utcnow_iso
 from hpc_mapreduce.lifecycle import LifecycleState
 from hpc_mapreduce.job.runs import read_run_sidecar
 from slash_commands import errors, runner, session
+from slash_commands.runner import mark_terminal, record_status
 
 try:
     import fcntl as _fcntl
@@ -295,7 +296,7 @@ def _is_terminal(
 @primitive(
     name="monitor-flow",
     verb="workflow",
-    composes=["poll-run-status", "mark-run-terminal"],
+    composes=[record_status, mark_terminal],
     side_effects=[
         SideEffect("ssh", "<cluster>"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),

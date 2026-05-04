@@ -39,15 +39,37 @@ def registry() -> dict[str, PrimitiveMeta]:
 # Item #3 — composes references must resolve.
 
 def test_composes_references_resolve(registry: dict[str, PrimitiveMeta]) -> None:
-    """Every atom name listed in a composite's composes=[...] must itself
-    be a registered primitive. Renaming an atom without updating the
-    composers fails this test instead of silently breaking the runtime
-    composition graph."""
+    """Every entry in ``meta.composes`` must be a :class:`PrimitiveMeta`
+    that resolves back to a registry entry by both name and identity.
+
+    The decorator now stores function references (resolved at decoration
+    time via the atom's ``_primitive_meta`` attribute), so the
+    composition graph is wired with real Python identities — a renamed
+    atom is an import-time NameError. This test additionally pins the
+    invariant that no stale or shadow ``PrimitiveMeta`` snuck in: the
+    object referenced from the composite's ``composes`` tuple must be
+    THE registry entry's meta, and the atom's underlying ``func`` must
+    be the same callable currently registered under that name.
+    """
     failures: list[str] = []
     for name, meta in registry.items():
-        for atom in meta.composes:
-            if atom not in registry:
-                failures.append(f"{name!r} composes {atom!r}, not in registry")
+        for atom_meta in meta.composes:
+            if not isinstance(atom_meta, PrimitiveMeta):
+                failures.append(
+                    f"{name!r} composes entry {atom_meta!r} is not a PrimitiveMeta"
+                )
+                continue
+            registered = registry.get(atom_meta.name)
+            if registered is None:
+                failures.append(
+                    f"{name!r} composes {atom_meta.name!r}, not in registry"
+                )
+                continue
+            if registered.func is not atom_meta.func:
+                failures.append(
+                    f"{name!r} composes {atom_meta.name!r} but the referenced "
+                    "function is not the registered one"
+                )
     assert not failures, "\n".join(failures)
 
 
@@ -212,7 +234,7 @@ def test_workflow_primitives_compose_at_least_one_atom(
         if not meta.composes:
             failures.append(f"{name}: workflow primitive declares no composes")
             continue
-        resolved = [a for a in meta.composes if a in registry]
+        resolved = [a for a in meta.composes if a.name in registry]
         if not resolved:
             failures.append(
                 f"{name}: workflow primitive's composes={list(meta.composes)} "

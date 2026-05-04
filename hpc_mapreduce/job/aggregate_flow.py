@@ -39,6 +39,7 @@ from hpc_mapreduce.infra.remote import rsync_pull, split_ssh_target
 from hpc_mapreduce.job.runs import read_run_sidecar
 from hpc_mapreduce.reduce.metrics import reduce_partials
 from slash_commands import errors, runner, session
+from slash_commands.runner import combine_wave, record_status
 
 __all__ = ["aggregate_flow", "AggregateFlowResult"]
 
@@ -131,7 +132,7 @@ def _combine_missing(
 @primitive(
     name="aggregate-flow",
     verb="workflow",
-    composes=["combine-wave", "poll-run-status"],
+    composes=[combine_wave, record_status],
     side_effects=[
         SideEffect("ssh", "<cluster>"),
         SideEffect("rsync", "<ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/"),

@@ -623,25 +623,25 @@ def inspect_cluster(
             return _snapshot_from_dict(cached)
     if runner is None:
         runner = _CommandRunner(host=cfg.get("host"), user=cfg.get("user"))
-    if scheduler == "slurm":
-        snap = _slurm_inspect(
-            cluster_name,
-            cfg,
-            sacct_window_hours=sacct_window_hours,
-            stress_alloc_mem_pct=stress_alloc_mem_pct,
-            stress_cpu_load_frac=stress_cpu_load_frac,
-            runner=runner,
-        )
-    elif scheduler == "sge":
-        snap = _sge_inspect(
-            cluster_name,
-            cfg,
-            stress_alloc_mem_pct=stress_alloc_mem_pct,
-            stress_cpu_load_frac=stress_cpu_load_frac,
-            runner=runner,
-        )
-    else:
-        raise ValueError(f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}")
+    # B5-PR2: dispatch through the backend registry. Each backend's
+    # ``inspect_cluster`` classmethod normalises kwargs for its scheduler
+    # (e.g. SGE ignores ``sacct_window_hours``); a missing backend
+    # raises ValueError just like the prior ladder did.
+    from hpc_mapreduce.infra.backends import get_backend_class
+    try:
+        backend_cls = get_backend_class(scheduler)
+    except ValueError as exc:
+        raise ValueError(
+            f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}"
+        ) from exc
+    snap = backend_cls.inspect_cluster(
+        cluster_name,
+        cfg,
+        sacct_window_hours=sacct_window_hours,
+        stress_alloc_mem_pct=stress_alloc_mem_pct,
+        stress_cpu_load_frac=stress_cpu_load_frac,
+        runner=runner,
+    )
     if use_cache:
         _CACHE.put(cache_key, snap.to_dict())
     if persist_dir is not None:
