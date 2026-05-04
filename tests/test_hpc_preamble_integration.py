@@ -13,11 +13,14 @@ from __future__ import annotations
 import shutil
 import subprocess
 import textwrap
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from claude_hpc import _PACKAGE_ROOT
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 PREAMBLE = _PACKAGE_ROOT / "mapreduce" / "templates" / "common" / "hpc_preamble.sh"
 
@@ -29,9 +32,7 @@ pytestmark = pytest.mark.skipif(
     not (_BASH and _MD5SUM),
     reason="bash + md5sum required for preamble integration tests",
 )
-needs_rsync = pytest.mark.skipif(
-    not _RSYNC, reason="rsync required for staging integration test"
-)
+needs_rsync = pytest.mark.skipif(not _RSYNC, reason="rsync required for staging integration test")
 
 
 def _make_rsync_stub(tmp_path: Path) -> Path:
@@ -65,7 +66,6 @@ def _make_rsync_stub(tmp_path: Path) -> Path:
     )
     rsync.chmod(0o755)
     return stub_dir
-
 
 
 def _run_with_preamble(

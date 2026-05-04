@@ -196,8 +196,7 @@ def test_template_thread_reexport_honors_user_env_override(template: Path) -> No
         f"thread cap) before falling back to scheduler-allocated cores"
     )
     assert "HPC_MKL_NUM_THREADS" in text, (
-        f"{template.name} per-template MKL_NUM_THREADS must honor "
-        f"HPC_MKL_NUM_THREADS env override"
+        f"{template.name} per-template MKL_NUM_THREADS must honor HPC_MKL_NUM_THREADS env override"
     )
 
 
