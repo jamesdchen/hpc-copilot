@@ -30,7 +30,7 @@ VERB_DESCRIPTIONS = {
     "query": "Read-only, no side effects. Freely composable; cacheable.",
     "validate": "Read + binary health check. Same composability as `query`.",
     "mutate": (
-        "Writes to journal / sidecar / blacklist. "
+        "Writes to journal / sidecar. "
         "Need flock + idempotency-key consideration."
     ),
     "submit": "Records a new submission (sidecar write + journal entry).",

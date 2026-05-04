@@ -46,7 +46,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 - **`query`** — read-only, no side effects, freely composable
 - **`validate`** — read + binary health check (preflight)
-- **`mutate`** — write to journal / sidecar / blacklist; need flock + idempotency-key consideration
+- **`mutate`** — write to journal / sidecar; need flock + idempotency-key consideration
 - **`submit`** — record a new submission (sidecar write + journal entry)
 - **`scaffold`** — create new files (e.g. starter executor templates)
 - **`workflow`** — end-to-end pipelines composing other primitives; same envelope shape so they're indistinguishable to higher-level callers (the Composite property)
@@ -87,7 +87,6 @@ The verb partitions primitives into bands the reader can scan independently:
 | [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
-| [record-segv-blacklist](record-segv-blacklist.md) | yes | writes-blacklist: `<experiment_dir>/.hpc/blacklist/<cluster>.json` | `` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
 
 ### `submit` primitives
