@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 import hpc_mapreduce
+from hpc_mapreduce._primitive import get_registry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -105,18 +106,108 @@ def operations_catalog() -> list[dict[str, Any]]:
     ``None`` (not absent) so callers can distinguish "no schema" from
     "field not present in this entry."
 
+    Source-of-truth chain (C′):
+
+    1. The ``@primitive`` registry (``hpc_mapreduce._primitive.get_registry``).
+       Decorator metadata is the canonical SoT; this path is taken
+       whenever any primitives have been registered.
+    2. Frontmatter under ``docs/primitives/*.md``. Used to fill in
+       any primitives missing from the registry (migration safety
+       net — emits ``UserWarning`` so missing decorations get caught).
+    3. Baked ``operations.json`` for wheel installs that ship without
+       ``docs/`` on the file system.
+
     Order: stable, sorted by (verb, name) so consumers can diff.
-    Empty list when neither frontmatter source nor baked operations.json
-    is available — callers should treat this as a not-yet-baked wheel.
     """
+    registry_entries = _from_registry()
+    registry_names = {e["name"] for e in registry_entries}
+
     prims_dir = _primitives_dir()
+    fm_entries: list[dict[str, Any]] = []
     if prims_dir is not None:
-        return _from_frontmatters(prims_dir)
+        for entry in _from_frontmatters(prims_dir):
+            if entry["name"] not in registry_names:
+                # Holdout: not yet decorated. Surface so the next
+                # c-prime decoration commit covers it; the registry
+                # cross-validation test asserts no holdouts at HEAD.
+                import warnings
+                warnings.warn(
+                    f"primitive {entry['name']!r} present in frontmatter but "
+                    "not in @primitive registry; falling back to frontmatter.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                fm_entries.append(entry)
+
+    if registry_entries or fm_entries:
+        out = registry_entries + fm_entries
+        return sorted(out, key=lambda o: (o["verb"], o["name"]))
+
     baked = _baked_path()
     if baked.is_file():
         loaded = json.loads(baked.read_text(encoding="utf-8"))
         return loaded if isinstance(loaded, list) else []
     return []
+
+
+def _from_registry() -> list[dict[str, Any]]:
+    """Project the @primitive registry into the operations_catalog shape.
+
+    The registry stores ``PrimitiveMeta`` objects; the catalog wants
+    plain dicts. Field correspondence:
+
+    * ``name``, ``verb``, ``idempotent`` map directly.
+    * ``side_effects`` is summarized to one token per kind, mirroring
+      :func:`_summarize_side_effects` so frontmatter fallback entries
+      remain shape-compatible.
+    * ``cli`` and ``python`` are derived: ``python`` is
+      ``f"{func.__module__}.{func.__qualname__}"``; ``cli`` is read
+      from the existing frontmatter (the registry doesn't yet carry
+      CLI invocations — that's a follow-up).
+    * ``input_schema`` / ``output_schema`` resolve via :func:`schema_for`
+      using a synthetic ``backed_by`` dict.
+    """
+    out: list[dict[str, Any]] = []
+    for meta in get_registry().values():
+        backed = {
+            "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
+            "cli": _cli_for_registry_entry(meta.name),
+        }
+        out.append(
+            {
+                "name": meta.name,
+                "verb": meta.verb,
+                "idempotent": bool(meta.idempotent),
+                "side_effects": sorted({s.kind for s in meta.side_effects}),
+                "cli": backed["cli"],
+                "python": backed["python"],
+                "input_schema": schema_for(meta.name, "input", backed),
+                "output_schema": schema_for(meta.name, "output", backed),
+            }
+        )
+    return sorted(out, key=lambda o: (o["verb"], o["name"]))
+
+
+def _cli_for_registry_entry(name: str) -> str | None:
+    """Look up the ``cli:`` field from the primitive's frontmatter.
+
+    The registry decorator doesn't yet carry the CLI invocation string
+    (callers compose it themselves from argparse); we still read it
+    from the frontmatter as a presentation hint. Returns None if the
+    frontmatter is unavailable or has no cli field.
+    """
+    prims_dir = _primitives_dir()
+    if prims_dir is None:
+        return None
+    path = prims_dir / f"{name}.md"
+    if not path.is_file():
+        return None
+    fm = _parse_frontmatter(path)
+    backed = fm.get("backed_by") if isinstance(fm.get("backed_by"), dict) else None
+    if backed is None:
+        return None
+    cli = backed.get("cli")
+    return cli if isinstance(cli, str) else None
 
 
 def _format_catalog_table(catalog: list[dict[str, Any]]) -> str:
