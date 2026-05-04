@@ -28,10 +28,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce._primitive import SideEffect, primitive
+from hpc_mapreduce.agent_cli import cmd_plan_submit
 from hpc_mapreduce.infra.backends.sge_remote import RemoteSGEBackend
 from hpc_mapreduce.infra.backends.slurm_remote import RemoteSlurmBackend
 from hpc_mapreduce.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
+from hpc_mapreduce.job.discover import discover_executors
 from slash_commands import errors, runner, session
+from slash_commands.runner import submit_and_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -153,7 +156,7 @@ def _make_single_array_submission(
 @primitive(
     name="submit-flow",
     verb="workflow",
-    composes=["submit-spec", "discover-executors", "score-submit-plan"],
+    composes=[submit_and_record, discover_executors, cmd_plan_submit],
     side_effects=[
         SideEffect("rsync", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster>"),

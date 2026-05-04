@@ -72,8 +72,7 @@ gitignored.
 - `RepoLayout` — frozen dataclass; canonical home for the three
   forwarders above. New code prefers
   `RepoLayout(experiment_dir).hpc | .runs | .tasks |
-  .run_sidecar(run_id) | .blacklist(cluster) |
-  .runtime_prior(profile, cluster)`.
+  .run_sidecar(run_id) | .runtime_prior(profile, cluster)`.
 - `JournalLayout` — frozen dataclass; the cross-experiment journal
   tree under `~/.claude/hpc/<repo_hash>/`. Distinct *type* from
   `RepoLayout` so the pre-B1 `runs_dir` (journal) vs `runs_subdir`
@@ -173,15 +172,11 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 Resource-quality-aware constraint planning. These functions back the
 `hpc-mapreduce inspect-cluster` / `runtime-prior` / `plan-submit` CLI
 subcommands and the `/hpc-submit` Step 4c smart-planning flow. State
-lives under the experiment's `.hpc/`: `bad_nodes.<cluster>.json` (SEGV
-blacklist) and `runtimes/<profile>.<cluster>.json` (runtime samples).
+lives under the experiment's `.hpc/`:
+`runtimes/<profile>.<cluster>.json` (runtime samples).
 
 - `inspect_cluster` — read-only per-node snapshot of a cluster
   (alloc-mem%, CPU load, GRES, co-tenants, drain). 60s in-process cache.
-- `record_segv` — append a SEGV record to the per-cluster blacklist
-  with a 7-day TTL (refreshed on repeats); flock-guarded atomic write.
-- `get_active_blacklist` — read currently-active blacklist entries
-  (TTL-filtered).
 - `append_runtime_sample` — append one task's elapsed-time + node +
   gpu_type to the runtime priors log; idempotent on `(run_id, task_id)`.
 - `roll_up_runtime_quantiles` — group samples by `gpu_type`, return

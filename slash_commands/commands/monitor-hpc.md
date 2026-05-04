@@ -1,6 +1,6 @@
 Monitor running HPC jobs via SSH and take corrective action.
 
-Per-operation contracts live in `docs/primitives/` — this skill composes the [poll-run-status](../../docs/primitives/poll-run-status.md), [combine-wave](../../docs/primitives/combine-wave.md), [resubmit-failed](../../docs/primitives/resubmit-failed.md), [reconcile-journal](../../docs/primitives/reconcile-journal.md), [mark-run-terminal](../../docs/primitives/mark-run-terminal.md), and [record-segv-blacklist](../../docs/primitives/record-segv-blacklist.md) primitives behind a tick-driven adaptive monitoring loop. For envelope/exit-code shapes see `docs/cli-spec.md`.
+Per-operation contracts live in `docs/primitives/` — this skill composes the [poll-run-status](../../docs/primitives/poll-run-status.md), [combine-wave](../../docs/primitives/combine-wave.md), [resubmit-failed](../../docs/primitives/resubmit-failed.md), [reconcile-journal](../../docs/primitives/reconcile-journal.md), and [mark-run-terminal](../../docs/primitives/mark-run-terminal.md) primitives behind a tick-driven adaptive monitoring loop. For envelope/exit-code shapes see `docs/cli-spec.md`.
 
 ## Setup
 
@@ -305,17 +305,17 @@ Classify the failure:
 | `CUDA out of memory` / `OutOfMemoryError` | GPU OOM | Resubmit with more memory + smaller batch |
 | High memory usage + exit !=0 | System OOM | Resubmit with higher memory limit |
 | Time limit exceeded | Walltime | Resubmit with longer walltime |
-| Node failure / `Eqw` / `NODE_FAIL` | Infra issue | Resubmit as-is — and call `record_segv` (see below) |
-| `exit -11` / SIGSEGV / no traceback | Node SEGV | Record to blacklist via `record_segv`, resubmit on a different node |
+| Node failure / `Eqw` / `NODE_FAIL` | Infra issue | Resubmit as-is on a different node (`--exclude=<failed_node>`) |
+| `exit -11` / SIGSEGV / no traceback | Node SEGV | **STOP. Surface the SEGV node to the user.** A retry is not auto-safe |
 | All tasks pending >15min / unchanged across 2 checks | Queue stall | Delete stalled job, resubmit with GPU fallback |
 | Python traceback with clear bug | Code bug | **STOP. Report to user. Do NOT resubmit.** |
 | Unrecognized error | Unknown | **STOP. Read full log, report to user.** |
 
-**AUTONOMY RULE**: For OOM, walltime, node failures, and queue stalls — act immediately. Only STOP for code bugs and unrecognized errors.
+**AUTONOMY RULE**: For OOM, walltime, node failures, and queue stalls — act immediately. Only STOP for code bugs, SEGVs, and unrecognized errors.
 
-### Recording node SEGVs to the blacklist
+### On SEGV
 
-When a task ends with `NODE_FAIL` or signals SEGV (`exit -11`, `signal: Segmentation fault`, or sacct `ExitCode=139`), invoke the [inspect-cluster](../../docs/primitives/inspect-cluster.md) primitive (with `no_cache=true` to capture contention at SEGV time) to get the failed node's `alloc_mem_pct`, `cpu_load_frac`, and `co_tenants`, then call the [record-segv-blacklist](../../docs/primitives/record-segv-blacklist.md) primitive with that context. The entry is read by the next `/submit-hpc` Step 4c planner which always-excludes the node.
+A SIGSEGV without a Python traceback is the strongest "node may be silently degraded" signal. There is no auto-blacklist anymore — surface the failed node + the canary's stderr tail to the user instead. The user decides whether to retry, fix the executor, or use `--exclude=<node>` on a manual resubmit.
 
 ## Step 3: Resubmit Failed Tasks
 

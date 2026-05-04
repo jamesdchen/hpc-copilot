@@ -99,6 +99,25 @@ class RepoLayout:
         safe_profile = profile.replace("/", "_")
         return self.runtimes / f"{safe_profile}.{cluster}.json"
 
+    def cluster_history(self, cluster: str) -> Path:
+        """``.hpc/cluster_history/<cluster>/`` — created on first access.
+
+        Persisted ``ClusterSnapshot`` JSON files live here (one file per
+        snapshot, named ``<unix_ts>.json``). The directory is created
+        eagerly on first read so callers can probe ``list(...)`` without
+        guarding on ``exists()`` — same lazy-mkdir pattern as
+        :attr:`runs`.
+        """
+        if not cluster:
+            raise ValueError("cluster must be non-empty")
+        # Sanitize separators in case a caller passes a path-like cluster
+        # name; the historical naming has only used flat tokens but this
+        # keeps us tolerant if that changes.
+        safe_cluster = cluster.replace("/", "_")
+        d = self.hpc / "cluster_history" / safe_cluster
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
 
 @dataclass(frozen=True)
 class JournalLayout:

@@ -68,7 +68,6 @@ The Python surface that slash commands and library callers invoke:
 | Reconcile journal vs cluster | [reconcile-journal](primitives/reconcile-journal.md) | `slash_commands.runner.reconcile` |
 | Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `slash_commands.runner.mark_terminal` |
 | Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `hpc_mapreduce.reduce.history.prior` |
-| Record SEGV node to blacklist | [record-segv-blacklist](primitives/record-segv-blacklist.md) | `hpc_mapreduce.job.blacklist.record_segv` |
 | List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `slash_commands.session.find_in_flight_runs` |
 | Discover executors | [discover-executors](primitives/discover-executors.md) | `hpc_mapreduce.job.discover.discover_executors` |
 | Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `hpc_mapreduce.infra.inspect.inspect_cluster` |

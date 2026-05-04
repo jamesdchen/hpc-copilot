@@ -206,7 +206,7 @@ If constraints are not configured for the cluster or profile, skip this step and
 
 ## Step 4c: Smart constraint planner (resource-quality aware)
 
-The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, invoke the [score-submit-plan](../../docs/primitives/score-submit-plan.md) primitive (`hpc-mapreduce plan-submit --profile <profile> --cluster <cluster>`); it combines a live snapshot of the cluster, the SEGV blacklist, and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric below and picks one.
+The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, invoke the [score-submit-plan](../../docs/primitives/score-submit-plan.md) primitive (`hpc-mapreduce plan-submit --profile <profile> --cluster <cluster>`); it combines a live snapshot of the cluster and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric below and picks one.
 
 The envelope's `data` carries the candidate scorecards. Three branches:
 
@@ -231,7 +231,7 @@ No runtime priors exist for this `(profile, cluster)`. Don't try to score — su
    )
    ```
 
-5. On SEGV: invoke the [record-segv-blacklist](../../docs/primitives/record-segv-blacklist.md) primitive with the failed node + per-node context from the inspect-cluster snapshot at SEGV time, then **stop the smart-planning flow** — surface the failure to the user with the canary's stderr tail and the SEGV node. Do NOT auto-retry on a different node (the failure is informative; re-running blindly may mask whether the workload itself is buggy) and do NOT keep looping into a fresh canary (without a successful canary the priors stay empty, so a re-entry would just request another canary and the loop would never terminate). The user decides whether to retry, fix the executor, or extend the blacklist manually.
+5. On SEGV: **stop the smart-planning flow** and surface the failure to the user with the canary's stderr tail and the SEGV node. Do NOT auto-retry on a different node (the failure is informative; re-running blindly may mask whether the workload itself is buggy) and do NOT keep looping into a fresh canary (without a successful canary the priors stay empty, so a re-entry would just request another canary and the loop would never terminate). The user decides whether to retry, fix the executor, or use `--exclude=<node>` on a manual resubmit.
 
 6. On timeout: bump walltime 2× and retry the canary **once**. After two timeouts, surface to the user. Track the per-(profile, cluster) timeout count in the run sidecar's `extra` block so a cold-session resume sees the prior attempt count.
 
@@ -295,8 +295,6 @@ For each chosen candidate's `stressed_nodes`, decide per-node whether to soft-ex
 - Co-tenant has been running >12h *and* holds >50% of CPU / mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).
 - Co-tenant is recently-started or holds little of the node's resources ⇒ allow.
 - Multiple co-tenants on a node with combined high resource share ⇒ exclude.
-
-Every entry in `blacklisted_nodes` is **always** excluded (rule per the primitive — no judgment).
 
 Build the resulting `--exclude=<node1>,<node2>,...` flag and add it to the sbatch invocation in Step 8.
 
