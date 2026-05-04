@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from hpc_mapreduce._primitive import primitive
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -108,6 +110,12 @@ def _build_prompt(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+@primitive(
+    name="campaign-health",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def campaign_health(
     experiment_dir: "Path",
     *,

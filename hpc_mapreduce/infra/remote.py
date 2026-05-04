@@ -257,7 +257,7 @@ def deploy_runtime(
     Two payloads:
 
     1. **Importable stubs** in ``{remote_path}/hpc_mapreduce/map/``:
-       ``context.py`` and ``metrics_io.py`` so user executors can do
+       ``metrics_io.py`` so user executors can do
        ``from hpc_mapreduce.map.metrics_io import write_metrics`` on
        compute nodes without installing the full package.
     2. **Framework artifacts** in ``{remote_path}/.hpc/``: the framework
@@ -313,7 +313,9 @@ def deploy_runtime(
             ) from exc
 
     # Importable stubs (used inside cluster jobs by user executors).
-    _scp(pkg_dir / "map" / "context.py", "hpc_mapreduce/map/context.py")
+    # Note: ``map/context.py`` was previously pushed here but the source
+    # module never existed on disk; the orphan reference would FileNotFound
+    # at deploy time. Removed in regfix.
     _scp(pkg_dir / "map" / "metrics_io.py", "hpc_mapreduce/map/metrics_io.py")
 
     # Framework executor + combiner inside .hpc/.
