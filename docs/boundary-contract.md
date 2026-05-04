@@ -69,6 +69,15 @@ gitignored.
 - `load_tasks_module` — importlib helper that imports a `tasks.py` from
   an arbitrary path; verifies the module exposes `total()` and
   `resolve(task_id)`.
+- `RepoLayout` — frozen dataclass; canonical home for the three
+  forwarders above. New code prefers
+  `RepoLayout(experiment_dir).hpc | .runs | .tasks |
+  .run_sidecar(run_id) | .blacklist(cluster) |
+  .runtime_prior(profile, cluster)`.
+- `JournalLayout` — frozen dataclass; the cross-experiment journal
+  tree under `~/.claude/hpc/<repo_hash>/`. Distinct *type* from
+  `RepoLayout` so the pre-B1 `runs_dir` (journal) vs `runs_subdir`
+  (cluster sidecar) name collision is now a type error.
 
 ### Per-run sidecars
 

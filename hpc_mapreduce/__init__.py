@@ -29,6 +29,9 @@ __all__ = [
     "runs_subdir",
     "tasks_path",
     "load_tasks_module",
+    # Path resolution (B1) — canonical home for the three forwarders above
+    "RepoLayout",
+    "JournalLayout",
     # Per-run sidecars (NEW)
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
@@ -158,10 +161,18 @@ from hpc_mapreduce.reduce.status import (
     rollup_by_grid_point,
 )
 
+from hpc_mapreduce.layout import JournalLayout, RepoLayout
+
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
 # Framework subdirectory layout (.hpc/)
+#
+# Canonical home: :class:`hpc_mapreduce.layout.RepoLayout`. The three
+# functions below are back-compat forwarders kept so external callers /
+# slash commands that imported them by name continue to work. New code
+# should prefer ``RepoLayout(experiment_dir).hpc`` / ``.runs`` /
+# ``.tasks`` directly.
 # ---------------------------------------------------------------------------
 
 HPC_SUBDIR: str = ".hpc"
@@ -170,30 +181,29 @@ RUNS_SUBDIR: str = "runs"
 
 
 def framework_subdir(experiment_dir: Path) -> Path:
-    """Return ``experiment_dir/.hpc``, creating it idempotently.
+    """Deprecated forwarder for ``RepoLayout(experiment_dir).hpc``.
 
-    Also writes ``.hpc/.gitignore`` (ignoring ``runs/``) on first call so
-    per-run sidecars don't pollute the user's git history while
-    ``tasks.py`` stays tracked.
+    Returns ``experiment_dir/.hpc``, creating it idempotently and
+    writing ``.hpc/.gitignore`` on first call.
     """
-    sub = Path(experiment_dir) / HPC_SUBDIR
-    sub.mkdir(parents=True, exist_ok=True)
-    gitignore = sub / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text(f"{RUNS_SUBDIR}/\n")
-    return sub
+    return RepoLayout(experiment_dir).hpc
 
 
 def runs_subdir(experiment_dir: Path) -> Path:
-    """Return ``experiment_dir/.hpc/runs``, creating it idempotently."""
-    sub = framework_subdir(experiment_dir) / RUNS_SUBDIR
-    sub.mkdir(parents=True, exist_ok=True)
-    return sub
+    """Deprecated forwarder for ``RepoLayout(experiment_dir).runs``.
+
+    Note: this is the *cluster sidecar* runs directory under
+    ``<experiment_dir>/.hpc/runs/``, NOT the journal runs directory
+    under ``~/.claude/hpc/<repo_hash>/runs/`` — that one is
+    :attr:`JournalLayout.runs`. The pre-B1 name collision was a P0 bug
+    source; ``RepoLayout`` / ``JournalLayout`` make it a type error.
+    """
+    return RepoLayout(experiment_dir).runs
 
 
 def tasks_path(experiment_dir: Path) -> Path:
-    """Return ``experiment_dir/.hpc/tasks.py`` (does not create the file)."""
-    return Path(experiment_dir) / HPC_SUBDIR / TASKS_FILENAME
+    """Deprecated forwarder for ``RepoLayout(experiment_dir).tasks``."""
+    return RepoLayout(experiment_dir).tasks
 
 
 def load_tasks_module(tasks_py_path: Path) -> ModuleType:
