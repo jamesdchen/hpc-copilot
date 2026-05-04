@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Removed (breaking) — SEGV blacklist feature
+
+The SEGV blacklist (`hpc_mapreduce.job.blacklist`, the
+`record-segv-blacklist` primitive, the `record_segv` /
+`get_active_blacklist` exports) has been removed. The smart planner no
+longer consumes a blacklist signal; callers should drop any reference to
+the feature.
+
+- **`schemas/plan_submit.output.json`**: the top-level required field
+  `blacklist_active_count` and the per-candidate optional property
+  `blacklisted_nodes` are removed. Pinned consumers should re-pin against
+  the current schema.
+- **Public API**: `record_segv`, `get_active_blacklist` removed from
+  `hpc_mapreduce.__all__`.
+- **Docs**: `docs/primitives/record-segv-blacklist.md` deleted;
+  `docs/operations.md` and `docs/primitives/README.md` regenerated.
+
 ### Added — `hpc_mapreduce.layout` and `hpc_mapreduce.lifecycle` (B1, B2)
 
 - **B1** `hpc_mapreduce.layout` introduces `RepoLayout(experiment_dir)`

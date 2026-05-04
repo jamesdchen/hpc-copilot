@@ -2,7 +2,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**28 operations total**: 25 primitive atoms + 3 workflow atoms.
+**27 operations total**: 24 primitive atoms + 3 workflow atoms.
 
 ## How to read this page
 
@@ -44,16 +44,15 @@ Read + binary health check. Same composability as `query`.
 | [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-mapreduce preflight [--cluster <name>]` | `hpc_mapreduce.agent_cli.cmd_preflight` | — | `hpc_mapreduce/schemas/preflight.output.json` |
 | [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `hpc_mapreduce.job.validate.validate_submission` | `hpc_mapreduce/schemas/validate.input.json` | `hpc_mapreduce/schemas/validate.output.json` |
 
-## `mutate` (5)
+## `mutate` (4)
 
-Writes to journal / sidecar / blacklist. Need flock + idempotency-key consideration.
+Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `slash_commands.runner.combine_wave` | — | `hpc_mapreduce/schemas/combine_wave.output.json` |
 | [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `(none — Python-only primitive)` | `slash_commands.runner.mark_terminal` | — | — |
 | [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` | `hpc_mapreduce.agent_cli.cmd_reconcile` | — | `hpc_mapreduce/schemas/reconcile.output.json` |
-| [`record-segv-blacklist`](primitives/record-segv-blacklist.md) | ✓ | writes-blacklist | `_(Python-only)_` | `hpc_mapreduce.job.blacklist.record_segv` | — | — |
 | [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` | `slash_commands.runner.resubmit_failed` | `hpc_mapreduce/schemas/resubmit.input.json` | — |
 
 ## `submit` (1)
