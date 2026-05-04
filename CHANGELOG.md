@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Changed (deprecation) — `hpc_mapreduce` → `claude_hpc` package rename
+
+The package import path has been renamed `hpc_mapreduce` → `claude_hpc`,
+matching the distribution name in `pyproject.toml`. The package was
+also split into 4 sub-packages reflecting their domains:
+
+- `claude_hpc.mapreduce` — the actual mapreduce tool (dispatch, combine, reduce, templates)
+- `claude_hpc.infra` — cluster communications (backends, ssh, inspect)
+- `claude_hpc.orchestrator` — job submission orchestration (flow primitives, planner, runs, runtime priors)
+- `claude_hpc.forecast` — predictive scheduling (queue-wait baseline, DES simulator, microstructure features)
+- `claude_hpc._internal` — shared utilities (_io, _time, _version, _primitive, idempotency, layout, lifecycle, telemetry)
+- `claude_hpc.atoms` — CLI-only primitive dispatchers
+
+`hpc_mapreduce` continues to work as a deprecation shim for one release
+— it emits a `DeprecationWarning` on import and forwards `*` from
+`claude_hpc`. Update your imports to `claude_hpc` directly; the shim
+will be removed in a future release.
+
+The user-facing CLI binary `hpc-mapreduce` is unchanged. Slash commands,
+JSON envelope contracts, the `.hpc/tasks.py` user contract, JSON Schema
+shapes (now under `claude_hpc/schemas/`), and the cluster-side
+stdlib-only constraint on `dispatch.py` and `combiner.py` are all
+preserved exactly.
+
+The `cmd_capabilities` output's `python` field now reflects the new
+module paths (e.g. `claude_hpc.orchestrator.submit_flow.submit_flow`
+instead of `hpc_mapreduce.job.submit_flow.submit_flow`); agents that
+shell out by `cli` are unaffected.
+
 ### Removed (breaking) — SEGV blacklist feature
 
 The SEGV blacklist (`claude_hpc.orchestrator.blacklist`, the
