@@ -81,6 +81,10 @@ def test_capabilities_envelope_shape() -> None:
     assert "submit" in data["subcommands"]
     assert "status" in data["subcommands"]
     assert "preflight" in data["subcommands"]
+    # A7: derived from argparse, so newly-added cmd_walltime_drift /
+    # cmd_house_edge subcommands appear automatically.
+    assert "walltime-drift" in data["subcommands"]
+    assert "house-edge" in data["subcommands"]
     assert data["supported_schedulers"] == ["sge", "slurm"]
     assert isinstance(data["ssh_multiplexing"], bool)
 

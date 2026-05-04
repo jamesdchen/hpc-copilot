@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -55,14 +56,31 @@ _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
 
 def _runs_dir(experiment_dir: Path) -> Path:
-    return Path(experiment_dir) / ".hpc" / "runs"
+    """Deprecated alias for ``RepoLayout(experiment_dir).runs``.
+
+    Kept as an internal forwarder for module-internal callers. Note:
+    unlike :attr:`RepoLayout.runs` this does NOT mkdir the directory —
+    callers (``find_existing_runs``, ``prune_old_runs``) already handle
+    the absent-directory case by returning ``[]``.
+    """
+    from hpc_mapreduce.layout import RepoLayout
+
+    return RepoLayout(experiment_dir).hpc / "runs"
 
 
 def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
-    """Return the canonical path to a run's sidecar (file may not exist)."""
+    """Return the canonical path to a run's sidecar (file may not exist).
+
+    Forwarder for ``RepoLayout(experiment_dir).run_sidecar(run_id)`` plus
+    the run_id format validation that ``RepoLayout`` deliberately omits
+    (``RepoLayout`` is purely about path arithmetic; the format check is
+    a submit-time guard kept here).
+    """
+    from hpc_mapreduce.layout import RepoLayout
+
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError(f"invalid run_id: {run_id!r}")
-    return _runs_dir(experiment_dir) / f"{run_id}.json"
+    return RepoLayout(experiment_dir).run_sidecar(run_id)
 
 
 def compute_cmd_sha(tasks_module: Any) -> str:
@@ -138,6 +156,20 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "auto_retry": None,
     "aggregate_defaults": None,
 }
+
+# Hardened return-shape defaults. ``read_run_sidecar`` always fills these
+# so callers can read ``data["wave_map"]`` etc. without a presence check
+# regardless of which sidecar version wrote the file.
+_HARDENED_DEFAULTS: dict[str, Any] = {
+    "wave_map": dict,  # callable factory — produces a fresh empty dict
+    "task_count": int,  # 0
+    "result_dir_template": str,  # ""
+}
+
+# Module-level dedup for the version-mismatch warning. Keyed on
+# (run_id, sidecar_version) so a long-running monitor that re-reads the
+# same sidecar 1000 times only emits one warning per (run, version).
+_warned_version_mismatch: set[tuple[str, str]] = set()
 
 
 def write_run_sidecar(
@@ -231,6 +263,15 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     ``None`` so callers can rely on the v2 shape regardless of when the
     sidecar was written.
 
+    Hardened return shape — the dict is guaranteed to contain:
+
+    - ``wave_map: dict[str, list[int]]`` — empty dict when unset
+    - ``task_count: int`` — ``0`` when unset
+    - ``result_dir_template: str`` — empty string when unset
+
+    Callers can therefore read these keys directly without falling back
+    to ``.get(...)`` with a default, regardless of sidecar version.
+
     Raises
     ------
     FileNotFoundError
@@ -240,9 +281,59 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     if not target.is_file():
         raise FileNotFoundError(f"run sidecar not found: {target}")
     data: dict[str, Any] = json.loads(target.read_text())
+    # B8: route the schema-version check through the cross-domain
+    # manifest in hpc_mapreduce._version. Strict here (raises) because
+    # the sidecar shape is critical to the dispatcher / aggregator —
+    # mis-reading a future v3 with a v2 reader would silently corrupt
+    # the run. Writer keeps SIDECAR_SCHEMA_VERSION as the value emitted.
+    sv = data.get("sidecar_schema_version")
+    if isinstance(sv, int):
+        from hpc_mapreduce._version import compatibility_check as _compat
+        _compat("sidecar", sv)
     # Backfill missing v2 fields so callers see a uniform shape.
     for k, default in _V2_BACKFILL_DEFAULTS.items():
         data.setdefault(k, default)
+    # Hardened defaults — callers (monitor_flow, aggregate_flow,
+    # reduce.status, reduce.history) used to read these keys with raw
+    # json.loads + .get(...) and silently miss them on v1 sidecars or
+    # sidecars that omitted wave_map. Pin the shape here so the bug
+    # cannot recur.
+    for k, factory in _HARDENED_DEFAULTS.items():
+        existing = data.get(k)
+        if k == "wave_map":
+            if not isinstance(existing, dict):
+                data[k] = factory()
+        elif k == "task_count":
+            try:
+                data[k] = int(existing or 0)
+            except (TypeError, ValueError):
+                data[k] = 0
+        elif k == "result_dir_template":
+            data[k] = existing if isinstance(existing, str) else ""
+
+    # A10: surface a sidecar-vs-package version mismatch once per
+    # (run_id, sidecar_version). ``write_run_sidecar`` records
+    # ``claude_hpc_version`` from the writer's installed package; readers
+    # compare against their own ``hpc_mapreduce.__version__``. Pure
+    # observability — the read still succeeds; the warning lets us find
+    # old sidecars in the wild.
+    sidecar_version = data.get("claude_hpc_version")
+    if isinstance(sidecar_version, str) and sidecar_version:
+        try:
+            from hpc_mapreduce import __version__ as _pkg_version
+        except Exception:  # noqa: BLE001 — never let a circular fail the read
+            _pkg_version = None
+        if _pkg_version and sidecar_version != _pkg_version:
+            key = (run_id, sidecar_version)
+            if key not in _warned_version_mismatch:
+                _warned_version_mismatch.add(key)
+                warnings.warn(
+                    f"sidecar {run_id!r} written by claude-hpc "
+                    f"{sidecar_version!r} but reader is {_pkg_version!r}; "
+                    "shape backfills apply but consider re-submitting if "
+                    "behaviour drifts.",
+                    stacklevel=2,
+                )
     return data
 
 

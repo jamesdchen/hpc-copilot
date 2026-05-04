@@ -30,7 +30,9 @@ DOCUMENTED_ERROR_CODES = frozenset(
         "config_invalid",
         "combiner_failed",
         "cluster_timeout",
+        "cluster_partially_degraded",
         "outputs_missing",
+        "schema_incompat",
         "internal",
     }
 )
@@ -48,7 +50,9 @@ EXPECTED_SUBCLASSES = {
     "config_invalid": errors.ConfigInvalid,
     "combiner_failed": errors.CombinerFailed,
     "cluster_timeout": errors.ClusterTimeout,
+    "cluster_partially_degraded": errors.ClusterPartiallyDegraded,
     "outputs_missing": errors.OutputsMissing,
+    "schema_incompat": errors.SchemaIncompat,
 }
 
 

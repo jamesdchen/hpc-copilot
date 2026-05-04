@@ -45,27 +45,17 @@ def _stub_layout(
 
     Returns the dispatch.py copy that callers should invoke.
     """
+    from tests.conftest import make_sidecar_json, write_hpc_tasks  # noqa: PLC0415
+
     hpc = tmp_path / ".hpc"
-    (hpc / "runs").mkdir(parents=True)
-
-    (hpc / "tasks.py").write_text(
-        "_TASKS = [{}]\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+    write_hpc_tasks(hpc, [{}])
+    make_sidecar_json(
+        tmp_path,
+        run_id=run_id,
+        sidecar_schema_version=schema_version,
+        executor=executor or f"{sys.executable} -c 'pass'",
+        result_dir_template=str(tmp_path / "out"),
     )
-
-    sidecar = hpc / "runs" / f"{run_id}.json"
-    sidecar.write_text(json.dumps({
-        "sidecar_schema_version": schema_version,
-        "run_id": run_id,
-        "cmd_sha": "deadbeef" * 8,
-        "claude_hpc_version": "0.0.0+test",
-        "submitted_at": "2026-01-01T00:00:00Z",
-        "executor": executor or f"{sys.executable} -c 'pass'",
-        "result_dir_template": str(tmp_path / "out"),
-        "task_count": 1,
-        "tasks_py_sha": "abc",
-    }))
 
     dispatch_dst = hpc / "_hpc_dispatch.py"
     pkg_dispatch = Path(hpc_mapreduce.__file__).parent / "map" / "dispatch.py"

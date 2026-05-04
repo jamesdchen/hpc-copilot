@@ -1,4 +1,4 @@
-"""Phase 4 planner: combine inspect, blacklist, and runtime priors.
+"""Phase 4 planner: combine inspect and runtime priors.
 
 This module emits the structured JSON the slash command hands to Claude
 for cost-model judgment over candidate ``--constraint`` choices. It does
@@ -17,7 +17,6 @@ Output shape (see top-level design ``docs/`` for the full contract)::
           "pool_size": 28,
           "healthy_nodes": ["..."],
           "stressed_nodes": [{"node": "...", "AllocMem_pct": 0.86, ...}],
-          "blacklisted_nodes": [{"node": "...", "added_h_ago": 8, ...}],
           "eta_sec_via_test_only": 300,           # SLURM sbatch --test-only
           "runtime_prior_quantiles_sec": {"a100": {"p50": 4200, ...}, ...},
           "p_fail_30d": {"a100": 0.0, "v100": 0.14},
@@ -35,8 +34,9 @@ __all__ = ["plan_submit"]
 
 import re
 import subprocess
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+
+from hpc_mapreduce._time import parse_iso_utc, utcnow, utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,7 +56,6 @@ from hpc_mapreduce.job.backfill import (
     reshape_array_size_for_backfill,
     split_walltime_into_segments,
 )
-from hpc_mapreduce.job.blacklist import get_active as get_active_blacklist
 from hpc_mapreduce.job.calibration import (
     compute_walltime_drift,
     recommend_safety_mult_adjustment,
@@ -118,10 +117,6 @@ def plan_submit(
     # Snapshot the cluster (fully cached for 60s after first call).
     snap = inspect_cluster(cluster)
 
-    # TTL-filtered blacklist for this cluster.
-    bl_entries = get_active_blacklist(experiment_dir, cluster)
-    bl_by_node: dict[str, dict[str, Any]] = {e["node"]: e for e in bl_entries}
-
     # Quantiles per GPU type (one rollup, shared across candidates).
     rollup = roll_up_quantiles(
         experiment_dir, profile=profile, cluster=cluster, cmd_sha=cmd_sha
@@ -159,18 +154,25 @@ def plan_submit(
         pool = _nodes_for_constraint(snap.nodes, gpu_set)
         healthy: list[str] = []
         stressed: list[dict[str, Any]] = []
-        blacklisted: list[dict[str, Any]] = []
         for n in pool:
-            if n.name in bl_by_node:
-                e = bl_by_node[n.name]
-                blacklisted.append(_blacklist_summary(e))
-                continue
             if n.is_stressed:
                 stressed.append(_stressed_summary(n))
             elif not n.is_drained:
                 healthy.append(n.name)
         # ETA via sbatch --test-only (SLURM only) — best effort.
-        eta_sec = _eta_via_test_only(scheduler, c, cfg) if scheduler == "slurm" else None
+        # B5-PR2: capability is published via backend class; SGE returns
+        # supports_test_only_eta=False so we skip the probe.
+        from hpc_mapreduce.infra.backends import get_backend_class
+        if get_backend_class(scheduler).supports_test_only_eta:
+            eta_sec = _eta_via_test_only(scheduler, c, cfg)
+        else:
+            eta_sec = None
+        # Phase 4f: layered DES baseline. The DES p50 is independent of
+        # the live scheduler probe — it's a forecast against the most
+        # recent persisted snapshot. We surface it as a separate field
+        # so callers can compare the two ETAs (and the DES path stays
+        # available even when --test-only doesn't).
+        eta_sec_via_des = _eta_via_des(experiment_dir, profile, cluster)
         # Runtime prior quantiles for the GPU types in this constraint.
         c_quantiles = {gpu: quantiles[gpu] for gpu in gpu_set if gpu in quantiles}
         c_p_fail = {gpu: p_fail.get(gpu, 0.0) for gpu in gpu_set}
@@ -179,12 +181,12 @@ def plan_submit(
             "pool_size": len(pool),
             "healthy_nodes": sorted(healthy),
             "stressed_nodes": stressed,
-            "blacklisted_nodes": blacklisted,
             "eta_sec_via_test_only": eta_sec,
+            "eta_sec_via_des": eta_sec_via_des,
             "runtime_prior_quantiles_sec": c_quantiles,
             "p_fail_30d": c_p_fail,
         }
-        if adversarial and scheduler == "slurm":
+        if adversarial and get_backend_class(scheduler).supports_test_only_eta:
             report.update(
                 _adversarial_report(
                     constraint=c,
@@ -214,7 +216,7 @@ def plan_submit(
     # them once when assembling the final spec.
     array_reshape: dict[str, Any] | None = None
     walltime_split: dict[str, Any] | None = None
-    if adversarial and scheduler == "slurm":
+    if adversarial and get_backend_class(scheduler).supports_test_only_eta:
         if current_max_array_size:
             new_size, reshape_rationale = reshape_array_size_for_backfill(
                 current_max_array_size=current_max_array_size,
@@ -249,12 +251,11 @@ def plan_submit(
     return {
         "profile": profile,
         "cluster": cluster,
-        "now_iso": datetime.now(timezone.utc).isoformat(),
+        "now_iso": utcnow_iso(),
         "candidates": candidate_reports,
         "needs_canary": needs_canary,
         "canary_plan": canary_plan,
         "scheduler_kind": scheduler,
-        "blacklist_active_count": len(bl_entries),
         "array_reshape": array_reshape,
         "walltime_split": walltime_split,
         "walltime_drift": drift_report,
@@ -293,23 +294,6 @@ def _nodes_for_constraint(
     return out
 
 
-def _blacklist_summary(entry: dict[str, Any]) -> dict[str, Any]:
-    added = entry.get("added_at", "")
-    try:
-        ts = datetime.fromisoformat(added.replace("Z", "+00:00"))
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        added_h_ago = round((datetime.now(timezone.utc) - ts).total_seconds() / 3600.0, 1)
-    except (ValueError, AttributeError):
-        added_h_ago = None
-    return {
-        "node": entry.get("node"),
-        "added_h_ago": added_h_ago,
-        "expires_at": entry.get("expires_at"),
-        "evidence_count": len(entry.get("evidence") or []),
-    }
-
-
 def _stressed_summary(n: NodeSnapshot) -> dict[str, Any]:
     return {
         "node": n.name,
@@ -318,6 +302,30 @@ def _stressed_summary(n: NodeSnapshot) -> dict[str, Any]:
         "GresUsed": n.gres_used,
         "co_tenants": list(n.co_tenants),
     }
+
+
+def _eta_via_des(
+    experiment_dir: "Path", profile: str, cluster: str,
+) -> int | None:
+    """Phase 4f: DES p50 wait estimate as an alternative ETA input.
+
+    Returns the DES backend's predicted_wait_sec in seconds, or ``None``
+    when the DES path is unavailable (no snapshot, no profiles, etc.).
+    Defensive: any exception from the DES path is swallowed and ``None``
+    is returned — the planner must keep working when the simulator is
+    not yet bootstrapped.
+    """
+    try:
+        from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
+        out = predict_queue_wait(
+            experiment_dir, profile=profile, cluster=cluster,
+            backend="auto", n_replications=16, seed=0,
+        )
+    except Exception:  # noqa: BLE001 — defensive
+        return None
+    if out.method != "des":
+        return None
+    return out.predicted_wait_sec
 
 
 def _eta_via_test_only(scheduler: str, constraint: str, cluster_cfg: dict[str, Any]) -> int | None:
@@ -359,7 +367,9 @@ def _eta_via_test_only_with_resources(
     regex. Any failure path yields ``(None, "")`` so the planner can
     silently skip that probe rather than abort the whole report.
     """
-    if scheduler != "slurm":
+    # B5-PR2: gate on the backend capability, not the scheduler name.
+    from hpc_mapreduce.infra.backends import get_backend_class
+    if not get_backend_class(scheduler).supports_test_only_eta:
         return None, ""
     host = cluster_cfg.get("host")
     user = cluster_cfg.get("user")
@@ -540,12 +550,10 @@ def _parse_test_only_eta(text: str) -> int | None:
     if not m:
         return None
     try:
-        ts = datetime.fromisoformat(m.group(1))
+        ts = parse_iso_utc(m.group(1))
     except ValueError:
         return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    delta = (ts - datetime.now(timezone.utc)).total_seconds()
+    delta = (ts - utcnow()).total_seconds()
     return max(0, int(delta))
 
 

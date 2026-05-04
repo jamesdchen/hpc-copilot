@@ -2,39 +2,32 @@
 name: build-executor
 verb: scaffold
 inputs:
-  - name: name
-    type: string
-    description: Output filename stem (no .py).
-  - name: output_dir
-    type: path
-    description: Where to write the new file. Defaults to cwd.
-  - name: type
-    type: enum
-    description: Starter template selector. Currently only `plain`.
-    default: plain
-  - name: force
-    type: bool
-    description: Overwrite existing destination.
-    default: false
+- name: name
+  type: string
+  description: Output filename stem (no .py).
+- name: output_dir
+  type: path
+  description: Where to write the new file. Defaults to cwd.
+- name: type
+  type: enum
+  description: Starter template selector. Currently only `plain`.
+  default: plain
+- name: force
+  type: bool
+  description: Overwrite existing destination.
+  default: false
 side_effects:
-  - writes: <output_dir>/<name>.py
+- writes-file: <output_dir>/<name>.py (refuses to overwrite without --force)
 idempotent: false
-idempotency_key: none — file creation has side effects; refuses to overwrite without force=true
-error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-    description: Unknown type, or destination exists and force=false.
-  - code: config_invalid
-    category: user
-    retry_safe: false
-    description: Starter template missing on disk (corrupted install).
+idempotency_key: none
+error_codes: []
 backed_by:
-  cli: hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]
+  cli: hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain]
+    [--force]
   python: hpc_mapreduce.agent_cli.cmd_build_executor
 exit_codes:
-  - 0: ok
-  - 1: spec_invalid / config_invalid
+- 0: ok
+- 1: spec_invalid / config_invalid
 ---
 
 ## Purpose

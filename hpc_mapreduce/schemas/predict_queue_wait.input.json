@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/predict_queue_wait.input.json",
+  "title": "predict-queue-wait input",
+  "description": "Inputs for the `predict-queue-wait` primitive (hpc-mapreduce predict-queue-wait --profile <p> --cluster <c>). Phase 4 of the queue-wait predictor: when prerequisites are present, dispatches to a discrete-event simulator (DES) backend that runs the FIFO + EASY-backfill scheduler forward against the most recent persisted ClusterSnapshot.",
+  "type": "object",
+  "required": ["profile", "cluster"],
+  "additionalProperties": false,
+  "properties": {
+    "profile":         { "type": "string" },
+    "cluster":         { "type": "string" },
+    "at_iso":          { "type": ["string", "null"], "description": "Reference timestamp the forecast is for; null means now." },
+    "backend":         { "type": "string", "enum": ["auto", "diurnal_ma", "des"], "default": "auto" },
+    "n_replications":  { "type": "integer", "minimum": 1, "default": 64 },
+    "seed":            { "type": ["integer", "null"], "description": "Optional seed for deterministic DES sampling." }
+  }
+}

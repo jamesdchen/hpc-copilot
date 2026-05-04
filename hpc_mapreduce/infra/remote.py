@@ -24,6 +24,7 @@ from __future__ import annotations
 __all__ = [
     "SSH_TIMEOUT_SEC",
     "RSYNC_TIMEOUT_SEC",
+    "split_ssh_target",
     "ssh_run",
     "rsync_push",
     "rsync_pull",
@@ -45,6 +46,21 @@ from typing import Any, Final
 # minutes before declaring the transfer hung.
 SSH_TIMEOUT_SEC = 60
 RSYNC_TIMEOUT_SEC = 1800
+
+
+def split_ssh_target(ssh_target: str) -> tuple[str, str]:
+    """Split a ``user@host`` string into ``(user, host)``.
+
+    Raises :class:`ValueError` (caller may rewrap as
+    :class:`slash_commands.errors.SpecInvalid`) when the input does not
+    contain the ``@`` separator. Used by both ``submit_flow`` and
+    ``aggregate_flow`` (and the slash-command runner) to validate
+    cluster-spec ``ssh_target`` fields before invoking ssh/rsync.
+    """
+    if "@" not in ssh_target:
+        raise ValueError(f"ssh_target must be 'user@host', got {ssh_target!r}")
+    user, host = ssh_target.split("@", 1)
+    return user, host
 
 
 def _ssh_multiplex_opts() -> list[str]:
@@ -241,7 +257,7 @@ def deploy_runtime(
     Two payloads:
 
     1. **Importable stubs** in ``{remote_path}/hpc_mapreduce/map/``:
-       ``context.py`` and ``metrics_io.py`` so user executors can do
+       ``metrics_io.py`` so user executors can do
        ``from hpc_mapreduce.map.metrics_io import write_metrics`` on
        compute nodes without installing the full package.
     2. **Framework artifacts** in ``{remote_path}/.hpc/``: the framework
@@ -266,7 +282,9 @@ def deploy_runtime(
     pkg_dir = Path(__file__).parent.parent
 
     ssh_run(
-        f"mkdir -p {remote_path_q}/hpc_mapreduce/map {remote_path_q}/.hpc/templates"
+        f"mkdir -p {remote_path_q}/hpc_mapreduce/map"
+        f" {remote_path_q}/.hpc/templates"
+        f" {remote_path_q}/.hpc/templates/common"
         f" && touch {remote_path_q}/hpc_mapreduce/__init__.py"
         f" && touch {remote_path_q}/hpc_mapreduce/map/__init__.py",
         host=host,
@@ -295,20 +313,36 @@ def deploy_runtime(
             ) from exc
 
     # Importable stubs (used inside cluster jobs by user executors).
-    _scp(pkg_dir / "map" / "context.py", "hpc_mapreduce/map/context.py")
+    # Note: ``map/context.py`` was previously pushed here but the source
+    # module never existed on disk; the orphan reference would FileNotFound
+    # at deploy time. Removed in regfix.
     _scp(pkg_dir / "map" / "metrics_io.py", "hpc_mapreduce/map/metrics_io.py")
 
     # Framework executor + combiner inside .hpc/.
     _scp(pkg_dir / "map" / "dispatch.py", ".hpc/_hpc_dispatch.py")
 
     # Job templates inside .hpc/templates/.
+    # B5-PR2: drop the inline ``if sched == 'sge'`` ladder; the backend
+    # registry owns the canonical extension via ``template_ext``. This
+    # keeps remote.py and __init__.py:get_template_path in sync.
+    from hpc_mapreduce.infra.backends import template_ext_for
     for sched in ("sge", "slurm"):
+        ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):
-            ext = "sh" if sched == "sge" else "slurm"
             _scp(
                 pkg_dir / "templates" / sched / f"{kind}.{ext}",
                 f".hpc/templates/{kind}.{ext}",
             )
+
+    # Shared preambles sourced by the templates above
+    # (templates/common/hpc_preamble.sh + templates/common/gpu_preamble.sh).
+    # The per-template ``source "$(dirname "$0")/common/<name>.sh"`` calls
+    # resolve to .hpc/templates/common/<name>.sh on the cluster.
+    for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
+        _scp(
+            pkg_dir / "templates" / "common" / common_name,
+            f".hpc/templates/common/{common_name}",
+        )
 
     # Combiner is the last scp; return its CompletedProcess so callers
     # can inspect the trailing returncode.

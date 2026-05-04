@@ -30,7 +30,6 @@ import logging
 import os
 import tempfile
 import warnings
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -58,7 +57,12 @@ SCHEMA_VERSION = 1
 # Resolve at import time. MARs (and any caller that wants its own state tree)
 # can set HPC_JOURNAL_DIR before importing this module to redirect the journal.
 HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
-TERMINAL_STATUSES = frozenset({"complete", "failed", "abandoned"})
+# B2: derived from the canonical hpc_mapreduce.lifecycle.JournalStatus
+# StrEnum so the literal can no longer drift from the rest of the codebase.
+# Re-exported as TERMINAL_STATUSES for back-compat.
+from hpc_mapreduce.lifecycle import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL  # noqa: E402
+
+TERMINAL_STATUSES = _LIFECYCLE_TERMINAL
 _UPDATABLE_FIELDS = frozenset(
     {
         "last_status",
@@ -111,8 +115,7 @@ class RunRecord:
         return cls(**{k: v for k, v in payload.items() if k in known})
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+from hpc_mapreduce._time import utcnow_iso as _utcnow_iso  # noqa: E402
 
 
 def repo_hash(experiment_dir: Path) -> str:
@@ -138,11 +141,27 @@ def journal_dir(experiment_dir: Path) -> Path:
 
 
 def runs_dir(experiment_dir: Path) -> Path:
-    return journal_dir(experiment_dir) / "runs"
+    """Deprecated forwarder for ``JournalLayout(experiment_dir).runs``.
+
+    NOTE: this is the **journal** runs directory under
+    ``~/.claude/hpc/<repo_hash>/runs/``, NOT the cluster sidecar runs
+    directory under ``<experiment_dir>/.hpc/runs/`` — that one is
+    :attr:`hpc_mapreduce.layout.RepoLayout.runs` (also exported as
+    :func:`hpc_mapreduce.runs_subdir`). The pre-B1 collision between
+    these two ``runs_*`` names was a P0 bug source; the
+    ``RepoLayout`` / ``JournalLayout`` type split makes it a type
+    error.
+    """
+    from hpc_mapreduce.layout import JournalLayout
+
+    return JournalLayout(experiment_dir).runs
 
 
 def _run_path(experiment_dir: Path, run_id: str) -> Path:
-    return runs_dir(experiment_dir) / f"{run_id}.json"
+    """Deprecated alias for ``JournalLayout(experiment_dir).run_record(run_id)``."""
+    from hpc_mapreduce.layout import JournalLayout
+
+    return JournalLayout(experiment_dir).run_record(run_id)
 
 
 def _lock_path(target: Path) -> Path:
@@ -203,10 +222,17 @@ def load_run(experiment_dir: Path, run_id: str) -> RunRecord | None:
     payload = _read_json(path)
     if payload is None:
         return None
-    if payload.get("schema_version") != SCHEMA_VERSION:
+    # B8: route reader-side check through the cross-domain manifest
+    # in hpc_mapreduce._version. Writer still emits SCHEMA_VERSION;
+    # the manifest declares the *supported* range so back-compat is one
+    # one-line edit if/when v2 ships.
+    from hpc_mapreduce._version import is_compatible as _is_compat
+
+    found = payload.get("schema_version")
+    if not isinstance(found, int) or not _is_compat("session", found):
         warnings.warn(
-            f"session: schema_version={payload.get('schema_version')} "
-            f"!= {SCHEMA_VERSION}; skipping {path.name}",
+            f"session: schema_version={payload.get('schema_version')!r} "
+            f"unsupported; skipping {path.name}",
             stacklevel=2,
         )
         return None
@@ -246,7 +272,10 @@ def mark_run(
     stage: str | None = None,
 ) -> RunRecord:
     """Terminal transition. Updates status (and optionally stage)."""
-    if status not in {"in_flight", *TERMINAL_STATUSES}:
+    # Validate against the canonical JournalStatus StrEnum (B2).
+    from hpc_mapreduce.lifecycle import JournalStatus
+
+    if status not in set(JournalStatus):
         raise ValueError(f"mark_run: invalid status {status!r}")
     path = _run_path(experiment_dir, run_id)
     with _locked(path):
@@ -298,7 +327,10 @@ def _rebuild_index(experiment_dir: Path) -> dict:
         payload = _read_json(path)
         if payload is None:
             continue
-        if payload.get("schema_version") != SCHEMA_VERSION:
+        # B8: route reader-side check through the cross-domain manifest.
+        from hpc_mapreduce._version import is_compatible as _is_compat
+        sv = payload.get("schema_version")
+        if not isinstance(sv, int) or not _is_compat("session", sv):
             continue
         run_id = payload.get("run_id") or path.stem
         entries[run_id] = {

@@ -4,17 +4,13 @@ verb: validate
 side_effects: []
 idempotent: true
 idempotency_key: none
-error_codes:
-  - code: internal
-    category: internal
-    retry_safe: false
-    description: Surface to the caller; preflight bug.
+error_codes: []
 backed_by:
   cli: hpc-mapreduce preflight [--cluster <name>]
-  python: hpc_mapreduce.preflight.run
+  python: hpc_mapreduce.agent_cli.cmd_preflight
 exit_codes:
-  - 0: all checks passed
-  - 2: one or more checks failed (envelope is still ok=true; failures live in checks[].ok)
+- 0: all checks passed
+- 2: one or more checks failed (envelope is still ok=true; failures live in checks[].ok)
 ---
 
 ## Purpose

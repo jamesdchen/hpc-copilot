@@ -34,9 +34,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce.infra.remote import rsync_pull
+from hpc_mapreduce._primitive import SideEffect, primitive
+from hpc_mapreduce.infra.remote import rsync_pull, split_ssh_target
+from hpc_mapreduce.job.runs import read_run_sidecar
 from hpc_mapreduce.reduce.metrics import reduce_partials
 from slash_commands import errors, runner, session
+from slash_commands.runner import combine_wave, record_status
 
 __all__ = ["aggregate_flow", "AggregateFlowResult"]
 
@@ -68,10 +71,13 @@ class AggregateFlowResult:
 
 
 def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    if "@" not in ssh_target:
-        raise errors.SpecInvalid(f"ssh_target must be 'user@host', got {ssh_target!r}")
-    user, host = ssh_target.split("@", 1)
-    return user, host
+    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
+    error type. See :mod:`hpc_mapreduce.infra.remote.split_ssh_target`.
+    """
+    try:
+        return split_ssh_target(ssh_target)
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
 
 
 def _missing_waves(wave_map_keys: list[str], already_combined: list[int]) -> list[int]:
@@ -123,6 +129,25 @@ def _combine_missing(
     return combined_now, failures
 
 
+@primitive(
+    name="aggregate-flow",
+    verb="workflow",
+    composes=[combine_wave, record_status],
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("rsync", "<ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
+    ],
+    error_codes=[
+        errors.SshUnreachable,
+        errors.CombinerFailed,
+        errors.OutputsMissing,
+        errors.JournalCorrupt,
+    ],
+    idempotent=True,
+    idempotency_key="run_id",
+    exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+)
 def aggregate_flow(
     *,
     experiment_dir: Path,
@@ -185,18 +210,15 @@ def aggregate_flow(
 
     user, host = _split_ssh_target(record.ssh_target)
 
-    # Read the sidecar's wave_map directly (record carries combined_waves
-    # but not wave_map — that lives in the per-run sidecar JSON).
-    import json as _json
-
-    sidecar_path = session.runs_dir(experiment_dir) / f"{run_id}.json"
+    # Read the sidecar's wave_map (record carries combined_waves but not
+    # wave_map — that lives in the per-run sidecar JSON, under
+    # <experiment_dir>/.hpc/runs/). ``read_run_sidecar`` guarantees
+    # ``wave_map`` is a dict; missing/unreadable sidecars yield empty.
     wave_map_keys: list[str] = []
     try:
-        sidecar_data = _json.loads(sidecar_path.read_text(encoding="utf-8"))
-        wm = sidecar_data.get("wave_map")
-        if isinstance(wm, dict):
-            wave_map_keys = list(wm.keys())
-    except (OSError, _json.JSONDecodeError):
+        sidecar_data = read_run_sidecar(experiment_dir, run_id)
+        wave_map_keys = list((sidecar_data.get("wave_map") or {}).keys())
+    except (FileNotFoundError, OSError):
         # No wave_map → no waves to ensure. Aggregation falls back to
         # whatever's already in _combiner/ on the cluster.
         pass

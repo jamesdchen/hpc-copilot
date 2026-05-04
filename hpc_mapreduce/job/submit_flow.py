@@ -27,10 +27,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
+from hpc_mapreduce.agent_cli import cmd_plan_submit
 from hpc_mapreduce.infra.backends.sge_remote import RemoteSGEBackend
 from hpc_mapreduce.infra.backends.slurm_remote import RemoteSlurmBackend
-from hpc_mapreduce.infra.remote import deploy_runtime, rsync_push, ssh_run
+from hpc_mapreduce.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
+from hpc_mapreduce.job.discover import discover_executors
 from slash_commands import errors, runner, session
+from slash_commands.runner import submit_and_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,10 +70,14 @@ class SubmitFlowResult:
 
 
 def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    if "@" not in ssh_target:
-        raise errors.SpecInvalid(f"ssh_target must be 'user@host', got {ssh_target!r}")
-    user, host = ssh_target.split("@", 1)
-    return user, host
+    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
+    error type. The shared helper raises ``ValueError``; this flow
+    surfaces ``SpecInvalid`` so callers see a typed envelope error.
+    """
+    try:
+        return split_ssh_target(ssh_target)
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
 
 
 def _build_backend(
@@ -145,6 +153,25 @@ def _make_single_array_submission(
     return [match.group(1)]
 
 
+@primitive(
+    name="submit-flow",
+    verb="workflow",
+    composes=[submit_and_record, discover_executors, cmd_plan_submit],
+    side_effects=[
+        SideEffect("rsync", "<ssh_target>:<remote_path>"),
+        SideEffect("scheduler-submit", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
+    ],
+    error_codes=[
+        errors.SpecInvalid,
+        errors.SshUnreachable,
+        errors.SchedulerThrottled,
+        errors.ClusterUnknown,
+    ],
+    idempotent=True,
+    idempotency_key="run_id",
+    exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+)
 def submit_flow(
     *,
     experiment_dir: Path,
@@ -166,6 +193,7 @@ def submit_flow(
     skip_preflight: bool = False,
     slurm_account: str | None = None,
     slurm_cluster: str | None = None,
+    partial_ok: bool = False,
 ) -> SubmitFlowResult:
     """Execute the full submit pipeline and emit a single result.
 
@@ -188,6 +216,13 @@ def submit_flow(
 
     Errors raise the existing :class:`errors.HpcError` hierarchy so the
     CLI subcommand layer can convert them to error envelopes uniformly.
+
+    *partial_ok* (default False) records ``extra.partial_ok=True`` on the
+    sidecar so a downstream monitor-flow wave with at least one success
+    is classified ``complete`` (not ``failed``); aggregate-flow then
+    skips the failed task IDs listed under ``<run_id>.failed.json``. The
+    flag mirrors the grid-sweep ``--partial-ok`` usage where one OOMing
+    config shouldn't abort an N-config sweep.
     """
     # Idempotency: short-circuit before touching the cluster.
     existing = session.load_run(experiment_dir, run_id)
@@ -308,6 +343,19 @@ def submit_flow(
         total_tasks=total_tasks,
         campaign_id=campaign_id,
     )
+
+    # Partial-ok marker: a sibling file that monitor-flow + aggregate-flow
+    # consult to relax their failure semantics. Kept as a sibling of the
+    # run sidecar so the two are reconcilable but the sidecar's frozen
+    # schema doesn't need a bump for this opt-in flag.
+    if partial_ok:
+        from hpc_mapreduce.job.runs import run_sidecar_path
+
+        marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
+        try:
+            marker.write_text("1")
+        except OSError:
+            pass
 
     return SubmitFlowResult(
         run_id=run_id,

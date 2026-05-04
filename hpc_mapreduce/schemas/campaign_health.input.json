@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/campaign_health.input.json",
+  "title": "campaign-health input spec",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "since_iso": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cluster": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

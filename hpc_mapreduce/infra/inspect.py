@@ -11,8 +11,8 @@ the ingredients for resource-quality-aware submission decisions:
 - Drain / down state.
 
 The resulting JSON is fed into :mod:`hpc_mapreduce.job.planner` (Phase 4)
-which combines it with runtime priors and a SEGV blacklist to score
-candidate constraints. It is also useful standalone for ad-hoc cluster
+which combines it with runtime priors to score candidate constraints.
+It is also useful standalone for ad-hoc cluster
 debugging via ``hpc-mapreduce inspect-cluster --cluster <c>``.
 
 This module is intentionally permissive: scheduler outputs vary between
@@ -29,22 +29,39 @@ __all__ = [
     "inspect_cluster",
     "parse_scontrol_show_node",
     "parse_sacct_node_jobs",
+    "persist_snapshot",
+    "read_cluster_history",
+    "MAX_HISTORY_SNAPSHOTS",
 ]
 
 import dataclasses
+import json
+import os
 import re
 import subprocess
-import time
-from datetime import datetime, timezone
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
+from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow, utcnow_iso
+
+from hpc_mapreduce.infra.cache import TTLCache
 from hpc_mapreduce.infra.clusters import load_clusters_config
+from slash_commands import errors
 
 # In-process cache so a single submit cycle that calls inspect-cluster
 # multiple times pays the SSH cost once. Keyed by (cluster, scheduler).
-_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
-_CACHE_TTL_SEC = 60.0
+# Stores the dict-form of :class:`ClusterSnapshot` (so re-reads survive
+# even if the snapshot dataclass shape evolves between writes).
+#
+# Migrated to :class:`TTLCache` (B6) — same 60-second horizon as the
+# pre-refactor module-level dict; gain is bounded LRU eviction + a
+# ``clear_all()`` test hook shared with backfill's probe cache.
+_CACHE: TTLCache[tuple[str, str], dict[str, Any]] = TTLCache(
+    "infra.inspect", ttl_sec=60.0, max_size=64
+)
 
 
 @dataclasses.dataclass
@@ -240,7 +257,7 @@ def _slurm_inspect(
     snap = ClusterSnapshot(
         cluster=cluster_name,
         scheduler_kind="slurm",
-        now_iso=datetime.now(timezone.utc).isoformat(),
+        now_iso=utcnow_iso(),
         nodes=[],
     )
     # Step 1: scontrol show node (all nodes; planner filters by candidate
@@ -380,7 +397,7 @@ def _sge_inspect(
     snap = ClusterSnapshot(
         cluster=cluster_name,
         scheduler_kind="sge",
-        now_iso=datetime.now(timezone.utc).isoformat(),
+        now_iso=utcnow_iso(),
         nodes=[],
     )
     rc, out, err = runner.run("qhost -F gpu -q")
@@ -564,6 +581,14 @@ class _CommandRunner:
 # --- public entry ---------------------------------------------------------
 
 
+@primitive(
+    name="inspect-cluster",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster>")],
+    error_codes=[errors.ClusterUnknown, errors.SshUnreachable],
+    idempotent=True,
+    idempotency_key="cluster",
+)
 def inspect_cluster(
     cluster_name: str,
     *,
@@ -573,6 +598,7 @@ def inspect_cluster(
     stress_cpu_load_frac: float = 0.80,
     use_cache: bool = True,
     runner: _CommandRunner | None = None,
+    persist_dir: Path | None = None,
 ) -> ClusterSnapshot:
     """Return a :class:`ClusterSnapshot` for *cluster_name*.
 
@@ -585,38 +611,196 @@ def inspect_cluster(
     """
     clusters = load_clusters_config(Path(config_path) if config_path is not None else None)
     if cluster_name not in clusters:
-        raise KeyError(f"unknown cluster {cluster_name!r}; check clusters.yaml")
+        raise errors.ClusterUnknown(
+            f"unknown cluster {cluster_name!r}; check clusters.yaml"
+        )
     cfg = clusters[cluster_name]
     scheduler = (cfg.get("scheduler") or "slurm").lower()
     cache_key = (cluster_name, scheduler)
     if use_cache:
         cached = _CACHE.get(cache_key)
-        if cached is not None and time.monotonic() - cached[0] < _CACHE_TTL_SEC:
-            return _snapshot_from_dict(cached[1])
+        if cached is not None:
+            return _snapshot_from_dict(cached)
     if runner is None:
         runner = _CommandRunner(host=cfg.get("host"), user=cfg.get("user"))
-    if scheduler == "slurm":
-        snap = _slurm_inspect(
-            cluster_name,
-            cfg,
-            sacct_window_hours=sacct_window_hours,
-            stress_alloc_mem_pct=stress_alloc_mem_pct,
-            stress_cpu_load_frac=stress_cpu_load_frac,
-            runner=runner,
-        )
-    elif scheduler == "sge":
-        snap = _sge_inspect(
-            cluster_name,
-            cfg,
-            stress_alloc_mem_pct=stress_alloc_mem_pct,
-            stress_cpu_load_frac=stress_cpu_load_frac,
-            runner=runner,
-        )
-    else:
-        raise ValueError(f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}")
+    # B5-PR2: dispatch through the backend registry. Each backend's
+    # ``inspect_cluster`` classmethod normalises kwargs for its scheduler
+    # (e.g. SGE ignores ``sacct_window_hours``); a missing backend
+    # raises ValueError just like the prior ladder did.
+    from hpc_mapreduce.infra.backends import get_backend_class
+    try:
+        backend_cls = get_backend_class(scheduler)
+    except ValueError as exc:
+        raise ValueError(
+            f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}"
+        ) from exc
+    snap = backend_cls.inspect_cluster(
+        cluster_name,
+        cfg,
+        sacct_window_hours=sacct_window_hours,
+        stress_alloc_mem_pct=stress_alloc_mem_pct,
+        stress_cpu_load_frac=stress_cpu_load_frac,
+        runner=runner,
+    )
     if use_cache:
-        _CACHE[cache_key] = (time.monotonic(), snap.to_dict())
+        _CACHE.put(cache_key, snap.to_dict())
+    if persist_dir is not None:
+        # Best-effort: a snapshot persistence failure must not blow up
+        # the planning pipeline. We only emit the file under a real
+        # experiment dir; tests pass tmp_path directly.
+        try:
+            persist_snapshot(persist_dir, snap)
+        except OSError:
+            pass
     return snap
+
+
+# --- history persistence --------------------------------------------------
+
+# Per-cluster snapshot cap. Same bounded-growth pattern as
+# `runtime_prior.MAX_SAMPLES`: the history is advisory not audit, so
+# trimming oldest-first is fine. Override via HPC_MAX_CLUSTER_HISTORY.
+MAX_HISTORY_SNAPSHOTS: int = int(os.environ.get("HPC_MAX_CLUSTER_HISTORY", "10000"))
+
+
+def _history_dir(experiment_dir: Path, cluster: str) -> Path:
+    from hpc_mapreduce.layout import RepoLayout
+
+    return RepoLayout(experiment_dir).cluster_history(cluster)
+
+
+def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
+    """Persist *snap* under ``<exp>/.hpc/cluster_history/<cluster>/<unix_ts>.json``.
+
+    Atomic write (``tempfile`` + :func:`os.replace`) so a reader that
+    arrives mid-write either sees the previous snapshot list or the new
+    one — never a partial JSON document. Returns the file path written.
+
+    Bounded growth: after writing, the directory is trimmed to the
+    most-recent :data:`MAX_HISTORY_SNAPSHOTS` files (oldest-first
+    eviction). Same pattern as ``runtime_prior``'s sample list cap.
+
+    Filename uses Unix timestamp seconds (sortable, no path-separator
+    concerns). When two snapshots arrive in the same second we suffix
+    ``-N`` to break ties — this is best-effort and the planner does not
+    need second-resolution precision.
+    """
+    d = _history_dir(experiment_dir, snap.cluster)
+    ts = parse_iso_utc_or_none(snap.now_iso)
+    if ts is not None:
+        unix_ts = int(ts.timestamp())
+    else:
+        unix_ts = int(utcnow().timestamp())
+    base = d / f"{unix_ts}.json"
+    target = base
+    counter = 1
+    while target.exists():
+        target = d / f"{unix_ts}-{counter}.json"
+        counter += 1
+    payload = json.dumps(snap.to_dict(), indent=2, sort_keys=True)
+    tmp = tempfile.NamedTemporaryFile(
+        "w",
+        delete=False,
+        dir=str(d),
+        prefix=target.name + ".",
+        suffix=".tmp",
+        encoding="utf-8",
+    )
+    try:
+        tmp.write(payload)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        os.replace(tmp.name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+    finally:
+        if not tmp.closed:
+            tmp.close()
+    _prune_history(d, MAX_HISTORY_SNAPSHOTS)
+    return target
+
+
+def _prune_history(d: Path, limit: int) -> None:
+    """Delete oldest snapshot files until at most *limit* remain.
+
+    Sorts by filename so the embedded unix-ts orders chronologically.
+    Best-effort: an unlink that races with another writer is ignored.
+    """
+    if limit <= 0:
+        return
+    try:
+        files = sorted(p for p in d.iterdir() if p.suffix == ".json" and p.is_file())
+    except OSError:
+        return
+    excess = len(files) - limit
+    if excess <= 0:
+        return
+    for p in files[:excess]:
+        try:
+            p.unlink()
+        except OSError:
+            continue
+
+
+def read_cluster_history(
+    experiment_dir: Path,
+    cluster: str,
+    *,
+    since_iso: str | None = None,
+    limit: int | None = None,
+) -> Iterator[ClusterSnapshot]:
+    """Yield persisted snapshots in reverse-chronological order.
+
+    *since_iso* (optional): filter out snapshots whose ``now_iso`` is
+    strictly older than *since_iso*. Unparseable timestamps on either
+    side fall through (returned).
+
+    *limit* (optional): yield at most this many. Applied after the
+    ``since_iso`` filter so callers asking for "the most recent N" get
+    the most recent N matching snapshots.
+
+    Files that fail to parse as JSON or lack the expected shape are
+    silently skipped — same permissive-read posture as the rest of this
+    module.
+    """
+    d = _history_dir(experiment_dir, cluster)
+    try:
+        files = sorted(
+            (p for p in d.iterdir() if p.suffix == ".json" and p.is_file()),
+            reverse=True,
+        )
+    except OSError:
+        return
+    since_dt = parse_iso_utc_or_none(since_iso) if since_iso else None
+    yielded = 0
+    for p in files:
+        try:
+            text = p.read_text()
+        except OSError:
+            continue
+        try:
+            doc = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        if since_dt is not None:
+            ts = parse_iso_utc_or_none(doc.get("now_iso"))
+            if ts is not None and ts < since_dt:
+                continue
+        try:
+            snap = _snapshot_from_dict(doc)
+        except (KeyError, TypeError):
+            continue
+        yield snap
+        yielded += 1
+        if limit is not None and yielded >= limit:
+            return
 
 
 def _snapshot_from_dict(d: dict[str, Any]) -> ClusterSnapshot:
@@ -705,13 +889,10 @@ def _hours_since(iso_or_slurm: str) -> float | None:
     """
     if not iso_or_slurm or iso_or_slurm in ("Unknown", "None"):
         return None
-    try:
-        ts = datetime.fromisoformat(iso_or_slurm.replace("Z", "+00:00"))
-    except ValueError:
+    ts = parse_iso_utc_or_none(iso_or_slurm)
+    if ts is None:
         return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    delta = datetime.now(timezone.utc) - ts
+    delta = utcnow() - ts
     return round(delta.total_seconds() / 3600.0, 2)
 
 

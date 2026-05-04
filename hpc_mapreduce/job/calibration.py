@@ -31,9 +31,11 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from hpc_mapreduce._time import parse_iso_utc, utcnow_iso
+from hpc_mapreduce.job.runtime_prior import coerce_pos_int as _coerce_pos_int
 
 __all__ = [
     "WalltimeDrift",
@@ -269,23 +271,7 @@ def _actual_queue_sec(sample: dict[str, Any]) -> float | None:
     return delta if delta >= 0 else None
 
 
-def _parse_iso(s: str) -> datetime:
-    """Parse an ISO-8601 timestamp; force UTC if naive."""
-    dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def _coerce_pos_int(x: Any) -> int | None:
-    """Coerce to a positive int or None."""
-    if x is None:
-        return None
-    try:
-        v = int(x)
-    except (TypeError, ValueError):
-        return None
-    return v if v > 0 else None
+_parse_iso = parse_iso_utc
 
 
 # ─── prediction sidecar I/O ────────────────────────────────────────────────
@@ -331,8 +317,7 @@ def record_prediction_sidecar(
         "walltime_sec": int(walltime_sec),
         "mem_mb": int(mem_mb),
         "cpus": int(cpus),
-        "submitted_at_iso": submitted_at_iso
-        or datetime.now(timezone.utc).isoformat(),
+        "submitted_at_iso": submitted_at_iso or utcnow_iso(),
     }
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))

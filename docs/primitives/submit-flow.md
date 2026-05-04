@@ -2,24 +2,24 @@
 name: submit-flow
 verb: workflow
 side_effects:
-  - rsyncs: <experiment_dir> → cluster
-  - submits: scheduler array job
-  - writes: per-run sidecar + journal
+- rsync: <ssh_target>:<remote_path>
+- scheduler-submit: <cluster>
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
 idempotent: true
-idempotency_key: spec.run_id
+idempotency_key: run_id
 error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: remote_command_failed
-    category: cluster
-    retry_safe: false
-  - code: internal
-    category: internal
-    retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
+- code: scheduler_throttled
+  category: cluster
+  retry_safe: true
+- code: cluster_unknown
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-mapreduce submit-flow --spec <path>
   python: hpc_mapreduce.job.submit_flow.submit_flow

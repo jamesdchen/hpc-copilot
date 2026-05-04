@@ -34,7 +34,12 @@ __all__ = ["main"]
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``hpc_mapreduce/job/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
-SUPPORTED_SCHEMA_VERSIONS = (1,)
+#
+# v2 added optional fields (wave_map, aggregate_defaults, ...). The
+# dispatcher reads only the v1-shape fields (sidecar_schema_version,
+# executor, result_dir_template), so accepting v2 here is safe; the
+# extra fields are simply ignored cluster-side.
+SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 
 
 def _load_tasks_module(tasks_py_path):

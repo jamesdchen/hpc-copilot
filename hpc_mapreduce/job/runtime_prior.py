@@ -48,13 +48,11 @@ __all__ = [
 import json
 import os
 import statistics
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from hpc_mapreduce._io import atomic_locked_update
+from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow_iso
 
 SCHEMA_VERSION: int = 1
 
@@ -67,20 +65,13 @@ MAX_SAMPLES: int = int(os.environ.get("HPC_MAX_RUNTIME_SAMPLES", "10000"))
 def runtime_path(experiment_dir: Path, profile: str, cluster: str) -> Path:
     """Return the runtime-priors file path for ``(profile, cluster)``.
 
-    Resolves *experiment_dir* to an absolute path so writers and readers
-    invoked from different working directories see the same file.
+    Forwarder for ``RepoLayout(experiment_dir).runtime_prior(profile,
+    cluster)``. The layout class resolves *experiment_dir* and
+    sanitizes ``/`` in *profile*; both behaviors are preserved here.
     """
-    if not profile:
-        raise ValueError("profile must be non-empty")
-    if not cluster:
-        raise ValueError("cluster must be non-empty")
-    safe_profile = profile.replace("/", "_")
-    return (
-        Path(experiment_dir).resolve()
-        / ".hpc"
-        / "runtimes"
-        / f"{safe_profile}.{cluster}.json"
-    )
+    from hpc_mapreduce.layout import RepoLayout
+
+    return RepoLayout(experiment_dir).runtime_prior(profile, cluster)
 
 
 def _empty_doc(profile: str, cluster: str) -> dict[str, Any]:
@@ -90,6 +81,58 @@ def _empty_doc(profile: str, cluster: str) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "samples": [],
     }
+
+
+def _normalise(doc: dict[str, Any] | None, profile: str, cluster: str) -> dict[str, Any]:
+    """Coerce a parsed runtime-prior doc (or ``None``) to a well-shaped
+    dict with the required schema fields.
+    """
+    if not isinstance(doc, dict):
+        return _empty_doc(profile, cluster)
+    doc.setdefault("schema_version", SCHEMA_VERSION)
+    doc.setdefault("profile", profile)
+    doc.setdefault("cluster", cluster)
+    if not isinstance(doc.get("samples"), list):
+        doc["samples"] = []
+    return doc
+
+
+def _resolve_queue_wait_sec(
+    explicit: int | None,
+    started_at: str | None,
+    submitted_at_iso: str | None,
+) -> int | None:
+    """Return the queue-wait seconds for a sample.
+
+    Precedence:
+
+    1. *explicit* (from the caller) wins when given. Negative values are
+       rejected to None — a negative wait is meaningless.
+    2. Otherwise compute ``started_at - submitted_at_iso`` if both
+       timestamps are parseable ISO strings.
+    3. Negative deltas (clock skew between the submitting host and the
+       compute node) reject to None.
+    4. Anything missing/unparseable yields None.
+
+    Kept as a free function so the queue-wait baseline tests can exercise
+    derivation independently of the full ``append_sample`` path.
+    """
+    if explicit is not None:
+        try:
+            v = int(explicit)
+        except (TypeError, ValueError):
+            return None
+        return v if v >= 0 else None
+    if not started_at or not submitted_at_iso:
+        return None
+    sd = parse_iso_utc_or_none(submitted_at_iso)
+    st = parse_iso_utc_or_none(started_at)
+    if sd is None or st is None:
+        return None
+    delta = (st - sd).total_seconds()
+    if delta < 0:
+        return None
+    return int(round(delta))
 
 
 def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
@@ -103,70 +146,15 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
         doc = json.loads(text)
     except json.JSONDecodeError:
         return _empty_doc(profile, cluster)
-    if not isinstance(doc, dict):
-        return _empty_doc(profile, cluster)
-    doc.setdefault("schema_version", SCHEMA_VERSION)
-    doc.setdefault("profile", profile)
-    doc.setdefault("cluster", cluster)
-    if not isinstance(doc.get("samples"), list):
-        doc["samples"] = []
-    return doc
-
-
-def _with_locked_doc(
-    path: Path,
-    profile: str,
-    cluster: str,
-    mutate: Callable[[dict[str, Any]], dict[str, Any]],
-) -> dict[str, Any]:
-    """Read-modify-write inside a single flock so concurrent writers
-    serialize. The read happens *inside* the lock to prevent the
-    classic "two writers each see stale state, one's append is lost"
-    race.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    try:
-        import fcntl  # noqa: PLC0415
-    except ImportError:
-        fcntl = None  # type: ignore[assignment]
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        if fcntl is not None:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        existing = _read_doc(path, profile, cluster)
-        new_doc = mutate(existing)
-        tmp = tempfile.NamedTemporaryFile(
-            "w",
-            delete=False,
-            dir=str(path.parent),
-            prefix=path.name + ".",
-            suffix=".tmp",
-            encoding="utf-8",
-        )
-        try:
-            json.dump(new_doc, tmp, indent=2, sort_keys=True)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp.close()
-            os.replace(tmp.name, path)
-        except BaseException:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            raise
-        finally:
-            if not tmp.closed:
-                tmp.close()
-        return new_doc
-    finally:
-        if fcntl is not None:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-        os.close(fd)
+    # B8: cross-domain manifest check. Soft-skip on mismatch — a future
+    # writer with a wider schema shouldn't poison the prior; treating
+    # the file as empty makes the prior re-learn from fresh samples.
+    from hpc_mapreduce._version import is_compatible as _is_compat
+    if isinstance(doc, dict):
+        sv = doc.get("schema_version")
+        if isinstance(sv, int) and not _is_compat("runtime_prior", sv):
+            return _empty_doc(profile, cluster)
+    return _normalise(doc, profile, cluster)
 
 
 def append_sample(
@@ -192,6 +180,7 @@ def append_sample(
     cpus_requested: int | None = None,
     predicted_eta_sec: int | None = None,
     submitted_at_iso: str | None = None,
+    queue_wait_sec: int | None = None,
 ) -> Path:
     """Append a single runtime sample. Returns the file path written.
 
@@ -236,9 +225,19 @@ def append_sample(
         # measure scheduler calibration without any cross-module state.
         "predicted_eta_sec": predicted_eta_sec,
         "submitted_at_iso": submitted_at_iso,
+        # Queue-wait observation feeding the diurnal moving-average
+        # forecaster (`queue_wait_baseline.predict_queue_wait`). When the
+        # caller doesn't pass it explicitly we derive it from
+        # `started_at - submitted_at_iso` if both are parseable; a
+        # negative delta (clock skew) records None rather than a
+        # nonsense negative.
+        "queue_wait_sec": _resolve_queue_wait_sec(
+            queue_wait_sec, started_at, submitted_at_iso
+        ),
     }
 
-    def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
+    def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:
+        doc = _normalise(raw, profile, cluster)
         samples = [
             s
             for s in doc.get("samples", [])
@@ -250,7 +249,7 @@ def append_sample(
         doc["samples"] = samples
         return doc
 
-    _with_locked_doc(path, profile, cluster, _mutate)
+    atomic_locked_update(path, _mutate)
     return path
 
 
@@ -358,7 +357,7 @@ def roll_up_quantiles(
     return {
         "profile": profile,
         "cluster": cluster,
-        "now_iso": datetime.now(timezone.utc).isoformat(),
+        "now_iso": utcnow_iso(),
         "needs_canary": len(out_quantiles) == 0,
         "quantiles": out_quantiles,
         # Footprint-shrink rollups. Only populated when samples carry
@@ -373,8 +372,12 @@ def roll_up_quantiles(
     }
 
 
-def _coerce_pos_int(x: Any) -> int | None:
-    """Coerce *x* to a positive int or return None. Permissive on garbage."""
+def coerce_pos_int(x: Any) -> int | None:
+    """Coerce *x* to a positive int or return None. Permissive on garbage.
+
+    Shared with :mod:`hpc_mapreduce.job.calibration` so both modules
+    consume the runtime-prior sample dicts through a single coercion.
+    """
     if x is None:
         return None
     try:
@@ -382,6 +385,10 @@ def _coerce_pos_int(x: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return v if v > 0 else None
+
+
+# Back-compat alias for in-module callers; remove once they migrate.
+_coerce_pos_int = coerce_pos_int
 
 
 def _cores_used_from_sample(s: dict[str, Any], elapsed_sec: int) -> int | None:

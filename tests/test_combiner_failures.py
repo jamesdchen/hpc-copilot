@@ -29,35 +29,17 @@ def _materialize_cluster_layout(
 
     Returns the path to the combiner script the test should invoke.
     """
+    from tests.conftest import make_sidecar_json, write_hpc_tasks  # noqa: PLC0415
+
     hpc = tmp_path / ".hpc"
-    (hpc / "runs").mkdir(parents=True)
-
-    # Write tasks.py — the user's per-experiment task definitions.
-    tasks_py = hpc / "tasks.py"
-    tasks_py.write_text(
-        "import json\n"
-        f"_TASKS = {json.dumps(kwargs_per_task)}\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+    write_hpc_tasks(hpc, kwargs_per_task)
+    make_sidecar_json(
+        tmp_path,
+        run_id=run_id,
+        result_dir_template=str(tmp_path / "task_{task_id}"),
+        task_count=len(kwargs_per_task),
+        wave_map={"0": list(range(len(kwargs_per_task)))},
     )
-
-    # Write the per-run sidecar. result_dir_template uses {task_id} so each
-    # entry in result_dirs has to live at a path that the template renders to.
-    # For tests we just plant {task_id} into each rdir name and use a flat
-    # template.
-    sidecar = hpc / "runs" / f"{run_id}.json"
-    sidecar.write_text(json.dumps({
-        "sidecar_schema_version": 1,
-        "run_id": run_id,
-        "cmd_sha": "deadbeef" * 8,
-        "claude_hpc_version": "0.0.0+test",
-        "submitted_at": "2026-01-01T00:00:00Z",
-        "executor": "true",
-        "result_dir_template": str(tmp_path / "task_{task_id}"),
-        "task_count": len(kwargs_per_task),
-        "tasks_py_sha": "abc",
-        "wave_map": {"0": list(range(len(kwargs_per_task)))},
-    }))
 
     # Place the combiner script as the cluster does.
     combiner_dst = hpc / "_hpc_combiner.py"

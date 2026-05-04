@@ -12,21 +12,27 @@ clusters are SLURM).
 
 from __future__ import annotations
 
-import re
-import shlex
 from typing import TYPE_CHECKING
 
-from hpc_mapreduce.infra.backends import HPCBackend, register
+from hpc_mapreduce.infra.backends import register
+from hpc_mapreduce.infra.backends._remote_base import RemoteHPCBackend
+from hpc_mapreduce.infra.backends.slurm import SlurmBackend
 
 if TYPE_CHECKING:
     import subprocess
     from collections.abc import Callable
-    from pathlib import Path
 
 
 @register("slurm-remote")
-class RemoteSlurmBackend(HPCBackend):
+class RemoteSlurmBackend(RemoteHPCBackend, SlurmBackend):
     """SLURM backend that runs sbatch on the cluster via SSH.
+
+    Inherits ``_build_command``, ``_build_dependency_flag``, and
+    ``JOB_ID_REGEX`` from :class:`SlurmBackend` — sbatch's command shape
+    and output format are identical regardless of how it is invoked.
+    The SSH-specific overrides (``_execute_command`` /
+    ``_setup_log_dir``) come from :class:`RemoteHPCBackend`, listed
+    first in the MRO so its overrides win.
 
     Parameters
     ----------
@@ -48,11 +54,6 @@ class RemoteSlurmBackend(HPCBackend):
         SLURM installations).
     """
 
-    # Same anchored regex as the local SLURM backend — sbatch output
-    # format is identical regardless of how we invoke it. A warning
-    # prefix containing digits won't poison the parse.
-    JOB_ID_REGEX = re.compile(r"Submitted batch job\s+(\d+)")
-
     def __init__(
         self,
         script: str | None = None,
@@ -62,72 +63,26 @@ class RemoteSlurmBackend(HPCBackend):
         account: str | None = None,
         cluster: str | None = None,
     ):
-        if script is None:
-            raise ValueError("RemoteSlurmBackend requires a 'script' path")
         if ssh_run is None:
             raise ValueError("RemoteSlurmBackend requires an 'ssh_run' callable")
         if remote_repo is None:
             raise ValueError("RemoteSlurmBackend requires a 'remote_repo' path")
-        self.script = script
-        self.ssh_run = ssh_run
-        self.remote_repo = remote_repo
-        self.log_dir = log_dir or f"{remote_repo}/logs"
+        # Default the remote log dir to <remote_repo>/logs before the
+        # local SlurmBackend.__init__ sees None and falls back to the
+        # local-machine SLURM_LOG_DIR env var.
+        # SlurmBackend.__init__ env-falls-back to local SLURM_ACCOUNT /
+        # SLURM_CLUSTER when its kwargs are None. That is wrong for a
+        # remote backend (the local env is not the remote env), so we
+        # bypass it: pass empty strings ("") through to disable the
+        # fallback, then overwrite with the user's actual values.
+        SlurmBackend.__init__(
+            self,
+            script=script,
+            account="",
+            cluster="",
+            log_dir=log_dir or f"{remote_repo}/logs",
+        )
         self.account = account
         self.cluster = cluster
-
-    def _build_dependency_flag(self, job_ids: list[str]) -> list[str]:
-        if not job_ids:
-            return []
-        return ["--dependency", f"afterany:{':'.join(job_ids)}"]
-
-    def _build_command(
-        self,
-        task_range: str,
-        job_name: str,
-        job_env: dict[str, str],
-        *,
-        extra_flags: list[str] | None = None,
-    ) -> list[str]:
-        """Return sbatch command parts for SSH execution."""
-        parts: list[str] = ["sbatch"]
-        if self.cluster:
-            parts.append(f"--clusters={self.cluster}")
-        parts += [
-            "--array",
-            task_range,
-            "--job-name",
-            job_name,
-        ]
-        if self.account:
-            parts += ["--account", self.account]
-        parts += [
-            "--output",
-            f"{self.log_dir}/%x_%A_%a.out",
-            "--error",
-            f"{self.log_dir}/%x_%A_%a.err",
-        ]
-        # SLURM forwards every key/value pair listed in --export. Unlike
-        # SGE's qsub -v, there is no per-key whitelist; the cluster-side
-        # template can read any name it expects.
-        if job_env:
-            export_str = ",".join(f"{k}={v}" for k, v in job_env.items())
-            parts += ["--export", f"ALL,{export_str}"]
-        if extra_flags:
-            parts += extra_flags
-        parts.append(self.script)
-        return parts
-
-    def _execute_command(
-        self,
-        cmd: list[str],
-        job_env: dict[str, str],
-        cwd: Path,
-    ) -> subprocess.CompletedProcess[str]:
-        """Execute an sbatch command on the remote host via SSH."""
-        cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
-        remote_cmd = f"cd {shlex.quote(self.remote_repo)} && {cmd_str}"
-        return self.ssh_run(remote_cmd)
-
-    def _setup_log_dir(self) -> None:
-        """Ensure the remote log directory exists via SSH ``mkdir -p``."""
-        self.ssh_run(f"mkdir -p {shlex.quote(self.log_dir)}")
+        self.ssh_run = ssh_run
+        self.remote_repo = remote_repo

@@ -2,7 +2,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json",
   "title": "CLI envelope",
-  "description": "Universal envelope wrapping every hpc-mapreduce stdout response.",
+  "description": "Universal envelope wrapping every hpc-mapreduce stdout response. The `$defs` block at the bottom holds reusable subschemas that callers may $ref from sibling output schemas (run_id, combined_waves, failed_waves, lifecycle_state). Note: at the time of writing, the agent_cli's jsonschema.validate path does not register a RefResolver, so consumer schemas must still inline these definitions verbatim — `$defs` here is the canonical source of truth for the values.",
+  "$defs": {
+    "run_id": {
+      "type": "string",
+      "description": "Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>; loosely validated as filesystem-safe with no path separators."
+    },
+    "combined_waves": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Wave numbers whose partial-aggregate file has been combined into the run's _combiner/ directory."
+    },
+    "failed_waves": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Wave numbers whose combine attempt exhausted retries; the run may still be partially aggregated."
+    },
+    "lifecycle_state_terminal": {
+      "type": "string",
+      "enum": ["complete", "failed", "abandoned", "timeout"],
+      "description": "Lifecycle state set used by monitor-flow output. 'complete' = every task reported complete. 'failed' = at least one failure with no running/pending tasks left. 'abandoned' = recorded job_ids are no longer known to the scheduler. 'timeout' = wall_clock_budget_seconds exceeded; cluster jobs may still be running."
+    },
+    "lifecycle_state_observable": {
+      "type": "string",
+      "enum": ["in_flight", "complete", "failed", "abandoned"],
+      "description": "Lifecycle state set used by status / reconcile (point-in-time observation, no 'timeout' bucket)."
+    }
+  },
   "oneOf": [
     {
       "type": "object",
@@ -11,7 +37,20 @@
       "properties": {
         "ok": { "const": true },
         "idempotent": { "type": "boolean" },
-        "data": { "type": "object" }
+        "data": { "type": "object" },
+        "partial_errors": {
+          "type": "array",
+          "description": "Optional top-level array surfacing soft per-source failures while the operation as a whole succeeded. Distinct from `data.errors`: this key documents *cluster-side* degradations (qhost timed out, one of N nodes unreachable, sacct unavailable) that the planner considered and chose to tolerate. Operations that genuinely failed should set ok:false instead.",
+          "items": {
+            "type": "object",
+            "required": ["code", "detail"],
+            "additionalProperties": false,
+            "properties": {
+              "code": { "type": "string", "description": "Machine-readable category, e.g. 'qhost_failed', 'scontrol_failed', 'qstat_unavailable', 'qacct_unavailable', 'malformed_row'." },
+              "detail": { "type": "string" }
+            }
+          }
+        }
       }
     },
     {
@@ -33,7 +72,9 @@
             "config_invalid",
             "combiner_failed",
             "cluster_timeout",
+            "cluster_partially_degraded",
             "outputs_missing",
+            "schema_incompat",
             "internal"
           ]
         },

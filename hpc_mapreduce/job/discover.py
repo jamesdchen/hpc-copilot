@@ -21,6 +21,7 @@ source parse. Any Python file with the right shape qualifies.
 
 from __future__ import annotations
 
+from hpc_mapreduce._primitive import primitive
 __all__ = [
     "ExecutorInfo",
     "detect_mars_tier",
@@ -175,6 +176,12 @@ def is_executor_source(source: str) -> bool:
     return _parse_source(source).is_executor
 
 
+@primitive(
+    name="discover-executors",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def discover_executors(
     root: Path | str,
     *,
