@@ -140,6 +140,7 @@ def recommend_mem_mb(
     floor_mb: int = 512,
     min_samples: int = 10,
     cold_start_buffer: float = 0.0,
+    ceiling_mb: int | None = None,
 ) -> tuple[int, str]:
     """Recommend ``--mem`` in MB from the host-memory prior.
 
@@ -167,6 +168,12 @@ def recommend_mem_mb(
     *shrink-recommend* more than the user's ask. The cold-start buffer
     is the only path that grows the ask, and only when we genuinely
     have no prior to draw from.
+
+    *ceiling_mb* (B-M5) is the cluster's per-node memory cap. When the
+    grown buffer would exceed it, we clamp back down — survives the
+    "240GB ask × 1.15 buffer = 276GB on a 256GB node → ReqNodeNotAvail
+    forever" footgun. Only applied when set; default ``None`` preserves
+    legacy behavior.
     """
     if user_default_mb <= 0:
         raise ValueError("user_default_mb must be positive")
@@ -174,15 +181,35 @@ def recommend_mem_mb(
         raise ValueError("safety_mult must be positive")
     if cold_start_buffer < 0:
         raise ValueError("cold_start_buffer must be non-negative")
+    if ceiling_mb is not None and ceiling_mb <= 0:
+        raise ValueError("ceiling_mb must be positive when set")
 
     usable = _gather_usable(mem_quantiles_mb, gpu_types_in_constraint, min_samples)
     if not usable:
         if cold_start_buffer > 0:
             buffered = max(int(round(user_default_mb * (1.0 + cold_start_buffer))), floor_mb)
+            if ceiling_mb is not None and buffered > ceiling_mb:
+                clamped = max(ceiling_mb, floor_mb)
+                return clamped, (
+                    f"no usable mem prior (need ≥{min_samples} samples per GPU type); "
+                    f"applied cold-start buffer ×{1.0 + cold_start_buffer:.2f} "
+                    f"({user_default_mb}MB → {buffered}MB) then clamped to "
+                    f"{clamped}MB (per-node cap) for OOM-daemon survival "
+                    f"without ReqNodeNotAvail"
+                )
             return buffered, (
                 f"no usable mem prior (need ≥{min_samples} samples per GPU type); "
                 f"applied cold-start buffer ×{1.0 + cold_start_buffer:.2f} "
                 f"({user_default_mb}MB → {buffered}MB) for OOM-daemon survival"
+            )
+        # No buffer applied; still respect the per-node cap so a user-
+        # default ask larger than the node never sits Pending.
+        if ceiling_mb is not None and user_default_mb > ceiling_mb:
+            clamped = max(ceiling_mb, floor_mb)
+            return clamped, (
+                f"no usable mem prior (need ≥{min_samples} samples per GPU type); "
+                f"clamped user default {user_default_mb}MB → {clamped}MB "
+                f"(per-node cap)"
             )
         return user_default_mb, (
             f"no usable mem prior (need ≥{min_samples} samples per GPU type); "
@@ -194,6 +221,17 @@ def recommend_mem_mb(
     # Only shrink: never recommend more than the user asked for.
     capped = min(raw, user_default_mb)
     clamped = max(capped, floor_mb)
+    # Apply per-node cap last — even a prior-driven shrink could sit
+    # above the cap if the user_default_mb already does (shouldn't
+    # happen on a well-configured cluster, but make the behavior
+    # consistent with the cold-start path).
+    if ceiling_mb is not None and clamped > ceiling_mb:
+        clamped = max(ceiling_mb, floor_mb)
+        rationale = (
+            f"p95×{safety_mult:.2f}, n={worst_n} {worst_gpu} samples; "
+            f"clamped to {clamped}MB (per-node cap)"
+        )
+        return clamped, rationale
     if raw >= user_default_mb:
         rationale = (
             f"prior p95 ({worst_p95}MB) × {safety_mult:.2f} ≥ user default; "

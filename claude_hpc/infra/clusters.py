@@ -104,6 +104,19 @@ CLUSTER_YAML_KEYS: list[dict[str, Any]] = [
             "chain fires when an ask exceeds max_walltime_sec - 3600."
         ),
     },
+    {
+        "key": "max_node_mem_mb",
+        "type": "integer",
+        "required": False,
+        "description": (
+            "Largest single-node memory ask the cluster will schedule. "
+            "When set, the planner clamps the cold-start mem buffer (and "
+            "any other grower) so the campus user's run doesn't sit "
+            "Pending forever with ReqNodeNotAvail. Pick the most "
+            "permissive partition's node size (Hoffman2: 384000 / 192000 "
+            "/ 96000 depending on partition; CARC similar)."
+        ),
+    },
 ]
 
 
@@ -245,6 +258,38 @@ def get_auto_daisy_chain(cluster_config: dict[str, Any]) -> bool | None:
             f"auto_daisy_chain must be a bool when set, got {raw!r} ({type(raw).__name__})"
         )
     return raw
+
+
+def get_max_node_mem_mb(cluster_config: dict[str, Any]) -> int | None:
+    """Read the per-cluster ``max_node_mem_mb`` (per-node memory ceiling).
+
+    The largest single-node memory request the cluster will schedule.
+    When the cold-start buffer (or any other recommender) would push
+    the campus user's ``--mem`` ask past this ceiling, the planner
+    clamps it back down — without the clamp, an ask like 240GB on a
+    256GB node × 1.15 buffer = 276GB sits Pending forever with
+    ``ReqNodeNotAvail`` and the user's brand-new run never starts.
+
+    Returns ``None`` when unset; the planner then leaves the ask
+    uncapped (legacy behavior).
+
+    Schema validation: rejects non-int / non-positive values. Bools
+    are rejected explicitly because ``True == 1`` would otherwise
+    silently clamp every ask to 1MB.
+    """
+    if "max_node_mem_mb" not in cluster_config:
+        return None
+    raw = cluster_config["max_node_mem_mb"]
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(
+            f"max_node_mem_mb must be a positive int when set, got {raw!r} "
+            f"({type(raw).__name__})"
+        )
+    if raw <= 0:
+        raise ValueError(f"max_node_mem_mb must be positive, got {raw}")
+    return int(raw)
 
 
 def get_max_walltime_sec(
