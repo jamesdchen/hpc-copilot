@@ -30,11 +30,11 @@ _MARS_SKILL_NAMES = (
 
 
 def _mars_skill_paths() -> dict[str, str]:
-    # Skills live one level up from the package (skills/ is a sibling of
-    # claude_hpc/ in the source tree). Wheel-only deploys won't ship
-    # them — return only entries that resolve to an existing file so a
-    # consumer can rely on every value being a real path.
-    skills_root = claude_hpc._PACKAGE_ROOT.parent / "skills"
+    # Skills live at the repo root (skills/ is a sibling of src/ in the
+    # source tree, two levels up from the package). Wheel-only deploys
+    # won't ship them — return only entries that resolve to an existing
+    # file so a consumer can rely on every value being a real path.
+    skills_root = claude_hpc._PACKAGE_ROOT.parent.parent / "skills"
     out: dict[str, str] = {}
     for name in _MARS_SKILL_NAMES:
         path = skills_root / name / "SKILL.md"

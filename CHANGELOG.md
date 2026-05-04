@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Changed — repository layout switched to PyPA src layout
+
+Both top-level Python packages now live under `src/`:
+
+- `claude_hpc/` → `src/claude_hpc/`
+- `slash_commands/` → `src/slash_commands/`
+
+Import names are unchanged (`import claude_hpc`,
+`import slash_commands.runner`); only the on-disk layout moved.
+`pyproject.toml` declares `[tool.setuptools.packages.find].where =
+["src"]` and `[tool.mypy].mypy_path = ["src"]` so the editable install
+and type-checker continue to resolve the packages by import name.
+
+The src layout prevents the "import works from cwd without
+`pip install -e`" footgun, which had bitten us twice.
+
 ### Removed (BREAKING) — `hpc_mapreduce` deprecation shim
 
 The `hpc_mapreduce` shim package, added when the package was renamed

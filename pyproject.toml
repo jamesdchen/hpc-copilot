@@ -32,6 +32,7 @@ tui = [
 hpc-mapreduce = "claude_hpc.agent_cli:main"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["claude_hpc*", "slash_commands*"]
 
 [tool.setuptools.package-data]
@@ -62,3 +63,4 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+mypy_path = ["src"]
