@@ -103,6 +103,15 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+from claude_hpc._internal._primitive import (
+    PrimitiveMeta,
+    SideEffect,
+    get_meta,
+    get_registry,
+    primitive,
+    register_primitives,
+)
+from claude_hpc._internal.layout import JournalLayout, RepoLayout
 from claude_hpc.infra.clusters import load_clusters_config
 from claude_hpc.infra.gpu import pick_gpu
 from claude_hpc.infra.inspect import inspect_cluster
@@ -113,6 +122,22 @@ from claude_hpc.infra.remote import (
     run_combiner,
     run_combiner_checked,
     ssh_run,
+)
+from claude_hpc.mapreduce.metrics_io import write_metrics
+from claude_hpc.mapreduce.reduce.classify import classify_failure
+from claude_hpc.mapreduce.reduce.metrics import (
+    reduce_by_grid_point,
+    reduce_metrics,
+    reduce_partials,
+    reduce_resource_usage,
+)
+from claude_hpc.mapreduce.reduce.status import (
+    check_results,
+    check_results_from_tasks,
+    detect_scheduler,
+    report_status,
+    report_status_from_tasks,
+    rollup_by_grid_point,
 )
 from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
 from claude_hpc.orchestrator.discover import (
@@ -147,32 +172,6 @@ from claude_hpc.orchestrator.throughput import (
     build_wave_map,
     compute_submission_plan,
 )
-from claude_hpc.mapreduce.metrics_io import write_metrics
-from claude_hpc.mapreduce.reduce.classify import classify_failure
-from claude_hpc.mapreduce.reduce.metrics import (
-    reduce_by_grid_point,
-    reduce_metrics,
-    reduce_partials,
-    reduce_resource_usage,
-)
-from claude_hpc.mapreduce.reduce.status import (
-    check_results,
-    check_results_from_tasks,
-    detect_scheduler,
-    report_status,
-    report_status_from_tasks,
-    rollup_by_grid_point,
-)
-
-from claude_hpc._internal._primitive import (
-    PrimitiveMeta,
-    SideEffect,
-    get_meta,
-    get_registry,
-    primitive,
-    register_primitives,
-)
-from claude_hpc._internal.layout import JournalLayout, RepoLayout
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 

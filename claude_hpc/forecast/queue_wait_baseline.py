@@ -481,15 +481,15 @@ class _DESDecision:
 _DES_AUTO_USER_COVERAGE_THRESHOLD = 0.8
 
 
-def _des_eligible(experiment_dir: "Path", *, cluster: str) -> _DESDecision:
+def _des_eligible(experiment_dir: Path, *, cluster: str) -> _DESDecision:
     """Decide whether the auto path should pick DES over diurnal_ma.
 
     Defensive: any import error or filesystem hiccup yields
     ``eligible=False`` with a populated reason — never raises.
     """
     try:
-        from claude_hpc.infra.inspect import read_cluster_history
         from claude_hpc.forecast.queue_simulator import extract_running_jobs
+        from claude_hpc.infra.inspect import read_cluster_history
     except ImportError as exc:
         return _DESDecision(False, f"import failed: {exc}", 0, 0)
 
@@ -588,7 +588,7 @@ def _retag_method(result: PredictionResult, method: Method, reason: str) -> Pred
 
 
 def _predict_des(
-    experiment_dir: "Path",
+    experiment_dir: Path,
     *,
     profile: str,
     cluster: str,
@@ -604,7 +604,6 @@ def _predict_des(
     when the prerequisites are missing — that way the caller still gets
     a number rather than a hard error.
     """
-    from claude_hpc.infra.inspect import read_cluster_history
     from claude_hpc.forecast.queue_simulator import (
         SimJob,
         extract_running_jobs,
@@ -614,6 +613,7 @@ def _predict_des(
         sample_arrival_stream,
         sample_residual_lifetimes,
     )
+    from claude_hpc.infra.inspect import read_cluster_history
 
     snapshots = list(read_cluster_history(experiment_dir, cluster, limit=1))
     if not snapshots:

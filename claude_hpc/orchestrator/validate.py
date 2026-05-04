@@ -38,7 +38,7 @@ DEFAULT_BACKFILL_WINDOW_SEC = 600
     idempotent=True,
 )
 def validate_submission(
-    experiment_dir: "Path",
+    experiment_dir: Path,
     *,
     profile: str,
     cluster: str,

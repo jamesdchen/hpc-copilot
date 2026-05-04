@@ -696,7 +696,7 @@ def _main() -> int:
 
     try:
         sidecar = read_run_sidecar(Path("."), args.run_id)
-    except FileNotFoundError as exc:
+    except FileNotFoundError:
         sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
         print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
         return _emit_err("sidecar_not_found", str(sidecar_path))  # noqa: B904

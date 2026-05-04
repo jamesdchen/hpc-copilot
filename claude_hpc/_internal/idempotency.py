@@ -35,8 +35,10 @@ from __future__ import annotations
 
 import abc
 import dataclasses
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class IdempotencyKey(abc.ABC):
@@ -115,7 +117,7 @@ class PriorResult:
     details: dict
 
 
-def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> Optional[PriorResult]:
+def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None:
     """Resolve *key* against the journal + sidecar in priority order.
 
     Read-only — never mutates state. Returns ``None`` if no prior

@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from claude_hpc._internal import telemetry
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_default_sink_is_silent(capsys, tmp_path: Path) -> None:

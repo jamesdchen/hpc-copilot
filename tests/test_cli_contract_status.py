@@ -14,7 +14,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _build_minimal_run(tmp_path: Path, *, run_id: str = "test_run") -> tuple[Path, Path]:

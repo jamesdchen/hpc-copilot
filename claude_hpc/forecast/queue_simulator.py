@@ -54,9 +54,12 @@ from __future__ import annotations
 import dataclasses
 import heapq
 import random
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any
 
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 __all__ = [
     "SimJob",

@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from claude_hpc.mapreduce import dispatch
 from claude_hpc.mapreduce.reduce.status import check_results
 from tests.conftest import make_sidecar_json, write_hpc_tasks
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _scaffold(

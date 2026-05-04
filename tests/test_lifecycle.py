@@ -36,11 +36,11 @@ def test_journal_status_str_coercion() -> None:
 
 
 def test_terminal_statuses_match_journal_status() -> None:
-    assert TERMINAL_STATUSES == {
+    assert {
         JournalStatus.COMPLETE,
         JournalStatus.FAILED,
         JournalStatus.ABANDONED,
-    }
+    } == TERMINAL_STATUSES
     assert JournalStatus.IN_FLIGHT not in TERMINAL_STATUSES
 
 

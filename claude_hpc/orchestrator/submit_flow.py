@@ -24,6 +24,7 @@ journal arbiter since the framework began.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -352,10 +353,8 @@ def submit_flow(
         from claude_hpc.orchestrator.runs import run_sidecar_path
 
         marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
-        try:
+        with contextlib.suppress(OSError):
             marker.write_text("1")
-        except OSError:
-            pass
 
     return SubmitFlowResult(
         run_id=run_id,

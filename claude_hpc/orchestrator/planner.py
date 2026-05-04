@@ -300,7 +300,7 @@ def _stressed_summary(n: NodeSnapshot) -> dict[str, Any]:
 
 
 def _eta_via_des(
-    experiment_dir: "Path",
+    experiment_dir: Path,
     profile: str,
     cluster: str,
 ) -> int | None:

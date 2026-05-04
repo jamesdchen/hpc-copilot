@@ -45,10 +45,12 @@ Smoke test during development::
 
 from __future__ import annotations
 
-import argparse
 import csv
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import argparse
 
 
 def compute(args: argparse.Namespace) -> None:

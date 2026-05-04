@@ -34,22 +34,24 @@ __all__ = [
     "MAX_HISTORY_SNAPSHOTS",
 ]
 
+import contextlib
 import dataclasses
 import json
 import os
 import re
 import subprocess
 import tempfile
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow, utcnow_iso
-
 from claude_hpc.infra.cache import TTLCache
 from claude_hpc.infra.clusters import load_clusters_config
 from slash_commands import errors
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # In-process cache so a single submit cycle that calls inspect-cluster
 # multiple times pays the SSH cost once. Keyed by (cluster, scheduler).
@@ -210,10 +212,7 @@ def parse_sacct_node_jobs(text: str, *, recent_only: bool = True) -> list[dict[s
         # Drop step rows (12345.batch / 12345.extern) — keep only top-level.
         base_job = job_field.split(".", 1)[0]
         # Strip array-task suffix for de-dup of co-tenant listing.
-        if "_" in base_job:
-            dedup_key = base_job
-        else:
-            dedup_key = base_job
+        dedup_key = base_job if "_" in base_job else base_job
         if dedup_key in seen_jobs:
             continue
         seen_jobs.add(dedup_key)
@@ -647,10 +646,8 @@ def inspect_cluster(
         # Best-effort: a snapshot persistence failure must not blow up
         # the planning pipeline. We only emit the file under a real
         # experiment dir; tests pass tmp_path directly.
-        try:
+        with contextlib.suppress(OSError):
             persist_snapshot(persist_dir, snap)
-        except OSError:
-            pass
     return snap
 
 
@@ -686,10 +683,7 @@ def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
     """
     d = _history_dir(experiment_dir, snap.cluster)
     ts = parse_iso_utc_or_none(snap.now_iso)
-    if ts is not None:
-        unix_ts = int(ts.timestamp())
-    else:
-        unix_ts = int(utcnow().timestamp())
+    unix_ts = int(ts.timestamp()) if ts is not None else int(utcnow().timestamp())
     base = d / f"{unix_ts}.json"
     target = base
     counter = 1
@@ -712,10 +706,8 @@ def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
         tmp.close()
         os.replace(tmp.name, target)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp.name)
-        except OSError:
-            pass
         raise
     finally:
         if not tmp.closed:
@@ -909,6 +901,4 @@ def _is_stressed(
         return False  # drained is reported separately, not as stressed
     if n.alloc_mem_pct is not None and n.alloc_mem_pct >= stress_alloc_mem_pct:
         return True
-    if n.cpu_load_frac is not None and n.cpu_load_frac >= stress_cpu_load_frac:
-        return True
-    return False
+    return bool(n.cpu_load_frac is not None and n.cpu_load_frac >= stress_cpu_load_frac)

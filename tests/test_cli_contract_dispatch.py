@@ -8,7 +8,6 @@ against a minimal ``.hpc/`` layout under tmp_path, and asserts on
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys

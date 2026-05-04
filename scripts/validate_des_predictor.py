@@ -35,12 +35,12 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from claude_hpc._internal._time import parse_iso_utc_or_none
-from claude_hpc.infra.inspect import read_cluster_history
 from claude_hpc.forecast.queue_simulator import SimJob, simulate_distribution
 from claude_hpc.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
+from claude_hpc.infra.inspect import read_cluster_history
 from claude_hpc.orchestrator.runtime_prior import read_samples
 
 

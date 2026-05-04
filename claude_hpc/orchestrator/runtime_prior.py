@@ -48,11 +48,13 @@ __all__ = [
 import json
 import os
 import statistics
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._io import atomic_locked_update
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow_iso
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 SCHEMA_VERSION: int = 1
 

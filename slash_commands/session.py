@@ -31,7 +31,7 @@ import os
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 try:
     import fcntl  # POSIX
@@ -110,12 +110,15 @@ class RunRecord:
         return dataclasses.asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "RunRecord":
+    def from_dict(cls, payload: dict) -> RunRecord:
         known = {f.name for f in dataclasses.fields(cls)}
         return cls(**{k: v for k, v in payload.items() if k in known})
 
 
 from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: E402
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 def repo_hash(experiment_dir: Path) -> str:

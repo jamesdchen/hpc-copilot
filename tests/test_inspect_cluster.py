@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 from claude_hpc.infra import inspect as ins
 
-
 # --- scontrol parser ------------------------------------------------------
 
 

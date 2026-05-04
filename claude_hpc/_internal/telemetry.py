@@ -51,8 +51,10 @@ import contextlib
 import json
 import os
 import sys
-from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 try:  # POSIX-only flock; Windows degrades to no-op.
     import fcntl as _fcntl
@@ -95,7 +97,7 @@ def flock_append(target: Path):
         os.close(fd)
 
 
-def _resolve_sink(explicit: Optional[str]) -> str:
+def _resolve_sink(explicit: str | None) -> str:
     if explicit is not None:
         return explicit
     return os.environ.get(_ENV_VAR, "none")
@@ -105,8 +107,8 @@ def record(
     event: str,
     payload: dict[str, Any],
     *,
-    sink: Optional[str] = None,
-    monitor_jsonl_path: Optional[Path] = None,
+    sink: str | None = None,
+    monitor_jsonl_path: Path | None = None,
 ) -> None:
     """Record one telemetry event.
 
@@ -128,10 +130,8 @@ def record(
         return
     line = json.dumps({"event": event, **payload}, sort_keys=True)
     if sink == "stderr-jsonl":
-        try:
+        with contextlib.suppress(OSError):
             print(line, file=sys.stderr, flush=True)
-        except OSError:
-            pass
         return
     if sink == "monitor-jsonl":
         if monitor_jsonl_path is None:

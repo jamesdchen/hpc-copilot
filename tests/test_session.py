@@ -6,13 +6,16 @@ import json
 import os
 import threading
 import warnings
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
 from slash_commands import session
 from slash_commands.session import RunRecord
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture
