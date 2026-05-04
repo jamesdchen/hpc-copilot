@@ -409,6 +409,8 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
         cluster=args.cluster,
         candidates=candidates,
         cmd_sha=args.cmd_sha,
+        adversarial=not bool(getattr(args, "no_adversarial", False)),
+        walltime_safety_mult=float(getattr(args, "walltime_safety_mult", 1.30)),
     )
     _ok(out, idempotent=True)
     return EXIT_OK
@@ -1341,6 +1343,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--cmd-sha",
         default=None,
         help="If set, filter runtime priors to samples with this cmd_sha.",
+    )
+    p_ps.add_argument(
+        "--no-adversarial",
+        action="store_true",
+        help=(
+            "Disable the default backfill-attack mode. By default, plan-submit "
+            "right-sizes the walltime ask from runtime priors and probes a "
+            "(walltime × constraint) lattice via `sbatch --test-only` to find "
+            "the variant SLURM predicts will start earliest. Pass this flag "
+            "for debugging or on clusters that throttle --test-only. With "
+            "<5 prior samples per GPU type the right-sizing falls back to "
+            "the default walltime regardless."
+        ),
+    )
+    p_ps.add_argument(
+        "--walltime-safety-mult",
+        type=float,
+        default=1.30,
+        help=(
+            "Multiplier applied to the runtime prior's p95 to derive the "
+            "right-sized walltime ask. Default 1.30 (30%% pad). Lower = more "
+            "aggressive backfill targeting at higher risk of cliff-kill."
+        ),
     )
     p_ps.set_defaults(func=cmd_plan_submit)
 
