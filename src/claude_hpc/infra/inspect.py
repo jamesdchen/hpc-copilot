@@ -55,6 +55,9 @@ from claude_hpc.infra.parsing import (
     parse_mem_to_mb as _parse_mem_to_mb,
 )
 from claude_hpc.infra.parsing import (
+    parse_sacct_pipe_row,
+)
+from claude_hpc.infra.parsing import (
     parse_walltime_to_sec as _parse_elapsed_to_sec,
 )
 from claude_hpc.infra.parsing import (
@@ -63,6 +66,20 @@ from claude_hpc.infra.parsing import (
 from claude_hpc.infra.parsing import (
     to_int_or_none as _to_int_or_none,
 )
+
+# sacct ``--format=`` lists, kept here so the parser and the command
+# string never drift out of sync.
+_SACCT_NODE_JOBS_FORMAT: list[str] = [
+    "JobID",
+    "User",
+    "State",
+    "ReqCPUS",
+    "ReqMem",
+    "Start",
+    "Elapsed",
+    "AllocTRES",
+]
+_SACCT_BUCKET_FORMAT: list[str] = [*_SACCT_NODE_JOBS_FORMAT, "NodeList"]
 from slash_commands import errors
 
 if TYPE_CHECKING:
@@ -223,29 +240,23 @@ def parse_sacct_node_jobs(text: str, *, recent_only: bool = True) -> list[dict[s
         parts = line.split("|")
         if len(parts) < 7:
             continue
-        job_field = parts[0]
+        row = parse_sacct_pipe_row(parts, _SACCT_NODE_JOBS_FORMAT)
         # Drop step rows (12345.batch / 12345.extern) — keep only top-level.
-        base_job = job_field.split(".", 1)[0]
-        # Strip array-task suffix for de-dup of co-tenant listing.
-        dedup_key = base_job if "_" in base_job else base_job
-        if dedup_key in seen_jobs:
+        base_job = row["JobID"].split(".", 1)[0]
+        if base_job in seen_jobs:
             continue
-        seen_jobs.add(dedup_key)
-        user = parts[1].strip()
-        state = parts[2].strip().split()[0] if parts[2].strip() else ""
+        seen_jobs.add(base_job)
+        state = row["State"].split()[0] if row["State"] else ""
         if recent_only and state in terminal:
             continue
-        cpus = _to_int_or_none(parts[3]) or 0
-        mem_text = parts[4].strip()
-        mem_gb = _parse_mem_to_gb(mem_text)
-        start_text = parts[5].strip()
-        started_h_ago = _hours_since(start_text)
-        elapsed = _parse_elapsed_to_sec(parts[6].strip()) if len(parts) > 6 else 0
-        alloc_tres = parts[7].strip() if len(parts) > 7 else ""
-        gpus = _parse_gpu_count_from_tres(alloc_tres)
+        cpus = _to_int_or_none(row["ReqCPUS"]) or 0
+        mem_gb = _parse_mem_to_gb(row["ReqMem"])
+        started_h_ago = _hours_since(row["Start"])
+        elapsed = _parse_elapsed_to_sec(row["Elapsed"])
+        gpus = _parse_gpu_count_from_tres(row["AllocTRES"])
         rows.append(
             {
-                "user": user,
+                "user": row["User"],
                 "job_id": base_job,
                 "state": state,
                 "cpus": cpus,
@@ -329,24 +340,22 @@ def _bucket_tenants_by_node(sacct_out: str) -> dict[str, list[dict[str, Any]]]:
         parts = line.split("|")
         if len(parts) < 8:
             continue
-        job_field = parts[0]
-        base_job = job_field.split(".", 1)[0]
+        row = parse_sacct_pipe_row(parts, _SACCT_BUCKET_FORMAT)
+        base_job = row["JobID"].split(".", 1)[0]
         if base_job in seen_jobs:
             continue
         seen_jobs.add(base_job)
-        state = parts[2].strip().split()[0] if parts[2].strip() else ""
+        state = row["State"].split()[0] if row["State"] else ""
         if state in terminal:
             continue
-        cpus = _to_int_or_none(parts[3]) or 0
-        mem_gb = _parse_mem_to_gb(parts[4].strip())
-        started_h_ago = _hours_since(parts[5].strip())
-        elapsed = _parse_elapsed_to_sec(parts[6].strip())
-        alloc_tres = parts[7].strip() if len(parts) > 7 else ""
-        node_list_raw = parts[8].strip() if len(parts) > 8 else ""
-        nodes = _expand_slurm_nodelist(node_list_raw)
-        gpus = _parse_gpu_count_from_tres(alloc_tres)
+        cpus = _to_int_or_none(row["ReqCPUS"]) or 0
+        mem_gb = _parse_mem_to_gb(row["ReqMem"])
+        started_h_ago = _hours_since(row["Start"])
+        elapsed = _parse_elapsed_to_sec(row["Elapsed"])
+        nodes = _expand_slurm_nodelist(row["NodeList"])
+        gpus = _parse_gpu_count_from_tres(row["AllocTRES"])
         record = {
-            "user": parts[1].strip(),
+            "user": row["User"],
             "job_id": base_job,
             "state": state,
             "cpus": cpus,

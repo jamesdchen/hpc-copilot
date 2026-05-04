@@ -36,6 +36,19 @@ import os
 import re
 import subprocess
 
+from claude_hpc.infra.parsing import parse_sacct_pipe_row, to_int as _to_int
+
+# sacct ``--format=`` list, kept here so the parser and the command
+# string never drift out of sync.
+_SACCT_QUERY_FORMAT: list[str] = [
+    "JobID",
+    "State",
+    "ExitCode",
+    "ElapsedRaw",
+    "ReqCPUS",
+    "AllocTRES",
+]
+
 # ---------------------------------------------------------------------------
 # Resource-usage parsing helpers
 # ---------------------------------------------------------------------------
@@ -88,23 +101,6 @@ def parse_gpu_count_from_sge_resources(text: str) -> int:
         except ValueError:
             continue
     return total
-
-
-def _to_int(value: str | None, default: int = 0) -> int:
-    """Best-effort int parse.  Returns *default* on any failure."""
-    if value is None:
-        return default
-    value = value.strip()
-    if not value:
-        return default
-    # tolerate trailing ".0" from some sacct formats
-    try:
-        return int(value)
-    except ValueError:
-        try:
-            return int(float(value))
-        except ValueError:
-            return default
 
 
 # ---------------------------------------------------------------------------
@@ -175,12 +171,13 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
         if len(parts) < 3:
             errors.append({"code": "malformed_row", "detail": f"expected >=3 fields: {line!r}"})
             continue
-        job_field, state, exit_code = parts[0], parts[1], parts[2]
+        row = parse_sacct_pipe_row(parts, _SACCT_QUERY_FORMAT)
+        job_field, state, exit_code = row["JobID"], row["State"], row["ExitCode"]
         # Optional trailing fields (only present when sacct was invoked with the
         # extended --format we request above).  Older fixtures/tests still pass.
-        elapsed_raw = parts[3] if len(parts) > 3 else ""
-        req_cpus = parts[4] if len(parts) > 4 else ""
-        alloc_tres = parts[5] if len(parts) > 5 else ""
+        elapsed_raw = row["ElapsedRaw"]
+        req_cpus = row["ReqCPUS"]
+        alloc_tres = row["AllocTRES"]
         if "_" not in job_field:
             continue
         # job_field looks like "12345_7" or "12345_7.batch"; strip trailing step.
