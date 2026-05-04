@@ -411,6 +411,9 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
         cmd_sha=args.cmd_sha,
         adversarial=not bool(getattr(args, "no_adversarial", False)),
         walltime_safety_mult=float(getattr(args, "walltime_safety_mult", 1.30)),
+        target_backfill_window_sec=getattr(args, "target_backfill_window_sec", None),
+        current_max_array_size=getattr(args, "current_max_array_size", None),
+        est_per_task_sec=getattr(args, "est_per_task_sec", None),
     )
     _ok(out, idempotent=True)
     return EXIT_OK
@@ -1365,6 +1368,38 @@ def build_parser() -> argparse.ArgumentParser:
             "Multiplier applied to the runtime prior's p95 to derive the "
             "right-sized walltime ask. Default 1.30 (30%% pad). Lower = more "
             "aggressive backfill targeting at higher risk of cliff-kill."
+        ),
+    )
+    p_ps.add_argument(
+        "--target-backfill-window-sec",
+        type=int,
+        default=None,
+        help=(
+            "Adversarial knob: if you've observed a typical backfill gap size "
+            "on this cluster (e.g., 1800 for 30 minutes), pass it here. "
+            "Triggers array-reshape and walltime-split recommendations sized "
+            "to fit that window."
+        ),
+    )
+    p_ps.add_argument(
+        "--current-max-array-size",
+        type=int,
+        default=None,
+        help=(
+            "Adversarial array-reshape input: the cluster's currently "
+            "configured max array size. When supplied (with optionally "
+            "--target-backfill-window-sec and --est-per-task-sec), the "
+            "report includes a `array_reshape` recommendation."
+        ),
+    )
+    p_ps.add_argument(
+        "--est-per-task-sec",
+        type=int,
+        default=None,
+        help=(
+            "Adversarial knob: estimated per-task runtime (typically the "
+            "p95 from `runtime-prior`). Used by array-reshape and "
+            "walltime-split recommendations."
         ),
     )
     p_ps.set_defaults(func=cmd_plan_submit)
