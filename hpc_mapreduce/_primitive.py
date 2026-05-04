@@ -4,13 +4,39 @@ Implementation is SoT for behavior (the decorated function). JSON
 schemas under ``hpc_mapreduce/schemas/`` are SoT for the wire contract.
 ``docs/primitives/*.md`` and ``operations.py``'s catalog are *views*
 generated from this registry plus the schemas.
+
+Decoration convention
+---------------------
+
+Most primitives have a clean Python entry point — a public function in
+``hpc_mapreduce/job/`` or ``hpc_mapreduce/infra/`` that performs the
+operation. Decorate that function directly with ``@primitive(...)``.
+
+Some primitives have no inner Python helper — their behavior lives in
+the ``cmd_*`` dispatcher in ``agent_cli.py`` (e.g. ``capabilities``,
+``check-preflight``). For those, decorate the ``cmd_*`` function. The
+registry treats both shapes uniformly; downstream consumers should not
+assume ``meta.func`` is always at the primitives layer.
+
+Migration safety
+----------------
+
+Until ``operations.py`` has fully switched off frontmatter as a
+fallback source, ``docs/primitives/*.md`` and the registry are dual
+sources of truth. ``tests/test_primitive_spine.py`` cross-validates
+that decorator metadata matches frontmatter — drift is caught at CI
+time, not silently absorbed.
 """
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import importlib
+import importlib.util
+import pkgutil
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -122,10 +148,12 @@ def get_meta(name: str) -> PrimitiveMeta:
     return _REGISTRY[name]
 
 
-# Modules listed here are imported on first registry query. Each
-# module-level @primitive(...) call registers itself on import.
-# Listed explicitly rather than auto-walking the package because some
-# modules have side effects we don't want to trigger speculatively.
+# Modules listed here are imported on first registry query (fast path
+# — avoids walking the filesystem on every call). Each module-level
+# @primitive(...) call registers itself on import. The ``discover_*``
+# helper below is the safety net that catches any module added without
+# updating this list (item #2 of the C′ breakage list — "registered
+# but invisible").
 _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_mapreduce.job.submit_flow",
     "hpc_mapreduce.job.monitor_flow",
@@ -141,24 +169,115 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_mapreduce.infra.clusters",
     "hpc_mapreduce.agent_cli",
     "slash_commands.runner",
+    "hpc_mapreduce.job.validate",
 )
+
+# Recursion guards for ``_ensure_imported`` (item #6 of the C′
+# breakage list — "circular import risk"). A primitive module's
+# top-level @primitive(...) call decorates a function whose definition
+# can transitively trigger imports. If any of those imports re-enters
+# ``get_registry()`` while we are mid-import, ``_ensure_imported``
+# would loop. ``_IMPORTING`` short-circuits the inner call so the
+# outermost frame completes the import sequence atomically;
+# ``_IMPORT_DONE`` makes subsequent calls cheap.
+_IMPORTING: bool = False
+_IMPORT_DONE: bool = False
+
+
+def discover_primitive_modules(
+    roots: Iterable[str] = ("hpc_mapreduce", "slash_commands"),
+) -> set[str]:
+    """Return module names whose source contains ``@primitive(...)``.
+
+    Uses ``ast`` to parse module sources without importing them, so
+    discovery is side-effect-free. The CI cross-validation test asserts
+    this set is a subset of ``_PRIMITIVE_MODULES`` so no orphans slip
+    past the fast-path list.
+    """
+    found: set[str] = set()
+    for root in roots:
+        try:
+            pkg = importlib.import_module(root)
+        except ImportError:
+            continue
+        if not hasattr(pkg, "__path__"):
+            continue
+        for info in pkgutil.walk_packages(pkg.__path__, prefix=root + "."):
+            modname = info.name
+            try:
+                spec = importlib.util.find_spec(modname)
+            except (ImportError, AttributeError, ValueError):
+                continue
+            if spec is None or spec.origin is None or not spec.origin.endswith(".py"):
+                continue
+            try:
+                source = Path(spec.origin).read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "@primitive" not in source:
+                continue
+            try:
+                tree = ast.parse(source, filename=spec.origin)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                for dec in node.decorator_list:
+                    target = dec.func if isinstance(dec, ast.Call) else dec
+                    name = getattr(target, "id", None) or getattr(target, "attr", None)
+                    if name == "primitive":
+                        found.add(modname)
+                        break
+                if modname in found:
+                    break
+    return found
 
 
 def _ensure_imported() -> None:
     """Force-import every module that registers a primitive.
 
-    Without this, callers querying the registry before any primitive
-    module has been imported would see an empty dict. A missing module
-    in the list is a no-op so partial decoration during the C′ rollout
-    keeps working.
+    Fast path: import the explicit ``_PRIMITIVE_MODULES`` list. Safety
+    net: on first call only, also walk the discovered module set to
+    catch anything missed. Subsequent calls short-circuit on
+    ``_IMPORT_DONE``. The ``_IMPORTING`` guard prevents recursion if
+    decorated code triggers ``get_registry()`` during its own
+    module-load.
     """
-    for modname in _PRIMITIVE_MODULES:
+    global _IMPORTING, _IMPORT_DONE
+    if _IMPORT_DONE or _IMPORTING:
+        return
+    _IMPORTING = True
+    try:
+        for modname in _PRIMITIVE_MODULES:
+            try:
+                importlib.import_module(modname)
+            except ImportError:
+                pass
         try:
-            importlib.import_module(modname)
-        except ImportError:
+            for modname in discover_primitive_modules():
+                if modname in _PRIMITIVE_MODULES:
+                    continue
+                try:
+                    importlib.import_module(modname)
+                except ImportError:
+                    pass
+        except Exception:
+            # Auto-discovery is best-effort. Never let it break callers
+            # if the file-system layout is unusual (read-only install,
+            # namespace packages, frozen importer, etc.).
             pass
+    finally:
+        _IMPORTING = False
+        _IMPORT_DONE = True
 
 
 def _reset_for_tests() -> None:
-    """Test helper: clear the registry. Not part of the public API."""
+    """Test helper: clear the registry and reset the import latch.
+
+    Not part of the public API. Tests that need a clean registry
+    snapshot call this before re-importing primitive modules.
+    """
+    global _IMPORT_DONE
     _REGISTRY.clear()
+    _IMPORT_DONE = False

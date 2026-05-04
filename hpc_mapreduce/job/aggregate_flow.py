@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce.infra.remote import rsync_pull, split_ssh_target
 from hpc_mapreduce.job.runs import read_run_sidecar
 from hpc_mapreduce.reduce.metrics import reduce_partials
@@ -127,6 +128,25 @@ def _combine_missing(
     return combined_now, failures
 
 
+@primitive(
+    name="aggregate-flow",
+    verb="workflow",
+    composes=["combine-wave", "poll-run-status"],
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("rsync", "<ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
+    ],
+    error_codes=[
+        errors.SshUnreachable,
+        errors.CombinerFailed,
+        errors.OutputsMissing,
+        errors.JournalCorrupt,
+    ],
+    idempotent=True,
+    idempotency_key="run_id",
+    exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+)
 def aggregate_flow(
     *,
     experiment_dir: Path,

@@ -1292,6 +1292,13 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 # ─── subcommand: logs ──────────────────────────────────────────────────────
 
 
+@primitive(
+    name="logs",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster>")],
+    error_codes=[errors.SshUnreachable, errors.RemoteCommandFailed],
+    idempotent=True,
+)
 def cmd_logs(args: argparse.Namespace) -> int:
     """Fetch per-task stderr logs from the cluster.
 
@@ -1372,6 +1379,13 @@ def cmd_logs(args: argparse.Namespace) -> int:
 # ─── subcommand: failures ──────────────────────────────────────────────────
 
 
+@primitive(
+    name="failures",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster>")],
+    error_codes=[errors.SshUnreachable],
+    idempotent=True,
+)
 def cmd_failures(args: argparse.Namespace) -> int:
     """Cluster failed tasks by stderr fingerprint for triage.
 
@@ -1472,6 +1486,29 @@ def cmd_failures(args: argparse.Namespace) -> int:
     ],
     idempotent=False,
 )
+def cmd_campaign_health(args: argparse.Namespace) -> int:
+    """Aggregate run-history into a campaign-health payload (D2a)."""
+    from hpc_mapreduce.job.campaign_health import campaign_health
+
+    try:
+        data = campaign_health(
+            args.experiment_dir,
+            campaign_id=args.campaign_id,
+            since_iso=args.since_iso,
+            profile=args.profile,
+            cluster=args.cluster,
+        )
+    except Exception as exc:  # noqa: BLE001 — last-resort error envelope
+        return _err(
+            error_code="internal",
+            message=f"campaign_health failed: {exc}",
+            category="internal",
+            retry_safe=False,
+        )
+    _ok(data, idempotent=True)
+    return EXIT_OK
+
+
 def cmd_build_executor(args: argparse.Namespace) -> int:
     starters = hpc_mapreduce._PACKAGE_ROOT / "templates" / "starters"
     template_map = {
@@ -1942,6 +1979,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per-task stderr tail length used for fingerprinting (default 30).",
     )
     p_fail.set_defaults(func=cmd_failures)
+
+    # campaign-health (D2a)
+    p_ch = sub.add_parser(
+        "campaign-health",
+        help=(
+            "Structured run-history aggregation for an LLM agent. Returns "
+            "walltime cliff rates, failure breakdown, GPU utilization, and "
+            "a ready-to-feed-LLM suggested_prompt."
+        ),
+    )
+    _add_experiment_dir(p_ch)
+    p_ch.add_argument("--campaign-id", default=None)
+    p_ch.add_argument("--since-iso", default=None)
+    p_ch.add_argument("--profile", default=None)
+    p_ch.add_argument("--cluster", default=None)
+    p_ch.set_defaults(func=cmd_campaign_health)
 
     # build-executor
     p_be = sub.add_parser(
