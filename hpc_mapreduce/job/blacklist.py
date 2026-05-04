@@ -104,6 +104,14 @@ def _read_doc(path: Path) -> dict[str, Any]:
         doc = json.loads(text)
     except json.JSONDecodeError:
         return _empty_doc()
+    # B8: cross-domain manifest check. Soft-skip on mismatch (returning
+    # an empty doc) rather than raise — refusing to plan because of an
+    # incompatible blacklist file would be worse than re-learning.
+    from hpc_mapreduce._version import is_compatible as _is_compat
+    if isinstance(doc, dict):
+        sv = doc.get("schema_version")
+        if isinstance(sv, int) and not _is_compat("blacklist", sv):
+            return _empty_doc()
     return _normalise(doc)
 
 

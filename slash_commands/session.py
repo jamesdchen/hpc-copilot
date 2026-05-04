@@ -222,10 +222,17 @@ def load_run(experiment_dir: Path, run_id: str) -> RunRecord | None:
     payload = _read_json(path)
     if payload is None:
         return None
-    if payload.get("schema_version") != SCHEMA_VERSION:
+    # B8: route reader-side check through the cross-domain manifest
+    # in hpc_mapreduce._version. Writer still emits SCHEMA_VERSION;
+    # the manifest declares the *supported* range so back-compat is one
+    # one-line edit if/when v2 ships.
+    from hpc_mapreduce._version import is_compatible as _is_compat
+
+    found = payload.get("schema_version")
+    if not isinstance(found, int) or not _is_compat("session", found):
         warnings.warn(
-            f"session: schema_version={payload.get('schema_version')} "
-            f"!= {SCHEMA_VERSION}; skipping {path.name}",
+            f"session: schema_version={payload.get('schema_version')!r} "
+            f"unsupported; skipping {path.name}",
             stacklevel=2,
         )
         return None
@@ -320,7 +327,10 @@ def _rebuild_index(experiment_dir: Path) -> dict:
         payload = _read_json(path)
         if payload is None:
             continue
-        if payload.get("schema_version") != SCHEMA_VERSION:
+        # B8: route reader-side check through the cross-domain manifest.
+        from hpc_mapreduce._version import is_compatible as _is_compat
+        sv = payload.get("schema_version")
+        if not isinstance(sv, int) or not _is_compat("session", sv):
             continue
         run_id = payload.get("run_id") or path.stem
         entries[run_id] = {
