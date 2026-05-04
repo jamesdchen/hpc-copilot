@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc._internal._primitive import primitive
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
 
 
 __all__ = ["recall_campaigns", "resolve_roots"]
@@ -407,7 +407,7 @@ def _histogram(values: Iterable[Any]) -> dict[str, int]:
     return dict(counter)
 
 
-def _pctile(values: list[float], p: float) -> float:
+def _pctile(values: Sequence[float], p: float) -> float:
     """Linear-interpolation percentile. Returns 0 for empty input."""
     if not values:
         return 0.0
