@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce._time import utcnow_iso
+from hpc_mapreduce.job.runs import read_run_sidecar
 from slash_commands import errors, runner, session
 
 if TYPE_CHECKING:
@@ -215,16 +216,20 @@ def monitor_flow(
             f"no journal record for {run_id!r}; cannot monitor an unknown run"
         )
 
-    sidecar_path = session.runs_dir(experiment_dir) / f"{run_id}.json"
+    # Read the per-run sidecar (under <experiment_dir>/.hpc/runs/, not the
+    # journal dir). ``read_run_sidecar`` guarantees ``wave_map`` is a dict.
     wave_map: dict[str, list[int]] | None = None
     try:
-        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        wm = sidecar.get("wave_map")
-        if isinstance(wm, dict):
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        # Missing or unreadable sidecar → auto_combine_waves is a no-op.
+        sidecar = None
+    if sidecar is not None:
+        wm = sidecar.get("wave_map") or {}
+        # Empty dict counts as "no wave_map" so auto_combine_waves below
+        # short-circuits exactly as it did when the read silently failed.
+        if isinstance(wm, dict) and wm:
             wave_map = wm
-    except (OSError, json.JSONDecodeError):
-        # No wave_map → auto_combine_waves is a no-op. Not fatal.
-        wave_map = None
 
     state = _LoopState(
         last_combined_waves=list(record.combined_waves),

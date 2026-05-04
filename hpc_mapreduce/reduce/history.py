@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce.job.runs import find_existing_runs
+from hpc_mapreduce.job.runs import find_existing_runs, read_run_sidecar
 from hpc_mapreduce.reduce.metrics import reduce_metrics
 
 __all__ = [
@@ -39,11 +39,20 @@ _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def _read_sidecar_safe(path: Path) -> dict[str, Any] | None:
+    """Read a sidecar via the canonical hardened reader.
+
+    The sidecar's directory layout is ``<experiment>/.hpc/runs/<run_id>.json``;
+    we recover the experiment dir and run_id from *path* and route the
+    read through :func:`read_run_sidecar` so the returned dict has the
+    full backfilled v2 shape (``wave_map``/``task_count``/...). Missing
+    or malformed files yield ``None``.
+    """
     try:
-        data: dict[str, Any] = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        experiment_dir = path.parent.parent.parent
+        run_id = path.stem
+        return read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
 
 
 def find_sidecars_by_campaign(

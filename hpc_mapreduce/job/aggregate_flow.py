@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce.infra.remote import rsync_pull, split_ssh_target
+from hpc_mapreduce.job.runs import read_run_sidecar
 from hpc_mapreduce.reduce.metrics import reduce_partials
 from slash_commands import errors, runner, session
 
@@ -188,18 +189,15 @@ def aggregate_flow(
 
     user, host = _split_ssh_target(record.ssh_target)
 
-    # Read the sidecar's wave_map directly (record carries combined_waves
-    # but not wave_map — that lives in the per-run sidecar JSON).
-    import json as _json
-
-    sidecar_path = session.runs_dir(experiment_dir) / f"{run_id}.json"
+    # Read the sidecar's wave_map (record carries combined_waves but not
+    # wave_map — that lives in the per-run sidecar JSON, under
+    # <experiment_dir>/.hpc/runs/). ``read_run_sidecar`` guarantees
+    # ``wave_map`` is a dict; missing/unreadable sidecars yield empty.
     wave_map_keys: list[str] = []
     try:
-        sidecar_data = _json.loads(sidecar_path.read_text(encoding="utf-8"))
-        wm = sidecar_data.get("wave_map")
-        if isinstance(wm, dict):
-            wave_map_keys = list(wm.keys())
-    except (OSError, _json.JSONDecodeError):
+        sidecar_data = read_run_sidecar(experiment_dir, run_id)
+        wave_map_keys = list((sidecar_data.get("wave_map") or {}).keys())
+    except (FileNotFoundError, OSError):
         # No wave_map → no waves to ensure. Aggregation falls back to
         # whatever's already in _combiner/ on the cluster.
         pass
