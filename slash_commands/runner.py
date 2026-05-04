@@ -19,6 +19,7 @@ from typing import Any
 
 from hpc_mapreduce._time import utcnow_iso
 from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
+from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar
 from slash_commands import errors, session
 from slash_commands.errors import RemoteCommandFailed
 from slash_commands.session import RunRecord, _atomic_write_json
@@ -89,6 +90,7 @@ def submit_and_record(
     job_ids: list[str],
     total_tasks: int,
     campaign_id: str = "",
+    cmd_sha: str | None = None,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
@@ -115,6 +117,50 @@ def submit_and_record(
     existing = session.load_run(experiment_dir, run_id)
     if existing is not None:
         return existing, True
+
+    # A5: cmd_sha-based dedup. Covers the case where the journal at
+    # ~/.claude/hpc/<repo_hash>/runs/ has been wiped (rm -rf, machine
+    # swap) but the per-experiment sidecar at <exp>/.hpc/runs/<id>.json
+    # still exists. Without this fallback, submit_and_record would
+    # generate a fresh RunRecord and the caller would re-submit a job
+    # the cluster already has running.
+    if cmd_sha:
+        sidecar_path = find_run_by_cmd_sha(experiment_dir, cmd_sha)
+        if sidecar_path is not None:
+            existing_run_id = sidecar_path.stem
+            sidecar_data = None
+            try:
+                sidecar_data = read_run_sidecar(experiment_dir, existing_run_id)
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                sidecar_data = None
+            if sidecar_data is not None:
+                # Treat anything other than "cancelled" as a live record
+                # we should dedup against.
+                sidecar_status = (sidecar_data.get("status") or "").lower()
+                if sidecar_status != "cancelled":
+                    reconstructed = RunRecord(
+                        run_id=existing_run_id,
+                        profile=str(sidecar_data.get("profile") or profile),
+                        cluster=str(sidecar_data.get("cluster") or cluster),
+                        ssh_target=str(sidecar_data.get("ssh_target") or ssh_target),
+                        remote_path=str(sidecar_data.get("remote_path") or remote_path),
+                        job_name=str(sidecar_data.get("job_name") or job_name),
+                        job_ids=list(sidecar_data.get("job_ids") or []),
+                        total_tasks=int(
+                            sidecar_data.get("task_count") or total_tasks
+                        ),
+                        submitted_at=str(
+                            sidecar_data.get("submitted_at") or _utcnow_iso()
+                        ),
+                        experiment_dir=str(Path(experiment_dir).resolve()),
+                        campaign_id=str(
+                            sidecar_data.get("campaign_id") or campaign_id
+                        ),
+                    )
+                    # Repair the journal so future load_run calls hit it
+                    # directly without re-doing the cmd_sha scan.
+                    session.upsert_run(experiment_dir, reconstructed)
+                    return reconstructed, True
 
     record = RunRecord(
         run_id=run_id,
