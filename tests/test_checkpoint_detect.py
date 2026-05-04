@@ -11,9 +11,12 @@ all yield ``False``.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from claude_hpc.orchestrator.checkpoint_detect import detect_checkpointing
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_sidecar(
