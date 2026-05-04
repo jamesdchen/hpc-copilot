@@ -160,7 +160,13 @@ def plan_submit(
             elif not n.is_drained:
                 healthy.append(n.name)
         # ETA via sbatch --test-only (SLURM only) — best effort.
-        eta_sec = _eta_via_test_only(scheduler, c, cfg) if scheduler == "slurm" else None
+        # B5-PR2: capability is published via backend class; SGE returns
+        # supports_test_only_eta=False so we skip the probe.
+        from hpc_mapreduce.infra.backends import get_backend_class
+        if get_backend_class(scheduler).supports_test_only_eta:
+            eta_sec = _eta_via_test_only(scheduler, c, cfg)
+        else:
+            eta_sec = None
         # Runtime prior quantiles for the GPU types in this constraint.
         c_quantiles = {gpu: quantiles[gpu] for gpu in gpu_set if gpu in quantiles}
         c_p_fail = {gpu: p_fail.get(gpu, 0.0) for gpu in gpu_set}
