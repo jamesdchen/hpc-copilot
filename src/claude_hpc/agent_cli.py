@@ -313,8 +313,8 @@ def _live_subcommands() -> list[str]:
 
 def cmd_capabilities(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.capabilities."""
-    from claude_hpc.atoms.capabilities import capabilities
     from claude_hpc._internal.operations import render_llms_full
+    from claude_hpc.atoms.capabilities import capabilities
 
     if getattr(args, "full", False):
         # Human/LLM-mode: emit a multi-section text blob (NOT the JSON

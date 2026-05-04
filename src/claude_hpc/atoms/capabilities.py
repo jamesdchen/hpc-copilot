@@ -59,8 +59,8 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     multiplexing flag, MARs skill paths, required env vars, and the
     operations catalog — is computed here.
     """
-    from claude_hpc.infra.clusters import CLUSTER_YAML_KEYS
     from claude_hpc._internal.operations import operations_catalog
+    from claude_hpc.infra.clusters import CLUSTER_YAML_KEYS
 
     return {
         "version": claude_hpc.__version__,

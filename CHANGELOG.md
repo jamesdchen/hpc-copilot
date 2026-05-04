@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Changed — folded slash_commands Python runtime into claude_hpc
+
+The atomic-ops layer (runner.py), journal storage (session.py), and
+typed exception hierarchy (errors.py) moved out of `slash_commands/`
+into `claude_hpc/`:
+
+- `slash_commands/runner.py`  → `claude_hpc/orchestrator/runner.py`
+- `slash_commands/errors.py`  → `claude_hpc/errors.py`
+- `slash_commands/session.py` → `claude_hpc/_internal/session.py`
+
+Plus:
+
+- `claude_hpc/operations.py`  → `claude_hpc/_internal/operations.py`
+  (framework-internal plumbing, not user-facing)
+
+The motivation is layering: `claude_hpc/` is the framework, `slash_commands/`
+is the human-UX surface. Pre-fold, 7 framework files imported FROM
+`slash_commands/`, which is upside-down. Post-fold, `claude_hpc/`
+is self-contained.
+
+`slash_commands/` retains its directory and `__init__.py` so the
+markdown command templates (`slash_commands/commands/*.md`) still
+ship as package data. Users who clone the repo and run `claude code`
+inside it pick up the slash commands; the `/setup_hpc` flow still
+copies them into `~/.claude/commands/` for global install.
+
+Imports updated across ~10 framework files and the test suite.
+Primitive frontmatter `backed_by.python` paths regenerated. No
+behavior changes — purely a rearrangement.
+
 ### Changed — repository layout switched to PyPA src layout
 
 Both top-level Python packages now live under `src/`:
