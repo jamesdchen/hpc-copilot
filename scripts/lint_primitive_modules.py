@@ -44,7 +44,23 @@ def main() -> int:
     found: set[str] = set()
     for p in REPO.rglob("*.py"):
         s = str(p)
-        if "/.git/" in s or "/tests/" in s or "/scripts/" in s:
+        # Skip:
+        # - .git/             — git's own files
+        # - tests/, scripts/  — never registration sites
+        # - .claude/worktrees/ — agent-isolated worktrees may shadow the
+        #   real source tree with their own copies; treating those as
+        #   first-class would double-count primitives
+        # - .venv/, venv/, build/, dist/ — install / build artifacts
+        if (
+            "/.git/" in s
+            or "/tests/" in s
+            or "/scripts/" in s
+            or "/.claude/worktrees/" in s
+            or "/.venv/" in s
+            or "/venv/" in s
+            or "/build/" in s
+            or "/dist/" in s
+        ):
             continue
         if p.resolve() == self_path:
             continue
