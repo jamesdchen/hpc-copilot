@@ -71,9 +71,7 @@ def get_cold_start_mem_buffer(
     try:
         val = float(raw)
     except (TypeError, ValueError) as e:
-        raise ValueError(
-            f"cold_start_mem_buffer must be a number, got {raw!r}"
-        ) from e
+        raise ValueError(f"cold_start_mem_buffer must be a number, got {raw!r}") from e
     if val < 0:
         raise ValueError(
             f"cold_start_mem_buffer must be non-negative (it grows the ask, "
@@ -96,7 +94,5 @@ def get_nfs_data_dir(cluster_config: dict[str, Any]) -> str | None:
     if raw is None:
         return None
     if not isinstance(raw, str) or not raw.strip():
-        raise ValueError(
-            f"nfs_data_dir must be a non-empty string when set, got {raw!r}"
-        )
+        raise ValueError(f"nfs_data_dir must be a non-empty string when set, got {raw!r}")
     return raw
