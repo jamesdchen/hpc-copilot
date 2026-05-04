@@ -103,15 +103,7 @@ def recommend_walltime_sec(
     if floor_sec < 0:
         raise ValueError("floor_sec must be non-negative")
 
-    usable: list[tuple[str, int, int]] = []  # (gpu, p95, n)
-    for gpu in gpu_types_in_constraint:
-        entry = quantiles.get(gpu)
-        if not entry:
-            continue
-        n = int(entry.get("n_samples", 0))
-        p95 = int(entry.get("p95", 0))
-        if n >= min_samples and p95 > 0:
-            usable.append((gpu, p95, n))
+    usable = _gather_usable(quantiles, gpu_types_in_constraint, min_samples)
 
     if not usable:
         rationale = (
