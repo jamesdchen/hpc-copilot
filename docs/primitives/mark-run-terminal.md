@@ -16,7 +16,6 @@ outputs:
     type: enum
 side_effects:
   - mutates: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)
-  - mutates: <experiment_dir>/.hpc/runs/<run_id>.json (mirror)
 idempotent: true
 idempotency_key: (run_id, status) — re-marking with the same terminal status is a no-op
 error_codes:

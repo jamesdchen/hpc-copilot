@@ -2,7 +2,6 @@
 name: submit-spec
 verb: submit
 side_effects:
-  - writes: <experiment_dir>/.hpc/runs/<run_id>.json (per-run sidecar, source of truth for cluster-side dispatcher and combiner)
   - writes: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (laptop journal record, lets cold sessions resume)
   - rsyncs: <experiment_dir> → <ssh_target>:<remote_path> (assumed already done by caller; submit-spec itself does not rsync)
   - submits: scheduler array job via the caller-supplied job_ids (submit-spec records what was submitted; it does NOT call qsub itself)
