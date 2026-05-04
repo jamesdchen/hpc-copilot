@@ -83,8 +83,15 @@ CATALOG: list[FailureSignature] = [
     ),
     FailureSignature(
         error_class="walltime",
+        # ``CANCELLED.*TIME LIMIT`` covers SLURM's per-step cancellation
+        # message; the bare ``\bwalltime\b`` token covers SGE qacct lines
+        # that just say "h_rt ... walltime" without an "expired"/"exceeded"
+        # qualifier (folded in from the older mapreduce/reduce/classify.py
+        # patterns when classify_failure was deduped onto this catalog).
         stderr_pattern=re.compile(
-            r"DUE TO TIME LIMIT|wall.?time.*expired|wall.?time.*exceeded|"
+            r"DUE TO TIME LIMIT|CANCELLED.*TIME LIMIT|"
+            r"wall.?time.*expired|wall.?time.*exceeded|"
+            r"Time limit exceeded|\bwalltime\b|"
             r"signal SIGTERM.*15",
             re.I,
         ),
@@ -94,8 +101,15 @@ CATALOG: list[FailureSignature] = [
     ),
     FailureSignature(
         error_class="node_failure",
+        # ``NODE FAILURE`` (with a space, not just NODE_FAIL),
+        # ``slurmstepd: error: *** NODE`` and SGE's ``Eqw`` error state
+        # were folded in from mapreduce/reduce/classify.py during the
+        # dedup so the wrapper there can delegate fully to this catalog.
         stderr_pattern=re.compile(
-            r"NODE_FAIL|node failed|connection (closed|reset by peer)|"
+            r"NODE_FAIL|NODE FAILURE|node failed|"
+            r"slurmstepd:\s*error:\s*\*\*\*\s*NODE|"
+            r"\bEqw\b|"
+            r"connection (closed|reset by peer)|"
             r"ssh: connect.*refused",
             re.I,
         ),
