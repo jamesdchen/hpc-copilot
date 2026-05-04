@@ -32,7 +32,6 @@ from typing import Any
 
 import claude_hpc
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.infra.clusters import load_clusters_config
 from claude_hpc.orchestrator.discover import (
     detect_mars_tier,
     discover_executors,
@@ -1159,9 +1158,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
         try:
             task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
         except ValueError as exc:
-            raise errors.SpecInvalid(
-                f"--task-id must be comma-separated integers: {exc}"
-            ) from exc
+            raise errors.SpecInvalid(f"--task-id must be comma-separated integers: {exc}") from exc
         if not task_ids:
             raise errors.SpecInvalid("--task-id is empty")
 

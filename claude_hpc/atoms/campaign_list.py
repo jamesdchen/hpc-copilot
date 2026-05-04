@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import primitive
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @primitive(

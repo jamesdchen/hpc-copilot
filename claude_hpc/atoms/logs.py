@@ -10,12 +10,14 @@ this before delegating, so the atom assumes a usable SSH agent.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._primitive import primitive, SideEffect
+from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
 from slash_commands import errors, runner, session
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @primitive(
