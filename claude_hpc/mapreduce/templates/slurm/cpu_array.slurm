@@ -55,8 +55,13 @@ echo "============================================"
 source "$(dirname "$0")/common/hpc_preamble.sh"
 
 # Bind CPU threads to allocated cores ($SLURM_CPUS_PER_TASK — SLURM-specific).
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+# Honors the campus user's HPC_OMP_NUM_THREADS / HPC_MKL_NUM_THREADS env
+# override before falling back to the scheduler-allocated core count;
+# without this precedence, a user's HPC_OMP_NUM_THREADS=4 would be
+# silently overridden by SLURM_CPUS_PER_TASK on multi-threaded array
+# jobs and the run would oversubscribe its cgroup until OOM-killed.
+export OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
+export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
 
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"
