@@ -140,6 +140,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_mapreduce.infra.inspect",
     "hpc_mapreduce.infra.clusters",
     "hpc_mapreduce.agent_cli",
+    "slash_commands.runner",
 )
 
 

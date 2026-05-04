@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce._time import utcnow_iso
 from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
 from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar
@@ -584,6 +585,19 @@ def reconcile(
     return updated
 
 
+@primitive(
+    name="mark-run-terminal",
+    verb="mutate",
+    side_effects=[
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
+        ),
+    ],
+    error_codes=[errors.JournalCorrupt],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def mark_terminal(
     experiment_dir: Path,
     run_id: str,
