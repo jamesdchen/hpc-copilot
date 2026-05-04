@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import hpc_mapreduce
-from hpc_mapreduce._primitive import SideEffect, primitive
+from claude_hpc._internal._primitive import SideEffect, primitive
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from hpc_mapreduce.job.discover import (
     detect_mars_tier,
@@ -2164,7 +2164,7 @@ def main(argv: list[str] | None = None) -> int:
     # dispatch — without this, get_registry() raises RuntimeError
     # (the previous auto-import path silently swallowed ImportError
     # and made missing-decorator bugs hard to diagnose).
-    from hpc_mapreduce._primitive import register_primitives
+    from claude_hpc._internal._primitive import register_primitives
 
     register_primitives()
     parser = build_parser()

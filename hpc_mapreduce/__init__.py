@@ -164,7 +164,7 @@ from hpc_mapreduce.reduce.status import (
     rollup_by_grid_point,
 )
 
-from hpc_mapreduce._primitive import (
+from claude_hpc._internal._primitive import (
     PrimitiveMeta,
     SideEffect,
     get_meta,

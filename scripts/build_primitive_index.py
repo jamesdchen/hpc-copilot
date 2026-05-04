@@ -108,7 +108,7 @@ def primitives_from_registry() -> list[dict]:
     migration window where some primitives might not be decorated yet.
     """
     sys.path.insert(0, str(REPO_ROOT))
-    from hpc_mapreduce._primitive import get_registry
+    from claude_hpc._internal._primitive import get_registry
 
     registered = get_registry()
     out: list[dict] = []

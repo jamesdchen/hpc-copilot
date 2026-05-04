@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce._primitive import (
+from claude_hpc._internal._primitive import (
     PrimitiveMeta,
     get_registry,
 )

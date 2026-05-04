@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce._primitive import SideEffect, primitive
+from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
 from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar

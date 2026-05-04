@@ -1,5 +1,5 @@
 """CI lint: every Python file with @primitive(...) must be listed in
-hpc_mapreduce._primitive._PRIMITIVE_MODULES (so the registry sees it).
+claude_hpc._internal._primitive._PRIMITIVE_MODULES (so the registry sees it).
 
 Greps for the decorator literal, derives the module name from the
 file path, and asserts membership. ~30 LOC. No runtime cost.
@@ -31,7 +31,7 @@ def main() -> int:
     # Import the canonical list at runtime so this script tracks the
     # source of truth without re-typing it.
     sys.path.insert(0, str(REPO))
-    from hpc_mapreduce._primitive import _PRIMITIVE_MODULES
+    from claude_hpc._internal._primitive import _PRIMITIVE_MODULES
 
     expected = set(_PRIMITIVE_MODULES)
 

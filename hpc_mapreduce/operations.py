@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 import hpc_mapreduce
-from hpc_mapreduce._primitive import get_registry
+from claude_hpc._internal._primitive import get_registry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -108,7 +108,7 @@ def operations_catalog() -> list[dict[str, Any]]:
 
     Source-of-truth chain (C′):
 
-    1. The ``@primitive`` registry (``hpc_mapreduce._primitive.get_registry``).
+    1. The ``@primitive`` registry (``claude_hpc._internal._primitive.get_registry``).
        Decorator metadata is the canonical SoT; this path is taken
        whenever any primitives have been registered.
     2. Frontmatter under ``docs/primitives/*.md``. Used to fill in
