@@ -241,6 +241,20 @@ No runtime priors exist for this `(profile, cluster)`. Don't try to score — su
 
 Score the candidates per the **Scoring rubric** in [score-submit-plan.md](../../docs/primitives/score-submit-plan.md) — formula, tie-break, walltime selection, and the empty-quantiles / empty-ETA edge cases all live in the primitive body. Pick the candidate with smallest `total_etc`.
 
+**Adversarial backfill mode** (default-on): `plan-submit` runs in adversarial mode by default. It right-sizes the walltime ask from runtime priors (p95 × 1.30) and probes a `(walltime × constraint)` lattice via `sbatch --test-only`. Each candidate report carries:
+
+- `recommended_tuple: {constraint, walltime_sec, mem_mb, cpus, predicted_eta_sec, rationale}` — the variant SLURM predicts will start earliest.
+- `backfill_probes: [...]` — the full lattice with predicted ETAs.
+
+**Auto-pick rule**: whenever the chosen candidate's `recommended_tuple.predicted_eta_sec is not None`, **automatically use** `recommended_tuple.walltime_sec` and `recommended_tuple.constraint` for the sbatch invocation in Step 8 — no user prompt. SLURM has confirmed a fitting backfill window exists, so we take it. Surface the `rationale` field in the audit file (Step 4c "Audit file" section) so the choice is replayable.
+
+Fall back to the original walltime/constraint only when:
+
+1. `recommended_tuple.predicted_eta_sec is None` (every probe failed), **or**
+2. `recommended_tuple.rationale` starts with "no usable prior" (fewer than 5 prior samples per GPU type).
+
+Pass `--no-adversarial` to `plan-submit` only for debugging or on clusters that throttle `--test-only`.
+
 For each chosen candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly, so it stays here in the slash command:
 
 - Co-tenant has been running >12h *and* holds >50% of CPU / mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).
