@@ -18,6 +18,73 @@ imports; that release has elapsed. Removing it eliminates the
 `DeprecationWarning` pollution at every import and simplifies the
 package layout.
 
+### Added — walltime arbitrage and auto-daisy-chain (PR-C)
+
+Two more survival defenses for the campus user submitting low-priority
+jobs to clusters where higher-priority jobs consume most of the
+resources. Both features fit the same pattern as PR-A and PR-B: they
+don't make jobs more efficient — they help the campus user's *own*
+jobs survive structural disadvantage. Both default-on but only fire
+when they're safe.
+
+**Cold-start walltime arbitrage.** A nominal walltime ask of 4:00:00
+collides with every other 4:00:00 ask — the round numbers every
+well-funded job requests are also the slots backfill schedulers
+reserve. Asking 3:45:00 instead fits in backfill shadows the
+4:00:00 jobs don't reach. The new helper
+`claude_hpc.orchestrator.walltime_arbitrage.arbitrage_walltime`
+subtracts 15min and floors to a 5min boundary; below a 1h floor the
+ask passes through unchanged so short tasks aren't cliff-killed.
+The planner (`plan_submit`) applies the trim only when the
+`--test-only` lattice probe couldn't pin a winner (no priors path);
+the lattice path supersedes arbitrage when priors exist. Per-cluster
+opt-out via `walltime_arbitrage: false` in `clusters.yaml`. The plan
+output gains a `walltime_arbitraged_from: <int_sec> | null` field
+carrying the original ask when the trim fired.
+
+**Auto-daisy-chain for tasks exceeding the cluster's hard ceiling.**
+A walltime ask exceeding the cluster's hard scheduler ceiling fails
+outright. Auto-daisy-chain splits the ask into N segments where each
+segment N+1 holds on segment N (`--dependency=afterany:<id>` on
+SLURM, `-hold_jid <id>` on SGE — `afterany` deliberately so a
+preempted segment's exit-130 from PR-A still triggers segment N+1).
+The trigger fires when the ask exceeds `max_walltime_sec - 1h` (the
+1h buffer absorbs queue-wait variance between segments). No segment
+cap — a 7-day task on a 24h cluster becomes ~8 segments; bounded
+only by checkpointing actually working.
+
+The chain is **default-off when checkpointing isn't detected** so we
+don't silently waste compute. The new
+`claude_hpc.orchestrator.checkpoint_detect.detect_checkpointing`
+helper walks past run output dirs (`<exp>/.hpc/runs/*/result_dirs`)
+for files matching `checkpoint*`, `*.ckpt`, `state*.pkl`, `last*.pt`,
+`latest*.pt`, `model*.{joblib,pkl,pt}`, `epoch_*.{pt,pkl}`. Returns
+True only when a past run of `(profile, cluster)` actually produced
+checkpoint-shaped files; False on no past runs, no matching files,
+or any error. With detection False, the planner emits an explanatory
+error telling the user how to opt in (add checkpointing OR set
+`auto_daisy_chain: true` in clusters.yaml).
+
+Per-cluster controls in `clusters.yaml`:
+
+- `max_walltime_sec: <int>` — hard scheduler ceiling. Default 24h
+  (Hoffman2 highp); USC CARC Discovery main is 48h. Required for
+  chain-decision math.
+- `auto_daisy_chain: true` — always chain (skip checkpoint scan).
+- `auto_daisy_chain: false` — never chain on this cluster (kill
+  switch). The "exceeds max walltime" error fires unmodified.
+- (key absent) — defer to `detect_checkpointing` (the safe default).
+
+The plan output gains two more fields: `daisy_chain_segments: <int> |
+null` (segment count when chained) and `daisy_chain_dep_jobids:
+<list[str]> | null` (the actual scheduler dep jobids; populated
+post-submit by `submit_flow`, null at plan time).
+
+New typed validator helpers in `claude_hpc.infra.clusters`:
+`get_walltime_arbitrage`, `get_auto_daisy_chain`,
+`get_max_walltime_sec`. Each rejects wrong-typed yaml values
+(`walltime_arbitrage: "yes"` is a string, not a bool — fails loudly
+at load time rather than silently disabling the feature).
 
 ### Added — dispatch resilience for the campus user (PR-A)
 
@@ -52,7 +119,6 @@ behaviour for non-preempted runs.
   `preempted_task_ids` surfaced at the data top level). Also added to
   the canonical `FailureCategory` StrEnum so classifier-emits ⊆
   resubmit-accepts.
-
 
 ### Added — template defenses for low-priority campus jobs (PR-B)
 

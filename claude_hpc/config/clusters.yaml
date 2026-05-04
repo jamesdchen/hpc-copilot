@@ -18,6 +18,23 @@ hoffman2:
   # dataset path (e.g., /u/scratch/.../shared_data) and the executor
   # reads from $LOCAL_DATA_DIR instead. Omit to disable.
   # nfs_data_dir: /u/scratch/j/jamesdc1/datasets
+  # Cold-start walltime trim: when no runtime prior exists to score
+  # candidates the planner trims the nominal ask by 15min and floors
+  # to a 5min boundary, so the campus user fits in backfill shadows
+  # the round-number ask doesn't reach. Default true.
+  walltime_arbitrage: true
+  # Hard scheduler walltime ceiling (seconds). UCLA Hoffman2 highp queue
+  # is 24h. Auto-daisy-chain fires when an ask exceeds (max - 1h
+  # queue-wait buffer) so a long task survives the cluster's hard
+  # walltime ceiling.
+  max_walltime_sec: 86400
+  # Auto-daisy-chain default is detection-driven (absent key here):
+  # chain only when past runs of (profile, cluster) produced
+  # checkpoint-shaped files; otherwise emit the explanatory error so
+  # we don't silently waste compute on a chain that starts from
+  # scratch every segment. Uncomment to override:
+  # auto_daisy_chain: true     # always chain (skip checkpoint scan)
+  # auto_daisy_chain: false    # never chain on this cluster (kill switch)
   constraints:
     max_array_size: 100
     max_walltime: "3:00:00"
@@ -37,6 +54,23 @@ discovery:
   gpu_constraint: "a100|a40|v100|l40s"
   cold_start_mem_buffer: 0.15
   # nfs_data_dir: /scratch1/jc_905/datasets
+  # Cold-start walltime trim: when no runtime prior exists to score
+  # candidates the planner trims the nominal ask by 15min and floors
+  # to a 5min boundary, so the campus user fits in backfill shadows
+  # the round-number ask doesn't reach. Default true.
+  walltime_arbitrage: true
+  # Hard scheduler walltime ceiling (seconds). USC CARC Discovery main
+  # queue is 48h. Auto-daisy-chain fires when an ask exceeds (max - 1h
+  # queue-wait buffer) so a long task survives the cluster's hard
+  # walltime ceiling.
+  max_walltime_sec: 172800
+  # Auto-daisy-chain default is detection-driven (absent key here):
+  # chain only when past runs of (profile, cluster) produced
+  # checkpoint-shaped files; otherwise emit the explanatory error so
+  # we don't silently waste compute on a chain that starts from
+  # scratch every segment. Uncomment to override:
+  # auto_daisy_chain: true     # always chain (skip checkpoint scan)
+  # auto_daisy_chain: false    # never chain on this cluster (kill switch)
   constraints:
     max_array_size: 100
     max_walltime: "3:00:00"
