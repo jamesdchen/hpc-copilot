@@ -1827,6 +1827,28 @@ def build_parser() -> argparse.ArgumentParser:
     _add_profile_cluster_cmdsha(p_he)
     p_he.set_defaults(func=cmd_house_edge)
 
+    # predict-queue-wait
+    p_pqw = sub.add_parser(
+        "predict-queue-wait",
+        help=(
+            "Forecast queue-wait seconds for a hypothetical submit. "
+            "Backend 'auto' picks DES when a snapshot + user-profiles "
+            "are available; falls back to the diurnal MA baseline."
+        ),
+    )
+    _add_experiment_dir(p_pqw)
+    p_pqw.add_argument("--profile", required=True)
+    p_pqw.add_argument("--cluster", required=True)
+    p_pqw.add_argument("--at-iso", default=None,
+                       help="reference timestamp (default: now)")
+    p_pqw.add_argument("--backend", choices=["auto", "diurnal_ma", "des"],
+                       default="auto")
+    p_pqw.add_argument("--n-replications", type=int, default=64,
+                       help="DES replications (only used on the DES path)")
+    p_pqw.add_argument("--seed", type=int, default=None,
+                       help="seed for deterministic DES sampling")
+    p_pqw.set_defaults(func=cmd_predict_queue_wait)
+
     # best-submit-window
     p_bsw = sub.add_parser(
         "best-submit-window",
