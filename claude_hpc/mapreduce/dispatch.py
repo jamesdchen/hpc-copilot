@@ -284,6 +284,29 @@ def main() -> None:
         print(f"[dispatch] ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    # --- Idempotency skip ---
+    # Helps the campus user resubmit a preempted task cleanly: if a
+    # prior run already wrote ``metrics.json`` (the per-task completion
+    # marker), we skip invoking the executor and exit 0. The combiner
+    # picks up the existing output on the next wave; the agent harness
+    # sees the same exit-0 envelope as a normal completion.
+    #
+    # Defensive: a 0-byte ``metrics.json`` (e.g. crashed mid-write) does
+    # NOT trigger the skip — the user must be able to re-run. We only
+    # gate on file presence + non-zero size; parsing the JSON would
+    # require exception handling and isn't worth the cost.
+    metrics_path = Path(result_dir) / "metrics.json"
+    try:
+        already_complete = metrics_path.is_file() and metrics_path.stat().st_size > 0
+    except OSError:
+        already_complete = False
+    if already_complete:
+        print(
+            f"[claude-hpc] task {task_id} already complete (metrics.json found); skipping",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
     # --- Install SIGTERM trap ---
     # Most preemption scenarios send SIGTERM 30-60s before SIGKILL.
     # Trap it so we can mark the run as bumped (not failed) in the

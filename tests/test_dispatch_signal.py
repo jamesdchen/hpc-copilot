@@ -1,10 +1,15 @@
-"""Tests for the dispatch-resilience SIGTERM trap.
+"""Tests for the dispatch-resilience features — preemption signal trap +
+idempotency-skip on resubmit.
 
 The campus user's low-priority jobs on a shared HPC are routinely
-preempted by higher-priority work. The signal trap covered here marks
-the run as bumped (not failed) in the sidecar and exits 130 so the
-agent harness can resubmit cleanly without surfacing a real failure
-to the user.
+preempted by higher-priority work. These tests cover the two
+mechanisms that help such jobs survive the cluster's preemption
+window:
+
+1. SIGTERM trap that marks the run as bumped (not failed) in the
+   sidecar and exits 130.
+2. Idempotency skip that lets a resubmitted preempted task exit 0
+   without redoing already-completed work.
 """
 
 from __future__ import annotations
@@ -43,6 +48,91 @@ def _scaffold(
         tasks_py_sha="abc123",
     )
     return hpc
+
+
+# ---------------------------------------------------------------------------
+# Idempotency skip
+# ---------------------------------------------------------------------------
+
+
+class TestIdempotencySkip:
+    """A resubmitted preempted task whose ``metrics.json`` already
+    exists must exit 0 without re-running the executor. The combiner
+    picks up the existing output on the next wave."""
+
+    def test_skips_when_metrics_json_present(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        # Sentinel file: if the executor runs, it will create this.
+        sentinel = tmp_path / "executor_ran.flag"
+        hpc = _scaffold(
+            tmp_path,
+            executor=f'touch "{sentinel}"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        # Pre-create a non-empty metrics.json — simulating a prior
+        # completed run for the same task.
+        task_dir = result_root / "0"
+        task_dir.mkdir(parents=True)
+        (task_dir / "metrics.json").write_text("{}")
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # Executor must not have run.
+        assert not sentinel.exists()
+
+    def test_does_not_skip_on_zero_byte_metrics_json(self, tmp_path, monkeypatch):
+        """A 0-byte metrics.json (e.g. crashed mid-write) must NOT
+        lock the user out of re-running."""
+        result_root = tmp_path / "results"
+        sentinel = tmp_path / "executor_ran.flag"
+        hpc = _scaffold(
+            tmp_path,
+            executor=f'touch "{sentinel}"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        task_dir = result_root / "0"
+        task_dir.mkdir(parents=True)
+        (task_dir / "metrics.json").write_text("")  # 0 bytes
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # Executor MUST have run.
+        assert sentinel.exists()
+
+    def test_does_not_skip_when_result_dir_missing(self, tmp_path, monkeypatch):
+        """No prior result_dir means a fresh task — executor runs."""
+        result_root = tmp_path / "results"
+        sentinel = tmp_path / "executor_ran.flag"
+        hpc = _scaffold(
+            tmp_path,
+            executor=f'touch "{sentinel}"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        # Note: no result_root pre-creation.
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert sentinel.exists()
 
 
 # ---------------------------------------------------------------------------
