@@ -106,6 +106,12 @@ ALLOWED_EXPORTS = frozenset(
         "run_combiner_checked",
         # Per-task metrics sidecar
         "write_metrics",
+        # Primitive registry (C′ — implementation + schemas as SoT)
+        "PrimitiveMeta",
+        "SideEffect",
+        "get_meta",
+        "get_registry",
+        "primitive",
     }
 )
 
