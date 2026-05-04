@@ -712,16 +712,16 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
 
 
 def cmd_clusters_list(_args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_mapreduce.atoms.clusters."""
-    from hpc_mapreduce.atoms.clusters import list_clusters
+    """Argparse adapter — primitive lives at claude_hpc.atoms.clusters."""
+    from claude_hpc.atoms.clusters import list_clusters
 
     _ok(list_clusters(), name="clusters-list")
     return EXIT_OK
 
 
 def cmd_clusters_describe(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_mapreduce.atoms.clusters."""
-    from hpc_mapreduce.atoms.clusters import describe_cluster
+    """Argparse adapter — primitive lives at claude_hpc.atoms.clusters."""
+    from claude_hpc.atoms.clusters import describe_cluster
 
     _ok(describe_cluster(name=args.name), name="clusters-describe")
     return EXIT_OK
