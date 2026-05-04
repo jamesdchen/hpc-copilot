@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+### Fixed — cross-cutting audit (A1–A11)
+
+- **A1** `docs/primitives/check-preflight.md` frontmatter pointed
+  `backed_by.python` at a non-existent module
+  (`hpc_mapreduce.preflight.run`); routed to the canonical
+  `hpc_mapreduce.agent_cli.cmd_preflight`.
+- **A2** Four primitive docs claimed bogus per-experiment mirror writes
+  that no implementation actually performed — `submit-spec.md`,
+  `mark-run-terminal.md`, and `resubmit-failed.md` had stale "writes
+  `<experiment_dir>/.hpc/runs/...` (mirror)" lines; `monitor-flow.md`
+  declared the wrong path for `.monitor.jsonl` (the real path is in the
+  journal dir, not the per-experiment dir). Frontmatter now matches
+  reality.
+- **A3** `hpc_mapreduce/schemas/status.output.json` and
+  `reconcile.output.json` enums missed `timeout`, which
+  `monitor_flow.output.json` already accepts. Consumers reading status
+  output must accept any value the workflow primitive could plausibly
+  produce; both schemas now include it.
+- **A4** Failure-category vocabulary divergence: the auto-classifier in
+  `slash_commands.runner.cluster_failures_by_fingerprint` emitted 5
+  categories (`import_error`, `file_not_found`, `permission_denied`,
+  `disk_full`, `python_traceback`) that the resubmit subcommand silently
+  rejected. Took the union as canonical; added a regression test pinning
+  the invariant.
+- **A5** `slash_commands.runner.submit_and_record` now accepts an
+  optional `cmd_sha` and dedups against `find_run_by_cmd_sha` when the
+  journal is empty but the per-experiment sidecar still exists. Repairs
+  the journal in-place so subsequent calls hit `load_run` directly.
+- **A6** Authored four missing primitive docs:
+  `docs/primitives/walltime-drift.md`, `house-edge.md`, `logs.md`,
+  `failures.md`. Each follows the existing frontmatter contract and
+  parses cleanly through `tests/test_primitive_frontmatter.py`.
+- **A7** Replaced the hand-typed `subcommands` literal in
+  `cmd_capabilities` with a derivation from the live argparse tree.
+  `walltime-drift` and `house-edge` now appear automatically in
+  capabilities output.
+- **A8** Corrected the `hpc_mapreduce/agent_cli.py` module docstring,
+  which falsely claimed stderr is JSON-per-line. Stderr is free-form
+  diagnostic prose (`[dispatch] ERROR: ...`); only stdout carries
+  envelopes.
+- **A9** `_append_tick` in `hpc_mapreduce/job/monitor_flow.py` now
+  acquires a flock on a sibling `.lock` file before writing the JSONL
+  record. The slash-command surface and the workflow primitive both
+  append to the same `<run_id>.monitor.jsonl`; without flock, two
+  concurrent writers could interleave bytes mid-line. Best-effort no-op
+  on platforms without `fcntl`.
+- **A10** `read_run_sidecar` now warns once per
+  `(run_id, sidecar_version)` when the sidecar's `claude_hpc_version`
+  differs from the running package's `__version__`. Closes the loop on
+  a previously-dead sidecar field; readers can find old sidecars in the
+  wild.
+- **A11** `hpc_mapreduce.infra.inspect.inspect_cluster` raised a bare
+  `KeyError` for unknown clusters, which the envelope translator
+  surfaced as `error_code: internal`. Replaced with
+  `errors.ClusterUnknown` so the typed exception flows through
+  `_err_from_hpc` to produce the documented `error_code: cluster_unknown`.
+
 ### Removed — `hpc_mapreduce.campaign.run_campaign` asyncio loop and `defaults` callbacks
 
 The closed-loop driver is now the slash-command surface itself: the
