@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/interview.output.json",
+  "title": "interview output envelope",
+  "description": "Envelope returned by `hpc-mapreduce interview`. Reports which artifacts the materializer wrote into the campaign directory and includes a dry-resolve preview so the calling agent (or human) can sanity-check the produced tasks.py before submit.",
+  "type": "object",
+  "required": ["ok", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "ok":   { "type": "boolean", "const": true },
+    "data": {
+      "type": "object",
+      "required": ["campaign_dir", "artifacts", "total_tasks", "preview"],
+      "additionalProperties": false,
+      "properties": {
+        "campaign_dir": {
+          "type": "string",
+          "description": "Absolute path to the campaign workdir the artifacts were written to."
+        },
+        "artifacts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Relative paths (under campaign_dir) of every file the materializer wrote or updated. Always includes interview.json and tasks.py; includes meta.json if the materializer created one (vs merging into an existing meta.json)."
+        },
+        "total_tasks": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Result of calling tasks.total() against the freshly materialized tasks.py — the cross-check gate that catches off-by-one search-space bugs at the interview stage."
+        },
+        "cmd_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8,64}$",
+          "description": "compute_cmd_sha() over the produced tasks.py. Embedded in interview.json so future cmd_recall queries can detect when an old recipe has drifted."
+        },
+        "preview": {
+          "type": "object",
+          "required": ["first", "mid", "last"],
+          "additionalProperties": false,
+          "properties": {
+            "first": { "description": "tasks.resolve(0)" },
+            "mid":   { "description": "tasks.resolve(total_tasks // 2)" },
+            "last":  { "description": "tasks.resolve(total_tasks - 1)" }
+          },
+          "description": "Three sample resolve() calls so the caller can echo back 'sweep starts here, midpoint here, ends here' before committing to submit."
+        }
+      }
+    }
+  }
+}
