@@ -320,9 +320,13 @@ def deploy_runtime(
     _scp(pkg_dir / "map" / "dispatch.py", ".hpc/_hpc_dispatch.py")
 
     # Job templates inside .hpc/templates/.
+    # B5-PR2: drop the inline ``if sched == 'sge'`` ladder; the backend
+    # registry owns the canonical extension via ``template_ext``. This
+    # keeps remote.py and __init__.py:get_template_path in sync.
+    from hpc_mapreduce.infra.backends import template_ext_for
     for sched in ("sge", "slurm"):
+        ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):
-            ext = "sh" if sched == "sge" else "slurm"
             _scp(
                 pkg_dir / "templates" / sched / f"{kind}.{ext}",
                 f".hpc/templates/{kind}.{ext}",
