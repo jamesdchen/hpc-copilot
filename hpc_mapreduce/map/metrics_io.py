@@ -2,7 +2,7 @@
 
 Stdlib-only.  Safe to import from an executor running on a cluster compute
 node without the full ``hpc_mapreduce`` install -- this module is deployed
-alongside ``combiner.py`` by :func:`hpc_mapreduce.infra.remote.deploy_runtime`.
+alongside ``combiner.py`` by :func:`claude_hpc.infra.remote.deploy_runtime`.
 
 Executors call :func:`write_metrics` at the end of their run to drop a
 ``metrics.json`` sidecar into ``$RESULT_DIR``.  The combiner

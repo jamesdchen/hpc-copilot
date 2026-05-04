@@ -1,7 +1,7 @@
 """Shared SSH-shim mixin for remote scheduler backends.
 
-Both :class:`hpc_mapreduce.infra.backends.sge_remote.RemoteSGEBackend`
-and :class:`hpc_mapreduce.infra.backends.slurm_remote.RemoteSlurmBackend`
+Both :class:`claude_hpc.infra.backends.sge_remote.RemoteSGEBackend`
+and :class:`claude_hpc.infra.backends.slurm_remote.RemoteSlurmBackend`
 need the exact same two overrides on top of their local cousin:
 
 - ``_execute_command`` — wrap the scheduler invocation in

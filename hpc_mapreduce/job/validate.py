@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import SideEffect, primitive
-from hpc_mapreduce.infra.clusters import load_clusters_config
+from claude_hpc.infra.clusters import load_clusters_config
 
 if TYPE_CHECKING:
     from pathlib import Path

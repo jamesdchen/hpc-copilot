@@ -3,7 +3,7 @@
 import os
 import re
 
-from hpc_mapreduce.infra.backends import HPCBackend, register
+from claude_hpc.infra.backends import HPCBackend, register
 
 
 @register("sge")
@@ -110,7 +110,7 @@ class SGEBackend(HPCBackend):
         ``backend_cls.query_jobs(...)`` without an inline ladder. The
         unused kwarg is ignored (slurm_cluster is irrelevant for SGE).
         """
-        from hpc_mapreduce.infra.backends.query import query_sge
+        from claude_hpc.infra.backends.query import query_sge
         return query_sge(job_ids, user=sge_user)
 
     @staticmethod
@@ -130,7 +130,7 @@ class SGEBackend(HPCBackend):
         co-tenant view from ``qstat`` snapshots, which are wall-clock
         snapshots rather than a historical window.
         """
-        from hpc_mapreduce.infra.inspect import _sge_inspect
+        from claude_hpc.infra.inspect import _sge_inspect
         return _sge_inspect(
             cluster_name,
             cfg,

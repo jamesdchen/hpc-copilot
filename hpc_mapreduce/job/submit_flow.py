@@ -29,9 +29,9 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import SideEffect, primitive
 from hpc_mapreduce.agent_cli import cmd_plan_submit
-from hpc_mapreduce.infra.backends.sge_remote import RemoteSGEBackend
-from hpc_mapreduce.infra.backends.slurm_remote import RemoteSlurmBackend
-from hpc_mapreduce.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
+from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
+from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
+from claude_hpc.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
 from hpc_mapreduce.job.discover import discover_executors
 from slash_commands import errors, runner, session
 from slash_commands.runner import submit_and_record
@@ -39,7 +39,7 @@ from slash_commands.runner import submit_and_record
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from hpc_mapreduce.infra.backends import HPCBackend
+    from claude_hpc.infra.backends import HPCBackend
 
 __all__ = ["submit_flow", "SubmitFlowResult"]
 

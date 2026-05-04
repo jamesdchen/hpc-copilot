@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from claude_hpc._internal._primitive import primitive
-from hpc_mapreduce.infra.clusters import load_clusters_config
+from claude_hpc.infra.clusters import load_clusters_config
 from slash_commands import errors
 
 
@@ -27,7 +27,7 @@ def list_clusters() -> dict[str, Any]:
 
     Each entry: ``{name, host, scheduler}``. Reads ``clusters.yaml``
     under the package's normal config-discovery path (see
-    :func:`hpc_mapreduce.infra.clusters.load_clusters_config`).
+    :func:`claude_hpc.infra.clusters.load_clusters_config`).
     """
     clusters = load_clusters_config()
     return {

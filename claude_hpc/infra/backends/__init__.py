@@ -6,7 +6,7 @@ can target any scheduler (SLURM, SGE, PBS, ...) without changing
 the core submission logic.
 
 Usage:
-    from hpc_mapreduce.infra.backends import get_backend
+    from claude_hpc.infra.backends import get_backend
     backend = get_backend("slurm", script="path/to/job.slurm")
     backend.submit_array(job_name, total_tasks, tasks_per_array, job_env)
 """
@@ -115,7 +115,7 @@ class HPCBackend(abc.ABC):
     def inspect(self, cluster_name: str, **kwargs):
         """Return a :class:`ClusterSnapshot` for *cluster_name*.
 
-        Wraps :func:`hpc_mapreduce.infra.inspect.inspect_cluster`'s
+        Wraps :func:`claude_hpc.infra.inspect.inspect_cluster`'s
         existing per-scheduler dispatch. Subclasses override; the
         default raises so an unmigrated backend is loud.
         """
@@ -307,9 +307,9 @@ def register(name: str) -> Callable[[type[HPCBackend]], type[HPCBackend]]:
 def get_backend(name: str = "slurm", **kwargs: object) -> HPCBackend:
     """Instantiate a backend by name.  *kwargs* are forwarded to the constructor."""
     # Lazy imports to populate registry
-    from hpc_mapreduce.infra.backends import sge as _sge  # noqa: F401
-    from hpc_mapreduce.infra.backends import sge_remote as _sge_remote  # noqa: F401
-    from hpc_mapreduce.infra.backends import slurm as _slurm  # noqa: F401
+    from claude_hpc.infra.backends import sge as _sge  # noqa: F401
+    from claude_hpc.infra.backends import sge_remote as _sge_remote  # noqa: F401
+    from claude_hpc.infra.backends import slurm as _slurm  # noqa: F401
 
     if name not in _REGISTRY:
         raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")
@@ -327,10 +327,10 @@ def get_backend_class(name: str) -> type[HPCBackend]:
     this when the script-path / SSH-target context is not available.
     """
     # Lazy imports to populate registry — same pattern as get_backend.
-    from hpc_mapreduce.infra.backends import sge as _sge  # noqa: F401
-    from hpc_mapreduce.infra.backends import sge_remote as _sge_remote  # noqa: F401
-    from hpc_mapreduce.infra.backends import slurm as _slurm  # noqa: F401
-    from hpc_mapreduce.infra.backends import slurm_remote as _slurm_remote  # noqa: F401
+    from claude_hpc.infra.backends import sge as _sge  # noqa: F401
+    from claude_hpc.infra.backends import sge_remote as _sge_remote  # noqa: F401
+    from claude_hpc.infra.backends import slurm as _slurm  # noqa: F401
+    from claude_hpc.infra.backends import slurm_remote as _slurm_remote  # noqa: F401
 
     if name not in _REGISTRY:
         raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")

@@ -2,7 +2,7 @@
 
 Usage (programmatic)::
 
-    from hpc_mapreduce.infra.gpu import pick_gpu
+    from claude_hpc.infra.gpu import pick_gpu
 
     # Static fallback - returns first available from preferred list
     result = pick_gpu(preferred=["A100", "H200", "A6000", "V100"])
@@ -134,13 +134,13 @@ def _run_qstat(ssh_host: str | None = None) -> str | None:
     """Run ``qstat -f -q gpu_*``, optionally over SSH. Returns stdout or None.
 
     When *ssh_host* is set (``"user@cluster"``), routes through the
-    canonical :func:`hpc_mapreduce.infra.remote.ssh_run` helper so the
+    canonical :func:`claude_hpc.infra.remote.ssh_run` helper so the
     SSH command picks up the project-wide multiplexing options and
     timeout discipline (``SSH_TIMEOUT_SEC = 60`` by default).
     """
     if ssh_host:
         # Lazy import to avoid a hard dependency for the local-qstat path.
-        from hpc_mapreduce.infra.remote import (  # noqa: PLC0415
+        from claude_hpc.infra.remote import (  # noqa: PLC0415
             split_ssh_target,
             ssh_run,
         )

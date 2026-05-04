@@ -19,7 +19,7 @@ from typing import Any
 
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
-from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
+from claude_hpc.infra.remote import run_combiner_checked, ssh_run
 from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar
 from slash_commands import errors, session
 from slash_commands.errors import RemoteCommandFailed
@@ -509,7 +509,7 @@ def _ssh_alive_job_ids(
     """
     if not job_ids:
         return set()
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
 
     backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
@@ -668,7 +668,7 @@ def fetch_task_logs(
     # B5-PR2: per-scheduler stderr-path templates live on the backend
     # class (``stderr_log_path``); this function is now transport (SSH)
     # plus retry-over-job-ids only.
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
     backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
     out: list[dict[str, Any]] = []

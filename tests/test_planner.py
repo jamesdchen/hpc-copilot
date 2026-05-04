@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_mapreduce.infra import inspect as ins
-from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
+from claude_hpc.infra import inspect as ins
+from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 from hpc_mapreduce.job import planner
 from hpc_mapreduce.job import runtime_prior as rp
 
@@ -188,14 +188,14 @@ class TestNodesForConstraint:
         # `a10` must not match a node whose Gres advertises `a100`. The
         # naive substring-in approach would silently include this node;
         # the token-aware match correctly excludes it.
-        from hpc_mapreduce.infra.inspect import NodeSnapshot
+        from claude_hpc.infra.inspect import NodeSnapshot
 
         a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
         out = planner._nodes_for_constraint([a100_node], gpu_types=["a10"])
         assert out == []
 
     def test_exact_match_still_works(self):
-        from hpc_mapreduce.infra.inspect import NodeSnapshot
+        from claude_hpc.infra.inspect import NodeSnapshot
 
         a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
         out = planner._nodes_for_constraint([a100_node], gpu_types=["a100"])
@@ -203,7 +203,7 @@ class TestNodesForConstraint:
 
     def test_active_features_fallback(self):
         # Some clusters expose the GPU type as a feature, not a GRES type.
-        from hpc_mapreduce.infra.inspect import NodeSnapshot
+        from claude_hpc.infra.inspect import NodeSnapshot
 
         node = NodeSnapshot(name="d11-08", gres="gpu:1", active_features=["v100"])
         out = planner._nodes_for_constraint([node], gpu_types=["v100"])
@@ -344,7 +344,7 @@ class TestEtaViaDES:
 
     def test_returns_int_when_des_eligible(self, tmp_path):
         # Persist an idle snapshot — DES runs and returns 0.
-        from hpc_mapreduce.infra.inspect import (
+        from claude_hpc.infra.inspect import (
             ClusterSnapshot, NodeSnapshot, persist_snapshot,
         )
         from hpc_mapreduce.job.planner import _eta_via_des

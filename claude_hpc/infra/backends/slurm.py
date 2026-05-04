@@ -3,7 +3,7 @@
 import os
 import re
 
-from hpc_mapreduce.infra.backends import HPCBackend, register
+from claude_hpc.infra.backends import HPCBackend, register
 
 
 @register("slurm")
@@ -109,7 +109,7 @@ class SlurmBackend(HPCBackend):
         ``backend_cls.query_jobs(...)`` without an inline ladder. The
         unused kwarg is ignored (sge_user is irrelevant for SLURM).
         """
-        from hpc_mapreduce.infra.backends.query import query_sacct
+        from claude_hpc.infra.backends.query import query_sacct
         return query_sacct(job_ids, cluster=slurm_cluster)
 
     @staticmethod
@@ -128,7 +128,7 @@ class SlurmBackend(HPCBackend):
         consumes ``sacct_window_hours`` (used to scope the failure-rate
         sacct query) while SGE ignores it.
         """
-        from hpc_mapreduce.infra.inspect import _slurm_inspect
+        from claude_hpc.infra.inspect import _slurm_inspect
         return _slurm_inspect(
             cluster_name,
             cfg,

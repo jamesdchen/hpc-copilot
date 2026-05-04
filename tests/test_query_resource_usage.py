@@ -11,8 +11,8 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
-from hpc_mapreduce.infra.backends import query as qmod
-from hpc_mapreduce.infra.backends.query import (
+from claude_hpc.infra.backends import query as qmod
+from claude_hpc.infra.backends.query import (
     parse_gpu_count_from_sge_resources,
     parse_gpu_count_from_tres,
 )

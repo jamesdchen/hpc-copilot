@@ -38,7 +38,7 @@ import math
 import random
 from typing import Any
 
-from hpc_mapreduce.infra.inspect import ClusterSnapshot
+from claude_hpc.infra.inspect import ClusterSnapshot
 from hpc_mapreduce.job.queue_simulator import SimJob, extract_running_jobs
 
 __all__ = [

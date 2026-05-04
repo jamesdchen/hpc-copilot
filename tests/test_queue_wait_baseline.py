@@ -216,7 +216,7 @@ class TestPredictionResult:
 # ---------------------------------------------------------------------------
 
 
-from hpc_mapreduce.infra.inspect import (
+from claude_hpc.infra.inspect import (
     ClusterSnapshot, NodeSnapshot, persist_snapshot,
 )
 

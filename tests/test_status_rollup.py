@@ -112,7 +112,7 @@ def test_report_status_from_tasks_integrates(tmp_path):
 
     with (
         patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
-        patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}),
+        patch("claude_hpc.infra.backends.query.query_sacct", return_value={}),
     ):
         report = report_status_from_tasks(
             tasks_data,
