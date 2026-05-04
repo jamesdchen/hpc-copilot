@@ -21,6 +21,7 @@ and shipped as JSON Schema files under ``hpc_mapreduce/schemas/``.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import shutil
@@ -63,13 +64,46 @@ def _emit(envelope: dict[str, Any]) -> None:
     print(json.dumps(envelope, sort_keys=True), flush=True)
 
 
+@functools.cache
+def _meta_idempotent(name: str) -> bool:
+    """Look up a primitive's idempotency declaration from the catalog.
+
+    B4 rewire: callers used to hardcode ``_ok(idempotent=True/False, ...)``
+    which forked the truth between the @primitive decorator (consumed by
+    docs / lint) and the runtime envelope (consumed by caller policy).
+    Routing through the catalog collapses both to the decorator.
+
+    Cached because the catalog walks every primitive's frontmatter on
+    first call. Falls back to True on miss (consistent with the
+    pre-B4 default for query-style commands; the cross-validation test
+    in tests/test_idempotency.py guards against silent drift).
+    """
+    try:
+        from hpc_mapreduce.operations import operations_catalog
+        for entry in operations_catalog():
+            if entry.get("name") == name:
+                return bool(entry.get("idempotent", True))
+    except Exception:
+        pass
+    return True
+
+
 def _ok(
     data: dict[str, Any],
     *,
-    idempotent: bool,
+    idempotent: bool | None = None,
+    name: str | None = None,
     partial_errors: list[dict[str, str]] | None = None,
 ) -> None:
     """Emit an ok-true envelope.
+
+    *idempotent* (B4 rewire): preferred spelling is to pass *name* — the
+    primitive's catalog name — and let the envelope read the
+    ``idempotent`` flag from ``operations_catalog()``. The legacy
+    ``idempotent=True/False`` kwarg is still honoured for callsites that
+    don't have a primitive mapping (e.g. cmd_aggregate which wraps a
+    pure mapreduce reduce). When both are supplied, the explicit kwarg
+    wins so callers can opt out of the catalog lookup if needed.
 
     *partial_errors*: optional list of ``{code, detail}`` dicts surfaced
     at the top level of the envelope — distinct from ``data.errors``.
@@ -77,6 +111,8 @@ def _ok(
     source can be partially degraded (qhost timed out, sacct
     unavailable) without the operation as a whole failing.
     """
+    if idempotent is None:
+        idempotent = _meta_idempotent(name) if name else True
     env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
     if partial_errors:
         env["partial_errors"] = list(partial_errors)
@@ -1472,22 +1508,17 @@ def cmd_failures(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-# ─── subcommand: build-executor ────────────────────────────────────────────
+# ─── subcommand: campaign-health ───────────────────────────────────────────
 
 
-@primitive(
-    name="build-executor",
-    verb="scaffold",
-    side_effects=[
-        SideEffect(
-            "writes-file",
-            "<output_dir>/<name>.py (refuses to overwrite without --force)",
-        ),
-    ],
-    idempotent=False,
-)
 def cmd_campaign_health(args: argparse.Namespace) -> int:
-    """Aggregate run-history into a campaign-health payload (D2a)."""
+    """Aggregate run-history into a campaign-health payload (D2a).
+
+    Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
+    decorator lives on ``hpc_mapreduce.job.campaign_health.campaign_health``
+    (the module-level implementation), matching the ``backed_by.python``
+    pointer in ``docs/primitives/campaign-health.md``.
+    """
     from hpc_mapreduce.job.campaign_health import campaign_health
 
     try:
@@ -1509,6 +1540,20 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: build-executor ────────────────────────────────────────────
+
+
+@primitive(
+    name="build-executor",
+    verb="scaffold",
+    side_effects=[
+        SideEffect(
+            "writes-file",
+            "<output_dir>/<name>.py (refuses to overwrite without --force)",
+        ),
+    ],
+    idempotent=False,
+)
 def cmd_build_executor(args: argparse.Namespace) -> int:
     starters = hpc_mapreduce._PACKAGE_ROOT / "templates" / "starters"
     template_map = {
