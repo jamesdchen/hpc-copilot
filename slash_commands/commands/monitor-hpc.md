@@ -165,7 +165,7 @@ Keybinds:
 Invoke the module directly:
 
 ```bash
-python -m hpc_mapreduce.reduce.tui \
+python -m claude_hpc.mapreduce.reduce.tui \
     --run-id <run_id> \
     --job-ids <csv_job_ids> \
     --job-name <profile> \
@@ -347,7 +347,7 @@ This guards against the "file count lies" failure mode (see anti-pattern at Step
 
 ### 4a.1 — Non-empty rows
 
-Re-invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive's underlying cluster-side reporter with `--min-rows N` (a flag of the on-cluster `python -m hpc_mapreduce.reduce.status` script that the primitive wraps; see `docs/cli-contract.md` for the cluster-side script's args). `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count). Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
+Re-invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive's underlying cluster-side reporter with `--min-rows N` (a flag of the on-cluster `python -m claude_hpc.mapreduce.reduce.status` script that the primitive wraps; see `docs/cli-contract.md` for the cluster-side script's args). `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count). Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
 
 ### 4a.2 — Spot-check 3 tasks
 

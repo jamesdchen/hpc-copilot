@@ -1,6 +1,6 @@
 """Tests for the executor-side ``read_kw_env`` helper.
 
-Lives in ``hpc_mapreduce.map.metrics_io`` (the same stdlib-only module
+Lives in ``claude_hpc.mapreduce.metrics_io`` (the same stdlib-only module
 that ships to the cluster), so the test only depends on the env shape
 the dispatcher already exports.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc_mapreduce.map.metrics_io import read_kw_env
+from claude_hpc.mapreduce.metrics_io import read_kw_env
 
 if TYPE_CHECKING:
     import pytest

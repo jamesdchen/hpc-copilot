@@ -36,12 +36,14 @@ include = ["claude_hpc*", "hpc_mapreduce*", "slash_commands*"]
 [tool.setuptools.package-data]
 hpc_mapreduce = [
     "config/*.yaml",
-    "templates/common/*.sh",
-    "templates/sge/*",
-    "templates/slurm/*",
-    "templates/starters/*.py",
     "schemas/*.json",
     "py.typed",
+]
+claude_hpc = [
+    "mapreduce/templates/common/*.sh",
+    "mapreduce/templates/sge/*",
+    "mapreduce/templates/slurm/*",
+    "mapreduce/templates/starters/*.py",
 ]
 
 [tool.pytest.ini_options]

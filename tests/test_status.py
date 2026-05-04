@@ -1,10 +1,10 @@
-"""Tests for hpc_mapreduce.reduce.status — check_results and report_status."""
+"""Tests for claude_hpc.mapreduce.reduce.status — check_results and report_status."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
-from hpc_mapreduce.reduce.status import (
+from claude_hpc.mapreduce.reduce.status import (
     check_results,
     check_results_from_tasks,
     report_status,
@@ -38,7 +38,7 @@ class TestReportStatus:
     def test_report_status_basic(self, tmp_path):
         # Patch scheduler query functions to avoid real subprocess calls.
         with (
-            patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
+            patch("claude_hpc.mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
             patch("claude_hpc.infra.backends.query.query_sacct", return_value={}),
         ):
             result = report_status(
@@ -70,7 +70,7 @@ class TestReportStatusResourceUsage:
             "errors": [],
         }
         with (
-            patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
+            patch("claude_hpc.mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
             patch("claude_hpc.infra.backends.query.query_sacct", return_value=fake_query),
         ):
             result = report_status(
@@ -154,7 +154,7 @@ class TestReportTimestampIsUtc:
         timezone the timestamp was in.  The fix uses an explicit UTC ISO
         string so the field is unambiguous.
         """
-        from hpc_mapreduce.reduce.status import report_status_from_tasks
+        from claude_hpc.mapreduce.reduce.status import report_status_from_tasks
 
         task_dir = tmp_path / "t0"
         task_dir.mkdir()
@@ -183,7 +183,7 @@ class TestDetectSchedulerMetaHint:
         experiment root looking for ``experiment_meta.json`` so a Slurm
         cluster's meta file wins over a missing local ``sacct``.
         """
-        from hpc_mapreduce.reduce.status import detect_scheduler
+        from claude_hpc.mapreduce.reduce.status import detect_scheduler
 
         # Place the meta file at the experiment root, not the per-task dir.
         exp = tmp_path / "exp"
@@ -195,17 +195,17 @@ class TestDetectSchedulerMetaHint:
         def no_sacct(*args, **kwargs):
             raise FileNotFoundError("no sacct")
 
-        with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
+        with patch("claude_hpc.mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
             assert detect_scheduler(task) == "slurm"
 
     def test_falls_back_to_sge_when_no_meta_and_no_sacct(self, tmp_path):
         """No meta file, no sacct → preserve the existing fallback."""
-        from hpc_mapreduce.reduce.status import detect_scheduler
+        from claude_hpc.mapreduce.reduce.status import detect_scheduler
 
         def no_sacct(*args, **kwargs):
             raise FileNotFoundError("no sacct")
 
-        with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
+        with patch("claude_hpc.mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
             assert detect_scheduler(tmp_path) == "sge"
 
     def test_report_status_from_tasks_uses_first_task_meta(
@@ -217,7 +217,7 @@ class TestDetectSchedulerMetaHint:
         the heuristic has a chance to read the experiment meta JSON
         sitting at the experiment root.
         """
-        from hpc_mapreduce.reduce.status import report_status_from_tasks
+        from claude_hpc.mapreduce.reduce.status import report_status_from_tasks
 
         exp = tmp_path / "exp2"
         task = exp / "t0"
@@ -232,6 +232,6 @@ class TestDetectSchedulerMetaHint:
         def no_sacct(*args, **kwargs):
             raise FileNotFoundError("no sacct")
 
-        with patch("hpc_mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
+        with patch("claude_hpc.mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
             report = report_status_from_tasks(tasks_data, [])
         assert report["scheduler"] == "slurm"

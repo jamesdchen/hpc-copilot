@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-import hpc_mapreduce
+import claude_hpc
 
 
 def _materialize_cluster_layout(
@@ -43,7 +43,7 @@ def _materialize_cluster_layout(
 
     # Place the combiner script as the cluster does.
     combiner_dst = hpc / "_hpc_combiner.py"
-    pkg_combiner = Path(hpc_mapreduce.__file__).parent / "map" / "combiner.py"
+    pkg_combiner = Path(claude_hpc.__file__).parent / "mapreduce" / "combiner.py"
     shutil.copyfile(pkg_combiner, combiner_dst)
     return combiner_dst
 

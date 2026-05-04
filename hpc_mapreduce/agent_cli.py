@@ -8,7 +8,7 @@ Bash tool, cron, scripts). Conventions:
   LLM context loading, analogous to ``--help``). Every other invocation
   preserves the JSON-envelope contract.
 - Stderr carries free-form diagnostic prose (e.g. ``[dispatch] ERROR: …``
-  emitted by ``hpc_mapreduce.map.dispatch`` and ``…map.combiner``); it is
+  emitted by ``claude_hpc.mapreduce.dispatch`` and ``…map.combiner``); it is
   intended for humans tailing logs. Do not parse it as JSON.
 - Exit codes: 0 success, 1 user error, 2 cluster/network error, 3 internal.
 - Every subcommand accepts ``--experiment-dir`` (defaults to CWD).
@@ -796,7 +796,7 @@ def cmd_campaign_status(args: argparse.Namespace) -> int:
     in-flight count (sidecars whose journal status is still
     ``in_flight``). No SSH, no scheduler — pure local filesystem read.
     """
-    from hpc_mapreduce.reduce.history import find_sidecars_by_campaign, prior
+    from claude_hpc.mapreduce.reduce.history import find_sidecars_by_campaign, prior
 
     sidecars = find_sidecars_by_campaign(args.experiment_dir, args.campaign_id)
     history = prior(args.experiment_dir, args.campaign_id)

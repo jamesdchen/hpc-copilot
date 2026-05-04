@@ -14,7 +14,7 @@
     },
     "last_status": {
       "type": "object",
-      "description": "Snapshot from the on-cluster status reporter; see hpc_mapreduce.reduce.status."
+      "description": "Snapshot from the on-cluster status reporter; see claude_hpc.mapreduce.reduce.status."
     },
     "last_status_age_seconds": {
       "type": ["integer", "null"],

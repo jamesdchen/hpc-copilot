@@ -249,7 +249,7 @@ def test_core_does_not_import_templates() -> None:
 # ``docs/boundary-contract.md``.
 RUNTIME_MODULES_ALLOWED_IN_TEMPLATES = frozenset(
     {
-        "hpc_mapreduce.map.metrics_io",
+        "claude_hpc.mapreduce.metrics_io",
     }
 )
 
@@ -258,7 +258,7 @@ def _imported_dotted_modules(path: Path) -> set[str]:
     """Return the set of fully-qualified imported module names in ``path``.
 
     Like :func:`_imported_top_level_modules` but returns the full dotted name
-    so callers can distinguish ``hpc_mapreduce.map.metrics_io`` (a deployed
+    so callers can distinguish ``claude_hpc.mapreduce.metrics_io`` (a deployed
     runtime module) from ``hpc_mapreduce.job.runs`` (framework-internal).
     """
     source = path.read_text(encoding="utf-8")

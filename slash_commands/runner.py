@@ -237,7 +237,7 @@ def _ssh_status_report(
     job_ids_csv = ",".join(job_ids)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
-        f"python -m hpc_mapreduce.reduce.status "
+        f"python -m claude_hpc.mapreduce.reduce.status "
         f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "
@@ -654,7 +654,7 @@ def fetch_task_logs(
     """SSH to the cluster and tail each task's stderr log.
 
     Tries the most recent ``job_id`` first, falls back through earlier
-    ones (matching :func:`hpc_mapreduce.reduce.status.get_err_log_paths`
+    ones (matching :func:`claude_hpc.mapreduce.reduce.status.get_err_log_paths`
     semantics). Returns one dict per task; missing logs surface as
     ``{"task_id": int, "missing": True}``.
 

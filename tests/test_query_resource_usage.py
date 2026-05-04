@@ -16,7 +16,7 @@ from claude_hpc.infra.backends.query import (
     parse_gpu_count_from_sge_resources,
     parse_gpu_count_from_tres,
 )
-from hpc_mapreduce.reduce.metrics import reduce_resource_usage
+from claude_hpc.mapreduce.reduce.metrics import reduce_resource_usage
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:

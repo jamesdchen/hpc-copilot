@@ -29,7 +29,7 @@ Convention details:
 * Writes the per-task result to ``args.output_file`` (CSV / Parquet /
   JSON — format is the executor's call).
 * Optionally calls
-  :func:`hpc_mapreduce.map.metrics_io.write_metrics` with a dict of
+  :func:`claude_hpc.mapreduce.metrics_io.write_metrics` with a dict of
   scalar summaries when ``$RESULT_DIR`` is set, so the on-cluster
   combiner can aggregate per grid point. No-op outside the HPC
   dispatcher.
@@ -71,7 +71,7 @@ def compute(args: argparse.Namespace) -> None:
     # No-op outside the HPC dispatcher (when $RESULT_DIR is unset) so
     # the scaffold stays standalone-runnable for local smoke tests.
     if os.environ.get("RESULT_DIR"):
-        from hpc_mapreduce.map.metrics_io import write_metrics
+        from claude_hpc.mapreduce.metrics_io import write_metrics
 
         write_metrics(result)
 
@@ -92,7 +92,7 @@ def compute(args: argparse.Namespace) -> None:
 #        metrics = {"qlike": qlike(test.y, preds), "n_samples": len(test)}
 #        write_csv(args.output_file, preds)
 #        if os.environ.get("RESULT_DIR"):
-#            from hpc_mapreduce.map.metrics_io import write_metrics
+#            from claude_hpc.mapreduce.metrics_io import write_metrics
 #            write_metrics(metrics)
 #
 # 2. Simulation / seed-sweep (FLAGS: seed, steps, config, ...)

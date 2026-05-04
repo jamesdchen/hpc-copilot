@@ -13,22 +13,23 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_mapreduce import _PACKAGE_ROOT
+from claude_hpc import _PACKAGE_ROOT
+from hpc_mapreduce import _PACKAGE_ROOT as _LEGACY_PACKAGE_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 TEMPLATES = [
-    _PACKAGE_ROOT / "templates" / "sge" / "cpu_array.sh",
-    _PACKAGE_ROOT / "templates" / "sge" / "gpu_array.sh",
-    _PACKAGE_ROOT / "templates" / "slurm" / "cpu_array.slurm",
-    _PACKAGE_ROOT / "templates" / "slurm" / "gpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "cpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "gpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "cpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "gpu_array.slurm",
 ]
 
 # Each per-scheduler template now sources the shared preamble for the
 # uv-sync block. Check the union of the template body + any preamble it
 # sources so the invariants survive the dedup.
-COMMON_PREAMBLE = _PACKAGE_ROOT / "templates" / "common" / "hpc_preamble.sh"
+COMMON_PREAMBLE = _PACKAGE_ROOT / "mapreduce" / "templates" / "common" / "hpc_preamble.sh"
 
 
 def _effective_template_text(template: Path) -> str:
@@ -76,7 +77,9 @@ def test_submit_input_schema_accepts_runtime() -> None:
     """The submit.input.json schema accepts an optional runtime field."""
     import json
 
-    schema_path = _PACKAGE_ROOT / "schemas" / "submit.input.json"
+    # Schemas have not yet moved to claude_hpc/ at this point in the
+    # reorg; resolve via the legacy alias (will be cleaned up in Step 8).
+    schema_path = _LEGACY_PACKAGE_ROOT / "schemas" / "submit.input.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert "runtime" in schema["properties"]
     rt = schema["properties"]["runtime"]

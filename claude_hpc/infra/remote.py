@@ -258,7 +258,7 @@ def deploy_runtime(
 
     1. **Importable stubs** in ``{remote_path}/hpc_mapreduce/map/``:
        ``metrics_io.py`` so user executors can do
-       ``from hpc_mapreduce.map.metrics_io import write_metrics`` on
+       ``from claude_hpc.mapreduce.metrics_io import write_metrics`` on
        compute nodes without installing the full package.
     2. **Framework artifacts** in ``{remote_path}/.hpc/``: the framework
        executor (``_hpc_dispatch.py``), the combiner
@@ -316,10 +316,10 @@ def deploy_runtime(
     # Note: ``map/context.py`` was previously pushed here but the source
     # module never existed on disk; the orphan reference would FileNotFound
     # at deploy time. Removed in regfix.
-    _scp(pkg_dir / "map" / "metrics_io.py", "hpc_mapreduce/map/metrics_io.py")
+    _scp(pkg_dir / "mapreduce" / "metrics_io.py", "hpc_mapreduce/map/metrics_io.py")
 
     # Framework executor + combiner inside .hpc/.
-    _scp(pkg_dir / "map" / "dispatch.py", ".hpc/_hpc_dispatch.py")
+    _scp(pkg_dir / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
 
     # Job templates inside .hpc/templates/.
     # B5-PR2: drop the inline ``if sched == 'sge'`` ladder; the backend
@@ -330,7 +330,7 @@ def deploy_runtime(
         ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):
             _scp(
-                pkg_dir / "templates" / sched / f"{kind}.{ext}",
+                pkg_dir / "mapreduce" / "templates" / sched / f"{kind}.{ext}",
                 f".hpc/templates/{kind}.{ext}",
             )
 
@@ -340,13 +340,13 @@ def deploy_runtime(
     # resolve to .hpc/templates/common/<name>.sh on the cluster.
     for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
         _scp(
-            pkg_dir / "templates" / "common" / common_name,
+            pkg_dir / "mapreduce" / "templates" / "common" / common_name,
             f".hpc/templates/common/{common_name}",
         )
 
     # Combiner is the last scp; return its CompletedProcess so callers
     # can inspect the trailing returncode.
-    return _scp(pkg_dir / "map" / "combiner.py", ".hpc/_hpc_combiner.py")
+    return _scp(pkg_dir / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
 
 
 def run_combiner(

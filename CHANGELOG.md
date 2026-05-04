@@ -130,7 +130,7 @@ Removed:
 Kept (the small surface that actually mattered):
 - `campaign_id` field on submit specs and per-run sidecars.
 - `HPC_CAMPAIGN_ID` env var threaded through scheduler templates.
-- `hpc_mapreduce.reduce.history.prior(...)` for reading per-iteration
+- `claude_hpc.mapreduce.reduce.history.prior(...)` for reading per-iteration
   reduced metrics back inside `tasks.py`.
 - `hpc_mapreduce.campaign.campaign_dir(...)` for strategy-state
   placement (Optuna SQLite, PBT checkpoints).
@@ -249,7 +249,7 @@ shape made every user write themselves.
   without polling externally. Optional; the framework computes
   `raw_metrics` via the v2 sidecar pipeline when `experiment_dir` is
   provided. Empty dict for failed iterations.
-- **`hpc_mapreduce.map.metrics_io.read_kw_env()`** — executor-side helper
+- **`claude_hpc.mapreduce.metrics_io.read_kw_env()`** — executor-side helper
   that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env
   var the dispatcher exported. Stdlib-only; deployed alongside the
   executor.
@@ -264,7 +264,7 @@ shape made every user write themselves.
 The framework gains a small new primitive for adaptive iteration: a
 **campaign** is a sequence of `/submit` invocations sharing a
 `campaign_id` tag. The user's `.hpc/tasks.py` reads
-`hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
+`claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
 module load to learn what prior iterations of the same campaign produced
 and decide what to run next. Strategies (Optuna, RandomSearch,
 walk-forward, PBT, …) live as Python libraries the user imports inside
@@ -278,7 +278,7 @@ Surface area:
 - **`HPC_CAMPAIGN_ID`** — env var forwarded by every scheduler template
   (SGE/SLURM × CPU/GPU). Read by the user's `tasks.py` and executor on
   the cluster.
-- **`hpc_mapreduce.reduce.history`** — read-only accessor:
+- **`claude_hpc.mapreduce.reduce.history`** — read-only accessor:
   - `prior(experiment_dir, campaign_id)` returns per-iteration reduced
     metric dicts, oldest-first. Pending iterations contribute `{}`.
   - `find_sidecars_by_campaign` and `result_dirs_for_sidecar` for
@@ -370,7 +370,7 @@ All future work.
   `waves` rollup keyed by wave id with `{complete, running, pending,
   failed, unknown, total}` buckets. `record_status` and `reconcile`
   carry it into the persisted `last_status`. New `rollup_by_wave`
-  helper in `hpc_mapreduce.reduce.status`.
+  helper in `claude_hpc.mapreduce.reduce.status`.
 - **`hpc-mapreduce logs` subcommand.** Fetches per-task stderr from the
   cluster: `--task-id 7,12,42` for explicit ids or `--all-failed` for
   every failed task. Falls back through earlier `job_ids` when the
