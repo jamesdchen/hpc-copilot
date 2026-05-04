@@ -110,9 +110,7 @@ def record_interview(
     tasks_mod = load_tasks_module(tasks_py)
     total_tasks = int(tasks_mod.total())
     if total_tasks < 1:
-        raise ValueError(
-            f"tasks.total() = {total_tasks}; campaign has no tasks to dispatch"
-        )
+        raise ValueError(f"tasks.total() = {total_tasks}; campaign has no tasks to dispatch")
 
     if declared != total_tasks:
         raise ValueError(

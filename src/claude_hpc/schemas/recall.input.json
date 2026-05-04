@@ -2,15 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/recall.input.json",
   "title": "recall query spec",
-  "description": "Optional spec file for `hpc-mapreduce recall`. The same arguments are exposed as CLI flags (--root, --task-kind, --operator, --since, --limit) and the operator picks one path. The flag form is more convenient for shell pipelines; the spec form is more convenient when the calling agent already has a structured filter to pass.",
+  "description": "Optional spec file for `hpc-mapreduce recall`. The same arguments are exposed as CLI flags (--root, --task-kind, --operator, --since, --limit, --include-runtime, --include-generator-stats) and the operator picks one path. The flag form is more convenient for shell pipelines; the spec form is more convenient when the calling agent already has a structured filter to pass. When `root` is omitted (in either form), recall falls back to ~/.claude-hpc/config.json:experiment_roots — both empty raises spec_invalid.",
   "type": "object",
-  "required": ["root"],
   "additionalProperties": false,
   "properties": {
     "root": {
       "type": "string",
       "minLength": 1,
-      "description": "Filesystem directory to walk (recursively) for interview.json files."
+      "description": "Filesystem directory to walk (recursively) for interview.json files. Optional; when absent, ~/.claude-hpc/config.json:experiment_roots is consulted."
     },
     "task_kind": {
       "type": "string",
@@ -30,6 +29,16 @@
       "minimum": 1,
       "default": 20,
       "description": "Cap on results returned. The total match count (pre-truncation) is reported via data.total_matching."
+    },
+    "include_runtime": {
+      "type": "boolean",
+      "default": false,
+      "description": "Tier 2 rollup: walks each matched campaign's .hpc/runtimes/*.json and aggregates elapsed_sec + failure rate. Adds data.rollup.runtime_rollup."
+    },
+    "include_generator_stats": {
+      "type": "boolean",
+      "default": false,
+      "description": "Tier 3 rollup: buckets matched campaigns by task_generator.kind and reports observed parameter envelopes. Adds data.rollup.generator_rollup."
     }
   }
 }

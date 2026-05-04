@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/recall.output.json",
   "title": "recall output envelope",
-  "description": "Envelope returned by `hpc-mapreduce recall`. Each campaign summary is a projection over the corresponding interview.json — the recall primitive does not load the full intent, transcript, or any metrics; the calling agent re-reads `<campaign_dir>/interview.json` directly when it needs more.",
+  "description": "Envelope returned by `hpc-mapreduce recall`. Each campaign summary projects the prior-decision fields the next interviewer would compare against (budget, abort_if, task_generator, cluster_target) — not just file-listing metadata. The rollup block pre-computes aggregations across all matched campaigns: Tier 1 always-on (free, computed from interview.json fields alone), Tier 2 opt-in via include_runtime (walks .hpc/runtimes/*.json), Tier 3 opt-in via include_generator_stats (per-generator-kind parameter envelopes).",
   "type": "object",
   "required": ["ok", "data"],
   "additionalProperties": false,
@@ -10,7 +10,7 @@
     "ok":   { "type": "boolean", "const": true },
     "data": {
       "type": "object",
-      "required": ["campaigns", "total_matching", "showing"],
+      "required": ["campaigns", "total_matching", "showing", "rollup"],
       "additionalProperties": false,
       "properties": {
         "campaigns": {
@@ -26,6 +26,10 @@
           "type": "integer",
           "minimum": 0,
           "description": "Number of summaries actually included in `campaigns` (== min(total_matching, limit))."
+        },
+        "rollup": {
+          "$ref": "#/$defs/rollup",
+          "description": "Cross-campaign aggregations. Tier 1 fields always present; runtime_rollup present iff include_runtime; generator_rollup present iff include_generator_stats."
         }
       }
     }
@@ -43,7 +47,126 @@
         "operator":         { "type": ["string", "null"] },
         "produced_by_kind": { "type": ["string", "null"], "enum": ["mars", "human", null] },
         "materialized_at":  { "type": ["string", "null"], "description": "ISO-8601 timestamp from interview.json._materialized.at." },
-        "cmd_sha":          { "type": ["string", "null"], "pattern": "^[0-9a-f]{8,64}$" }
+        "cmd_sha":          { "type": ["string", "null"], "pattern": "^[0-9a-f]{8,64}$" },
+        "budget":           { "type": ["object", "null"], "description": "Echo of intent.budget — opaque dict, units chosen by the interview agent." },
+        "abort_if":         { "type": ["object", "null"], "description": "Echo of intent.abort_if — early-stop criterion." },
+        "cluster_target":   { "type": ["object", "null"], "description": "Echo of intent.cluster_target — {cluster, profile, constraint?}." },
+        "task_generator":   {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["kind"],
+              "additionalProperties": false,
+              "properties": {
+                "kind":   { "type": "string" },
+                "params": { "type": ["object", "null"] }
+              }
+            }
+          ],
+          "description": "Echo of intent.task_generator — {kind, params}. Null when the interview agent hand-wrote tasks.py."
+        }
+      }
+    },
+    "rollup": {
+      "type": "object",
+      "required": [
+        "count",
+        "task_kind_distribution",
+        "operators",
+        "produced_by_kinds",
+        "task_generator_kinds",
+        "clusters",
+        "task_count",
+        "materialized_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "count":                   { "type": "integer", "minimum": 0 },
+        "task_kind_distribution":  { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "operators":               { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "produced_by_kinds":       { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "task_generator_kinds":    { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "clusters":                { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "task_count": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["p50", "p95", "min", "max"],
+              "additionalProperties": false,
+              "properties": {
+                "p50": { "type": "number" },
+                "p95": { "type": "number" },
+                "min": { "type": "integer", "minimum": 0 },
+                "max": { "type": "integer", "minimum": 0 }
+              }
+            }
+          ]
+        },
+        "materialized_at": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["earliest", "latest"],
+              "additionalProperties": false,
+              "properties": {
+                "earliest": { "type": "string" },
+                "latest":   { "type": "string" }
+              }
+            }
+          ]
+        },
+        "runtime_rollup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["walltime_per_task_sec", "failure_rate", "total_task_samples", "campaigns_with_no_runtime"],
+          "properties": {
+            "walltime_per_task_sec": {
+              "anyOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["p50", "p95", "min", "max", "n_samples"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "p50":       { "type": "number" },
+                    "p95":       { "type": "number" },
+                    "min":       { "type": "integer" },
+                    "max":       { "type": "integer" },
+                    "n_samples": { "type": "integer", "minimum": 0 }
+                  }
+                }
+              ]
+            },
+            "failure_rate":              { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "total_task_samples":        { "type": "integer", "minimum": 0 },
+            "campaigns_with_no_runtime": { "type": "integer", "minimum": 0 }
+          },
+          "description": "Tier 2: aggregated per-task runtime stats from .hpc/runtimes/*.json across every matched campaign."
+        },
+        "generator_rollup": {
+          "type": "object",
+          "required": ["by_kind"],
+          "additionalProperties": false,
+          "properties": {
+            "by_kind": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": ["count"],
+                "additionalProperties": true,
+                "properties": {
+                  "count":             { "type": "integer", "minimum": 1 },
+                  "param_envelopes":   { "type": "object", "description": "numeric_logspace / numeric_linspace: {param: {low: [min, max], high: [min, max], n: [min, max]}}." },
+                  "axis_value_unions": { "type": "object", "description": "cartesian_product: {axis_name: [unique values seen across campaigns]}." }
+                }
+              }
+            }
+          },
+          "description": "Tier 3: bucket-by-kind observed parameter envelopes."
+        }
       }
     }
   }
