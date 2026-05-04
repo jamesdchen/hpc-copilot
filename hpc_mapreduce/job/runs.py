@@ -139,6 +139,15 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "aggregate_defaults": None,
 }
 
+# Hardened return-shape defaults. ``read_run_sidecar`` always fills these
+# so callers can read ``data["wave_map"]`` etc. without a presence check
+# regardless of which sidecar version wrote the file.
+_HARDENED_DEFAULTS: dict[str, Any] = {
+    "wave_map": dict,  # callable factory — produces a fresh empty dict
+    "task_count": int,  # 0
+    "result_dir_template": str,  # ""
+}
+
 
 def write_run_sidecar(
     experiment_dir: Path,
@@ -231,6 +240,15 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     ``None`` so callers can rely on the v2 shape regardless of when the
     sidecar was written.
 
+    Hardened return shape — the dict is guaranteed to contain:
+
+    - ``wave_map: dict[str, list[int]]`` — empty dict when unset
+    - ``task_count: int`` — ``0`` when unset
+    - ``result_dir_template: str`` — empty string when unset
+
+    Callers can therefore read these keys directly without falling back
+    to ``.get(...)`` with a default, regardless of sidecar version.
+
     Raises
     ------
     FileNotFoundError
@@ -243,6 +261,23 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     # Backfill missing v2 fields so callers see a uniform shape.
     for k, default in _V2_BACKFILL_DEFAULTS.items():
         data.setdefault(k, default)
+    # Hardened defaults — callers (monitor_flow, aggregate_flow,
+    # reduce.status, reduce.history) used to read these keys with raw
+    # json.loads + .get(...) and silently miss them on v1 sidecars or
+    # sidecars that omitted wave_map. Pin the shape here so the bug
+    # cannot recur.
+    for k, factory in _HARDENED_DEFAULTS.items():
+        existing = data.get(k)
+        if k == "wave_map":
+            if not isinstance(existing, dict):
+                data[k] = factory()
+        elif k == "task_count":
+            try:
+                data[k] = int(existing or 0)
+            except (TypeError, ValueError):
+                data[k] = 0
+        elif k == "result_dir_template":
+            data[k] = existing if isinstance(existing, str) else ""
     return data
 
 
