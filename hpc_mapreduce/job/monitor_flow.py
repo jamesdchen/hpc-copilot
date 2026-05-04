@@ -168,10 +168,21 @@ def _append_tick(
         "console_emitted": False,
     }
     path = _tick_log_path(experiment_dir, run_id)
+    # B7: Route the JSONL append through hpc_mapreduce.telemetry, which
+    # owns the flock-guarded writer pattern. The local _flock_append /
+    # legacy fallback below remain as the on-disk shape -- the only
+    # change is that the writer call goes through the canonical sink.
+    # Telemetry's monitor-jsonl sink ignores HPC_TELEMETRY_SINK because
+    # this caller is the canonical producer.
     try:
-        with _flock_append(path), path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-    except OSError:
+        from hpc_mapreduce.telemetry import record as _telemetry_record
+
+        _telemetry_record(
+            "tick", record,
+            sink="monitor-jsonl",
+            monitor_jsonl_path=path,
+        )
+    except Exception:  # noqa: BLE001 — never crash the loop on telemetry
         # Tick log writes must never crash the loop. The journal record
         # is the primary state; this is observability.
         pass
