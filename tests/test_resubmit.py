@@ -98,3 +98,23 @@ class TestResubmitPlanBatching:
         for b in plan.batches:
             for tid in b.task_ids:
                 assert 0 <= tid < 60
+
+
+class TestFailureCategoryVocabulary:
+    """Cross-check: every category emitted by the auto-classifier must be
+    accepted by the resubmit subcommand. Catches drift introduced when
+    someone adds a new pattern to ``_FAILURE_CATEGORY_PATTERNS`` without
+    extending ``_VALID_RESUBMIT_CATEGORIES``.
+    """
+
+    def test_classifier_categories_are_all_valid_resubmit_categories(self):
+        from hpc_mapreduce.agent_cli import _VALID_RESUBMIT_CATEGORIES
+        from slash_commands.runner import _FAILURE_CATEGORY_PATTERNS
+
+        emitted = {name for name, _ in _FAILURE_CATEGORY_PATTERNS}
+        missing = emitted - _VALID_RESUBMIT_CATEGORIES
+        assert not missing, (
+            "auto-classifier emits categories that resubmit silently rejects: "
+            f"{sorted(missing)}. Either accept them in _VALID_RESUBMIT_CATEGORIES "
+            "or stop emitting them."
+        )

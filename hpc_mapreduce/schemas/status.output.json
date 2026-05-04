@@ -10,7 +10,7 @@
     "run_id": { "type": "string" },
     "lifecycle_state": {
       "type": "string",
-      "enum": ["in_flight", "complete", "failed", "abandoned"]
+      "enum": ["in_flight", "complete", "failed", "abandoned", "timeout"]
     },
     "last_status": {
       "type": "object",

@@ -124,6 +124,60 @@ def _add_experiment_dir(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_profile_cluster_cmdsha(
+    parser: argparse.ArgumentParser,
+    *,
+    cmd_sha_help: str | None = None,
+) -> None:
+    """Add the ``--profile`` (required), ``--cluster`` (required), and
+    ``--cmd-sha`` (optional) trio used by every smart-submit pipeline
+    subcommand: ``plan-submit``, ``runtime-prior``, ``walltime-drift``,
+    ``house-edge``.
+
+    *cmd_sha_help* lets each subcommand explain how it consumes the
+    filter; defaults to a generic note.
+    """
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--cluster", required=True)
+    parser.add_argument(
+        "--cmd-sha",
+        default=None,
+        help=cmd_sha_help or "If set, filter runtime priors to samples with this cmd_sha.",
+    )
+
+
+def _add_run_id(parser: argparse.ArgumentParser) -> None:
+    """Add the canonical ``--run-id`` argument (always required)."""
+    parser.add_argument("--run-id", required=True)
+
+
+def _add_spec_and_dry_run(
+    parser: argparse.ArgumentParser,
+    *,
+    schema_hint: str,
+    dry_run_help: str,
+) -> None:
+    """Add the ``--spec`` (required) + ``--dry-run`` pair used by the
+    workflow-flow subcommands (``submit-flow``, ``monitor-flow``,
+    ``aggregate-flow``).
+
+    *schema_hint* is the schema filename mentioned in the spec help
+    (e.g. ``"schemas/submit_flow.input.json"``); *dry_run_help* lets
+    each subcommand explain what dry-run skips.
+    """
+    parser.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help=f"JSON spec file ({schema_hint})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=dry_run_help,
+    )
+
+
 def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dict[str, Any]:
     """Load and (optionally) JSON-Schema-validate ``--spec`` input.
 
@@ -1031,8 +1085,16 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 # ─── subcommand: resubmit ──────────────────────────────────────────────────
 
 
+# Canonical failure-category vocabulary. Must be the UNION of:
+#   - the auto-classifier in slash_commands.runner.cluster_failures_by_fingerprint
+#     (gpu_oom, system_oom, walltime, node_failure, import_error,
+#      file_not_found, permission_denied, disk_full, python_traceback)
+#   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
+# A test in tests/test_resubmit.py asserts the classifier never emits a
+# category outside this set.
 _VALID_RESUBMIT_CATEGORIES = frozenset(
     {
+        # Human-supplied taxonomy.
         "gpu_oom",
         "system_oom",
         "segv",
@@ -1041,6 +1103,13 @@ _VALID_RESUBMIT_CATEGORIES = frozenset(
         "queue_stall",
         "code_bug",
         "unknown",
+        # Auto-classifier emits these too — accept them so an agent can
+        # round-trip the classifier's output back into a resubmit spec.
+        "import_error",
+        "file_not_found",
+        "permission_denied",
+        "disk_full",
+        "python_traceback",
     }
 )
 
@@ -1392,8 +1461,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_ps)
-    p_ps.add_argument("--profile", required=True)
-    p_ps.add_argument("--cluster", required=True)
+    _add_profile_cluster_cmdsha(p_ps)
     p_ps.add_argument(
         "--candidates",
         default=None,
@@ -1402,11 +1470,6 @@ def build_parser() -> argparse.ArgumentParser:
             "(e.g. 'a100,a40|a100,a40|a100|v100'). Defaults to single-GPU + "
             "all-GPU-types from clusters.yaml."
         ),
-    )
-    p_ps.add_argument(
-        "--cmd-sha",
-        default=None,
-        help="If set, filter runtime priors to samples with this cmd_sha.",
     )
     p_ps.add_argument(
         "--no-adversarial",
@@ -1471,12 +1534,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Quantile rollup of runtime samples for a (profile, cluster).",
     )
     _add_experiment_dir(p_rp)
-    p_rp.add_argument("--profile", required=True)
-    p_rp.add_argument("--cluster", required=True)
-    p_rp.add_argument(
-        "--cmd-sha",
-        default=None,
-        help="Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes).",
+    _add_profile_cluster_cmdsha(
+        p_rp,
+        cmd_sha_help=(
+            "Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes)."
+        ),
     )
     p_rp.set_defaults(func=cmd_runtime_prior)
 
@@ -1489,9 +1551,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_wd)
-    p_wd.add_argument("--profile", required=True)
-    p_wd.add_argument("--cluster", required=True)
-    p_wd.add_argument("--cmd-sha", default=None)
+    _add_profile_cluster_cmdsha(p_wd)
     p_wd.add_argument("--base-safety-mult", type=float, default=1.30)
     p_wd.set_defaults(func=cmd_walltime_drift)
 
@@ -1505,9 +1565,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_he)
-    p_he.add_argument("--profile", required=True)
-    p_he.add_argument("--cluster", required=True)
-    p_he.add_argument("--cmd-sha", default=None)
+    _add_profile_cluster_cmdsha(p_he)
     p_he.set_defaults(func=cmd_house_edge)
 
     # clusters
@@ -1558,7 +1616,7 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="Poll cluster status for a run_id; one-shot, returns snapshot."
     )
     _add_experiment_dir(p_st)
-    p_st.add_argument("--run-id", required=True)
+    _add_run_id(p_st)
     p_st.set_defaults(func=cmd_status)
 
     # submit
@@ -1600,13 +1658,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_sf)
-    p_sf.add_argument(
-        "--spec", type=Path, required=True, help="JSON spec file (schemas/submit_flow.input.json)"
-    )
-    p_sf.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate the spec and report what would be launched; no SSH/rsync/qsub.",
+    _add_spec_and_dry_run(
+        p_sf,
+        schema_hint="schemas/submit_flow.input.json",
+        dry_run_help="Validate the spec and report what would be launched; no SSH/rsync/qsub.",
     )
     p_sf.set_defaults(func=cmd_submit_flow)
 
@@ -1622,13 +1677,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_mf)
-    p_mf.add_argument(
-        "--spec", type=Path, required=True, help="JSON spec file (schemas/monitor_flow.input.json)"
-    )
-    p_mf.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate the spec and report what would be polled; no SSH.",
+    _add_spec_and_dry_run(
+        p_mf,
+        schema_hint="schemas/monitor_flow.input.json",
+        dry_run_help="Validate the spec and report what would be polled; no SSH.",
     )
     p_mf.set_defaults(func=cmd_monitor_flow)
 
@@ -1643,16 +1695,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_af)
-    p_af.add_argument(
-        "--spec",
-        type=Path,
-        required=True,
-        help="JSON spec file (schemas/aggregate_flow.input.json)",
-    )
-    p_af.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate the spec and report what would be aggregated; no SSH.",
+    _add_spec_and_dry_run(
+        p_af,
+        schema_hint="schemas/aggregate_flow.input.json",
+        dry_run_help="Validate the spec and report what would be aggregated; no SSH.",
     )
     p_af.set_defaults(func=cmd_aggregate_flow)
 
@@ -1662,7 +1708,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the on-cluster combiner for one wave; records outcome to journal.",
     )
     _add_experiment_dir(p_agg)
-    p_agg.add_argument("--run-id", required=True)
+    _add_run_id(p_agg)
     p_agg.add_argument("--wave", type=int, required=True)
     p_agg.add_argument(
         "--force",
@@ -1697,7 +1743,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a resubmission attempt in the journal (caller does the actual qsub).",
     )
     _add_experiment_dir(p_rs)
-    p_rs.add_argument("--run-id", required=True)
+    _add_run_id(p_rs)
     p_rs.add_argument("--spec", type=Path, required=True)
     p_rs.set_defaults(func=cmd_resubmit)
 
@@ -1707,7 +1753,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-derive ground truth from the cluster (status, waves, alive jobs).",
     )
     _add_experiment_dir(p_rec)
-    p_rec.add_argument("--run-id", required=True)
+    _add_run_id(p_rec)
     p_rec.add_argument(
         "--scheduler",
         required=True,
@@ -1722,7 +1768,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fetch per-task stderr logs from the cluster (requires --task-id or --all-failed).",
     )
     _add_experiment_dir(p_logs)
-    p_logs.add_argument("--run-id", required=True)
+    _add_run_id(p_logs)
     p_logs.add_argument(
         "--task-id",
         default=None,
@@ -1747,7 +1793,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cluster failed tasks by stderr fingerprint for triage.",
     )
     _add_experiment_dir(p_fail)
-    p_fail.add_argument("--run-id", required=True)
+    _add_run_id(p_fail)
     p_fail.add_argument(
         "--lines",
         type=int,
