@@ -46,7 +46,7 @@ exit_codes:
 
 ## Purpose
 
-Combine `inspect-cluster` + `read-runtime-prior` + the SEGV blacklist into a candidate-constraint scorecard. The slash command hands this JSON to Claude (or the user) for cost-model judgment over which constraint to submit under.
+Combine `inspect-cluster` + `read-runtime-prior` into a candidate-constraint scorecard. The slash command hands this JSON to Claude (or the user) for cost-model judgment over which constraint to submit under.
 
 ## Compose with
 
@@ -74,4 +74,4 @@ Suggested walltime: `chosen.p95(c) * safety_margin` (default `1.3`). Covers the 
 ## Notes
 
 - When `needs_canary=true`, `canary_plan` carries a 1-task probe spec — the caller submits the canary, ingests its result via `runtime_prior.append_sample`, then re-invokes this primitive to score normally.
-- `stressed_nodes` are advisory soft-excludes — the caller decides per-node whether to actually exclude based on co-tenant context. `blacklisted_nodes` are hard excludes (rule, not judgment).
+- `stressed_nodes` are advisory soft-excludes — the caller decides per-node whether to actually exclude based on co-tenant context.

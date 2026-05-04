@@ -29,11 +29,18 @@ __all__ = [
     "inspect_cluster",
     "parse_scontrol_show_node",
     "parse_sacct_node_jobs",
+    "persist_snapshot",
+    "read_cluster_history",
+    "MAX_HISTORY_SNAPSHOTS",
 ]
 
 import dataclasses
+import json
+import os
 import re
 import subprocess
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -591,6 +598,7 @@ def inspect_cluster(
     stress_cpu_load_frac: float = 0.80,
     use_cache: bool = True,
     runner: _CommandRunner | None = None,
+    persist_dir: Path | None = None,
 ) -> ClusterSnapshot:
     """Return a :class:`ClusterSnapshot` for *cluster_name*.
 
@@ -636,7 +644,163 @@ def inspect_cluster(
         raise ValueError(f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}")
     if use_cache:
         _CACHE.put(cache_key, snap.to_dict())
+    if persist_dir is not None:
+        # Best-effort: a snapshot persistence failure must not blow up
+        # the planning pipeline. We only emit the file under a real
+        # experiment dir; tests pass tmp_path directly.
+        try:
+            persist_snapshot(persist_dir, snap)
+        except OSError:
+            pass
     return snap
+
+
+# --- history persistence --------------------------------------------------
+
+# Per-cluster snapshot cap. Same bounded-growth pattern as
+# `runtime_prior.MAX_SAMPLES`: the history is advisory not audit, so
+# trimming oldest-first is fine. Override via HPC_MAX_CLUSTER_HISTORY.
+MAX_HISTORY_SNAPSHOTS: int = int(os.environ.get("HPC_MAX_CLUSTER_HISTORY", "10000"))
+
+
+def _history_dir(experiment_dir: Path, cluster: str) -> Path:
+    from hpc_mapreduce.layout import RepoLayout
+
+    return RepoLayout(experiment_dir).cluster_history(cluster)
+
+
+def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
+    """Persist *snap* under ``<exp>/.hpc/cluster_history/<cluster>/<unix_ts>.json``.
+
+    Atomic write (``tempfile`` + :func:`os.replace`) so a reader that
+    arrives mid-write either sees the previous snapshot list or the new
+    one — never a partial JSON document. Returns the file path written.
+
+    Bounded growth: after writing, the directory is trimmed to the
+    most-recent :data:`MAX_HISTORY_SNAPSHOTS` files (oldest-first
+    eviction). Same pattern as ``runtime_prior``'s sample list cap.
+
+    Filename uses Unix timestamp seconds (sortable, no path-separator
+    concerns). When two snapshots arrive in the same second we suffix
+    ``-N`` to break ties — this is best-effort and the planner does not
+    need second-resolution precision.
+    """
+    d = _history_dir(experiment_dir, snap.cluster)
+    ts = parse_iso_utc_or_none(snap.now_iso)
+    if ts is not None:
+        unix_ts = int(ts.timestamp())
+    else:
+        unix_ts = int(utcnow().timestamp())
+    base = d / f"{unix_ts}.json"
+    target = base
+    counter = 1
+    while target.exists():
+        target = d / f"{unix_ts}-{counter}.json"
+        counter += 1
+    payload = json.dumps(snap.to_dict(), indent=2, sort_keys=True)
+    tmp = tempfile.NamedTemporaryFile(
+        "w",
+        delete=False,
+        dir=str(d),
+        prefix=target.name + ".",
+        suffix=".tmp",
+        encoding="utf-8",
+    )
+    try:
+        tmp.write(payload)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        os.replace(tmp.name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+    finally:
+        if not tmp.closed:
+            tmp.close()
+    _prune_history(d, MAX_HISTORY_SNAPSHOTS)
+    return target
+
+
+def _prune_history(d: Path, limit: int) -> None:
+    """Delete oldest snapshot files until at most *limit* remain.
+
+    Sorts by filename so the embedded unix-ts orders chronologically.
+    Best-effort: an unlink that races with another writer is ignored.
+    """
+    if limit <= 0:
+        return
+    try:
+        files = sorted(p for p in d.iterdir() if p.suffix == ".json" and p.is_file())
+    except OSError:
+        return
+    excess = len(files) - limit
+    if excess <= 0:
+        return
+    for p in files[:excess]:
+        try:
+            p.unlink()
+        except OSError:
+            continue
+
+
+def read_cluster_history(
+    experiment_dir: Path,
+    cluster: str,
+    *,
+    since_iso: str | None = None,
+    limit: int | None = None,
+) -> Iterator[ClusterSnapshot]:
+    """Yield persisted snapshots in reverse-chronological order.
+
+    *since_iso* (optional): filter out snapshots whose ``now_iso`` is
+    strictly older than *since_iso*. Unparseable timestamps on either
+    side fall through (returned).
+
+    *limit* (optional): yield at most this many. Applied after the
+    ``since_iso`` filter so callers asking for "the most recent N" get
+    the most recent N matching snapshots.
+
+    Files that fail to parse as JSON or lack the expected shape are
+    silently skipped — same permissive-read posture as the rest of this
+    module.
+    """
+    d = _history_dir(experiment_dir, cluster)
+    try:
+        files = sorted(
+            (p for p in d.iterdir() if p.suffix == ".json" and p.is_file()),
+            reverse=True,
+        )
+    except OSError:
+        return
+    since_dt = parse_iso_utc_or_none(since_iso) if since_iso else None
+    yielded = 0
+    for p in files:
+        try:
+            text = p.read_text()
+        except OSError:
+            continue
+        try:
+            doc = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(doc, dict):
+            continue
+        if since_dt is not None:
+            ts = parse_iso_utc_or_none(doc.get("now_iso"))
+            if ts is not None and ts < since_dt:
+                continue
+        try:
+            snap = _snapshot_from_dict(doc)
+        except (KeyError, TypeError):
+            continue
+        yield snap
+        yielded += 1
+        if limit is not None and yielded >= limit:
+            return
 
 
 def _snapshot_from_dict(d: dict[str, Any]) -> ClusterSnapshot:
