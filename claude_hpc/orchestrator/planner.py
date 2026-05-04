@@ -548,14 +548,24 @@ def _adversarial_report(
     # so the OOM daemon doesn't bump a brand-new run mid-write. Once
     # ≥min_samples priors land the quantile-based shrink takes over
     # and the buffer is no longer applied.
-    from claude_hpc.infra.clusters import get_cold_start_mem_buffer
+    from claude_hpc.infra.clusters import (
+        get_cold_start_mem_buffer,
+        get_max_node_mem_mb,
+    )
 
     cold_start_buffer = get_cold_start_mem_buffer(cluster_cfg)
+    # B-M5: per-node memory cap. When set, prevents the cold-start
+    # buffer from pushing the campus user's ask past the largest node
+    # the cluster will schedule — without this clamp, an ask like
+    # 240GB on a 256GB node × 1.15 buffer = 276GB sits Pending forever
+    # with ReqNodeNotAvail and the user's run never starts.
+    ceiling_mb = get_max_node_mem_mb(cluster_cfg)
     rec_mem, mem_rationale = recommend_mem_mb(
         mem_quantiles,
         gpu_set or [],
         user_default_mb=base_mem_mb,
         cold_start_buffer=cold_start_buffer,
+        ceiling_mb=ceiling_mb,
     )
     rec_cpus, cpu_rationale = recommend_cpus(
         cpu_quantiles, gpu_set or [], user_default_cpus=base_cpus

@@ -157,6 +157,12 @@ ALLOWED_CLUSTER_KEYS = frozenset(
         "walltime_arbitrage",
         "auto_daisy_chain",
         "max_walltime_sec",
+        # Survival-defense knob (prab-fix B-M5): per-node memory
+        # ceiling. When set, the planner clamps the cold-start buffer
+        # so a campus user's run doesn't sit Pending forever with
+        # ReqNodeNotAvail when buffer × ask exceeds the largest node.
+        # Infra-shaped: describes the cluster's hardware, not the work.
+        "max_node_mem_mb",
     }
 )
 
