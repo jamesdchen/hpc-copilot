@@ -501,43 +501,21 @@ def _ssh_alive_job_ids(
     cancelled, failed — so we deliberately skip it here; ``squeue``
     alone covers pending+running+requeued, which is what callers actually
     want when deciding whether a run has been abandoned.
+
+    B5-PR2: the per-scheduler shell-command shape and the per-scheduler
+    output parser both live on the backend class
+    (``build_alive_check_cmd`` / ``parse_alive_output``); this function
+    is now transport (SSH) only.
     """
     if not job_ids:
         return set()
+    from hpc_mapreduce.infra.backends import get_backend_class
+
+    backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
-    csv = ",".join(job_ids)
-    if scheduler == "slurm":
-        # squeue lists only active states; sacct would leak completed
-        # jobs into the alive set and cause runs to never be marked
-        # abandoned.
-        cmd = f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null || true"
-    else:  # sge
-        # Key the marker on qstat's *exit code*, not on the pipeline
-        # tail.  ``qstat | head -1`` would always return 0 (head reads
-        # empty stdin successfully), making ``&& echo __ALIVE__`` fire
-        # for missing jobs and the alive check meaningless.
-        cmd = (
-            "{ "
-            + "; ".join(
-                f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 && echo __ALIVE__{jid}"
-                for jid in job_ids
-            )
-            + "; } || true"
-        )
+    cmd = backend_cls.build_alive_check_cmd(job_ids)
     proc = ssh_run(cmd, host=host, user=user)
-    alive: set[str] = set()
-    for line in proc.stdout.splitlines():
-        token = line.strip()
-        if not token:
-            continue
-        if scheduler == "slurm":
-            base = token.split(".")[0].split("_")[0]
-            if base in job_ids:
-                alive.add(base)
-        else:
-            if token.startswith("__ALIVE__"):
-                alive.add(token.removeprefix("__ALIVE__"))
-    return alive
+    return backend_cls.parse_alive_output(proc.stdout, job_ids)
 
 
 def reconcile(
@@ -687,15 +665,17 @@ def fetch_task_logs(
     """
     if not task_ids:
         return []
+    # B5-PR2: per-scheduler stderr-path templates live on the backend
+    # class (``stderr_log_path``); this function is now transport (SSH)
+    # plus retry-over-job-ids only.
+    from hpc_mapreduce.infra.backends import get_backend_class
+    backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
     out: list[dict[str, Any]] = []
     for tid in task_ids:
         found: dict[str, Any] | None = None
         for job_id in reversed(job_ids or []):
-            if scheduler == "sge":
-                path = f"{remote_path.rstrip('/')}/{job_name}.o{job_id}.{tid}"
-            else:
-                path = f"{remote_path.rstrip('/')}/_hpc_logs/{job_name}_{job_id}_{tid}.err"
+            path = backend_cls.stderr_log_path(remote_path, job_name, job_id, tid)
             quoted = shlex.quote(path)
             script = (
                 f"if [ -f {quoted} ]; then "
