@@ -1,0 +1,78 @@
+"""``capabilities`` primitive — emit the operations catalog + env metadata.
+
+Pure-dispatch primitive: builds the capabilities envelope from
+package metadata, the operations catalog, the journal home dir, and
+the resolved MARs skill paths. No SSH, no scheduler, no filesystem
+mutations.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import claude_hpc
+from claude_hpc._internal._primitive import primitive
+from slash_commands import session
+
+# Names of the MARs-shipped slash-command skill bundles. Capabilities
+# reports the absolute path to each present ``SKILL.md`` so an
+# orchestrator can load the skill content without re-deriving the
+# layout.
+_MARS_SKILL_NAMES = (
+    "hpc-submit",
+    "hpc-status",
+    "hpc-preflight",
+    "hpc-aggregate",
+    "hpc-build-executor",
+    "hpc-campaign",
+)
+
+
+def _mars_skill_paths() -> dict[str, str]:
+    # Skills live one level up from the package (skills/ is a sibling of
+    # claude_hpc/ in the source tree). Wheel-only deploys won't ship
+    # them — return only entries that resolve to an existing file so a
+    # consumer can rely on every value being a real path.
+    skills_root = claude_hpc._PACKAGE_ROOT.parent / "skills"
+    out: dict[str, str] = {}
+    for name in _MARS_SKILL_NAMES:
+        path = skills_root / name / "SKILL.md"
+        if path.is_file():
+            out[name] = str(path.resolve())
+    return out
+
+
+@primitive(
+    name="capabilities",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
+def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
+    """Return the capabilities-envelope data payload.
+
+    *subcommands* is the live list derived from the argparse tree
+    (passed in by the CLI adapter so the atom doesn't reach back into
+    the dispatcher to walk argparse internals). Everything else —
+    version, supported schedulers, schemas dir, journal dir, ssh
+    multiplexing flag, MARs skill paths, required env vars, and the
+    operations catalog — is computed here.
+    """
+    from claude_hpc.operations import operations_catalog
+
+    return {
+        "version": claude_hpc.__version__,
+        "subcommands": list(subcommands),
+        "supported_schedulers": ["sge", "slurm"],
+        "schemas_dir": str(claude_hpc._PACKAGE_ROOT / "schemas"),
+        "journal_dir": str(session.HPC_HOMEDIR),
+        "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
+        "mars_skill_paths": _mars_skill_paths(),
+        "required_env": [
+            "SSH_AUTH_SOCK",
+            "HPC_JOURNAL_DIR",
+            "HPC_CLUSTERS_CONFIG",
+        ],
+        "operations": operations_catalog(),
+    }

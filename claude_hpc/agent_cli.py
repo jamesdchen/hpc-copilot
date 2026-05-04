@@ -24,8 +24,6 @@ import argparse
 import functools
 import json
 import os
-import shutil
-import socket
 import subprocess
 import sys
 from importlib.resources import files as _resource_files
@@ -34,7 +32,6 @@ from typing import Any
 
 import claude_hpc
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.infra.clusters import load_clusters_config
 from claude_hpc.orchestrator.discover import (
     detect_mars_tier,
     discover_executors,
@@ -292,28 +289,9 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
 # ─── subcommand: capabilities ──────────────────────────────────────────────
 
 
-_MARS_SKILL_NAMES = (
-    "hpc-submit",
-    "hpc-status",
-    "hpc-preflight",
-    "hpc-aggregate",
-    "hpc-build-executor",
-    "hpc-campaign",
-)
-
-
-def _mars_skill_paths() -> dict[str, str]:
-    # Skills live one level up from the package (skills/ is a sibling of
-    # claude_hpc/ in the source tree). Wheel-only deploys won't ship
-    # them — return only entries that resolve to an existing file so a
-    # consumer can rely on every value being a real path.
-    skills_root = claude_hpc._PACKAGE_ROOT.parent / "skills"
-    out: dict[str, str] = {}
-    for name in _MARS_SKILL_NAMES:
-        path = skills_root / name / "SKILL.md"
-        if path.is_file():
-            out[name] = str(path.resolve())
-    return out
+# Re-exported from claude_hpc.atoms.capabilities for back-compat with
+# tests that import the constant directly from agent_cli.
+from claude_hpc.atoms.capabilities import _MARS_SKILL_NAMES  # noqa: E402,F401
 
 
 def _live_subcommands() -> list[str]:
@@ -331,107 +309,33 @@ def _live_subcommands() -> list[str]:
     return []
 
 
-@primitive(
-    name="capabilities",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_capabilities(args: argparse.Namespace) -> int:
-    from claude_hpc.operations import operations_catalog, render_llms_full
+    """Argparse adapter — primitive lives at claude_hpc.atoms.capabilities."""
+    from claude_hpc.atoms.capabilities import capabilities
+    from claude_hpc.operations import render_llms_full
 
     if getattr(args, "full", False):
         # Human/LLM-mode: emit a multi-section text blob (NOT the JSON
-        # envelope) modeled on Modal\'s llms-full.txt pattern. Documented
+        # envelope) modeled on Modal's llms-full.txt pattern. Documented
         # exception to the stdout-is-JSON contract; analogous to --help.
         sys.stdout.write(render_llms_full())
         sys.stdout.flush()
         return EXIT_OK
 
-    _ok(
-        {
-            "version": claude_hpc.__version__,
-            "subcommands": _live_subcommands(),
-            "supported_schedulers": ["sge", "slurm"],
-            "schemas_dir": str(claude_hpc._PACKAGE_ROOT / "schemas"),
-            "journal_dir": str(session.HPC_HOMEDIR),
-            "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
-            "mars_skill_paths": _mars_skill_paths(),
-            "required_env": [
-                "SSH_AUTH_SOCK",
-                "HPC_JOURNAL_DIR",
-                "HPC_CLUSTERS_CONFIG",
-            ],
-            "operations": operations_catalog(),
-        },
-        name="capabilities",
-    )
+    _ok(capabilities(subcommands=_live_subcommands()), name="capabilities")
     return EXIT_OK
 
 
 # ─── subcommand: preflight ─────────────────────────────────────────────────
 
 
-def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
-    return {"name": name, "ok": ok, "detail": detail}
-
-
-@primitive(
-    name="check-preflight",
-    verb="validate",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_preflight(args: argparse.Namespace) -> int:
-    checks: list[dict[str, Any]] = []
+    """Argparse adapter — primitive lives at claude_hpc.atoms.preflight."""
+    from claude_hpc.atoms.preflight import check_preflight
 
-    # SSH agent
-    sock = os.environ.get("SSH_AUTH_SOCK")
-    if not sock:
-        checks.append(_check("ssh_auth_sock", False, "SSH_AUTH_SOCK is not set"))
-    else:
-        try:
-            agent = subprocess.run(["ssh-add", "-l"], capture_output=True, text=True, timeout=5)
-            has_keys = agent.returncode == 0 and bool(agent.stdout.strip())
-            checks.append(
-                _check(
-                    "ssh_auth_sock",
-                    has_keys,
-                    "ssh-agent has no keys" if not has_keys else f"agent at {sock}",
-                )
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            checks.append(_check("ssh_auth_sock", False, f"ssh-add failed: {exc}"))
-
-    # Binaries on PATH
-    for binary in ("ssh", "rsync"):
-        path = shutil.which(binary)
-        checks.append(_check(f"{binary}_on_path", path is not None, path or "not found"))
-
-    # Clusters config parseable
-    try:
-        clusters = load_clusters_config()
-        checks.append(_check("clusters_yaml_parses", True, f"{len(clusters)} clusters defined"))
-    except (OSError, Exception) as exc:  # noqa: BLE001
-        clusters = {}
-        checks.append(_check("clusters_yaml_parses", False, str(exc)))
-
-    # If --cluster passed, attempt a TCP probe on port 22.
-    cluster_name = getattr(args, "cluster", None)
-    if cluster_name:
-        if cluster_name not in clusters:
-            checks.append(_check("cluster_known", False, f"{cluster_name!r} not in clusters.yaml"))
-        else:
-            host = clusters[cluster_name].get("host")
-            try:
-                with socket.create_connection((host, 22), timeout=3):
-                    checks.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
-            except OSError as exc:
-                checks.append(_check("cluster_tcp_22", False, f"{host}:22 — {exc}"))
-
-    all_ok = all(c["ok"] for c in checks)
-    _ok({"all_ok": all_ok, "checks": checks}, name="check-preflight")
-    return EXIT_OK if all_ok else EXIT_CLUSTER_ERROR
+    data = check_preflight(cluster=getattr(args, "cluster", None))
+    _ok(data, name="check-preflight")
+    return EXIT_OK if data["all_ok"] else EXIT_CLUSTER_ERROR
 
 
 # ─── subcommand: discover ──────────────────────────────────────────────────
@@ -536,42 +440,18 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
 # ─── subcommand: walltime-drift / house-edge (calibration) ────────────────
 
 
-@primitive(
-    name="walltime-drift",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_walltime_drift(args: argparse.Namespace) -> int:
-    from claude_hpc.orchestrator.calibration import (
-        compute_walltime_drift,
-        recommend_safety_mult_adjustment,
-    )
-    from claude_hpc.orchestrator.runtime_prior import read_samples
+    """Argparse adapter — primitive lives at claude_hpc.atoms.walltime_drift."""
+    from claude_hpc.atoms.walltime_drift import walltime_drift
 
-    samples = read_samples(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        cmd_sha=args.cmd_sha,
-        only_successful=False,
-    )
-    drift = compute_walltime_drift(samples)
-    adjusted, rationale = recommend_safety_mult_adjustment(
-        drift, base_safety_mult=float(args.base_safety_mult)
-    )
     _ok(
-        {
-            "n_recent": drift.n_recent,
-            "n_cliff_events": drift.n_cliff_events,
-            "n_near_misses": drift.n_near_misses,
-            "weighted_cliff_rate": drift.weighted_cliff_rate,
-            "median_utilization": drift.median_utilization,
-            "base_safety_mult": float(args.base_safety_mult),
-            "adjusted_safety_mult": adjusted,
-            "rationale": rationale,
-        },
+        walltime_drift(
+            experiment_dir=args.experiment_dir,
+            profile=args.profile,
+            cluster=args.cluster,
+            cmd_sha=args.cmd_sha,
+            base_safety_mult=float(args.base_safety_mult),
+        ),
         name="walltime-drift",
     )
     return EXIT_OK
@@ -645,33 +525,17 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-@primitive(
-    name="house-edge",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_house_edge(args: argparse.Namespace) -> int:
-    from claude_hpc.orchestrator.calibration import compute_house_edge
-    from claude_hpc.orchestrator.runtime_prior import read_samples
+    """Argparse adapter — primitive lives at claude_hpc.atoms.house_edge."""
+    from claude_hpc.atoms.house_edge import house_edge
 
-    samples = read_samples(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        cmd_sha=args.cmd_sha,
-        only_successful=True,
-    )
-    edge = compute_house_edge(samples)
     _ok(
-        {
-            "n_with_prediction": edge.n_with_prediction,
-            "mean_delta_sec": edge.mean_delta_sec,
-            "median_delta_sec": edge.median_delta_sec,
-            "p95_delta_sec": edge.p95_delta_sec,
-            "calibration_ratio": edge.calibration_ratio,
-        },
+        house_edge(
+            experiment_dir=args.experiment_dir,
+            profile=args.profile,
+            cluster=args.cluster,
+            cmd_sha=args.cmd_sha,
+        ),
         name="house-edge",
     )
     return EXIT_OK
@@ -730,117 +594,40 @@ def cmd_clusters_describe(args: argparse.Namespace) -> int:
 # ─── subcommand: list-in-flight ────────────────────────────────────────────
 
 
-def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
-    """Return age in seconds of ``last_status.checked_at``, or None.
-
-    Returns ``None`` when ``last_status`` is empty, has no ``checked_at``,
-    or the timestamp is unparseable.  Callers use this to surface
-    staleness to humans without changing the freshness contract of any
-    SSH-mutating subcommand.
-    """
-    if not isinstance(last_status, dict):
-        return None
-    iso = last_status.get("checked_at")
-    if not isinstance(iso, str):
-        return None
-    from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
-
-    ts = parse_iso_utc_or_none(iso)
-    if ts is None:
-        return None
-    delta = utcnow() - ts
-    return max(0, int(delta.total_seconds()))
+# ``_last_status_age_seconds`` lives at the atom layer (it's the
+# freshness helper used by both list-in-flight and the cmd_status
+# adapter); re-exported here so cmd_status can keep its existing
+# import-free callsite without a layering inversion.
+from claude_hpc.atoms.list_in_flight import _last_status_age_seconds  # noqa: E402,F401
 
 
-@primitive(
-    name="list-in-flight",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_list_in_flight(args: argparse.Namespace) -> int:
-    records = session.find_in_flight_runs(args.experiment_dir)
+    """Argparse adapter — primitive lives at claude_hpc.atoms.list_in_flight."""
+    from claude_hpc.atoms.list_in_flight import list_in_flight
 
-    def _row(r: session.RunRecord) -> dict[str, Any]:
-        d: dict[str, Any] = {
-            "run_id": r.run_id,
-            "profile": r.profile,
-            "cluster": r.cluster,
-            "job_ids": r.job_ids,
-            "total_tasks": r.total_tasks,
-            "submitted_at": r.submitted_at,
-            "last_status": r.last_status,
-            "last_status_age_seconds": _last_status_age_seconds(r.last_status),
-        }
-        if r.campaign_id:
-            d["campaign_id"] = r.campaign_id
-        return d
-
-    _ok({"runs": [_row(r) for r in records]}, name="list-in-flight")
+    _ok(list_in_flight(experiment_dir=args.experiment_dir), name="list-in-flight")
     return EXIT_OK
 
 
 # ─── subcommand: campaign status / list ────────────────────────────────────
 
 
-@primitive(
-    name="campaign-status",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_campaign_status(args: argparse.Namespace) -> int:
-    """Read-only summary of a closed-loop campaign.
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_status."""
+    from claude_hpc.atoms.campaign_status import campaign_status
 
-    Walks every sidecar tagged with ``--campaign-id`` and reports the
-    per-iteration reduced metrics dicts (``history.prior``) plus an
-    in-flight count (sidecars whose journal status is still
-    ``in_flight``). No SSH, no scheduler — pure local filesystem read.
-    """
-    from claude_hpc.mapreduce.reduce.history import find_sidecars_by_campaign, prior
-
-    sidecars = find_sidecars_by_campaign(args.experiment_dir, args.campaign_id)
-    history = prior(args.experiment_dir, args.campaign_id)
-    in_flight_records = session.find_runs_by_campaign(args.experiment_dir, args.campaign_id)
-    in_flight = sum(1 for r in in_flight_records if r.status == "in_flight")
     _ok(
-        {
-            "campaign_id": args.campaign_id,
-            "iterations": len(sidecars),
-            "in_flight": in_flight,
-            "history": history,
-            "run_ids": [s["run_id"] for s in sidecars],
-        },
+        campaign_status(experiment_dir=args.experiment_dir, campaign_id=args.campaign_id),
         name="campaign-status",
     )
     return EXIT_OK
 
 
-@primitive(
-    name="campaign-list",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_campaign_list(args: argparse.Namespace) -> int:
-    """List every campaign with at least one sidecar in this experiment."""
-    from collections import Counter
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_list."""
+    from claude_hpc.atoms.campaign_list import campaign_list
 
-    from claude_hpc.orchestrator.runs import find_existing_runs, read_run_sidecar
-
-    counts: Counter[str] = Counter()
-    for path in find_existing_runs(args.experiment_dir):
-        try:
-            data = read_run_sidecar(args.experiment_dir, path.stem)
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            continue
-        cid = data.get("campaign_id")
-        if isinstance(cid, str) and cid:
-            counts[cid] += 1
-    _ok(
-        {"campaigns": [{"campaign_id": cid, "iterations": n} for cid, n in sorted(counts.items())]},
-        name="campaign-list",
-    )
+    _ok(campaign_list(experiment_dir=args.experiment_dir), name="campaign-list")
     return EXIT_OK
 
 
@@ -1115,33 +902,9 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
 
 
-def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str, Any]]:
-    """Resolve the auto-retry policy for a run.
-
-    Precedence: per-run sidecar override (``auto_retry`` field, populated
-    by /submit when the user supplies a custom policy) > framework
-    defaults (:data:`runner.DEFAULT_AUTO_RETRY_POLICY`).
-
-    Always returns a non-empty dict so callers can rely on advice being
-    computed for every run.
-    """
-    try:
-        from claude_hpc.orchestrator.runs import read_run_sidecar
-    except ImportError:
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
-    user_policy = sidecar.get("auto_retry")
-    if not isinstance(user_policy, dict):
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
-    valid = {
-        cat: pol
-        for cat, pol in user_policy.items()
-        if isinstance(cat, str) and isinstance(pol, dict)
-    }
-    return valid or dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+# Re-exported from claude_hpc.atoms.failures for back-compat with the
+# auto-retry resolver test suite, which imports the helper directly.
+from claude_hpc.atoms.failures import _resolve_auto_retry  # noqa: E402,F401
 
 
 def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, str]:
@@ -1376,15 +1139,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 # ─── subcommand: logs ──────────────────────────────────────────────────────
 
 
-@primitive(
-    name="logs",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.SshUnreachable, errors.RemoteCommandFailed],
-    idempotent=True,
-)
 def cmd_logs(args: argparse.Namespace) -> int:
-    """Fetch per-task stderr logs from the cluster.
+    """Argparse adapter — primitive lives at claude_hpc.atoms.logs.
 
     Two ways to select tasks:
       --task-id 7,12,42   explicit list
@@ -1393,69 +1149,26 @@ def cmd_logs(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
 
-    record = session.load_run(args.experiment_dir, args.run_id)
-    if record is None:
-        raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
+    from claude_hpc.atoms.logs import fetch_logs
 
-    # Resolve task ids.
-    task_ids: list[int] = []
-    note: str | None = None
-    if getattr(args, "all_failed", False):
-        # Fresh status poll to enumerate failed tasks.
-        try:
-            report = runner._ssh_status_report(
-                ssh_target=record.ssh_target,
-                remote_path=record.remote_path,
-                run_id=args.run_id,
-                job_ids=record.job_ids,
-                job_name=record.job_name,
-            )
-        except errors.HpcError:
-            raise
-        for tid_str, info in (report.get("tasks") or {}).items():
-            if isinstance(info, dict) and info.get("status") == "failed":
-                try:
-                    task_ids.append(int(tid_str))
-                except (TypeError, ValueError):
-                    continue
-        if not task_ids:
-            note = "no failed tasks in current status report"
-    elif args.task_id:
+    # Parse the user-facing comma-separated --task-id at the adapter
+    # boundary; the atom takes a typed list[int].
+    task_ids: list[int] | None = None
+    if not getattr(args, "all_failed", False) and args.task_id:
         try:
             task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
         except ValueError as exc:
             raise errors.SpecInvalid(f"--task-id must be comma-separated integers: {exc}") from exc
         if not task_ids:
             raise errors.SpecInvalid("--task-id is empty")
-    else:
-        raise errors.SpecInvalid("logs requires --task-id <ids> or --all-failed")
 
-    # Cluster-side scheduler.
-    try:
-        clusters = load_clusters_config()
-    except Exception:  # noqa: BLE001 — config errors fall through to user-error path
-        clusters = {}
-    scheduler = (clusters.get(record.cluster) or {}).get("scheduler") or "slurm"
-
-    logs: list[dict[str, Any]] = []
-    if task_ids:
-        logs = runner.fetch_task_logs(
-            ssh_target=record.ssh_target,
-            remote_path=record.remote_path,
-            job_name=record.job_name,
-            job_ids=record.job_ids,
-            scheduler=scheduler,
-            task_ids=task_ids,
-            lines=int(getattr(args, "lines", 50) or 50),
-        )
-
-    data: dict[str, Any] = {
-        "run_id": args.run_id,
-        "scheduler": scheduler,
-        "logs": logs,
-    }
-    if note is not None:
-        data["note"] = note
+    data = fetch_logs(
+        experiment_dir=args.experiment_dir,
+        run_id=args.run_id,
+        task_ids=task_ids,
+        all_failed=bool(getattr(args, "all_failed", False)),
+        lines=int(getattr(args, "lines", 50) or 50),
+    )
     _ok(data, name="logs")
     return EXIT_OK
 
@@ -1463,111 +1176,26 @@ def cmd_logs(args: argparse.Namespace) -> int:
 # ─── subcommand: failures ──────────────────────────────────────────────────
 
 
-@primitive(
-    name="failures",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.SshUnreachable],
-    idempotent=True,
-)
 def cmd_failures(args: argparse.Namespace) -> int:
-    """Cluster failed tasks by stderr fingerprint for triage.
+    """Argparse adapter — primitive lives at claude_hpc.atoms.failures.
 
-    Re-polls status, fetches stderr for every failed task, and groups
-    them by fingerprint so 40 failures with the same root cause show up
-    as one cluster instead of 40 separate logs to read.
+    Cluster failed tasks by stderr fingerprint so 40 failures with the
+    same root cause show up as one cluster instead of 40 separate logs
+    to read.
     """
     if (rc := _require_ssh_agent()) is not None:
         return rc
 
-    record = session.load_run(args.experiment_dir, args.run_id)
-    if record is None:
-        raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
+    from claude_hpc.atoms.failures import fetch_failures
 
-    # Fresh poll: enumerate failed tasks.
-    report = runner._ssh_status_report(
-        ssh_target=record.ssh_target,
-        remote_path=record.remote_path,
-        run_id=args.run_id,
-        job_ids=record.job_ids,
-        job_name=record.job_name,
+    _ok(
+        fetch_failures(
+            experiment_dir=args.experiment_dir,
+            run_id=args.run_id,
+            lines=int(getattr(args, "lines", 30) or 30),
+        ),
+        name="failures",
     )
-    failed_ids: list[int] = []
-    for tid_str, info in (report.get("tasks") or {}).items():
-        if isinstance(info, dict) and info.get("status") == "failed":
-            try:
-                failed_ids.append(int(tid_str))
-            except (TypeError, ValueError):
-                continue
-
-    if not failed_ids:
-        _ok(
-            {
-                "run_id": args.run_id,
-                "failed_count": 0,
-                "clusters": [],
-                "note": "no failed tasks in current status report",
-            },
-            name="failures",
-        )
-        return EXIT_OK
-
-    # Cluster scheduler.
-    try:
-        clusters_cfg = load_clusters_config()
-    except Exception:  # noqa: BLE001
-        clusters_cfg = {}
-    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler") or "slurm"
-
-    logs = runner.fetch_task_logs(
-        ssh_target=record.ssh_target,
-        remote_path=record.remote_path,
-        job_name=record.job_name,
-        job_ids=record.job_ids,
-        scheduler=scheduler,
-        task_ids=failed_ids,
-        lines=int(getattr(args, "lines", 30) or 30),
-    )
-    clusters = runner.cluster_failures_by_fingerprint(logs)
-
-    # Auto-retry policy: resolve per-run sidecar override + framework
-    # defaults (runner.DEFAULT_AUTO_RETRY_POLICY). Annotate each cluster
-    # with which task ids are still eligible for an automated retry per
-    # the per-category max_attempts. Purely advisory — the actual
-    # resubmit remains the caller's job (matches existing /resubmit
-    # semantics).
-    auto_retry = _resolve_auto_retry(args.experiment_dir, args.run_id)
-    if auto_retry:
-        clusters = runner.annotate_clusters_with_retry_advice(
-            clusters,
-            auto_retry_policy=auto_retry,
-            record=record,
-        )
-
-    # Surface preempted-task count at the top level so a harness can
-    # branch on "campus user got bumped, resubmit cleanly" vs. "real
-    # failure, surface to user" without parsing the cluster
-    # ``error_class`` strings. Sourced from the failure_signatures
-    # catalog entry (exit_code=130 / "[claude-hpc] SIGTERM received"
-    # stderr line) — preempted tasks are guaranteed to land in the
-    # ``preempted`` cluster.
-    preempted_task_ids: list[int] = []
-    for cluster in clusters:
-        if cluster.get("error_class") == "preempted":
-            preempted_task_ids.extend(cluster.get("task_ids") or [])
-
-    data: dict[str, Any] = {
-        "run_id": args.run_id,
-        "failed_count": len(failed_ids),
-        "clusters": clusters,
-        "scheduler": scheduler,
-    }
-    if preempted_task_ids:
-        data["preempted_count"] = len(preempted_task_ids)
-        data["preempted_task_ids"] = sorted(preempted_task_ids)
-    if auto_retry:
-        data["auto_retry_policy"] = auto_retry
-    _ok(data, name="failures")
     return EXIT_OK
 
 
