@@ -11,7 +11,7 @@ error_codes:
     description: Surface to the caller; preflight bug.
 backed_by:
   cli: hpc-mapreduce preflight [--cluster <name>]
-  python: hpc_mapreduce.preflight.run
+  python: hpc_mapreduce.agent_cli.cmd_preflight
 exit_codes:
   - 0: all checks passed
   - 2: one or more checks failed (envelope is still ok=true; failures live in checks[].ok)
