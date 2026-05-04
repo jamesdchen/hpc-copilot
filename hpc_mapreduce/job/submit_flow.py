@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce.infra.backends.sge_remote import RemoteSGEBackend
 from hpc_mapreduce.infra.backends.slurm_remote import RemoteSlurmBackend
 from hpc_mapreduce.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
@@ -149,6 +150,25 @@ def _make_single_array_submission(
     return [match.group(1)]
 
 
+@primitive(
+    name="submit-flow",
+    verb="workflow",
+    composes=["submit-spec", "discover-executors", "score-submit-plan"],
+    side_effects=[
+        SideEffect("rsync", "<ssh_target>:<remote_path>"),
+        SideEffect("scheduler-submit", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
+    ],
+    error_codes=[
+        errors.SpecInvalid,
+        errors.SshUnreachable,
+        errors.SchedulerThrottled,
+        errors.ClusterUnknown,
+    ],
+    idempotent=True,
+    idempotency_key="run_id",
+    exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+)
 def submit_flow(
     *,
     experiment_dir: Path,
