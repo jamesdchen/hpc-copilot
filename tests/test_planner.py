@@ -337,6 +337,145 @@ class TestAdversarialPath:
 
 
 # ---------------------------------------------------------------------------
+# PR-C: cold-start walltime arbitrage
+# ---------------------------------------------------------------------------
+
+
+class TestColdStartWalltimeArbitrage:
+    """The cold-start fallback: trim the user's nominal ask when the
+    lattice probe has no priors to score against. The trim fits the
+    campus user's job in backfill shadows the round-number ask doesn't
+    reach.
+    """
+
+    def test_arbitrage_fires_when_no_priors_and_cluster_opted_in(self, tmp_path, monkeypatch):
+        # No priors → no lattice pick → cold-start path → trim.
+        cfg = _write_clusters(tmp_path)
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
+            out = planner.plan_submit(
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                candidates=["a100"],
+                adversarial=False,
+                walltime_user_ask_sec=14400,  # 4h nominal
+            )
+        # 4h trims to 3:45 (13500s); the response carries the original.
+        assert out["walltime_arbitraged_from"] == 14400
+
+    def test_arbitrage_does_not_fire_when_priors_pin_a_winner(self, tmp_path, monkeypatch):
+        # Priors exist AND lattice probe returns a real ETA → the
+        # lattice path supersedes arbitrage; we do NOT trim.
+        from claude_hpc.orchestrator import backfill as bf
+
+        bf.clear_probe_cache()
+        cfg = _write_clusters(tmp_path)
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+        for tid in range(8):
+            rp.append_sample(
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                run_id="r1",
+                task_id=tid,
+                gpu_type="a100",
+                node="d11-07",
+                elapsed_sec=1000,
+            )
+
+        from datetime import datetime, timedelta, timezone
+
+        def fake_probe(scheduler, cluster_cfg, *, constraint, walltime_sec, mem_mb, cpus):
+            future = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime(
+                "%Y-%m-%dT%H:%M:%S"
+            )
+            return planner._parse_test_only_eta(
+                f"sbatch: Job 1 to start at {future} using 1 ..."
+            ), ""
+
+        with (
+            patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()),
+            patch(
+                "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
+                side_effect=fake_probe,
+            ),
+        ):
+            out = planner.plan_submit(
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                candidates=["a100"],
+                walltime_user_ask_sec=14400,
+            )
+        assert out["walltime_arbitraged_from"] is None
+
+    def test_arbitrage_disabled_per_cluster(self, tmp_path, monkeypatch):
+        # Cluster opts out via walltime_arbitrage: false → no trim
+        # even in cold-start.
+        cfg_path = tmp_path / "clusters.yaml"
+        cfg_path.write_text(
+            "discovery:\n"
+            "  host: example.invalid\n"
+            "  user: tester\n"
+            "  scheduler: slurm\n"
+            "  scratch: /tmp\n"
+            "  gpu_types: [a100]\n"
+            "  walltime_arbitrage: false\n"
+        )
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg_path))
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
+            out = planner.plan_submit(
+                tmp_path,
+                profile="x",
+                cluster="discovery",
+                candidates=["a100"],
+                adversarial=False,
+                walltime_user_ask_sec=14400,
+            )
+        assert out["walltime_arbitraged_from"] is None
+
+    def test_arbitrage_null_when_no_user_ask(self, tmp_path, monkeypatch):
+        # walltime_user_ask_sec=None → no arbitrage attempted, field is null.
+        cfg = _write_clusters(tmp_path)
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
+            out = planner.plan_submit(
+                tmp_path,
+                profile="x",
+                cluster="discovery",
+                candidates=["a100"],
+                adversarial=False,
+            )
+        assert out["walltime_arbitraged_from"] is None
+
+    def test_arbitrage_null_when_below_floor(self, tmp_path, monkeypatch):
+        # Sub-1h asks pass through the helper unchanged; the planner
+        # records walltime_arbitraged_from=null because the trim is a
+        # no-op (we only set the field when the trim actually fires).
+        cfg = _write_clusters(tmp_path)
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
+            out = planner.plan_submit(
+                tmp_path,
+                profile="x",
+                cluster="discovery",
+                candidates=["a100"],
+                adversarial=False,
+                walltime_user_ask_sec=1800,  # 30min, below 1h floor
+            )
+        assert out["walltime_arbitraged_from"] is None
+
+
+# ---------------------------------------------------------------------------
 # Phase 4f: DES ETA layered alongside test-only
 # ---------------------------------------------------------------------------
 

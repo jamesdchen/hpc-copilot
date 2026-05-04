@@ -41,7 +41,7 @@ from claude_hpc._internal._time import parse_iso_utc, utcnow, utcnow_iso
 if TYPE_CHECKING:
     from pathlib import Path
 
-from claude_hpc.infra.clusters import load_clusters_config
+from claude_hpc.infra.clusters import get_walltime_arbitrage, load_clusters_config
 from claude_hpc.infra.inspect import NodeSnapshot, inspect_cluster
 from claude_hpc.orchestrator.backfill import (
     BackfillProbe,
@@ -78,6 +78,7 @@ def plan_submit(
     target_backfill_window_sec: int | None = None,
     current_max_array_size: int | None = None,
     est_per_task_sec: int | None = None,
+    walltime_user_ask_sec: int | None = None,
 ) -> dict[str, Any]:
     """Score candidate constraints. Pure function over inputs + cluster snapshot.
 
@@ -97,6 +98,15 @@ def plan_submit(
     pad). Pass ``adversarial=False`` to disable the lattice probing
     entirely (useful for debugging or for clusters that throttle
     ``--test-only``).
+
+    *walltime_user_ask_sec* is the campus user's nominal walltime ask
+    (in seconds). When no candidate produces a ``recommended_tuple``
+    (i.e. the ``--test-only`` lattice probe has no priors to score) and
+    the cluster's ``walltime_arbitrage`` flag is True (default), the
+    planner returns a cold-start-trimmed walltime in
+    ``walltime_arbitraged_from`` so the user fits in backfill shadows
+    the round-number ask doesn't reach. Pass ``None`` to skip arbitrage
+    (the field is then ``null``).
     """
     clusters = load_clusters_config()
     if cluster not in clusters:
@@ -245,6 +255,32 @@ def plan_submit(
             "rationale": drift_rationale,
         }
 
+    # Cold-start walltime arbitrage. Fires only when the lattice probe
+    # produced no recommendation for ANY candidate (no priors to score)
+    # AND the cluster opted into arbitrage. Trims the user's nominal ask
+    # by 15min and floors to a 5min boundary so the campus user fits in
+    # backfill shadows the round-number ask doesn't reach. The lattice
+    # path supersedes this when priors exist.
+    walltime_arbitraged_from: int | None = None
+    # The lattice probe "wins" only when at least one candidate produced
+    # a non-None predicted_eta_sec — that's the signal that priors exist
+    # and the scheduler actually scored the right-sized resource tuple.
+    # Otherwise we're in cold-start territory and apply the trim.
+    has_lattice_pick = any(
+        (c.get("recommended_tuple") or {}).get("predicted_eta_sec") is not None
+        for c in candidate_reports
+    )
+    if (
+        walltime_user_ask_sec is not None
+        and not has_lattice_pick
+        and get_walltime_arbitrage(cfg)
+    ):
+        from claude_hpc.orchestrator.walltime_arbitrage import arbitrage_walltime
+
+        trimmed = arbitrage_walltime(int(walltime_user_ask_sec))
+        if trimmed != walltime_user_ask_sec:
+            walltime_arbitraged_from = int(walltime_user_ask_sec)
+
     return {
         "profile": profile,
         "cluster": cluster,
@@ -256,6 +292,7 @@ def plan_submit(
         "array_reshape": array_reshape,
         "walltime_split": walltime_split,
         "walltime_drift": drift_report,
+        "walltime_arbitraged_from": walltime_arbitraged_from,
     }
 
 
