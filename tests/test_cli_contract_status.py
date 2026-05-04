@@ -32,30 +32,22 @@ def _build_minimal_run(tmp_path: Path, *, run_id: str = "test_run") -> tuple[Pat
         r.mkdir()
     (r0 / "done.json").write_text("{}")  # mark task 0 complete
 
+    from tests.conftest import make_sidecar_json, write_hpc_tasks  # noqa: PLC0415
+
     hpc = tmp_path / ".hpc"
-    (hpc / "runs").mkdir(parents=True)
-    (hpc / "tasks.py").write_text(
-        '_TASKS = ['
-        '{"model": "ridge"}, {"model": "ridge"}, {"model": "xgb"}'
-        "]\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+    write_hpc_tasks(
+        hpc,
+        [{"model": "ridge"}, {"model": "ridge"}, {"model": "xgb"}],
     )
-    sidecar = hpc / "runs" / f"{run_id}.json"
     # result_dir_template renders to tmp_path/task_0, task_1, task_2 by
     # using {task_id} (consuming the literal index) — matches the dirs
     # we created above.
-    sidecar.write_text(json.dumps({
-        "sidecar_schema_version": 1,
-        "run_id": run_id,
-        "cmd_sha": "deadbeef" * 8,
-        "claude_hpc_version": "0.0.0+test",
-        "submitted_at": "2026-01-01T00:00:00Z",
-        "executor": "true",
-        "result_dir_template": str(tmp_path / "task_{task_id}"),
-        "task_count": 3,
-        "tasks_py_sha": "abc",
-    }))
+    sidecar = make_sidecar_json(
+        tmp_path,
+        run_id=run_id,
+        result_dir_template=str(tmp_path / "task_{task_id}"),
+        task_count=3,
+    )
     return tmp_path, sidecar
 
 

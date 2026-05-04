@@ -2,41 +2,36 @@
 name: submit-spec
 verb: submit
 side_effects:
-  - writes: <experiment_dir>/.hpc/runs/<run_id>.json (per-run sidecar, source of truth for cluster-side dispatcher and combiner)
-  - writes: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (laptop journal record, lets cold sessions resume)
-  - rsyncs: <experiment_dir> → <ssh_target>:<remote_path> (assumed already done by caller; submit-spec itself does not rsync)
-  - submits: scheduler array job via the caller-supplied job_ids (submit-spec records what was submitted; it does NOT call qsub itself)
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
+- scheduler-submit: <cluster>
 idempotent: true
 idempotency_key: spec.run_id
 error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-    description: Spec failed schema validation; fix the spec and retry.
-  - code: cluster_unknown
-    category: user
-    retry_safe: false
-    description: spec.cluster does not match any clusters.yaml entry.
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-    description: SSH to the cluster failed. Re-run check-preflight; retry after fix.
-  - code: scheduler_throttled
-    category: cluster
-    retry_safe: true
-    description: Scheduler rate limit hit. Wait ≥1s, retry the same spec (idempotency protects against double-submit).
-  - code: internal
-    category: internal
-    retry_safe: false
-    description: Surface to the caller; do not retry.
+- code: spec_invalid
+  category: user
+  retry_safe: false
+  description: Spec failed schema validation; fix the spec and retry.
+- code: cluster_unknown
+  category: user
+  retry_safe: false
+  description: spec.cluster does not match any clusters.yaml entry.
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
+  description: SSH to the cluster failed. Re-run check-preflight; retry after fix.
+- code: scheduler_throttled
+  category: cluster
+  retry_safe: true
+  description: Scheduler rate limit hit. Wait ≥1s, retry the same spec (idempotency
+    protects against double-submit).
 backed_by:
   cli: hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]
   python: slash_commands.runner.submit_and_record
 exit_codes:
-  - 0: ok
-  - 1: user error (spec_invalid / cluster_unknown)
-  - 2: cluster/network (ssh_unreachable / scheduler_throttled — check retry_safe)
-  - 3: internal
+- 0: ok
+- 1: user error (spec_invalid / cluster_unknown)
+- 2: cluster/network (ssh_unreachable / scheduler_throttled — check retry_safe)
+- 3: internal
 ---
 
 ## Purpose

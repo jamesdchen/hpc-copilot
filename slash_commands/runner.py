@@ -17,8 +17,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce._time import utcnow_iso
 from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
+from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar
 from slash_commands import errors, session
 from slash_commands.errors import RemoteCommandFailed
 from slash_commands.session import RunRecord, _atomic_write_json
@@ -52,6 +54,24 @@ def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
     return user, host
 
 
+def _parse_remote_json(stdout: str, *, source_label: str) -> dict[str, Any]:
+    """Parse JSON emitted by a remote process; raise typed error on failure.
+
+    Centralises the ``json.loads + JSONDecodeError → RemoteCommandFailed``
+    pattern that ``_ssh_status_report`` and ``_read_remote_sidecar`` both
+    needed. *source_label* is interpolated into the error message so the
+    caller's diagnostic still pinpoints which remote read failed.
+    """
+    try:
+        result: dict[str, Any] = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        snippet = stdout[:200]
+        raise RemoteCommandFailed(
+            f"{source_label} returned invalid JSON: {exc}; first 200 chars: {snippet!r}"
+        ) from exc
+    return result
+
+
 # Backwards-compatible alias for tests/external imports that referenced
 # the original helper here.  The canonical implementation now lives in
 # ``hpc_mapreduce._time`` so timestamps stay consistent across the
@@ -59,6 +79,22 @@ def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
 _utcnow_iso = utcnow_iso
 
 
+@primitive(
+    name="submit-spec",
+    verb="submit",
+    side_effects=[
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
+        SideEffect("scheduler-submit", "<cluster>"),
+    ],
+    error_codes=[
+        errors.SpecInvalid,
+        errors.ClusterUnknown,
+        errors.SshUnreachable,
+        errors.SchedulerThrottled,
+    ],
+    idempotent=True,
+    idempotency_key="spec.run_id",
+)
 def submit_and_record(
     experiment_dir: Path,
     *,
@@ -71,6 +107,7 @@ def submit_and_record(
     job_ids: list[str],
     total_tasks: int,
     campaign_id: str = "",
+    cmd_sha: str | None = None,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
 
@@ -97,6 +134,50 @@ def submit_and_record(
     existing = session.load_run(experiment_dir, run_id)
     if existing is not None:
         return existing, True
+
+    # A5: cmd_sha-based dedup. Covers the case where the journal at
+    # ~/.claude/hpc/<repo_hash>/runs/ has been wiped (rm -rf, machine
+    # swap) but the per-experiment sidecar at <exp>/.hpc/runs/<id>.json
+    # still exists. Without this fallback, submit_and_record would
+    # generate a fresh RunRecord and the caller would re-submit a job
+    # the cluster already has running.
+    if cmd_sha:
+        sidecar_path = find_run_by_cmd_sha(experiment_dir, cmd_sha)
+        if sidecar_path is not None:
+            existing_run_id = sidecar_path.stem
+            sidecar_data = None
+            try:
+                sidecar_data = read_run_sidecar(experiment_dir, existing_run_id)
+            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                sidecar_data = None
+            if sidecar_data is not None:
+                # Treat anything other than "cancelled" as a live record
+                # we should dedup against.
+                sidecar_status = (sidecar_data.get("status") or "").lower()
+                if sidecar_status != "cancelled":
+                    reconstructed = RunRecord(
+                        run_id=existing_run_id,
+                        profile=str(sidecar_data.get("profile") or profile),
+                        cluster=str(sidecar_data.get("cluster") or cluster),
+                        ssh_target=str(sidecar_data.get("ssh_target") or ssh_target),
+                        remote_path=str(sidecar_data.get("remote_path") or remote_path),
+                        job_name=str(sidecar_data.get("job_name") or job_name),
+                        job_ids=list(sidecar_data.get("job_ids") or []),
+                        total_tasks=int(
+                            sidecar_data.get("task_count") or total_tasks
+                        ),
+                        submitted_at=str(
+                            sidecar_data.get("submitted_at") or _utcnow_iso()
+                        ),
+                        experiment_dir=str(Path(experiment_dir).resolve()),
+                        campaign_id=str(
+                            sidecar_data.get("campaign_id") or campaign_id
+                        ),
+                    )
+                    # Repair the journal so future load_run calls hit it
+                    # directly without re-doing the cmd_sha scan.
+                    session.upsert_run(experiment_dir, reconstructed)
+                    return reconstructed, True
 
     record = RunRecord(
         run_id=run_id,
@@ -168,14 +249,20 @@ def _ssh_status_report(
         raise RemoteCommandFailed(
             f"status reporter failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RemoteCommandFailed(
-            f"status reporter returned invalid JSON: {exc}; first 200 chars: {proc.stdout[:200]!r}"
-        ) from exc
+    return _parse_remote_json(proc.stdout, source_label="status reporter")
 
 
+@primitive(
+    name="poll-run-status",
+    verb="query",
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),
+    ],
+    error_codes=[errors.JournalCorrupt, errors.SshUnreachable, errors.RemoteCommandFailed],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def record_status(
     experiment_dir: Path,
     run_id: str,
@@ -224,6 +311,19 @@ def record_status(
     return record
 
 
+@primitive(
+    name="combine-wave",
+    verb="mutate",
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("runs", "cluster-side combiner (python3 .hpc/_hpc_combiner.py)"),
+        SideEffect("writes-cluster", "<output_dir>/_combiner/wave_<N>.json"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)"),
+    ],
+    error_codes=[errors.SshUnreachable, errors.CombinerFailed, errors.JournalCorrupt],
+    idempotent=True,
+    idempotency_key="(run_id, wave)",
+)
 def combine_wave(
     experiment_dir: Path,
     run_id: str,
@@ -294,6 +394,17 @@ def derive_resubmit_request_id(
     return "rs_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+@primitive(
+    name="resubmit-failed",
+    verb="mutate",
+    side_effects=[
+        SideEffect("scheduler-submit", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters)"),
+    ],
+    error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
+    idempotent=True,
+    idempotency_key="request_id",
+)
 def resubmit_failed(
     experiment_dir: Path,
     run_id: str,
@@ -390,43 +501,21 @@ def _ssh_alive_job_ids(
     cancelled, failed — so we deliberately skip it here; ``squeue``
     alone covers pending+running+requeued, which is what callers actually
     want when deciding whether a run has been abandoned.
+
+    B5-PR2: the per-scheduler shell-command shape and the per-scheduler
+    output parser both live on the backend class
+    (``build_alive_check_cmd`` / ``parse_alive_output``); this function
+    is now transport (SSH) only.
     """
     if not job_ids:
         return set()
+    from hpc_mapreduce.infra.backends import get_backend_class
+
+    backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
-    csv = ",".join(job_ids)
-    if scheduler == "slurm":
-        # squeue lists only active states; sacct would leak completed
-        # jobs into the alive set and cause runs to never be marked
-        # abandoned.
-        cmd = f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null || true"
-    else:  # sge
-        # Key the marker on qstat's *exit code*, not on the pipeline
-        # tail.  ``qstat | head -1`` would always return 0 (head reads
-        # empty stdin successfully), making ``&& echo __ALIVE__`` fire
-        # for missing jobs and the alive check meaningless.
-        cmd = (
-            "{ "
-            + "; ".join(
-                f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 && echo __ALIVE__{jid}"
-                for jid in job_ids
-            )
-            + "; } || true"
-        )
+    cmd = backend_cls.build_alive_check_cmd(job_ids)
     proc = ssh_run(cmd, host=host, user=user)
-    alive: set[str] = set()
-    for line in proc.stdout.splitlines():
-        token = line.strip()
-        if not token:
-            continue
-        if scheduler == "slurm":
-            base = token.split(".")[0].split("_")[0]
-            if base in job_ids:
-                alive.add(base)
-        else:
-            if token.startswith("__ALIVE__"):
-                alive.add(token.removeprefix("__ALIVE__"))
-    return alive
+    return backend_cls.parse_alive_output(proc.stdout, job_ids)
 
 
 def reconcile(
@@ -525,6 +614,19 @@ def reconcile(
     return updated
 
 
+@primitive(
+    name="mark-run-terminal",
+    verb="mutate",
+    side_effects=[
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
+        ),
+    ],
+    error_codes=[errors.JournalCorrupt],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def mark_terminal(
     experiment_dir: Path,
     run_id: str,
@@ -563,15 +665,17 @@ def fetch_task_logs(
     """
     if not task_ids:
         return []
+    # B5-PR2: per-scheduler stderr-path templates live on the backend
+    # class (``stderr_log_path``); this function is now transport (SSH)
+    # plus retry-over-job-ids only.
+    from hpc_mapreduce.infra.backends import get_backend_class
+    backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
     out: list[dict[str, Any]] = []
     for tid in task_ids:
         found: dict[str, Any] | None = None
         for job_id in reversed(job_ids or []):
-            if scheduler == "sge":
-                path = f"{remote_path.rstrip('/')}/{job_name}.o{job_id}.{tid}"
-            else:
-                path = f"{remote_path.rstrip('/')}/_hpc_logs/{job_name}_{job_id}_{tid}.err"
+            path = backend_cls.stderr_log_path(remote_path, job_name, job_id, tid)
             quoted = shlex.quote(path)
             script = (
                 f"if [ -f {quoted} ]; then "
@@ -779,6 +883,13 @@ def cluster_failures_by_fingerprint(
         content = entry.get("content") or ""
         fp = fingerprint_stderr_tail(content)
         category = _categorize(content)
+        # D1c: VASPilot-pattern catalog returns a suggested_fix per error
+        # class so MARs can auto-resubmit with adjusted resources rather
+        # than asking the user. Importable as
+        # ``hpc_mapreduce.job.failure_signatures.classify``.
+        from hpc_mapreduce.job.failure_signatures import classify
+
+        sig = classify(content, entry.get("exit_code"))
         key = (category, fp)
         bucket = by_fp.setdefault(
             key,
@@ -788,6 +899,8 @@ def cluster_failures_by_fingerprint(
                 "count": 0,
                 "task_ids": [],
                 "sample": content[-200:].rstrip(),
+                "suggested_fix": sig["suggested_fix"],
+                "error_class": sig["error_class"],
             },
         )
         bucket["count"] += 1
@@ -817,12 +930,9 @@ def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> d
             f"failed to read remote sidecar at {remote_path}/{sidecar_rel}: "
             f"{proc.stderr.strip()[:500]}"
         )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise RemoteCommandFailed(
-            f"remote sidecar at {remote_path}/{sidecar_rel} is not valid JSON: {exc}"
-        ) from exc
+    return _parse_remote_json(
+        proc.stdout, source_label=f"remote sidecar at {remote_path}/{sidecar_rel}"
+    )
 
 
 def _wave_task_ids(sidecar: dict[str, Any], wave: int) -> list[int]:

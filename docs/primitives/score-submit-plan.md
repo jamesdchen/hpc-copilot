@@ -2,51 +2,49 @@
 name: score-submit-plan
 verb: query
 inputs:
-  - name: profile
-    type: string
-  - name: cluster
-    type: string
-  - name: candidates
-    type: list[string]
-    description: Constraint expressions (comma-separated; pipe inside a single candidate). Defaults to one per gpu_type plus their union.
-    default: null
-  - name: cmd_sha
-    type: string
-    description: Filter applied to read-runtime-prior.
-    default: null
-  - name: experiment_dir
-    type: path
-    default: cwd
+- name: profile
+  type: string
+- name: cluster
+  type: string
+- name: candidates
+  type: list[string]
+  description: Constraint expressions (comma-separated; pipe inside a single candidate).
+    Defaults to one per gpu_type plus their union.
+  default: null
+- name: cmd_sha
+  type: string
+  description: Filter applied to read-runtime-prior.
+  default: null
+- name: experiment_dir
+  type: path
+  default: cwd
 side_effects:
-  - ssh: cluster reachable (delegates to inspect-cluster)
+- ssh: <cluster> (delegates to inspect-cluster)
 idempotent: true
 idempotency_key: none
 error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: cluster_unknown
-    category: user
-    retry_safe: false
-  - code: internal
-    category: internal
-    retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
+- code: cluster_unknown
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]
   python: hpc_mapreduce.job.planner.plan_submit
 exit_codes:
-  - 0: ok
-  - 1: spec_invalid / cluster_unknown
-  - 2: ssh_unreachable
-  - 3: internal
+- 0: ok
+- 1: spec_invalid / cluster_unknown
+- 2: ssh_unreachable
+- 3: internal
 ---
 
 ## Purpose
 
-Combine `inspect-cluster` + `read-runtime-prior` + the SEGV blacklist into a candidate-constraint scorecard. The slash command hands this JSON to Claude (or the user) for cost-model judgment over which constraint to submit under.
+Combine `inspect-cluster` + `read-runtime-prior` into a candidate-constraint scorecard. The slash command hands this JSON to Claude (or the user) for cost-model judgment over which constraint to submit under.
 
 ## Compose with
 
@@ -74,4 +72,4 @@ Suggested walltime: `chosen.p95(c) * safety_margin` (default `1.3`). Covers the 
 ## Notes
 
 - When `needs_canary=true`, `canary_plan` carries a 1-task probe spec — the caller submits the canary, ingests its result via `runtime_prior.append_sample`, then re-invokes this primitive to score normally.
-- `stressed_nodes` are advisory soft-excludes — the caller decides per-node whether to actually exclude based on co-tenant context. `blacklisted_nodes` are hard excludes (rule, not judgment).
+- `stressed_nodes` are advisory soft-excludes — the caller decides per-node whether to actually exclude based on co-tenant context.

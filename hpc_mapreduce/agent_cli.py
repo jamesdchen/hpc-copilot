@@ -3,8 +3,13 @@
 Designed to be invoked by automation (MARs orchestrator agents via the
 Bash tool, cron, scripts). Conventions:
 
-- Stdout is exclusively a single-line JSON envelope.
-- Stderr is JSON-per-line log records (debug for humans; agents may ignore).
+- Stdout is exclusively a single-line JSON envelope. Exception:
+  ``capabilities --full`` emits a plain-text ``llms-full`` dump (one-shot
+  LLM context loading, analogous to ``--help``). Every other invocation
+  preserves the JSON-envelope contract.
+- Stderr carries free-form diagnostic prose (e.g. ``[dispatch] ERROR: …``
+  emitted by ``hpc_mapreduce.map.dispatch`` and ``…map.combiner``); it is
+  intended for humans tailing logs. Do not parse it as JSON.
 - Exit codes: 0 success, 1 user error, 2 cluster/network error, 3 internal.
 - Every subcommand accepts ``--experiment-dir`` (defaults to CWD).
 - Subcommands with non-trivial inputs accept ``--spec path/to/spec.json``.
@@ -16,6 +21,7 @@ and shipped as JSON Schema files under ``hpc_mapreduce/schemas/``.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import shutil
@@ -27,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import hpc_mapreduce
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from hpc_mapreduce.job.discover import (
     detect_mars_tier,
@@ -57,8 +64,59 @@ def _emit(envelope: dict[str, Any]) -> None:
     print(json.dumps(envelope, sort_keys=True), flush=True)
 
 
-def _ok(data: dict[str, Any], *, idempotent: bool) -> None:
-    _emit({"ok": True, "idempotent": idempotent, "data": data})
+@functools.cache
+def _meta_idempotent(name: str) -> bool:
+    """Look up a primitive's idempotency declaration from the catalog.
+
+    B4 rewire: callers used to hardcode ``_ok(idempotent=True/False, ...)``
+    which forked the truth between the @primitive decorator (consumed by
+    docs / lint) and the runtime envelope (consumed by caller policy).
+    Routing through the catalog collapses both to the decorator.
+
+    Cached because the catalog walks every primitive's frontmatter on
+    first call. Falls back to True on miss (consistent with the
+    pre-B4 default for query-style commands; the cross-validation test
+    in tests/test_idempotency.py guards against silent drift).
+    """
+    try:
+        from hpc_mapreduce.operations import operations_catalog
+        for entry in operations_catalog():
+            if entry.get("name") == name:
+                return bool(entry.get("idempotent", True))
+    except Exception:
+        pass
+    return True
+
+
+def _ok(
+    data: dict[str, Any],
+    *,
+    idempotent: bool | None = None,
+    name: str | None = None,
+    partial_errors: list[dict[str, str]] | None = None,
+) -> None:
+    """Emit an ok-true envelope.
+
+    *idempotent* (B4 rewire): preferred spelling is to pass *name* — the
+    primitive's catalog name — and let the envelope read the
+    ``idempotent`` flag from ``operations_catalog()``. The legacy
+    ``idempotent=True/False`` kwarg is still honoured for callsites that
+    don't have a primitive mapping (e.g. cmd_aggregate which wraps a
+    pure mapreduce reduce). When both are supplied, the explicit kwarg
+    wins so callers can opt out of the catalog lookup if needed.
+
+    *partial_errors*: optional list of ``{code, detail}`` dicts surfaced
+    at the top level of the envelope — distinct from ``data.errors``.
+    Used by primitives like ``inspect-cluster`` whose underlying data
+    source can be partially degraded (qhost timed out, sacct
+    unavailable) without the operation as a whole failing.
+    """
+    if idempotent is None:
+        idempotent = _meta_idempotent(name) if name else True
+    env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
+    if partial_errors:
+        env["partial_errors"] = list(partial_errors)
+    _emit(env)
 
 
 def _err(
@@ -119,6 +177,60 @@ def _add_experiment_dir(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=Path.cwd(),
         help="Path to the experiment repo (default: current working directory).",
+    )
+
+
+def _add_profile_cluster_cmdsha(
+    parser: argparse.ArgumentParser,
+    *,
+    cmd_sha_help: str | None = None,
+) -> None:
+    """Add the ``--profile`` (required), ``--cluster`` (required), and
+    ``--cmd-sha`` (optional) trio used by every smart-submit pipeline
+    subcommand: ``plan-submit``, ``runtime-prior``, ``walltime-drift``,
+    ``house-edge``.
+
+    *cmd_sha_help* lets each subcommand explain how it consumes the
+    filter; defaults to a generic note.
+    """
+    parser.add_argument("--profile", required=True)
+    parser.add_argument("--cluster", required=True)
+    parser.add_argument(
+        "--cmd-sha",
+        default=None,
+        help=cmd_sha_help or "If set, filter runtime priors to samples with this cmd_sha.",
+    )
+
+
+def _add_run_id(parser: argparse.ArgumentParser) -> None:
+    """Add the canonical ``--run-id`` argument (always required)."""
+    parser.add_argument("--run-id", required=True)
+
+
+def _add_spec_and_dry_run(
+    parser: argparse.ArgumentParser,
+    *,
+    schema_hint: str,
+    dry_run_help: str,
+) -> None:
+    """Add the ``--spec`` (required) + ``--dry-run`` pair used by the
+    workflow-flow subcommands (``submit-flow``, ``monitor-flow``,
+    ``aggregate-flow``).
+
+    *schema_hint* is the schema filename mentioned in the spec help
+    (e.g. ``"schemas/submit_flow.input.json"``); *dry_run_help* lets
+    each subcommand explain what dry-run skips.
+    """
+    parser.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help=f"JSON spec file ({schema_hint})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=dry_run_help,
     )
 
 
@@ -203,34 +315,42 @@ def _mars_skill_paths() -> dict[str, str]:
     return out
 
 
-def cmd_capabilities(_args: argparse.Namespace) -> int:
-    from hpc_mapreduce.operations import operations_catalog
+def _live_subcommands() -> list[str]:
+    """Derive the subcommand list from the actual argparse tree.
+
+    Replaces the hand-typed literal that used to live here — the literal
+    drifted (it missed ``walltime-drift``, ``house-edge``, etc.) and had
+    no test backing it. Walking ``parser._subparsers._group_actions[0]
+    .choices`` gives the single source of truth.
+    """
+    parser = build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return sorted(action.choices)
+    return []
+
+
+@primitive(
+    name="capabilities",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
+def cmd_capabilities(args: argparse.Namespace) -> int:
+    from hpc_mapreduce.operations import operations_catalog, render_llms_full
+
+    if getattr(args, "full", False):
+        # Human/LLM-mode: emit a multi-section text blob (NOT the JSON
+        # envelope) modeled on Modal\'s llms-full.txt pattern. Documented
+        # exception to the stdout-is-JSON contract; analogous to --help.
+        sys.stdout.write(render_llms_full())
+        sys.stdout.flush()
+        return EXIT_OK
 
     _ok(
         {
             "version": hpc_mapreduce.__version__,
-            "subcommands": [
-                "submit",
-                "submit-flow",
-                "monitor-flow",
-                "aggregate-flow",
-                "status",
-                "aggregate",
-                "reconcile",
-                "resubmit",
-                "preflight",
-                "discover",
-                "list-in-flight",
-                "clusters",
-                "capabilities",
-                "build-executor",
-                "logs",
-                "failures",
-                "campaign",
-                "inspect-cluster",
-                "plan-submit",
-                "runtime-prior",
-            ],
+            "subcommands": _live_subcommands(),
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
             "journal_dir": str(session.HPC_HOMEDIR),
@@ -243,7 +363,7 @@ def cmd_capabilities(_args: argparse.Namespace) -> int:
             ],
             "operations": operations_catalog(),
         },
-        idempotent=True,
+        name="capabilities",
     )
     return EXIT_OK
 
@@ -255,6 +375,12 @@ def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     return {"name": name, "ok": ok, "detail": detail}
 
 
+@primitive(
+    name="check-preflight",
+    verb="validate",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_preflight(args: argparse.Namespace) -> int:
     checks: list[dict[str, Any]] = []
 
@@ -303,7 +429,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
                 checks.append(_check("cluster_tcp_22", False, f"{host}:22 — {exc}"))
 
     all_ok = all(c["ok"] for c in checks)
-    _ok({"all_ok": all_ok, "checks": checks}, idempotent=True)
+    _ok({"all_ok": all_ok, "checks": checks}, name="check-preflight")
     return EXIT_OK if all_ok else EXIT_CLUSTER_ERROR
 
 
@@ -326,7 +452,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
     meta = _build_mars_meta_block(Path(args.experiment_dir))
     if meta is not None:
         data["meta"] = meta
-    _ok(data, idempotent=True)
+    _ok(data, name="discover-executors")
     return EXIT_OK
 
 
@@ -372,13 +498,27 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
         stress_cpu_load_frac=args.stress_cpu_load_frac,
         use_cache=not args.no_cache,
     )
-    _ok(snap.to_dict(), idempotent=True)
+    # B3: surface cluster-side soft failures (qhost timed out, scontrol
+    # parse error, sacct unavailable) at envelope-level ``partial_errors``
+    # rather than burying them inside ``data.errors`` where machine
+    # consumers tend to miss them. The legacy ``data.errors`` shape is
+    # kept (snap.to_dict() includes it) for one release as back-compat.
+    payload = snap.to_dict()
+    partial = list(payload.get("errors", []))
+    _ok(payload, name="inspect-cluster", partial_errors=partial or None)
     return EXIT_OK
 
 
 # ─── subcommand: runtime-prior ─────────────────────────────────────────────
 
 
+@primitive(
+    name="read-runtime-prior",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def cmd_runtime_prior(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.runtime_prior import roll_up_quantiles
 
@@ -388,13 +528,20 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
         cluster=args.cluster,
         cmd_sha=args.cmd_sha,
     )
-    _ok(out, idempotent=True)
+    _ok(out, name="read-runtime-prior")
     return EXIT_OK
 
 
 # ─── subcommand: walltime-drift / house-edge (calibration) ────────────────
 
 
+@primitive(
+    name="walltime-drift",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def cmd_walltime_drift(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.calibration import (
         compute_walltime_drift,
@@ -424,11 +571,86 @@ def cmd_walltime_drift(args: argparse.Namespace) -> int:
             "adjusted_safety_mult": adjusted,
             "rationale": rationale,
         },
-        idempotent=True,
+        name="walltime-drift",
     )
     return EXIT_OK
 
 
+@primitive(
+    name="best-submit-window",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.HpcError],
+    idempotent=True,
+)
+def cmd_best_submit_window(args: argparse.Namespace) -> int:
+    """Surface the top_k lowest-wait submit windows in the next horizon.
+
+    Sweeps the diurnal queue-wait predictor at hourly offsets up to
+    ``--within-hours`` and returns the top ``--top-k`` candidates.
+    Cold-start hours are excluded from the ranking. The slash command
+    consumes the result to suggest "submit now" vs. "wait until
+    <hour>".
+    """
+    from hpc_mapreduce.job.best_submit_window import best_submit_windows
+
+    candidates = best_submit_windows(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        within_hours=int(args.within_hours),
+        top_k=int(args.top_k),
+    )
+    _ok(
+        {
+            "profile": args.profile,
+            "cluster": args.cluster,
+            "within_hours": int(args.within_hours),
+            "top_k": int(args.top_k),
+            "candidates": [c.to_dict() for c in candidates],
+        },
+        name="best-submit-window",
+    )
+    return EXIT_OK
+
+
+@primitive(
+    name="predict-queue-wait",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
+def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
+    """Forecast queue-wait seconds for a hypothetical submit.
+
+    Dispatches to the discrete-event simulator (Phase 4 DES backend)
+    when a recent ClusterSnapshot + user_profiles coverage are present;
+    falls back to the diurnal moving-average baseline otherwise. The
+    result's ``method`` field reports which backend won.
+    """
+    from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
+
+    out = predict_queue_wait(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        at_iso=args.at_iso,
+        backend=args.backend,
+        n_replications=int(args.n_replications),
+        seed=args.seed,
+    )
+    _ok(out.to_dict(), name="predict-queue-wait")
+    return EXIT_OK
+
+
+@primitive(
+    name="house-edge",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def cmd_house_edge(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.calibration import compute_house_edge
     from hpc_mapreduce.job.runtime_prior import read_samples
@@ -449,7 +671,7 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
             "p95_delta_sec": edge.p95_delta_sec,
             "calibration_ratio": edge.calibration_ratio,
         },
-        idempotent=True,
+        name="house-edge",
     )
     return EXIT_OK
 
@@ -457,6 +679,13 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
 # ─── subcommand: plan-submit ───────────────────────────────────────────────
 
 
+@primitive(
+    name="score-submit-plan",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster> (delegates to inspect-cluster)")],
+    error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.ClusterUnknown],
+    idempotent=True,
+)
 def cmd_plan_submit(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -477,31 +706,23 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
         current_max_array_size=getattr(args, "current_max_array_size", None),
         est_per_task_sec=getattr(args, "est_per_task_sec", None),
     )
-    _ok(out, idempotent=True)
+    _ok(out, name="score-submit-plan")
     return EXIT_OK
 
 
 def cmd_clusters_list(_args: argparse.Namespace) -> int:
-    clusters = load_clusters_config()
-    _ok(
-        {
-            "clusters": [
-                {"name": name, "host": cfg.get("host"), "scheduler": cfg.get("scheduler")}
-                for name, cfg in clusters.items()
-            ]
-        },
-        idempotent=True,
-    )
+    """Argparse adapter — primitive lives at hpc_mapreduce.atoms.clusters."""
+    from hpc_mapreduce.atoms.clusters import list_clusters
+
+    _ok(list_clusters(), name="clusters-list")
     return EXIT_OK
 
 
 def cmd_clusters_describe(args: argparse.Namespace) -> int:
-    clusters = load_clusters_config()
-    if args.name not in clusters:
-        raise errors.ClusterUnknown(
-            f"unknown cluster {args.name!r}; run `hpc-mapreduce clusters list`"
-        )
-    _ok({"name": args.name, "config": clusters[args.name]}, idempotent=True)
+    """Argparse adapter — primitive lives at hpc_mapreduce.atoms.clusters."""
+    from hpc_mapreduce.atoms.clusters import describe_cluster
+
+    _ok(describe_cluster(name=args.name), name="clusters-describe")
     return EXIT_OK
 
 
@@ -521,18 +742,21 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     iso = last_status.get("checked_at")
     if not isinstance(iso, str):
         return None
-    try:
-        from datetime import datetime, timezone
+    from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
 
-        ts = datetime.fromisoformat(iso)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        delta = datetime.now(timezone.utc) - ts
-        return max(0, int(delta.total_seconds()))
-    except (ValueError, TypeError):
+    ts = parse_iso_utc_or_none(iso)
+    if ts is None:
         return None
+    delta = utcnow() - ts
+    return max(0, int(delta.total_seconds()))
 
 
+@primitive(
+    name="list-in-flight",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_list_in_flight(args: argparse.Namespace) -> int:
     records = session.find_in_flight_runs(args.experiment_dir)
 
@@ -551,13 +775,19 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
             d["campaign_id"] = r.campaign_id
         return d
 
-    _ok({"runs": [_row(r) for r in records]}, idempotent=True)
+    _ok({"runs": [_row(r) for r in records]}, name="list-in-flight")
     return EXIT_OK
 
 
 # ─── subcommand: campaign status / list ────────────────────────────────────
 
 
+@primitive(
+    name="campaign-status",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_campaign_status(args: argparse.Namespace) -> int:
     """Read-only summary of a closed-loop campaign.
 
@@ -580,11 +810,17 @@ def cmd_campaign_status(args: argparse.Namespace) -> int:
             "history": history,
             "run_ids": [s["run_id"] for s in sidecars],
         },
-        idempotent=True,
+        name="campaign-status",
     )
     return EXIT_OK
 
 
+@primitive(
+    name="campaign-list",
+    verb="query",
+    side_effects=[],
+    idempotent=True,
+)
 def cmd_campaign_list(args: argparse.Namespace) -> int:
     """List every campaign with at least one sidecar in this experiment."""
     from collections import Counter
@@ -602,7 +838,7 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
             counts[cid] += 1
     _ok(
         {"campaigns": [{"campaign_id": cid, "iterations": n} for cid, n in sorted(counts.items())]},
-        idempotent=True,
+        name="campaign-list",
     )
     return EXIT_OK
 
@@ -639,7 +875,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     # querying `campaign list` / `campaign status`.
     if updated.campaign_id:
         data["campaign_id"] = updated.campaign_id
-    _ok(data, idempotent=True)
+    _ok(data, name="poll-run-status")
     return EXIT_OK
 
 
@@ -697,7 +933,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "run_id": spec["run_id"],
                 "dry_run": True,
             },
-            idempotent=True,
+            name="submit-spec",
         )
         return EXIT_OK
 
@@ -720,7 +956,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             "total_tasks": record.total_tasks,
             "deduped": deduped,
         },
-        idempotent=True,  # honest now that submit_and_record dedups
+        name="submit-spec",  # honest now that submit_and_record dedups
     )
     return EXIT_OK
 
@@ -739,6 +975,12 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.submit_flow import submit_flow
 
     spec = _load_spec(args.spec, schema_name=None)
+    # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
+    # caller can opt in via either path. Flag wins over spec when both
+    # are set (CLI is the more explicit override).
+    if getattr(args, "partial_ok", False):
+        spec = dict(spec)
+        spec["partial_ok"] = True
     _validate_against_schema(spec, "submit_flow")
 
     if args.dry_run:
@@ -751,7 +993,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
                 "canary": bool(spec.get("canary", True)),
                 "dry_run": True,
             },
-            idempotent=True,
+            name="submit-flow",
         )
         return EXIT_OK
 
@@ -775,8 +1017,9 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         skip_preflight=bool(spec.get("skip_preflight", False)),
         slurm_account=spec.get("slurm_account"),
         slurm_cluster=spec.get("slurm_cluster"),
+        partial_ok=bool(spec.get("partial_ok", False)),
     )
-    _ok(result.to_envelope_data(), idempotent=True)
+    _ok(result.to_envelope_data(), name="submit-flow")
     return EXIT_OK
 
 
@@ -807,7 +1050,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
                 "auto_combine_waves": spec.get("auto_combine_waves", True),
                 "dry_run": True,
             },
-            idempotent=True,
+            name="monitor-flow",
         )
         return EXIT_OK
 
@@ -820,7 +1063,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
         combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
         file_glob=spec.get("file_glob", "*"),
     )
-    _ok(result.to_envelope_data(), idempotent=True)
+    _ok(result.to_envelope_data(), name="monitor-flow")
     return EXIT_OK
 
 
@@ -850,7 +1093,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
                 "output_dir": spec.get("output_dir"),
                 "dry_run": True,
             },
-            idempotent=True,
+            name="aggregate-flow",
         )
         return EXIT_OK
 
@@ -864,7 +1107,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
         summary_glob=spec.get("summary_glob"),
         results_subdir=spec.get("results_subdir", "results"),
     )
-    _ok(result.to_envelope_data(), idempotent=True)
+    _ok(result.to_envelope_data(), name="aggregate-flow")
     return EXIT_OK
 
 
@@ -1032,18 +1275,22 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 # ─── subcommand: resubmit ──────────────────────────────────────────────────
 
 
-_VALID_RESUBMIT_CATEGORIES = frozenset(
-    {
-        "gpu_oom",
-        "system_oom",
-        "segv",
-        "walltime",
-        "node_failure",
-        "queue_stall",
-        "code_bug",
-        "unknown",
-    }
-)
+# Canonical failure-category vocabulary. Must be the UNION of:
+#   - the auto-classifier in slash_commands.runner.cluster_failures_by_fingerprint
+#     (gpu_oom, system_oom, walltime, node_failure, import_error,
+#      file_not_found, permission_denied, disk_full, python_traceback)
+#   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
+# A test in tests/test_resubmit.py asserts the classifier never emits a
+# category outside this set.
+# B2: derived from the canonical FailureCategory StrEnum.
+# Pre-B2 this was a literal frozenset that drifted from the classifier
+# emissions in slash_commands.runner; A4 landed the union as a literal,
+# B2 makes the literal redundant by sourcing from the StrEnum so the
+# drift class cannot recur. test_lifecycle.py asserts the cross-set
+# invariants (classifier emissions ⊆ accepted ⊆ FailureCategory).
+from hpc_mapreduce.lifecycle import FailureCategory as _FailureCategory  # noqa: E402
+
+_VALID_RESUBMIT_CATEGORIES = frozenset({fc.value for fc in _FailureCategory})
 
 
 def cmd_resubmit(args: argparse.Namespace) -> int:
@@ -1082,7 +1329,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
         },
         # Honest now that resubmit_failed dedups on request_id: a replay
         # with the same spec is a no-op, just like submit.
-        idempotent=True,
+        name="resubmit-failed",
     )
     return EXIT_OK
 
@@ -1090,6 +1337,20 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
 # ─── subcommand: reconcile ─────────────────────────────────────────────────
 
 
+@primitive(
+    name="reconcile-journal",
+    verb="mutate",
+    side_effects=[
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
+        ),
+        SideEffect("ssh", "<cluster>"),
+    ],
+    error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def cmd_reconcile(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -1106,7 +1367,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             "failed_waves": record.failed_waves,
             "last_status": record.last_status,
         },
-        idempotent=True,
+        name="reconcile-journal",
     )
     return EXIT_OK
 
@@ -1114,6 +1375,13 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 # ─── subcommand: logs ──────────────────────────────────────────────────────
 
 
+@primitive(
+    name="logs",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster>")],
+    error_codes=[errors.SshUnreachable, errors.RemoteCommandFailed],
+    idempotent=True,
+)
 def cmd_logs(args: argparse.Namespace) -> int:
     """Fetch per-task stderr logs from the cluster.
 
@@ -1187,13 +1455,20 @@ def cmd_logs(args: argparse.Namespace) -> int:
     }
     if note is not None:
         data["note"] = note
-    _ok(data, idempotent=True)
+    _ok(data, name="logs")
     return EXIT_OK
 
 
 # ─── subcommand: failures ──────────────────────────────────────────────────
 
 
+@primitive(
+    name="failures",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster>")],
+    error_codes=[errors.SshUnreachable],
+    idempotent=True,
+)
 def cmd_failures(args: argparse.Namespace) -> int:
     """Cluster failed tasks by stderr fingerprint for triage.
 
@@ -1232,7 +1507,7 @@ def cmd_failures(args: argparse.Namespace) -> int:
                 "clusters": [],
                 "note": "no failed tasks in current status report",
             },
-            idempotent=True,
+            name="failures",
         )
         return EXIT_OK
 
@@ -1276,13 +1551,56 @@ def cmd_failures(args: argparse.Namespace) -> int:
     }
     if auto_retry:
         data["auto_retry_policy"] = auto_retry
-    _ok(data, idempotent=True)
+    _ok(data, name="failures")
+    return EXIT_OK
+
+
+# ─── subcommand: campaign-health ───────────────────────────────────────────
+
+
+def cmd_campaign_health(args: argparse.Namespace) -> int:
+    """Aggregate run-history into a campaign-health payload (D2a).
+
+    Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
+    decorator lives on ``hpc_mapreduce.job.campaign_health.campaign_health``
+    (the module-level implementation), matching the ``backed_by.python``
+    pointer in ``docs/primitives/campaign-health.md``.
+    """
+    from hpc_mapreduce.job.campaign_health import campaign_health
+
+    try:
+        data = campaign_health(
+            args.experiment_dir,
+            campaign_id=args.campaign_id,
+            since_iso=args.since_iso,
+            profile=args.profile,
+            cluster=args.cluster,
+        )
+    except Exception as exc:  # noqa: BLE001 — last-resort error envelope
+        return _err(
+            error_code="internal",
+            message=f"campaign_health failed: {exc}",
+            category="internal",
+            retry_safe=False,
+        )
+    _ok(data, name="campaign-health")
     return EXIT_OK
 
 
 # ─── subcommand: build-executor ────────────────────────────────────────────
 
 
+@primitive(
+    name="build-executor",
+    verb="scaffold",
+    side_effects=[
+        SideEffect(
+            "writes-file",
+            "<output_dir>/<name>.py (refuses to overwrite without --force)",
+        ),
+    ],
+    idempotent=False,
+)
 def cmd_build_executor(args: argparse.Namespace) -> int:
     starters = hpc_mapreduce._PACKAGE_ROOT / "templates" / "starters"
     template_map = {
@@ -1302,7 +1620,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
     dest.write_text(src.read_text())
     _ok(
         {"path": str(dest.resolve()), "type": args.type, "source": str(src)},
-        idempotent=False,
+        name="build-executor",
     )
     return EXIT_OK
 
@@ -1330,6 +1648,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_cap = sub.add_parser(
         "capabilities",
         help="Machine-readable feature flags: subcommands, schedulers, schema dirs.",
+    )
+    p_cap.add_argument(
+        "--full",
+        action="store_true",
+        help=(
+            "Emit a plain-text llms-full dump (catalog + every primitive doc + "
+            "schemas + envelope + boundary contract + cli-spec). Exception to the "
+            "stdout-is-JSON contract; intended for one-shot LLM context loading."
+        ),
     )
     p_cap.set_defaults(func=cmd_capabilities)
 
@@ -1387,14 +1714,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ps = sub.add_parser(
         "plan-submit",
         help=(
-            "Score candidate constraints for a submit. Combines inspect-cluster, "
-            "runtime priors, and the SEGV blacklist. Output is JSON the slash "
-            "command hands to Claude for cost-model judgment."
+            "Score candidate constraints for a submit. Combines inspect-cluster "
+            "and runtime priors. Output is JSON the slash command hands to "
+            "Claude for cost-model judgment."
         ),
     )
     _add_experiment_dir(p_ps)
-    p_ps.add_argument("--profile", required=True)
-    p_ps.add_argument("--cluster", required=True)
+    _add_profile_cluster_cmdsha(p_ps)
     p_ps.add_argument(
         "--candidates",
         default=None,
@@ -1403,11 +1729,6 @@ def build_parser() -> argparse.ArgumentParser:
             "(e.g. 'a100,a40|a100,a40|a100|v100'). Defaults to single-GPU + "
             "all-GPU-types from clusters.yaml."
         ),
-    )
-    p_ps.add_argument(
-        "--cmd-sha",
-        default=None,
-        help="If set, filter runtime priors to samples with this cmd_sha.",
     )
     p_ps.add_argument(
         "--no-adversarial",
@@ -1472,12 +1793,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Quantile rollup of runtime samples for a (profile, cluster).",
     )
     _add_experiment_dir(p_rp)
-    p_rp.add_argument("--profile", required=True)
-    p_rp.add_argument("--cluster", required=True)
-    p_rp.add_argument(
-        "--cmd-sha",
-        default=None,
-        help="Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes).",
+    _add_profile_cluster_cmdsha(
+        p_rp,
+        cmd_sha_help=(
+            "Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes)."
+        ),
     )
     p_rp.set_defaults(func=cmd_runtime_prior)
 
@@ -1490,9 +1810,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_wd)
-    p_wd.add_argument("--profile", required=True)
-    p_wd.add_argument("--cluster", required=True)
-    p_wd.add_argument("--cmd-sha", default=None)
+    _add_profile_cluster_cmdsha(p_wd)
     p_wd.add_argument("--base-safety-mult", type=float, default=1.30)
     p_wd.set_defaults(func=cmd_walltime_drift)
 
@@ -1506,10 +1824,47 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_he)
-    p_he.add_argument("--profile", required=True)
-    p_he.add_argument("--cluster", required=True)
-    p_he.add_argument("--cmd-sha", default=None)
+    _add_profile_cluster_cmdsha(p_he)
     p_he.set_defaults(func=cmd_house_edge)
+
+    # predict-queue-wait
+    p_pqw = sub.add_parser(
+        "predict-queue-wait",
+        help=(
+            "Forecast queue-wait seconds for a hypothetical submit. "
+            "Backend 'auto' picks DES when a snapshot + user-profiles "
+            "are available; falls back to the diurnal MA baseline."
+        ),
+    )
+    _add_experiment_dir(p_pqw)
+    p_pqw.add_argument("--profile", required=True)
+    p_pqw.add_argument("--cluster", required=True)
+    p_pqw.add_argument("--at-iso", default=None,
+                       help="reference timestamp (default: now)")
+    p_pqw.add_argument("--backend", choices=["auto", "diurnal_ma", "des"],
+                       default="auto")
+    p_pqw.add_argument("--n-replications", type=int, default=64,
+                       help="DES replications (only used on the DES path)")
+    p_pqw.add_argument("--seed", type=int, default=None,
+                       help="seed for deterministic DES sampling")
+    p_pqw.set_defaults(func=cmd_predict_queue_wait)
+
+    # best-submit-window
+    p_bsw = sub.add_parser(
+        "best-submit-window",
+        help=(
+            "Sweep the diurnal queue-wait predictor over the next "
+            "--within-hours hours and surface the top_k lowest-wait "
+            "submit candidates. Used by /submit-hpc Step 4c to advise "
+            "submit-now vs. wait-for-window."
+        ),
+    )
+    _add_experiment_dir(p_bsw)
+    p_bsw.add_argument("--profile", required=True)
+    p_bsw.add_argument("--cluster", required=True)
+    p_bsw.add_argument("--within-hours", type=int, default=24)
+    p_bsw.add_argument("--top-k", type=int, default=5)
+    p_bsw.set_defaults(func=cmd_best_submit_window)
 
     # clusters
     p_cl = sub.add_parser("clusters", help="Introspect available cluster definitions.")
@@ -1559,7 +1914,7 @@ def build_parser() -> argparse.ArgumentParser:
         "status", help="Poll cluster status for a run_id; one-shot, returns snapshot."
     )
     _add_experiment_dir(p_st)
-    p_st.add_argument("--run-id", required=True)
+    _add_run_id(p_st)
     p_st.set_defaults(func=cmd_status)
 
     # submit
@@ -1600,14 +1955,22 @@ def build_parser() -> argparse.ArgumentParser:
             "agent-driving /submit-hpc. Idempotent on run_id."
         ),
     )
-    _add_experiment_dir(p_sf)
     p_sf.add_argument(
-        "--spec", type=Path, required=True, help="JSON spec file (schemas/submit_flow.input.json)"
-    )
-    p_sf.add_argument(
-        "--dry-run",
+        "--partial-ok",
         action="store_true",
-        help="Validate the spec and report what would be launched; no SSH/rsync/qsub.",
+        help=(
+            "Tolerate per-task failures: when the wave finishes, classify "
+            "as `complete` if at least one task succeeded; record failed "
+            "task IDs in <run_id>.failed.json so aggregate-flow can skip "
+            "them. Without this flag (the default), any failure aborts the "
+            "wave with lifecycle_state=failed."
+        ),
+    )
+    _add_experiment_dir(p_sf)
+    _add_spec_and_dry_run(
+        p_sf,
+        schema_hint="schemas/submit_flow.input.json",
+        dry_run_help="Validate the spec and report what would be launched; no SSH/rsync/qsub.",
     )
     p_sf.set_defaults(func=cmd_submit_flow)
 
@@ -1623,13 +1986,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_mf)
-    p_mf.add_argument(
-        "--spec", type=Path, required=True, help="JSON spec file (schemas/monitor_flow.input.json)"
-    )
-    p_mf.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate the spec and report what would be polled; no SSH.",
+    _add_spec_and_dry_run(
+        p_mf,
+        schema_hint="schemas/monitor_flow.input.json",
+        dry_run_help="Validate the spec and report what would be polled; no SSH.",
     )
     p_mf.set_defaults(func=cmd_monitor_flow)
 
@@ -1644,16 +2004,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_af)
-    p_af.add_argument(
-        "--spec",
-        type=Path,
-        required=True,
-        help="JSON spec file (schemas/aggregate_flow.input.json)",
-    )
-    p_af.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate the spec and report what would be aggregated; no SSH.",
+    _add_spec_and_dry_run(
+        p_af,
+        schema_hint="schemas/aggregate_flow.input.json",
+        dry_run_help="Validate the spec and report what would be aggregated; no SSH.",
     )
     p_af.set_defaults(func=cmd_aggregate_flow)
 
@@ -1663,7 +2017,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the on-cluster combiner for one wave; records outcome to journal.",
     )
     _add_experiment_dir(p_agg)
-    p_agg.add_argument("--run-id", required=True)
+    _add_run_id(p_agg)
     p_agg.add_argument("--wave", type=int, required=True)
     p_agg.add_argument(
         "--force",
@@ -1698,7 +2052,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a resubmission attempt in the journal (caller does the actual qsub).",
     )
     _add_experiment_dir(p_rs)
-    p_rs.add_argument("--run-id", required=True)
+    _add_run_id(p_rs)
     p_rs.add_argument("--spec", type=Path, required=True)
     p_rs.set_defaults(func=cmd_resubmit)
 
@@ -1708,7 +2062,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-derive ground truth from the cluster (status, waves, alive jobs).",
     )
     _add_experiment_dir(p_rec)
-    p_rec.add_argument("--run-id", required=True)
+    _add_run_id(p_rec)
     p_rec.add_argument(
         "--scheduler",
         required=True,
@@ -1723,7 +2077,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fetch per-task stderr logs from the cluster (requires --task-id or --all-failed).",
     )
     _add_experiment_dir(p_logs)
-    p_logs.add_argument("--run-id", required=True)
+    _add_run_id(p_logs)
     p_logs.add_argument(
         "--task-id",
         default=None,
@@ -1748,7 +2102,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cluster failed tasks by stderr fingerprint for triage.",
     )
     _add_experiment_dir(p_fail)
-    p_fail.add_argument("--run-id", required=True)
+    _add_run_id(p_fail)
     p_fail.add_argument(
         "--lines",
         type=int,
@@ -1756,6 +2110,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Per-task stderr tail length used for fingerprinting (default 30).",
     )
     p_fail.set_defaults(func=cmd_failures)
+
+    # campaign-health (D2a)
+    p_ch = sub.add_parser(
+        "campaign-health",
+        help=(
+            "Structured run-history aggregation for an LLM agent. Returns "
+            "walltime cliff rates, failure breakdown, GPU utilization, and "
+            "a ready-to-feed-LLM suggested_prompt."
+        ),
+    )
+    _add_experiment_dir(p_ch)
+    p_ch.add_argument("--campaign-id", default=None)
+    p_ch.add_argument("--since-iso", default=None)
+    p_ch.add_argument("--profile", default=None)
+    p_ch.add_argument("--cluster", default=None)
+    p_ch.set_defaults(func=cmd_campaign_health)
 
     # build-executor
     p_be = sub.add_parser(
@@ -1790,6 +2160,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Populate the primitive registry once before any subcommand
+    # dispatch — without this, get_registry() raises RuntimeError
+    # (the previous auto-import path silently swallowed ImportError
+    # and made missing-decorator bugs hard to diagnose).
+    from hpc_mapreduce._primitive import register_primitives
+
+    register_primitives()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -1807,19 +2184,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     except ValueError as exc:
-        return _err(
-            error_code="spec_invalid",
-            message=str(exc),
-            category="user",
-            retry_safe=False,
-        )
+        # Route through the canonical errors enum rather than inlining
+        # the "spec_invalid" string — keeps error_code values centralised
+        # in slash_commands.errors.
+        return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except Exception as exc:  # noqa: BLE001 — last-resort envelope
-        return _err(
-            error_code="internal",
-            message=f"{type(exc).__name__}: {exc}",
-            category="internal",
-            retry_safe=False,
-        )
+        # The base HpcError carries error_code="internal" + category=
+        # "internal" by default, which matches the previous inline
+        # values. Wrap so callers see a uniform shape.
+        return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))
 
 
 if __name__ == "__main__":

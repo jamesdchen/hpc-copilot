@@ -2,36 +2,35 @@
 name: reconcile-journal
 verb: mutate
 inputs:
-  - name: run_id
-    type: string
-  - name: scheduler
-    type: enum
-    description: One of `sge`, `slurm`. Determines which on-cluster query backend to invoke.
-  - name: experiment_dir
-    type: path
-    description: Repo root. Defaults to cwd.
+- name: run_id
+  type: string
+- name: scheduler
+  type: enum
+  description: One of `sge`, `slurm`. Determines which on-cluster query backend to
+    invoke.
+- name: experiment_dir
+  type: path
+  description: Repo root. Defaults to cwd.
 side_effects:
-  - ssh: 3 parallel SSH calls (status report, combiner-wave listing, alive-job-id check)
-  - mutates: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (atomic merged write)
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)
+- ssh: <cluster>
 idempotent: true
 idempotency_key: run_id
 error_codes:
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: remote_command_failed
-    category: cluster
-    retry_safe: false
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
+- code: cluster_unknown
+  category: user
+  retry_safe: false
 backed_by:
-  cli: hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]
+  cli: hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir
+    <dir>]
   python: slash_commands.runner.reconcile
 exit_codes:
-  - 0: ok
-  - 2: ssh_unreachable / remote_command_failed
-  - 3: journal_corrupt
+- 0: ok
+- 2: ssh_unreachable / remote_command_failed
+- 3: journal_corrupt
 ---
 
 ## Purpose

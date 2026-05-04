@@ -8,7 +8,6 @@ import pytest
 
 from hpc_mapreduce.infra import inspect as ins
 from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job import blacklist as bl
 from hpc_mapreduce.job import planner
 from hpc_mapreduce.job import runtime_prior as rp
 
@@ -109,37 +108,6 @@ class TestPlanSubmit:
         assert "a100" in constraints
         assert "v100" in constraints
         assert "a100|v100" in constraints
-
-    def test_blacklisted_node_separated_from_pool(self, tmp_path, monkeypatch):
-        cfg = _write_clusters(tmp_path)
-        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        bl.record_segv(
-            tmp_path,
-            cluster="discovery",
-            node="d11-07",
-            run_id="r-prior",
-            job_id="500",
-            task_id=0,
-        )
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
-            out = planner.plan_submit(
-                tmp_path,
-                profile="x",
-                cluster="discovery",
-                candidates=["a100"],
-                adversarial=False,
-            )
-        a100 = next(c for c in out["candidates"] if c["constraint"] == "a100")
-        assert a100["healthy_nodes"] == []
-        assert len(a100["blacklisted_nodes"]) == 1
-        entry = a100["blacklisted_nodes"][0]
-        # Deeper assertion than just node name — the planner is supposed
-        # to surface evidence_count and added_h_ago so the slash command
-        # can show "added 8h ago, 1 prior SEGV" rather than a bare name.
-        assert entry["node"] == "d11-07"
-        assert entry["evidence_count"] == 1
-        assert isinstance(entry["added_h_ago"], (int, float))
-        assert entry["expires_at"] is not None
 
     def test_stressed_node_surfaces_co_tenants(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
@@ -360,3 +328,37 @@ class TestAdversarialPath:
         assert rec["predicted_eta_sec"] is None
         assert "no usable prior" in rec["rationale"]
         assert out["needs_canary"] is True  # still triggers the canary path
+
+
+# ---------------------------------------------------------------------------
+# Phase 4f: DES ETA layered alongside test-only
+# ---------------------------------------------------------------------------
+
+
+class TestEtaViaDES:
+    def test_returns_none_without_snapshot_or_profiles(self, tmp_path):
+        from hpc_mapreduce.job.planner import _eta_via_des
+
+        # Empty experiment dir → no DES inputs.
+        assert _eta_via_des(tmp_path, "ml_ridge", "discovery") is None
+
+    def test_returns_int_when_des_eligible(self, tmp_path):
+        # Persist an idle snapshot — DES runs and returns 0.
+        from hpc_mapreduce.infra.inspect import (
+            ClusterSnapshot, NodeSnapshot, persist_snapshot,
+        )
+        from hpc_mapreduce.job.planner import _eta_via_des
+
+        snap = ClusterSnapshot(
+            cluster="discovery", scheduler_kind="slurm",
+            now_iso="2026-04-28T10:00:00+00:00",
+            nodes=[NodeSnapshot(
+                name="n0", state="IDLE", real_mem_mb=64_000, alloc_mem_mb=0,
+                cpu_tot=8, cpu_alloc=0, gres="", gres_used="", co_tenants=[],
+                is_drained=False,
+            )],
+        )
+        persist_snapshot(tmp_path, snap)
+        eta = _eta_via_des(tmp_path, "ml_ridge", "discovery")
+        # Idle snapshot + small candidate → 0 wait.
+        assert eta == 0

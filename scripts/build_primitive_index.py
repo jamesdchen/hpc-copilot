@@ -18,7 +18,9 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _shared import REPO_ROOT, sort_verbs, summarize_side_effects  # noqa: E402
+
 PRIMITIVES_DIR = REPO_ROOT / "docs" / "primitives"
 README = PRIMITIVES_DIR / "README.md"
 BEGIN = "<!-- BEGIN PRIMITIVE CATALOG -->"
@@ -42,21 +44,6 @@ def parse_frontmatter(path: Path) -> dict:
     return fm
 
 
-def summarize_side_effects(side_effects: list) -> str:
-    """Compact one-line rendering for the catalog cell."""
-    if not side_effects:
-        return "_none_"
-    parts: list[str] = []
-    for entry in side_effects:
-        if isinstance(entry, dict):
-            for verb, target in entry.items():
-                short_target = target.split(" ")[0].rstrip(",.;")
-                parts.append(f"{verb}: `{short_target}`")
-        else:
-            parts.append(str(entry))
-    return "; ".join(parts)
-
-
 def render_table(primitives: list[dict]) -> str:
     """Render the catalog grouped by verb.
 
@@ -73,13 +60,9 @@ def render_table(primitives: list[dict]) -> str:
         by_verb.setdefault(p["verb"], []).append(p)
 
     # Render verbs in the order that matches the architecture's tier story:
-    # read → mutate → submit/build → workflow. Verbs not in this list fall
-    # to the end alphabetically.
-    verb_order = ["query", "validate", "mutate", "submit", "scaffold", "workflow"]
-    sorted_verbs = sorted(
-        by_verb.keys(),
-        key=lambda v: (verb_order.index(v) if v in verb_order else len(verb_order), v),
-    )
+    # read → mutate → submit/build → workflow. Verbs not in the canonical
+    # list fall to the end alphabetically — see scripts/_shared.sort_verbs.
+    sorted_verbs = sort_verbs(list(by_verb.keys()))
 
     sections: list[str] = []
     for verb in sorted_verbs:
@@ -111,14 +94,66 @@ def update_readme(table: str) -> tuple[str, str]:
     return old, new
 
 
-def main() -> int:
-    check = "--check" in sys.argv
-    primitives = []
+def primitives_from_registry() -> list[dict]:
+    """Project the @primitive registry into the dict shape this script
+    already consumes (name / verb / idempotent / side_effects / backed_by).
+
+    The registry is the SoT for behavior + structured side-effect kinds;
+    we still cross-reference each primitive's frontmatter to recover the
+    backed_by.cli string (the registry doesn't yet carry CLI invocations
+    — that's a follow-up).
+
+    Falls through to pure-frontmatter parsing for any primitive missing
+    from the registry, so the script stays useful during the C′
+    migration window where some primitives might not be decorated yet.
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    from hpc_mapreduce._primitive import get_registry
+
+    registered = get_registry()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for meta in registered.values():
+        # Read the matching frontmatter for cli + error_codes (prose
+        # fields the registry doesn't yet model).
+        md_path = PRIMITIVES_DIR / f"{meta.name}.md"
+        fm = parse_frontmatter(md_path) if md_path.is_file() else {}
+        backed_by = fm.get("backed_by") if isinstance(fm.get("backed_by"), dict) else {}
+        out.append(
+            {
+                "name": meta.name,
+                "verb": meta.verb,
+                "idempotent": bool(meta.idempotent),
+                # Render structured registry SideEffects in the same
+                # ``kind: target`` shape that summarize_side_effects
+                # already understands; mixing dicts and strings stays
+                # backward-compatible with frontmatter-only sources.
+                "side_effects": [
+                    {se.kind: se.target} if se.target else se.kind
+                    for se in meta.side_effects
+                ],
+                "error_codes": fm.get("error_codes", []),
+                "backed_by": backed_by,
+            }
+        )
+        seen.add(meta.name)
+
+    # Frontmatter holdouts (primitives present on disk but not yet
+    # decorated). The registry switch is incremental; this fallback
+    # keeps the catalog complete during the migration.
     for path in sorted(PRIMITIVES_DIR.glob("*.md")):
         if path.name == "README.md":
             continue
-        primitives.append(parse_frontmatter(path))
+        fm = parse_frontmatter(path)
+        if fm.get("name") in seen:
+            continue
+        out.append(fm)
+    return out
 
+
+def main() -> int:
+    check = "--check" in sys.argv
+    primitives = primitives_from_registry()
     table = render_table(primitives)
     old, new = update_readme(table)
 

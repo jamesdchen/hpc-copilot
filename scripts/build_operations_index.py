@@ -19,15 +19,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# Import via direct path append so this script runs without an editable
+# install ("python scripts/build_operations_index.py").
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _shared import REPO_ROOT, sort_verbs, summarize_side_effects  # noqa: E402
+
 OUT = REPO_ROOT / "docs" / "operations.md"
 
-VERB_ORDER = ["query", "validate", "mutate", "submit", "scaffold", "workflow"]
 VERB_DESCRIPTIONS = {
     "query": "Read-only, no side effects. Freely composable; cacheable.",
     "validate": "Read + binary health check. Same composability as `query`.",
     "mutate": (
-        "Writes to journal / sidecar / blacklist. "
+        "Writes to journal / sidecar. "
         "Need flock + idempotency-key consideration."
     ),
     "submit": "Records a new submission (sidecar write + journal entry).",
@@ -60,8 +63,10 @@ def render_row(op: dict) -> str:
     inp = f"`hpc_mapreduce/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
     out = f"`hpc_mapreduce/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
     idem = "✓" if op.get("idempotent") else "✗"
-    side_effects = op.get("side_effects") or []
-    sfx = ", ".join(side_effects) if side_effects else "_none_"
+    # Use the shared renderer so structured {verb: target} side-effect
+    # entries from primitive frontmatter survive — the previous inline
+    # ", ".join(side_effects) silently dropped them.
+    sfx = summarize_side_effects(op.get("side_effects") or [])
     return (
         f"| [`{name}`](primitives/{name}.md) | {idem} | {sfx} | `{cli}` | `{py}` | {inp} | {out} |"
     )
@@ -83,10 +88,7 @@ def build_index(operations: list[dict]) -> str:
     for op in operations:
         by_verb.setdefault(op["verb"], []).append(op)
 
-    sorted_verbs = sorted(
-        by_verb.keys(),
-        key=lambda v: (VERB_ORDER.index(v) if v in VERB_ORDER else len(VERB_ORDER), v),
-    )
+    sorted_verbs = sort_verbs(list(by_verb.keys()))
     sections = "\n".join(render_section(v, by_verb[v]) for v in sorted_verbs)
     workflow_count = len(by_verb.get("workflow", []))
     primitive_count = len(operations) - workflow_count

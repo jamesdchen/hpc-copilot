@@ -131,10 +131,34 @@ _EXCLUDED_PREFIXES: set[str] = {
 
 
 def _run_qstat(ssh_host: str | None = None) -> str | None:
-    """Run ``qstat -f -q gpu_*``, optionally over SSH. Returns stdout or None."""
-    cmd = ["qstat", "-f", "-q", "gpu_*"]
+    """Run ``qstat -f -q gpu_*``, optionally over SSH. Returns stdout or None.
+
+    When *ssh_host* is set (``"user@cluster"``), routes through the
+    canonical :func:`hpc_mapreduce.infra.remote.ssh_run` helper so the
+    SSH command picks up the project-wide multiplexing options and
+    timeout discipline (``SSH_TIMEOUT_SEC = 60`` by default).
+    """
     if ssh_host:
-        cmd = ["ssh", "-o", "ConnectTimeout=10", ssh_host] + cmd
+        # Lazy import to avoid a hard dependency for the local-qstat path.
+        from hpc_mapreduce.infra.remote import (  # noqa: PLC0415
+            split_ssh_target,
+            ssh_run,
+        )
+
+        try:
+            user, host = split_ssh_target(ssh_host)
+        except ValueError:
+            return None
+        try:
+            result = ssh_run("qstat -f -q gpu_*", host=host, user=user)
+        except (TimeoutError, OSError):
+            return None
+        if result.returncode == 0:
+            return result.stdout
+        return None
+
+    # Local qstat path — no SSH wrapping needed.
+    cmd = ["qstat", "-f", "-q", "gpu_*"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:

@@ -28,9 +28,75 @@ import argparse
 import importlib
 import importlib.util
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from hpc_mapreduce.executor_cli import build_parser_from_flags
+# ─── inlined from hpc_mapreduce.executor_cli ───────────────────────────────
+#
+# This file is delivered to the cluster as ``.hpc/cli.py`` and runs in a
+# stdlib-only Python: the package ``hpc_mapreduce`` is NOT installed
+# there. The same constraint already drives the inline copies in
+# ``combine.py`` / ``dispatch.py``. We duplicate the (~30 LOC) Flag /
+# build_parser_from_flags surface verbatim rather than push the whole
+# ``executor_cli.py`` module to the cluster, which would widen the
+# remote runtime footprint.
+#
+# Keep this in lock-step with hpc_mapreduce.executor_cli.{Flag,
+# build_parser_from_flags}; ``tests/test_executor_cli_inline_parity.py``
+# (or equivalent) should AST-compare the two when added.
+
+
+@dataclass(frozen=True)
+class Flag:
+    """Declarative spec for one argparse flag (inlined from executor_cli)."""
+
+    name: str
+    type: type | None = str
+    default: Any = None
+    required: bool = False
+    choices: tuple[Any, ...] | None = None
+    help: str = ""
+    nargs: str | None = None
+
+    def add_to(self, parser: argparse.ArgumentParser) -> None:
+        kwargs: dict[str, Any] = {"help": self.help}
+        if self.required:
+            kwargs["required"] = True
+        if self.default is not None:
+            kwargs["default"] = self.default
+        elif not self.required:
+            kwargs["default"] = None
+        if self.choices is not None:
+            kwargs["choices"] = list(self.choices)
+        if self.nargs is not None:
+            kwargs["nargs"] = self.nargs
+        if self.type is not None:
+            kwargs["type"] = self.type
+        cli_flag = "--" + self.name.replace("_", "-")
+        parser.add_argument(cli_flag, **kwargs)
+
+
+def build_parser_from_flags(
+    flags: "list[Flag] | list[dict[str, Any]]",
+    *,
+    description: str = "",
+) -> argparse.ArgumentParser:
+    """Build an argparse parser from a declarative flag list (inlined)."""
+    parser = argparse.ArgumentParser(description=description)
+    for f in flags:
+        if isinstance(f, Flag):
+            f.add_to(parser)
+        elif isinstance(f, dict):
+            Flag(**f).add_to(parser)
+        else:
+            raise TypeError(
+                f"FLAGS entries must be Flag instances or dicts; got {type(f).__name__}"
+            )
+    return parser
+
+
+# ─── end of inlined section ────────────────────────────────────────────────
 
 
 def _load_tasks():

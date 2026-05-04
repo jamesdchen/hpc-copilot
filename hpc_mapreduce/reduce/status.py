@@ -52,6 +52,7 @@ import subprocess
 from pathlib import Path
 
 from hpc_mapreduce._time import utcnow_iso
+from hpc_mapreduce.lifecycle import TaskStatus
 
 # ---------------------------------------------------------------------------
 # Result checking
@@ -195,18 +196,27 @@ def get_err_log_paths(
     job_name: str = "",
     scratch_dir: str = "",
 ) -> dict[int, str]:
-    """Find the most recent error log path on disk for each task."""
+    """Find the most recent error log path on disk for each task.
+
+    B5-PR2: per-scheduler base path goes through
+    :meth:`HPCBackend.err_log_disk_path`. The SLURM fallback glob (which
+    catches submission scripts that override ``--error`` to a non-canonical
+    name) stays here because it's an on-disk recovery pattern, not a
+    scheduler shape question.
+    """
+    from hpc_mapreduce.infra.backends import get_backend_class
+
+    backend_cls = get_backend_class(scheduler)
     paths: dict[int, str] = {}
     for tid in range(1, total_tasks + 1):
         for job_id in reversed(job_ids):
-            if scheduler == "sge":
-                p = os.path.join(scratch_dir, f"{job_name}.o{job_id}.{tid}")
-            else:
-                p = os.path.join(log_dir, f"{job_name}_{job_id}_{tid}.err")
-                if not os.path.isfile(p):
-                    matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
-                    if matches:
-                        p = max(matches, key=os.path.getmtime)
+            p = backend_cls.err_log_disk_path(
+                log_dir, scratch_dir, job_name, job_id, tid
+            )
+            if scheduler != "sge" and not os.path.isfile(p):
+                matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
+                if matches:
+                    p = max(matches, key=os.path.getmtime)
             if os.path.isfile(p):
                 paths[tid] = p
                 break
@@ -223,19 +233,22 @@ _FAILED_STATES = {"FAILED", "CANCELLED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL"
 
 
 def _empty_summary() -> dict[str, int]:
-    """Return the canonical zeroed summary dict (5 int keys, always present)."""
-    return {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+    """Return the canonical zeroed summary dict (5 int keys, always present).
+
+    Keys derived from :class:`hpc_mapreduce.lifecycle.TaskStatus` (B2).
+    """
+    return {ts.value: 0 for ts in TaskStatus}
 
 
 def _categorize(state: str) -> str:
-    """Map a scheduler state string to a summary bucket name."""
+    """Map a scheduler state string to a summary bucket name (TaskStatus value)."""
     if state in _ACTIVE_STATES:
-        return "running"
+        return TaskStatus.RUNNING
     if state in _PENDING_STATES:
-        return "pending"
+        return TaskStatus.PENDING
     if state in _FAILED_STATES or state.startswith("CANCELLED"):
-        return "failed"
-    return "unknown"
+        return TaskStatus.FAILED
+    return TaskStatus.UNKNOWN
 
 
 def report_status(
@@ -257,7 +270,8 @@ def report_status(
     ``min_rows`` is forwarded to :func:`check_results`; see its docstring for the
     CSV completion semantics.
     """
-    from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
+    # B5-PR2: per-scheduler job-state query goes through backend.query_jobs.
+    from hpc_mapreduce.infra.backends import get_backend_class
 
     csv_results = check_results(result_dir, total_tasks, file_glob=file_glob, min_rows=min_rows)
 
@@ -266,10 +280,9 @@ def report_status(
 
     errors: list[dict] = []
     if job_ids:
-        if scheduler == "sge":
-            query_result = query_sge(job_ids, user=sge_user)
-        else:
-            query_result = query_sacct(job_ids, cluster=slurm_cluster)
+        query_result = get_backend_class(scheduler).query_jobs(
+            job_ids, sge_user=sge_user, slurm_cluster=slurm_cluster
+        )
         job_info = query_result.get("tasks", {}) or {}
         errors.extend(query_result.get("errors", []) or [])
     else:
@@ -430,7 +443,8 @@ def report_status_from_tasks(
     Each task's per-task dict includes ``cmd_sha`` pulled from the task
     entry when present; ``null`` otherwise.
     """
-    from hpc_mapreduce.infra.backends.query import query_sacct, query_sge
+    # B5-PR2: per-scheduler job-state query goes through backend.query_jobs.
+    from hpc_mapreduce.infra.backends import get_backend_class
 
     total = int(tasks_data.get("total_tasks", len(tasks_data.get("tasks", {}))))
     task_entries = tasks_data.get("tasks", {}) or {}
@@ -448,10 +462,9 @@ def report_status_from_tasks(
 
     errors: list[dict] = []
     if job_ids:
-        if scheduler == "sge":
-            query_result = query_sge(job_ids, user=sge_user)
-        else:
-            query_result = query_sacct(job_ids, cluster=slurm_cluster)
+        query_result = get_backend_class(scheduler).query_jobs(
+            job_ids, sge_user=sge_user, slurm_cluster=slurm_cluster
+        )
         job_info = query_result.get("tasks", {}) or {}
         errors.extend(query_result.get("errors", []) or [])
     else:
@@ -678,14 +691,19 @@ def _main() -> int:
         return exit_code
 
     # Read .hpc/runs/<run_id>.json + .hpc/tasks.py and synthesize a
-    # task-keyed dict the reporting code consumes.
-    sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
-    if not sidecar_path.is_file():
-        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
-        return _emit_err("sidecar_not_found", str(sidecar_path))
+    # task-keyed dict the reporting code consumes. Use the canonical
+    # hardened reader so wave_map / task_count / result_dir_template are
+    # guaranteed to be present.
+    from hpc_mapreduce.job.runs import read_run_sidecar  # noqa: PLC0415 — lazy
+
     try:
-        sidecar = json.loads(sidecar_path.read_text())
+        sidecar = read_run_sidecar(Path("."), args.run_id)
+    except FileNotFoundError as exc:
+        sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
+        print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
+        return _emit_err("sidecar_not_found", str(sidecar_path))  # noqa: B904
     except (OSError, json.JSONDecodeError) as exc:
+        sidecar_path = Path(".hpc") / "runs" / f"{args.run_id}.json"
         return _emit_err("sidecar_parse_error", f"{sidecar_path}: {exc}")
 
     tasks_py_path = Path(".hpc") / "tasks.py"

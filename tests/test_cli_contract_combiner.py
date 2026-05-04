@@ -20,11 +20,13 @@ def _build_fixture(workdir: Path, *, run_id: str = "test_run") -> Path:
     Result dirs and metrics.json files are placed under workdir/. Returns
     the path to the combiner script the test should invoke.
     """
+    from tests.conftest import make_sidecar_json, write_hpc_tasks  # noqa: PLC0415
+
     repo_root = Path(__file__).resolve().parent.parent
     combiner_src = repo_root / "hpc_mapreduce" / "map" / "combiner.py"
 
     hpc = workdir / ".hpc"
-    (hpc / "runs").mkdir(parents=True)
+    hpc.mkdir(parents=True, exist_ok=True)
     combiner_dst = hpc / "_hpc_combiner.py"
     shutil.copy(combiner_src, combiner_dst)
 
@@ -35,23 +37,14 @@ def _build_fixture(workdir: Path, *, run_id: str = "test_run") -> Path:
     (r0 / "metrics.json").write_text(json.dumps({"mse": 0.10, "n_samples": 100}))
     (r1 / "metrics.json").write_text(json.dumps({"mse": 0.20, "n_samples": 100}))
 
-    (hpc / "tasks.py").write_text(
-        "_TASKS = [{'model': 'ridge'}, {'model': 'ridge'}]\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+    write_hpc_tasks(hpc, [{"model": "ridge"}, {"model": "ridge"}])
+    make_sidecar_json(
+        workdir,
+        run_id=run_id,
+        result_dir_template=str(workdir / "task_{task_id}"),
+        task_count=2,
+        wave_map={"0": [0, 1]},
     )
-    (hpc / "runs" / f"{run_id}.json").write_text(json.dumps({
-        "sidecar_schema_version": 1,
-        "run_id": run_id,
-        "cmd_sha": "deadbeef" * 8,
-        "claude_hpc_version": "0.0.0+test",
-        "submitted_at": "2026-01-01T00:00:00Z",
-        "executor": "true",
-        "result_dir_template": str(workdir / "task_{task_id}"),
-        "task_count": 2,
-        "tasks_py_sha": "abc",
-        "wave_map": {"0": [0, 1]},
-    }))
     return combiner_dst
 
 

@@ -2,22 +2,20 @@
 name: monitor-flow
 verb: workflow
 side_effects:
-  - mutates: per-run journal entry's last_status (per poll)
-  - writes: <experiment_dir>/.hpc/runs/<run_id>.monitor.jsonl (one record per poll)
-  - mutates: combined_waves / failed_waves on the journal record (per combined wave)
-  - mutates: lifecycle_state to `complete` when every task reports complete
+- ssh: <cluster>
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)
 idempotent: true
-idempotency_key: run_id (re-invoke after terminal is a no-op)
+idempotency_key: run_id
 error_codes:
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: remote_command_failed
-    category: cluster
-    retry_safe: false
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
+- code: remote_command_failed
+  category: cluster
+  retry_safe: false
 backed_by:
   cli: hpc-mapreduce monitor-flow --spec <path>
   python: hpc_mapreduce.job.monitor_flow.monitor_flow

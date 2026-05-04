@@ -179,3 +179,188 @@ def test_write_without_any_v2_kwargs_still_works(tmp_path: Path) -> None:
 def test_read_missing_sidecar_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         read_run_sidecar(tmp_path, "20260101-000000-nope0000")
+
+
+# ---------------------------------------------------------------------------
+# Hardened return shape — wave_map / task_count / result_dir_template
+# guaranteed present (regression: monitor_flow / aggregate_flow / status /
+# history all used to read these via raw json.loads from the wrong dir).
+# ---------------------------------------------------------------------------
+
+
+def test_wave_map_defaults_to_empty_dict_when_omitted(tmp_path: Path) -> None:
+    # Write without wave_map.
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert "wave_map" in data
+    assert data["wave_map"] == {}
+    assert isinstance(data["wave_map"], dict)
+
+
+def test_wave_map_preserved_when_present(tmp_path: Path) -> None:
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs(),
+        wave_map={"0": [0, 1, 2], "1": [3]},
+    )
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert data["wave_map"] == {"0": [0, 1, 2], "1": [3]}
+
+
+def test_task_count_present_and_int(tmp_path: Path) -> None:
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert "task_count" in data
+    assert isinstance(data["task_count"], int)
+    assert data["task_count"] == 4
+
+
+def test_result_dir_template_present_and_str(tmp_path: Path) -> None:
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    data = read_run_sidecar(tmp_path, _common_required_kwargs()["run_id"])
+    assert "result_dir_template" in data
+    assert isinstance(data["result_dir_template"], str)
+    assert data["result_dir_template"] == "results/{seed}"
+
+
+def test_v1_sidecar_without_wave_map_still_yields_empty_dict(tmp_path: Path) -> None:
+    """Hand-craft a v1 sidecar lacking wave_map; the hardened reader must
+    still produce wave_map={} so downstream code (auto_combine_waves /
+    ensure_all_combined) can rely on the shape."""
+    run_id = "20260101-000000-deadbee"
+    target = run_sidecar_path(tmp_path, run_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(
+            {
+                "sidecar_schema_version": 1,
+                "run_id": run_id,
+                "cmd_sha": "0" * 64,
+                "claude_hpc_version": "0.0.1",
+                "submitted_at": "2026-01-01T00:00:00Z",
+                "executor": "python3 old.py",
+                "result_dir_template": "results/{seed}",
+                "task_count": 0,
+                "tasks_py_sha": "1" * 64,
+                # NOTE: no wave_map key
+            }
+        )
+    )
+    data = read_run_sidecar(tmp_path, run_id)
+    assert data["wave_map"] == {}
+    assert data["task_count"] == 0
+    assert data["result_dir_template"] == "results/{seed}"
+
+
+class TestVersionMismatchWarning:
+    """A10: read_run_sidecar warns once per (run_id, sidecar_version) when
+    the sidecar's ``claude_hpc_version`` differs from the running
+    package's ``__version__``. Reads always succeed regardless of the
+    warning.
+    """
+
+    def test_warning_fires_on_version_mismatch(self, tmp_path: Path) -> None:
+        import warnings as _warnings
+
+        from hpc_mapreduce.job import runs as _runs_mod
+
+        # Reset module-level dedup set so this test is hermetic regardless
+        # of test ordering.
+        _runs_mod._warned_version_mismatch.clear()
+
+        run_id = "20260101-000000-deadbee"
+        target = run_sidecar_path(tmp_path, run_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(
+                {
+                    "sidecar_schema_version": 2,
+                    "run_id": run_id,
+                    "cmd_sha": "0" * 64,
+                    "claude_hpc_version": "9.9.9-from-the-future",
+                    "submitted_at": "2026-01-01T00:00:00Z",
+                    "executor": "python3 src/run.py",
+                    "result_dir_template": "results/{seed}",
+                    "task_count": 0,
+                    "tasks_py_sha": "1" * 64,
+                }
+            )
+        )
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            data = read_run_sidecar(tmp_path, run_id)
+        # Read succeeds.
+        assert data["run_id"] == run_id
+        # And exactly one warning fires.
+        msgs = [str(w.message) for w in caught]
+        assert any("9.9.9-from-the-future" in m for m in msgs), (
+            "expected version-mismatch warning, got: " + repr(msgs)
+        )
+
+    def test_warning_dedupes_per_run_and_version(self, tmp_path: Path) -> None:
+        import warnings as _warnings
+
+        from hpc_mapreduce.job import runs as _runs_mod
+
+        _runs_mod._warned_version_mismatch.clear()
+        run_id = "20260101-000000-deadbee"
+        target = run_sidecar_path(tmp_path, run_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(
+                {
+                    "sidecar_schema_version": 2,
+                    "run_id": run_id,
+                    "cmd_sha": "0" * 64,
+                    "claude_hpc_version": "9.9.9-from-the-future",
+                    "submitted_at": "2026-01-01T00:00:00Z",
+                    "executor": "python3 src/run.py",
+                    "result_dir_template": "results/{seed}",
+                    "task_count": 0,
+                    "tasks_py_sha": "1" * 64,
+                }
+            )
+        )
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            for _ in range(5):
+                read_run_sidecar(tmp_path, run_id)
+        version_warnings = [
+            w for w in caught if "9.9.9-from-the-future" in str(w.message)
+        ]
+        assert len(version_warnings) == 1, (
+            f"expected exactly one warning across 5 reads; got {len(version_warnings)}"
+        )
+
+    def test_no_warning_when_versions_match(self, tmp_path: Path) -> None:
+        import warnings as _warnings
+
+        from hpc_mapreduce import __version__ as pkg_version
+        from hpc_mapreduce.job import runs as _runs_mod
+
+        _runs_mod._warned_version_mismatch.clear()
+        run_id = "20260101-000000-cafebab"
+        target = run_sidecar_path(tmp_path, run_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(
+                {
+                    "sidecar_schema_version": 2,
+                    "run_id": run_id,
+                    "cmd_sha": "0" * 64,
+                    "claude_hpc_version": pkg_version,
+                    "submitted_at": "2026-01-01T00:00:00Z",
+                    "executor": "python3 src/run.py",
+                    "result_dir_template": "results/{seed}",
+                    "task_count": 0,
+                    "tasks_py_sha": "1" * 64,
+                }
+            )
+        )
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            read_run_sidecar(tmp_path, run_id)
+        assert not any(
+            "claude-hpc" in str(w.message) and "but reader is" in str(w.message)
+            for w in caught
+        ), "matching versions should not warn"

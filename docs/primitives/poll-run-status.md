@@ -2,30 +2,29 @@
 name: poll-run-status
 verb: query
 side_effects:
-  - writes: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status under flock)
-  - writes: ~/.claude/hpc/<repo_hash>/runs/<run_id>.last_status.json (cached snapshot)
-  - ssh: cluster reachable on submit cluster
+- ssh: <cluster>
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)
 idempotent: true
 idempotency_key: run_id
 error_codes:
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
-    description: No journal record for run_id; verify the id is correct.
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: remote_command_failed
-    category: cluster
-    retry_safe: false
-    description: The on-cluster reporter exited non-zero; surface stderr.
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
+  description: No journal record for run_id; verify the id is correct.
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
+- code: remote_command_failed
+  category: cluster
+  retry_safe: false
+  description: The on-cluster reporter exited non-zero; surface stderr.
 backed_by:
   cli: hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]
   python: slash_commands.runner.record_status
 exit_codes:
-  - 0: ok
-  - 2: ssh_unreachable / remote_command_failed (check retry_safe)
-  - 3: journal_corrupt
+- 0: ok
+- 2: ssh_unreachable / remote_command_failed (check retry_safe)
+- 3: journal_corrupt
 ---
 
 ## Purpose

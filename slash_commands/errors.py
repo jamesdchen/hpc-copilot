@@ -23,6 +23,8 @@ __all__ = [
     "CombinerFailed",
     "ClusterTimeout",
     "OutputsMissing",
+    "ClusterPartiallyDegraded",
+    "SchemaIncompat",
 ]
 
 
@@ -172,4 +174,58 @@ class OutputsMissing(HpcError):
         "Resubmit the listed task ids and re-run aggregate.  Inspect "
         "<remote_path>/_hpc_logs/ for per-task stderr if the resubmit "
         "doesn't produce the expected output."
+    )
+
+
+class ClusterPartiallyDegraded(HpcError):
+    """One or more cluster-side data sources were unreachable but the
+    operation succeeded with partial data.
+
+    Carries a ``partial_errors`` list attribute of ``{code, detail}``
+    dicts so the agent_cli can surface the per-source failures to the
+    envelope's top-level ``partial_errors`` key. The operation that
+    raises this still set ok:true cluster-side; the exception is the
+    typed channel for surfacing what was missed.
+
+    Retry-safe because the typical cause is a transient scheduler
+    daemon stall (qhost, sacct).
+    """
+
+    error_code = "cluster_partially_degraded"
+    retry_safe = True
+    category = "cluster"
+    remediation = (
+        "One or more node-state queries (qhost, scontrol, sacct, qacct) "
+        "timed out or returned malformed output. The result is usable but "
+        "may under-count co-tenants or stale-bucket nodes. Re-run after a "
+        "short delay if planning quality matters."
+    )
+
+    def __init__(self, message: str, *, partial_errors: list[dict[str, str]] | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.partial_errors: list[dict[str, str]] = list(partial_errors or [])
+
+
+class SchemaIncompat(HpcError):
+    """An on-disk JSON file declared a ``schema_version`` outside our
+    supported range for that domain.
+
+    Raised by :func:`hpc_mapreduce._version.compatibility_check` so the
+    five readers in the codebase (session, blacklist, runtime_prior,
+    calibration prediction, status rollup, per-run sidecar) all surface
+    the same error code.
+
+    Not retry-safe — the file on disk has a shape we cannot read.
+    Either the writer is newer than the reader (upgrade the package) or
+    the file was hand-edited / from a different repo.
+    """
+
+    error_code = "schema_incompat"
+    retry_safe = False
+    category = "internal"
+    remediation = (
+        "The on-disk JSON was written by a newer (or older, foreign) "
+        "claude-hpc version than this one supports. Upgrade the package "
+        "or migrate the file. The supported version set is declared in "
+        "``hpc_mapreduce/_version.py:_MANIFEST``."
     )

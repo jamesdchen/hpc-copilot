@@ -43,6 +43,9 @@ ALLOWED_EXPORTS = frozenset(
         "runs_subdir",
         "tasks_path",
         "load_tasks_module",
+        # Path resolution (B1) — canonical home for the three forwarders above
+        "RepoLayout",
+        "JournalLayout",
         # Per-run sidecars (NEW)
         "MAX_RUNS",
         "SIDECAR_SCHEMA_VERSION",
@@ -88,8 +91,6 @@ ALLOWED_EXPORTS = frozenset(
         "build_wave_map",
         # Smart-submit data layer
         "inspect_cluster",
-        "record_segv",
-        "get_active_blacklist",
         "append_runtime_sample",
         "roll_up_runtime_quantiles",
         "plan_submit",
@@ -103,6 +104,13 @@ ALLOWED_EXPORTS = frozenset(
         "run_combiner_checked",
         # Per-task metrics sidecar
         "write_metrics",
+        # Primitive registry (C′ — implementation + schemas as SoT)
+        "PrimitiveMeta",
+        "SideEffect",
+        "get_meta",
+        "get_registry",
+        "primitive",
+        "register_primitives",
     }
 )
 

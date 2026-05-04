@@ -2,23 +2,19 @@
 name: list-in-flight
 verb: query
 inputs:
-  - name: experiment_dir
-    type: path
-    description: Repo root containing the journal. Defaults to cwd.
+- name: experiment_dir
+  type: path
+  description: Repo root containing the journal. Defaults to cwd.
 side_effects: []
 idempotent: true
 idempotency_key: none
-error_codes:
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
-    description: A journal record has a mismatched schema_version. Fix the file and retry.
+error_codes: []
 backed_by:
   cli: hpc-mapreduce list-in-flight --experiment-dir <path>
   python: slash_commands.session.find_in_flight_runs
 exit_codes:
-  - 0: ok
-  - 3: journal_corrupt
+- 0: ok
+- 3: journal_corrupt
 ---
 
 ## Purpose

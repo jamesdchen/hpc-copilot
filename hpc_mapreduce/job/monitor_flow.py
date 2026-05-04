@@ -36,19 +36,29 @@ What it intentionally does NOT do (in MVP)
   this with category-driven resource overrides; folding that into
   monitor-flow requires a backend abstraction parallel to submit-flow's,
   plus the failure-classification policy. Tracked separately.
-- SEGV blacklist updates. Same reason.
 - Decision logic about whether a run is "stalled" — this is judgment.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce._time import utcnow_iso
+from hpc_mapreduce.lifecycle import LifecycleState
+from hpc_mapreduce.job.runs import read_run_sidecar
 from slash_commands import errors, runner, session
+from slash_commands.runner import mark_terminal, record_status
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -103,6 +113,34 @@ def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
     return session.runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
 
 
+@contextlib.contextmanager
+def _flock_append(target: Path):
+    """Hold an exclusive flock on a sibling ``.lock`` while yielding.
+
+    Mirrors :func:`slash_commands.session._locked` so the slash-command
+    surface (which appends to the same ``.monitor.jsonl`` file) and this
+    workflow atom serialize their writes. Without flock, a concurrent
+    slash-command poll and an in-process monitor_flow tick can interleave
+    a partial JSON line and produce a torn record.
+
+    Best-effort on platforms without ``fcntl`` (Windows): degrades to a
+    no-op so the workflow primitive remains importable.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if _fcntl is None:
+        yield
+        return
+    lock = target.with_suffix(target.suffix + ".lock")
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            _fcntl.flock(fd, _fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _append_tick(
     experiment_dir: Path,
     run_id: str,
@@ -113,7 +151,11 @@ def _append_tick(
     lifecycle_state: str,
     next_tick_seconds: float | None,
 ) -> None:
-    """Append one JSONL record to ``<run_id>.monitor.jsonl`` (best-effort)."""
+    """Append one JSONL record to ``<run_id>.monitor.jsonl`` (best-effort).
+
+    Holds an exclusive flock for the duration of the append so a
+    concurrent slash-command writer can\'t interleave bytes mid-line.
+    """
     record = {
         "tick_id": utcnow_iso(),
         "run_id": run_id,
@@ -126,11 +168,21 @@ def _append_tick(
         "console_emitted": False,
     }
     path = _tick_log_path(experiment_dir, run_id)
+    # B7: Route the JSONL append through hpc_mapreduce.telemetry, which
+    # owns the flock-guarded writer pattern. The local _flock_append /
+    # legacy fallback below remain as the on-disk shape -- the only
+    # change is that the writer call goes through the canonical sink.
+    # Telemetry's monitor-jsonl sink ignores HPC_TELEMETRY_SINK because
+    # this caller is the canonical producer.
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-    except OSError:
+        from hpc_mapreduce.telemetry import record as _telemetry_record
+
+        _telemetry_record(
+            "tick", record,
+            sink="monitor-jsonl",
+            monitor_jsonl_path=path,
+        )
+    except Exception:  # noqa: BLE001 — never crash the loop on telemetry
         # Tick log writes must never crash the loop. The journal record
         # is the primary state; this is observability.
         pass
@@ -169,10 +221,60 @@ def _newly_complete_waves(
     return sorted(out)
 
 
-def _is_terminal(last_status: dict[str, Any], total_tasks: int) -> tuple[str | None, str | None]:
+def _read_partial_ok(experiment_dir: Path, run_id: str) -> bool:
+    """Read the partial_ok sibling marker written by submit-flow.
+
+    Returns True iff ``<exp>/.hpc/runs/<run_id>.partial_ok`` exists.
+    The marker is a sibling of the run sidecar (intentionally not a
+    sidecar field) so the sidecar's frozen schema does not need to bump
+    for this opt-in flag. See ``submit_flow.partial_ok``.
+    """
+    from hpc_mapreduce.job.runs import run_sidecar_path
+
+    marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
+    return marker.is_file()
+
+
+def _write_failed_task_ids(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    failed_task_ids: list[int],
+    classifier_codes: list[str] | None = None,
+    wave: int | None = None,
+) -> None:
+    """Persist the failure ledger consulted by aggregate-flow.
+
+    Writes ``<exp>/.hpc/runs/<run_id>.failed.json`` with the shape
+    documented in the D2b primitive doc — kept on disk (not in the
+    sidecar) so aggregate-flow can read it without a sidecar parse.
+    """
+    from hpc_mapreduce.job.runs import run_sidecar_path
+
+    target = run_sidecar_path(experiment_dir, run_id).with_suffix(".failed.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": run_id,
+        "failed_task_ids": sorted(set(int(t) for t in failed_task_ids)),
+        "wave": wave,
+        "classifier_codes": list(classifier_codes or []),
+    }
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _is_terminal(
+    last_status: dict[str, Any],
+    total_tasks: int,
+    *,
+    partial_ok: bool = False,
+) -> tuple[str | None, str | None]:
     """Inspect counts and return (lifecycle_state, escalation_reason).
 
     Returns ``(None, None)`` when still in flight.
+
+    With ``partial_ok=True``, the wave is classified ``complete`` as
+    soon as no work is left and at least one task succeeded. Only a
+    zero-success wave is classified ``failed`` under partial-ok.
     """
     complete = int(last_status.get("complete", 0))
     running = int(last_status.get("running", 0))
@@ -180,14 +282,30 @@ def _is_terminal(last_status: dict[str, Any], total_tasks: int) -> tuple[str | N
     failed = int(last_status.get("failed", 0))
 
     if complete >= total_tasks:
-        return ("complete", None)
+        return (LifecycleState.COMPLETE, None)
     if running == 0 and pending == 0 and failed > 0:
+        if partial_ok and complete > 0:
+            # Partial success: at least one task done, no work left.
+            return (LifecycleState.COMPLETE, "partial_ok_with_failures")
         # No work left and at least one failure. MVP doesn't auto-resubmit;
         # surface the failure for the caller to handle.
-        return ("failed", "failed_tasks_no_auto_recover_in_mvp")
+        return (LifecycleState.FAILED, "failed_tasks_no_auto_recover_in_mvp")
     return (None, None)
 
 
+@primitive(
+    name="monitor-flow",
+    verb="workflow",
+    composes=[record_status, mark_terminal],
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),
+    ],
+    error_codes=[errors.SshUnreachable, errors.JournalCorrupt, errors.RemoteCommandFailed],
+    idempotent=True,
+    idempotency_key="run_id",
+    exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+)
 def monitor_flow(
     *,
     experiment_dir: Path,
@@ -215,16 +333,20 @@ def monitor_flow(
             f"no journal record for {run_id!r}; cannot monitor an unknown run"
         )
 
-    sidecar_path = session.runs_dir(experiment_dir) / f"{run_id}.json"
+    # Read the per-run sidecar (under <experiment_dir>/.hpc/runs/, not the
+    # journal dir). ``read_run_sidecar`` guarantees ``wave_map`` is a dict.
     wave_map: dict[str, list[int]] | None = None
     try:
-        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        wm = sidecar.get("wave_map")
-        if isinstance(wm, dict):
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        # Missing or unreadable sidecar → auto_combine_waves is a no-op.
+        sidecar = None
+    if sidecar is not None:
+        wm = sidecar.get("wave_map") or {}
+        # Empty dict counts as "no wave_map" so auto_combine_waves below
+        # short-circuits exactly as it did when the read silently failed.
+        if isinstance(wm, dict) and wm:
             wave_map = wm
-    except (OSError, json.JSONDecodeError):
-        # No wave_map → auto_combine_waves is a no-op. Not fatal.
-        wave_map = None
 
     state = _LoopState(
         last_combined_waves=list(record.combined_waves),
@@ -303,21 +425,25 @@ def monitor_flow(
                         state.combiner_attempts[wave] = 10**9  # never retry again
 
         # Terminal check.
-        terminal, esc_reason = _is_terminal(last_status, int(record.total_tasks))
-        if terminal == "complete":
-            runner.mark_terminal(experiment_dir, run_id, status="complete")
+        terminal, esc_reason = _is_terminal(
+            last_status,
+            int(record.total_tasks),
+            partial_ok=_read_partial_ok(experiment_dir, run_id),
+        )
+        if terminal == LifecycleState.COMPLETE:
+            runner.mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
             _append_tick(
                 experiment_dir,
                 run_id,
                 summary=last_status,
                 diff_from_prev=diff,
                 actions=actions,
-                lifecycle_state="complete",
+                lifecycle_state=LifecycleState.COMPLETE,
                 next_tick_seconds=None,
             )
             return MonitorFlowResult(
                 run_id=run_id,
-                lifecycle_state="complete",
+                lifecycle_state=LifecycleState.COMPLETE,
                 last_status=last_status,
                 combined_waves=state.last_combined_waves,
                 failed_waves=state.last_failed_waves,
@@ -325,19 +451,19 @@ def monitor_flow(
                 elapsed_seconds=elapsed,
                 escalation_reason=None,
             )
-        if terminal == "failed":
+        if terminal == LifecycleState.FAILED:
             _append_tick(
                 experiment_dir,
                 run_id,
                 summary=last_status,
                 diff_from_prev=diff,
                 actions=actions,
-                lifecycle_state="failed",
+                lifecycle_state=LifecycleState.FAILED,
                 next_tick_seconds=None,
             )
             return MonitorFlowResult(
                 run_id=run_id,
-                lifecycle_state="failed",
+                lifecycle_state=LifecycleState.FAILED,
                 last_status=last_status,
                 combined_waves=state.last_combined_waves,
                 failed_waves=state.last_failed_waves,
@@ -354,12 +480,12 @@ def monitor_flow(
                 summary=last_status,
                 diff_from_prev=diff,
                 actions=actions,
-                lifecycle_state="timeout",
+                lifecycle_state=LifecycleState.TIMEOUT,
                 next_tick_seconds=None,
             )
             return MonitorFlowResult(
                 run_id=run_id,
-                lifecycle_state="timeout",
+                lifecycle_state=LifecycleState.TIMEOUT,
                 last_status=last_status,
                 combined_waves=state.last_combined_waves,
                 failed_waves=state.last_failed_waves,

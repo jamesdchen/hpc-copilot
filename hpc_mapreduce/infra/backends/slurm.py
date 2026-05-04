@@ -14,6 +14,12 @@ class SlurmBackend(HPCBackend):
     # parse.
     JOB_ID_REGEX = re.compile(r"Submitted batch job\s+(\d+)")
 
+    # B5: capability metadata — replaces ``if scheduler == "slurm"``
+    # branches throughout the framework.
+    scheduler_name = "slurm"
+    template_ext = ".slurm"
+    supports_test_only_eta = True
+
     def __init__(
         self,
         script: str | None = None,
@@ -32,6 +38,105 @@ class SlurmBackend(HPCBackend):
         if not job_ids:
             return []
         return ["--dependency", f"afterany:{':'.join(job_ids)}"]
+
+    # ------------------------------------------------------------------
+    # B5-PR2 capability hooks — pure, scheduler-shape-only helpers.
+    # Callers (runner.py, status.py) pair these with their own SSH /
+    # subprocess execution so the backend stays transport-agnostic.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_alive_check_cmd(job_ids: list[str]) -> str:
+        """Shell command whose stdout lists the live SLURM job ids.
+
+        Uses ``squeue`` (active states only) so completed/failed jobs do
+        NOT show up — keeping this aligned with sacct would leak history
+        and make abandoned-run detection useless.
+        """
+        import shlex
+        if not job_ids:
+            return "true"
+        csv = ",".join(job_ids)
+        return f"squeue -j {shlex.quote(csv)} -h -o '%i' 2>/dev/null || true"
+
+    @staticmethod
+    def parse_alive_output(stdout: str, job_ids: list[str]) -> set[str]:
+        """Filter ``squeue`` output to the requested *job_ids*."""
+        alive: set[str] = set()
+        wanted = set(job_ids)
+        for line in stdout.splitlines():
+            token = line.strip()
+            if not token:
+                continue
+            base = token.split(".")[0].split("_")[0]
+            if base in wanted:
+                alive.add(base)
+        return alive
+
+    @staticmethod
+    def stderr_log_path(
+        remote_path: str, job_name: str, job_id: str, task_id: int
+    ) -> str:
+        """Cluster-side path to a single task's stderr log.
+
+        Mirrors the ``--error`` template baked into ``_build_command``:
+        ``<remote_path>/_hpc_logs/<job_name>_<job_id>_<task_id>.err``.
+        Note the ``_hpc_logs`` directory is the convention used by the
+        framework's job templates, NOT ``self.log_dir`` (which on remote
+        backends defaults to ``<remote_repo>/logs`` for sbatch-side
+        plumbing). Keep these in sync if either moves.
+        """
+        return f"{remote_path.rstrip('/')}/_hpc_logs/{job_name}_{job_id}_{task_id}.err"
+
+    @staticmethod
+    def err_log_disk_path(
+        log_dir: str, scratch_dir: str, job_name: str, job_id: str, task_id: int
+    ) -> str:
+        """Local-disk path used by ``status.get_err_log_paths`` for SLURM."""
+        import os
+        return os.path.join(log_dir, f"{job_name}_{job_id}_{task_id}.err")
+
+    @staticmethod
+    def query_jobs(
+        job_ids: list[str],
+        *,
+        sge_user: str | None = None,
+        slurm_cluster: str | None = None,
+    ) -> dict:
+        """Dispatch to ``query_sacct`` for SLURM job state.
+
+        Unified signature across SGE and SLURM so reduce.status can call
+        ``backend_cls.query_jobs(...)`` without an inline ladder. The
+        unused kwarg is ignored (sge_user is irrelevant for SLURM).
+        """
+        from hpc_mapreduce.infra.backends.query import query_sacct
+        return query_sacct(job_ids, cluster=slurm_cluster)
+
+    @staticmethod
+    def inspect_cluster(
+        cluster_name: str,
+        cfg: dict,
+        *,
+        sacct_window_hours: int = 24,
+        stress_alloc_mem_pct: float = 0.80,
+        stress_cpu_load_frac: float = 0.80,
+        runner=None,
+    ):
+        """Dispatch to :func:`_slurm_inspect` for SLURM.
+
+        Unified signature with :meth:`SGEBackend.inspect_cluster`; SLURM
+        consumes ``sacct_window_hours`` (used to scope the failure-rate
+        sacct query) while SGE ignores it.
+        """
+        from hpc_mapreduce.infra.inspect import _slurm_inspect
+        return _slurm_inspect(
+            cluster_name,
+            cfg,
+            sacct_window_hours=sacct_window_hours,
+            stress_alloc_mem_pct=stress_alloc_mem_pct,
+            stress_cpu_load_frac=stress_cpu_load_frac,
+            runner=runner,
+        )
 
     def _build_command(
         self,

@@ -46,7 +46,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 - **`query`** — read-only, no side effects, freely composable
 - **`validate`** — read + binary health check (preflight)
-- **`mutate`** — write to journal / sidecar / blacklist; need flock + idempotency-key consideration
+- **`mutate`** — write to journal / sidecar; need flock + idempotency-key consideration
 - **`submit`** — record a new submission (sidecar write + journal entry)
 - **`scaffold`** — create new files (e.g. starter executor templates)
 - **`workflow`** — end-to-end pipelines composing other primitives; same envelope shape so they're indistinguishable to higher-level callers (the Composite property)
@@ -56,53 +56,58 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
+| [campaign-health](campaign-health.md) | yes | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` |
 | [campaign-list](campaign-list.md) | yes | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` |
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` |
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-mapreduce capabilities` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-mapreduce clusters describe <name>` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-mapreduce clusters list` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-mapreduce discover --experiment-dir <path>` |
-| [inspect-cluster](inspect-cluster.md) | yes | ssh: `cluster`; cache: `in-process` | `hpc-mapreduce inspect-cluster --cluster <name> [...]` |
+| [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-mapreduce failures --run-id <id> [--lines <n>]` |
+| [house-edge](house-edge.md) | yes | _none_ | `hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` |
+| [inspect-cluster](inspect-cluster.md) | yes | ssh: `<cluster>` | `hpc-mapreduce inspect-cluster --cluster <name> [...]` |
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` |
-| [poll-run-status](poll-run-status.md) | yes | writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.last_status.json`; ssh: `cluster` | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` |
+| [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
+| [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` |
 | [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
-| [score-submit-plan](score-submit-plan.md) | yes | ssh: `cluster` | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` |
+| [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` |
+| [walltime-drift](walltime-drift.md) | yes | _none_ | `hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` |
 
 ### `validate` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [check-preflight](check-preflight.md) | yes | _none_ | `hpc-mapreduce preflight [--cluster <name>]` |
+| [validate](validate.md) | yes | ssh: `<cluster>` | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` |
 
 ### `mutate` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [combine-wave](combine-wave.md) | yes | ssh: `cluster`; runs: `cluster-side`; writes: `<output_dir>/_combiner/wave_<N>.json`; mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
-| [mark-run-terminal](mark-run-terminal.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; mutates: `<experiment_dir>/.hpc/runs/<run_id>.json` | `(none — Python-only primitive)` |
-| [reconcile-journal](reconcile-journal.md) | yes | ssh: `3`; mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
-| [record-segv-blacklist](record-segv-blacklist.md) | yes | mutates: `<experiment_dir>/.hpc/blacklist/<cluster>.json` | `(none — Python-only primitive)` |
-| [resubmit-failed](resubmit-failed.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; mutates: `<experiment_dir>/.hpc/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
+| [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
+| [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
+| [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
+| [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
 
 ### `submit` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [submit-spec](submit-spec.md) | yes | writes: `<experiment_dir>/.hpc/runs/<run_id>.json`; writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; rsyncs: `<experiment_dir>`; submits: `scheduler` | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
+| [submit-spec](submit-spec.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; scheduler-submit: `<cluster>` | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
 
 ### `scaffold` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [build-executor](build-executor.md) | no | writes: `<output_dir>/<name>.py` | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
+| [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
 
 ### `workflow` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [aggregate-flow](aggregate-flow.md) | yes | mutates: `combined_waves`; writes: `<output_dir>/_combiner/`; writes: `<output_dir>/summaries/` | `hpc-mapreduce aggregate-flow --spec <path>` |
-| [monitor-flow](monitor-flow.md) | yes | mutates: `per-run`; writes: `<experiment_dir>/.hpc/runs/<run_id>.monitor.jsonl`; mutates: `combined_waves`; mutates: `lifecycle_state` | `hpc-mapreduce monitor-flow --spec <path>` |
-| [submit-flow](submit-flow.md) | yes | rsyncs: `<experiment_dir>`; submits: `scheduler`; writes: `per-run` | `hpc-mapreduce submit-flow --spec <path>` |
+| [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; rsync: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate-flow --spec <path>` |
+| [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce monitor-flow --spec <path>` |
+| [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow --spec <path>` |
 <!-- END PRIMITIVE CATALOG -->
 
 ## How slash commands and skills consume primitives

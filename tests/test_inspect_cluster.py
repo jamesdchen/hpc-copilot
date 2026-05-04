@@ -231,15 +231,22 @@ class TestInspectClusterEntry:
         assert len(runner.calls) == first_calls
 
     def test_unknown_cluster_raises(self, tmp_path, monkeypatch):
+        # Regression: inspect_cluster used to raise a bare KeyError, which
+        # the agent_cli envelope translator surfaced as `error_code:
+        # internal`. The primitive doc declares `cluster_unknown` as the
+        # correct code, so the raise is now typed.
+        from slash_commands import errors
+
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         ins._CACHE.clear()
         try:
             ins.inspect_cluster("nope", use_cache=False)
-        except KeyError as exc:
+        except errors.ClusterUnknown as exc:
             assert "nope" in str(exc)
+            assert exc.error_code == "cluster_unknown"
         else:
-            raise AssertionError("expected KeyError")
+            raise AssertionError("expected ClusterUnknown")
 
     def test_scontrol_failure_returns_errors(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)

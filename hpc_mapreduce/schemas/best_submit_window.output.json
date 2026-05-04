@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/best_submit_window.output.json",
+  "title": "best-submit-window output data",
+  "description": "Shape of the `data` field on a successful `best-submit-window` envelope. Lists the top_k submit-time candidates in ascending predicted-wait order.",
+  "type": "object",
+  "required": ["profile", "cluster", "within_hours", "top_k", "candidates"],
+  "additionalProperties": false,
+  "properties": {
+    "profile":      { "type": "string" },
+    "cluster":      { "type": "string" },
+    "within_hours": { "type": "integer", "minimum": 1 },
+    "top_k":        { "type": "integer", "minimum": 1 },
+    "candidates": {
+      "type": "array",
+      "description": "Top-k submit windows ranked ascending by predicted_wait_sec. Empty when the diurnal predictor is cold across every queried hour.",
+      "items": {
+        "type": "object",
+        "required": ["submit_iso", "predicted_wait_sec", "confidence", "method", "n_bucket_samples"],
+        "additionalProperties": false,
+        "properties": {
+          "submit_iso":         { "type": "string", "description": "UTC, second-resolution." },
+          "predicted_wait_sec": { "type": "integer", "minimum": 0 },
+          "confidence":         { "type": "string", "enum": ["high", "medium", "low", "cold"] },
+          "method":             { "type": "string" },
+          "n_bucket_samples":   { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

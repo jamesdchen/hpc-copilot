@@ -16,6 +16,7 @@ import pytest
 
 from hpc_mapreduce.map import dispatch
 from hpc_mapreduce.reduce.status import check_results
+from tests.conftest import make_sidecar_json, write_hpc_tasks
 
 
 def _scaffold(tmp_path: Path, *, executor: str, result_dir_template: str,
@@ -25,28 +26,15 @@ def _scaffold(tmp_path: Path, *, executor: str, result_dir_template: str,
     Returns the ``.hpc/`` path so callers can override env vars.
     """
     hpc = tmp_path / ".hpc"
-    (hpc / "runs").mkdir(parents=True)
-
-    tasks_py = hpc / "tasks.py"
-    tasks_py.write_text(
-        "import json\n"
-        f"_TASKS = {json.dumps(kwargs_per_task)}\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+    write_hpc_tasks(hpc, kwargs_per_task)
+    make_sidecar_json(
+        tmp_path,
+        run_id=run_id,
+        executor=executor,
+        result_dir_template=result_dir_template,
+        task_count=len(kwargs_per_task),
+        tasks_py_sha="abc123",
     )
-
-    sidecar = hpc / "runs" / f"{run_id}.json"
-    sidecar.write_text(json.dumps({
-        "sidecar_schema_version": 1,
-        "run_id": run_id,
-        "cmd_sha": "deadbeef" * 8,
-        "claude_hpc_version": "0.0.0+test",
-        "submitted_at": "2026-01-01T00:00:00Z",
-        "executor": executor,
-        "result_dir_template": result_dir_template,
-        "task_count": len(kwargs_per_task),
-        "tasks_py_sha": "abc123",
-    }))
     return hpc
 
 
