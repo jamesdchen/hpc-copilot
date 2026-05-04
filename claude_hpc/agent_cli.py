@@ -526,33 +526,17 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-@primitive(
-    name="house-edge",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_house_edge(args: argparse.Namespace) -> int:
-    from claude_hpc.orchestrator.calibration import compute_house_edge
-    from claude_hpc.orchestrator.runtime_prior import read_samples
+    """Argparse adapter — primitive lives at claude_hpc.atoms.house_edge."""
+    from claude_hpc.atoms.house_edge import house_edge
 
-    samples = read_samples(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        cmd_sha=args.cmd_sha,
-        only_successful=True,
-    )
-    edge = compute_house_edge(samples)
     _ok(
-        {
-            "n_with_prediction": edge.n_with_prediction,
-            "mean_delta_sec": edge.mean_delta_sec,
-            "median_delta_sec": edge.median_delta_sec,
-            "p95_delta_sec": edge.p95_delta_sec,
-            "calibration_ratio": edge.calibration_ratio,
-        },
+        house_edge(
+            experiment_dir=args.experiment_dir,
+            profile=args.profile,
+            cluster=args.cluster,
+            cmd_sha=args.cmd_sha,
+        ),
         name="house-edge",
     )
     return EXIT_OK
