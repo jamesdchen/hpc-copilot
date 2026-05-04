@@ -96,9 +96,7 @@ class HPCBackend(abc.ABC):
         by reduce.status to short-circuit polling once every job has
         terminated. Default raises so an unmigrated backend is loud.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement alive_job_ids"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not implement alive_job_ids")
 
     def stderr_log_path(self, run_id: str, task_id: int) -> str:
         """Return the cluster-side path to a single task's stderr log.
@@ -108,9 +106,7 @@ class HPCBackend(abc.ABC):
         scheduler-specific %x_%A_%a / job-array format string. Default
         raises so an unmigrated backend is loud.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement stderr_log_path"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not implement stderr_log_path")
 
     def inspect(self, cluster_name: str, **kwargs):
         """Return a :class:`ClusterSnapshot` for *cluster_name*.
@@ -119,9 +115,7 @@ class HPCBackend(abc.ABC):
         existing per-scheduler dispatch. Subclasses override; the
         default raises so an unmigrated backend is loud.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement inspect"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not implement inspect")
 
     @abc.abstractmethod
     def _build_command(

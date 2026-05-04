@@ -57,6 +57,7 @@ class SGEBackend(HPCBackend):
         missing jobs and the alive check meaningless.
         """
         import shlex
+
         if not job_ids:
             return "true"
         return (
@@ -79,9 +80,7 @@ class SGEBackend(HPCBackend):
         return alive
 
     @staticmethod
-    def stderr_log_path(
-        remote_path: str, job_name: str, job_id: str, task_id: int
-    ) -> str:
+    def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side stderr path for SGE: ``<remote_path>/<job_name>.o<job_id>.<task_id>``.
 
         SGE uses the ``-j y`` join-stderr-into-stdout convention in the
@@ -95,6 +94,7 @@ class SGEBackend(HPCBackend):
     ) -> str:
         """Local-disk path used by ``status.get_err_log_paths`` for SGE."""
         import os
+
         return os.path.join(scratch_dir, f"{job_name}.o{job_id}.{task_id}")
 
     @staticmethod
@@ -111,6 +111,7 @@ class SGEBackend(HPCBackend):
         unused kwarg is ignored (slurm_cluster is irrelevant for SGE).
         """
         from claude_hpc.infra.backends.query import query_sge
+
         return query_sge(job_ids, user=sge_user)
 
     @staticmethod
@@ -131,6 +132,7 @@ class SGEBackend(HPCBackend):
         snapshots rather than a historical window.
         """
         from claude_hpc.infra.inspect import _sge_inspect
+
         return _sge_inspect(
             cluster_name,
             cfg,

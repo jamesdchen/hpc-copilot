@@ -261,9 +261,7 @@ def available_resources(
         mem_free = max(0, mem_total - mem_alloc)
         gpus_total = _parse_gres_total(n.gres)
         gpus_used = _parse_gres_total(n.gres_used)
-        gpus_free = {
-            t: max(0, c - gpus_used.get(t, 0)) for t, c in gpus_total.items()
-        }
+        gpus_free = {t: max(0, c - gpus_used.get(t, 0)) for t, c in gpus_total.items()}
         out[n.name] = {
             "cpus_free": cpus_free,
             "mem_mb_free": mem_free,
@@ -286,9 +284,7 @@ _EVT_SUBMIT = 1
 _EVT_START = 2  # diagnostic only
 
 
-def _try_place(
-    job: SimJob, free_by_node: dict[str, dict[str, Any]]
-) -> str | None:
+def _try_place(job: SimJob, free_by_node: dict[str, dict[str, Any]]) -> str | None:
     """Return the node name a job fits on (first-fit), or None."""
     for name, free in free_by_node.items():
         if free["drained"]:
@@ -341,15 +337,11 @@ def _release(
     free["mem_mb_free"] += job.mem_mb
     if job.gpus > 0:
         if job.gpu_type:
-            free["gpus_free"][job.gpu_type] = (
-                free["gpus_free"].get(job.gpu_type, 0) + job.gpus
-            )
+            free["gpus_free"][job.gpu_type] = free["gpus_free"].get(job.gpu_type, 0) + job.gpus
         else:
             # Best-effort symmetric to _consume: bump first known type.
             keys = sorted(free["gpus_free"]) or [""]
-            free["gpus_free"][keys[0]] = (
-                free["gpus_free"].get(keys[0], 0) + job.gpus
-            )
+            free["gpus_free"][keys[0]] = free["gpus_free"].get(keys[0], 0) + job.gpus
 
 
 def _hoq_reservation(
@@ -387,9 +379,7 @@ def _hoq_reservation(
         f["cpus_free"] += job.cpus
         f["mem_mb_free"] += job.mem_mb
         if job.gpus > 0 and job.gpu_type:
-            f["gpus_free"][job.gpu_type] = (
-                f["gpus_free"].get(job.gpu_type, 0) + job.gpus
-            )
+            f["gpus_free"][job.gpu_type] = f["gpus_free"].get(job.gpu_type, 0) + job.gpus
         if _try_place(hoq, virt) is not None:
             return (max(end_t, now), hoq)
     return (float("inf"), hoq)
@@ -452,18 +442,14 @@ def simulate_one_pass(
 
     job_table[candidate.job_id] = candidate
     seq += 1
-    heapq.heappush(
-        events, (max(0.0, candidate.submit_time), _EVT_SUBMIT, seq, candidate.job_id)
-    )
+    heapq.heappush(events, (max(0.0, candidate.submit_time), _EVT_SUBMIT, seq, candidate.job_id))
 
     if arrival_stream:
         for arr in arrival_stream:
             if arr.submit_time < 0 or arr.submit_time > max_horizon_sec:
                 continue
             seq += 1
-            heapq.heappush(
-                events, (arr.submit_time, _EVT_SUBMIT, seq, arr.job_id)
-            )
+            heapq.heappush(events, (arr.submit_time, _EVT_SUBMIT, seq, arr.job_id))
             job_table[arr.job_id] = arr
 
     queued: list[SimJob] = []
@@ -493,9 +479,7 @@ def simulate_one_pass(
                 head.walltime_actual = head.walltime_ask
             head.end_time = now + head.walltime_actual
             seq += 1
-            heapq.heappush(
-                events, (head.end_time, _EVT_END, seq, head.job_id)
-            )
+            heapq.heappush(events, (head.end_time, _EVT_END, seq, head.job_id))
             if head.job_id == candidate.job_id and not candidate_started:
                 candidate_started = True
                 candidate_start = now
@@ -503,11 +487,10 @@ def simulate_one_pass(
             return
         # Tier 2: EASY backfill.
         running_endings = [
-            (job_table[jid].end_time or float("inf"),
-             job_table[jid],
-             placed_node.get(jid, ""))
+            (job_table[jid].end_time or float("inf"), job_table[jid], placed_node.get(jid, ""))
             for _, kind, _, jid in events
-            if kind == _EVT_END and job_table.get(jid) is not None
+            if kind == _EVT_END
+            and job_table.get(jid) is not None
             and (job_table[jid].state == "running")
         ]
         hoq_resv, _hoq = _hoq_reservation(queued, running_endings, free_by_node, now)
@@ -560,9 +543,7 @@ def simulate_one_pass(
                 continue
             j.state = "queued"
             if j is not candidate and j.walltime_actual is None:
-                j.walltime_actual = max(
-                    1.0, j.walltime_ask * rng.uniform(0.6, 1.0)
-                )
+                j.walltime_actual = max(1.0, j.walltime_ask * rng.uniform(0.6, 1.0))
             queued.append(j)
             _policy_loop(time)
 

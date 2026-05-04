@@ -329,6 +329,7 @@ def _rebuild_index(experiment_dir: Path) -> dict:
             continue
         # B8: route reader-side check through the cross-domain manifest.
         from claude_hpc._internal._version import is_compatible as _is_compat
+
         sv = payload.get("schema_version")
         if not isinstance(sv, int) or not _is_compat("session", sv):
             continue

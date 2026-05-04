@@ -201,7 +201,9 @@ class ClusterPartiallyDegraded(HpcError):
         "short delay if planning quality matters."
     )
 
-    def __init__(self, message: str, *, partial_errors: list[dict[str, str]] | None = None, **kwargs):
+    def __init__(
+        self, message: str, *, partial_errors: list[dict[str, str]] | None = None, **kwargs
+    ):
         super().__init__(message, **kwargs)
         self.partial_errors: list[dict[str, str]] = list(partial_errors or [])
 

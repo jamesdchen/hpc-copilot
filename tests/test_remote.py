@@ -196,12 +196,8 @@ class TestDeployRuntime:
         # Two shared preambles into .hpc/templates/common/
         common_dsts = {argv[2] for argv in argvs[8:10]}
         assert all(argv[0] == "scp" for argv in argvs[8:10])
-        assert any(
-            d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts
-        )
-        assert any(
-            d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts
-        )
+        assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts)
+        assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts)
 
         # Combiner is last
         assert argvs[10][0] == "scp"
@@ -250,7 +246,9 @@ class TestRunCombiner:
     def test_run_combiner_force_appends_flag(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=3, run_id="r1", force=True)
+            remote.run_combiner(
+                host="c", user="u", remote_path="/p", wave=3, run_id="r1", force=True
+            )
         cmd_str = mock_run.call_args[0][0][-1]
         assert "--force" in cmd_str
 
@@ -259,7 +257,9 @@ class TestRunCombinerChecked:
     def test_returns_true_on_success(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="ok\n", stderr="", returncode=0)
-            ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
+            ok, out, err = remote.run_combiner_checked(
+                host="c", user="u", remote_path="/p", wave=0, run_id="r1"
+            )
         assert ok is True
         assert out == "ok\n"
         assert err == ""
@@ -267,7 +267,9 @@ class TestRunCombinerChecked:
     def test_returns_false_on_failure(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="", stderr="boom", returncode=1)
-            ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
+            ok, out, err = remote.run_combiner_checked(
+                host="c", user="u", remote_path="/p", wave=0, run_id="r1"
+            )
         assert ok is False
         assert out == ""
         assert err == "boom"
@@ -275,7 +277,9 @@ class TestRunCombinerChecked:
     def test_force_threaded_through(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1", force=True)
+            remote.run_combiner_checked(
+                host="c", user="u", remote_path="/p", wave=0, run_id="r1", force=True
+            )
         cmd_str = mock_run.call_args[0][0][-1]
         assert "--force" in cmd_str
 
@@ -494,14 +498,18 @@ class TestRunCombinerTimeout:
     def test_explicit_timeout_threaded_through_to_ssh_run(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=15)
+            remote.run_combiner(
+                host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=15
+            )
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 15
 
     def test_explicit_none_threaded_through_to_ssh_run(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=None)
+            remote.run_combiner(
+                host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=None
+            )
         kwargs = mock_run.call_args.kwargs
         assert "timeout" in kwargs
         assert kwargs["timeout"] is None
@@ -518,7 +526,9 @@ class TestRunCombinerCheckedTimeout:
     def test_explicit_timeout_threaded_through(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=21)
+            remote.run_combiner_checked(
+                host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=21
+            )
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 21
 
@@ -530,4 +540,6 @@ class TestRunCombinerCheckedTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
-                remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
+                remote.run_combiner_checked(
+                    host="c", user="u", remote_path="/p", wave=0, run_id="r1"
+                )

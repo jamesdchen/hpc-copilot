@@ -34,25 +34,27 @@ def _empty_snapshot(nodes=1, cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100"):
         )
         ns.append(n)
     return ClusterSnapshot(
-        cluster="test", scheduler_kind="slurm",
+        cluster="test",
+        scheduler_kind="slurm",
         now_iso="2026-04-28T10:00:00+00:00",
         nodes=ns,
     )
 
 
-def _full_snapshot(*, cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100",
-                   elapsed_s=3600, user="alice"):
+def _full_snapshot(*, cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100", elapsed_s=3600, user="alice"):
     """A snapshot where the single node is fully utilized by one job."""
-    co = [{
-        "job_id": "j_running",
-        "user": user,
-        "cpus": cpus,
-        "mem_gb": mem_mb / 1024.0,
-        "gpus": gpus,
-        "elapsed_s": elapsed_s,
-        "state": "RUNNING",
-        "started_h_ago": elapsed_s / 3600.0,
-    }]
+    co = [
+        {
+            "job_id": "j_running",
+            "user": user,
+            "cpus": cpus,
+            "mem_gb": mem_mb / 1024.0,
+            "gpus": gpus,
+            "elapsed_s": elapsed_s,
+            "state": "RUNNING",
+            "started_h_ago": elapsed_s / 3600.0,
+        }
+    ]
     gres = f"gpu:{gpu_type}:{gpus}" if gpus else ""
     gres_used = f"gpu:{gpu_type}:{gpus}" if gpus else ""
     n = NodeSnapshot(
@@ -68,13 +70,23 @@ def _full_snapshot(*, cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100",
         is_drained=False,
     )
     return ClusterSnapshot(
-        cluster="test", scheduler_kind="slurm",
-        now_iso="2026-04-28T10:00:00+00:00", nodes=[n],
+        cluster="test",
+        scheduler_kind="slurm",
+        now_iso="2026-04-28T10:00:00+00:00",
+        nodes=[n],
     )
 
 
-def _candidate(job_id="cand-1", cpus=4, mem_mb=8_000, gpus=0, gpu_type="",
-               walltime_ask=600, submit_time=0.0, user="bob"):
+def _candidate(
+    job_id="cand-1",
+    cpus=4,
+    mem_mb=8_000,
+    gpus=0,
+    gpu_type="",
+    walltime_ask=600,
+    submit_time=0.0,
+    user="bob",
+):
     return SimJob(
         job_id=job_id,
         user=user,
@@ -129,15 +141,25 @@ class TestFIFOPriority:
         # arrival queues behind the first.
         snap = _empty_snapshot(cpus=8)
         first = SimJob(
-            job_id="j1", user="u", submit_time=0.0, walltime_ask=500,
-            cpus=8, mem_mb=1_000,
+            job_id="j1",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=500,
+            cpus=8,
+            mem_mb=1_000,
         )
         second = SimJob(
-            job_id="j2", user="u", submit_time=10.0, walltime_ask=300,
-            cpus=8, mem_mb=1_000,
+            job_id="j2",
+            user="u",
+            submit_time=10.0,
+            walltime_ask=300,
+            cpus=8,
+            mem_mb=1_000,
         )
         out = simulate_one_pass(
-            snap, candidate=second, arrival_stream=[first],
+            snap,
+            candidate=second,
+            arrival_stream=[first],
         )
         # j1 starts at t=0 with walltime jittered 0.6-1.0 of 500. j2
         # waits for j1 to finish; wait = end_of_j1 - submit(10).
@@ -157,31 +179,40 @@ class TestEASYBackfill:
             alloc_mem_mb=32_000,
             cpu_tot=8,
             cpu_alloc=4,
-            co_tenants=[{
-                "job_id": "j_big_running",
-                "user": "u",
-                "cpus": 4,
-                "mem_gb": 32,
-                "gpus": 0,
-                "elapsed_s": 3000,
-                "state": "RUNNING",
-                "started_h_ago": 1.0,
-            }],
+            co_tenants=[
+                {
+                    "job_id": "j_big_running",
+                    "user": "u",
+                    "cpus": 4,
+                    "mem_gb": 32,
+                    "gpus": 0,
+                    "elapsed_s": 3000,
+                    "state": "RUNNING",
+                    "started_h_ago": 1.0,
+                }
+            ],
             is_drained=False,
         )
         snap = ClusterSnapshot(
-            cluster="t", scheduler_kind="slurm",
-            now_iso="2026-04-28T10:00:00+00:00", nodes=[n],
+            cluster="t",
+            scheduler_kind="slurm",
+            now_iso="2026-04-28T10:00:00+00:00",
+            nodes=[n],
         )
         blocker = SimJob(
-            job_id="blocker", user="u", submit_time=0.0,
-            walltime_ask=1000, cpus=8, mem_mb=8_000,
+            job_id="blocker",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=1000,
+            cpus=8,
+            mem_mb=8_000,
             walltime_actual=1000.0,
         )
-        candidate = _candidate(cpus=4, mem_mb=8_000, walltime_ask=60,
-                               submit_time=0.0)
+        candidate = _candidate(cpus=4, mem_mb=8_000, walltime_ask=60, submit_time=0.0)
         out = simulate_one_pass(
-            snap, candidate=candidate, arrival_stream=[blocker],
+            snap,
+            candidate=candidate,
+            arrival_stream=[blocker],
             residual_lifetimes={"j_big_running": 600.0},
         )
         assert out.predicted_start_offset_sec == 0.0
@@ -191,8 +222,14 @@ class TestDeterminism:
     def test_same_seed_same_result(self):
         snap = _empty_snapshot(cpus=8)
         arrivals = [
-            SimJob(job_id=f"a{i}", user="u", submit_time=float(i*10),
-                   walltime_ask=200, cpus=4, mem_mb=1_000)
+            SimJob(
+                job_id=f"a{i}",
+                user="u",
+                submit_time=float(i * 10),
+                walltime_ask=200,
+                cpus=4,
+                mem_mb=1_000,
+            )
             for i in range(5)
         ]
         c = _candidate(cpus=4, walltime_ask=100, submit_time=25.0)
@@ -213,12 +250,16 @@ class TestDistribution:
         snap = _empty_snapshot(cpus=8)
         c = _candidate(cpus=8, mem_mb=8_000)
         arrivals = [
-            SimJob(job_id=f"a{i}", user="u", submit_time=0.0,
-                   walltime_ask=400, cpus=8, mem_mb=8_000)
+            SimJob(
+                job_id=f"a{i}", user="u", submit_time=0.0, walltime_ask=400, cpus=8, mem_mb=8_000
+            )
             for i in range(3)
         ]
         out = simulate_distribution(
-            snap, candidate=c, n_replications=8, seed=7,
+            snap,
+            candidate=c,
+            n_replications=8,
+            seed=7,
             arrival_sampler=lambda s: list(arrivals),
         )
         assert out.n_replications == 8

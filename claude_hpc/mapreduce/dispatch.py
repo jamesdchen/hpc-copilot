@@ -62,8 +62,7 @@ def _format_result_dir(template, *, task_id, run_id, kwargs):
         return template.format(**ctx)
     except KeyError as exc:
         raise KeyError(
-            f"result_dir_template references unknown key {exc.args[0]!r}; "
-            f"available: {sorted(ctx)}"
+            f"result_dir_template references unknown key {exc.args[0]!r}; available: {sorted(ctx)}"
         ) from None
 
 

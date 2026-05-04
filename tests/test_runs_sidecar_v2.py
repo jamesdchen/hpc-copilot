@@ -325,9 +325,7 @@ class TestVersionMismatchWarning:
             _warnings.simplefilter("always")
             for _ in range(5):
                 read_run_sidecar(tmp_path, run_id)
-        version_warnings = [
-            w for w in caught if "9.9.9-from-the-future" in str(w.message)
-        ]
+        version_warnings = [w for w in caught if "9.9.9-from-the-future" in str(w.message)]
         assert len(version_warnings) == 1, (
             f"expected exactly one warning across 5 reads; got {len(version_warnings)}"
         )
@@ -361,6 +359,5 @@ class TestVersionMismatchWarning:
             _warnings.simplefilter("always")
             read_run_sidecar(tmp_path, run_id)
         assert not any(
-            "claude-hpc" in str(w.message) and "but reader is" in str(w.message)
-            for w in caught
+            "claude-hpc" in str(w.message) and "but reader is" in str(w.message) for w in caught
         ), "matching versions should not warn"

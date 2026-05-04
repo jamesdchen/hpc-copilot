@@ -23,6 +23,7 @@ from claude_hpc._internal import telemetry
 def test_default_sink_is_silent(capsys, tmp_path: Path) -> None:
     # Unset the env var explicitly to defend against test-runner pollution.
     import os
+
     os.environ.pop("HPC_TELEMETRY_SINK", None)
     telemetry.record("tick", {"run_id": "x", "n": 1})
     out = capsys.readouterr()
@@ -46,12 +47,16 @@ def test_monitor_jsonl_requires_path() -> None:
 def test_monitor_jsonl_appends(tmp_path: Path) -> None:
     target = tmp_path / "x.monitor.jsonl"
     telemetry.record(
-        "tick", {"run_id": "x", "n": 1},
-        sink="monitor-jsonl", monitor_jsonl_path=target,
+        "tick",
+        {"run_id": "x", "n": 1},
+        sink="monitor-jsonl",
+        monitor_jsonl_path=target,
     )
     telemetry.record(
-        "tick", {"run_id": "x", "n": 2},
-        sink="monitor-jsonl", monitor_jsonl_path=target,
+        "tick",
+        {"run_id": "x", "n": 2},
+        sink="monitor-jsonl",
+        monitor_jsonl_path=target,
     )
     lines = target.read_text().splitlines()
     assert len(lines) == 2
@@ -70,8 +75,10 @@ def test_concurrent_appenders_produce_no_torn_lines(tmp_path: Path) -> None:
     def worker(tag: str) -> None:
         for i in range(N):
             telemetry.record(
-                "tick", {**payload, "tag": tag, "i": i},
-                sink="monitor-jsonl", monitor_jsonl_path=target,
+                "tick",
+                {**payload, "tag": tag, "i": i},
+                sink="monitor-jsonl",
+                monitor_jsonl_path=target,
             )
 
     threads = [threading.Thread(target=worker, args=(f"t{i}",)) for i in range(threads_n)]

@@ -64,9 +64,7 @@ def test_disk_full_matches() -> None:
 
 
 def test_python_traceback_fallback() -> None:
-    out = classify(
-        "Traceback (most recent call last):\n  File 'foo.py', line 1, in <module>", 1
-    )
+    out = classify("Traceback (most recent call last):\n  File 'foo.py', line 1, in <module>", 1)
     assert out["error_class"] == "python_traceback"
 
 

@@ -150,6 +150,7 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
     # writer with a wider schema shouldn't poison the prior; treating
     # the file as empty makes the prior re-learn from fresh samples.
     from claude_hpc._internal._version import is_compatible as _is_compat
+
     if isinstance(doc, dict):
         sv = doc.get("schema_version")
         if isinstance(sv, int) and not _is_compat("runtime_prior", sv):
@@ -231,9 +232,7 @@ def append_sample(
         # `started_at - submitted_at_iso` if both are parseable; a
         # negative delta (clock skew) records None rather than a
         # nonsense negative.
-        "queue_wait_sec": _resolve_queue_wait_sec(
-            queue_wait_sec, started_at, submitted_at_iso
-        ),
+        "queue_wait_sec": _resolve_queue_wait_sec(queue_wait_sec, started_at, submitted_at_iso),
     }
 
     def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:

@@ -289,6 +289,7 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     sv = data.get("sidecar_schema_version")
     if isinstance(sv, int):
         from claude_hpc._internal._version import compatibility_check as _compat
+
         _compat("sidecar", sv)
     # Backfill missing v2 fields so callers see a uniform shape.
     for k, default in _V2_BACKFILL_DEFAULTS.items():

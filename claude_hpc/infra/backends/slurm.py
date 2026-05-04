@@ -54,6 +54,7 @@ class SlurmBackend(HPCBackend):
         and make abandoned-run detection useless.
         """
         import shlex
+
         if not job_ids:
             return "true"
         csv = ",".join(job_ids)
@@ -74,9 +75,7 @@ class SlurmBackend(HPCBackend):
         return alive
 
     @staticmethod
-    def stderr_log_path(
-        remote_path: str, job_name: str, job_id: str, task_id: int
-    ) -> str:
+    def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side path to a single task's stderr log.
 
         Mirrors the ``--error`` template baked into ``_build_command``:
@@ -94,6 +93,7 @@ class SlurmBackend(HPCBackend):
     ) -> str:
         """Local-disk path used by ``status.get_err_log_paths`` for SLURM."""
         import os
+
         return os.path.join(log_dir, f"{job_name}_{job_id}_{task_id}.err")
 
     @staticmethod
@@ -110,6 +110,7 @@ class SlurmBackend(HPCBackend):
         unused kwarg is ignored (sge_user is irrelevant for SLURM).
         """
         from claude_hpc.infra.backends.query import query_sacct
+
         return query_sacct(job_ids, cluster=slurm_cluster)
 
     @staticmethod
@@ -129,6 +130,7 @@ class SlurmBackend(HPCBackend):
         sacct query) while SGE ignores it.
         """
         from claude_hpc.infra.inspect import _slurm_inspect
+
         return _slurm_inspect(
             cluster_name,
             cfg,

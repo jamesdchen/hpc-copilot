@@ -611,9 +611,7 @@ def inspect_cluster(
     """
     clusters = load_clusters_config(Path(config_path) if config_path is not None else None)
     if cluster_name not in clusters:
-        raise errors.ClusterUnknown(
-            f"unknown cluster {cluster_name!r}; check clusters.yaml"
-        )
+        raise errors.ClusterUnknown(f"unknown cluster {cluster_name!r}; check clusters.yaml")
     cfg = clusters[cluster_name]
     scheduler = (cfg.get("scheduler") or "slurm").lower()
     cache_key = (cluster_name, scheduler)
@@ -628,6 +626,7 @@ def inspect_cluster(
     # (e.g. SGE ignores ``sacct_window_hours``); a missing backend
     # raises ValueError just like the prior ladder did.
     from claude_hpc.infra.backends import get_backend_class
+
     try:
         backend_cls = get_backend_class(scheduler)
     except ValueError as exc:
@@ -864,9 +863,7 @@ def _parse_mem_to_mb(s: str) -> int | None:
     return int(round(gb * 1024))
 
 
-_ELAPSED_RE = re.compile(
-    r"^(?:(?P<d>\d+)-)?(?P<h>\d{1,2}):(?P<m>\d{2}):(?P<s>\d{2})(?:\.\d+)?$"
-)
+_ELAPSED_RE = re.compile(r"^(?:(?P<d>\d+)-)?(?P<h>\d{1,2}):(?P<m>\d{2}):(?P<s>\d{2})(?:\.\d+)?$")
 
 
 def _parse_elapsed_to_sec(s: str) -> int:

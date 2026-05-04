@@ -129,9 +129,7 @@ def primitive(
             existing = _REGISTRY[name].func
             if existing is func:
                 return func
-            raise ValueError(
-                f"Primitive {name!r} already registered (by {existing!r})"
-            )
+            raise ValueError(f"Primitive {name!r} already registered (by {existing!r})")
         resolved_composes: list[PrimitiveMeta] = []
         for c in composes or ():
             if callable(c):
@@ -147,14 +145,11 @@ def primitive(
             elif isinstance(c, str):
                 if c not in _REGISTRY:
                     raise ValueError(
-                        f"composes references {c!r} which is not a "
-                        "registered primitive"
+                        f"composes references {c!r} which is not a registered primitive"
                     )
                 resolved_composes.append(_REGISTRY[c])
             else:
-                raise ValueError(
-                    f"composes entries must be callables or names, got {c!r}"
-                )
+                raise ValueError(f"composes entries must be callables or names, got {c!r}")
         meta = PrimitiveMeta(
             name=name,
             verb=verb,
@@ -165,10 +160,7 @@ def primitive(
             idempotent=idempotent,
             idempotency_key=idempotency_key,
             exit_codes=tuple(exit_codes or ()),
-            description=(
-                description
-                or (func.__doc__ or "").strip().split("\n", 1)[0]
-            ),
+            description=(description or (func.__doc__ or "").strip().split("\n", 1)[0]),
         )
         _REGISTRY[name] = meta
         func._primitive_meta = meta  # type: ignore[attr-defined]

@@ -373,8 +373,12 @@ def _to_dict(profile: UserProfile) -> dict[str, Any]:
     """dataclass → dict for serialization (used by tests)."""
     d = asdict(profile)
     # Round float fields for stable JSON.
-    for k in ("median_submits_per_day", "median_actual_over_ask",
-              "failure_rate", "p_followup_within_6h"):
+    for k in (
+        "median_submits_per_day",
+        "median_actual_over_ask",
+        "failure_rate",
+        "p_followup_within_6h",
+    ):
         if k in d and isinstance(d[k], float):
             d[k] = round(d[k], 6) if not math.isnan(d[k]) else 0.0
     return d

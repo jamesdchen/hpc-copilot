@@ -115,9 +115,7 @@ class PriorResult:
     details: dict
 
 
-def dedup_check(
-    experiment_dir: Path, key: IdempotencyKey
-) -> Optional[PriorResult]:
+def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> Optional[PriorResult]:
     """Resolve *key* against the journal + sidecar in priority order.
 
     Read-only — never mutates state. Returns ``None`` if no prior

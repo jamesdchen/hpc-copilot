@@ -84,9 +84,7 @@ def test_failure_category_includes_resubmit_validation() -> None:
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)
     canonical = {fc.value for fc in FailureCategory}
     missing = accepted - canonical
-    assert not missing, (
-        f"resubmit accepts categories not in FailureCategory: {missing}"
-    )
+    assert not missing, f"resubmit accepts categories not in FailureCategory: {missing}"
 
 
 def test_classifier_emissions_subset_of_resubmit_accepted() -> None:
@@ -102,9 +100,7 @@ def test_classifier_emissions_subset_of_resubmit_accepted() -> None:
     classifier_emits = {cat for cat, _ in runner._FAILURE_CATEGORY_PATTERNS}
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)
     rejected = classifier_emits - accepted
-    assert not rejected, (
-        f"classifier emits categories the resubmit path rejects: {rejected}"
-    )
+    assert not rejected, f"classifier emits categories the resubmit path rejects: {rejected}"
 
 
 def test_task_status_distinct_from_journal_status() -> None:

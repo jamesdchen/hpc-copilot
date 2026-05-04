@@ -65,7 +65,7 @@ class _SubmoduleAlias(MetaPathFinder, Loader):
         return ModuleSpec(fullname, self)
 
     def create_module(self, spec):
-        target = "claude_hpc." + spec.name[len(self._PREFIX):]
+        target = "claude_hpc." + spec.name[len(self._PREFIX) :]
         try:
             module = importlib.import_module(target)
         except ImportError:

@@ -175,10 +175,7 @@ class TestJobIdParsingAnchored:
     """
 
     def test_warning_prefix_does_not_poison_job_id(self, monkeypatch, tmp_path):
-        warning_stdout = (
-            "sbatch: warning: 30% of nodes pre-empt; "
-            "Submitted batch job 12345\n"
-        )
+        warning_stdout = "sbatch: warning: 30% of nodes pre-empt; Submitted batch job 12345\n"
 
         def fake_run(cmd, *args, **kwargs):
             return _cp(stdout=warning_stdout, returncode=0)
@@ -189,7 +186,11 @@ class TestJobIdParsingAnchored:
             log_dir=str(tmp_path / "logs"),
         )
         out = backend.submit_array_tracked(
-            "j", total_tasks=1, tasks_per_array=1, job_env={}, cwd=tmp_path,
+            "j",
+            total_tasks=1,
+            tasks_per_array=1,
+            job_env={},
+            cwd=tmp_path,
         )
         assert out == [("1-1", "12345")]
 
@@ -203,7 +204,11 @@ class TestJobIdParsingAnchored:
             log_dir=str(tmp_path / "logs"),
         )
         out = backend.submit_array_tracked(
-            "j", total_tasks=1, tasks_per_array=1, job_env={}, cwd=tmp_path,
+            "j",
+            total_tasks=1,
+            tasks_per_array=1,
+            job_env={},
+            cwd=tmp_path,
         )
         assert out == [("1-1", "99999")]
 
@@ -222,9 +227,7 @@ class TestSubmitTimeout:
         import subprocess as sp
 
         def fake_run(cmd, *args, **kwargs):
-            assert "timeout" in kwargs, (
-                "backend submit subprocess must enforce a timeout"
-            )
+            assert "timeout" in kwargs, "backend submit subprocess must enforce a timeout"
             raise sp.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
 
         monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", fake_run)
@@ -234,5 +237,9 @@ class TestSubmitTimeout:
         )
         with pytest.raises(sp.TimeoutExpired):
             backend.submit_array_tracked(
-                "j", total_tasks=1, tasks_per_array=1, job_env={}, cwd=tmp_path,
+                "j",
+                total_tasks=1,
+                tasks_per_array=1,
+                job_env={},
+                cwd=tmp_path,
             )

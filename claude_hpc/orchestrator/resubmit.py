@@ -174,9 +174,7 @@ def resubmit_plan(
 
     unknown = [tid for tid in failed_task_ids if not 0 <= int(tid) < task_count]
     if unknown:
-        raise ValueError(
-            f"failed_task_ids out of range [0, {task_count}): {unknown}"
-        )
+        raise ValueError(f"failed_task_ids out of range [0, {task_count}): {unknown}")
 
     sorted_ids = sorted(int(tid) for tid in failed_task_ids)
     if constraints is None:

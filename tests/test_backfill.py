@@ -26,9 +26,7 @@ class TestRecommendWalltime:
     def test_below_min_samples_falls_back(self):
         # 3 samples isn't enough; we must not trust the prior.
         q = {"a100": {"p50": 1000, "p95": 1500, "p99": 1700, "n_samples": 3}}
-        wt, rationale = bf.recommend_walltime_sec(
-            q, ["a100"], fallback_sec=999, min_samples=5
-        )
+        wt, rationale = bf.recommend_walltime_sec(q, ["a100"], fallback_sec=999, min_samples=5)
         assert wt == 999
         assert "no usable prior" in rationale
 
@@ -50,17 +48,13 @@ class TestRecommendWalltime:
 
     def test_floor_clamp(self):
         q = {"a100": {"p50": 50, "p95": 60, "n_samples": 10}}
-        wt, rationale = bf.recommend_walltime_sec(
-            q, ["a100"], safety_mult=1.0, floor_sec=600
-        )
+        wt, rationale = bf.recommend_walltime_sec(q, ["a100"], safety_mult=1.0, floor_sec=600)
         assert wt == 600
         assert "clamped" in rationale
 
     def test_ceiling_clamp(self):
         q = {"a100": {"p50": 100000, "p95": 100000, "n_samples": 10}}
-        wt, rationale = bf.recommend_walltime_sec(
-            q, ["a100"], safety_mult=1.0, ceiling_sec=3600
-        )
+        wt, rationale = bf.recommend_walltime_sec(q, ["a100"], safety_mult=1.0, ceiling_sec=3600)
         assert wt == 3600
         assert "clamped" in rationale
 
@@ -111,9 +105,7 @@ class TestProbeLattice:
         # completion, then assert the returned list is still index-aligned.
         import time as _time
 
-        lattice = [
-            bf.ResourceTuple(constraint=f"c{i}", walltime_sec=100 + i) for i in range(4)
-        ]
+        lattice = [bf.ResourceTuple(constraint=f"c{i}", walltime_sec=100 + i) for i in range(4)]
 
         def probe(t: bf.ResourceTuple) -> bf.BackfillProbe:
             if t.constraint == "c0":
@@ -236,17 +228,13 @@ class TestRecommendMem:
 
     def test_below_min_samples_keeps_default(self):
         q = {"a100": {"p95": 4096, "n_samples": 5}}
-        mb, rationale = bf.recommend_mem_mb(
-            q, ["a100"], user_default_mb=16384, min_samples=10
-        )
+        mb, rationale = bf.recommend_mem_mb(q, ["a100"], user_default_mb=16384, min_samples=10)
         assert mb == 16384
         assert "no usable" in rationale
 
     def test_shrinks_when_prior_below_default(self):
         q = {"a100": {"p95": 4096, "n_samples": 50}}
-        mb, rationale = bf.recommend_mem_mb(
-            q, ["a100"], user_default_mb=16384, safety_mult=1.5
-        )
+        mb, rationale = bf.recommend_mem_mb(q, ["a100"], user_default_mb=16384, safety_mult=1.5)
         # 4096 * 1.5 = 6144, well under 16384.
         assert mb == 6144
         assert "was 16384MB" in rationale

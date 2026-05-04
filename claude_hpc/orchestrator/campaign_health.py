@@ -177,7 +177,8 @@ def campaign_health(
 
     if since_iso is not None:
         samples = [
-            s for s in samples
+            s
+            for s in samples
             if isinstance(s.get("submitted_at"), str) and s["submitted_at"] >= since_iso
         ]
     if campaign_id is not None:

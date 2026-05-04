@@ -197,9 +197,7 @@ def compute_features(
         node_partitions = _node_partitions(node)
         if node_partitions:
             any_node_has_partitions = True
-        in_partition = (
-            partition is None or partition in node_partitions
-        )
+        in_partition = partition is None or partition in node_partitions
 
         for tenant in node.co_tenants:
             state = str(tenant.get("state") or "")
@@ -211,8 +209,8 @@ def compute_features(
                     queued_in_part += 1
                 # Co-tenants do not carry GPU type — bucket as 'unknown'.
                 if tenant_gpus:
-                    gpu_queued_demand["unknown"] = (
-                        gpu_queued_demand.get("unknown", 0) + int(tenant_gpus)
+                    gpu_queued_demand["unknown"] = gpu_queued_demand.get("unknown", 0) + int(
+                        tenant_gpus
                     )
             else:
                 # Treat anything non-pending as running. Terminal-state

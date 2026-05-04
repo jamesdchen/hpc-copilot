@@ -36,36 +36,92 @@ _BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 # matched here is allowed without being an error_code.
 _DOC_VOCABULARY = {
     # Subcommands
-    "submit", "status", "aggregate", "reconcile", "resubmit", "preflight",
-    "discover", "list-in-flight", "clusters", "capabilities",
+    "submit",
+    "status",
+    "aggregate",
+    "reconcile",
+    "resubmit",
+    "preflight",
+    "discover",
+    "list-in-flight",
+    "clusters",
+    "capabilities",
     "build-executor",
     # Envelope keys
-    "ok", "data", "error_code", "category", "retry_safe", "remediation",
-    "message", "idempotent",
+    "ok",
+    "data",
+    "error_code",
+    "category",
+    "retry_safe",
+    "remediation",
+    "message",
+    "idempotent",
     # Status fields
-    "deduped", "lifecycle_state", "in_flight", "complete", "failed",
-    "abandoned", "all_ok", "checks", "stderr_tail", "stdout_tail",
-    "ssh_auth_sock", "cluster_tcp_22", "experiment_id",
-    "run_id", "job_ids", "total_tasks", "profile",
-    "ssh_target", "remote_path", "job_name", "wave", "seed",
-    "executor", "cmd_sha", "tasks.py", "_TASKS", "lr", "i",
-    "timestamp", "models", "rankings", "statistical_tests",
-    "qsub", "sbatch",
+    "deduped",
+    "lifecycle_state",
+    "in_flight",
+    "complete",
+    "failed",
+    "abandoned",
+    "all_ok",
+    "checks",
+    "stderr_tail",
+    "stdout_tail",
+    "ssh_auth_sock",
+    "cluster_tcp_22",
+    "experiment_id",
+    "run_id",
+    "job_ids",
+    "total_tasks",
+    "profile",
+    "ssh_target",
+    "remote_path",
+    "job_name",
+    "wave",
+    "seed",
+    "executor",
+    "cmd_sha",
+    "tasks.py",
+    "_TASKS",
+    "lr",
+    "i",
+    "timestamp",
+    "models",
+    "rankings",
+    "statistical_tests",
+    "qsub",
+    "sbatch",
     "last_status",
     # Programs and runtimes
-    "uv", "pip", "bash", "python", "python3",
-    "scancel", "qdel",
+    "uv",
+    "pip",
+    "bash",
+    "python",
+    "python3",
+    "scancel",
+    "qdel",
     # Booleans / JSON literals
-    "true", "false", "null",
+    "true",
+    "false",
+    "null",
     # Tier names
-    "scripts", "src", "probe.py", "meta.json", "metrics.json",
+    "scripts",
+    "src",
+    "probe.py",
+    "meta.json",
+    "metrics.json",
     "results/metrics.json",
     # Capabilities additions
-    "mars_skill_paths", "required_env",
+    "mars_skill_paths",
+    "required_env",
     # Categories
-    "user", "cluster", "network", "internal",
+    "user",
+    "cluster",
+    "network",
+    "internal",
     # Submit-spec fields
-    "cmd", "request_id",
+    "cmd",
+    "request_id",
 }
 
 
@@ -111,9 +167,7 @@ def test_mars_integration_error_codes_match_code() -> None:
         "cluster_unknown",
     }
     missing = must_document - seen_error_codes
-    assert not missing, (
-        f"docs/mars-integration.md is missing error_code rows for: {missing}"
-    )
+    assert not missing, f"docs/mars-integration.md is missing error_code rows for: {missing}"
 
 
 def test_mars_snippet_error_codes_match_code() -> None:

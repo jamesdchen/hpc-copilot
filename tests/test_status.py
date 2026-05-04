@@ -208,9 +208,7 @@ class TestDetectSchedulerMetaHint:
         with patch("claude_hpc.mapreduce.reduce.status.subprocess.run", side_effect=no_sacct):
             assert detect_scheduler(tmp_path) == "sge"
 
-    def test_report_status_from_tasks_uses_first_task_meta(
-        self, tmp_path, monkeypatch
-    ):
+    def test_report_status_from_tasks_uses_first_task_meta(self, tmp_path, monkeypatch):
         """``report_status_from_tasks`` previously called
         ``detect_scheduler()`` with no args, bypassing every meta hint.
         Now it pulls a representative result_dir from the first task so

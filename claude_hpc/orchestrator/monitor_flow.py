@@ -178,7 +178,8 @@ def _append_tick(
         from claude_hpc._internal.telemetry import record as _telemetry_record
 
         _telemetry_record(
-            "tick", record,
+            "tick",
+            record,
             sink="monitor-jsonl",
             monitor_jsonl_path=path,
         )
@@ -299,7 +300,9 @@ def _is_terminal(
     composes=[record_status, mark_terminal],
     side_effects=[
         SideEffect("ssh", "<cluster>"),
-        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),
+        SideEffect(
+            "writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"
+        ),
     ],
     error_codes=[errors.SshUnreachable, errors.JournalCorrupt, errors.RemoteCommandFailed],
     idempotent=True,

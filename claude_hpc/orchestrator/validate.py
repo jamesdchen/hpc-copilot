@@ -102,14 +102,13 @@ def validate_submission(
         ts = utcnow().timestamp() + int(eta_sec)
         from datetime import datetime, timezone
 
-        estimated_start_iso = (
-            datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        estimated_start_iso = datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
         )
         fits = int(eta_sec) <= int(backfill_window_sec)
         verdict = "fits" if fits else "exceeds"
         reason = (
-            f"predicted start in {int(eta_sec)}s "
-            f"({verdict} {int(backfill_window_sec)}s window)"
+            f"predicted start in {int(eta_sec)}s ({verdict} {int(backfill_window_sec)}s window)"
         )
 
     return {

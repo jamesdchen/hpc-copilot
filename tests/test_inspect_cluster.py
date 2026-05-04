@@ -81,10 +81,7 @@ def _ago_iso(hours: float) -> str:
 class TestSacctParser:
     def test_parses_live_co_tenant(self):
         # 19h-old job, still RUNNING.
-        line = (
-            f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|"
-            f"cpu=24,mem=128G,gres/gpu=1"
-        )
+        line = f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|cpu=24,mem=128G,gres/gpu=1"
         rows = ins.parse_sacct_node_jobs(line)
         assert len(rows) == 1
         r = rows[0]
@@ -208,7 +205,11 @@ class TestInspectClusterEntry:
         runner = _FakeRunner(
             {
                 "scontrol show node": (0, _SCONTROL_FIXTURE, ""),
-                "sacct": (0, f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|gres/gpu=1|d11-03", ""),
+                "sacct": (
+                    0,
+                    f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|gres/gpu=1|d11-03",
+                    "",
+                ),
             }
         )
         snap = ins.inspect_cluster("discovery", runner=runner, use_cache=False)
@@ -224,7 +225,9 @@ class TestInspectClusterEntry:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         ins._CACHE.clear()
-        runner = _FakeRunner({"scontrol show node": (0, _SCONTROL_FIXTURE, ""), "sacct": (0, "", "")})
+        runner = _FakeRunner(
+            {"scontrol show node": (0, _SCONTROL_FIXTURE, ""), "sacct": (0, "", "")}
+        )
         ins.inspect_cluster("discovery", runner=runner, use_cache=True)
         first_calls = len(runner.calls)
         ins.inspect_cluster("discovery", runner=runner, use_cache=True)

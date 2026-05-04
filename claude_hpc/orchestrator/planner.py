@@ -118,9 +118,7 @@ def plan_submit(
     snap = inspect_cluster(cluster)
 
     # Quantiles per GPU type (one rollup, shared across candidates).
-    rollup = roll_up_quantiles(
-        experiment_dir, profile=profile, cluster=cluster, cmd_sha=cmd_sha
-    )
+    rollup = roll_up_quantiles(experiment_dir, profile=profile, cluster=cluster, cmd_sha=cmd_sha)
     quantiles = rollup["quantiles"]
     mem_quantiles = rollup.get("mem_quantiles_mb") or {}
     cpu_quantiles = rollup.get("cpu_cores_quantiles") or {}
@@ -163,6 +161,7 @@ def plan_submit(
         # B5-PR2: capability is published via backend class; SGE returns
         # supports_test_only_eta=False so we skip the probe.
         from claude_hpc.infra.backends import get_backend_class
+
         if get_backend_class(scheduler).supports_test_only_eta:
             eta_sec = _eta_via_test_only(scheduler, c, cfg)
         else:
@@ -229,9 +228,7 @@ def plan_submit(
                 "rationale": reshape_rationale,
             }
         if target_backfill_window_sec and est_per_task_sec:
-            seg = split_walltime_into_segments(
-                est_per_task_sec, target_backfill_window_sec
-            )
+            seg = split_walltime_into_segments(est_per_task_sec, target_backfill_window_sec)
             walltime_split = {
                 "n_segments": seg.n_segments,
                 "segment_walltime_sec": seg.segment_walltime_sec,
@@ -268,9 +265,7 @@ def _gpu_types_in_constraint(c: str) -> list[str]:
     return [t.strip() for t in c.split("|") if t.strip()]
 
 
-def _nodes_for_constraint(
-    nodes: list[NodeSnapshot], gpu_types: list[str]
-) -> list[NodeSnapshot]:
+def _nodes_for_constraint(nodes: list[NodeSnapshot], gpu_types: list[str]) -> list[NodeSnapshot]:
     """Filter the node list to those that advertise any of *gpu_types*.
 
     Matching uses the ``Gres`` advertisement when present and the
@@ -305,7 +300,9 @@ def _stressed_summary(n: NodeSnapshot) -> dict[str, Any]:
 
 
 def _eta_via_des(
-    experiment_dir: "Path", profile: str, cluster: str,
+    experiment_dir: "Path",
+    profile: str,
+    cluster: str,
 ) -> int | None:
     """Phase 4f: DES p50 wait estimate as an alternative ETA input.
 
@@ -317,9 +314,14 @@ def _eta_via_des(
     """
     try:
         from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
+
         out = predict_queue_wait(
-            experiment_dir, profile=profile, cluster=cluster,
-            backend="auto", n_replications=16, seed=0,
+            experiment_dir,
+            profile=profile,
+            cluster=cluster,
+            backend="auto",
+            n_replications=16,
+            seed=0,
         )
     except Exception:  # noqa: BLE001 — defensive
         return None
@@ -369,6 +371,7 @@ def _eta_via_test_only_with_resources(
     """
     # B5-PR2: gate on the backend capability, not the scheduler name.
     from claude_hpc.infra.backends import get_backend_class
+
     if not get_backend_class(scheduler).supports_test_only_eta:
         return None, ""
     host = cluster_cfg.get("host")
@@ -384,9 +387,7 @@ def _eta_via_test_only_with_resources(
     # We omit --array because the ETA only depends on the resource ask
     # for a single task, and the combination of --wrap and --array can
     # be rejected by some SLURM configurations.
-    constraint_flag = (
-        "" if constraint == "<cpu-only>" else f"--constraint={constraint!r}"
-    )
+    constraint_flag = "" if constraint == "<cpu-only>" else f"--constraint={constraint!r}"
     time_flag = _format_walltime_for_sbatch(walltime_sec)
     cmd = (
         f"sbatch --test-only --time={time_flag} --mem={int(mem_mb)}M "
@@ -488,9 +489,7 @@ def _adversarial_report(
         }
         for p in probes
     ]
-    combined_rationale = (
-        f"walltime: {wt_rationale} | mem: {mem_rationale} | cpus: {cpu_rationale}"
-    )
+    combined_rationale = f"walltime: {wt_rationale} | mem: {mem_rationale} | cpus: {cpu_rationale}"
     if pick is None:
         recommended: dict[str, Any] | None = {
             "constraint": base.constraint,
@@ -529,9 +528,7 @@ def _format_walltime_for_sbatch(walltime_sec: int) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-_TEST_ONLY_RE = re.compile(
-    r"start at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", re.IGNORECASE
-)
+_TEST_ONLY_RE = re.compile(r"start at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", re.IGNORECASE)
 
 
 def _parse_test_only_eta(text: str) -> int | None:
@@ -557,9 +554,7 @@ def _parse_test_only_eta(text: str) -> int | None:
     return max(0, int(delta))
 
 
-def _p_fail_by_gpu_type(
-    snap: Any, gpu_types: list[str], scheduler: str
-) -> dict[str, float]:
+def _p_fail_by_gpu_type(snap: Any, gpu_types: list[str], scheduler: str) -> dict[str, float]:
     """Compute approximate per-GPU-type failure probability.
 
     Default implementation returns zeros; the production version would
@@ -579,6 +574,7 @@ def _build_canary_plan(
     The slash command runs the canary, ingests the result into the
     runtime priors, then re-calls plan_submit which scores normally.
     """
+
     def _eta_key(r: dict[str, Any]) -> int:
         eta = r.get("eta_sec_via_test_only")
         # Sentinel for "ETA unknown" — sort to the back. Plain int so mypy

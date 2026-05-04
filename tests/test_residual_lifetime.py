@@ -22,18 +22,28 @@ class TestColdStart:
         prof = _profile(n=MIN_OBSERVATIONS_FOR_PROFILE - 1, ratio=0.5)
         # ratio on profile is ignored because n_observations < threshold.
         # ask=100, elapsed=0, fallback=0.85 → expected 85.
-        assert predict_residual_lifetime(
-            profile=prof, elapsed_sec=0, walltime_ask_sec=100,
-            fallback_ratio=0.85,
-        ) == 85
+        assert (
+            predict_residual_lifetime(
+                profile=prof,
+                elapsed_sec=0,
+                walltime_ask_sec=100,
+                fallback_ratio=0.85,
+            )
+            == 85
+        )
 
     def test_above_threshold_uses_profile(self):
         prof = _profile(n=MIN_OBSERVATIONS_FOR_PROFILE + 5, ratio=0.5)
         # ask=100, elapsed=0, profile_ratio=0.5 → expected 50.
-        assert predict_residual_lifetime(
-            profile=prof, elapsed_sec=0, walltime_ask_sec=100,
-            fallback_ratio=0.85,
-        ) == 50
+        assert (
+            predict_residual_lifetime(
+                profile=prof,
+                elapsed_sec=0,
+                walltime_ask_sec=100,
+                fallback_ratio=0.85,
+            )
+            == 50
+        )
 
 
 class TestMonotonicity:
@@ -43,7 +53,9 @@ class TestMonotonicity:
         prev = ask
         for elapsed in (0, 100, 500, 800, 999):
             r = predict_residual_lifetime(
-                profile=prof, elapsed_sec=elapsed, walltime_ask_sec=ask,
+                profile=prof,
+                elapsed_sec=elapsed,
+                walltime_ask_sec=ask,
             )
             assert r <= prev
             prev = r
@@ -54,7 +66,9 @@ class TestMonotonicity:
         prev = 0
         for ask in (200, 1000, 5000, 10000):
             r = predict_residual_lifetime(
-                profile=prof, elapsed_sec=elapsed, walltime_ask_sec=ask,
+                profile=prof,
+                elapsed_sec=elapsed,
+                walltime_ask_sec=ask,
             )
             assert r >= prev
             prev = r
@@ -65,27 +79,47 @@ class TestClamping:
         prof = _profile(n=20, ratio=2.0)  # absurd ratio
         # ask=100, elapsed=50 → remaining = 50; ratio*ask=200 capped at 100.
         # expected_total = min(max(50, 200), 100) = 100; residual = 50.
-        assert predict_residual_lifetime(
-            profile=prof, elapsed_sec=50, walltime_ask_sec=100,
-        ) == 50
+        assert (
+            predict_residual_lifetime(
+                profile=prof,
+                elapsed_sec=50,
+                walltime_ask_sec=100,
+            )
+            == 50
+        )
 
     def test_already_overdue_returns_zero(self):
         prof = _profile(n=20, ratio=0.85)
-        assert predict_residual_lifetime(
-            profile=prof, elapsed_sec=200, walltime_ask_sec=100,
-        ) == 0
+        assert (
+            predict_residual_lifetime(
+                profile=prof,
+                elapsed_sec=200,
+                walltime_ask_sec=100,
+            )
+            == 0
+        )
 
     def test_negative_inputs_return_zero(self):
         prof = _profile(n=20, ratio=0.85)
-        assert predict_residual_lifetime(
-            profile=prof, elapsed_sec=-100, walltime_ask_sec=-50,
-        ) == 0
+        assert (
+            predict_residual_lifetime(
+                profile=prof,
+                elapsed_sec=-100,
+                walltime_ask_sec=-50,
+            )
+            == 0
+        )
 
     def test_zero_walltime_returns_zero(self):
         prof = _profile(n=20, ratio=0.85)
-        assert predict_residual_lifetime(
-            profile=prof, elapsed_sec=0, walltime_ask_sec=0,
-        ) == 0
+        assert (
+            predict_residual_lifetime(
+                profile=prof,
+                elapsed_sec=0,
+                walltime_ask_sec=0,
+            )
+            == 0
+        )
 
 
 class TestLongTail:
@@ -98,7 +132,9 @@ class TestLongTail:
         # capped at 100. residual = 80 - 80 = 0. Then clamped to
         # remaining = 20.
         out = predict_residual_lifetime(
-            profile=prof, elapsed_sec=80, walltime_ask_sec=100,
+            profile=prof,
+            elapsed_sec=80,
+            walltime_ask_sec=100,
         )
         # Predicted to finish exactly at elapsed → residual 0.
         # Caller interprets as "complete now".
@@ -109,7 +145,9 @@ class TestFallbackOverride:
     def test_explicit_fallback_used_below_threshold(self):
         prof = _profile(n=1)  # very thin
         out = predict_residual_lifetime(
-            profile=prof, elapsed_sec=0, walltime_ask_sec=1000,
+            profile=prof,
+            elapsed_sec=0,
+            walltime_ask_sec=1000,
             fallback_ratio=0.5,
         )
         assert out == 500

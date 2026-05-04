@@ -22,6 +22,7 @@ source parse. Any Python file with the right shape qualifies.
 from __future__ import annotations
 
 from claude_hpc._internal._primitive import primitive
+
 __all__ = [
     "ExecutorInfo",
     "detect_mars_tier",
@@ -60,6 +61,7 @@ def _default_candidate_dirs(root: Path) -> tuple[str, ...]:
     if (root / "meta.json").is_file():
         return _MARS_CANDIDATE_DIRS
     return _DEFAULT_CANDIDATE_DIRS
+
 
 # Files we always skip — only ``__init__.py`` is interesting now that all
 # framework artifacts live under ``.hpc/`` (which is excluded wholesale by

@@ -137,8 +137,7 @@ class TestReadMetaJson:
 
 def _run_discover(experiment_dir: Path) -> dict:
     proc = subprocess.run(
-        [sys.executable, "-m", "claude_hpc", "discover",
-         "--experiment-dir", str(experiment_dir)],
+        [sys.executable, "-m", "claude_hpc", "discover", "--experiment-dir", str(experiment_dir)],
         capture_output=True,
         text=True,
         check=False,
@@ -156,11 +155,13 @@ class TestDiscoverEnvelopeMeta:
         run = tmp_path / "runs" / "run-001-foo"
         (run / "scripts").mkdir(parents=True)
         (run / "meta.json").write_text(
-            json.dumps({
-                "experiment_id": "run-001-foo",
-                "seed": 42,
-                "purpose": "ridge",
-            }),
+            json.dumps(
+                {
+                    "experiment_id": "run-001-foo",
+                    "seed": 42,
+                    "purpose": "ridge",
+                }
+            ),
             encoding="utf-8",
         )
         _write_executor(run / "scripts" / "train.py")

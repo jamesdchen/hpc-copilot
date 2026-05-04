@@ -66,10 +66,7 @@ FLAGS: dict[str, list] = {
 # Use when each task is one cell of a grid over named axes. Two seeds
 # and two horizons below produce four tasks.
 
-_TASKS: list[dict] = [
-    {"horizon": h, "seed": s}
-    for h, s in itertools.product([1, 5], [42, 1337])
-]
+_TASKS: list[dict] = [{"horizon": h, "seed": s} for h, s in itertools.product([1, 5], [42, 1337])]
 
 # ─── Pattern 2: Chunking by row count ──────────────────────────────────────
 #

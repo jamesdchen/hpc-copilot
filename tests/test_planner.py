@@ -84,7 +84,9 @@ class TestPlanSubmit:
     def test_needs_canary_when_no_priors(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
             out = planner.plan_submit(
                 tmp_path,
                 profile="ml_ridge",
@@ -99,10 +101,10 @@ class TestPlanSubmit:
     def test_candidates_include_default_pair(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
-            out = planner.plan_submit(
-                tmp_path, profile="x", cluster="discovery", adversarial=False
-            )
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
+            out = planner.plan_submit(tmp_path, profile="x", cluster="discovery", adversarial=False)
         constraints = [c["constraint"] for c in out["candidates"]]
         # Default behavior: each gpu type + the union.
         assert "a100" in constraints
@@ -112,7 +114,9 @@ class TestPlanSubmit:
     def test_stressed_node_surfaces_co_tenants(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
             out = planner.plan_submit(
                 tmp_path,
                 profile="x",
@@ -142,7 +146,9 @@ class TestPlanSubmit:
                 node="d11-07",
                 elapsed_sec=1000 + tid * 100,
             )
-        with patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
             out = planner.plan_submit(
                 tmp_path,
                 profile="ml_ridge",
@@ -214,9 +220,7 @@ class TestTestOnlyEtaParser:
     def test_parses_iso_timestamp(self):
         from datetime import datetime, timedelta, timezone
 
-        future = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime(
-            "%Y-%m-%dT%H:%M:%S"
-        )
+        future = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
         text = f"sbatch: Job 12345 to start at {future} using 1 ..."
         eta = planner._parse_test_only_eta(text)
         assert eta is not None
@@ -270,11 +274,12 @@ class TestAdversarialPath:
             captured.append(walltime_sec)
             return planner._parse_test_only_eta(self._canned_test_only(walltime_sec)), ""
 
-        with patch(
-            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
-        ), patch(
-            "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
-            side_effect=fake_probe,
+        with (
+            patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()),
+            patch(
+                "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
+                side_effect=fake_probe,
+            ),
         ):
             out = planner.plan_submit(
                 tmp_path,
@@ -308,11 +313,12 @@ class TestAdversarialPath:
         def fake_probe(scheduler, cluster_cfg, *, constraint, walltime_sec, mem_mb, cpus):
             return None, ""  # every probe fails
 
-        with patch(
-            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
-        ), patch(
-            "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
-            side_effect=fake_probe,
+        with (
+            patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()),
+            patch(
+                "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
+                side_effect=fake_probe,
+            ),
         ):
             out = planner.plan_submit(
                 tmp_path,
@@ -345,18 +351,30 @@ class TestEtaViaDES:
     def test_returns_int_when_des_eligible(self, tmp_path):
         # Persist an idle snapshot — DES runs and returns 0.
         from claude_hpc.infra.inspect import (
-            ClusterSnapshot, NodeSnapshot, persist_snapshot,
+            ClusterSnapshot,
+            NodeSnapshot,
+            persist_snapshot,
         )
         from claude_hpc.orchestrator.planner import _eta_via_des
 
         snap = ClusterSnapshot(
-            cluster="discovery", scheduler_kind="slurm",
+            cluster="discovery",
+            scheduler_kind="slurm",
             now_iso="2026-04-28T10:00:00+00:00",
-            nodes=[NodeSnapshot(
-                name="n0", state="IDLE", real_mem_mb=64_000, alloc_mem_mb=0,
-                cpu_tot=8, cpu_alloc=0, gres="", gres_used="", co_tenants=[],
-                is_drained=False,
-            )],
+            nodes=[
+                NodeSnapshot(
+                    name="n0",
+                    state="IDLE",
+                    real_mem_mb=64_000,
+                    alloc_mem_mb=0,
+                    cpu_tot=8,
+                    cpu_alloc=0,
+                    gres="",
+                    gres_used="",
+                    co_tenants=[],
+                    is_drained=False,
+                )
+            ],
         )
         persist_snapshot(tmp_path, snap)
         eta = _eta_via_des(tmp_path, "ml_ridge", "discovery")

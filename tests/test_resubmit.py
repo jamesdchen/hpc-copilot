@@ -80,9 +80,7 @@ class TestResubmitPlanBatching:
         failed = [2, 5, 9, 20, 42]
         constraints = ClusterConstraints(max_array_size=3, max_concurrent_jobs=10)
 
-        plan = resubmit_plan(
-            task_count=60, failed_task_ids=failed, constraints=constraints
-        )
+        plan = resubmit_plan(task_count=60, failed_task_ids=failed, constraints=constraints)
 
         assert plan.total_batches >= 2
         assert len(plan.batches) >= 2
