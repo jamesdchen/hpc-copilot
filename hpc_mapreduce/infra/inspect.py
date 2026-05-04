@@ -580,7 +580,7 @@ class _CommandRunner:
     side_effects=[SideEffect("ssh", "<cluster>")],
     error_codes=[errors.ClusterUnknown, errors.SshUnreachable],
     idempotent=True,
-    idempotency_key="cluster_name",
+    idempotency_key="cluster",
 )
 def inspect_cluster(
     cluster_name: str,

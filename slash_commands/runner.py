@@ -93,7 +93,7 @@ _utcnow_iso = utcnow_iso
         errors.SchedulerThrottled,
     ],
     idempotent=True,
-    idempotency_key="run_id",
+    idempotency_key="spec.run_id",
 )
 def submit_and_record(
     experiment_dir: Path,
