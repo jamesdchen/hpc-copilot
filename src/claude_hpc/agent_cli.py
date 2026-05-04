@@ -340,6 +340,25 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return EXIT_OK if data["all_ok"] else EXIT_CLUSTER_ERROR
 
 
+# ─── subcommand: interview ─────────────────────────────────────────────────
+
+
+def cmd_interview(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.interview."""
+    from claude_hpc.atoms.interview import record_interview
+
+    intent = _load_spec(args.spec, schema_name="interview")
+    if not intent:
+        raise errors.SpecInvalid("--spec is required for `interview`")
+    campaign_dir = Path(args.campaign_dir).resolve()
+    try:
+        data = record_interview(intent, campaign_dir=campaign_dir)
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
+    _ok(data, name="interview")
+    return EXIT_OK
+
+
 # ─── subcommand: discover ──────────────────────────────────────────────────
 
 
@@ -1399,6 +1418,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pre.add_argument("--cluster", help="Optional cluster name to TCP-probe on :22.")
     p_pre.set_defaults(func=cmd_preflight)
+
+    # interview
+    p_iv = sub.add_parser(
+        "interview",
+        help=(
+            "Validate an agent-written tasks.py against the structured intent "
+            "from an interview, then persist intent + cmd_sha + dry-resolve "
+            "preview to <campaign-dir>/interview.json."
+        ),
+    )
+    p_iv.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="Path to interview.input.json conforming to schemas/interview.input.json.",
+    )
+    p_iv.add_argument(
+        "--campaign-dir",
+        required=True,
+        help=(
+            "Campaign workdir; must already contain a tasks.py written by the "
+            "interview agent. interview.json (and optionally meta.json) is "
+            "written into this directory."
+        ),
+    )
+    p_iv.set_defaults(func=cmd_interview)
 
     # discover
     p_disc = sub.add_parser(

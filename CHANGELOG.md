@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added — `interview` primitive: persist campaign intent alongside tasks.py
+
+The interview between hpc-agent and either MARs or a human now produces
+a structured artifact (`<campaign-dir>/interview.json`) instead of only
+chat-context that's gone the moment the campaign starts.
+
+- `hpc-mapreduce interview --spec <intent.json> --campaign-dir <dir>`
+  validates an agent-written tasks.py against the recorded intent
+  (asserts `tasks.total() == intent.task_count`, fingerprints with
+  `cmd_sha`, samples `resolve(0)`/`resolve(n//2)`/`resolve(n-1)` as a
+  dry-resolve preview), then persists the intent verbatim plus a
+  `_materialized` block to interview.json. When intent supplies
+  `cluster_target` or `budget`, meta.json is merged-into (existing
+  operator-set keys win on conflict; `total_tasks` is always derived
+  from `tasks.total()`).
+- Schema (`schemas/interview.input.json`) is deliberately bare-bones:
+  required fields are `goal`, `task_count`, `produced_by`. Optional:
+  `task_kind` (free-text recall tag), `budget` (opaque dict so units
+  match the campaign — gpu_hours, cpu_hours, task_count, credits),
+  `abort_if`, `cluster_target`, `transcript`, `notes`. The schema does
+  *not* enumerate search-space shapes (logspace / grid / seeds_x); doing
+  so would narrow the existing experiment-agnostic `tasks.py` contract
+  to ML-hyperparameter sweeps. The reserved `task_generator` field is a
+  placeholder for an opt-in typed materializer (not implemented).
+- Spine for future `cmd_recall`: interview.json captures provenance
+  (`{kind: mars|human, session_sha, operator, at}`) and a `cmd_sha`
+  fingerprint, so future "show me my last 5 LR sweeps" queries can index
+  past campaigns by `task_kind` and surface their typed parameters.
+
 ### Changed — folded slash_commands Python runtime into claude_hpc
 
 The atomic-ops layer (runner.py), journal storage (session.py), and
