@@ -100,8 +100,6 @@ CATALOG: list[FailureSignature] = [
             re.I,
         ),
         exit_code=None,
-        # "blacklist-node" was a leftover from the deleted SEGV-blacklist
-        # feature; agents read it as "do not auto-retry on this node".
         suggested_fix={"action": "retry-on-different-node"},
         priority=90,
     ),
