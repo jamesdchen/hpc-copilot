@@ -214,10 +214,10 @@ class Preempted(HpcError):
 
     Surfaces from the agent envelope when the cluster-side dispatcher
     exited 130 (POSIX preempted) after trapping SIGTERM, or when the
-    per-task sidecar carries a ``preempted_at`` timestamp. The campus
-    user got bumped by higher-priority work, not failed; the harness
-    can resubmit cleanly without redoing already-completed work
-    (dispatch.py's metrics.json idempotency skip handles that).
+    per-task sidecar carries a ``preempt: {at, grace_sec}`` block. The
+    campus user got bumped by higher-priority work, not failed; the
+    harness can resubmit cleanly without redoing already-completed
+    work (dispatch.py's metrics.json idempotency skip handles that).
     """
 
     error_code = "preempted"

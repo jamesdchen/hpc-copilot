@@ -18,6 +18,104 @@ import yaml  # type: ignore[import-untyped]
 
 from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
 
+# B-M4: declarative manifest of per-cluster yaml keys. Mirrors the
+# get_*() validators below; surfaced through cmd_capabilities so a
+# campus user learning the schema by inspection (without reading
+# clusters.py source) can discover every supported field. Add a row
+# here when adding a new validator. The ``required`` flag is False for
+# every survival-shaped field — the cluster works without them; they
+# just opt into specific helps for low-priority jobs.
+CLUSTER_YAML_KEYS: list[dict[str, Any]] = [
+    {
+        "key": "scheduler",
+        "type": "string",
+        "required": True,
+        "description": ("One of 'sge' or 'slurm'. Routes the submission to the right backend."),
+    },
+    {
+        "key": "ssh_target",
+        "type": "string",
+        "required": False,
+        "description": "Default user@host for ssh; overridable per-spec.",
+    },
+    {
+        "key": "constraints",
+        "type": "object",
+        "required": False,
+        "description": (
+            "Cluster-level resource ceilings (cpus, gpus, mem_mb, walltime_sec). "
+            "Profile-level constraints override field-by-field."
+        ),
+    },
+    {
+        "key": "cold_start_mem_buffer",
+        "type": "number",
+        "default": 0.15,
+        "required": False,
+        "description": (
+            "Fractional headroom grown onto the user's --mem ask when no "
+            "runtime prior exists, so the OOM daemon doesn't bump the "
+            "campus user's brand-new run mid-write."
+        ),
+    },
+    {
+        "key": "nfs_data_dir",
+        "type": "string",
+        "required": False,
+        "description": (
+            "When set, threaded through as $HPC_NFS_DATA_DIR so the template "
+            "preamble copies the dataset into node-local SSD before the "
+            "executor runs — survives NFS throttling when N tasks read the "
+            "same files at once."
+        ),
+    },
+    {
+        "key": "walltime_arbitrage",
+        "type": "boolean",
+        "default": True,
+        "required": False,
+        "description": (
+            "Cold-start walltime trim: shave 15min and floor to a 5min "
+            "boundary so the campus user fits in backfill shadows higher-"
+            "priority jobs don't reach."
+        ),
+    },
+    {
+        "key": "auto_daisy_chain",
+        "type": "boolean | null",
+        "required": False,
+        "description": (
+            "Tri-state: true=always chain on max-walltime overflow, "
+            "false=never (kill switch), absent=defer to "
+            "detect_checkpointing on past runs. Lets long-walltime asks "
+            "survive the cluster's hard ceiling via segmented submission."
+        ),
+    },
+    {
+        "key": "max_walltime_sec",
+        "type": "integer",
+        "default": 86400,
+        "required": False,
+        "description": (
+            "The cluster's hard walltime ceiling in seconds. Auto-daisy-"
+            "chain fires when an ask exceeds max_walltime_sec - 3600."
+        ),
+    },
+    {
+        "key": "max_node_mem_mb",
+        "type": "integer",
+        "required": False,
+        "description": (
+            "Largest single-node memory ask the cluster will schedule. "
+            "When set, the planner clamps the cold-start mem buffer (and "
+            "any other grower) so the campus user's run doesn't sit "
+            "Pending forever with ReqNodeNotAvail. Pick the most "
+            "permissive partition's node size (Hoffman2: 384000 / 192000 "
+            "/ 96000 depending on partition; CARC similar)."
+        ),
+    },
+]
+
 
 def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
     """Load cluster definitions from clusters.yaml.
@@ -157,6 +255,37 @@ def get_auto_daisy_chain(cluster_config: dict[str, Any]) -> bool | None:
             f"auto_daisy_chain must be a bool when set, got {raw!r} ({type(raw).__name__})"
         )
     return raw
+
+
+def get_max_node_mem_mb(cluster_config: dict[str, Any]) -> int | None:
+    """Read the per-cluster ``max_node_mem_mb`` (per-node memory ceiling).
+
+    The largest single-node memory request the cluster will schedule.
+    When the cold-start buffer (or any other recommender) would push
+    the campus user's ``--mem`` ask past this ceiling, the planner
+    clamps it back down — without the clamp, an ask like 240GB on a
+    256GB node × 1.15 buffer = 276GB sits Pending forever with
+    ``ReqNodeNotAvail`` and the user's brand-new run never starts.
+
+    Returns ``None`` when unset; the planner then leaves the ask
+    uncapped (legacy behavior).
+
+    Schema validation: rejects non-int / non-positive values. Bools
+    are rejected explicitly because ``True == 1`` would otherwise
+    silently clamp every ask to 1MB.
+    """
+    if "max_node_mem_mb" not in cluster_config:
+        return None
+    raw = cluster_config["max_node_mem_mb"]
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(
+            f"max_node_mem_mb must be a positive int when set, got {raw!r} ({type(raw).__name__})"
+        )
+    if raw <= 0:
+        raise ValueError(f"max_node_mem_mb must be positive, got {raw}")
+    return int(raw)
 
 
 def get_max_walltime_sec(

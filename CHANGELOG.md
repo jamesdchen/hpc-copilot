@@ -96,9 +96,9 @@ behaviour for non-preempted runs.
 * `claude_hpc/mapreduce/dispatch.py` now traps `SIGTERM` from the
   scheduler. The handler logs `[claude-hpc] SIGTERM received;
   cluster preemption imminent` to stderr, writes
-  `preempted_at: <utcnow_iso>` to the per-task entry of
-  `<exp>/.hpc/runs/<run_id>.json`, forwards `SIGINT` to the executor
-  subprocess so its except blocks run during the cluster's
+  `preempt: {at: <utcnow_iso>, grace_sec: <int>}` to the per-task
+  entry of `<exp>/.hpc/runs/<run_id>.json`, forwards `SIGINT` to the
+  executor subprocess so its except blocks run during the cluster's
   preemption window, waits up to `HPC_PREEMPT_GRACE_SEC` (default
   25s) for clean exit, then `sys.exit(130)`. Marks the run as bumped
   (not failed) so the agent harness can resubmit cleanly without
@@ -159,9 +159,10 @@ overrides still work.
 
 **Cold-start memory buffer in the smart planner.** When no usable
 runtime prior exists for `(profile, cluster, gpu_type)`, the user's
-`--mem` ask is now grown by `(1 + cold_start_mem_buffer)` so the OOM
-daemon doesn't bump the campus user's brand-new run mid-write and
-leave a corrupt result dir behind. This is the cold-start "I have no
+`--mem` ask in MB is grown by `(1 + cold_start_mem_buffer)`, then
+floored to the existing `floor_mb` minimum, so the OOM daemon doesn't
+bump the campus user's brand-new run mid-write and leave a corrupt
+result dir behind. This is the cold-start "I have no
 idea how much memory you'll use" headroom; the smart planner takes
 over once you have ≥5 successful samples per `(profile, cluster,
 gpu_type)`, at which point the quantile-based shrink owns and the

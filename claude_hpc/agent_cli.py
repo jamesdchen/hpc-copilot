@@ -663,8 +663,61 @@ def cmd_status(args: argparse.Namespace) -> int:
     # querying `campaign list` / `campaign status`.
     if updated.campaign_id:
         data["campaign_id"] = updated.campaign_id
+
+    # A-M1: surface preempted-task counts directly on /status so a
+    # caller polling a partially-bumped run sees them without first
+    # having to call /failures. The campus user's harness can branch
+    # on "X of N tasks got preempted" while the run is still in
+    # flight, instead of waiting for the whole array to fail before
+    # noticing scheduler pressure. Sourced from the per-task sidecar
+    # ``preempt`` block written by dispatch.py's SIGTERM handler.
+    preempt_summary = _preempted_summary_from_sidecar(args.experiment_dir, args.run_id)
+    if preempt_summary is not None:
+        count, ids = preempt_summary
+        data["preempted_count"] = count
+        data["preempted_task_ids"] = ids
+
     _ok(data, name="poll-run-status")
     return EXIT_OK
+
+
+def _preempted_summary_from_sidecar(
+    experiment_dir: Any, run_id: str
+) -> tuple[int, list[int]] | None:
+    """Return (preempted_count, preempted_task_ids_sorted) or None.
+
+    Walks the per-task ``tasks`` block of the run sidecar and collects
+    every task_id whose entry carries a ``preempt`` block (set by
+    dispatch.py's SIGTERM handler when the cluster bumps the campus
+    user's low-priority job). Returns None when there are no preempted
+    tasks or when the sidecar can't be read — callers should treat
+    None as "no preempt info to surface", not an error.
+    """
+    try:
+        from claude_hpc.orchestrator.runs import (
+            read_run_sidecar as _read_sidecar_for_status,
+        )
+
+        sidecar = _read_sidecar_for_status(Path(experiment_dir), run_id)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(sidecar, dict):
+        return None
+    tasks_block = sidecar.get("tasks") or {}
+    if not isinstance(tasks_block, dict):
+        return None
+    preempted_ids: list[int] = []
+    for tid_str, entry in tasks_block.items():
+        if not isinstance(entry, dict):
+            continue
+        if "preempt" in entry:
+            try:
+                preempted_ids.append(int(tid_str))
+            except (TypeError, ValueError):
+                continue
+    if not preempted_ids:
+        return None
+    return len(preempted_ids), sorted(preempted_ids)
 
 
 def _overlay_meta_on_spec(spec: dict[str, Any], experiment_dir: Path) -> dict[str, Any]:
@@ -1073,6 +1126,39 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
         raise errors.SpecInvalid(
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
+
+    # A-M3: surface preempted runs as a typed Preempted exception at
+    # the envelope level. If every task_id the caller is trying to
+    # resubmit carries a ``preempt`` marker in the per-task sidecar
+    # (set by dispatch.py's SIGTERM handler), the campus user wasn't
+    # the one who failed — they got bumped by higher-priority work.
+    # Raising Preempted lets the agent harness branch on
+    # ``error_code: preempted`` instead of seeing a successful resubmit
+    # envelope and treating it like any other retry. The resubmit
+    # itself still happens after the harness handles the signal; we
+    # raise BEFORE doing the cluster-side work so the caller can
+    # decide whether to throttle.
+    if category == "preempted":
+        from claude_hpc.orchestrator.runs import read_run_sidecar as _read_sidecar
+
+        try:
+            sidecar = _read_sidecar(Path(args.experiment_dir), args.run_id)
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            sidecar = None
+        if sidecar is not None:
+            tasks_block = sidecar.get("tasks") or {}
+            failed_ids_int = [int(t) for t in failed]
+            all_preempted = bool(failed_ids_int) and all(
+                isinstance(tasks_block.get(str(tid)), dict)
+                and "preempt" in tasks_block.get(str(tid), {})
+                for tid in failed_ids_int
+            )
+            if all_preempted:
+                raise errors.Preempted(
+                    f"all {len(failed_ids_int)} task ids in resubmit spec carry "
+                    "preempt markers; the campus user got bumped by higher-priority "
+                    "work, not failed. Resubmit when scheduler pressure abates."
+                )
 
     record, deduped, request_id = runner.resubmit_failed(
         args.experiment_dir,

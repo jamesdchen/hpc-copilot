@@ -111,6 +111,31 @@ def test_capabilities_exposes_mars_skill_paths_and_required_env() -> None:
     ]
 
 
+def test_capabilities_exposes_cluster_yaml_keys() -> None:
+    """B-M4: capabilities surfaces a declarative manifest of every
+    recognised per-cluster yaml key so a campus user learning the
+    schema by inspection sees the new survival fields (nfs_data_dir,
+    cold_start_mem_buffer, max_walltime_sec, ...) without reading
+    claude_hpc/infra/clusters.py source."""
+    rc, out, _ = _run_cli("capabilities")
+    assert rc == 0
+    data = _parse_envelope(out)["data"]
+
+    keys = data.get("cluster_yaml_keys")
+    assert isinstance(keys, list) and keys, "cluster_yaml_keys must be a non-empty list"
+    # Each entry has the documented shape.
+    for entry in keys:
+        assert isinstance(entry, dict), entry
+        for required in ("key", "type", "required", "description"):
+            assert required in entry, f"{entry!r} missing {required}"
+        assert isinstance(entry["required"], bool)
+
+    # The new survival fields must be discoverable here.
+    names = {entry["key"] for entry in keys}
+    for expected in ("nfs_data_dir", "cold_start_mem_buffer", "max_walltime_sec"):
+        assert expected in names, f"cluster_yaml_keys missing {expected!r}; got {sorted(names)}"
+
+
 def test_clusters_list_returns_known_clusters() -> None:
     """clusters list must return the names defined in the active clusters.yaml."""
     rc, out, _ = _run_cli("clusters", "list")
@@ -569,6 +594,159 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     assert rc != 0
     payload = _parse_envelope(out)
     assert payload["error_code"] == "spec_invalid"
+
+
+# ─── A-M1: cmd_status surfaces preempted tasks from sidecar ───────────────
+
+
+def test_status_helper_returns_none_when_no_preempt_marks(tmp_path: Path) -> None:
+    """When no per-task entry carries a preempt block, the helper
+    returns None — /status output then omits the preempted_* keys."""
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True)
+    sidecar = {
+        "sidecar_schema_version": 2,
+        "run_id": "rid",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "out"),
+        "task_count": 1,
+        "tasks_py_sha": "abc",
+        "tasks": {"0": {}},
+    }
+    (runs_dir / "rid.json").write_text(json.dumps(sidecar))
+
+    assert cli._preempted_summary_from_sidecar(tmp_path, "rid") is None
+
+
+def test_status_helper_aggregates_preempted_task_ids(tmp_path: Path) -> None:
+    """When tasks 0 and 2 carry preempt blocks (task 1 doesn't), the
+    helper returns (2, [0, 2]) — caller surfaces those keys on
+    /status so the campus user's harness can see scheduler pressure
+    on a partially-bumped run while it's still in flight."""
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True)
+    sidecar = {
+        "sidecar_schema_version": 2,
+        "run_id": "rid",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "out"),
+        "task_count": 3,
+        "tasks_py_sha": "abc",
+        "tasks": {
+            "0": {"preempt": {"at": "2026-01-01T00:00:00Z", "grace_sec": 25}},
+            "1": {},
+            "2": {"preempt": {"at": "2026-01-01T00:00:01Z", "grace_sec": 25}},
+        },
+    }
+    (runs_dir / "rid.json").write_text(json.dumps(sidecar))
+
+    summary = cli._preempted_summary_from_sidecar(tmp_path, "rid")
+    assert summary == (2, [0, 2])
+
+
+def test_status_helper_returns_none_on_missing_sidecar(tmp_path: Path) -> None:
+    """No sidecar file → None (treated as 'nothing to surface', not an
+    error). Keeps cmd_status robust when called against a run that
+    hasn't completed its first wave yet."""
+    assert cli._preempted_summary_from_sidecar(tmp_path, "missing_run") is None
+
+
+# ─── A-M3: cmd_resubmit surfaces Preempted at envelope level ──────────────
+
+
+def test_resubmit_preempted_category_with_all_marked_raises_preempted(
+    tmp_path: Path,
+) -> None:
+    """When the caller asks to resubmit category=preempted and every
+    listed task_id has a preempt marker on the per-task sidecar entry,
+    the CLI must surface a Preempted envelope (error_code=preempted)
+    instead of treating it as an ordinary retry. The campus user got
+    bumped, not failed.
+    """
+    import os
+
+    # Scaffold: minimal sidecar with two preempt-marked tasks.
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True)
+    sidecar = {
+        "sidecar_schema_version": 2,
+        "run_id": "rid",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "out"),
+        "task_count": 2,
+        "tasks_py_sha": "abc",
+        "tasks": {
+            "0": {"preempt": {"at": "2026-01-01T00:00:00Z", "grace_sec": 25}},
+            "1": {"preempt": {"at": "2026-01-01T00:00:01Z", "grace_sec": 25}},
+        },
+    }
+    (runs_dir / "rid.json").write_text(json.dumps(sidecar))
+
+    spec = tmp_path / "rs.json"
+    spec.write_text(json.dumps({"failed_task_ids": [0, 1], "category": "preempted"}))
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
+
+    rc, out, _ = _run_cli(
+        "resubmit",
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        "rid",
+        "--spec",
+        str(spec),
+        env=env_vars,
+    )
+    assert rc == 2, "preempted is category=cluster → exit 2"
+    payload = _parse_envelope(out)
+    assert payload["ok"] is False
+    assert payload["error_code"] == "preempted"
+    assert payload["category"] == "cluster"
+
+
+def test_resubmit_preempted_category_with_partial_marks_does_not_raise(
+    tmp_path: Path,
+) -> None:
+    """If only SOME of the listed task_ids carry preempt markers, the
+    others are real failures — fall through to the normal resubmit
+    path (which will fail SSH-gate in this offline test, but must not
+    raise Preempted)."""
+    import os
+
+    runs_dir = tmp_path / ".hpc" / "runs"
+    runs_dir.mkdir(parents=True)
+    sidecar = {
+        "sidecar_schema_version": 2,
+        "run_id": "rid",
+        "executor": "true",
+        "result_dir_template": str(tmp_path / "out"),
+        "task_count": 2,
+        "tasks_py_sha": "abc",
+        "tasks": {
+            "0": {"preempt": {"at": "2026-01-01T00:00:00Z", "grace_sec": 25}},
+            # task 1: a real failure, no preempt marker.
+            "1": {},
+        },
+    }
+    (runs_dir / "rid.json").write_text(json.dumps(sidecar))
+
+    spec = tmp_path / "rs.json"
+    spec.write_text(json.dumps({"failed_task_ids": [0, 1], "category": "preempted"}))
+    env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
+
+    rc, out, _ = _run_cli(
+        "resubmit",
+        "--experiment-dir",
+        str(tmp_path),
+        "--run-id",
+        "rid",
+        "--spec",
+        str(spec),
+        env=env_vars,
+    )
+    payload = _parse_envelope(out)
+    assert payload.get("error_code") != "preempted", (
+        "partial preempt markers must not trigger envelope-level Preempted"
+    )
 
 
 # ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────

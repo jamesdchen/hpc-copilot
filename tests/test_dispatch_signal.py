@@ -170,7 +170,7 @@ def _write_runner(
 class TestPreemptionSignalTrap:
     def test_sigterm_writes_preempted_at_to_sidecar(self, tmp_path):
         """A SIGTERM during executor runtime must populate
-        ``preempted_at`` on the per-task sidecar entry."""
+        ``preempt: {at, grace_sec}`` on the per-task sidecar entry."""
         result_root = tmp_path / "results"
         # Long-running executor — sleeps until killed.
         hpc = _scaffold(
@@ -226,13 +226,18 @@ class TestPreemptionSignalTrap:
         # Stderr must announce preemption.
         assert b"preemption imminent" in stderr_bytes, stderr_bytes
 
-        # Sidecar must have preempted_at populated for task 0.
+        # Sidecar must have preempt block populated for task 0.
         sidecar = json.loads((hpc / "runs" / "test_run.json").read_text())
         tasks = sidecar.get("tasks") or {}
         entry = tasks.get("0") or {}
-        assert "preempted_at" in entry, f"sidecar missing preempted_at for task 0; got {sidecar}"
+        assert "preempt" in entry, f"sidecar missing preempt for task 0; got {sidecar}"
+        preempt = entry["preempt"]
+        assert isinstance(preempt, dict), preempt
+        assert "at" in preempt and "grace_sec" in preempt, preempt
         # ISO-8601 with Z suffix.
-        assert entry["preempted_at"].endswith("Z"), entry["preempted_at"]
+        assert preempt["at"].endswith("Z"), preempt["at"]
+        # grace_sec round-trips the env override (set to 2 above).
+        assert preempt["grace_sec"] == 2, preempt
 
     def test_grace_sec_env_override_is_honored(self, tmp_path):
         """Setting HPC_PREEMPT_GRACE_SEC=1 forces a quick teardown
@@ -281,3 +286,195 @@ class TestPreemptionSignalTrap:
         # Exit must be 130 and within ~1s grace + small slack.
         assert proc.returncode == 130
         assert elapsed < 6.0, f"teardown took {elapsed:.2f}s; expected ~1s"
+
+    def test_repeated_sigterm_is_ignored_after_first(self, tmp_path):
+        """A-H3: re-entrancy guard. A second SIGTERM mid-handler must
+        be a no-op — the campus user can't debug a recursive sys.exit
+        from a cluster log."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="sleep 30",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+
+        runner = tmp_path / "run.py"
+        repo_root = Path(__file__).resolve().parent.parent
+        _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
+
+        env = dict(os.environ)
+        env["HPC_TASK_ID"] = "0"
+        env["HPC_RUN_ID"] = "test_run"
+        env["HPC_TASKS_PATH"] = str(hpc / "tasks.py")
+        env["HPC_PREEMPT_GRACE_SEC"] = "3"
+
+        stdout_log = tmp_path / "dispatcher.stdout"
+        stderr_log = tmp_path / "dispatcher.stderr"
+        with open(stdout_log, "wb") as out_fh, open(stderr_log, "wb") as err_fh:
+            proc = subprocess.Popen(
+                [sys.executable, str(runner)],
+                env=env,
+                stdout=out_fh,
+                stderr=err_fh,
+            )
+            time.sleep(2.0)
+            # Burst of SIGTERMs — only the first should fire the
+            # handler; the rest must be silently ignored.
+            for _ in range(5):
+                proc.send_signal(signal.SIGTERM)
+                time.sleep(0.05)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                pytest.fail("dispatcher did not exit cleanly after burst SIGTERM")
+
+        stderr_bytes = stderr_log.read_bytes()
+
+        # Exit code must still be 130; no recursive double-exit.
+        assert proc.returncode == 130, (
+            f"expected exit 130, got {proc.returncode}\nstderr: {stderr_bytes!r}"
+        )
+        # The "preemption imminent" stderr line should appear exactly
+        # once — re-entry into the handler would print it again.
+        assert stderr_bytes.count(b"preemption imminent") == 1, stderr_bytes
+
+    def test_grace_sec_zero_is_accepted_and_skips_wait_loop(self, tmp_path):
+        """A-M5: HPC_PREEMPT_GRACE_SEC=0 must not crash; documented
+        intent is 'no grace, exit immediately'."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="sleep 30",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+
+        runner = tmp_path / "run.py"
+        repo_root = Path(__file__).resolve().parent.parent
+        _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
+
+        env = dict(os.environ)
+        env["HPC_TASK_ID"] = "0"
+        env["HPC_RUN_ID"] = "test_run"
+        env["HPC_TASKS_PATH"] = str(hpc / "tasks.py")
+        env["HPC_PREEMPT_GRACE_SEC"] = "0"
+
+        stdout_log = tmp_path / "dispatcher.stdout"
+        stderr_log = tmp_path / "dispatcher.stderr"
+        with open(stdout_log, "wb") as out_fh, open(stderr_log, "wb") as err_fh:
+            proc = subprocess.Popen(
+                [sys.executable, str(runner)],
+                env=env,
+                stdout=out_fh,
+                stderr=err_fh,
+            )
+            time.sleep(2.0)
+            t0 = time.monotonic()
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                pytest.fail("HPC_PREEMPT_GRACE_SEC=0 did not exit promptly")
+            elapsed = time.monotonic() - t0
+
+        assert proc.returncode == 130
+        # Zero grace should land in well under 5s (terminate→wait(2)→kill).
+        assert elapsed < 5.0, f"teardown with grace=0 took {elapsed:.2f}s"
+
+        # Sidecar still records grace_sec=0 (round-tripped from env).
+        sidecar = json.loads((hpc / "runs" / "test_run.json").read_text())
+        entry = sidecar["tasks"]["0"]
+        assert entry["preempt"]["grace_sec"] == 0
+
+    def test_grace_sec_invalid_falls_back_to_default(self, tmp_path):
+        """A non-integer HPC_PREEMPT_GRACE_SEC must not crash dispatch;
+        survival over strictness — fall back to the documented default."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="echo ok",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+
+        runner = tmp_path / "run.py"
+        repo_root = Path(__file__).resolve().parent.parent
+        _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
+
+        env = dict(os.environ)
+        env["HPC_TASK_ID"] = "0"
+        env["HPC_RUN_ID"] = "test_run"
+        env["HPC_TASKS_PATH"] = str(hpc / "tasks.py")
+        env["HPC_PREEMPT_GRACE_SEC"] = "abc"
+
+        stdout_log = tmp_path / "dispatcher.stdout"
+        stderr_log = tmp_path / "dispatcher.stderr"
+        with open(stdout_log, "wb") as out_fh, open(stderr_log, "wb") as err_fh:
+            proc = subprocess.Popen(
+                [sys.executable, str(runner)],
+                env=env,
+                stdout=out_fh,
+                stderr=err_fh,
+            )
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                pytest.fail("dispatcher hung on bad HPC_PREEMPT_GRACE_SEC")
+
+        # Executor printed "ok" → exit 0; no crash from int("abc").
+        assert proc.returncode == 0, stderr_log.read_bytes()
+
+    def test_kill_escalation_when_executor_ignores_sigint_and_sigterm(self, tmp_path):
+        """A-H2: if the executor ignores both SIGINT (forwarded) and
+        SIGTERM (escalated), the dispatcher must SIGKILL it before
+        exiting. A zombie executor outliving the dispatcher would
+        keep writing to the next user's half-rotated log."""
+        result_root = tmp_path / "results"
+        # Trap both INT and TERM; survive only SIGKILL.
+        hpc = _scaffold(
+            tmp_path,
+            executor="trap '' INT TERM; sleep 60",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+
+        runner = tmp_path / "run.py"
+        repo_root = Path(__file__).resolve().parent.parent
+        _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
+
+        env = dict(os.environ)
+        env["HPC_TASK_ID"] = "0"
+        env["HPC_RUN_ID"] = "test_run"
+        env["HPC_TASKS_PATH"] = str(hpc / "tasks.py")
+        env["HPC_PREEMPT_GRACE_SEC"] = "1"
+
+        stdout_log = tmp_path / "dispatcher.stdout"
+        stderr_log = tmp_path / "dispatcher.stderr"
+        with open(stdout_log, "wb") as out_fh, open(stderr_log, "wb") as err_fh:
+            proc = subprocess.Popen(
+                [sys.executable, str(runner)],
+                env=env,
+                stdout=out_fh,
+                stderr=err_fh,
+            )
+            time.sleep(2.0)
+            t0 = time.monotonic()
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                pytest.fail("dispatcher did not escalate to SIGKILL")
+            elapsed = time.monotonic() - t0
+
+        assert proc.returncode == 130
+        # 1s grace + ≤2s terminate-wait + ≤2s kill-wait + slack.
+        assert elapsed < 8.0, f"escalation took {elapsed:.2f}s"

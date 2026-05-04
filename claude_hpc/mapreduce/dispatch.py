@@ -42,9 +42,11 @@ __all__ = ["main"]
 _DEFAULT_PREEMPT_GRACE_SEC = 25
 
 # Exit code used when the dispatcher itself is preempted by the
-# scheduler. Matches the POSIX convention of 128 + signal number for
-# SIGINT (2), giving 130 — the agent surface maps this to
-# ``error_code: preempted``.
+# scheduler. 130 = 128 + 2 (SIGINT). claude-hpc treats the trapped
+# SIGTERM as if the executor received SIGINT, so the campus user's
+# agent harness sees the canonical "job interrupted" code regardless
+# of which signal the scheduler actually sent — preempted runs survive
+# as a clean, recognizable diagnostic instead of a noisy crash.
 _EXIT_PREEMPTED = 130
 
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
@@ -104,14 +106,19 @@ def _atomic_write_json(path, data):
         raise
 
 
-def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso):
-    """Write ``preempted_at`` to the per-task entry of *sidecar_path*.
+def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
+    """Write ``preempt: {at, grace_sec}`` to the per-task sidecar entry.
 
     Marks the run as bumped (preempted by higher-priority work), not
     failed. The agent harness reads this field to distinguish a clean
     resubmit from a real failure. Best-effort: a write error here must
     not prevent the dispatcher from exiting, since the SIGKILL window
     is short.
+
+    Namespaced under ``preempt`` (not flat ``preempted_at``) to avoid
+    field-name collisions with future preemption-related metadata and
+    to keep the sidecar reading clean for the campus user inspecting
+    a bumped run by hand.
     """
     try:
         sidecar = json.loads(Path(sidecar_path).read_text())
@@ -123,7 +130,7 @@ def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso):
     entry = tasks.setdefault(str(task_id), {})
     if not isinstance(entry, dict):
         return
-    entry["preempted_at"] = when_iso
+    entry["preempt"] = {"at": when_iso, "grace_sec": int(grace_sec)}
     # Sidecar lives on shared NFS; a transient write failure here is
     # survivable — the agent harness will fall back to exit-code 130
     # detection. Don't let it block the preemption-window teardown.
@@ -135,14 +142,27 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
     """Install a SIGTERM handler that marks the run preempted and tears down.
 
     The handler:
-      1. Logs to stderr (matches the existing dispatch.py prose style).
-      2. Writes ``preempted_at: <utcnow_iso>`` to the per-task entry of
-         the run sidecar so the agent harness can tell "bumped" from
-         "real failure".
-      3. Forwards SIGINT to the executor subprocess so its except blocks
-         run during the cluster's preemption window.
-      4. Waits up to *grace_sec* for the executor to exit cleanly.
-      5. Exits 130 — the POSIX-standard preempted exit code.
+      1. Ignores subsequent SIGTERMs for the rest of its lifetime
+         (re-entrancy guard — a flurry of SIGTERMs in the cluster's
+         preemption window must not recursively re-enter the handler
+         and call ``sys.exit`` while the outer call is still unwinding).
+      2. Logs to stderr (matches the existing dispatch.py prose style).
+      3. Writes ``preempt: {at: <utcnow_iso>, grace_sec: <int>}`` to the
+         per-task entry of the run sidecar so the agent harness can tell
+         "bumped" from "real failure".
+      4. Forwards SIGINT to the executor subprocess so its except blocks
+         run during the cluster's preemption window. If the SIGTERM lands
+         in the race window between ``Popen()`` returning and the main
+         flow assigning into ``child_holder[0]``, falls back to
+         ``killpg`` on the dispatcher's own process group — which the
+         child inherits via ``preexec_fn=os.setpgrp`` — so no executor
+         is ever orphaned by the race.
+      5. Waits up to *grace_sec* for the executor to exit cleanly, then
+         escalates ``terminate() → wait(2) → kill()`` to guarantee
+         teardown. A zombie executor outliving the dispatcher would keep
+         writing to a half-rotated log and surprise the next user of
+         the same node.
+      6. Exits 130 — the POSIX-standard preempted exit code.
 
     *child_holder* is a single-element list holding the current
     ``subprocess.Popen`` (or ``None`` if no child is live yet); using a
@@ -151,11 +171,20 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
     """
 
     def _handler(signum, frame):
+        # A-H3: re-entrancy guard. Ignore further SIGTERMs for the rest
+        # of this process's life. SIG_IGN is set first because writing
+        # the sidecar and rsync-style waits below take measurable
+        # wall-clock; a second SIGTERM mid-handler would otherwise
+        # recurse into another sys.exit while the outer call is still
+        # unwinding — a footgun the campus user can't debug from a
+        # cluster log.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
         print(
             "[claude-hpc] SIGTERM received; cluster preemption imminent",
             file=sys.stderr,
         )
-        _mark_preempted_in_sidecar(sidecar_path, task_id, _utcnow_iso())
+        _mark_preempted_in_sidecar(sidecar_path, task_id, _utcnow_iso(), grace_sec=grace_sec)
 
         child = child_holder[0] if child_holder else None
         if child is not None and child.poll() is None:
@@ -165,8 +194,33 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
             while time.monotonic() < deadline and child.poll() is None:
                 time.sleep(0.5)
             if child.poll() is None:
+                # A-H2: escalate. The executor ignored or blocked the
+                # SIGINT we forwarded; terminate-then-kill so we don't
+                # leave an orphan that keeps writing to the next user's
+                # half-rotated log file after the cgroup eventually
+                # collects it.
                 with contextlib.suppress(OSError):
                     child.terminate()
+                try:
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(OSError):
+                        child.kill()
+                    with contextlib.suppress(Exception):
+                        child.wait(timeout=2)
+        else:
+            # A-H1: race window. SIGTERM landed before the main flow
+            # could populate child_holder[0]. The Popen() call ran with
+            # preexec_fn=os.setpgrp, so the child (if it exists) is in
+            # our process group; signal the whole pgid so the executor
+            # gets the SIGINT even though we never saw the Popen handle.
+            # Best-effort: if there genuinely is no child yet, killpg
+            # is a no-op against ourselves (we're about to sys.exit
+            # anyway, and SIGINT to ourselves while SIGTERM is now
+            # ignored is harmless — the default Python SIGINT handler
+            # raises KeyboardInterrupt which sys.exit overrides).
+            with contextlib.suppress(OSError, ProcessLookupError):
+                os.killpg(os.getpgid(0), signal.SIGINT)
 
         sys.exit(_EXIT_PREEMPTED)
 
@@ -292,14 +346,25 @@ def main() -> None:
     # sees the same exit-0 envelope as a normal completion.
     #
     # Defensive: a 0-byte ``metrics.json`` (e.g. crashed mid-write) does
-    # NOT trigger the skip — the user must be able to re-run. We only
-    # gate on file presence + non-zero size; parsing the JSON would
-    # require exception handling and isn't worth the cost.
+    # NOT trigger the skip — the user must be able to re-run.
+    #
+    # NFS staleness (A-M2): plain ``stat().st_size`` over NFS can return
+    # a stale or partial size from the client cache; a concurrent writer
+    # (a still-running prior submission of the same task_id) could
+    # otherwise trigger a premature skip. We open the file and read the
+    # first byte, which forces the NFS client to revalidate the inode
+    # via a GETATTR/READ round-trip. The read also catches the 0-byte
+    # case in the same call. Cheap (one byte, no JSON parse) and
+    # contract-tight: a metrics.json file that opens and yields ≥1 byte
+    # is by construction non-empty as seen by *us*, not the cache.
     metrics_path = Path(result_dir) / "metrics.json"
-    try:
-        already_complete = metrics_path.is_file() and metrics_path.stat().st_size > 0
-    except OSError:
-        already_complete = False
+    already_complete = False
+    if metrics_path.is_file():
+        try:
+            with open(metrics_path, "rb") as fh:
+                already_complete = bool(fh.read(1))
+        except OSError:
+            already_complete = False
     if already_complete:
         print(
             f"[claude-hpc] task {task_id} already complete (metrics.json found); skipping",
@@ -312,6 +377,14 @@ def main() -> None:
     # Trap it so we can mark the run as bumped (not failed) in the
     # sidecar and forward a clean SIGINT to the executor subprocess
     # before the cluster kills us.
+    # Setting HPC_PREEMPT_GRACE_SEC=0 means no grace — the SIGINT we
+    # forward to the executor must complete its except blocks in
+    # microseconds or its work is lost. Most campus users want the
+    # default 25s so the executor's atomic-write contract has time to
+    # land on disk before the cluster's SIGKILL arrives. A non-integer
+    # value (or a missing one) falls back to the default rather than
+    # erroring out — survival over strictness during the preemption
+    # window.
     try:
         grace_sec = int(os.environ.get("HPC_PREEMPT_GRACE_SEC") or _DEFAULT_PREEMPT_GRACE_SEC)
     except ValueError:
@@ -362,7 +435,16 @@ def main() -> None:
     # Use Popen (not subprocess.run) so the SIGTERM handler can reach
     # the child via *child_holder* and forward SIGINT during the
     # cluster's preemption grace window.
-    child = subprocess.Popen(executor, shell=True, env=env)
+    #
+    # preexec_fn=os.setpgrp puts the executor in its own process group
+    # rooted at the dispatcher's pgid. Closes A-H1: if SIGTERM lands
+    # between Popen() returning and the line that assigns into
+    # child_holder[0], the handler falls back to killpg on our pgid
+    # — which the child has just joined — instead of leaving the
+    # executor orphaned (inherited by init, eventually cleaned up by
+    # cgroup teardown but possibly still writing output in the
+    # meantime, surprising the next user of the same node).
+    child = subprocess.Popen(executor, shell=True, env=env, preexec_fn=os.setpgrp)
     child_holder[0] = child
     returncode = child.wait()
 
