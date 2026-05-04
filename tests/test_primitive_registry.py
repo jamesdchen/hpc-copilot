@@ -40,7 +40,6 @@ def test_decorator_registers_under_given_name() -> None:
         assert my_op() == 7
     finally:
         _REGISTRY.pop(fname, None)
-        _REGISTRY.pop(atom_name, None)
 
 
 def test_decorator_attaches_meta_attribute() -> None:
