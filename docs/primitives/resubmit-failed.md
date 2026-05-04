@@ -3,7 +3,6 @@ name: resubmit-failed
 verb: mutate
 side_effects:
   - mutates: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters; appends new_job_ids)
-  - mutates: <experiment_dir>/.hpc/runs/<run_id>.json (mirror)
 idempotent: true
 idempotency_key: request_id (auto-derived from sorted failed_task_ids + category + sorted overrides when not supplied)
 error_codes:
