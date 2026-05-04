@@ -18,8 +18,6 @@ import pytest
 
 from hpc_mapreduce._primitive import (
     PrimitiveMeta,
-    _PRIMITIVE_MODULES,
-    discover_primitive_modules,
     get_registry,
 )
 
@@ -29,22 +27,13 @@ def registry() -> dict[str, PrimitiveMeta]:
     return get_registry()
 
 
-# Item #2 — registered but invisible.
-
-def test_no_orphan_primitive_modules() -> None:
-    """Every module containing @primitive(...) must be reachable from the
-    fast-path list. Catches the failure mode where someone adds a new
-    primitive in a new module and forgets to add the module to
-    _PRIMITIVE_MODULES — the registry would silently miss it on cold
-    import."""
-    discovered = discover_primitive_modules()
-    missing = discovered - set(_PRIMITIVE_MODULES)
-    assert not missing, (
-        "These modules contain @primitive(...) but are not in "
-        "_PRIMITIVE_MODULES (the registry would miss them on cold "
-        f"import): {sorted(missing)}. Add them to _PRIMITIVE_MODULES "
-        "in hpc_mapreduce/_primitive.py."
-    )
+# Item #2 — orphan-module detection moved to a CI lint
+# (``scripts/lint_primitive_modules.py``). The lint catches the
+# failure mode where someone adds a new primitive in a new module and
+# forgets to add the module to ``_PRIMITIVE_MODULES`` — the registry
+# would silently miss it on cold import. ``test_lint_primitive_modules``
+# subprocess-invokes the script so test runs catch drift even without
+# CI.
 
 
 # Item #3 — composes references must resolve.
