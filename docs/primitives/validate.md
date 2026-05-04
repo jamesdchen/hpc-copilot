@@ -1,6 +1,6 @@
 ---
 name: validate
-verb: query
+verb: validate
 side_effects:
   - ssh: scheduler --test-only probe (no submit)
 idempotent: true

@@ -53,10 +53,73 @@ class HPCBackend(abc.ABC):
     Subclasses implement ``_build_command`` to construct the scheduler-specific
     command.  Override ``_execute_command`` to change how commands are run
     (e.g. via SSH) and ``_setup_log_dir`` for remote ``mkdir``.
+
+    B5: widened with class-level metadata that the rest of the
+    framework historically obtained via ``if scheduler == "slurm"``
+    branches sprinkled across 16 callsites. New callers should consult
+    these attributes / methods rather than re-parsing the scheduler
+    name.
     """
+
+    # Scheduler name — subclasses set to "slurm" / "sge" / etc. Allows
+    # ``isinstance`` lookups to be replaced with attribute reads in the
+    # planner / status code that needs to dispatch on scheduler kind.
+    scheduler_name: str = ""
+
+    # Template-script extension. The framework currently has 3 hard-
+    # coded ``if scheduler == "slurm" else "sge"`` blocks that compute
+    # ``.slurm`` vs ``.sge``; subclasses publish their canonical
+    # extension here so callers can do ``backend.template_ext``.
+    template_ext: str = ""
+
+    # Whether the backend supports ``sbatch --test-only``-style ETA
+    # probes used by the backfill planner. SLURM does, SGE does not;
+    # the planner currently checks via ``if scheduler == "slurm"``.
+    supports_test_only_eta: bool = False
 
     log_dir: str  # subclasses must set this
     JOB_ID_REGEX: re.Pattern[str] = _DEFAULT_JOB_ID_REGEX
+
+    # ------------------------------------------------------------------
+    # Capability hooks — additive in B5-PR1. Subclasses override; the
+    # default raises NotImplementedError so callers that haven't
+    # migrated yet still see a clear failure mode rather than a silent
+    # wrong answer.
+    # ------------------------------------------------------------------
+
+    def alive_job_ids(self, job_ids: list[str]) -> list[str]:
+        """Return the subset of *job_ids* still known to the scheduler.
+
+        Used by the slash-command runner to detect abandoned runs and
+        by reduce.status to short-circuit polling once every job has
+        terminated. Default raises so an unmigrated backend is loud.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement alive_job_ids"
+        )
+
+    def stderr_log_path(self, run_id: str, task_id: int) -> str:
+        """Return the cluster-side path to a single task's stderr log.
+
+        Used by /failures and the auto-retry resolver to fetch
+        per-task stderr without re-deriving the path from the
+        scheduler-specific %x_%A_%a / job-array format string. Default
+        raises so an unmigrated backend is loud.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement stderr_log_path"
+        )
+
+    def inspect(self, cluster_name: str, **kwargs):
+        """Return a :class:`ClusterSnapshot` for *cluster_name*.
+
+        Wraps :func:`hpc_mapreduce.infra.inspect.inspect_cluster`'s
+        existing per-scheduler dispatch. Subclasses override; the
+        default raises so an unmigrated backend is loud.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement inspect"
+        )
 
     @abc.abstractmethod
     def _build_command(
