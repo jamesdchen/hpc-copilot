@@ -211,7 +211,8 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 def _read_json(path: Path) -> dict | None:
     try:
-        return json.loads(path.read_text())
+        result: dict = json.loads(path.read_text())
+        return result
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:

@@ -27,7 +27,7 @@ import re
 import subprocess
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -98,17 +98,7 @@ class HPCBackend(abc.ABC):
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement alive_job_ids")
 
-    def stderr_log_path(self, run_id: str, task_id: int) -> str:
-        """Return the cluster-side path to a single task's stderr log.
-
-        Used by /failures and the auto-retry resolver to fetch
-        per-task stderr without re-deriving the path from the
-        scheduler-specific %x_%A_%a / job-array format string. Default
-        raises so an unmigrated backend is loud.
-        """
-        raise NotImplementedError(f"{type(self).__name__} does not implement stderr_log_path")
-
-    def inspect(self, cluster_name: str, **kwargs):
+    def inspect(self, cluster_name: str, **kwargs: Any) -> Any:
         """Return a :class:`ClusterSnapshot` for *cluster_name*.
 
         Wraps :func:`claude_hpc.infra.inspect.inspect_cluster`'s
@@ -116,6 +106,63 @@ class HPCBackend(abc.ABC):
         default raises so an unmigrated backend is loud.
         """
         raise NotImplementedError(f"{type(self).__name__} does not implement inspect")
+
+    # ------------------------------------------------------------------
+    # B5-PR2 capability hooks — staticmethods so callers can invoke them
+    # off the *class* (cheap path that skips constructor kwargs).
+    # Subclasses override; defaults raise NotImplementedError so an
+    # unmigrated backend is loud.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_alive_check_cmd(job_ids: list[str]) -> str:
+        """Shell command whose stdout lists the live job ids."""
+        raise NotImplementedError("backend does not implement build_alive_check_cmd")
+
+    @staticmethod
+    def parse_alive_output(stdout: str, job_ids: list[str]) -> set[str]:
+        """Parse ``build_alive_check_cmd`` stdout to the live subset of *job_ids*."""
+        raise NotImplementedError("backend does not implement parse_alive_output")
+
+    @staticmethod
+    def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
+        """Return the cluster-side path to a single task's stderr log.
+
+        Used by /failures and the auto-retry resolver to fetch
+        per-task stderr without re-deriving the path from the
+        scheduler-specific %x_%A_%a / job-array format string.
+        """
+        raise NotImplementedError("backend does not implement stderr_log_path")
+
+    @staticmethod
+    def err_log_disk_path(
+        log_dir: str, scratch_dir: str, job_name: str, job_id: str, task_id: int
+    ) -> str:
+        """Local-disk path used by ``status.get_err_log_paths``."""
+        raise NotImplementedError("backend does not implement err_log_disk_path")
+
+    @staticmethod
+    def query_jobs(
+        job_ids: list[str],
+        *,
+        sge_user: str | None = None,
+        slurm_cluster: str | None = None,
+    ) -> dict[str, Any]:
+        """Return per-job state map for *job_ids* via the scheduler's history."""
+        raise NotImplementedError("backend does not implement query_jobs")
+
+    @staticmethod
+    def inspect_cluster(
+        cluster_name: str,
+        cfg: dict[str, Any],
+        *,
+        sacct_window_hours: int = 24,
+        stress_alloc_mem_pct: float = 0.80,
+        stress_cpu_load_frac: float = 0.80,
+        runner: Any = None,
+    ) -> Any:
+        """Return a ``ClusterSnapshot`` for *cluster_name* (B5-PR2)."""
+        raise NotImplementedError("backend does not implement inspect_cluster")
 
     @abc.abstractmethod
     def _build_command(

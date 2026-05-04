@@ -23,7 +23,23 @@ StrEnum string-coerces transparently for JSON serialization
 
 from __future__ import annotations
 
-from enum import StrEnum
+import sys
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:  # pragma: no cover - fallback for Python 3.10
+    from enum import Enum
+
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
+        """Minimal py3.10 backport of :class:`enum.StrEnum`.
+
+        Provides ``str(Foo.BAR) == "bar"`` and equality with bare
+        strings, which is all this module relies on.
+        """
+
+        def __str__(self) -> str:
+            return str(self.value)
+
 
 __all__ = [
     "JournalStatus",

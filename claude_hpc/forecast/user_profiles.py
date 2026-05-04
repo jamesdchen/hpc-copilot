@@ -146,20 +146,19 @@ def _normalize_hist(hist: dict[int, float]) -> dict[int, float]:
 
 def _coerce_user_dict(d: Any, user: str) -> dict[str, Any]:
     """Return a well-shaped per-user record, defaulting fields."""
-    if not isinstance(d, dict):
-        d = {}
-    d.setdefault("user", user)
-    d.setdefault("n_observations", 0)
-    d.setdefault("median_submits_per_day", 0.0)
-    d.setdefault("submit_hour_of_week_counts", {})
-    d.setdefault("median_walltime_ask_sec", 0)
-    d.setdefault("median_actual_over_ask", 1.0)
-    d.setdefault("median_array_size", 1)
-    d.setdefault("typical_gpu_types", {})  # gpu_type -> count
-    d.setdefault("failure_rate", 0.0)
-    d.setdefault("p_followup_within_6h", 0.0)
-    d.setdefault("last_seen_iso", None)
-    return d
+    out: dict[str, Any] = d if isinstance(d, dict) else {}
+    out.setdefault("user", user)
+    out.setdefault("n_observations", 0)
+    out.setdefault("median_submits_per_day", 0.0)
+    out.setdefault("submit_hour_of_week_counts", {})
+    out.setdefault("median_walltime_ask_sec", 0)
+    out.setdefault("median_actual_over_ask", 1.0)
+    out.setdefault("median_array_size", 1)
+    out.setdefault("typical_gpu_types", {})  # gpu_type -> count
+    out.setdefault("failure_rate", 0.0)
+    out.setdefault("p_followup_within_6h", 0.0)
+    out.setdefault("last_seen_iso", None)
+    return out
 
 
 def _to_profile(record: dict[str, Any]) -> UserProfile:
