@@ -14,8 +14,9 @@ from unittest.mock import patch
 import pytest
 
 from claude_hpc import errors
-from slash_commands import runner, session
-from slash_commands.session import RunRecord
+from claude_hpc._internal import session
+from claude_hpc._internal.session import RunRecord
+from slash_commands import runner
 
 if TYPE_CHECKING:
     from pathlib import Path

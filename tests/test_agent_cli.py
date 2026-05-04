@@ -295,7 +295,7 @@ def test_submit_persists_campaign_id_to_journal(tmp_path: Path) -> None:
     assert env_resp["ok"] is True
 
     # Confirm the journal carries the tag and the campaign filter sees it.
-    from slash_commands import session
+    from claude_hpc._internal import session
 
     # Redirect HPC_HOMEDIR for this in-process check the same way the CLI did.
     saved = session.HPC_HOMEDIR
@@ -424,8 +424,8 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
     import argparse
     from unittest.mock import patch
 
-    from slash_commands import session as session_mod
-    from slash_commands.session import RunRecord
+    from claude_hpc._internal import session as session_mod
+    from claude_hpc._internal.session import RunRecord
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
@@ -862,8 +862,8 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake.sock")
 
     # Seed a run.
-    from slash_commands import session as session_mod
-    from slash_commands.session import RunRecord
+    from claude_hpc._internal import session as session_mod
+    from claude_hpc._internal.session import RunRecord
 
     rec = RunRecord(
         run_id="ml_abcd1234",
@@ -959,8 +959,8 @@ def test_list_in_flight_envelope_includes_age_field(tmp_path: Path) -> None:
 
 def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
     """Helper: seed a journal record so cmd_aggregate gets past lookup."""
-    from slash_commands import session as session_mod
-    from slash_commands.session import RunRecord
+    from claude_hpc._internal import session as session_mod
+    from claude_hpc._internal.session import RunRecord
 
     rec = RunRecord(
         run_id=run_id,
@@ -1285,7 +1285,7 @@ class TestSubmitFromMeta:
         assert env["ok"] is True
         # run_id is now spec-supplied directly; --from-meta only fills
         # the profile + job_name fields.  Verify by reading the journal.
-        from slash_commands import session
+        from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
@@ -1309,7 +1309,7 @@ class TestSubmitFromMeta:
         )
         assert rc == 0, out
         env = _parse_envelope(out)
-        from slash_commands import session
+        from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
@@ -1333,7 +1333,7 @@ class TestSubmitFromMeta:
         )
         assert rc == 0, out
         env = _parse_envelope(out)
-        from slash_commands import session
+        from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])

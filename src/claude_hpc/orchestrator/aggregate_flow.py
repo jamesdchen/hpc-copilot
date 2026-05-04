@@ -39,7 +39,8 @@ from claude_hpc.infra.remote import rsync_pull, split_ssh_target
 from claude_hpc.mapreduce.reduce.metrics import reduce_partials
 from claude_hpc.orchestrator.runs import read_run_sidecar
 from claude_hpc import errors
-from slash_commands import runner, session
+from claude_hpc._internal import session
+from slash_commands import runner
 from slash_commands.runner import combine_wave, record_status
 
 __all__ = ["aggregate_flow", "AggregateFlowResult"]

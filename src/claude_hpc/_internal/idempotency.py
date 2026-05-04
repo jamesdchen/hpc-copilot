@@ -137,9 +137,9 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
     should be free to re-submit work that was explicitly cancelled.
     """
     # Local imports keep this module's import graph cheap and avoid
-    # circular dependencies with slash_commands which imports
+    # circular dependencies with the runner module which imports
     # session lazily.
-    from slash_commands import session
+    from claude_hpc._internal import session
 
     if isinstance(key, RunIdKey):
         record = session.load_run(experiment_dir, key.run_id)
