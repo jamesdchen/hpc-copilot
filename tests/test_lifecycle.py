@@ -21,7 +21,7 @@ from claude_hpc._internal.lifecycle import (
 )
 
 REPO = Path(__file__).resolve().parent.parent
-SCHEMAS = REPO / "claude_hpc" / "schemas"
+SCHEMAS = REPO / "src" / "claude_hpc" / "schemas"
 
 
 def _load_lifecycle_enum(schema_name: str) -> set[str]:

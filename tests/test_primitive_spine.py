@@ -256,7 +256,7 @@ def test_idempotency_key_names_input_schema_property(
     import json
     import re
 
-    schemas_dir = Path(__file__).resolve().parent.parent / "claude_hpc" / "schemas"
+    schemas_dir = Path(__file__).resolve().parent.parent / "src" / "claude_hpc" / "schemas"
 
     def _input_schema_for(name: str) -> dict | None:
         for fname in (

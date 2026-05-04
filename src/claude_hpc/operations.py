@@ -37,12 +37,13 @@ _PACKAGE_ROOT = claude_hpc._PACKAGE_ROOT
 def _primitives_dir() -> Path | None:
     """Locate `docs/primitives/` from the package root.
 
-    Source-tree installs: `<repo>/claude_hpc/` is the package, so the
-    parent is `<repo>/` and frontmatters live at `<repo>/docs/primitives/`.
-    Wheel installs don't ship docs/; this returns None and callers fall
-    through to the baked operations.json (when implemented).
+    Source-tree installs: `<repo>/src/claude_hpc/` is the package, so the
+    repo root is two levels up and frontmatters live at
+    `<repo>/docs/primitives/`. Wheel installs don't ship docs/; this
+    returns None and callers fall through to the baked operations.json
+    (when implemented).
     """
-    candidate = _PACKAGE_ROOT.parent / "docs" / "primitives"
+    candidate = _PACKAGE_ROOT.parent.parent / "docs" / "primitives"
     return candidate if candidate.is_dir() else None
 
 
@@ -221,7 +222,7 @@ def _format_catalog_table(catalog: list[dict[str, Any]]) -> str:
 
 def _read_doc_file(rel: str) -> str:
     """Read a doc file relative to the repo root; ``"(missing)"`` if absent."""
-    path = _PACKAGE_ROOT.parent / rel
+    path = _PACKAGE_ROOT.parent.parent / rel
     if not path.is_file():
         return f"(missing: {rel})"
     return path.read_text(encoding="utf-8")

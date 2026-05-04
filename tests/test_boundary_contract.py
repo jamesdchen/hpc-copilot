@@ -246,7 +246,7 @@ def test_reserved_dirs_match_contract() -> None:
 
 def test_core_does_not_import_templates() -> None:
     """No file under ``claude_hpc/`` may import from ``templates``."""
-    core_root = REPO_ROOT / "claude_hpc"
+    core_root = REPO_ROOT / "src" / "claude_hpc"
     offenders: list[str] = []
     for path in _walk_python_files(core_root):
         # Skip the templates directory itself — it lives inside the
@@ -311,7 +311,7 @@ def test_templates_do_not_import_core() -> None:
     are user-facing reference files copied by the user and never pushed
     to the cluster, so the boundary applies on the deployed subset.
     """
-    templates_root = REPO_ROOT / "claude_hpc" / "mapreduce" / "templates"
+    templates_root = REPO_ROOT / "src" / "claude_hpc" / "mapreduce" / "templates"
     deployed_subdirs = ("sge", "slurm", "common", "starters")
     offenders: list[tuple[str, list[str]]] = []
     for subdir in deployed_subdirs:
@@ -334,7 +334,7 @@ def test_templates_do_not_import_core() -> None:
 
 def test_clusters_yaml_is_infra_only() -> None:
     """Each cluster entry in ``claude_hpc/config/clusters.yaml`` must use only infra keys."""
-    clusters_path = REPO_ROOT / "claude_hpc" / "config" / "clusters.yaml"
+    clusters_path = REPO_ROOT / "src" / "claude_hpc" / "config" / "clusters.yaml"
     with clusters_path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
 
