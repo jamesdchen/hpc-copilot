@@ -18,10 +18,18 @@ _DECORATOR_RE = re.compile(r"^\s*@primitive\(", re.MULTILINE)
 
 REPO = Path(__file__).resolve().parent.parent
 
+# After the src-layout migration, packages live under ``src/`` on disk
+# but their import names don't include the ``src`` prefix. Strip the
+# leading ``src/`` segment when converting paths to module names so
+# ``src/claude_hpc/foo.py`` becomes ``claude_hpc.foo``.
+_SRC_PREFIX = ("src",)
+
 
 def file_to_modname(p: Path) -> str:
     rel = p.resolve().relative_to(REPO)
     parts = list(rel.with_suffix("").parts)
+    if tuple(parts[: len(_SRC_PREFIX)]) == _SRC_PREFIX:
+        parts = parts[len(_SRC_PREFIX) :]
     if parts[-1] == "__init__":
         parts = parts[:-1]
     return ".".join(parts)
@@ -39,7 +47,7 @@ def main() -> int:
     # which references @primitive(...) prose) is never a registration
     # site; skip explicitly so the regex doesn't pick up docstring
     # mentions.
-    self_path = (REPO / "claude_hpc" / "_internal" / "_primitive.py").resolve()
+    self_path = (REPO / "src" / "claude_hpc" / "_internal" / "_primitive.py").resolve()
 
     found: set[str] = set()
     for p in REPO.rglob("*.py"):
