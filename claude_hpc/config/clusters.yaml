@@ -7,6 +7,17 @@ hoffman2:
   conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh
   conda_envs: [harxhar-dl]
   gpu_types: [a100, h200, a6000, h100, v100, rtx2080ti]
+  # Cold-start mem headroom: when no runtime prior exists for the
+  # (profile, cluster, cmd_sha) the user's --mem ask is multiplied by
+  # (1 + cold_start_mem_buffer) so the OOM daemon doesn't bump the job
+  # mid-write. The smart planner takes over once ≥5 successful samples
+  # exist per (profile, cluster, gpu_type).
+  cold_start_mem_buffer: 0.15
+  # Optional NFS path the templates rsync into local node SSD
+  # ($SLURM_TMPDIR / $TMPDIR) at preamble time. Set to a per-user
+  # dataset path (e.g., /u/scratch/.../shared_data) and the executor
+  # reads from $LOCAL_DATA_DIR instead. Omit to disable.
+  # nfs_data_dir: /u/scratch/j/jamesdc1/datasets
   constraints:
     max_array_size: 100
     max_walltime: "3:00:00"
@@ -24,6 +35,8 @@ discovery:
   conda_envs: [project-cucuringu]
   gpu_types: [a100, a40, v100, l40s]
   gpu_constraint: "a100|a40|v100|l40s"
+  cold_start_mem_buffer: 0.15
+  # nfs_data_dir: /scratch1/jc_905/datasets
   constraints:
     max_array_size: 100
     max_walltime: "3:00:00"

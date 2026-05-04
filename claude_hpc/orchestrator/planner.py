@@ -440,10 +440,19 @@ def _adversarial_report(
         ceiling_sec=walltime_ceiling_sec,
     )
     # Axis 2: footprint shrink (mem + cpus). Only ever shrinks below the
-    # user-supplied defaults — never grows the ask, since growing
-    # contradicts the goal of fitting more backfill windows.
+    # user-supplied defaults when priors exist — but on cold start we
+    # *grow* mem by the cluster's cold_start_mem_buffer (default 15%)
+    # so the OOM daemon doesn't bump a brand-new run mid-write. Once
+    # ≥min_samples priors land the quantile-based shrink takes over
+    # and the buffer is no longer applied.
+    from claude_hpc.infra.clusters import get_cold_start_mem_buffer
+
+    cold_start_buffer = get_cold_start_mem_buffer(cluster_cfg)
     rec_mem, mem_rationale = recommend_mem_mb(
-        mem_quantiles, gpu_set or [], user_default_mb=base_mem_mb
+        mem_quantiles,
+        gpu_set or [],
+        user_default_mb=base_mem_mb,
+        cold_start_buffer=cold_start_buffer,
     )
     rec_cpus, cpu_rationale = recommend_cpus(
         cpu_quantiles, gpu_set or [], user_default_cpus=base_cpus
