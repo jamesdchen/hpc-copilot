@@ -111,6 +111,33 @@ def test_capabilities_exposes_mars_skill_paths_and_required_env() -> None:
     ]
 
 
+def test_capabilities_exposes_cluster_yaml_keys() -> None:
+    """B-M4: capabilities surfaces a declarative manifest of every
+    recognised per-cluster yaml key so a campus user learning the
+    schema by inspection sees the new survival fields (nfs_data_dir,
+    cold_start_mem_buffer, max_walltime_sec, ...) without reading
+    claude_hpc/infra/clusters.py source."""
+    rc, out, _ = _run_cli("capabilities")
+    assert rc == 0
+    data = _parse_envelope(out)["data"]
+
+    keys = data.get("cluster_yaml_keys")
+    assert isinstance(keys, list) and keys, (
+        "cluster_yaml_keys must be a non-empty list"
+    )
+    # Each entry has the documented shape.
+    for entry in keys:
+        assert isinstance(entry, dict), entry
+        for required in ("key", "type", "required", "description"):
+            assert required in entry, f"{entry!r} missing {required}"
+        assert isinstance(entry["required"], bool)
+
+    # The new survival fields must be discoverable here.
+    names = {entry["key"] for entry in keys}
+    for expected in ("nfs_data_dir", "cold_start_mem_buffer", "max_walltime_sec"):
+        assert expected in names, f"cluster_yaml_keys missing {expected!r}; got {sorted(names)}"
+
+
 def test_clusters_list_returns_known_clusters() -> None:
     """clusters list must return the names defined in the active clusters.yaml."""
     rc, out, _ = _run_cli("clusters", "list")

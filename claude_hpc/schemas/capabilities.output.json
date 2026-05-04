@@ -24,6 +24,22 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "cluster_yaml_keys": {
+      "type": "array",
+      "description": "Declarative manifest of per-cluster fields recognized in clusters.yaml. Lets a campus user discover the schema by inspection without reading claude_hpc/infra/clusters.py source. Each item describes one validated field.",
+      "items": {
+        "type": "object",
+        "required": ["key", "type", "required", "description"],
+        "additionalProperties": true,
+        "properties": {
+          "key":         { "type": "string" },
+          "type":        { "type": "string" },
+          "required":    { "type": "boolean" },
+          "default":     {},
+          "description": { "type": "string" }
+        }
+      }
+    },
     "operations": {
       "type": "array",
       "description": "Per-operation catalog. The CLI subcommands listed in `subcommands` are the invocable surface; this `operations` block carries machine-readable metadata about each one (verb tier, idempotency, side-effect class, schema files). Source-tree installs read from docs/primitives/ frontmatter; future wheel installs will read a baked operations.json shipped in the package.",
