@@ -44,9 +44,7 @@ def _effective_template_text(template: Path) -> str:
 def test_template_has_hpc_runtime_gate(template: Path) -> None:
     """Every template (or its sourced preamble) gates uv sync on HPC_RUNTIME."""
     text = _effective_template_text(template)
-    assert '"${HPC_RUNTIME:-}" = "uv"' in text, (
-        f"{template.name} missing HPC_RUNTIME=uv gate"
-    )
+    assert '"${HPC_RUNTIME:-}" = "uv"' in text, f"{template.name} missing HPC_RUNTIME=uv gate"
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: f"{p.parent.name}/{p.name}")

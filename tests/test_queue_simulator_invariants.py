@@ -27,13 +27,22 @@ from claude_hpc.forecast.queue_simulator import (
 def _snap(cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100"):
     gres = f"gpu:{gpu_type}:{gpus}" if gpus else ""
     n = NodeSnapshot(
-        name="n0", state="IDLE", real_mem_mb=mem_mb, alloc_mem_mb=0,
-        cpu_tot=cpus, cpu_alloc=0, gres=gres, gres_used="",
-        co_tenants=[], is_drained=False,
+        name="n0",
+        state="IDLE",
+        real_mem_mb=mem_mb,
+        alloc_mem_mb=0,
+        cpu_tot=cpus,
+        cpu_alloc=0,
+        gres=gres,
+        gres_used="",
+        co_tenants=[],
+        is_drained=False,
     )
     return ClusterSnapshot(
-        cluster="t", scheduler_kind="slurm",
-        now_iso="2026-04-28T10:00:00+00:00", nodes=[n],
+        cluster="t",
+        scheduler_kind="slurm",
+        now_iso="2026-04-28T10:00:00+00:00",
+        nodes=[n],
     )
 
 
@@ -53,16 +62,28 @@ class TestResourceInvariants:
         # 'n_completed' makes sense.
         snap = _snap(cpus=8)
         cand = SimJob(
-            job_id="c", user="u", submit_time=0.0, walltime_ask=100,
-            cpus=4, mem_mb=8_000,
+            job_id="c",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=100,
+            cpus=4,
+            mem_mb=8_000,
         )
         arrivals = [
-            SimJob(job_id=f"a{i}", user="u", submit_time=float(i),
-                   walltime_ask=50, cpus=4, mem_mb=8_000)
+            SimJob(
+                job_id=f"a{i}",
+                user="u",
+                submit_time=float(i),
+                walltime_ask=50,
+                cpus=4,
+                mem_mb=8_000,
+            )
             for i in range(3)
         ]
         out = simulate_one_pass(
-            snap, candidate=cand, arrival_stream=arrivals,
+            snap,
+            candidate=cand,
+            arrival_stream=arrivals,
         )
         # All four jobs (candidate + 3 arrivals) must complete or remain
         # queued; nothing can have negative resources.
@@ -79,33 +100,53 @@ class TestBackfillSafety:
         # only 4 CPUs but for 1000s. The candidate should NOT backfill
         # because its end (1+1000=1001) > hoq_resv (600).
         n = NodeSnapshot(
-            name="n0", state="MIXED",
-            real_mem_mb=64_000, alloc_mem_mb=32_000,
-            cpu_tot=8, cpu_alloc=4,
-            co_tenants=[{
-                "job_id": "j_running", "user": "u",
-                "cpus": 4, "mem_gb": 32, "gpus": 0,
-                "elapsed_s": 3000, "state": "RUNNING",
-                "started_h_ago": 1.0,
-            }],
+            name="n0",
+            state="MIXED",
+            real_mem_mb=64_000,
+            alloc_mem_mb=32_000,
+            cpu_tot=8,
+            cpu_alloc=4,
+            co_tenants=[
+                {
+                    "job_id": "j_running",
+                    "user": "u",
+                    "cpus": 4,
+                    "mem_gb": 32,
+                    "gpus": 0,
+                    "elapsed_s": 3000,
+                    "state": "RUNNING",
+                    "started_h_ago": 1.0,
+                }
+            ],
             is_drained=False,
         )
         snap = ClusterSnapshot(
-            cluster="t", scheduler_kind="slurm",
-            now_iso="2026-04-28T10:00:00+00:00", nodes=[n],
+            cluster="t",
+            scheduler_kind="slurm",
+            now_iso="2026-04-28T10:00:00+00:00",
+            nodes=[n],
         )
         blocker = SimJob(
-            job_id="blocker", user="u", submit_time=0.0,
-            walltime_ask=1000, cpus=8, mem_mb=8_000,
+            job_id="blocker",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=1000,
+            cpus=8,
+            mem_mb=8_000,
             walltime_actual=1000.0,
         )
         long_candidate = SimJob(
-            job_id="cand", user="u", submit_time=1.0,
-            walltime_ask=2000, cpus=4, mem_mb=8_000,
+            job_id="cand",
+            user="u",
+            submit_time=1.0,
+            walltime_ask=2000,
+            cpus=4,
+            mem_mb=8_000,
             walltime_actual=2000.0,
         )
         out = simulate_one_pass(
-            snap, candidate=long_candidate,
+            snap,
+            candidate=long_candidate,
             arrival_stream=[blocker],
             residual_lifetimes={"j_running": 600.0},
         )
@@ -117,33 +158,53 @@ class TestBackfillSafety:
         # Same setup, but the candidate is tiny (60s, fits comfortably
         # in the 600s gap). It MUST be allowed to start at t=0.
         n = NodeSnapshot(
-            name="n0", state="MIXED",
-            real_mem_mb=64_000, alloc_mem_mb=32_000,
-            cpu_tot=8, cpu_alloc=4,
-            co_tenants=[{
-                "job_id": "j_running", "user": "u",
-                "cpus": 4, "mem_gb": 32, "gpus": 0,
-                "elapsed_s": 3000, "state": "RUNNING",
-                "started_h_ago": 1.0,
-            }],
+            name="n0",
+            state="MIXED",
+            real_mem_mb=64_000,
+            alloc_mem_mb=32_000,
+            cpu_tot=8,
+            cpu_alloc=4,
+            co_tenants=[
+                {
+                    "job_id": "j_running",
+                    "user": "u",
+                    "cpus": 4,
+                    "mem_gb": 32,
+                    "gpus": 0,
+                    "elapsed_s": 3000,
+                    "state": "RUNNING",
+                    "started_h_ago": 1.0,
+                }
+            ],
             is_drained=False,
         )
         snap = ClusterSnapshot(
-            cluster="t", scheduler_kind="slurm",
-            now_iso="2026-04-28T10:00:00+00:00", nodes=[n],
+            cluster="t",
+            scheduler_kind="slurm",
+            now_iso="2026-04-28T10:00:00+00:00",
+            nodes=[n],
         )
         blocker = SimJob(
-            job_id="blocker", user="u", submit_time=0.0,
-            walltime_ask=1000, cpus=8, mem_mb=8_000,
+            job_id="blocker",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=1000,
+            cpus=8,
+            mem_mb=8_000,
             walltime_actual=1000.0,
         )
         short_candidate = SimJob(
-            job_id="cand", user="u", submit_time=0.0,
-            walltime_ask=60, cpus=4, mem_mb=8_000,
+            job_id="cand",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=60,
+            cpus=4,
+            mem_mb=8_000,
             walltime_actual=60.0,
         )
         out = simulate_one_pass(
-            snap, candidate=short_candidate,
+            snap,
+            candidate=short_candidate,
             arrival_stream=[blocker],
             residual_lifetimes={"j_running": 600.0},
         )
@@ -157,13 +218,21 @@ class TestDistributionEquivalence:
         # same seed.
         snap = _snap()
         c = SimJob(
-            job_id="c", user="u", submit_time=0.0, walltime_ask=300,
-            cpus=4, mem_mb=8_000,
+            job_id="c",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=300,
+            cpus=4,
+            mem_mb=8_000,
         )
         a = simulate_one_pass(snap, candidate=c, seed=99)
         b = simulate_distribution(
-            snap, candidate=c, n_replications=1, seed=99,
-            arrival_sampler=None, residual_sampler=None,
+            snap,
+            candidate=c,
+            n_replications=1,
+            seed=99,
+            arrival_sampler=None,
+            residual_sampler=None,
         )
         assert a.predicted_start_offset_sec == b.p50_wait_sec
         assert b.p10_wait_sec == b.p50_wait_sec == b.p90_wait_sec
@@ -172,16 +241,24 @@ class TestDistributionEquivalence:
         # p10 <= p50 <= p90 must hold ALWAYS, regardless of input.
         snap = _snap(cpus=8)
         cand = SimJob(
-            job_id="c", user="u", submit_time=0.0, walltime_ask=100,
-            cpus=8, mem_mb=8_000,
+            job_id="c",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=100,
+            cpus=8,
+            mem_mb=8_000,
         )
         arrivals = [
-            SimJob(job_id=f"a{i}", user="u", submit_time=0.0,
-                   walltime_ask=200, cpus=8, mem_mb=8_000)
+            SimJob(
+                job_id=f"a{i}", user="u", submit_time=0.0, walltime_ask=200, cpus=8, mem_mb=8_000
+            )
             for i in range(5)
         ]
         out = simulate_distribution(
-            snap, candidate=cand, n_replications=16, seed=3,
+            snap,
+            candidate=cand,
+            n_replications=16,
+            seed=3,
             arrival_sampler=lambda s: list(arrivals),
         )
         assert out.p10_wait_sec <= out.p50_wait_sec <= out.p90_wait_sec

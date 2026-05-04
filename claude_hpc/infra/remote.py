@@ -336,6 +336,7 @@ def deploy_runtime(
     # registry owns the canonical extension via ``template_ext``. This
     # keeps remote.py and __init__.py:get_template_path in sync.
     from claude_hpc.infra.backends import template_ext_for
+
     for sched in ("sge", "slurm"):
         ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):

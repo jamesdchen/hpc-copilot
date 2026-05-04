@@ -263,11 +263,13 @@ def get_template_path(scheduler: str, template: str) -> Path:
     # (".sh" for SGE, ".slurm" for SLURM); this keeps the on-disk layout
     # under the backend's authority.
     from claude_hpc.infra.backends import template_ext_for
+
     ext = template_ext_for(scheduler)
     # B7: templates moved to claude_hpc/mapreduce/templates/ as part of
     # the package reorg. Resolve via the claude_hpc package root so this
     # forwarder keeps working until the rest of __init__.py moves over.
     import claude_hpc as _claude_hpc_pkg
+
     _claude_hpc_root = Path(_claude_hpc_pkg.__file__).resolve().parent
     path = _claude_hpc_root / "mapreduce" / "templates" / scheduler / f"{template}{ext}"
     if not path.exists():

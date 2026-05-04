@@ -129,9 +129,7 @@ class TestStatusCliContract:
         hpc = tmp_path / ".hpc"
         (hpc / "runs").mkdir(parents=True)
         (hpc / "tasks.py").write_text(
-            "_TASKS = [{}]\n"
-            "def total(): return 1\n"
-            "def resolve(i): return _TASKS[0]\n"
+            "_TASKS = [{}]\ndef total(): return 1\ndef resolve(i): return _TASKS[0]\n"
         )
         rc, out, _ = _run_status(tmp_path, run_id="does-not-exist")
         assert rc != 0

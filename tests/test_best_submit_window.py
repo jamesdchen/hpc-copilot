@@ -67,14 +67,20 @@ class TestSweep:
 
     def test_within_hours_zero_returns_empty(self, tmp_path):
         out = best_submit_windows(
-            tmp_path, profile=PROFILE, cluster=CLUSTER, within_hours=0,
+            tmp_path,
+            profile=PROFILE,
+            cluster=CLUSTER,
+            within_hours=0,
         )
         assert out == []
 
     def test_top_k_zero_returns_empty(self, tmp_path):
         _seed_with_dip(tmp_path)
         out = best_submit_windows(
-            tmp_path, profile=PROFILE, cluster=CLUSTER, top_k=0,
+            tmp_path,
+            profile=PROFILE,
+            cluster=CLUSTER,
+            top_k=0,
         )
         assert out == []
 
@@ -82,7 +88,10 @@ class TestSweep:
         # No samples seeded → predictor returns no_data for every hour →
         # candidates list is empty.
         out = best_submit_windows(
-            tmp_path, profile=PROFILE, cluster=CLUSTER, within_hours=12,
+            tmp_path,
+            profile=PROFILE,
+            cluster=CLUSTER,
+            within_hours=12,
         )
         assert out == []
 
@@ -94,8 +103,11 @@ class TestSweep:
         monkeypatch.setattr(bsw, "utcnow", lambda: fixed_now)
 
         out = best_submit_windows(
-            tmp_path, profile=PROFILE, cluster=CLUSTER,
-            within_hours=24, top_k=10,
+            tmp_path,
+            profile=PROFILE,
+            cluster=CLUSTER,
+            within_hours=24,
+            top_k=10,
         )
         waits = [c.predicted_wait_sec for c in out]
         assert waits == sorted(waits)
@@ -108,12 +120,18 @@ class TestSweep:
         monkeypatch.setattr(bsw, "utcnow", lambda: fixed_now)
 
         out = best_submit_windows(
-            tmp_path, profile=PROFILE, cluster=CLUSTER,
-            within_hours=6, top_k=2,
+            tmp_path,
+            profile=PROFILE,
+            cluster=CLUSTER,
+            within_hours=6,
+            top_k=2,
         )
         assert out
         d = out[0].to_dict()
         assert set(d) == {
-            "submit_iso", "predicted_wait_sec", "confidence",
-            "method", "n_bucket_samples",
+            "submit_iso",
+            "predicted_wait_sec",
+            "confidence",
+            "method",
+            "n_bucket_samples",
         }

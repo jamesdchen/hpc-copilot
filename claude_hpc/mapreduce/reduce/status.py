@@ -210,9 +210,7 @@ def get_err_log_paths(
     paths: dict[int, str] = {}
     for tid in range(1, total_tasks + 1):
         for job_id in reversed(job_ids):
-            p = backend_cls.err_log_disk_path(
-                log_dir, scratch_dir, job_name, job_id, tid
-            )
+            p = backend_cls.err_log_disk_path(log_dir, scratch_dir, job_name, job_id, tid)
             if scheduler != "sge" and not os.path.isfile(p):
                 matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
                 if matches:

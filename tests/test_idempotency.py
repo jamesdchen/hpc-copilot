@@ -25,6 +25,7 @@ from slash_commands import session
 def _ensure_journal_dirs(tmp_path: Path) -> None:
     # Make sure the journal lookup path resolves without env-var leak.
     import os
+
     os.environ["HPC_JOURNAL_DIR"] = str(tmp_path / "_journal")
 
 

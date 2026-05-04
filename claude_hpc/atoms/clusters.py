@@ -53,7 +53,5 @@ def describe_cluster(*, name: str) -> dict[str, Any]:
     """
     clusters = load_clusters_config()
     if name not in clusters:
-        raise errors.ClusterUnknown(
-            f"unknown cluster {name!r}; run `hpc-mapreduce clusters list`"
-        )
+        raise errors.ClusterUnknown(f"unknown cluster {name!r}; run `hpc-mapreduce clusters list`")
     return {"name": name, "config": clusters[name]}

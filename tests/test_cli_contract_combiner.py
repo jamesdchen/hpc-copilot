@@ -89,9 +89,7 @@ class TestCombinerCliContract:
         assert first.returncode == 0
 
         # Mutate one task's metrics so we can tell the output was regenerated.
-        (tmp_path / "task_0" / "metrics.json").write_text(
-            json.dumps({"mse": 0.99, "n_samples": 1})
-        )
+        (tmp_path / "task_0" / "metrics.json").write_text(json.dumps({"mse": 0.99, "n_samples": 1}))
 
         forced = _run(tmp_path, combiner, "--wave", "0", "--run-id", "test_run", "--force")
         assert forced.returncode == 0, forced.stderr

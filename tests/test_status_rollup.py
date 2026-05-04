@@ -153,8 +153,8 @@ def test_rollup_by_wave_groups_tasks_by_wave():
         "tasks": {
             "1": {"status": "complete"},  # task 0
             "2": {"status": "complete"},  # task 1
-            "3": {"status": "running"},   # task 2
-            "4": {"status": "failed"},    # task 3
+            "3": {"status": "running"},  # task 2
+            "4": {"status": "failed"},  # task 3
         }
     }
 

@@ -64,9 +64,7 @@ def main() -> int:
         print("ERROR: modules with @primitive(...) not in _PRIMITIVE_MODULES:")
         for m in sorted(missing):
             print(f"  {m}")
-        print(
-            "\nAdd them to _PRIMITIVE_MODULES in claude_hpc/_internal/_primitive.py."
-        )
+        print("\nAdd them to _PRIMITIVE_MODULES in claude_hpc/_internal/_primitive.py.")
         return 1
     return 0
 

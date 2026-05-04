@@ -107,9 +107,7 @@ def _load_tasks():
     assumption that an unrelated top-level ``tasks`` module isn't
     shadowing the .hpc one.
     """
-    spec = importlib.util.spec_from_file_location(
-        "tasks", Path(__file__).parent / "tasks.py"
-    )
+    spec = importlib.util.spec_from_file_location("tasks", Path(__file__).parent / "tasks.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -125,8 +123,7 @@ def get_parser(executor_module: str, description: str = "") -> argparse.Argument
     flags_dict = getattr(tasks, "FLAGS", None)
     if not isinstance(flags_dict, dict):
         raise TypeError(
-            f"tasks.FLAGS must be a dict[str, list[Flag]]; "
-            f"got {type(flags_dict).__name__}"
+            f"tasks.FLAGS must be a dict[str, list[Flag]]; got {type(flags_dict).__name__}"
         )
     if executor_module not in flags_dict:
         raise KeyError(

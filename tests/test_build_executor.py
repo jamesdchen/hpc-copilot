@@ -41,6 +41,7 @@ def _load_template_module(path: Path):
     spec.loader.exec_module(mod)
     return mod
 
+
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mock_experiment"
 TEMPLATES_DIR = _PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
 
@@ -173,6 +174,7 @@ def test_tasks_example_is_valid_python_and_exposes_total_resolve() -> None:
     example during /submit Step 6.
     """
     import importlib.util
+
     path = TEMPLATES_DIR.parent / "tasks_example.py"
     assert path.is_file(), f"missing canonical example: {path}"
     source = path.read_text(encoding="utf-8")

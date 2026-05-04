@@ -178,8 +178,7 @@ def recommend_mem_mb(
         )
     else:
         rationale = (
-            f"p95×{safety_mult:.2f}, n={worst_n} {worst_gpu} samples "
-            f"(was {user_default_mb}MB)"
+            f"p95×{safety_mult:.2f}, n={worst_n} {worst_gpu} samples (was {user_default_mb}MB)"
         )
     return clamped, rationale
 
@@ -222,8 +221,7 @@ def recommend_cpus(
         )
     else:
         rationale = (
-            f"p95+{safety_pad}, n={worst_n} {worst_gpu} samples "
-            f"(was {user_default_cpus} cores)"
+            f"p95+{safety_pad}, n={worst_n} {worst_gpu} samples (was {user_default_cpus} cores)"
         )
     return capped, rationale
 
@@ -329,9 +327,7 @@ def reshape_array_size_for_backfill(
     array — it only reshapes downward.
     """
     if current_max_array_size <= floor_array_size:
-        return current_max_array_size, (
-            f"already at floor ({current_max_array_size}); no reshape"
-        )
+        return current_max_array_size, (f"already at floor ({current_max_array_size}); no reshape")
     if target_window_sec and est_per_task_sec and est_per_task_sec > 0:
         # If per-task runtime already fits the target window, smaller
         # arrays only add overhead — skip the reshape.

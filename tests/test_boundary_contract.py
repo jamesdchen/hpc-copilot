@@ -202,9 +202,7 @@ def test_public_api_matches_contract() -> None:
     """``claude_hpc.__all__`` must match the allowlist exactly."""
     actual = set(claude_hpc.__all__)
     expected = set(ALLOWED_EXPORTS)
-    assert actual == expected, _diff_message(
-        "claude_hpc public API", actual, expected
-    )
+    assert actual == expected, _diff_message("claude_hpc public API", actual, expected)
 
 
 def test_reserved_filenames_match_contract() -> None:
@@ -223,9 +221,7 @@ def test_reserved_dirs_match_contract() -> None:
     # present.
     actual = set(_SKIP_DIRS)
     missing = set(RESERVED_DIRS) - actual
-    assert not missing, _diff_message(
-        "Reserved dirs (_SKIP_DIRS)", actual, set(RESERVED_DIRS)
-    )
+    assert not missing, _diff_message("Reserved dirs (_SKIP_DIRS)", actual, set(RESERVED_DIRS))
 
 
 def test_core_does_not_import_templates() -> None:

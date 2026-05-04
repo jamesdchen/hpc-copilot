@@ -19,8 +19,14 @@ from claude_hpc.mapreduce.reduce.status import check_results
 from tests.conftest import make_sidecar_json, write_hpc_tasks
 
 
-def _scaffold(tmp_path: Path, *, executor: str, result_dir_template: str,
-              kwargs_per_task: list[dict], run_id: str = "test_run") -> Path:
+def _scaffold(
+    tmp_path: Path,
+    *,
+    executor: str,
+    result_dir_template: str,
+    kwargs_per_task: list[dict],
+    run_id: str = "test_run",
+) -> Path:
     """Materialize a ``.hpc/`` next to *tmp_path* with tasks.py + sidecar.
 
     Returns the ``.hpc/`` path so callers can override env vars.
@@ -61,9 +67,7 @@ class TestDispatchAtomicOutput:
         # sidecar lookup still uses Path(__file__).parent / "runs" / ...
         # In tests we have to point that at .hpc/. Patch the module's
         # __file__-derived path:
-        monkeypatch.setattr(
-            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
-        )
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
@@ -86,9 +90,7 @@ class TestDispatchAtomicOutput:
         monkeypatch.setenv("HPC_TASK_ID", "0")
         monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
-        monkeypatch.setattr(
-            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
-        )
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
@@ -120,9 +122,7 @@ class TestDispatchStaleWipRetry:
         monkeypatch.setenv("HPC_TASK_ID", "1")
         monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
-        monkeypatch.setattr(
-            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
-        )
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
@@ -153,9 +153,7 @@ class TestDispatchSidecarSchemaVersion:
         monkeypatch.setenv("HPC_TASK_ID", "0")
         monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
-        monkeypatch.setattr(
-            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
-        )
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()
@@ -176,9 +174,7 @@ class TestDispatchSidecarSchemaVersion:
         monkeypatch.setenv("HPC_TASK_ID", "0")
         monkeypatch.setenv("HPC_RUN_ID", "test_run")
         monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
-        monkeypatch.setattr(
-            dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False
-        )
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
 
         with pytest.raises(SystemExit) as exc_info:
             dispatch.main()

@@ -135,13 +135,12 @@ def record(
         return
     if sink == "monitor-jsonl":
         if monitor_jsonl_path is None:
-            raise ValueError(
-                "sink='monitor-jsonl' requires monitor_jsonl_path"
-            )
+            raise ValueError("sink='monitor-jsonl' requires monitor_jsonl_path")
         try:
-            with flock_append(monitor_jsonl_path), monitor_jsonl_path.open(
-                "a", encoding="utf-8"
-            ) as f:
+            with (
+                flock_append(monitor_jsonl_path),
+                monitor_jsonl_path.open("a", encoding="utf-8") as f,
+            ):
                 f.write(line + "\n")
         except OSError:
             # Telemetry writes must never crash the parent loop.

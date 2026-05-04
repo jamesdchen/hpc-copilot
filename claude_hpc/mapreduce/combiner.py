@@ -195,8 +195,7 @@ def main(max_workers=None, argv=None):
     wave_key = str(wave)
     if wave_key not in wave_map:
         print(
-            f"[combiner] ERROR: wave {wave} not in wave_map "
-            f"(available: {sorted(wave_map.keys())})",
+            f"[combiner] ERROR: wave {wave} not in wave_map (available: {sorted(wave_map.keys())})",
             file=sys.stderr,
         )
         sys.exit(1)

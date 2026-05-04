@@ -121,7 +121,8 @@ def test_combine_wave_records_success(journal_home, experiment):
     _seed_run(experiment)
     with patch("slash_commands.runner.run_combiner_checked", return_value=(True, "ok", "")) as m:
         ok, _, _ = runner.combine_wave(
-            experiment, "ml_ridge_abcd1234",
+            experiment,
+            "ml_ridge_abcd1234",
             wave=2,
             ssh_target="user@hoffman2.idre.ucla.edu",
             remote_path="/u/scratch/exp",
@@ -137,7 +138,8 @@ def test_combine_wave_records_failure(journal_home, experiment):
     _seed_run(experiment)
     with patch("slash_commands.runner.run_combiner_checked", return_value=(False, "", "boom")):
         ok, _, _ = runner.combine_wave(
-            experiment, "ml_ridge_abcd1234",
+            experiment,
+            "ml_ridge_abcd1234",
             wave=3,
             ssh_target="user@hoffman2.idre.ucla.edu",
             remote_path="/u/scratch/exp",
@@ -152,13 +154,19 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
     _seed_run(experiment)
     with patch("slash_commands.runner.run_combiner_checked", return_value=(False, "", "boom")):
         runner.combine_wave(
-            experiment, "ml_ridge_abcd1234",
-            wave=4, ssh_target="user@h", remote_path="/x",
+            experiment,
+            "ml_ridge_abcd1234",
+            wave=4,
+            ssh_target="user@h",
+            remote_path="/x",
         )
     with patch("slash_commands.runner.run_combiner_checked", return_value=(True, "ok", "")):
         runner.combine_wave(
-            experiment, "ml_ridge_abcd1234",
-            wave=4, ssh_target="user@h", remote_path="/x",
+            experiment,
+            "ml_ridge_abcd1234",
+            wave=4,
+            ssh_target="user@h",
+            remote_path="/x",
             force=True,
         )
     final = session.load_run(experiment, "ml_ridge_abcd1234")
@@ -170,7 +178,8 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
     _seed_run(experiment)
 
     runner.resubmit_failed(
-        experiment, "ml_ridge_abcd1234",
+        experiment,
+        "ml_ridge_abcd1234",
         failed_task_ids=[3, 7],
         category="system_oom",
         overrides={"mem": "32G"},
@@ -184,14 +193,17 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
     assert after_one.job_ids == ["99999999"]
 
     runner.resubmit_failed(
-        experiment, "ml_ridge_abcd1234",
+        experiment,
+        "ml_ridge_abcd1234",
         failed_task_ids=[3],
         category="system_oom",
         overrides={"mem": "64G"},
     )
     after_two = session.load_run(experiment, "ml_ridge_abcd1234")
     assert after_two.retries["3"] == {
-        "attempts": 2, "category": "system_oom", "overrides": {"mem": "64G"},
+        "attempts": 2,
+        "category": "system_oom",
+        "overrides": {"mem": "64G"},
     }
     assert after_two.retries["7"]["attempts"] == 1
     assert after_two.job_ids == ["99999999"]
@@ -205,7 +217,8 @@ def test_record_status_sets_checked_at(journal_home, experiment):
         return_value=_completed(stdout=json.dumps(payload)),
     ):
         record = runner.record_status(
-            experiment, "ml_ridge_abcd1234",
+            experiment,
+            "ml_ridge_abcd1234",
             ssh_target="user@hoffman2.idre.ucla.edu",
             remote_path="/u/scratch/exp",
             job_ids=["12345678"],
@@ -285,7 +298,8 @@ def test_resubmit_failed_rejects_empty_list(journal_home, experiment):
     _seed_run(experiment)
     with pytest.raises(ValueError):
         runner.resubmit_failed(
-            experiment, "ml_ridge_abcd1234",
+            experiment,
+            "ml_ridge_abcd1234",
             failed_task_ids=[],
             category="system_oom",
         )
@@ -408,9 +422,7 @@ def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experime
     assert any("wave list" in w for w in record.last_status["warnings"])
 
 
-def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(
-    journal_home, experiment
-):
+def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(journal_home, experiment):
     """The dangerous edge case: if the *alive* SSH call itself fails, we
     must not flip a healthy run to ``abandoned``.  Previously the
     fault-tolerant path returned an empty alive set, falling straight
@@ -449,7 +461,8 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
         return_value=_completed(stdout=json.dumps(payload)),
     ):
         runner.record_status(
-            experiment, "ml_ridge_abcd1234",
+            experiment,
+            "ml_ridge_abcd1234",
             ssh_target="user@host",
             remote_path="/x",
             job_ids=["1"],
@@ -480,9 +493,7 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
         # Existence check: pretend task 1's output is missing.
-        return _completed(
-            stdout="MISSING:results/metrics.1.json\n", returncode=0
-        )
+        return _completed(stdout="MISSING:results/metrics.1.json\n", returncode=0)
 
     with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
         missing = runner.verify_per_task_outputs(
@@ -516,9 +527,7 @@ def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, ex
     assert missing == []
 
 
-def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(
-    journal_home, experiment
-):
+def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(journal_home, experiment):
     """A sidecar without wave_map (un-batched single-array submission) treats
     wave 0 as 'every task in [0, task_count)'."""
     sidecar_json = json.dumps({"sidecar_schema_version": 1, "task_count": 2})
@@ -630,7 +639,8 @@ def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
     _seed_run(experiment)
 
     rec1, dedup1, rid1 = runner.resubmit_failed(
-        experiment, "ml_ridge_abcd1234",
+        experiment,
+        "ml_ridge_abcd1234",
         failed_task_ids=[3],
         category="system_oom",
         overrides={"mem": "32G"},
@@ -640,7 +650,8 @@ def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
 
     # Same spec again — should dedupe.
     rec2, dedup2, rid2 = runner.resubmit_failed(
-        experiment, "ml_ridge_abcd1234",
+        experiment,
+        "ml_ridge_abcd1234",
         failed_task_ids=[3],
         category="system_oom",
         overrides={"mem": "32G"},
@@ -657,7 +668,8 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     _seed_run(experiment)
 
     _, dedup1, rid1 = runner.resubmit_failed(
-        experiment, "ml_ridge_abcd1234",
+        experiment,
+        "ml_ridge_abcd1234",
         failed_task_ids=[3],
         category="system_oom",
         request_id="rs_explicit_abc",
@@ -666,7 +678,8 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     assert rid1 == "rs_explicit_abc"
 
     _, dedup2, rid2 = runner.resubmit_failed(
-        experiment, "ml_ridge_abcd1234",
+        experiment,
+        "ml_ridge_abcd1234",
         failed_task_ids=[7],  # different task!
         category="walltime",  # different category!
         request_id="rs_explicit_abc",  # but same id
@@ -676,9 +689,7 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     assert rid2 == "rs_explicit_abc"
 
 
-def test_annotate_clusters_with_retry_advice_tags_eligible_and_blocked(
-    journal_home, experiment
-):
+def test_annotate_clusters_with_retry_advice_tags_eligible_and_blocked(journal_home, experiment):
     """Tasks with attempts < max_attempts are eligible; at-or-over are blocked."""
     record = _seed_run(
         experiment,
@@ -706,9 +717,7 @@ def test_annotate_clusters_with_retry_advice_tags_eligible_and_blocked(
     assert advice["policy"]["mem_multiplier"] == 1.5
 
 
-def test_annotate_clusters_skips_categories_without_policy(
-    journal_home, experiment
-):
+def test_annotate_clusters_skips_categories_without_policy(journal_home, experiment):
     record = _seed_run(experiment)
     clusters = [
         {"category": "walltime", "task_ids": [1, 2], "count": 2},
@@ -800,9 +809,7 @@ def test_fetch_task_logs_returns_content_for_slurm():
     def fake_ssh_run(cmd, *, host, user, **_kw):
         captured.append(cmd)
         # First job_id attempt found.
-        return _completed(
-            stdout="FOUND\nline1\nline2\nline3\n", returncode=0
-        )
+        return _completed(stdout="FOUND\nline1\nline2\nline3\n", returncode=0)
 
     with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
         logs = runner.fetch_task_logs(
@@ -900,6 +907,4 @@ def test_write_remote_provenance_writes_sidecar_path():
         )
     assert path == "/exp/results/_provenance.json"
     # Script should base64-decode into the sidecar path.
-    assert any(
-        "base64 -d" in c and "_provenance.json" in c for c in captured
-    ), captured
+    assert any("base64 -d" in c and "_provenance.json" in c for c in captured), captured

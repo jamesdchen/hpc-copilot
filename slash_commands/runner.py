@@ -163,16 +163,10 @@ def submit_and_record(
                         remote_path=str(sidecar_data.get("remote_path") or remote_path),
                         job_name=str(sidecar_data.get("job_name") or job_name),
                         job_ids=list(sidecar_data.get("job_ids") or []),
-                        total_tasks=int(
-                            sidecar_data.get("task_count") or total_tasks
-                        ),
-                        submitted_at=str(
-                            sidecar_data.get("submitted_at") or _utcnow_iso()
-                        ),
+                        total_tasks=int(sidecar_data.get("task_count") or total_tasks),
+                        submitted_at=str(sidecar_data.get("submitted_at") or _utcnow_iso()),
                         experiment_dir=str(Path(experiment_dir).resolve()),
-                        campaign_id=str(
-                            sidecar_data.get("campaign_id") or campaign_id
-                        ),
+                        campaign_id=str(sidecar_data.get("campaign_id") or campaign_id),
                     )
                     # Repair the journal so future load_run calls hit it
                     # directly without re-doing the cmd_sha scan.
@@ -257,7 +251,9 @@ def _ssh_status_report(
     verb="query",
     side_effects=[
         SideEffect("ssh", "<cluster>"),
-        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),
+        SideEffect(
+            "writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"
+        ),
     ],
     error_codes=[errors.JournalCorrupt, errors.SshUnreachable, errors.RemoteCommandFailed],
     idempotent=True,
@@ -318,7 +314,10 @@ def record_status(
         SideEffect("ssh", "<cluster>"),
         SideEffect("runs", "cluster-side combiner (python3 .hpc/_hpc_combiner.py)"),
         SideEffect("writes-cluster", "<output_dir>/_combiner/wave_<N>.json"),
-        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)"),
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)",
+        ),
     ],
     error_codes=[errors.SshUnreachable, errors.CombinerFailed, errors.JournalCorrupt],
     idempotent=True,
@@ -399,7 +398,10 @@ def derive_resubmit_request_id(
     verb="mutate",
     side_effects=[
         SideEffect("scheduler-submit", "<cluster>"),
-        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters)"),
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters)",
+        ),
     ],
     error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
     idempotent=True,
@@ -669,6 +671,7 @@ def fetch_task_logs(
     # class (``stderr_log_path``); this function is now transport (SSH)
     # plus retry-over-job-ids only.
     from claude_hpc.infra.backends import get_backend_class
+
     backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
     out: list[dict[str, Any]] = []

@@ -63,10 +63,10 @@ class WalltimeDrift:
     indicate the walltime ask was perilously tight.
     """
 
-    n_recent: int                 # samples considered (filtered by recency + has-walltime)
-    n_cliff_events: int           # full cliff-kills (TIMEOUT or similar)
-    n_near_misses: int            # successful but elapsed/requested >= 0.90
-    weighted_cliff_rate: float    # (cliff + 0.5*near_miss) / n_recent
+    n_recent: int  # samples considered (filtered by recency + has-walltime)
+    n_cliff_events: int  # full cliff-kills (TIMEOUT or similar)
+    n_near_misses: int  # successful but elapsed/requested >= 0.90
+    weighted_cliff_rate: float  # (cliff + 0.5*near_miss) / n_recent
     median_utilization: float | None  # median elapsed/requested over n_recent
 
 
@@ -174,11 +174,7 @@ def recommend_safety_mult_adjustment(
         )
     # Tighten if we're systematically over-asking. Conservative: only
     # tighten when the median is well below the cliff.
-    if (
-        drift.median_utilization is not None
-        and drift.median_utilization < 0.5
-        and rate == 0.0
-    ):
+    if drift.median_utilization is not None and drift.median_utilization < 0.5 and rate == 0.0:
         adjusted = max(base_safety_mult - 0.10, floor_safety_mult)
         if adjusted < base_safety_mult:
             return round(adjusted, 3), (
@@ -187,8 +183,7 @@ def recommend_safety_mult_adjustment(
                 f"{base_safety_mult:.2f}→{adjusted:.2f}"
             )
     return base_safety_mult, (
-        f"cliff rate {rate:.2%} ≤ {cliff_threshold:.0%}; "
-        f"using base {base_safety_mult:.2f}"
+        f"cliff rate {rate:.2%} ≤ {cliff_threshold:.0%}; using base {base_safety_mult:.2f}"
     )
 
 

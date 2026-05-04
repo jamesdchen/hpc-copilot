@@ -95,9 +95,7 @@ CATALOG: list[FailureSignature] = [
     ),
     FailureSignature(
         error_class="file_not_found",
-        stderr_pattern=re.compile(
-            r"FileNotFoundError|No such file or directory", re.I
-        ),
+        stderr_pattern=re.compile(r"FileNotFoundError|No such file or directory", re.I),
         exit_code=2,
         suggested_fix={"action": "user-fix-paths"},
         priority=80,
@@ -118,18 +116,14 @@ CATALOG: list[FailureSignature] = [
     ),
     FailureSignature(
         error_class="disk_full",
-        stderr_pattern=re.compile(
-            r"No space left on device|disk.*full|\bENOSPC\b", re.I
-        ),
+        stderr_pattern=re.compile(r"No space left on device|disk.*full|\bENOSPC\b", re.I),
         exit_code=28,
         suggested_fix={"action": "user-clean-disk"},
         priority=80,
     ),
     FailureSignature(
         error_class="python_traceback",
-        stderr_pattern=re.compile(
-            r"^Traceback \(most recent call last\):", re.I | re.M
-        ),
+        stderr_pattern=re.compile(r"^Traceback \(most recent call last\):", re.I | re.M),
         exit_code=1,
         suggested_fix={"action": "user-debug"},
         priority=10,
@@ -153,10 +147,7 @@ def classify(stderr: str | None, exit_code: int | None) -> dict[str, Any]:
     text = stderr or ""
     sorted_catalog = sorted(CATALOG, key=lambda s: -s.priority)
     for sig in sorted_catalog:
-        pattern_hit = (
-            sig.stderr_pattern is not None
-            and bool(sig.stderr_pattern.search(text))
-        )
+        pattern_hit = sig.stderr_pattern is not None and bool(sig.stderr_pattern.search(text))
         exit_hit = (
             sig.exit_code is not None
             and exit_code is not None

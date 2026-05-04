@@ -111,11 +111,13 @@ class TestConvergence:
             up.update_profile(
                 tmp_path,
                 cluster="discovery",
-                observed_jobs=[{
-                    "user": "alice",
-                    "walltime_ask_sec": 3600,
-                    "elapsed_sec": 3000,
-                }],
+                observed_jobs=[
+                    {
+                        "user": "alice",
+                        "walltime_ask_sec": 3600,
+                        "elapsed_sec": 3000,
+                    }
+                ],
             )
         prof = up.read_profile(tmp_path, cluster="discovery", user="alice")
         assert prof is not None

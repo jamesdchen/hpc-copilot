@@ -44,9 +44,7 @@ def _write_stub(tmp_path: Path) -> Path:
     return stub
 
 
-def _materialize_run(
-    tmp_path: Path, *, run_id: str = "test_run"
-) -> tuple[Path, list[dict], str]:
+def _materialize_run(tmp_path: Path, *, run_id: str = "test_run") -> tuple[Path, list[dict], str]:
     """Set up tmp_path/.hpc/{tasks.py, runs/<id>.json, _hpc_dispatch.py}.
 
     Returns (dispatch_script_path, kwargs_per_task, result_dir_template).
@@ -58,10 +56,7 @@ def _materialize_run(
     ]
     result_dir_template = str(tmp_path / "results" / "{alpha}_{model}")
     # Stub takes positional args; user kwargs go on the command line.
-    executor = (
-        f"{sys.executable} {stub} "
-        '"$ALPHA" "$MODEL"'
-    )
+    executor = f'{sys.executable} {stub} "$ALPHA" "$MODEL"'
 
     from tests.conftest import make_sidecar_json, write_hpc_tasks  # noqa: PLC0415
 
@@ -131,9 +126,7 @@ def pipeline(tmp_path: Path) -> dict:
             f"dispatch failed for task {tid}: stdout={proc.stdout!r} stderr={proc.stderr!r}"
         )
 
-    tasks_data = _synthetic_per_task_dict(
-        kwargs_per_task, result_dir_template=result_dir_template
-    )
+    tasks_data = _synthetic_per_task_dict(kwargs_per_task, result_dir_template=result_dir_template)
     return {
         "tmp_path": tmp_path,
         "tasks_data": tasks_data,
@@ -159,8 +152,14 @@ class TestSidecarLayout:
         sidecar_path = pipeline["tmp_path"] / ".hpc" / "runs" / "test_run.json"
         on_disk = json.loads(sidecar_path.read_text())
         for key in (
-            "sidecar_schema_version", "run_id", "cmd_sha", "claude_hpc_version",
-            "submitted_at", "executor", "result_dir_template", "task_count",
+            "sidecar_schema_version",
+            "run_id",
+            "cmd_sha",
+            "claude_hpc_version",
+            "submitted_at",
+            "executor",
+            "result_dir_template",
+            "task_count",
             "tasks_py_sha",
         ):
             assert key in on_disk, f"missing sidecar field: {key!r}"

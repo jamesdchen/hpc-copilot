@@ -16,10 +16,7 @@ def _mk_snap(cluster: str, *, now_iso: str, nodes: int = 1) -> ic.ClusterSnapsho
         cluster=cluster,
         scheduler_kind="slurm",
         now_iso=now_iso,
-        nodes=[
-            ic.NodeSnapshot(name=f"d11-{i:02d}", state="MIXED")
-            for i in range(nodes)
-        ],
+        nodes=[ic.NodeSnapshot(name=f"d11-{i:02d}", state="MIXED") for i in range(nodes)],
     )
 
 
@@ -89,9 +86,7 @@ class TestSinceFilter:
                 _mk_snap("discovery", now_iso=f"2026-04-30T{hour:02d}:00:00"),
             )
         snaps = list(
-            ic.read_cluster_history(
-                tmp_path, "discovery", since_iso="2026-04-30T12:00:00"
-            )
+            ic.read_cluster_history(tmp_path, "discovery", since_iso="2026-04-30T12:00:00")
         )
         # 12:00 and 14:00 included; 10:00 excluded.
         nows = sorted(s.now_iso for s in snaps)
@@ -119,9 +114,7 @@ class TestEdgeCases:
     def test_read_skips_unparseable_files(self, tmp_path):
         d = RepoLayout(tmp_path).cluster_history("discovery")
         (d / "garbage.json").write_text("not json {{{")
-        ic.persist_snapshot(
-            tmp_path, _mk_snap("discovery", now_iso="2026-04-30T12:00:00")
-        )
+        ic.persist_snapshot(tmp_path, _mk_snap("discovery", now_iso="2026-04-30T12:00:00"))
         snaps = list(ic.read_cluster_history(tmp_path, "discovery"))
         assert len(snaps) == 1
 
@@ -150,9 +143,7 @@ class TestEdgeCases:
         )
         # Disable the in-process cache so we actually call _slurm_inspect.
         inspect_mod._CACHE.clear_all() if hasattr(inspect_mod._CACHE, "clear_all") else None
-        snap = inspect_mod.inspect_cluster(
-            "discovery", persist_dir=tmp_path, use_cache=False
-        )
+        snap = inspect_mod.inspect_cluster("discovery", persist_dir=tmp_path, use_cache=False)
         assert snap.cluster == "discovery"
         snaps = list(ic.read_cluster_history(tmp_path, "discovery"))
         assert len(snaps) == 1

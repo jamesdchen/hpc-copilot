@@ -65,8 +65,13 @@ __all__ = ["PredictionResult", "predict_queue_wait"]
 
 Confidence = Literal["high", "medium", "low", "cold"]
 Method = Literal[
-    "diurnal_ma", "blended_ma", "global_ma", "no_data",
-    "des", "des_no_snapshot", "des_no_profiles",
+    "diurnal_ma",
+    "blended_ma",
+    "global_ma",
+    "no_data",
+    "des",
+    "des_no_snapshot",
+    "des_no_profiles",
 ]
 Backend = Literal["diurnal_ma", "des", "auto"]
 
@@ -206,12 +211,9 @@ def _apply_features(
         return result
     adjusted = max(0, int(round(result.predicted_wait_sec * factor)))
     extra = (
-        f"order-book factor={factor:.3f} "
-        f"(queued_in_partition={features.queued_jobs_in_partition})"
+        f"order-book factor={factor:.3f} (queued_in_partition={features.queued_jobs_in_partition})"
     )
-    new_reason = (
-        extra if result.fallback_reason is None else f"{result.fallback_reason}; {extra}"
-    )
+    new_reason = extra if result.fallback_reason is None else f"{result.fallback_reason}; {extra}"
     return PredictionResult(
         predicted_wait_sec=adjusted,
         confidence=result.confidence,
@@ -279,22 +281,35 @@ def predict_queue_wait(
     """
     if backend == "des":
         return _predict_des(
-            experiment_dir, profile=profile, cluster=cluster, at_iso=at_iso,
-            n_replications=n_replications, candidate=candidate, seed=seed,
+            experiment_dir,
+            profile=profile,
+            cluster=cluster,
+            at_iso=at_iso,
+            n_replications=n_replications,
+            candidate=candidate,
+            seed=seed,
             current_features=current_features,
         )
     if backend == "auto":
         decision = _des_eligible(experiment_dir, cluster=cluster)
         if decision.eligible:
             return _predict_des(
-                experiment_dir, profile=profile, cluster=cluster, at_iso=at_iso,
-                n_replications=n_replications, candidate=candidate, seed=seed,
+                experiment_dir,
+                profile=profile,
+                cluster=cluster,
+                at_iso=at_iso,
+                n_replications=n_replications,
+                candidate=candidate,
+                seed=seed,
                 current_features=current_features,
             )
         # else: fall through to diurnal_ma. The diurnal path's own
         # bookkeeping records the reason via its method tag.
     return _predict_diurnal_ma(
-        experiment_dir, profile=profile, cluster=cluster, at_iso=at_iso,
+        experiment_dir,
+        profile=profile,
+        cluster=cluster,
+        at_iso=at_iso,
         half_life_days=half_life_days,
         min_bucket_samples=min_bucket_samples,
         min_global_samples=min_global_samples,
@@ -333,13 +348,9 @@ def _predict_diurnal_ma(
     # that crashed after waiting 2 hours still tells us the queue was
     # busy. Pull all samples (only_successful=False) and filter on the
     # populated fields we actually need.
-    raw = read_samples(
-        experiment_dir, profile=profile, cluster=cluster, only_successful=False
-    )
+    raw = read_samples(experiment_dir, profile=profile, cluster=cluster, only_successful=False)
     populated = [
-        s
-        for s in raw
-        if s.get("submitted_at_iso") and s.get("queue_wait_sec") is not None
+        s for s in raw if s.get("submitted_at_iso") and s.get("queue_wait_sec") is not None
     ]
     n_total = len(populated)
 
@@ -351,9 +362,7 @@ def _predict_diurnal_ma(
             n_bucket_samples=0,
             n_total_samples=n_total,
             bucket_hour_of_week=target_bucket,
-            fallback_reason=(
-                f"only {n_total} populated samples; need {min_global_samples}"
-            ),
+            fallback_reason=(f"only {n_total} populated samples; need {min_global_samples}"),
         )
 
     buckets: dict[int, list[tuple[float, float]]] = {}
@@ -382,9 +391,7 @@ def _predict_diurnal_ma(
                 buckets, target_bucket, n_total, "bucket weights summed to zero"
             )
             return _apply_features(base, current_features)
-        confidence: Confidence = (
-            "high" if n_bucket >= 4 * min_bucket_samples else "medium"
-        )
+        confidence: Confidence = "high" if n_bucket >= 4 * min_bucket_samples else "medium"
         base = PredictionResult(
             predicted_wait_sec=int(round(m)),
             confidence=confidence,
@@ -400,9 +407,7 @@ def _predict_diurnal_ma(
     blended: list[tuple[float, float]] = list(target_obs)
     for off in range(1, bucket_radius + 1):
         for d in (-off, off):
-            blended.extend(
-                buckets.get((target_bucket + d) % _HOURS_PER_WEEK, [])
-            )
+            blended.extend(buckets.get((target_bucket + d) % _HOURS_PER_WEEK, []))
     if len(blended) >= min_bucket_samples:
         m = _wmean(blended)
         if m is not None:
@@ -413,10 +418,7 @@ def _predict_diurnal_ma(
                 n_bucket_samples=len(blended),
                 n_total_samples=n_total,
                 bucket_hour_of_week=target_bucket,
-                fallback_reason=(
-                    f"target bucket had only {n_bucket}; "
-                    f"blended +/-{bucket_radius}h"
-                ),
+                fallback_reason=(f"target bucket had only {n_bucket}; blended +/-{bucket_radius}h"),
             )
             return _apply_features(base, current_features)
 
@@ -505,9 +507,7 @@ def _des_eligible(experiment_dir: "Path", *, cluster: str) -> _DESDecision:
     try:
         from claude_hpc.forecast.user_profiles import all_profiles
     except ImportError:
-        return _DESDecision(
-            False, "user_profiles module unavailable", len(running_users), 0
-        )
+        return _DESDecision(False, "user_profiles module unavailable", len(running_users), 0)
     profiles = all_profiles(experiment_dir, cluster=cluster)
     known = sum(1 for u in running_users if u in profiles)
     coverage = known / len(running_users)
@@ -553,25 +553,25 @@ def _profile_to_dict(p: Any) -> dict[str, Any]:
         return p
     out: dict[str, Any] = {}
     for fld in (
-        "user", "n_observations",
-        "median_submits_per_day", "submit_hour_of_week_distribution",
-        "median_walltime_ask_sec", "median_actual_over_ask",
-        "median_array_size", "typical_gpu_types",
-        "failure_rate", "p_followup_within_6h",
+        "user",
+        "n_observations",
+        "median_submits_per_day",
+        "submit_hour_of_week_distribution",
+        "median_walltime_ask_sec",
+        "median_actual_over_ask",
+        "median_array_size",
+        "typical_gpu_types",
+        "failure_rate",
+        "p_followup_within_6h",
     ):
         if hasattr(p, fld):
             out[fld] = getattr(p, fld)
     return out
 
 
-def _retag_method(
-    result: PredictionResult, method: Method, reason: str
-) -> PredictionResult:
+def _retag_method(result: PredictionResult, method: Method, reason: str) -> PredictionResult:
     """Replace ``method`` and prepend ``reason`` to ``fallback_reason``."""
-    new_reason = (
-        reason if result.fallback_reason is None
-        else f"{reason}; {result.fallback_reason}"
-    )
+    new_reason = reason if result.fallback_reason is None else f"{reason}; {result.fallback_reason}"
     return PredictionResult(
         predicted_wait_sec=result.predicted_wait_sec,
         confidence=result.confidence,
@@ -618,7 +618,10 @@ def _predict_des(
     snapshots = list(read_cluster_history(experiment_dir, cluster, limit=1))
     if not snapshots:
         fallback = _predict_diurnal_ma(
-            experiment_dir, profile=profile, cluster=cluster, at_iso=at_iso,
+            experiment_dir,
+            profile=profile,
+            cluster=cluster,
+            at_iso=at_iso,
             half_life_days=_DEFAULT_HALF_LIFE_DAYS,
             min_bucket_samples=_DEFAULT_MIN_BUCKET_SAMPLES,
             min_global_samples=_DEFAULT_MIN_GLOBAL_SAMPLES,
@@ -626,13 +629,15 @@ def _predict_des(
             current_features=current_features,
         )
         return _retag_method(
-            fallback, "des_no_snapshot",
+            fallback,
+            "des_no_snapshot",
             "DES requested but no cluster_history snapshot persisted",
         )
     snap = snapshots[0]
 
     try:
         from claude_hpc.forecast.user_profiles import all_profiles
+
         profiles = all_profiles(experiment_dir, cluster=cluster)
     except ImportError:
         profiles = {}
@@ -640,8 +645,7 @@ def _predict_des(
     cand = candidate if isinstance(candidate, SimJob) else _default_candidate(profile)
     snap_how = _hour_of_week(snap.now_iso) or 0
     profile_dicts = {
-        u: (p if isinstance(p, dict) else _profile_to_dict(p))
-        for u, p in profiles.items()
+        u: (p if isinstance(p, dict) else _profile_to_dict(p)) for u, p in profiles.items()
     }
 
     def _arr_sampler(s: int) -> list[SimJob]:

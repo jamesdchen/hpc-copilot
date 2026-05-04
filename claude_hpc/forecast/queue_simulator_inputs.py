@@ -181,16 +181,18 @@ def sample_arrival_stream(
             if rng.random() > lam_t / lam_max:
                 continue
             counter += 1
-            arrivals.append(SimJob(
-                job_id=f"{job_id_prefix}-{uname}-{counter}",
-                user=str(uname),
-                submit_time=t,
-                walltime_ask=float(_resolve_walltime_ask(profile)),
-                cpus=int(_profile_get(profile, "common_cpus", 1)),
-                mem_mb=int(_profile_get(profile, "common_mem_mb", 4_000)),
-                gpus=int(_profile_get(profile, "common_gpus", 0)),
-                gpu_type=_resolve_gpu_type(profile),
-            ))
+            arrivals.append(
+                SimJob(
+                    job_id=f"{job_id_prefix}-{uname}-{counter}",
+                    user=str(uname),
+                    submit_time=t,
+                    walltime_ask=float(_resolve_walltime_ask(profile)),
+                    cpus=int(_profile_get(profile, "common_cpus", 1)),
+                    mem_mb=int(_profile_get(profile, "common_mem_mb", 4_000)),
+                    gpus=int(_profile_get(profile, "common_gpus", 0)),
+                    gpu_type=_resolve_gpu_type(profile),
+                )
+            )
     arrivals.sort(key=lambda j: j.submit_time)
     return arrivals
 

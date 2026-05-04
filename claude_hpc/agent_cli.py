@@ -80,6 +80,7 @@ def _meta_idempotent(name: str) -> bool:
     """
     try:
         from claude_hpc.operations import operations_catalog
+
         for entry in operations_catalog():
             if entry.get("name") == name:
                 return bool(entry.get("idempotent", True))
@@ -1795,9 +1796,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_rp)
     _add_profile_cluster_cmdsha(
         p_rp,
-        cmd_sha_help=(
-            "Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes)."
-        ),
+        cmd_sha_help=("Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes)."),
     )
     p_rp.set_defaults(func=cmd_runtime_prior)
 
@@ -1839,14 +1838,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_pqw)
     p_pqw.add_argument("--profile", required=True)
     p_pqw.add_argument("--cluster", required=True)
-    p_pqw.add_argument("--at-iso", default=None,
-                       help="reference timestamp (default: now)")
-    p_pqw.add_argument("--backend", choices=["auto", "diurnal_ma", "des"],
-                       default="auto")
-    p_pqw.add_argument("--n-replications", type=int, default=64,
-                       help="DES replications (only used on the DES path)")
-    p_pqw.add_argument("--seed", type=int, default=None,
-                       help="seed for deterministic DES sampling")
+    p_pqw.add_argument("--at-iso", default=None, help="reference timestamp (default: now)")
+    p_pqw.add_argument("--backend", choices=["auto", "diurnal_ma", "des"], default="auto")
+    p_pqw.add_argument(
+        "--n-replications",
+        type=int,
+        default=64,
+        help="DES replications (only used on the DES path)",
+    )
+    p_pqw.add_argument("--seed", type=int, default=None, help="seed for deterministic DES sampling")
     p_pqw.set_defaults(func=cmd_predict_queue_wait)
 
     # best-submit-window

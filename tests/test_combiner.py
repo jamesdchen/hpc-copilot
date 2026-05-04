@@ -49,9 +49,7 @@ def _scaffold(
 
 def _patch_sibling_lookup(monkeypatch, hpc: Path) -> None:
     """Make combiner.main treat hpc/ as the dir containing __file__."""
-    monkeypatch.setattr(
-        combiner_mod, "__file__", str(hpc / "_hpc_combiner.py"), raising=False
-    )
+    monkeypatch.setattr(combiner_mod, "__file__", str(hpc / "_hpc_combiner.py"), raising=False)
 
 
 # ─── Pure-function tests ────────────────────────────────────────────────────
@@ -132,8 +130,10 @@ class TestMainEndToEnd:
         hpc = _scaffold(
             tmp_path,
             # Two tasks with the same kwargs ⇒ same grid_key ⇒ one grid point.
-            kwargs_per_task=[{"model": "ridge", "horizon": "1"},
-                             {"model": "ridge", "horizon": "1"}],
+            kwargs_per_task=[
+                {"model": "ridge", "horizon": "1"},
+                {"model": "ridge", "horizon": "1"},
+            ],
         )
         _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
