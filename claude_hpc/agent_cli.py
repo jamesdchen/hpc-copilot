@@ -624,31 +624,11 @@ def cmd_campaign_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-@primitive(
-    name="campaign-list",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_campaign_list(args: argparse.Namespace) -> int:
-    """List every campaign with at least one sidecar in this experiment."""
-    from collections import Counter
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_list."""
+    from claude_hpc.atoms.campaign_list import campaign_list
 
-    from claude_hpc.orchestrator.runs import find_existing_runs, read_run_sidecar
-
-    counts: Counter[str] = Counter()
-    for path in find_existing_runs(args.experiment_dir):
-        try:
-            data = read_run_sidecar(args.experiment_dir, path.stem)
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            continue
-        cid = data.get("campaign_id")
-        if isinstance(cid, str) and cid:
-            counts[cid] += 1
-    _ok(
-        {"campaigns": [{"campaign_id": cid, "iterations": n} for cid, n in sorted(counts.items())]},
-        name="campaign-list",
-    )
+    _ok(campaign_list(experiment_dir=args.experiment_dir), name="campaign-list")
     return EXIT_OK
 
 
