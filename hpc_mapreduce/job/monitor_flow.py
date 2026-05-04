@@ -49,6 +49,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce._time import utcnow_iso
 from hpc_mapreduce.lifecycle import LifecycleState
 from hpc_mapreduce.job.runs import read_run_sidecar
@@ -281,6 +282,19 @@ def _is_terminal(
     return (None, None)
 
 
+@primitive(
+    name="monitor-flow",
+    verb="workflow",
+    composes=["poll-run-status", "mark-run-terminal"],
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),
+    ],
+    error_codes=[errors.SshUnreachable, errors.JournalCorrupt, errors.RemoteCommandFailed],
+    idempotent=True,
+    idempotency_key="run_id",
+    exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+)
 def monitor_flow(
     *,
     experiment_dir: Path,

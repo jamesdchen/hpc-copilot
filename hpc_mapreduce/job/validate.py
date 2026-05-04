@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce.infra.clusters import load_clusters_config
 
 if TYPE_CHECKING:
@@ -30,6 +31,12 @@ __all__ = ["validate_submission"]
 DEFAULT_BACKFILL_WINDOW_SEC = 600
 
 
+@primitive(
+    name="validate",
+    verb="validate",
+    side_effects=[SideEffect("ssh", "<cluster> (scheduler --test-only probe)")],
+    idempotent=True,
+)
 def validate_submission(
     experiment_dir: "Path",
     *,
