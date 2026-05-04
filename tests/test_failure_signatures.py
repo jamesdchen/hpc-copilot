@@ -1,8 +1,8 @@
-"""Tests for hpc_mapreduce.job.failure_signatures.classify."""
+"""Tests for claude_hpc.orchestrator.failure_signatures.classify."""
 
 from __future__ import annotations
 
-from hpc_mapreduce.job.failure_signatures import CATALOG, classify
+from claude_hpc.orchestrator.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:
@@ -64,9 +64,7 @@ def test_disk_full_matches() -> None:
 
 
 def test_python_traceback_fallback() -> None:
-    out = classify(
-        "Traceback (most recent call last):\n  File 'foo.py', line 1, in <module>", 1
-    )
+    out = classify("Traceback (most recent call last):\n  File 'foo.py', line 1, in <module>", 1)
     assert out["error_class"] == "python_traceback"
 
 

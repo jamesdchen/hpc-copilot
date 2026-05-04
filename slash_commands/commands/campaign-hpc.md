@@ -1,4 +1,4 @@
-Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit-hpc` invocations that share a `campaign_id` tag; each iteration's `tasks.py` reads `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to learn what prior iterations produced and decide what to run next. **The loop is you (the assistant) repeatedly invoking `/submit-hpc`** — not a custom Python driver. `/submit-hpc` already owns the rsync + qsub + sidecar pipeline; `/campaign-hpc` reuses it as-is, threading the `campaign_id` through.
+Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit-hpc` invocations that share a `campaign_id` tag; each iteration's `tasks.py` reads `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to learn what prior iterations produced and decide what to run next. **The loop is you (the assistant) repeatedly invoking `/submit-hpc`** — not a custom Python driver. `/submit-hpc` already owns the rsync + qsub + sidecar pipeline; `/campaign-hpc` reuses it as-is, threading the `campaign_id` through.
 
 The framework is intentionally tiny here: there is no `Strategy` Protocol, no `Context` Protocol, no state file. The user's `tasks.py` does the strategy work using whatever Python library suits — `random`, `optuna`, `nevergrad`, `scikit-optimize`, walk-forward indexing, custom PBT — by import. The framework just tags sidecars (the `campaign_id` field threads through `/submit-hpc` into every per-run sidecar) and reports history (`/campaign-hpc status`).
 
@@ -15,7 +15,7 @@ If the user just wants one-shot parallel work with no feedback loop, use `/submi
 ## Setup
 
 Read cluster definitions:
-- `clusters.yaml`: resolve via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+- `clusters.yaml`: resolve via `python -c 'from claude_hpc import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
 Pick a campaign:
 
@@ -79,7 +79,7 @@ Per iteration:
 ```python
 import json, subprocess
 from pathlib import Path
-from hpc_mapreduce import load_tasks_module, tasks_path
+from claude_hpc import load_tasks_module, tasks_path
 
 def run_one(spec_path, *, verb):
     """Invoke one workflow atom; return parsed envelope or raise."""

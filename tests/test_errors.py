@@ -70,15 +70,11 @@ def test_subclass_has_required_attributes(code: str, cls: type[errors.HpcError])
 
 def test_envelope_schema_enum_matches_subclass_inventory() -> None:
     """The error_code enum in envelope.json must match the documented set."""
-    schema_path = (
-        Path(__file__).parent.parent
-        / "hpc_mapreduce" / "schemas" / "envelope.json"
-    )
+    schema_path = Path(__file__).parent.parent / "claude_hpc" / "schemas" / "envelope.json"
     schema = json.loads(schema_path.read_text())
     # The schema is `oneOf [success, error]`; pull the error variant.
     error_variant = next(
-        v for v in schema["oneOf"]
-        if v.get("properties", {}).get("ok", {}).get("const") is False
+        v for v in schema["oneOf"] if v.get("properties", {}).get("ok", {}).get("const") is False
     )
     enum_in_schema = frozenset(error_variant["properties"]["error_code"]["enum"])
     assert enum_in_schema == DOCUMENTED_ERROR_CODES, (
@@ -124,6 +120,5 @@ def test_remediation_strings_are_actionable() -> None:
     for cls in EXPECTED_SUBCLASSES.values():
         assert cls.remediation is not None
         assert imperative_verbs.search(cls.remediation), (
-            f"{cls.__name__}.remediation must include an imperative verb; "
-            f"got: {cls.remediation!r}"
+            f"{cls.__name__}.remediation must include an imperative verb; got: {cls.remediation!r}"
         )

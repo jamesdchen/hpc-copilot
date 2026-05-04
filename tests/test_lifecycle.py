@@ -1,4 +1,4 @@
-"""Tests for ``hpc_mapreduce.lifecycle``.
+"""Tests for ``claude_hpc._internal.lifecycle``.
 
 The B2 refactor introduced four StrEnums to replace the four scattered,
 drifting string vocabularies. The cross-validation tests here exist
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_mapreduce.lifecycle import (
+from claude_hpc._internal.lifecycle import (
     TERMINAL_STATUSES,
     FailureCategory,
     JournalStatus,
@@ -21,7 +21,7 @@ from hpc_mapreduce.lifecycle import (
 )
 
 REPO = Path(__file__).resolve().parent.parent
-SCHEMAS = REPO / "hpc_mapreduce" / "schemas"
+SCHEMAS = REPO / "claude_hpc" / "schemas"
 
 
 def _load_lifecycle_enum(schema_name: str) -> set[str]:
@@ -36,11 +36,11 @@ def test_journal_status_str_coercion() -> None:
 
 
 def test_terminal_statuses_match_journal_status() -> None:
-    assert TERMINAL_STATUSES == {
+    assert {
         JournalStatus.COMPLETE,
         JournalStatus.FAILED,
         JournalStatus.ABANDONED,
-    }
+    } == TERMINAL_STATUSES
     assert JournalStatus.IN_FLIGHT not in TERMINAL_STATUSES
 
 
@@ -79,14 +79,12 @@ def test_failure_category_includes_classifier_emissions() -> None:
 
 def test_failure_category_includes_resubmit_validation() -> None:
     """Every category the resubmit path accepts must round-trip through FailureCategory."""
-    from hpc_mapreduce import agent_cli
+    from claude_hpc import agent_cli
 
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)
     canonical = {fc.value for fc in FailureCategory}
     missing = accepted - canonical
-    assert not missing, (
-        f"resubmit accepts categories not in FailureCategory: {missing}"
-    )
+    assert not missing, f"resubmit accepts categories not in FailureCategory: {missing}"
 
 
 def test_classifier_emissions_subset_of_resubmit_accepted() -> None:
@@ -96,15 +94,13 @@ def test_classifier_emissions_subset_of_resubmit_accepted() -> None:
     unrepresentable. If the classifier ever emits a category the
     resubmit silently rejects, this fails.
     """
-    from hpc_mapreduce import agent_cli
+    from claude_hpc import agent_cli
     from slash_commands import runner
 
     classifier_emits = {cat for cat, _ in runner._FAILURE_CATEGORY_PATTERNS}
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)
     rejected = classifier_emits - accepted
-    assert not rejected, (
-        f"classifier emits categories the resubmit path rejects: {rejected}"
-    )
+    assert not rejected, f"classifier emits categories the resubmit path rejects: {rejected}"
 
 
 def test_task_status_distinct_from_journal_status() -> None:

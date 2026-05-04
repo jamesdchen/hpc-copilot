@@ -16,8 +16,8 @@ from pathlib import Path
 
 import yaml
 
-import hpc_mapreduce
-from hpc_mapreduce.job.discover import _SKIP_BASENAMES, _SKIP_DIRS
+import claude_hpc
+from claude_hpc.orchestrator.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_DOC = "docs/boundary-contract.md"
@@ -185,11 +185,10 @@ def _imported_top_level_modules(path: Path) -> set[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 modules.add(alias.name.split(".", 1)[0])
-        elif isinstance(node, ast.ImportFrom):
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             # Skip relative imports (node.level > 0); they cannot reach across
             # the boundary by construction.
-            if node.level == 0 and node.module:
-                modules.add(node.module.split(".", 1)[0])
+            modules.add(node.module.split(".", 1)[0])
     return modules
 
 
@@ -199,12 +198,10 @@ def _imported_top_level_modules(path: Path) -> set[str]:
 
 
 def test_public_api_matches_contract() -> None:
-    """``hpc_mapreduce.__all__`` must match the allowlist exactly."""
-    actual = set(hpc_mapreduce.__all__)
+    """``claude_hpc.__all__`` must match the allowlist exactly."""
+    actual = set(claude_hpc.__all__)
     expected = set(ALLOWED_EXPORTS)
-    assert actual == expected, _diff_message(
-        "hpc_mapreduce public API", actual, expected
-    )
+    assert actual == expected, _diff_message("claude_hpc public API", actual, expected)
 
 
 def test_reserved_filenames_match_contract() -> None:
@@ -223,33 +220,36 @@ def test_reserved_dirs_match_contract() -> None:
     # present.
     actual = set(_SKIP_DIRS)
     missing = set(RESERVED_DIRS) - actual
-    assert not missing, _diff_message(
-        "Reserved dirs (_SKIP_DIRS)", actual, set(RESERVED_DIRS)
-    )
+    assert not missing, _diff_message("Reserved dirs (_SKIP_DIRS)", actual, set(RESERVED_DIRS))
 
 
 def test_core_does_not_import_templates() -> None:
-    """No file under ``hpc_mapreduce/`` may import from ``templates``."""
-    core_root = REPO_ROOT / "hpc_mapreduce"
+    """No file under ``claude_hpc/`` may import from ``templates``."""
+    core_root = REPO_ROOT / "claude_hpc"
     offenders: list[str] = []
     for path in _walk_python_files(core_root):
+        # Skip the templates directory itself — it lives inside the
+        # claude_hpc package now (claude_hpc/mapreduce/templates/) but
+        # is data, not framework code.
+        if "mapreduce/templates" in str(path):
+            continue
         if "templates" in _imported_top_level_modules(path):
             offenders.append(str(path.relative_to(REPO_ROOT)))
     assert not offenders, (
-        f"hpc_mapreduce/** must not import from templates/. See {CONTRACT_DOC}.\n"
+        f"claude_hpc/** must not import from templates/. See {CONTRACT_DOC}.\n"
         f"  Offending files: {offenders}"
     )
 
 
-# Submodules of ``hpc_mapreduce`` that are intentionally deployed alongside
+# Submodules of ``claude_hpc`` that are intentionally deployed alongside
 # user executors on the cluster by ``deploy_runtime`` (see
-# ``hpc_mapreduce/infra/remote.py``). Templates may import from these because
+# ``claude_hpc/infra/remote.py``). Templates may import from these because
 # they are guaranteed to be present at execution time on the compute node.
 # Keep this list narrow; new entries require a matching update to
 # ``docs/boundary-contract.md``.
 RUNTIME_MODULES_ALLOWED_IN_TEMPLATES = frozenset(
     {
-        "hpc_mapreduce.map.metrics_io",
+        "claude_hpc.mapreduce.metrics_io",
     }
 )
 
@@ -258,8 +258,8 @@ def _imported_dotted_modules(path: Path) -> set[str]:
     """Return the set of fully-qualified imported module names in ``path``.
 
     Like :func:`_imported_top_level_modules` but returns the full dotted name
-    so callers can distinguish ``hpc_mapreduce.map.metrics_io`` (a deployed
-    runtime module) from ``hpc_mapreduce.job.runs`` (framework-internal).
+    so callers can distinguish ``claude_hpc.mapreduce.metrics_io`` (a deployed
+    runtime module) from ``claude_hpc.orchestrator.runs`` (framework-internal).
     """
     source = path.read_text(encoding="utf-8")
     try:
@@ -272,47 +272,54 @@ def _imported_dotted_modules(path: Path) -> set[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 modules.add(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level == 0 and node.module:
-                modules.add(node.module)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module)
     return modules
 
 
 def test_templates_do_not_import_core() -> None:
-    """No file under ``templates/`` may import from ``hpc_mapreduce``.
+    """No deployed file under ``claude_hpc/mapreduce/templates/`` may import from ``claude_hpc``.
 
     Exception: a small allowlist of runtime modules deployed alongside the
     executor by ``deploy_runtime`` (see
     ``RUNTIME_MODULES_ALLOWED_IN_TEMPLATES``). New entries require a matching
     update to ``docs/boundary-contract.md``.
+
+    Only the *deployed* template subdirectories (sge/, slurm/, common/,
+    starters/) are scanned; ``tasks_example.py`` and ``cli_dispatcher.py``
+    are user-facing reference files copied by the user and never pushed
+    to the cluster, so the boundary applies on the deployed subset.
     """
-    templates_root = REPO_ROOT / "templates"
+    templates_root = REPO_ROOT / "claude_hpc" / "mapreduce" / "templates"
+    deployed_subdirs = ("sge", "slurm", "common", "starters")
     offenders: list[tuple[str, list[str]]] = []
-    for path in _walk_python_files(templates_root):
-        imported = _imported_dotted_modules(path)
-        bad = sorted(
-            m
-            for m in imported
-            if (m == "hpc_mapreduce" or m.startswith("hpc_mapreduce."))
-            and m not in RUNTIME_MODULES_ALLOWED_IN_TEMPLATES
-        )
-        if bad:
-            offenders.append((str(path.relative_to(REPO_ROOT)), bad))
+    for subdir in deployed_subdirs:
+        for path in _walk_python_files(templates_root / subdir):
+            imported = _imported_dotted_modules(path)
+            bad = sorted(
+                m
+                for m in imported
+                if (m == "claude_hpc" or m.startswith("claude_hpc."))
+                and m not in RUNTIME_MODULES_ALLOWED_IN_TEMPLATES
+            )
+            if bad:
+                offenders.append((str(path.relative_to(REPO_ROOT)), bad))
     assert not offenders, (
-        f"templates/** must not import from hpc_mapreduce (except deployed "
+        f"templates/** must not import from claude_hpc (except deployed "
         f"runtime modules). See {CONTRACT_DOC}.\n"
         + "\n".join(f"  {p}: {mods}" for p, mods in offenders)
     )
 
 
 def test_clusters_yaml_is_infra_only() -> None:
-    """Each cluster entry in ``hpc_mapreduce/config/clusters.yaml`` must use only infra keys."""
-    clusters_path = REPO_ROOT / "hpc_mapreduce" / "config" / "clusters.yaml"
+    """Each cluster entry in ``claude_hpc/config/clusters.yaml`` must use only infra keys."""
+    clusters_path = REPO_ROOT / "claude_hpc" / "config" / "clusters.yaml"
     with clusters_path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
 
     assert isinstance(data, dict), (
-        f"config/clusters.yaml must be a mapping of cluster_name -> config; got {type(data).__name__}."
+        "config/clusters.yaml must be a mapping of cluster_name -> config; "
+        f"got {type(data).__name__}."
     )
 
     violations: list[str] = []

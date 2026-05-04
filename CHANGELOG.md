@@ -2,9 +2,38 @@
 
 ## Unreleased
 
+### Changed (deprecation) — `hpc_mapreduce` → `claude_hpc` package rename
+
+The package import path has been renamed `hpc_mapreduce` → `claude_hpc`,
+matching the distribution name in `pyproject.toml`. The package was
+also split into 4 sub-packages reflecting their domains:
+
+- `claude_hpc.mapreduce` — the actual mapreduce tool (dispatch, combine, reduce, templates)
+- `claude_hpc.infra` — cluster communications (backends, ssh, inspect)
+- `claude_hpc.orchestrator` — job submission orchestration (flow primitives, planner, runs, runtime priors)
+- `claude_hpc.forecast` — predictive scheduling (queue-wait baseline, DES simulator, microstructure features)
+- `claude_hpc._internal` — shared utilities (_io, _time, _version, _primitive, idempotency, layout, lifecycle, telemetry)
+- `claude_hpc.atoms` — CLI-only primitive dispatchers
+
+`hpc_mapreduce` continues to work as a deprecation shim for one release
+— it emits a `DeprecationWarning` on import and forwards `*` from
+`claude_hpc`. Update your imports to `claude_hpc` directly; the shim
+will be removed in a future release.
+
+The user-facing CLI binary `hpc-mapreduce` is unchanged. Slash commands,
+JSON envelope contracts, the `.hpc/tasks.py` user contract, JSON Schema
+shapes (now under `claude_hpc/schemas/`), and the cluster-side
+stdlib-only constraint on `dispatch.py` and `combiner.py` are all
+preserved exactly.
+
+The `cmd_capabilities` output's `python` field now reflects the new
+module paths (e.g. `claude_hpc.orchestrator.submit_flow.submit_flow`
+instead of `hpc_mapreduce.job.submit_flow.submit_flow`); agents that
+shell out by `cli` are unaffected.
+
 ### Removed (breaking) — SEGV blacklist feature
 
-The SEGV blacklist (`hpc_mapreduce.job.blacklist`, the
+The SEGV blacklist (`claude_hpc.orchestrator.blacklist`, the
 `record-segv-blacklist` primitive, the `record_segv` /
 `get_active_blacklist` exports) has been removed. The smart planner no
 longer consumes a blacklist signal; callers should drop any reference to
@@ -100,7 +129,7 @@ the feature.
   `errors.ClusterUnknown` so the typed exception flows through
   `_err_from_hpc` to produce the documented `error_code: cluster_unknown`.
 
-### Removed — `hpc_mapreduce.campaign.run_campaign` asyncio loop and `defaults` callbacks
+### Removed — `claude_hpc.orchestrator.campaign.run_campaign` asyncio loop and `defaults` callbacks
 
 The closed-loop driver is now the slash-command surface itself: the
 assistant repeatedly invokes `/submit-hpc campaign_id=<slug>` until
@@ -130,9 +159,9 @@ Removed:
 Kept (the small surface that actually mattered):
 - `campaign_id` field on submit specs and per-run sidecars.
 - `HPC_CAMPAIGN_ID` env var threaded through scheduler templates.
-- `hpc_mapreduce.reduce.history.prior(...)` for reading per-iteration
+- `claude_hpc.mapreduce.reduce.history.prior(...)` for reading per-iteration
   reduced metrics back inside `tasks.py`.
-- `hpc_mapreduce.campaign.campaign_dir(...)` for strategy-state
+- `claude_hpc.orchestrator.campaign.campaign_dir(...)` for strategy-state
   placement (Optuna SQLite, PBT checkpoints).
 - `hpc-mapreduce campaign list / status` CLI inspection.
 
@@ -175,18 +204,18 @@ into a single `plan-submit` CLI subcommand:
   or `CPULoad/CPUTot >= 0.80` (both tunable). 60s in-process cache so a
   single submit cycle pays the SSH cost once. Both SLURM and SGE are
   supported.
-- **`hpc_mapreduce.job.blacklist`** — append-only SEGV journal at
+- **`claude_hpc.orchestrator.blacklist`** — append-only SEGV journal at
   `<repo>/.hpc/bad_nodes.<cluster>.json`. 7-day TTL, refreshed on
   repeat SEGVs. Atomic write under `fcntl.flock`. Evidence list capped
   at 5 most-recent entries per node. `record_segv()` is called by
   `/hpc-monitor` on `NODE_FAIL` / `exit -11`; `get_active()` is called
   by the planner with TTL filtering.
-- **`hpc_mapreduce.job.runtime_prior`** — append-only sample log at
+- **`claude_hpc.orchestrator.runtime_prior`** — append-only sample log at
   `<repo>/.hpc/runtimes/<profile>.<cluster>.json`. `roll_up_quantiles()`
   groups by `gpu_type` and computes p50 / p95 / p99 / mean / n_samples,
   with optional `cmd_sha` filter so a `.hpc/tasks.py` change can
   invalidate stale priors.
-- **`hpc_mapreduce.job.planner`** — `plan-submit --profile <p>
+- **`claude_hpc.orchestrator.planner`** — `plan-submit --profile <p>
   --cluster <c>` combines all three into the scorecard JSON the slash
   command hands to Claude. When no priors exist, `needs_canary: true`
   and `canary_plan` describes the 1-task probe to seed the priors.
@@ -227,12 +256,12 @@ end-to-end Optuna recipe in `docs/campaign.md`. None bind the framework
 to a specific tuning library; they collapse boilerplate the previous
 shape made every user write themselves.
 
-- **`hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)`** —
+- **`claude_hpc.orchestrator.campaign.campaign_dir(experiment_dir, campaign_id)`** —
   canonical scratch directory `.hpc/campaigns/<cid>/`. Created
   idempotently. Reserved for strategy libraries to put state files
   (Optuna SQLite, PBT checkpoints, walk-forward cursor); the framework
   writes nothing inside.
-- **`hpc_mapreduce.campaign.defaults`** — three curried-function defaults
+- **`claude_hpc.orchestrator.campaign.defaults`** — three curried-function defaults
   for `run_campaign`'s callbacks:
   - `tasks_py_total_predicate(experiment_dir)` — re-imports `tasks.py`
     each call and returns `total() > 0`.
@@ -249,7 +278,7 @@ shape made every user write themselves.
   without polling externally. Optional; the framework computes
   `raw_metrics` via the v2 sidecar pipeline when `experiment_dir` is
   provided. Empty dict for failed iterations.
-- **`hpc_mapreduce.map.metrics_io.read_kw_env()`** — executor-side helper
+- **`claude_hpc.mapreduce.metrics_io.read_kw_env()`** — executor-side helper
   that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env
   var the dispatcher exported. Stdlib-only; deployed alongside the
   executor.
@@ -264,7 +293,7 @@ shape made every user write themselves.
 The framework gains a small new primitive for adaptive iteration: a
 **campaign** is a sequence of `/submit` invocations sharing a
 `campaign_id` tag. The user's `.hpc/tasks.py` reads
-`hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
+`claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
 module load to learn what prior iterations of the same campaign produced
 and decide what to run next. Strategies (Optuna, RandomSearch,
 walk-forward, PBT, …) live as Python libraries the user imports inside
@@ -278,13 +307,13 @@ Surface area:
 - **`HPC_CAMPAIGN_ID`** — env var forwarded by every scheduler template
   (SGE/SLURM × CPU/GPU). Read by the user's `tasks.py` and executor on
   the cluster.
-- **`hpc_mapreduce.reduce.history`** — read-only accessor:
+- **`claude_hpc.mapreduce.reduce.history`** — read-only accessor:
   - `prior(experiment_dir, campaign_id)` returns per-iteration reduced
     metric dicts, oldest-first. Pending iterations contribute `{}`.
   - `find_sidecars_by_campaign` and `result_dirs_for_sidecar` for
     callers that need the underlying primitives. None of these import
     `.hpc/tasks.py` (the loop's calling module), so no recursion.
-- **`hpc_mapreduce.campaign.run_campaign`** — asyncio in-flight queue.
+- **`claude_hpc.orchestrator.campaign.run_campaign`** — asyncio in-flight queue.
   Maintains *concurrency* live submits, awaits the next-finished one
   (FIRST_COMPLETED), repeats until the user's `should_submit` predicate
   flips to False or a wall-clock budget elapses. Fully IO-injected
@@ -370,7 +399,7 @@ All future work.
   `waves` rollup keyed by wave id with `{complete, running, pending,
   failed, unknown, total}` buckets. `record_status` and `reconcile`
   carry it into the persisted `last_status`. New `rollup_by_wave`
-  helper in `hpc_mapreduce.reduce.status`.
+  helper in `claude_hpc.mapreduce.reduce.status`.
 - **`hpc-mapreduce logs` subcommand.** Fetches per-task stderr from the
   cluster: `--task-id 7,12,42` for explicit ids or `--all-failed` for
   every failed task. Falls back through earlier `job_ids` when the

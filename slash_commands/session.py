@@ -31,7 +31,7 @@ import os
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 try:
     import fcntl  # POSIX
@@ -57,10 +57,10 @@ SCHEMA_VERSION = 1
 # Resolve at import time. MARs (and any caller that wants its own state tree)
 # can set HPC_JOURNAL_DIR before importing this module to redirect the journal.
 HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
-# B2: derived from the canonical hpc_mapreduce.lifecycle.JournalStatus
+# B2: derived from the canonical claude_hpc._internal.lifecycle.JournalStatus
 # StrEnum so the literal can no longer drift from the rest of the codebase.
 # Re-exported as TERMINAL_STATUSES for back-compat.
-from hpc_mapreduce.lifecycle import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL  # noqa: E402
+from claude_hpc._internal.lifecycle import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL  # noqa: E402
 
 TERMINAL_STATUSES = _LIFECYCLE_TERMINAL
 _UPDATABLE_FIELDS = frozenset(
@@ -110,12 +110,15 @@ class RunRecord:
         return dataclasses.asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "RunRecord":
+    def from_dict(cls, payload: dict) -> RunRecord:
         known = {f.name for f in dataclasses.fields(cls)}
         return cls(**{k: v for k, v in payload.items() if k in known})
 
 
-from hpc_mapreduce._time import utcnow_iso as _utcnow_iso  # noqa: E402
+from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: E402
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 def repo_hash(experiment_dir: Path) -> str:
@@ -146,20 +149,20 @@ def runs_dir(experiment_dir: Path) -> Path:
     NOTE: this is the **journal** runs directory under
     ``~/.claude/hpc/<repo_hash>/runs/``, NOT the cluster sidecar runs
     directory under ``<experiment_dir>/.hpc/runs/`` — that one is
-    :attr:`hpc_mapreduce.layout.RepoLayout.runs` (also exported as
-    :func:`hpc_mapreduce.runs_subdir`). The pre-B1 collision between
+    :attr:`claude_hpc._internal.layout.RepoLayout.runs` (also exported as
+    :func:`claude_hpc.runs_subdir`). The pre-B1 collision between
     these two ``runs_*`` names was a P0 bug source; the
     ``RepoLayout`` / ``JournalLayout`` type split makes it a type
     error.
     """
-    from hpc_mapreduce.layout import JournalLayout
+    from claude_hpc._internal.layout import JournalLayout
 
     return JournalLayout(experiment_dir).runs
 
 
 def _run_path(experiment_dir: Path, run_id: str) -> Path:
     """Deprecated alias for ``JournalLayout(experiment_dir).run_record(run_id)``."""
-    from hpc_mapreduce.layout import JournalLayout
+    from claude_hpc._internal.layout import JournalLayout
 
     return JournalLayout(experiment_dir).run_record(run_id)
 
@@ -208,7 +211,8 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 def _read_json(path: Path) -> dict | None:
     try:
-        return json.loads(path.read_text())
+        result: dict = json.loads(path.read_text())
+        return result
     except FileNotFoundError:
         return None
     except (OSError, json.JSONDecodeError) as exc:
@@ -223,10 +227,10 @@ def load_run(experiment_dir: Path, run_id: str) -> RunRecord | None:
     if payload is None:
         return None
     # B8: route reader-side check through the cross-domain manifest
-    # in hpc_mapreduce._version. Writer still emits SCHEMA_VERSION;
+    # in claude_hpc._internal._version. Writer still emits SCHEMA_VERSION;
     # the manifest declares the *supported* range so back-compat is one
     # one-line edit if/when v2 ships.
-    from hpc_mapreduce._version import is_compatible as _is_compat
+    from claude_hpc._internal._version import is_compatible as _is_compat
 
     found = payload.get("schema_version")
     if not isinstance(found, int) or not _is_compat("session", found):
@@ -273,7 +277,7 @@ def mark_run(
 ) -> RunRecord:
     """Terminal transition. Updates status (and optionally stage)."""
     # Validate against the canonical JournalStatus StrEnum (B2).
-    from hpc_mapreduce.lifecycle import JournalStatus
+    from claude_hpc._internal.lifecycle import JournalStatus
 
     if status not in set(JournalStatus):
         raise ValueError(f"mark_run: invalid status {status!r}")
@@ -328,7 +332,8 @@ def _rebuild_index(experiment_dir: Path) -> dict:
         if payload is None:
             continue
         # B8: route reader-side check through the cross-domain manifest.
-        from hpc_mapreduce._version import is_compatible as _is_compat
+        from claude_hpc._internal._version import is_compatible as _is_compat
+
         sv = payload.get("schema_version")
         if not isinstance(sv, int) or not _is_compat("session", sv):
             continue

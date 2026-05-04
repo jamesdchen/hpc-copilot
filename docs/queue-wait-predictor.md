@@ -14,15 +14,15 @@ Two layered backends, selected by the `backend` parameter (default
   hour-of-week (168 buckets), and returns the bucket's
   exponentially-weighted mean. Cold-start fallback when the DES inputs
   aren't available. Lives in
-  `hpc_mapreduce.job.queue_wait_baseline._predict_diurnal_ma`.
+  `claude_hpc.forecast.queue_wait_baseline._predict_diurnal_ma`.
 * **`des`** — Phase 4 discrete-event simulator. Loads the most recent
   persisted `ClusterSnapshot`, samples future arrivals per-user
   (non-homogeneous Poisson over `submit_hour_of_week_distribution`),
   samples residual lifetimes per-user (Triangular over the
   actual-over-ask ratio), and runs FIFO + EASY-backfill forward over
   a 7-day horizon. Returns the candidate's wait p10/p50/p90. Lives in
-  `hpc_mapreduce.job.queue_simulator` +
-  `hpc_mapreduce.job.queue_simulator_inputs`.
+  `claude_hpc.forecast.queue_simulator` +
+  `claude_hpc.forecast.queue_simulator_inputs`.
 
 ## Auto-fallback rule
 
@@ -34,7 +34,7 @@ Two layered backends, selected by the `backend` parameter (default
    (read from `<exp>/.hpc/user_profiles/<cluster>.json`).
 
 Otherwise it falls back to `diurnal_ma`. The decision logic is in
-`hpc_mapreduce.job.queue_wait_baseline._des_eligible`.
+`claude_hpc.forecast.queue_wait_baseline._des_eligible`.
 
 ## Replay-mode validation
 

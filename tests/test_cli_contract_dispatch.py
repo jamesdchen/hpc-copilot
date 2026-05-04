@@ -1,4 +1,4 @@
-"""Stderr/exit-code contract tests for ``hpc_mapreduce.map.dispatch``.
+"""Stderr/exit-code contract tests for ``claude_hpc.mapreduce.dispatch``.
 
 Pins the behaviours that ``/status`` and other observers rely on. Each
 test drives the dispatcher as a subprocess (matching cluster execution)
@@ -8,13 +8,12 @@ against a minimal ``.hpc/`` layout under tmp_path, and asserts on
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import hpc_mapreduce
+import claude_hpc
 
 
 def _run(
@@ -58,7 +57,7 @@ def _stub_layout(
     )
 
     dispatch_dst = hpc / "_hpc_dispatch.py"
-    pkg_dispatch = Path(hpc_mapreduce.__file__).parent / "map" / "dispatch.py"
+    pkg_dispatch = Path(claude_hpc.__file__).parent / "mapreduce" / "dispatch.py"
     shutil.copyfile(pkg_dispatch, dispatch_dst)
     return dispatch_dst
 

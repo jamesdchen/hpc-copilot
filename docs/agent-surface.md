@@ -21,7 +21,7 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
 - **One stdout shape**: a single-line JSON envelope.
   - Success: `{"ok": true, "idempotent": <bool>, "data": {...}}`
   - Failure: `{"ok": false, "error_code": "...", "category": "...", "retry_safe": <bool>, "remediation": "..."}`
-  - See [`schemas/envelope.json`](../hpc_mapreduce/schemas/envelope.json) and
+  - See [`schemas/envelope.json`](../claude_hpc/schemas/envelope.json) and
     [`docs/cli-spec.md`](cli-spec.md).
 - **Stable exit codes**: 0 ok, 1 user error, 2 cluster/network, 3 internal.
   An agent harness can dispatch on the exit code BEFORE parsing JSON.

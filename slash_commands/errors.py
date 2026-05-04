@@ -201,7 +201,9 @@ class ClusterPartiallyDegraded(HpcError):
         "short delay if planning quality matters."
     )
 
-    def __init__(self, message: str, *, partial_errors: list[dict[str, str]] | None = None, **kwargs):
+    def __init__(
+        self, message: str, *, partial_errors: list[dict[str, str]] | None = None, **kwargs
+    ):
         super().__init__(message, **kwargs)
         self.partial_errors: list[dict[str, str]] = list(partial_errors or [])
 
@@ -210,7 +212,7 @@ class SchemaIncompat(HpcError):
     """An on-disk JSON file declared a ``schema_version`` outside our
     supported range for that domain.
 
-    Raised by :func:`hpc_mapreduce._version.compatibility_check` so the
+    Raised by :func:`claude_hpc._internal._version.compatibility_check` so the
     five readers in the codebase (session, blacklist, runtime_prior,
     calibration prediction, status rollup, per-run sidecar) all surface
     the same error code.
@@ -227,5 +229,5 @@ class SchemaIncompat(HpcError):
         "The on-disk JSON was written by a newer (or older, foreign) "
         "claude-hpc version than this one supports. Upgrade the package "
         "or migrate the file. The supported version set is declared in "
-        "``hpc_mapreduce/_version.py:_MANIFEST``."
+        "``claude_hpc/_version.py:_MANIFEST``."
     )

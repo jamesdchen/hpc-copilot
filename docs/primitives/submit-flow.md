@@ -22,7 +22,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce submit-flow --spec <path>
-  python: hpc_mapreduce.job.submit_flow.submit_flow
+  python: claude_hpc.orchestrator.submit_flow.submit_flow
 ---
 
 ## Purpose

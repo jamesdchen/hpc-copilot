@@ -1,8 +1,8 @@
-"""Tests for hpc_mapreduce.reduce.classify.classify_failure."""
+"""Tests for claude_hpc.mapreduce.reduce.classify.classify_failure."""
 
 from __future__ import annotations
 
-from hpc_mapreduce.reduce.classify import CATEGORIES, classify_failure
+from claude_hpc.mapreduce.reduce.classify import CATEGORIES, classify_failure
 
 
 def test_gpu_oom_torch_message():

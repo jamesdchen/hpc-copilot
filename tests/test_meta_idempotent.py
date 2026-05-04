@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-from hpc_mapreduce.agent_cli import _meta_idempotent
-from hpc_mapreduce.operations import operations_catalog
+from claude_hpc.agent_cli import _meta_idempotent
+from claude_hpc.operations import operations_catalog
 
 
 def test_meta_idempotent_matches_catalog() -> None:
@@ -32,12 +32,8 @@ def test_meta_idempotent_matches_catalog() -> None:
         catalog_flag = bool(entry.get("idempotent", True))
         helper_flag = _meta_idempotent(name)
         if helper_flag != catalog_flag:
-            mismatches.append(
-                f"{name}: catalog={catalog_flag} helper={helper_flag}"
-            )
-    assert not mismatches, "drift between catalog and _meta_idempotent: " + "; ".join(
-        mismatches
-    )
+            mismatches.append(f"{name}: catalog={catalog_flag} helper={helper_flag}")
+    assert not mismatches, "drift between catalog and _meta_idempotent: " + "; ".join(mismatches)
 
 
 def test_meta_idempotent_unknown_name_defaults_true() -> None:

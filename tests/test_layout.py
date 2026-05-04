@@ -1,4 +1,4 @@
-"""Tests for ``hpc_mapreduce.layout``.
+"""Tests for ``claude_hpc._internal.layout``.
 
 The B1 refactor introduced ``RepoLayout`` and ``JournalLayout`` to
 replace eight scattered path helpers and to make the ``runs_dir``
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce.layout import JournalLayout, RepoLayout
+from claude_hpc._internal.layout import JournalLayout, RepoLayout
 
 
 def test_repo_layout_root_is_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,9 +92,7 @@ def test_journal_layout_runs_distinct_from_repo_layout(
     assert repo.runs != journal.runs
 
 
-def test_journal_layout_root_honors_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_journal_layout_root_honors_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     # ``slash_commands.session`` resolves ``HPC_HOMEDIR`` at import time;
     # we have to reload it for the env override to bite.
@@ -112,9 +110,7 @@ def test_journal_layout_root_honors_env(
         importlib.reload(session)
 
 
-def test_journal_layout_run_record_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_journal_layout_run_record_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     import importlib
 

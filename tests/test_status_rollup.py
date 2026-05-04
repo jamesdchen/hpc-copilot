@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from hpc_mapreduce.reduce.status import (
+from claude_hpc.mapreduce.reduce.status import (
     check_results_from_tasks,
     report_status_from_tasks,
     rollup_by_grid_point,
@@ -111,8 +111,8 @@ def test_report_status_from_tasks_integrates(tmp_path):
     (rdir / "done.json").write_text("{}")
 
     with (
-        patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
-        patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}),
+        patch("claude_hpc.mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
+        patch("claude_hpc.infra.backends.query.query_sacct", return_value={}),
     ):
         report = report_status_from_tasks(
             tasks_data,
@@ -153,8 +153,8 @@ def test_rollup_by_wave_groups_tasks_by_wave():
         "tasks": {
             "1": {"status": "complete"},  # task 0
             "2": {"status": "complete"},  # task 1
-            "3": {"status": "running"},   # task 2
-            "4": {"status": "failed"},    # task 3
+            "3": {"status": "running"},  # task 2
+            "4": {"status": "failed"},  # task 3
         }
     }
 

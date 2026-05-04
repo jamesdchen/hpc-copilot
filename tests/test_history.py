@@ -1,4 +1,4 @@
-"""Tests for ``hpc_mapreduce.reduce.history``: per-campaign sidecar
+"""Tests for ``claude_hpc.mapreduce.reduce.history``: per-campaign sidecar
 filtering, result-dir resolution, and per-iteration reduce."""
 
 from __future__ import annotations
@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_mapreduce.job.runs import write_run_sidecar
-from hpc_mapreduce.reduce.history import (
+from claude_hpc.mapreduce.reduce.history import (
     find_sidecars_by_campaign,
     prior,
     result_dirs_for_sidecar,
 )
+from claude_hpc.orchestrator.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path

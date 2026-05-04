@@ -1,11 +1,10 @@
-"""Tests for hpc_mapreduce.infra.inspect — pure parsers + injected runner."""
+"""Tests for claude_hpc.infra.inspect — pure parsers + injected runner."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from hpc_mapreduce.infra import inspect as ins
-
+from claude_hpc.infra import inspect as ins
 
 # --- scontrol parser ------------------------------------------------------
 
@@ -81,10 +80,7 @@ def _ago_iso(hours: float) -> str:
 class TestSacctParser:
     def test_parses_live_co_tenant(self):
         # 19h-old job, still RUNNING.
-        line = (
-            f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|"
-            f"cpu=24,mem=128G,gres/gpu=1"
-        )
+        line = f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|cpu=24,mem=128G,gres/gpu=1"
         rows = ins.parse_sacct_node_jobs(line)
         assert len(rows) == 1
         r = rows[0]
@@ -124,10 +120,10 @@ class TestQhostBareGpu:
         # Some SGE installs emit `gpu=2` directly under the host without
         # the `hl:` / `gl:` prefix. The parser must still capture it.
         text = (
-            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
-            "----------------------------------------------------------------------------------------------\n"
-            "global                  -               -    -    -    -     -       -       -       -       -\n"
-            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"  # noqa: E501
+            "----------------------------------------------------------------------------------------------\n"  # noqa: E501
+            "global                  -               -    -    -    -     -       -       -       -       -\n"  # noqa: E501
+            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"  # noqa: E501
             "    gpu=4\n"
             "    gpu_used=1\n"
         )
@@ -138,9 +134,9 @@ class TestQhostBareGpu:
 
     def test_prefixed_gpu_still_works(self):
         text = (
-            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
-            "----------------------------------------------------------------------------------------------\n"
-            "compute-002             lx-amd64       32    2   16   32  5.20  512.0G  100.0G   16.0G    1.0G\n"
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"  # noqa: E501
+            "----------------------------------------------------------------------------------------------\n"  # noqa: E501
+            "compute-002             lx-amd64       32    2   16   32  5.20  512.0G  100.0G   16.0G    1.0G\n"  # noqa: E501
             "    hl:gpu=8\n"
             "    gl:gpu_used=2\n"
         )
@@ -208,7 +204,11 @@ class TestInspectClusterEntry:
         runner = _FakeRunner(
             {
                 "scontrol show node": (0, _SCONTROL_FIXTURE, ""),
-                "sacct": (0, f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|gres/gpu=1|d11-03", ""),
+                "sacct": (
+                    0,
+                    f"99001|alice|RUNNING|24|128G|{_ago_iso(19)}|19:00:00|gres/gpu=1|d11-03",
+                    "",
+                ),
             }
         )
         snap = ins.inspect_cluster("discovery", runner=runner, use_cache=False)
@@ -224,7 +224,9 @@ class TestInspectClusterEntry:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         ins._CACHE.clear()
-        runner = _FakeRunner({"scontrol show node": (0, _SCONTROL_FIXTURE, ""), "sacct": (0, "", "")})
+        runner = _FakeRunner(
+            {"scontrol show node": (0, _SCONTROL_FIXTURE, ""), "sacct": (0, "", "")}
+        )
         ins.inspect_cluster("discovery", runner=runner, use_cache=True)
         first_calls = len(runner.calls)
         ins.inspect_cluster("discovery", runner=runner, use_cache=True)
@@ -265,10 +267,10 @@ class TestInspectClusterEntry:
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         ins._CACHE.clear()
         qhost_out = (
-            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
-            "----------------------------------------------------------------------------------------------\n"
-            "global                  -               -    -    -    -     -       -       -       -       -\n"
-            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"  # noqa: E501
+            "----------------------------------------------------------------------------------------------\n"  # noqa: E501
+            "global                  -               -    -    -    -     -       -       -       -       -\n"  # noqa: E501
+            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"  # noqa: E501
             "    hl:gpu=4\n"
             "    gl:gpu_used=1\n"
         )

@@ -1,4 +1,4 @@
-"""Tests for hpc_mapreduce.job.planner — integration via mocked snapshot."""
+"""Tests for claude_hpc.orchestrator.planner — integration via mocked snapshot."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_mapreduce.infra import inspect as ins
-from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job import planner
-from hpc_mapreduce.job import runtime_prior as rp
+from claude_hpc.infra import inspect as ins
+from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
+from claude_hpc.orchestrator import planner
+from claude_hpc.orchestrator import runtime_prior as rp
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +84,9 @@ class TestPlanSubmit:
     def test_needs_canary_when_no_priors(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
             out = planner.plan_submit(
                 tmp_path,
                 profile="ml_ridge",
@@ -99,10 +101,10 @@ class TestPlanSubmit:
     def test_candidates_include_default_pair(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
-            out = planner.plan_submit(
-                tmp_path, profile="x", cluster="discovery", adversarial=False
-            )
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
+            out = planner.plan_submit(tmp_path, profile="x", cluster="discovery", adversarial=False)
         constraints = [c["constraint"] for c in out["candidates"]]
         # Default behavior: each gpu type + the union.
         assert "a100" in constraints
@@ -112,7 +114,9 @@ class TestPlanSubmit:
     def test_stressed_node_surfaces_co_tenants(self, tmp_path, monkeypatch):
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
             out = planner.plan_submit(
                 tmp_path,
                 profile="x",
@@ -142,7 +146,9 @@ class TestPlanSubmit:
                 node="d11-07",
                 elapsed_sec=1000 + tid * 100,
             )
-        with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
+        with patch(
+            "claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()
+        ):
             out = planner.plan_submit(
                 tmp_path,
                 profile="ml_ridge",
@@ -188,14 +194,14 @@ class TestNodesForConstraint:
         # `a10` must not match a node whose Gres advertises `a100`. The
         # naive substring-in approach would silently include this node;
         # the token-aware match correctly excludes it.
-        from hpc_mapreduce.infra.inspect import NodeSnapshot
+        from claude_hpc.infra.inspect import NodeSnapshot
 
         a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
         out = planner._nodes_for_constraint([a100_node], gpu_types=["a10"])
         assert out == []
 
     def test_exact_match_still_works(self):
-        from hpc_mapreduce.infra.inspect import NodeSnapshot
+        from claude_hpc.infra.inspect import NodeSnapshot
 
         a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
         out = planner._nodes_for_constraint([a100_node], gpu_types=["a100"])
@@ -203,7 +209,7 @@ class TestNodesForConstraint:
 
     def test_active_features_fallback(self):
         # Some clusters expose the GPU type as a feature, not a GRES type.
-        from hpc_mapreduce.infra.inspect import NodeSnapshot
+        from claude_hpc.infra.inspect import NodeSnapshot
 
         node = NodeSnapshot(name="d11-08", gres="gpu:1", active_features=["v100"])
         out = planner._nodes_for_constraint([node], gpu_types=["v100"])
@@ -214,9 +220,7 @@ class TestTestOnlyEtaParser:
     def test_parses_iso_timestamp(self):
         from datetime import datetime, timedelta, timezone
 
-        future = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime(
-            "%Y-%m-%dT%H:%M:%S"
-        )
+        future = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
         text = f"sbatch: Job 12345 to start at {future} using 1 ..."
         eta = planner._parse_test_only_eta(text)
         assert eta is not None
@@ -246,7 +250,7 @@ class TestAdversarialPath:
         return f"sbatch: Job 1 to start at {future} using 1 ..."
 
     def test_recommended_tuple_picks_smallest_walltime(self, tmp_path, monkeypatch):
-        from hpc_mapreduce.job import backfill as bf
+        from claude_hpc.orchestrator import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -270,11 +274,12 @@ class TestAdversarialPath:
             captured.append(walltime_sec)
             return planner._parse_test_only_eta(self._canned_test_only(walltime_sec)), ""
 
-        with patch(
-            "hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()
-        ), patch(
-            "hpc_mapreduce.job.planner._eta_via_test_only_with_resources",
-            side_effect=fake_probe,
+        with (
+            patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()),
+            patch(
+                "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
+                side_effect=fake_probe,
+            ),
         ):
             out = planner.plan_submit(
                 tmp_path,
@@ -299,7 +304,7 @@ class TestAdversarialPath:
         assert sorted(adversarial_calls) == [1300, 1950, 2600]
 
     def test_falls_back_when_no_priors(self, tmp_path, monkeypatch):
-        from hpc_mapreduce.job import backfill as bf
+        from claude_hpc.orchestrator import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -308,11 +313,12 @@ class TestAdversarialPath:
         def fake_probe(scheduler, cluster_cfg, *, constraint, walltime_sec, mem_mb, cpus):
             return None, ""  # every probe fails
 
-        with patch(
-            "hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()
-        ), patch(
-            "hpc_mapreduce.job.planner._eta_via_test_only_with_resources",
-            side_effect=fake_probe,
+        with (
+            patch("claude_hpc.orchestrator.planner.inspect_cluster", return_value=_fake_snapshot()),
+            patch(
+                "claude_hpc.orchestrator.planner._eta_via_test_only_with_resources",
+                side_effect=fake_probe,
+            ),
         ):
             out = planner.plan_submit(
                 tmp_path,
@@ -337,26 +343,38 @@ class TestAdversarialPath:
 
 class TestEtaViaDES:
     def test_returns_none_without_snapshot_or_profiles(self, tmp_path):
-        from hpc_mapreduce.job.planner import _eta_via_des
+        from claude_hpc.orchestrator.planner import _eta_via_des
 
         # Empty experiment dir → no DES inputs.
         assert _eta_via_des(tmp_path, "ml_ridge", "discovery") is None
 
     def test_returns_int_when_des_eligible(self, tmp_path):
         # Persist an idle snapshot — DES runs and returns 0.
-        from hpc_mapreduce.infra.inspect import (
-            ClusterSnapshot, NodeSnapshot, persist_snapshot,
+        from claude_hpc.infra.inspect import (
+            ClusterSnapshot,
+            NodeSnapshot,
+            persist_snapshot,
         )
-        from hpc_mapreduce.job.planner import _eta_via_des
+        from claude_hpc.orchestrator.planner import _eta_via_des
 
         snap = ClusterSnapshot(
-            cluster="discovery", scheduler_kind="slurm",
+            cluster="discovery",
+            scheduler_kind="slurm",
             now_iso="2026-04-28T10:00:00+00:00",
-            nodes=[NodeSnapshot(
-                name="n0", state="IDLE", real_mem_mb=64_000, alloc_mem_mb=0,
-                cpu_tot=8, cpu_alloc=0, gres="", gres_used="", co_tenants=[],
-                is_drained=False,
-            )],
+            nodes=[
+                NodeSnapshot(
+                    name="n0",
+                    state="IDLE",
+                    real_mem_mb=64_000,
+                    alloc_mem_mb=0,
+                    cpu_tot=8,
+                    cpu_alloc=0,
+                    gres="",
+                    gres_used="",
+                    co_tenants=[],
+                    is_drained=False,
+                )
+            ],
         )
         persist_snapshot(tmp_path, snap)
         eta = _eta_via_des(tmp_path, "ml_ridge", "discovery")

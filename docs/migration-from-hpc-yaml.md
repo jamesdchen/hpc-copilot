@@ -37,7 +37,7 @@ multi-stage DAGs.
 | top-level `remote_path` | sidecar `remote_path` (v2) | First-class field. |
 | top-level `metrics` (sort order) | hardcoded alphabetical default + CLI override | No persisted setting. |
 | top-level `cluster_envs` | `clusters.yaml` `conda_envs` | Already in `clusters.yaml`; remaining overrides should fold there. |
-| `stages:` (multi-stage DAG) | **`.hpc/stages.py`** exposing `def stages() -> list[dict]` | New file. JSON Schema at `hpc_mapreduce/schemas/stages.input.json`. The only legacy field with no sidecar home. |
+| `stages:` (multi-stage DAG) | **`.hpc/stages.py`** exposing `def stages() -> list[dict]` | New file. JSON Schema at `claude_hpc/schemas/stages.input.json`. The only legacy field with no sidecar home. |
 
 ## Step-by-step migration
 
@@ -49,11 +49,11 @@ multi-stage DAGs.
    (`/aggregate`, `/monitor-hpc`, `/resubmit`, `/campaign`) read context from
    the sidecar rather than the yaml.
 3. **For multi-stage `stages:` DAGs, port to `.hpc/stages.py`.** The
-   helper `hpc_mapreduce.job.stages.from_yaml_dict` is *not* shipped —
+   helper `claude_hpc.orchestrator.stages.from_yaml_dict` is *not* shipped —
    convert by hand. The shape is straightforward: the dict-of-stages
    `{name: {run, depends_on, resources, ...}}` becomes a list of dicts
    `[{"name": ..., "run": ..., "depends_on": ..., ...}]`. Validate via
-   `hpc_mapreduce.job.stages.load_stages(experiment_dir)` — schema
+   `claude_hpc.orchestrator.stages.load_stages(experiment_dir)` — schema
    errors (missing `name`/`run`, unknown keys, broken `depends_on`)
    raise immediately.
 4. **Delete `hpc.yaml` from the repo.** It is not read; deleting it

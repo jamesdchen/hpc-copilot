@@ -22,7 +22,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]
-  python: hpc_mapreduce.job.runtime_prior.summarize
+  python: claude_hpc.orchestrator.runtime_prior.summarize
 exit_codes:
 - 0: ok
 - 1: spec_invalid

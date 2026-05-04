@@ -1,4 +1,4 @@
-"""Unit tests for :mod:`hpc_mapreduce.infra.cache`.
+"""Unit tests for :mod:`claude_hpc.infra.cache`.
 
 The cache backs :func:`infra.inspect.inspect_cluster` and
 :func:`job.backfill.cached_probe`; correctness here is correctness for
@@ -18,7 +18,7 @@ from unittest import mock
 
 import pytest
 
-from hpc_mapreduce.infra.cache import TTLCache, clear_all
+from claude_hpc.infra.cache import TTLCache, clear_all
 
 
 def test_get_returns_value_within_ttl() -> None:
@@ -31,7 +31,7 @@ def test_get_returns_value_within_ttl() -> None:
 def test_get_returns_none_after_ttl() -> None:
     c: TTLCache[str, int] = TTLCache("test-ttl", ttl_sec=10.0, max_size=4)
     base = time.monotonic()
-    with mock.patch("hpc_mapreduce.infra.cache.time.monotonic") as mt:
+    with mock.patch("claude_hpc.infra.cache.time.monotonic") as mt:
         mt.return_value = base
         c.put("a", 1)
         mt.return_value = base + 9.999
@@ -70,7 +70,7 @@ def test_get_refreshes_lru_position() -> None:
 def test_put_existing_key_resets_ttl_clock() -> None:
     c: TTLCache[str, int] = TTLCache("test-reset", ttl_sec=10.0, max_size=4)
     base = time.monotonic()
-    with mock.patch("hpc_mapreduce.infra.cache.time.monotonic") as mt:
+    with mock.patch("claude_hpc.infra.cache.time.monotonic") as mt:
         mt.return_value = base
         c.put("a", 1)
         mt.return_value = base + 8.0

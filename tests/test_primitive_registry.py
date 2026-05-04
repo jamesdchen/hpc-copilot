@@ -14,14 +14,14 @@ import dataclasses
 
 import pytest
 
-from hpc_mapreduce import (
+from claude_hpc import (
     PrimitiveMeta,
     SideEffect,
     get_meta,
     get_registry,
     primitive,
 )
-from hpc_mapreduce._primitive import _REGISTRY
+from claude_hpc._internal._primitive import _REGISTRY
 
 
 def test_decorator_registers_under_given_name() -> None:

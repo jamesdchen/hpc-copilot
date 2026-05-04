@@ -11,8 +11,7 @@ import argparse
 
 import pytest
 
-from hpc_mapreduce.executor_cli import (
-    Flag,
+from claude_hpc.executor_cli import (
     build_parser_from_flags,
     flag,
     generic_args,

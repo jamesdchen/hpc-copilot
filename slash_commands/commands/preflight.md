@@ -11,12 +11,12 @@ Catches the most common first-time-user failure mode: SSH credentials not forwar
 ## Steps
 
 1. Ask the user (or accept a `--cluster <name>` argument) which cluster to
-   target. If they don't know, run `python -m hpc_mapreduce clusters list`
+   target. If they don't know, run `python -m claude_hpc clusters list`
    first and present the names.
 
 2. Invoke the CLI:
    ```bash
-   python -m hpc_mapreduce preflight --cluster <name>
+   python -m claude_hpc preflight --cluster <name>
    ```
    Output is a single-line JSON envelope on stdout. Parse it.
 

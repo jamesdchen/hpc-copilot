@@ -12,7 +12,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -24,6 +23,5 @@ def test_lint_primitive_modules_passes() -> None:
         timeout=30,
     )
     assert proc.returncode == 0, (
-        f"lint_primitive_modules failed:\n"
-        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+        f"lint_primitive_modules failed:\nstdout={proc.stdout}\nstderr={proc.stderr}"
     )

@@ -34,14 +34,14 @@ from typing import Any
 # Allow ``python scripts/validate_des_predictor.py`` from a checkout.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hpc_mapreduce._time import parse_iso_utc_or_none
-from hpc_mapreduce.infra.inspect import read_cluster_history
-from hpc_mapreduce.job.queue_simulator import SimJob, simulate_distribution
-from hpc_mapreduce.job.queue_simulator_inputs import (
+from claude_hpc._internal._time import parse_iso_utc_or_none
+from claude_hpc.forecast.queue_simulator import SimJob, simulate_distribution
+from claude_hpc.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
-from hpc_mapreduce.job.runtime_prior import read_samples
+from claude_hpc.infra.inspect import read_cluster_history
+from claude_hpc.orchestrator.runtime_prior import read_samples
 
 
 def _percentile(xs: list[float], p: float) -> float:
@@ -57,9 +57,7 @@ def _percentile(xs: list[float], p: float) -> float:
     return xs[lo] + frac * (xs[hi] - xs[lo])
 
 
-def _find_snapshot_before(
-    experiment_dir: Path, cluster: str, target_iso: str
-):
+def _find_snapshot_before(experiment_dir: Path, cluster: str, target_iso: str):
     """Return the most recent snapshot whose now_iso ≤ target_iso, or None."""
     target_dt = parse_iso_utc_or_none(target_iso)
     if target_dt is None:
@@ -87,12 +85,13 @@ def replay(
 ) -> dict[str, Any]:
     """Run the replay sweep. Returns a summary dict."""
     samples = read_samples(
-        experiment_dir, profile=profile, cluster=cluster,
+        experiment_dir,
+        profile=profile,
+        cluster=cluster,
         only_successful=False,
     )
     populated = [
-        s for s in samples
-        if s.get("submitted_at_iso") and s.get("queue_wait_sec") is not None
+        s for s in samples if s.get("submitted_at_iso") and s.get("queue_wait_sec") is not None
     ]
     if limit is not None:
         populated = populated[-limit:]
@@ -122,23 +121,30 @@ def replay(
             n_replications=n_replications,
             seed=seed,
             arrival_sampler=lambda s: sample_arrival_stream(
-                {}, snap_hour_of_week=0, horizon_sec=7 * 86400.0, seed=s,
+                {},
+                snap_hour_of_week=0,
+                horizon_sec=7 * 86400.0,
+                seed=s,
             ),
-            residual_sampler=lambda s: sample_residual_lifetimes(
-                snap, {}, seed=s,
+            residual_sampler=lambda s, _snap=snap: sample_residual_lifetimes(
+                _snap,
+                {},
+                seed=s,
             ),
         )
         predicted = out.p50_wait_sec
         residual = predicted - observed
-        rows.append({
-            "submitted_at_iso": sub_iso,
-            "observed_sec": observed,
-            "predicted_p50_sec": predicted,
-            "predicted_p10_sec": out.p10_wait_sec,
-            "predicted_p90_sec": out.p90_wait_sec,
-            "residual_sec": residual,
-            "rel_residual": residual / observed if observed > 0 else None,
-        })
+        rows.append(
+            {
+                "submitted_at_iso": sub_iso,
+                "observed_sec": observed,
+                "predicted_p50_sec": predicted,
+                "predicted_p10_sec": out.p10_wait_sec,
+                "predicted_p90_sec": out.p90_wait_sec,
+                "residual_sec": residual,
+                "rel_residual": residual / observed if observed > 0 else None,
+            }
+        )
 
     if not rows:
         return {
@@ -152,29 +158,16 @@ def replay(
         }
 
     abs_resids = [abs(r["residual_sec"]) for r in rows]
-    rel_resids = [
-        r["rel_residual"] for r in rows if r["rel_residual"] is not None
-    ]
+    rel_resids = [r["rel_residual"] for r in rows if r["rel_residual"] is not None]
     return {
         "n_samples": len(rows),
         "n_skipped_no_snapshot": skipped_no_snapshot,
         "mae_sec": sum(abs_resids) / len(abs_resids),
-        "mape": (
-            sum(abs(rr) for rr in rel_resids) / len(rel_resids)
-            if rel_resids else None
-        ),
-        "residual_p50_sec": _percentile(
-            [r["residual_sec"] for r in rows], 0.5
-        ),
-        "residual_p95_sec": _percentile(
-            [r["residual_sec"] for r in rows], 0.95
-        ),
-        "rel_residual_p50": (
-            _percentile(rel_resids, 0.5) if rel_resids else None
-        ),
-        "rel_residual_p95": (
-            _percentile(rel_resids, 0.95) if rel_resids else None
-        ),
+        "mape": (sum(abs(rr) for rr in rel_resids) / len(rel_resids) if rel_resids else None),
+        "residual_p50_sec": _percentile([r["residual_sec"] for r in rows], 0.5),
+        "residual_p95_sec": _percentile([r["residual_sec"] for r in rows], 0.95),
+        "rel_residual_p50": (_percentile(rel_resids, 0.5) if rel_resids else None),
+        "rel_residual_p95": (_percentile(rel_resids, 0.95) if rel_resids else None),
     }
 
 
@@ -184,11 +177,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--profile", required=True)
     p.add_argument("--cluster", required=True)
     p.add_argument("--n-replications", type=int, default=16)
-    p.add_argument("--limit", type=int, default=None,
-                   help="cap to the most recent N samples (for speed)")
+    p.add_argument(
+        "--limit", type=int, default=None, help="cap to the most recent N samples (for speed)"
+    )
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--output", default="-",
-                   help="file path or '-' for stdout (default)")
+    p.add_argument("--output", default="-", help="file path or '-' for stdout (default)")
     args = p.parse_args(argv)
     summary = replay(
         args.experiment_dir,

@@ -1,4 +1,4 @@
-"""Tests for :mod:`hpc_mapreduce._version`.
+"""Tests for :mod:`claude_hpc._internal._version`.
 
 The manifest is the cross-domain source of truth for supported schema
 versions. These tests check three things:
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce import _version
+from claude_hpc._internal import _version
 from slash_commands import errors
 
 
@@ -56,8 +56,8 @@ def test_supported_versions_returns_tuple() -> None:
 # of (file, constant_name) pairs. We use one canonical writer per
 # domain even when readers exist in multiple files.
 _WRITER_CONSTANTS = {
-    "sidecar": [("hpc_mapreduce/job/runs.py", "SIDECAR_SCHEMA_VERSION")],
-    "runtime_prior": [("hpc_mapreduce/job/runtime_prior.py", "SCHEMA_VERSION")],
+    "sidecar": [("claude_hpc/orchestrator/runs.py", "SIDECAR_SCHEMA_VERSION")],
+    "runtime_prior": [("claude_hpc/orchestrator/runtime_prior.py", "SCHEMA_VERSION")],
     # calibration_prediction and status_rollup write their schema_version
     # as inline literals (no module-level constant). Verified by other tests.
     "calibration_prediction": [],

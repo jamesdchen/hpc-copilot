@@ -1,10 +1,10 @@
-"""Tests for hpc_mapreduce.job.runtime_prior — quantile rollups + atomic appends."""
+"""Tests for claude_hpc.orchestrator.runtime_prior — quantile rollups + atomic appends."""
 
 from __future__ import annotations
 
 import json
 
-from hpc_mapreduce.job import runtime_prior as rp
+from claude_hpc.orchestrator import runtime_prior as rp
 
 
 class TestAppendSample:
@@ -60,9 +60,7 @@ class TestRollUp:
             node="d11-07",
             elapsed_sec=4150,
         )
-        out = rp.roll_up_quantiles(
-            tmp_path, profile="ml_ridge", cluster="discovery"
-        )
+        out = rp.roll_up_quantiles(tmp_path, profile="ml_ridge", cluster="discovery")
         assert out["needs_canary"] is False
         a100 = out["quantiles"]["a100"]
         assert a100["n_samples"] == 1
@@ -82,9 +80,7 @@ class TestRollUp:
                 node="d11-07",
                 elapsed_sec=elapsed,
             )
-        out = rp.roll_up_quantiles(
-            tmp_path, profile="ml_ridge", cluster="discovery"
-        )
+        out = rp.roll_up_quantiles(tmp_path, profile="ml_ridge", cluster="discovery")
         a100 = out["quantiles"]["a100"]
         assert a100["n_samples"] == 10
         assert a100["min_sec"] == 1000
@@ -103,9 +99,7 @@ class TestRollUp:
                 node=f"node-{tid}",
                 elapsed_sec=1000 + tid,
             )
-        out = rp.roll_up_quantiles(
-            tmp_path, profile="ml_ridge", cluster="discovery"
-        )
+        out = rp.roll_up_quantiles(tmp_path, profile="ml_ridge", cluster="discovery")
         assert set(out["quantiles"].keys()) == {"a100", "v100"}
         assert out["quantiles"]["a100"]["n_samples"] == 2
         assert out["quantiles"]["v100"]["n_samples"] == 1
@@ -151,9 +145,7 @@ class TestRollUp:
             elapsed_sec=4000,
             exit_code=1,
         )
-        out = rp.roll_up_quantiles(
-            tmp_path, profile="ml_ridge", cluster="discovery"
-        )
+        out = rp.roll_up_quantiles(tmp_path, profile="ml_ridge", cluster="discovery")
         assert out["needs_canary"] is True
 
 
@@ -187,19 +179,37 @@ class TestIdempotencyUnderCap:
         monkeypatch.setattr(rp, "MAX_SAMPLES", 3)
         # Seed: (r1, 0).
         rp.append_sample(
-            tmp_path, profile="p", cluster="c", run_id="r1", task_id=0,
-            gpu_type="a100", node="n1", elapsed_sec=100,
+            tmp_path,
+            profile="p",
+            cluster="c",
+            run_id="r1",
+            task_id=0,
+            gpu_type="a100",
+            node="n1",
+            elapsed_sec=100,
         )
         # Push it off the back with three newer samples.
         for tid in (1, 2, 3):
             rp.append_sample(
-                tmp_path, profile="p", cluster="c", run_id="r1", task_id=tid,
-                gpu_type="a100", node="n1", elapsed_sec=200 + tid,
+                tmp_path,
+                profile="p",
+                cluster="c",
+                run_id="r1",
+                task_id=tid,
+                gpu_type="a100",
+                node="n1",
+                elapsed_sec=200 + tid,
             )
         # Now (r1, 0) is gone. Re-writing it should append a fresh copy.
         rp.append_sample(
-            tmp_path, profile="p", cluster="c", run_id="r1", task_id=0,
-            gpu_type="a100", node="n1", elapsed_sec=999,
+            tmp_path,
+            profile="p",
+            cluster="c",
+            run_id="r1",
+            task_id=0,
+            gpu_type="a100",
+            node="n1",
+            elapsed_sec=999,
         )
         samples = rp.read_samples(tmp_path, profile="p", cluster="c")
         # Cap is 3; the just-appended (r1, 0) plus the two most recent.

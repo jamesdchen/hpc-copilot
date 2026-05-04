@@ -1,4 +1,4 @@
-"""Tests for ``hpc_mapreduce._io.atomic_locked_update``.
+"""Tests for ``claude_hpc._internal._io.atomic_locked_update``.
 
 The helper is the canonical read-modify-write primitive for JSON docs
 under flock. These tests cover:
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce._io import atomic_locked_update
+from claude_hpc._internal._io import atomic_locked_update
 
 
 def test_create_new_doc(tmp_path: Path) -> None:

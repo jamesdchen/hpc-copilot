@@ -11,10 +11,13 @@ from __future__ import annotations
 import json
 import math
 import random
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from hpc_mapreduce.map import combiner as combiner_mod
-from hpc_mapreduce.map.combiner import _grid_key, _neumaier_sum, _weighted_mean, main
+from claude_hpc.mapreduce import combiner as combiner_mod
+from claude_hpc.mapreduce.combiner import _grid_key, _neumaier_sum, _weighted_mean, main
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _scaffold(
@@ -49,9 +52,7 @@ def _scaffold(
 
 def _patch_sibling_lookup(monkeypatch, hpc: Path) -> None:
     """Make combiner.main treat hpc/ as the dir containing __file__."""
-    monkeypatch.setattr(
-        combiner_mod, "__file__", str(hpc / "_hpc_combiner.py"), raising=False
-    )
+    monkeypatch.setattr(combiner_mod, "__file__", str(hpc / "_hpc_combiner.py"), raising=False)
 
 
 # ─── Pure-function tests ────────────────────────────────────────────────────
@@ -132,8 +133,10 @@ class TestMainEndToEnd:
         hpc = _scaffold(
             tmp_path,
             # Two tasks with the same kwargs ⇒ same grid_key ⇒ one grid point.
-            kwargs_per_task=[{"model": "ridge", "horizon": "1"},
-                             {"model": "ridge", "horizon": "1"}],
+            kwargs_per_task=[
+                {"model": "ridge", "horizon": "1"},
+                {"model": "ridge", "horizon": "1"},
+            ],
         )
         _patch_sibling_lookup(monkeypatch, hpc)
         monkeypatch.setenv("HPC_WAVE", "0")
@@ -293,9 +296,11 @@ class TestMainWritesOutputAtomically:
         def boom(*args, **kwargs):
             raise RuntimeError("walltime")
 
-        with _patch.object(combiner_mod.json, "dump", side_effect=boom):
-            with __import__("pytest").raises(RuntimeError):
-                combiner_mod.main()
+        with (
+            _patch.object(combiner_mod.json, "dump", side_effect=boom),
+            __import__("pytest").raises(RuntimeError),
+        ):
+            combiner_mod.main()
 
         out = tmp_path / "_combiner" / "wave_0.json"
         assert not out.exists()
