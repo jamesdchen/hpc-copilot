@@ -199,7 +199,7 @@ def get_active(
     ],
     error_codes=[_errors.HpcError],
     idempotent=True,
-    idempotency_key="node",
+    idempotency_key="(cluster, node)",
 )
 def record_segv(
     experiment_dir: Path,
