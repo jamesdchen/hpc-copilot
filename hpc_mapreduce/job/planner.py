@@ -179,7 +179,7 @@ def plan_submit(
             "runtime_prior_quantiles_sec": c_quantiles,
             "p_fail_30d": c_p_fail,
         }
-        if adversarial and scheduler == "slurm":
+        if adversarial and get_backend_class(scheduler).supports_test_only_eta:
             report.update(
                 _adversarial_report(
                     constraint=c,
@@ -209,7 +209,7 @@ def plan_submit(
     # them once when assembling the final spec.
     array_reshape: dict[str, Any] | None = None
     walltime_split: dict[str, Any] | None = None
-    if adversarial and scheduler == "slurm":
+    if adversarial and get_backend_class(scheduler).supports_test_only_eta:
         if current_max_array_size:
             new_size, reshape_rationale = reshape_array_size_for_backfill(
                 current_max_array_size=current_max_array_size,
@@ -336,7 +336,9 @@ def _eta_via_test_only_with_resources(
     regex. Any failure path yields ``(None, "")`` so the planner can
     silently skip that probe rather than abort the whole report.
     """
-    if scheduler != "slurm":
+    # B5-PR2: gate on the backend capability, not the scheduler name.
+    from hpc_mapreduce.infra.backends import get_backend_class
+    if not get_backend_class(scheduler).supports_test_only_eta:
         return None, ""
     host = cluster_cfg.get("host")
     user = cluster_cfg.get("user")
