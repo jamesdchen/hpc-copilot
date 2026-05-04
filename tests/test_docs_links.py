@@ -122,6 +122,30 @@ _DOC_VOCABULARY = {
     # Submit-spec fields
     "cmd",
     "request_id",
+    # Failure-output fields surfaced by cmd_failures
+    "preempted_count",
+    "preempted_task_ids",
+    "partial_errors",
+    "failure_breakdown",
+    # Poll-state vocabulary
+    "timeout",
+    # Subcommand / agent-CLI surface
+    "cmd_failures",
+    "validate",
+    # Package / module names
+    "claude_hpc",
+    "hpc_mapreduce",
+    # Re-exported helpers from claude_hpc.__init__
+    "load_tasks_module",
+    "tasks_path",
+    # Campaign-health fields
+    "walltime_cliff_rate",
+    "gpu_utilization",
+    "suggested_prompt",
+    # Legacy-rename references kept for migration history
+    "manifest_invalid",
+    "blacklist_active_count",
+    "blacklisted_nodes",
 }
 
 
