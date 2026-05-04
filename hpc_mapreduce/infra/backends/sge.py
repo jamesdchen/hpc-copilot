@@ -113,6 +113,32 @@ class SGEBackend(HPCBackend):
         from hpc_mapreduce.infra.backends.query import query_sge
         return query_sge(job_ids, user=sge_user)
 
+    @staticmethod
+    def inspect_cluster(
+        cluster_name: str,
+        cfg: dict,
+        *,
+        sacct_window_hours: int = 24,
+        stress_alloc_mem_pct: float = 0.80,
+        stress_cpu_load_frac: float = 0.80,
+        runner=None,
+    ):
+        """Dispatch to :func:`_sge_inspect` for SGE.
+
+        Unified signature with :meth:`SlurmBackend.inspect_cluster`; SGE
+        ignores ``sacct_window_hours`` because it builds its node /
+        co-tenant view from ``qstat`` snapshots, which are wall-clock
+        snapshots rather than a historical window.
+        """
+        from hpc_mapreduce.infra.inspect import _sge_inspect
+        return _sge_inspect(
+            cluster_name,
+            cfg,
+            stress_alloc_mem_pct=stress_alloc_mem_pct,
+            stress_cpu_load_frac=stress_cpu_load_frac,
+            runner=runner,
+        )
+
     def _build_command(
         self,
         task_range: str,
