@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import hpc_mapreduce
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from hpc_mapreduce.job.discover import (
     detect_mars_tier,
@@ -440,6 +441,13 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
 # ─── subcommand: runtime-prior ─────────────────────────────────────────────
 
 
+@primitive(
+    name="read-runtime-prior",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def cmd_runtime_prior(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.runtime_prior import roll_up_quantiles
 
@@ -456,6 +464,13 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
 # ─── subcommand: walltime-drift / house-edge (calibration) ────────────────
 
 
+@primitive(
+    name="walltime-drift",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def cmd_walltime_drift(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.calibration import (
         compute_walltime_drift,
@@ -490,6 +505,13 @@ def cmd_walltime_drift(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+@primitive(
+    name="house-edge",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def cmd_house_edge(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.calibration import compute_house_edge
     from hpc_mapreduce.job.runtime_prior import read_samples
@@ -797,6 +819,12 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     from hpc_mapreduce.job.submit_flow import submit_flow
 
     spec = _load_spec(args.spec, schema_name=None)
+    # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
+    # caller can opt in via either path. Flag wins over spec when both
+    # are set (CLI is the more explicit override).
+    if getattr(args, "partial_ok", False):
+        spec = dict(spec)
+        spec["partial_ok"] = True
     _validate_against_schema(spec, "submit_flow")
 
     if args.dry_run:
@@ -833,6 +861,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         skip_preflight=bool(spec.get("skip_preflight", False)),
         slurm_account=spec.get("slurm_account"),
         slurm_cluster=spec.get("slurm_cluster"),
+        partial_ok=bool(spec.get("partial_ok", False)),
     )
     _ok(result.to_envelope_data(), idempotent=True)
     return EXIT_OK
@@ -1669,6 +1698,17 @@ def build_parser() -> argparse.ArgumentParser:
             "one shot. Lets higher-level workflows (campaigns, sweeps) "
             "compose the submit pipeline as a single CLI call instead of "
             "agent-driving /submit-hpc. Idempotent on run_id."
+        ),
+    )
+    p_sf.add_argument(
+        "--partial-ok",
+        action="store_true",
+        help=(
+            "Tolerate per-task failures: when the wave finishes, classify "
+            "as `complete` if at least one task succeeded; record failed "
+            "task IDs in <run_id>.failed.json so aggregate-flow can skip "
+            "them. Without this flag (the default), any failure aborts the "
+            "wave with lifecycle_state=failed."
         ),
     )
     _add_experiment_dir(p_sf)
