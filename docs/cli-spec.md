@@ -35,6 +35,19 @@ The JSON Schemas under `hpc_mapreduce/schemas/` are the source of truth — agen
 {"ok": true, "idempotent": <bool>, "data": {<subcommand-specific>}}
 ```
 
+Optionally a top-level `partial_errors` array carries `{code, detail}`
+records when the operation succeeded but one or more cluster-side data
+sources were degraded (`qhost_failed`, `scontrol_failed`,
+`qstat_unavailable`, `qacct_unavailable`, `malformed_row`, ...). This
+is distinct from `data.errors`, which is a primitive-internal field
+some subcommands keep for back-compat. Consumers should prefer
+`partial_errors` when present.
+
+```json
+{"ok": true, "idempotent": true, "data": {...},
+ "partial_errors": [{"code": "qhost_failed", "detail": "qhost timed out"}]}
+```
+
 ### Error
 
 ```json
