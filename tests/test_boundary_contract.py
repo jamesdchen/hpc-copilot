@@ -43,6 +43,9 @@ ALLOWED_EXPORTS = frozenset(
         "runs_subdir",
         "tasks_path",
         "load_tasks_module",
+        # Path resolution (B1) — canonical home for the three forwarders above
+        "RepoLayout",
+        "JournalLayout",
         # Per-run sidecars (NEW)
         "MAX_RUNS",
         "SIDECAR_SCHEMA_VERSION",
