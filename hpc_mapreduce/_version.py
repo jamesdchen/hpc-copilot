@@ -100,4 +100,15 @@ def compatibility_check(domain: str, found: int) -> None:
     )
 
 
-__all__ = ["compatibility_check", "supported_versions"]
+def is_compatible(domain: str, found: int) -> bool:
+    """Non-raising sibling of :func:`compatibility_check`.
+
+    For readers that prefer to soft-skip an incompatible record (e.g.
+    the journal rebuilder, which scans every file and shouldn't tank
+    on one stale entry) rather than raise. Returns ``True`` iff
+    *found* is in :data:`_MANIFEST` ``[domain]``.
+    """
+    return found in _MANIFEST[domain]
+
+
+__all__ = ["compatibility_check", "is_compatible", "supported_versions"]
