@@ -36,7 +36,6 @@ What it intentionally does NOT do (in MVP)
   this with category-driven resource overrides; folding that into
   monitor-flow requires a backend abstraction parallel to submit-flow's,
   plus the failure-classification policy. Tracked separately.
-- SEGV blacklist updates. Same reason.
 - Decision logic about whether a run is "stalled" — this is judgment.
 """
 

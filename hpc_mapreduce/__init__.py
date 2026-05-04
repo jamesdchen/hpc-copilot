@@ -77,8 +77,6 @@ __all__ = [
     "build_wave_map",
     # Smart-submit data layer
     "inspect_cluster",
-    "record_segv",
-    "get_active_blacklist",
     "append_runtime_sample",
     "roll_up_runtime_quantiles",
     "plan_submit",
@@ -115,8 +113,6 @@ from hpc_mapreduce.infra.remote import (
     run_combiner_checked,
     ssh_run,
 )
-from hpc_mapreduce.job.blacklist import get_active as get_active_blacklist
-from hpc_mapreduce.job.blacklist import record_segv
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 from hpc_mapreduce.job.discover import (
     ExecutorInfo,

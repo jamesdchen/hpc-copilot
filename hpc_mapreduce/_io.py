@@ -1,9 +1,8 @@
 """Shared I/O primitives for the primitives layer.
 
 Currently exposes :func:`atomic_locked_update`, the read-modify-write
-helper used by :mod:`hpc_mapreduce.job.blacklist` and
-:mod:`hpc_mapreduce.job.runtime_prior` to mutate JSON documents under a
-``fcntl`` advisory lock with an atomic rename.
+helper used by :mod:`hpc_mapreduce.job.runtime_prior` to mutate JSON
+documents under a ``fcntl`` advisory lock with an atomic rename.
 
 The helper deliberately keeps a tight API:
 
@@ -38,8 +37,8 @@ if TYPE_CHECKING:
 def _read_json_doc(path: Path) -> dict[str, Any] | None:
     """Read *path* and return the parsed JSON dict, or ``None`` on any
     read / decode / shape error. Mirrors the ``_read_doc`` fall-through
-    behaviour of both blacklist and runtime_prior — we never raise on a
-    corrupt file because refusing to plan is worse than ignoring it.
+    behaviour of runtime_prior — we never raise on a corrupt file
+    because refusing to plan is worse than ignoring it.
     """
     try:
         text = path.read_text()

@@ -4,19 +4,19 @@ Two frozen dataclasses, distinguished by *type* so static checkers and
 human readers cannot confuse one for the other:
 
 * :class:`RepoLayout` — the experiment-relative ``.hpc/`` tree
-  (``tasks.py``, run sidecars, blacklist, runtime priors). Lives at
+  (``tasks.py``, run sidecars, runtime priors). Lives at
   ``<experiment_dir>/.hpc/``.
 * :class:`JournalLayout` — the cross-experiment journal tree under
   ``~/.claude/hpc/<repo_hash>/``. Holds ``RunRecord`` JSON, last-status
   snapshots, monitor tick logs, and the journal index.
 
-The pre-B1 codebase used eight scattered path helpers
+The pre-B1 codebase used several scattered path helpers
 (``framework_subdir``, ``runs_subdir``, ``tasks_path``,
-``run_sidecar_path``, ``blacklist_path``, ``runtime_path``,
-``journal_dir``, ``runs_dir``) plus a ``runs_dir`` (journal) /
-``runs_subdir`` (cluster sidecar) name collision that caused a P0
-``build_wave_map`` bug. ``RepoLayout``/``JournalLayout`` give those
-helpers a single, type-safe home.
+``run_sidecar_path``, ``runtime_path``, ``journal_dir``, ``runs_dir``)
+plus a ``runs_dir`` (journal) / ``runs_subdir`` (cluster sidecar) name
+collision that caused a P0 ``build_wave_map`` bug.
+``RepoLayout``/``JournalLayout`` give those helpers a single, type-safe
+home.
 """
 
 from __future__ import annotations
@@ -85,10 +85,6 @@ class RepoLayout:
     def run_sidecar(self, run_id: str) -> Path:
         """``.hpc/runs/<run_id>.json`` — per-run sidecar JSON."""
         return self.runs / f"{run_id}.json"
-
-    def blacklist(self, cluster: str) -> Path:
-        """``.hpc/bad_nodes.<cluster>.json``."""
-        return self.hpc / f"bad_nodes.{cluster}.json"
 
     def runtime_prior(self, profile: str, cluster: str) -> Path:
         """``.hpc/runtimes/<profile>.<cluster>.json``.

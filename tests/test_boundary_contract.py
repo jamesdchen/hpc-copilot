@@ -91,8 +91,6 @@ ALLOWED_EXPORTS = frozenset(
         "build_wave_map",
         # Smart-submit data layer
         "inspect_cluster",
-        "record_segv",
-        "get_active_blacklist",
         "append_runtime_sample",
         "roll_up_runtime_quantiles",
         "plan_submit",

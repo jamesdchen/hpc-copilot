@@ -58,11 +58,6 @@ def test_repo_layout_run_sidecar(tmp_path: Path) -> None:
     assert p == tmp_path.resolve() / ".hpc" / "runs" / "abc123.json"
 
 
-def test_repo_layout_blacklist(tmp_path: Path) -> None:
-    layout = RepoLayout(tmp_path)
-    assert layout.blacklist("cluster1") == tmp_path.resolve() / ".hpc" / "bad_nodes.cluster1.json"
-
-
 def test_repo_layout_runtime_prior(tmp_path: Path) -> None:
     layout = RepoLayout(tmp_path)
     p = layout.runtime_prior("profileA", "cluster1")
