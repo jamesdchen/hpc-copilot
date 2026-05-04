@@ -33,17 +33,33 @@ Methods:
 Samples without ``submitted_at_iso`` or ``queue_wait_sec`` are silently
 skipped — the prior is advisory and the older legacy samples predate the
 field.
+
+Order-book adjustment (Phase 1c)
+--------------------------------
+When :func:`predict_queue_wait` is called with ``current_features`` —
+a :class:`~hpc_mapreduce.job.queue_features.QueueFeatures` snapshot
+computed at submit time — the diurnal MA is multiplied by a bounded
+factor derived from the current queue depth relative to a reference
+depth. The factor is clamped to ``[_MIN_FACTOR, _MAX_FACTOR]`` so a
+malformed feature payload (zero divisor, runaway queue) cannot blow
+the prediction up by 100×. Confidence is **not** promoted by the
+adjustment — features are advisory. The applied factor is recorded on
+:attr:`PredictionResult.features_adjustment_factor` for transparency.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
 from hpc_mapreduce.job.runtime_prior import read_samples
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from hpc_mapreduce.job.queue_features import QueueFeatures
 
 __all__ = ["PredictionResult", "predict_queue_wait"]
 
@@ -61,6 +77,13 @@ class PredictionResult:
     ``bucket_hour_of_week`` is ``-1`` when the input ``at_iso`` was
     unparseable; otherwise it is the integer ``0..167`` index of the
     target bucket.
+
+    ``features_adjustment_factor`` is the multiplicative scaling
+    applied to the diurnal MA when ``current_features`` is supplied.
+    1.0 means no adjustment (either features were absent, or queue
+    depth matched the reference). Values >1 indicate the queue is
+    currently busier than usual; <1 indicates emptier. Clamped to
+    ``[_MIN_FACTOR, _MAX_FACTOR]``.
     """
 
     predicted_wait_sec: int | None
@@ -70,6 +93,7 @@ class PredictionResult:
     n_total_samples: int
     bucket_hour_of_week: int
     fallback_reason: str | None
+    features_adjustment_factor: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,6 +104,20 @@ _DEFAULT_HALF_LIFE_DAYS = 14.0
 _DEFAULT_MIN_BUCKET_SAMPLES = 5
 _DEFAULT_MIN_GLOBAL_SAMPLES = 20
 _DEFAULT_BUCKET_RADIUS = 1
+
+# Order-book adjustment caps — see module docstring.
+_MIN_FACTOR = 0.5
+_MAX_FACTOR = 2.0
+# Strength controls how aggressively the order-book signal pushes the
+# diurnal MA. 0.5 means "halve the deviation from the reference": a
+# queue at 2× the reference yields factor 1.5, not 2.0. Conservative
+# on purpose — the diurnal baseline is the dominant signal.
+_FACTOR_STRENGTH = 0.5
+# Reference depth assumed when the predictor has no historical depth
+# info to compare against. Picking a non-zero default keeps the factor
+# bounded when only the current snapshot is supplied; a richer
+# (history-aware) reference is a future revision.
+_DEFAULT_REFERENCE_DEPTH = 10
 
 
 def _hour_of_week(iso: str | None) -> int | None:
@@ -119,6 +157,62 @@ def _wmean(observations: list[tuple[float, float]]) -> float | None:
     return sum(v * w for v, w in observations) / total_w
 
 
+def _features_factor(features: QueueFeatures | None) -> float:
+    """Compute the multiplicative adjustment factor for *features*.
+
+    Returns 1.0 when *features* is ``None`` or carries no usable
+    queue-depth signal. The depth ratio is dampened by
+    :data:`_FACTOR_STRENGTH` and clamped to ``[_MIN_FACTOR,
+    _MAX_FACTOR]``. A queue 2× as deep as the reference nudges the
+    prediction up by 50%, not 100%.
+    """
+    if features is None:
+        return 1.0
+    depth = features.queued_jobs_in_partition
+    if depth < 0:
+        return 1.0
+    ref = max(1, _DEFAULT_REFERENCE_DEPTH)
+    raw_ratio = depth / ref
+    factor = 1.0 + (raw_ratio - 1.0) * _FACTOR_STRENGTH
+    return max(_MIN_FACTOR, min(_MAX_FACTOR, factor))
+
+
+def _apply_features(
+    result: PredictionResult,
+    features: QueueFeatures | None,
+) -> PredictionResult:
+    """Apply the order-book adjustment to a base :class:`PredictionResult`.
+
+    No-op when *features* is None, when the base prediction is cold
+    (``predicted_wait_sec`` is ``None``), or when the factor rounds to
+    1.0 — keeps existing test contracts intact for callers that don't
+    pass features.
+    """
+    if features is None or result.predicted_wait_sec is None:
+        return result
+    factor = _features_factor(features)
+    if math.isclose(factor, 1.0, abs_tol=1e-9):
+        return result
+    adjusted = max(0, int(round(result.predicted_wait_sec * factor)))
+    extra = (
+        f"order-book factor={factor:.3f} "
+        f"(queued_in_partition={features.queued_jobs_in_partition})"
+    )
+    new_reason = (
+        extra if result.fallback_reason is None else f"{result.fallback_reason}; {extra}"
+    )
+    return PredictionResult(
+        predicted_wait_sec=adjusted,
+        confidence=result.confidence,
+        method=result.method,
+        n_bucket_samples=result.n_bucket_samples,
+        n_total_samples=result.n_total_samples,
+        bucket_hour_of_week=result.bucket_hour_of_week,
+        fallback_reason=new_reason,
+        features_adjustment_factor=round(factor, 4),
+    )
+
+
 def predict_queue_wait(
     experiment_dir: Path,
     *,
@@ -129,6 +223,7 @@ def predict_queue_wait(
     min_bucket_samples: int = _DEFAULT_MIN_BUCKET_SAMPLES,
     min_global_samples: int = _DEFAULT_MIN_GLOBAL_SAMPLES,
     bucket_radius: int = _DEFAULT_BUCKET_RADIUS,
+    current_features: QueueFeatures | None = None,
 ) -> PredictionResult:
     """Forecast queue-wait seconds using the diurnal moving-average baseline.
 
@@ -159,6 +254,14 @@ def predict_queue_wait(
     bucket_radius:
         Hours on each side of the target bucket pooled into the
         ``blended_ma`` fallback.
+    current_features:
+        Optional :class:`~hpc_mapreduce.job.queue_features.QueueFeatures`
+        snapshot. When provided, the diurnal MA is multiplied by a
+        bounded factor derived from the current queue depth (see
+        :func:`_features_factor`). Confidence is preserved verbatim —
+        features are advisory only and never promote a low-confidence
+        forecast. The applied factor is recorded on
+        :attr:`PredictionResult.features_adjustment_factor`.
     """
     now_iso = at_iso if at_iso is not None else utcnow().isoformat(timespec="seconds")
     target_bucket = _hour_of_week(now_iso)
@@ -222,13 +325,14 @@ def predict_queue_wait(
     if n_bucket >= min_bucket_samples:
         m = _wmean(target_obs)
         if m is None:
-            return _global_fallback(
+            base = _global_fallback(
                 buckets, target_bucket, n_total, "bucket weights summed to zero"
             )
+            return _apply_features(base, current_features)
         confidence: Confidence = (
             "high" if n_bucket >= 4 * min_bucket_samples else "medium"
         )
-        return PredictionResult(
+        base = PredictionResult(
             predicted_wait_sec=int(round(m)),
             confidence=confidence,
             method="diurnal_ma",
@@ -237,6 +341,7 @@ def predict_queue_wait(
             bucket_hour_of_week=target_bucket,
             fallback_reason=None,
         )
+        return _apply_features(base, current_features)
 
     # Tier 2: blend with ±bucket_radius neighbours.
     blended: list[tuple[float, float]] = list(target_obs)
@@ -248,7 +353,7 @@ def predict_queue_wait(
     if len(blended) >= min_bucket_samples:
         m = _wmean(blended)
         if m is not None:
-            return PredictionResult(
+            base = PredictionResult(
                 predicted_wait_sec=int(round(m)),
                 confidence="low",
                 method="blended_ma",
@@ -260,14 +365,16 @@ def predict_queue_wait(
                     f"blended +/-{bucket_radius}h"
                 ),
             )
+            return _apply_features(base, current_features)
 
     # Tier 3: global fallback across all buckets.
-    return _global_fallback(
+    base = _global_fallback(
         buckets,
         target_bucket,
         n_total,
         f"target bucket had only {n_bucket}; neighbour blend insufficient",
     )
+    return _apply_features(base, current_features)
 
 
 def _global_fallback(
