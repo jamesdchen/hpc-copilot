@@ -2,11 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json",
   "title": "CLI envelope",
-  "description": "Universal envelope wrapping every hpc-mapreduce stdout response. The `$defs` block at the bottom holds reusable subschemas that callers may $ref from sibling output schemas (run_id, combined_waves, failed_waves, lifecycle_state). Note: at the time of writing, the agent_cli's jsonschema.validate path does not register a RefResolver, so consumer schemas must still inline these definitions verbatim — `$defs` here is the canonical source of truth for the values.",
+  "description": "Universal envelope wrapping every hpc-mapreduce stdout response. The `$defs` block at the bottom holds reusable subschemas — run_id (loose + strict), combined_waves, failed_waves, lifecycle_state (terminal / observable / observable+timeout), scheduler, gpu_type, error_code. Note: at the time of writing, the agent_cli's jsonschema.validate path does not register a RefResolver, so cross-file `$ref` does not resolve; consumer schemas must therefore inline these definitions verbatim. `$defs` here is the canonical source of truth, and tests/test_schema_defs_consistency.py asserts every inline copy stays byte-equivalent.",
   "$defs": {
     "run_id": {
       "type": "string",
       "description": "Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>; loosely validated as filesystem-safe with no path separators."
+    },
+    "run_id_strict": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "description": "Strict run-identifier shape used on input — must be filesystem-safe (alphanumerics, dot, underscore, hyphen). Output schemas use the looser `run_id` ({type: string}) so legacy sidecars validate."
     },
     "combined_waves": {
       "type": "array",
@@ -27,6 +32,42 @@
       "type": "string",
       "enum": ["in_flight", "complete", "failed", "abandoned"],
       "description": "Lifecycle state set used by status / reconcile (point-in-time observation, no 'timeout' bucket)."
+    },
+    "lifecycle_state_observable_with_timeout": {
+      "type": "string",
+      "enum": ["in_flight", "complete", "failed", "abandoned", "timeout"],
+      "description": "Lifecycle state set used when an observer also surfaces 'timeout' (e.g. status / reconcile reading sidecars previously marked timeout by monitor-flow). Superset of lifecycle_state_observable."
+    },
+    "scheduler": {
+      "type": "string",
+      "enum": ["sge", "slurm"],
+      "description": "Scheduler driver. 'sge' covers Sun/Univa/Open Grid Engine variants; 'slurm' covers Slurm-Workload-Manager clusters."
+    },
+    "gpu_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Cluster-specific GPU label (e.g. 'A100', 'H100', 'L40S'). Validated as a non-empty string; semantic checks (does this cluster expose this GPU?) live in inspect-cluster, not the schema."
+    },
+    "error_code": {
+      "type": "string",
+      "enum": [
+        "ssh_unreachable",
+        "scheduler_throttled",
+        "spec_invalid",
+        "executor_not_found",
+        "cluster_unknown",
+        "journal_corrupt",
+        "remote_command_failed",
+        "config_invalid",
+        "combiner_failed",
+        "cluster_timeout",
+        "cluster_partially_degraded",
+        "outputs_missing",
+        "schema_incompat",
+        "preempted",
+        "internal"
+      ],
+      "description": "Canonical envelope error_code enum. Output schemas that surface error codes inside `data` (e.g. failures, status, validate) must keep their enum byte-equivalent to this list."
     }
   },
   "oneOf": [
