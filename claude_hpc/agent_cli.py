@@ -1164,15 +1164,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 # ─── subcommand: logs ──────────────────────────────────────────────────────
 
 
-@primitive(
-    name="logs",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.SshUnreachable, errors.RemoteCommandFailed],
-    idempotent=True,
-)
 def cmd_logs(args: argparse.Namespace) -> int:
-    """Fetch per-task stderr logs from the cluster.
+    """Argparse adapter — primitive lives at claude_hpc.atoms.logs.
 
     Two ways to select tasks:
       --task-id 7,12,42   explicit list
@@ -1181,69 +1174,28 @@ def cmd_logs(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
 
-    record = session.load_run(args.experiment_dir, args.run_id)
-    if record is None:
-        raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
+    from claude_hpc.atoms.logs import fetch_logs
 
-    # Resolve task ids.
-    task_ids: list[int] = []
-    note: str | None = None
-    if getattr(args, "all_failed", False):
-        # Fresh status poll to enumerate failed tasks.
-        try:
-            report = runner._ssh_status_report(
-                ssh_target=record.ssh_target,
-                remote_path=record.remote_path,
-                run_id=args.run_id,
-                job_ids=record.job_ids,
-                job_name=record.job_name,
-            )
-        except errors.HpcError:
-            raise
-        for tid_str, info in (report.get("tasks") or {}).items():
-            if isinstance(info, dict) and info.get("status") == "failed":
-                try:
-                    task_ids.append(int(tid_str))
-                except (TypeError, ValueError):
-                    continue
-        if not task_ids:
-            note = "no failed tasks in current status report"
-    elif args.task_id:
+    # Parse the user-facing comma-separated --task-id at the adapter
+    # boundary; the atom takes a typed list[int].
+    task_ids: list[int] | None = None
+    if not getattr(args, "all_failed", False) and args.task_id:
         try:
             task_ids = [int(t.strip()) for t in args.task_id.split(",") if t.strip()]
         except ValueError as exc:
-            raise errors.SpecInvalid(f"--task-id must be comma-separated integers: {exc}") from exc
+            raise errors.SpecInvalid(
+                f"--task-id must be comma-separated integers: {exc}"
+            ) from exc
         if not task_ids:
             raise errors.SpecInvalid("--task-id is empty")
-    else:
-        raise errors.SpecInvalid("logs requires --task-id <ids> or --all-failed")
 
-    # Cluster-side scheduler.
-    try:
-        clusters = load_clusters_config()
-    except Exception:  # noqa: BLE001 — config errors fall through to user-error path
-        clusters = {}
-    scheduler = (clusters.get(record.cluster) or {}).get("scheduler") or "slurm"
-
-    logs: list[dict[str, Any]] = []
-    if task_ids:
-        logs = runner.fetch_task_logs(
-            ssh_target=record.ssh_target,
-            remote_path=record.remote_path,
-            job_name=record.job_name,
-            job_ids=record.job_ids,
-            scheduler=scheduler,
-            task_ids=task_ids,
-            lines=int(getattr(args, "lines", 50) or 50),
-        )
-
-    data: dict[str, Any] = {
-        "run_id": args.run_id,
-        "scheduler": scheduler,
-        "logs": logs,
-    }
-    if note is not None:
-        data["note"] = note
+    data = fetch_logs(
+        experiment_dir=args.experiment_dir,
+        run_id=args.run_id,
+        task_ids=task_ids,
+        all_failed=bool(getattr(args, "all_failed", False)),
+        lines=int(getattr(args, "lines", 50) or 50),
+    )
     _ok(data, name="logs")
     return EXIT_OK
 
