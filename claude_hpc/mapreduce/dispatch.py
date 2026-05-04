@@ -20,16 +20,32 @@ Stays zero-dependency — only Python stdlib, no imports from the
 ``claude_hpc`` package.
 """
 
+import contextlib
+import datetime
 import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 __all__ = ["main"]
+
+# Default grace window in seconds. The scheduler typically sends SIGTERM
+# 30-60s before SIGKILL on preemption; we forward SIGINT to the executor
+# subprocess and wait up to this many seconds for it to exit before
+# tearing down. Override via ``HPC_PREEMPT_GRACE_SEC``.
+_DEFAULT_PREEMPT_GRACE_SEC = 25
+
+# Exit code used when the dispatcher itself is preempted by the
+# scheduler. Matches the POSIX convention of 128 + signal number for
+# SIGINT (2), giving 130 — the agent surface maps this to
+# ``error_code: preempted``.
+_EXIT_PREEMPTED = 130
 
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``claude_hpc/orchestrator/runs.py``. Hardcoded
@@ -49,6 +65,112 @@ def _load_tasks_module(tasks_py_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _utcnow_iso():
+    """Return current UTC timestamp in ISO 8601 format with ``Z`` suffix.
+
+    Stdlib-only; mirrors the ``utcnow_iso`` helper used elsewhere in the
+    framework but inlined here because dispatch.py cannot import from
+    ``claude_hpc.*`` (cluster-side stdlib-only constraint).
+    """
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _atomic_write_json(path, data):
+    """Atomically write *data* as JSON to *path*.
+
+    Writes to a sibling tempfile in the same directory, then
+    ``os.replace``\\ s into place. Same-filesystem rename guarantees
+    readers never see a half-written sidecar. Stdlib-only.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(data, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso):
+    """Write ``preempted_at`` to the per-task entry of *sidecar_path*.
+
+    Marks the run as bumped (preempted by higher-priority work), not
+    failed. The agent harness reads this field to distinguish a clean
+    resubmit from a real failure. Best-effort: a write error here must
+    not prevent the dispatcher from exiting, since the SIGKILL window
+    is short.
+    """
+    try:
+        sidecar = json.loads(Path(sidecar_path).read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    tasks = sidecar.setdefault("tasks", {})
+    if not isinstance(tasks, dict):
+        return
+    entry = tasks.setdefault(str(task_id), {})
+    if not isinstance(entry, dict):
+        return
+    entry["preempted_at"] = when_iso
+    # Sidecar lives on shared NFS; a transient write failure here is
+    # survivable — the agent harness will fall back to exit-code 130
+    # detection. Don't let it block the preemption-window teardown.
+    with contextlib.suppress(OSError):
+        _atomic_write_json(sidecar_path, sidecar)
+
+
+def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_sec):
+    """Install a SIGTERM handler that marks the run preempted and tears down.
+
+    The handler:
+      1. Logs to stderr (matches the existing dispatch.py prose style).
+      2. Writes ``preempted_at: <utcnow_iso>`` to the per-task entry of
+         the run sidecar so the agent harness can tell "bumped" from
+         "real failure".
+      3. Forwards SIGINT to the executor subprocess so its except blocks
+         run during the cluster's preemption window.
+      4. Waits up to *grace_sec* for the executor to exit cleanly.
+      5. Exits 130 — the POSIX-standard preempted exit code.
+
+    *child_holder* is a single-element list holding the current
+    ``subprocess.Popen`` (or ``None`` if no child is live yet); using a
+    list lets us mutate the slot from the main flow without rebinding
+    the closure.
+    """
+
+    def _handler(signum, frame):
+        print(
+            "[claude-hpc] SIGTERM received; cluster preemption imminent",
+            file=sys.stderr,
+        )
+        _mark_preempted_in_sidecar(sidecar_path, task_id, _utcnow_iso())
+
+        child = child_holder[0] if child_holder else None
+        if child is not None and child.poll() is None:
+            with contextlib.suppress(OSError):
+                child.send_signal(signal.SIGINT)
+            deadline = time.monotonic() + max(0, int(grace_sec))
+            while time.monotonic() < deadline and child.poll() is None:
+                time.sleep(0.5)
+            if child.poll() is None:
+                with contextlib.suppress(OSError):
+                    child.terminate()
+
+        sys.exit(_EXIT_PREEMPTED)
+
+    signal.signal(signal.SIGTERM, _handler)
 
 
 def _format_result_dir(template, *, task_id, run_id, kwargs):
@@ -162,6 +284,46 @@ def main() -> None:
         print(f"[dispatch] ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    # --- Idempotency skip ---
+    # Helps the campus user resubmit a preempted task cleanly: if a
+    # prior run already wrote ``metrics.json`` (the per-task completion
+    # marker), we skip invoking the executor and exit 0. The combiner
+    # picks up the existing output on the next wave; the agent harness
+    # sees the same exit-0 envelope as a normal completion.
+    #
+    # Defensive: a 0-byte ``metrics.json`` (e.g. crashed mid-write) does
+    # NOT trigger the skip — the user must be able to re-run. We only
+    # gate on file presence + non-zero size; parsing the JSON would
+    # require exception handling and isn't worth the cost.
+    metrics_path = Path(result_dir) / "metrics.json"
+    try:
+        already_complete = metrics_path.is_file() and metrics_path.stat().st_size > 0
+    except OSError:
+        already_complete = False
+    if already_complete:
+        print(
+            f"[claude-hpc] task {task_id} already complete (metrics.json found); skipping",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
+    # --- Install SIGTERM trap ---
+    # Most preemption scenarios send SIGTERM 30-60s before SIGKILL.
+    # Trap it so we can mark the run as bumped (not failed) in the
+    # sidecar and forward a clean SIGINT to the executor subprocess
+    # before the cluster kills us.
+    try:
+        grace_sec = int(os.environ.get("HPC_PREEMPT_GRACE_SEC") or _DEFAULT_PREEMPT_GRACE_SEC)
+    except ValueError:
+        grace_sec = _DEFAULT_PREEMPT_GRACE_SEC
+    child_holder: list = [None]
+    _install_preemption_handler(
+        sidecar_path=sidecar_path,
+        task_id=task_id,
+        child_holder=child_holder,
+        grace_sec=grace_sec,
+    )
+
     # --- WIP / atomic-promote (preserved from prior dispatcher) ---
     # MapReduce correctness guarantee: write to a temporary work-in-progress
     # directory, then atomically promote files on success. If the task
@@ -197,20 +359,25 @@ def main() -> None:
     print(f"[dispatch] task_id={task_id} run_id={run_id} result_dir={result_dir}")
     print(f"[dispatch] cmd={executor}")
 
-    result = subprocess.run(executor, shell=True, env=env)
+    # Use Popen (not subprocess.run) so the SIGTERM handler can reach
+    # the child via *child_holder* and forward SIGINT during the
+    # cluster's preemption grace window.
+    child = subprocess.Popen(executor, shell=True, env=env)
+    child_holder[0] = child
+    returncode = child.wait()
 
-    if result.returncode == 0:
+    if returncode == 0:
         # Promote: atomically move each output file to the final directory.
         for fname in os.listdir(wip_dir):
             os.replace(os.path.join(wip_dir, fname), os.path.join(result_dir, fname))
         shutil.rmtree(wip_dir, ignore_errors=True)
     else:
         print(
-            f"[dispatch] FAILED (exit {result.returncode}), partial output preserved in {wip_dir}",
+            f"[dispatch] FAILED (exit {returncode}), partial output preserved in {wip_dir}",
             file=sys.stderr,
         )
 
-    sys.exit(result.returncode)
+    sys.exit(returncode)
 
 
 if __name__ == "__main__":
