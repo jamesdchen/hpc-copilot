@@ -1,4 +1,4 @@
-"""Phase 4 planner: combine inspect, blacklist, and runtime priors.
+"""Phase 4 planner: combine inspect and runtime priors.
 
 This module emits the structured JSON the slash command hands to Claude
 for cost-model judgment over candidate ``--constraint`` choices. It does
@@ -17,7 +17,6 @@ Output shape (see top-level design ``docs/`` for the full contract)::
           "pool_size": 28,
           "healthy_nodes": ["..."],
           "stressed_nodes": [{"node": "...", "AllocMem_pct": 0.86, ...}],
-          "blacklisted_nodes": [{"node": "...", "added_h_ago": 8, ...}],
           "eta_sec_via_test_only": 300,           # SLURM sbatch --test-only
           "runtime_prior_quantiles_sec": {"a100": {"p50": 4200, ...}, ...},
           "p_fail_30d": {"a100": 0.0, "v100": 0.14},
@@ -37,7 +36,7 @@ import re
 import subprocess
 from typing import TYPE_CHECKING, Any
 
-from hpc_mapreduce._time import parse_iso_utc, parse_iso_utc_or_none, utcnow, utcnow_iso
+from hpc_mapreduce._time import parse_iso_utc, utcnow, utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -57,7 +56,6 @@ from hpc_mapreduce.job.backfill import (
     reshape_array_size_for_backfill,
     split_walltime_into_segments,
 )
-from hpc_mapreduce.job.blacklist import get_active as get_active_blacklist
 from hpc_mapreduce.job.calibration import (
     compute_walltime_drift,
     recommend_safety_mult_adjustment,
@@ -119,10 +117,6 @@ def plan_submit(
     # Snapshot the cluster (fully cached for 60s after first call).
     snap = inspect_cluster(cluster)
 
-    # TTL-filtered blacklist for this cluster.
-    bl_entries = get_active_blacklist(experiment_dir, cluster)
-    bl_by_node: dict[str, dict[str, Any]] = {e["node"]: e for e in bl_entries}
-
     # Quantiles per GPU type (one rollup, shared across candidates).
     rollup = roll_up_quantiles(
         experiment_dir, profile=profile, cluster=cluster, cmd_sha=cmd_sha
@@ -160,12 +154,7 @@ def plan_submit(
         pool = _nodes_for_constraint(snap.nodes, gpu_set)
         healthy: list[str] = []
         stressed: list[dict[str, Any]] = []
-        blacklisted: list[dict[str, Any]] = []
         for n in pool:
-            if n.name in bl_by_node:
-                e = bl_by_node[n.name]
-                blacklisted.append(_blacklist_summary(e))
-                continue
             if n.is_stressed:
                 stressed.append(_stressed_summary(n))
             elif not n.is_drained:
@@ -180,7 +169,6 @@ def plan_submit(
             "pool_size": len(pool),
             "healthy_nodes": sorted(healthy),
             "stressed_nodes": stressed,
-            "blacklisted_nodes": blacklisted,
             "eta_sec_via_test_only": eta_sec,
             "runtime_prior_quantiles_sec": c_quantiles,
             "p_fail_30d": c_p_fail,
@@ -255,7 +243,6 @@ def plan_submit(
         "needs_canary": needs_canary,
         "canary_plan": canary_plan,
         "scheduler_kind": scheduler,
-        "blacklist_active_count": len(bl_entries),
         "array_reshape": array_reshape,
         "walltime_split": walltime_split,
         "walltime_drift": drift_report,
@@ -292,20 +279,6 @@ def _nodes_for_constraint(
         if any(gpu.lower() in node_tokens for gpu in gpu_types):
             out.append(n)
     return out
-
-
-def _blacklist_summary(entry: dict[str, Any]) -> dict[str, Any]:
-    ts = parse_iso_utc_or_none(entry.get("added_at", ""))
-    if ts is None:
-        added_h_ago = None
-    else:
-        added_h_ago = round((utcnow() - ts).total_seconds() / 3600.0, 1)
-    return {
-        "node": entry.get("node"),
-        "added_h_ago": added_h_ago,
-        "expires_at": entry.get("expires_at"),
-        "evidence_count": len(entry.get("evidence") or []),
-    }
 
 
 def _stressed_summary(n: NodeSnapshot) -> dict[str, Any]:
