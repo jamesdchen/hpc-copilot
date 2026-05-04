@@ -615,6 +615,36 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
 
 
 @primitive(
+    name="predict-queue-wait",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
+def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
+    """Forecast queue-wait seconds for a hypothetical submit.
+
+    Dispatches to the discrete-event simulator (Phase 4 DES backend)
+    when a recent ClusterSnapshot + user_profiles coverage are present;
+    falls back to the diurnal moving-average baseline otherwise. The
+    result's ``method`` field reports which backend won.
+    """
+    from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
+
+    out = predict_queue_wait(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        at_iso=args.at_iso,
+        backend=args.backend,
+        n_replications=int(args.n_replications),
+        seed=args.seed,
+    )
+    _ok(out.to_dict(), name="predict-queue-wait")
+    return EXIT_OK
+
+
+@primitive(
     name="house-edge",
     verb="query",
     side_effects=[],
