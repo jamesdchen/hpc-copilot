@@ -38,7 +38,9 @@ from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce._io import atomic_locked_update
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
+from slash_commands import errors as _errors
 
 SCHEMA_VERSION: int = 1
 DEFAULT_TTL_DAYS: int = 7
@@ -178,6 +180,19 @@ def get_active(
     return _filter_expired(doc["entries"], now or _now())
 
 
+@primitive(
+    name="record-segv-blacklist",
+    verb="mutate",
+    side_effects=[
+        SideEffect(
+            "writes-blacklist",
+            "<experiment_dir>/.hpc/blacklist/<cluster>.json (flock + atomic rename)",
+        ),
+    ],
+    error_codes=[_errors.HpcError],
+    idempotent=True,
+    idempotency_key="node",
+)
 def record_segv(
     experiment_dir: Path,
     cluster: str,
