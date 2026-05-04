@@ -65,20 +65,13 @@ MAX_SAMPLES: int = int(os.environ.get("HPC_MAX_RUNTIME_SAMPLES", "10000"))
 def runtime_path(experiment_dir: Path, profile: str, cluster: str) -> Path:
     """Return the runtime-priors file path for ``(profile, cluster)``.
 
-    Resolves *experiment_dir* to an absolute path so writers and readers
-    invoked from different working directories see the same file.
+    Forwarder for ``RepoLayout(experiment_dir).runtime_prior(profile,
+    cluster)``. The layout class resolves *experiment_dir* and
+    sanitizes ``/`` in *profile*; both behaviors are preserved here.
     """
-    if not profile:
-        raise ValueError("profile must be non-empty")
-    if not cluster:
-        raise ValueError("cluster must be non-empty")
-    safe_profile = profile.replace("/", "_")
-    return (
-        Path(experiment_dir).resolve()
-        / ".hpc"
-        / "runtimes"
-        / f"{safe_profile}.{cluster}.json"
-    )
+    from hpc_mapreduce.layout import RepoLayout
+
+    return RepoLayout(experiment_dir).runtime_prior(profile, cluster)
 
 
 def _empty_doc(profile: str, cluster: str) -> dict[str, Any]:
