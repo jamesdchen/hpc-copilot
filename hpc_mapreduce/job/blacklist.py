@@ -35,9 +35,11 @@ __all__ = [
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -58,23 +60,14 @@ def blacklist_path(experiment_dir: Path, cluster: str) -> Path:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utcnow()
 
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def _parse_iso(s: str) -> datetime | None:
-    if not s:
-        return None
-    try:
-        ts = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts
+_parse_iso = parse_iso_utc_or_none
 
 
 def _empty_doc() -> dict[str, Any]:
