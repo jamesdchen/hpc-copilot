@@ -441,42 +441,18 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
 # ─── subcommand: walltime-drift / house-edge (calibration) ────────────────
 
 
-@primitive(
-    name="walltime-drift",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_walltime_drift(args: argparse.Namespace) -> int:
-    from claude_hpc.orchestrator.calibration import (
-        compute_walltime_drift,
-        recommend_safety_mult_adjustment,
-    )
-    from claude_hpc.orchestrator.runtime_prior import read_samples
+    """Argparse adapter — primitive lives at claude_hpc.atoms.walltime_drift."""
+    from claude_hpc.atoms.walltime_drift import walltime_drift
 
-    samples = read_samples(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        cmd_sha=args.cmd_sha,
-        only_successful=False,
-    )
-    drift = compute_walltime_drift(samples)
-    adjusted, rationale = recommend_safety_mult_adjustment(
-        drift, base_safety_mult=float(args.base_safety_mult)
-    )
     _ok(
-        {
-            "n_recent": drift.n_recent,
-            "n_cliff_events": drift.n_cliff_events,
-            "n_near_misses": drift.n_near_misses,
-            "weighted_cliff_rate": drift.weighted_cliff_rate,
-            "median_utilization": drift.median_utilization,
-            "base_safety_mult": float(args.base_safety_mult),
-            "adjusted_safety_mult": adjusted,
-            "rationale": rationale,
-        },
+        walltime_drift(
+            experiment_dir=args.experiment_dir,
+            profile=args.profile,
+            cluster=args.cluster,
+            cmd_sha=args.cmd_sha,
+            base_safety_mult=float(args.base_safety_mult),
+        ),
         name="walltime-drift",
     )
     return EXIT_OK
