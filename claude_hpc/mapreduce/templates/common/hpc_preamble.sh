@@ -111,5 +111,33 @@ export VECLIB_MAXIMUM_THREADS="${HPC_VECLIB_NUM_THREADS:-1}"
 if [ -n "${HPC_NFS_DATA_DIR:-}" ]; then
     export LOCAL_DATA_DIR="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}/claude_hpc_data"
     mkdir -p "$LOCAL_DATA_DIR"
-    rsync -a "$HPC_NFS_DATA_DIR/" "$LOCAL_DATA_DIR/"
+    # Race + diagnostic guards. 200 array tasks landing on the same node
+    # would all rsync into the same $LOCAL_DATA_DIR and step on each
+    # other — half-staged files visible to siblings, overlapping writes,
+    # tempfile collisions. flock serialises the staging so the first
+    # task on a node copies, subsequent siblings block briefly then
+    # fast-skip via the .staged_ok sentinel. Steady-state cost is one
+    # `test -f` per task. The `|| exit 2` outside the subshell propagates
+    # rsync failure to the parent template (set -e doesn't cross subshell
+    # boundaries on its own); without it, a failed staging would silently
+    # let the executor run against missing data.
+    if [ ! -f "$LOCAL_DATA_DIR/.staged_ok" ]; then
+        (
+            flock -x 9
+            if [ ! -f "$LOCAL_DATA_DIR/.staged_ok" ]; then
+                # Capture rsync's exit code with `if !` so $? isn't
+                # clobbered by the echo trash before we read it (echo
+                # always succeeds, overwriting $? to 0).
+                if ! rsync -a "$HPC_NFS_DATA_DIR/" "$LOCAL_DATA_DIR/"; then
+                    rc=$?
+                    echo "[claude-hpc] NFS staging from \$HPC_NFS_DATA_DIR=$HPC_NFS_DATA_DIR" >&2
+                    echo "[claude-hpc]   to \$LOCAL_DATA_DIR=$LOCAL_DATA_DIR failed (rsync exit $rc)." >&2
+                    echo "[claude-hpc]   Check the source path exists, the destination has space," >&2
+                    echo "[claude-hpc]   and the NFS server is reachable from this compute node." >&2
+                    exit 2
+                fi
+                touch "$LOCAL_DATA_DIR/.staged_ok"
+            fi
+        ) 9>"$LOCAL_DATA_DIR/.staging.lock" || exit 2
+    fi
 fi
