@@ -5,6 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from claude_hpc.forecast import queue_wait_baseline as qwb
+from claude_hpc.infra.inspect import (
+    ClusterSnapshot,
+    NodeSnapshot,
+    persist_snapshot,
+)
 from claude_hpc.orchestrator import runtime_prior as rp
 
 PROFILE = "ml_ridge"
@@ -211,13 +216,6 @@ class TestPredictionResult:
 # ---------------------------------------------------------------------------
 # DES backend wiring (Phase 4c)
 # ---------------------------------------------------------------------------
-
-
-from claude_hpc.infra.inspect import (
-    ClusterSnapshot,
-    NodeSnapshot,
-    persist_snapshot,
-)
 
 
 def _persist_idle_snapshot(tmp_path):

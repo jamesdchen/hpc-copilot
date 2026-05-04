@@ -10,6 +10,7 @@ and journal writes meet.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shlex
@@ -297,13 +298,11 @@ def record_status(
     # Cache the snapshot for cheap external reads. Best-effort: a write
     # failure here must not roll back the journal update.
     cache_path = session.runs_dir(experiment_dir) / f"{run_id}.last_status.json"
-    try:
-        # Atomic write so a concurrent reader never sees a half-written
-        # file.  ``Path.write_text`` truncates in place; readers that
-        # race with the writer would otherwise observe a JSONDecodeError.
+    # Atomic write so a concurrent reader never sees a half-written
+    # file.  ``Path.write_text`` truncates in place; readers that
+    # race with the writer would otherwise observe a JSONDecodeError.
+    with contextlib.suppress(OSError):
         _atomic_write_json(cache_path, summary)
-    except OSError:
-        pass
     return record
 
 

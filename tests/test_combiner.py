@@ -296,9 +296,11 @@ class TestMainWritesOutputAtomically:
         def boom(*args, **kwargs):
             raise RuntimeError("walltime")
 
-        with _patch.object(combiner_mod.json, "dump", side_effect=boom):
-            with __import__("pytest").raises(RuntimeError):
-                combiner_mod.main()
+        with (
+            _patch.object(combiner_mod.json, "dump", side_effect=boom),
+            __import__("pytest").raises(RuntimeError),
+        ):
+            combiner_mod.main()
 
         out = tmp_path / "_combiner" / "wave_0.json"
         assert not out.exists()

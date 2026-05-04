@@ -120,10 +120,10 @@ class TestQhostBareGpu:
         # Some SGE installs emit `gpu=2` directly under the host without
         # the `hl:` / `gl:` prefix. The parser must still capture it.
         text = (
-            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
-            "----------------------------------------------------------------------------------------------\n"
-            "global                  -               -    -    -    -     -       -       -       -       -\n"
-            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"  # noqa: E501
+            "----------------------------------------------------------------------------------------------\n"  # noqa: E501
+            "global                  -               -    -    -    -     -       -       -       -       -\n"  # noqa: E501
+            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"  # noqa: E501
             "    gpu=4\n"
             "    gpu_used=1\n"
         )
@@ -134,9 +134,9 @@ class TestQhostBareGpu:
 
     def test_prefixed_gpu_still_works(self):
         text = (
-            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
-            "----------------------------------------------------------------------------------------------\n"
-            "compute-002             lx-amd64       32    2   16   32  5.20  512.0G  100.0G   16.0G    1.0G\n"
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"  # noqa: E501
+            "----------------------------------------------------------------------------------------------\n"  # noqa: E501
+            "compute-002             lx-amd64       32    2   16   32  5.20  512.0G  100.0G   16.0G    1.0G\n"  # noqa: E501
             "    hl:gpu=8\n"
             "    gl:gpu_used=2\n"
         )
@@ -267,10 +267,10 @@ class TestInspectClusterEntry:
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         ins._CACHE.clear()
         qhost_out = (
-            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"
-            "----------------------------------------------------------------------------------------------\n"
-            "global                  -               -    -    -    -     -       -       -       -       -\n"
-            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"
+            "HOSTNAME                ARCH         NCPU NSOC NCOR NTHR  LOAD  MEMTOT  MEMUSE  SWAPTO  SWAPUS\n"  # noqa: E501
+            "----------------------------------------------------------------------------------------------\n"  # noqa: E501
+            "global                  -               -    -    -    -     -       -       -       -       -\n"  # noqa: E501
+            "compute-001             lx-amd64       16    2    8   16  3.50  256.0G   64.0G   16.0G    1.0G\n"  # noqa: E501
             "    hl:gpu=4\n"
             "    gl:gpu_used=1\n"
         )

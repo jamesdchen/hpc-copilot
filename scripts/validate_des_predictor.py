@@ -126,8 +126,8 @@ def replay(
                 horizon_sec=7 * 86400.0,
                 seed=s,
             ),
-            residual_sampler=lambda s: sample_residual_lifetimes(
-                snap,
+            residual_sampler=lambda s, _snap=snap: sample_residual_lifetimes(
+                _snap,
                 {},
                 seed=s,
             ),

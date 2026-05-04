@@ -587,9 +587,8 @@ def _placement_for_running(
     """
     for n in snapshot.nodes:
         for tenant in n.co_tenants or []:
-            if str(tenant.get("job_id", "")).strip() == j.job_id:
-                if n.name in free_by_node:
-                    return n.name
+            if str(tenant.get("job_id", "")).strip() == j.job_id and n.name in free_by_node:
+                return n.name
     return _try_place(j, free_by_node)
 
 

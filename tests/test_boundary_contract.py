@@ -185,11 +185,10 @@ def _imported_top_level_modules(path: Path) -> set[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 modules.add(alias.name.split(".", 1)[0])
-        elif isinstance(node, ast.ImportFrom):
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             # Skip relative imports (node.level > 0); they cannot reach across
             # the boundary by construction.
-            if node.level == 0 and node.module:
-                modules.add(node.module.split(".", 1)[0])
+            modules.add(node.module.split(".", 1)[0])
     return modules
 
 
@@ -319,7 +318,8 @@ def test_clusters_yaml_is_infra_only() -> None:
         data = yaml.safe_load(fh)
 
     assert isinstance(data, dict), (
-        f"config/clusters.yaml must be a mapping of cluster_name -> config; got {type(data).__name__}."
+        "config/clusters.yaml must be a mapping of cluster_name -> config; "
+        f"got {type(data).__name__}."
     )
 
     violations: list[str] = []
