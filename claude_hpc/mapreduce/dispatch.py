@@ -348,14 +348,25 @@ def main() -> None:
     # sees the same exit-0 envelope as a normal completion.
     #
     # Defensive: a 0-byte ``metrics.json`` (e.g. crashed mid-write) does
-    # NOT trigger the skip — the user must be able to re-run. We only
-    # gate on file presence + non-zero size; parsing the JSON would
-    # require exception handling and isn't worth the cost.
+    # NOT trigger the skip — the user must be able to re-run.
+    #
+    # NFS staleness (A-M2): plain ``stat().st_size`` over NFS can return
+    # a stale or partial size from the client cache; a concurrent writer
+    # (a still-running prior submission of the same task_id) could
+    # otherwise trigger a premature skip. We open the file and read the
+    # first byte, which forces the NFS client to revalidate the inode
+    # via a GETATTR/READ round-trip. The read also catches the 0-byte
+    # case in the same call. Cheap (one byte, no JSON parse) and
+    # contract-tight: a metrics.json file that opens and yields ≥1 byte
+    # is by construction non-empty as seen by *us*, not the cache.
     metrics_path = Path(result_dir) / "metrics.json"
-    try:
-        already_complete = metrics_path.is_file() and metrics_path.stat().st_size > 0
-    except OSError:
-        already_complete = False
+    already_complete = False
+    if metrics_path.is_file():
+        try:
+            with open(metrics_path, "rb") as fh:
+                already_complete = bool(fh.read(1))
+        except OSError:
+            already_complete = False
     if already_complete:
         print(
             f"[claude-hpc] task {task_id} already complete (metrics.json found); skipping",
