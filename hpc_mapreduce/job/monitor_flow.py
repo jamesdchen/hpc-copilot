@@ -209,10 +209,60 @@ def _newly_complete_waves(
     return sorted(out)
 
 
-def _is_terminal(last_status: dict[str, Any], total_tasks: int) -> tuple[str | None, str | None]:
+def _read_partial_ok(experiment_dir: Path, run_id: str) -> bool:
+    """Read the partial_ok sibling marker written by submit-flow.
+
+    Returns True iff ``<exp>/.hpc/runs/<run_id>.partial_ok`` exists.
+    The marker is a sibling of the run sidecar (intentionally not a
+    sidecar field) so the sidecar's frozen schema does not need to bump
+    for this opt-in flag. See ``submit_flow.partial_ok``.
+    """
+    from hpc_mapreduce.job.runs import run_sidecar_path
+
+    marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
+    return marker.is_file()
+
+
+def _write_failed_task_ids(
+    experiment_dir: Path,
+    run_id: str,
+    *,
+    failed_task_ids: list[int],
+    classifier_codes: list[str] | None = None,
+    wave: int | None = None,
+) -> None:
+    """Persist the failure ledger consulted by aggregate-flow.
+
+    Writes ``<exp>/.hpc/runs/<run_id>.failed.json`` with the shape
+    documented in the D2b primitive doc — kept on disk (not in the
+    sidecar) so aggregate-flow can read it without a sidecar parse.
+    """
+    from hpc_mapreduce.job.runs import run_sidecar_path
+
+    target = run_sidecar_path(experiment_dir, run_id).with_suffix(".failed.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "run_id": run_id,
+        "failed_task_ids": sorted(set(int(t) for t in failed_task_ids)),
+        "wave": wave,
+        "classifier_codes": list(classifier_codes or []),
+    }
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _is_terminal(
+    last_status: dict[str, Any],
+    total_tasks: int,
+    *,
+    partial_ok: bool = False,
+) -> tuple[str | None, str | None]:
     """Inspect counts and return (lifecycle_state, escalation_reason).
 
     Returns ``(None, None)`` when still in flight.
+
+    With ``partial_ok=True``, the wave is classified ``complete`` as
+    soon as no work is left and at least one task succeeded. Only a
+    zero-success wave is classified ``failed`` under partial-ok.
     """
     complete = int(last_status.get("complete", 0))
     running = int(last_status.get("running", 0))
@@ -222,6 +272,9 @@ def _is_terminal(last_status: dict[str, Any], total_tasks: int) -> tuple[str | N
     if complete >= total_tasks:
         return (LifecycleState.COMPLETE, None)
     if running == 0 and pending == 0 and failed > 0:
+        if partial_ok and complete > 0:
+            # Partial success: at least one task done, no work left.
+            return (LifecycleState.COMPLETE, "partial_ok_with_failures")
         # No work left and at least one failure. MVP doesn't auto-resubmit;
         # surface the failure for the caller to handle.
         return (LifecycleState.FAILED, "failed_tasks_no_auto_recover_in_mvp")
@@ -347,7 +400,11 @@ def monitor_flow(
                         state.combiner_attempts[wave] = 10**9  # never retry again
 
         # Terminal check.
-        terminal, esc_reason = _is_terminal(last_status, int(record.total_tasks))
+        terminal, esc_reason = _is_terminal(
+            last_status,
+            int(record.total_tasks),
+            partial_ok=_read_partial_ok(experiment_dir, run_id),
+        )
         if terminal == LifecycleState.COMPLETE:
             runner.mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
             _append_tick(
