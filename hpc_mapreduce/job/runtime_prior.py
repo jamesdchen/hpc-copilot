@@ -48,14 +48,11 @@ __all__ = [
 import json
 import os
 import statistics
-import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from hpc_mapreduce._io import atomic_locked_update
 from hpc_mapreduce._time import utcnow_iso
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 SCHEMA_VERSION: int = 1
 
@@ -93,6 +90,20 @@ def _empty_doc(profile: str, cluster: str) -> dict[str, Any]:
     }
 
 
+def _normalise(doc: dict[str, Any] | None, profile: str, cluster: str) -> dict[str, Any]:
+    """Coerce a parsed runtime-prior doc (or ``None``) to a well-shaped
+    dict with the required schema fields.
+    """
+    if not isinstance(doc, dict):
+        return _empty_doc(profile, cluster)
+    doc.setdefault("schema_version", SCHEMA_VERSION)
+    doc.setdefault("profile", profile)
+    doc.setdefault("cluster", cluster)
+    if not isinstance(doc.get("samples"), list):
+        doc["samples"] = []
+    return doc
+
+
 def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
     try:
         text = path.read_text()
@@ -104,70 +115,7 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
         doc = json.loads(text)
     except json.JSONDecodeError:
         return _empty_doc(profile, cluster)
-    if not isinstance(doc, dict):
-        return _empty_doc(profile, cluster)
-    doc.setdefault("schema_version", SCHEMA_VERSION)
-    doc.setdefault("profile", profile)
-    doc.setdefault("cluster", cluster)
-    if not isinstance(doc.get("samples"), list):
-        doc["samples"] = []
-    return doc
-
-
-def _with_locked_doc(
-    path: Path,
-    profile: str,
-    cluster: str,
-    mutate: Callable[[dict[str, Any]], dict[str, Any]],
-) -> dict[str, Any]:
-    """Read-modify-write inside a single flock so concurrent writers
-    serialize. The read happens *inside* the lock to prevent the
-    classic "two writers each see stale state, one's append is lost"
-    race.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    try:
-        import fcntl  # noqa: PLC0415
-    except ImportError:
-        fcntl = None  # type: ignore[assignment]
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        if fcntl is not None:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        existing = _read_doc(path, profile, cluster)
-        new_doc = mutate(existing)
-        tmp = tempfile.NamedTemporaryFile(
-            "w",
-            delete=False,
-            dir=str(path.parent),
-            prefix=path.name + ".",
-            suffix=".tmp",
-            encoding="utf-8",
-        )
-        try:
-            json.dump(new_doc, tmp, indent=2, sort_keys=True)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp.close()
-            os.replace(tmp.name, path)
-        except BaseException:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            raise
-        finally:
-            if not tmp.closed:
-                tmp.close()
-        return new_doc
-    finally:
-        if fcntl is not None:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-        os.close(fd)
+    return _normalise(doc, profile, cluster)
 
 
 def append_sample(
@@ -239,7 +187,8 @@ def append_sample(
         "submitted_at_iso": submitted_at_iso,
     }
 
-    def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
+    def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:
+        doc = _normalise(raw, profile, cluster)
         samples = [
             s
             for s in doc.get("samples", [])
@@ -251,7 +200,7 @@ def append_sample(
         doc["samples"] = samples
         return doc
 
-    _with_locked_doc(path, profile, cluster, _mutate)
+    atomic_locked_update(path, _mutate)
     return path
 
 
