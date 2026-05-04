@@ -4,7 +4,7 @@ The framework has five idempotency mechanisms with no shared shape:
 
 1. Frontmatter ``idempotent: true|false`` (advisory; per-primitive).
 2. Envelope ``idempotent`` (hardcoded per call site, ~47 callers).
-3. ``run_id``-keyed dedup in :func:`slash_commands.runner.submit_and_record`.
+3. ``run_id``-keyed dedup in :func:`claude_hpc.orchestrator.runner.submit_and_record`.
 4. ``cmd_sha``-keyed :func:`claude_hpc.orchestrator.runs.find_run_by_cmd_sha`
    (wired to ``submit_and_record`` in item A5).
 5. ``request_id``-keyed resubmit dedup in ``slash_commands/runner.py``.
@@ -169,11 +169,13 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
         return PriorResult(origin="sidecar", run_id=run_id, details=data)
 
     if isinstance(key, RequestIdKey):
-        # Request-log dedup is owned by slash_commands.runner's
+        # Request-log dedup is owned by claude_hpc.orchestrator.runner's
         # _request_log helpers; the resolver hands off the lookup
         # rather than duplicate that file format here.
         try:
-            from slash_commands.runner import _lookup_request_id  # type: ignore[attr-defined]
+            from claude_hpc.orchestrator.runner import (
+                _lookup_request_id,  # type: ignore[attr-defined]
+            )
         except ImportError:
             return None
         try:

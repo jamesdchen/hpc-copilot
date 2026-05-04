@@ -201,7 +201,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.logs",
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.walltime_drift",
-    "slash_commands.runner",
+    "claude_hpc.orchestrator.runner",
     "claude_hpc.orchestrator.validate",
     # Composites — must come after every atom they reference.
     "claude_hpc.orchestrator.submit_flow",

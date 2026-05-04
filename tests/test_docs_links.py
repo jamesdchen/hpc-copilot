@@ -214,7 +214,7 @@ def test_mars_docs_env_vars_match_capabilities() -> None:
 
 
 def test_mars_snippet_does_not_claim_resubmit_non_idempotent() -> None:
-    """``slash_commands.runner.resubmit_failed`` dedupes on ``request_id``
+    """``claude_hpc.orchestrator.runner.resubmit_failed`` dedupes on ``request_id``
     (see CHANGELOG: 'Resubmit dedupe via request_id'); the snippet must not
     claim resubmit is non-idempotent."""
     text = _doc_text(MARS_SNIPPET)

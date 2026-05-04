@@ -48,14 +48,14 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc import errors
+from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.lifecycle import LifecycleState
+from claude_hpc.orchestrator import runner
+from claude_hpc.orchestrator.runner import mark_terminal, record_status
 from claude_hpc.orchestrator.runs import read_run_sidecar
-from claude_hpc import errors
-from claude_hpc._internal import session
-from slash_commands import runner
-from slash_commands.runner import mark_terminal, record_status
 
 try:
     import fcntl as _fcntl

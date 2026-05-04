@@ -31,15 +31,15 @@ from pathlib import Path
 from typing import Any
 
 import claude_hpc
+from claude_hpc import errors
+from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc.orchestrator import runner
 from claude_hpc.orchestrator.discover import (
     detect_mars_tier,
     discover_executors,
     read_meta_json,
 )
-from claude_hpc import errors
-from claude_hpc._internal import session
-from slash_commands import runner
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
@@ -986,7 +986,7 @@ def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, 
 
 
 def cmd_aggregate(args: argparse.Namespace) -> int:
-    # The aggregation pipeline is driven by slash_commands.runner.combine_wave
+    # The aggregation pipeline is driven by claude_hpc.orchestrator.runner.combine_wave
     # plus the user-supplied combiner script on the cluster. The CLI wraps it
     # with three optional, framework-agnostic guarantees:
     #   --require-outputs <template>  : every per-task output exists before
@@ -1095,7 +1095,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 
 
 # Canonical failure-category vocabulary. Must be the UNION of:
-#   - the auto-classifier in slash_commands.runner.cluster_failures_by_fingerprint
+#   - the auto-classifier in claude_hpc.orchestrator.runner.cluster_failures_by_fingerprint
 #     (gpu_oom, system_oom, walltime, node_failure, import_error,
 #      file_not_found, permission_denied, disk_full, python_traceback)
 #   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
@@ -1103,7 +1103,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 # category outside this set.
 # B2: derived from the canonical FailureCategory StrEnum.
 # Pre-B2 this was a literal frozenset that drifted from the classifier
-# emissions in slash_commands.runner; A4 landed the union as a literal,
+# emissions in claude_hpc.orchestrator.runner; A4 landed the union as a literal,
 # B2 makes the literal redundant by sourcing from the StrEnum so the
 # drift class cannot recur. test_lifecycle.py asserts the cross-set
 # invariants (classifier emissions ⊆ accepted ⊆ FailureCategory).
