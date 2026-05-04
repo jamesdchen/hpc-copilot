@@ -39,7 +39,7 @@ from hpc_mapreduce.job.residual_lifetime import predict_residual_lifetime
 from hpc_mapreduce.job.user_profiles import UserProfile
 
 if TYPE_CHECKING:
-    from hpc_mapreduce.infra.inspect import ClusterSnapshot
+    from claude_hpc.infra.inspect import ClusterSnapshot
 
 __all__ = ["ForecastedState", "forecast_state_at"]
 

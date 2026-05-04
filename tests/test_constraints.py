@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hpc_mapreduce.infra.clusters import load_clusters_config, load_constraints
+from claude_hpc.infra.clusters import load_clusters_config, load_constraints
 from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
 
 

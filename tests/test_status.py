@@ -39,7 +39,7 @@ class TestReportStatus:
         # Patch scheduler query functions to avoid real subprocess calls.
         with (
             patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
-            patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value={}),
+            patch("claude_hpc.infra.backends.query.query_sacct", return_value={}),
         ):
             result = report_status(
                 result_dir=tmp_path,
@@ -71,7 +71,7 @@ class TestReportStatusResourceUsage:
         }
         with (
             patch("hpc_mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
-            patch("hpc_mapreduce.infra.backends.query.query_sacct", return_value=fake_query),
+            patch("claude_hpc.infra.backends.query.query_sacct", return_value=fake_query),
         ):
             result = report_status(
                 result_dir=tmp_path,

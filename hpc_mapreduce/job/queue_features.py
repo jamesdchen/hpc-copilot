@@ -1,7 +1,7 @@
 """Order-book-style queue features derived from a single cluster snapshot.
 
 Phase 1b of the queue-wait predictor plan: turn the raw
-:class:`~hpc_mapreduce.infra.inspect.ClusterSnapshot` into a fixed-shape
+:class:`~claude_hpc.infra.inspect.ClusterSnapshot` into a fixed-shape
 :class:`QueueFeatures` record that the predictor can fold in alongside
 the diurnal moving-average baseline.
 
@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
 
 if TYPE_CHECKING:
-    from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
+    from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 __all__ = ["QueueFeatures", "compute_features"]
 

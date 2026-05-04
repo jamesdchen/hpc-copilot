@@ -1,10 +1,10 @@
-"""Tests for hpc_mapreduce.infra.inspect — pure parsers + injected runner."""
+"""Tests for claude_hpc.infra.inspect — pure parsers + injected runner."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from hpc_mapreduce.infra import inspect as ins
+from claude_hpc.infra import inspect as ins
 
 
 # --- scontrol parser ------------------------------------------------------

@@ -204,7 +204,7 @@ def get_err_log_paths(
     name) stays here because it's an on-disk recovery pattern, not a
     scheduler shape question.
     """
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
 
     backend_cls = get_backend_class(scheduler)
     paths: dict[int, str] = {}
@@ -271,7 +271,7 @@ def report_status(
     CSV completion semantics.
     """
     # B5-PR2: per-scheduler job-state query goes through backend.query_jobs.
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
 
     csv_results = check_results(result_dir, total_tasks, file_glob=file_glob, min_rows=min_rows)
 
@@ -444,7 +444,7 @@ def report_status_from_tasks(
     entry when present; ``null`` otherwise.
     """
     # B5-PR2: per-scheduler job-state query goes through backend.query_jobs.
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
 
     total = int(tasks_data.get("total_tasks", len(tasks_data.get("tasks", {}))))
     task_entries = tasks_data.get("tasks", {}) or {}

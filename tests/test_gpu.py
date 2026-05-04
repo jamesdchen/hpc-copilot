@@ -1,6 +1,6 @@
 """GPU queue selection fallback tests.
 
-Covers ``hpc_mapreduce.infra.gpu.pick_gpu`` and its fallback ordering when
+Covers ``claude_hpc.infra.gpu.pick_gpu`` and its fallback ordering when
 a preferred GPU is unavailable, qstat fails, exclusions wipe the candidate
 list, or no live queue qualifies.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
-from hpc_mapreduce.infra import gpu as gpu_mod
+from claude_hpc.infra import gpu as gpu_mod
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:

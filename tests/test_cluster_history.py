@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from hpc_mapreduce.infra import inspect as ic
+from claude_hpc.infra import inspect as ic
 from claude_hpc._internal.layout import RepoLayout
 
 
@@ -128,7 +128,7 @@ class TestEdgeCases:
     def test_persist_via_inspect_cluster_kwarg(self, tmp_path, monkeypatch):
         # inspect_cluster returns a synthetic snapshot when persist_dir
         # is set; we patch the SLURM path to short-circuit external IO.
-        from hpc_mapreduce.infra import inspect as inspect_mod
+        from claude_hpc.infra import inspect as inspect_mod
 
         captured = {}
 

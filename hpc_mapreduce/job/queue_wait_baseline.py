@@ -486,7 +486,7 @@ def _des_eligible(experiment_dir: "Path", *, cluster: str) -> _DESDecision:
     ``eligible=False`` with a populated reason — never raises.
     """
     try:
-        from hpc_mapreduce.infra.inspect import read_cluster_history
+        from claude_hpc.infra.inspect import read_cluster_history
         from hpc_mapreduce.job.queue_simulator import extract_running_jobs
     except ImportError as exc:
         return _DESDecision(False, f"import failed: {exc}", 0, 0)
@@ -604,7 +604,7 @@ def _predict_des(
     when the prerequisites are missing — that way the caller still gets
     a number rather than a hard error.
     """
-    from hpc_mapreduce.infra.inspect import read_cluster_history
+    from claude_hpc.infra.inspect import read_cluster_history
     from hpc_mapreduce.job.queue_simulator import (
         SimJob,
         extract_running_jobs,

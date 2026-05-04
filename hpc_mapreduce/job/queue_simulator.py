@@ -56,7 +56,7 @@ import heapq
 import random
 from typing import Any, Iterable
 
-from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
+from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 __all__ = [
     "SimJob",

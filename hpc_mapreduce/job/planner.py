@@ -41,8 +41,8 @@ from claude_hpc._internal._time import parse_iso_utc, utcnow, utcnow_iso
 if TYPE_CHECKING:
     from pathlib import Path
 
-from hpc_mapreduce.infra.clusters import load_clusters_config
-from hpc_mapreduce.infra.inspect import NodeSnapshot, inspect_cluster
+from claude_hpc.infra.clusters import load_clusters_config
+from claude_hpc.infra.inspect import NodeSnapshot, inspect_cluster
 from hpc_mapreduce.job.backfill import (
     BackfillProbe,
     ResourceTuple,
@@ -162,7 +162,7 @@ def plan_submit(
         # ETA via sbatch --test-only (SLURM only) — best effort.
         # B5-PR2: capability is published via backend class; SGE returns
         # supports_test_only_eta=False so we skip the probe.
-        from hpc_mapreduce.infra.backends import get_backend_class
+        from claude_hpc.infra.backends import get_backend_class
         if get_backend_class(scheduler).supports_test_only_eta:
             eta_sec = _eta_via_test_only(scheduler, c, cfg)
         else:
@@ -368,7 +368,7 @@ def _eta_via_test_only_with_resources(
     silently skip that probe rather than abort the whole report.
     """
     # B5-PR2: gate on the backend capability, not the scheduler name.
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
     if not get_backend_class(scheduler).supports_test_only_eta:
         return None, ""
     host = cluster_cfg.get("host")
@@ -376,7 +376,7 @@ def _eta_via_test_only_with_resources(
     if not host or not user:
         return None, ""
     try:
-        from hpc_mapreduce.infra.remote import ssh_run
+        from claude_hpc.infra.remote import ssh_run
     except ImportError:
         return None, ""
 

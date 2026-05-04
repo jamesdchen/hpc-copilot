@@ -484,7 +484,7 @@ def pick_earliest(probes: list[BackfillProbe]) -> BackfillProbe | None:
 # (cluster, constraint, walltime_minute_bucket) key shape as the
 # pre-refactor module-level dict; the generic cache adds bounded LRU
 # eviction and a ``clear_all()`` test hook shared with infra.inspect.
-from hpc_mapreduce.infra.cache import TTLCache as _TTLCache  # noqa: E402
+from claude_hpc.infra.cache import TTLCache as _TTLCache  # noqa: E402
 
 _PROBE_CACHE: _TTLCache[tuple[str, str, int], BackfillProbe] = _TTLCache(
     "job.backfill.probe", ttl_sec=60.0, max_size=512

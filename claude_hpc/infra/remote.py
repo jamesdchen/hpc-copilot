@@ -325,7 +325,7 @@ def deploy_runtime(
     # B5-PR2: drop the inline ``if sched == 'sge'`` ladder; the backend
     # registry owns the canonical extension via ``template_ext``. This
     # keeps remote.py and __init__.py:get_template_path in sync.
-    from hpc_mapreduce.infra.backends import template_ext_for
+    from claude_hpc.infra.backends import template_ext_for
     for sched in ("sge", "slurm"):
         ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):

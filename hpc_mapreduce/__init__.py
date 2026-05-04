@@ -103,10 +103,10 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from hpc_mapreduce.infra.clusters import load_clusters_config
-from hpc_mapreduce.infra.gpu import pick_gpu
-from hpc_mapreduce.infra.inspect import inspect_cluster
-from hpc_mapreduce.infra.remote import (
+from claude_hpc.infra.clusters import load_clusters_config
+from claude_hpc.infra.gpu import pick_gpu
+from claude_hpc.infra.inspect import inspect_cluster
+from claude_hpc.infra.remote import (
     deploy_runtime,
     rsync_pull,
     rsync_push,
@@ -262,7 +262,7 @@ def get_template_path(scheduler: str, template: str) -> Path:
     # ladder. ``template_ext`` is a class attribute on each backend
     # (".sh" for SGE, ".slurm" for SLURM); this keeps the on-disk layout
     # under the backend's authority.
-    from hpc_mapreduce.infra.backends import template_ext_for
+    from claude_hpc.infra.backends import template_ext_for
     ext = template_ext_for(scheduler)
     path = Path(__file__).parent / "templates" / scheduler / f"{template}{ext}"
     if not path.exists():

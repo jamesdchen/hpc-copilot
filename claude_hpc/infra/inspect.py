@@ -47,8 +47,8 @@ from typing import Any
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 
-from hpc_mapreduce.infra.cache import TTLCache
-from hpc_mapreduce.infra.clusters import load_clusters_config
+from claude_hpc.infra.cache import TTLCache
+from claude_hpc.infra.clusters import load_clusters_config
 from slash_commands import errors
 
 # In-process cache so a single submit cycle that calls inspect-cluster
@@ -536,7 +536,7 @@ class _CommandRunner:
 
     Tests substitute a fake runner that returns canned stdout/stderr; the
     real one shells out via ssh. We deliberately avoid threading the
-    ``hpc_mapreduce.infra.remote`` import through every call site so the
+    ``claude_hpc.infra.remote`` import through every call site so the
     pure parser tests don't need SSH keys.
     """
 
@@ -561,7 +561,7 @@ class _CommandRunner:
                 return 124, "", f"timeout: {exc}"
             except FileNotFoundError as exc:
                 return 127, "", f"missing binary: {exc}"
-        from hpc_mapreduce.infra.remote import ssh_run
+        from claude_hpc.infra.remote import ssh_run
 
         try:
             cp = ssh_run(cmd, host=self.host, user=self.user, timeout=self.timeout)
@@ -627,7 +627,7 @@ def inspect_cluster(
     # ``inspect_cluster`` classmethod normalises kwargs for its scheduler
     # (e.g. SGE ignores ``sacct_window_hours``); a missing backend
     # raises ValueError just like the prior ladder did.
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
     try:
         backend_cls = get_backend_class(scheduler)
     except ValueError as exc:
@@ -898,7 +898,7 @@ def _hours_since(iso_or_slurm: str) -> float | None:
 
 def _parse_gpu_count_from_tres(tres: str) -> int:
     """Re-export from ``backends.query`` to keep the parser single-sourced."""
-    from hpc_mapreduce.infra.backends.query import parse_gpu_count_from_tres
+    from claude_hpc.infra.backends.query import parse_gpu_count_from_tres
 
     return parse_gpu_count_from_tres(tres)
 

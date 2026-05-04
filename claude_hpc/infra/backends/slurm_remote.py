@@ -1,6 +1,6 @@
 """Remote SLURM backend — submits array jobs via sbatch over SSH.
 
-Mirrors :class:`hpc_mapreduce.infra.backends.sge_remote.RemoteSGEBackend`
+Mirrors :class:`claude_hpc.infra.backends.sge_remote.RemoteSGEBackend`
 for SLURM clusters. Constructor takes a ``remote_repo`` path and an
 ``ssh_run`` callable; the local SLURM binary is never called.
 
@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc_mapreduce.infra.backends import register
-from hpc_mapreduce.infra.backends._remote_base import RemoteHPCBackend
-from hpc_mapreduce.infra.backends.slurm import SlurmBackend
+from claude_hpc.infra.backends import register
+from claude_hpc.infra.backends._remote_base import RemoteHPCBackend
+from claude_hpc.infra.backends.slurm import SlurmBackend
 
 if TYPE_CHECKING:
     import subprocess

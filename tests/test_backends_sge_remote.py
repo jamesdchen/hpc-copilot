@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hpc_mapreduce.infra.backends.sge_remote import RemoteSGEBackend
+from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:

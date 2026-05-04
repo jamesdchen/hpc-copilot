@@ -34,7 +34,7 @@ from typing import Any
 
 import hpc_mapreduce
 from claude_hpc._internal._primitive import SideEffect, primitive
-from hpc_mapreduce.infra.clusters import load_clusters_config
+from claude_hpc.infra.clusters import load_clusters_config
 from hpc_mapreduce.job.discover import (
     detect_mars_tier,
     discover_executors,
@@ -489,7 +489,7 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
     """
     if (rc := _require_ssh_agent()) is not None:
         return rc
-    from hpc_mapreduce.infra.inspect import inspect_cluster
+    from claude_hpc.infra.inspect import inspect_cluster
 
     snap = inspect_cluster(
         args.cluster,

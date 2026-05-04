@@ -10,7 +10,7 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
-from hpc_mapreduce.infra.backends import query as qmod
+from claude_hpc.infra.backends import query as qmod
 
 
 def _cp(stdout="", stderr="", returncode=0):

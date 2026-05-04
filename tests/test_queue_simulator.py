@@ -5,7 +5,7 @@ Covers the FIFO + EASY backfill scheduler invariants.
 
 from __future__ import annotations
 
-from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
+from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 from hpc_mapreduce.job.queue_simulator import (
     SimJob,
     available_resources,

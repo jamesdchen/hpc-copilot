@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc_mapreduce.infra.backends import register
-from hpc_mapreduce.infra.backends._remote_base import RemoteHPCBackend
-from hpc_mapreduce.infra.backends.sge import SGEBackend
+from claude_hpc.infra.backends import register
+from claude_hpc.infra.backends._remote_base import RemoteHPCBackend
+from claude_hpc.infra.backends.sge import SGEBackend
 
 if TYPE_CHECKING:
     import subprocess

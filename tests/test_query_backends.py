@@ -1,4 +1,4 @@
-"""Backend-level tests for hpc_mapreduce.infra.backends.query.
+"""Backend-level tests for claude_hpc.infra.backends.query.
 
 Complements tests/test_query_batch.py by focusing on the uniform return
 shape - especially the error-reporting contract after A4.
@@ -9,7 +9,7 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
-from hpc_mapreduce.infra.backends import query as qmod
+from claude_hpc.infra.backends import query as qmod
 
 
 def _cp(stdout="", stderr="", returncode=0):

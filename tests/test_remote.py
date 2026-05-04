@@ -1,4 +1,4 @@
-"""Tests for hpc_mapreduce.infra.remote (ssh/rsync/combiner helpers).
+"""Tests for claude_hpc.infra.remote (ssh/rsync/combiner helpers).
 
 Mocks subprocess.run via unittest.mock.patch.  Covers argv composition
 (rsync flags, include/exclude order, trailing slashes) and the
@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_mapreduce.infra import remote
+from claude_hpc.infra import remote
 
 
 def _cp(stdout="", stderr="", returncode=0):
@@ -28,7 +28,7 @@ def _cp(stdout="", stderr="", returncode=0):
 
 class TestRsyncPush:
     def test_flag_composition_with_defaults(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
                 host="cluster.example",
@@ -54,7 +54,7 @@ class TestRsyncPush:
         assert dst == "alice@cluster.example:/u/home/alice/proj/"
 
     def test_delete_toggle_off(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
                 host="c",
@@ -67,7 +67,7 @@ class TestRsyncPush:
         assert "--delete" not in argv
 
     def test_custom_excludes_passed_in_order(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
                 host="c",
@@ -88,7 +88,7 @@ class TestRsyncPush:
 
 class TestRsyncPull:
     def test_with_include_list_filters_in_correct_order(self, tmp_path):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
                 host="c",
@@ -115,7 +115,7 @@ class TestRsyncPull:
         assert user_indices == sorted(user_indices)
 
     def test_without_include_no_filter_flags(self, tmp_path):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
                 host="c",
@@ -146,7 +146,7 @@ class TestDeployRuntime:
 
     def test_ssh_mkdir_then_scps_in_order(self):
         # subprocess.run is used both inside ssh_run (mkdir) and for each scp.
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.deploy_runtime(host="c", user="u", remote_path="/p")
 
@@ -209,14 +209,14 @@ class TestDeployRuntime:
 
 class TestSshRunCapture:
     def test_capture_true_by_default(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", host="c", user="u")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("capture_output") is True
 
     def test_capture_false_toggles_capture_output(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", host="c", user="u", capture=False)
         kwargs = mock_run.call_args.kwargs
@@ -230,7 +230,7 @@ class TestSshRunCapture:
 
 class TestRunCombiner:
     def test_run_combiner_default_no_force(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(host="c", user="u", remote_path="/p", wave=3, run_id="r1")
         argv = mock_run.call_args[0][0]
@@ -241,7 +241,7 @@ class TestRunCombiner:
         assert "--force" not in cmd_str
 
     def test_run_combiner_force_appends_flag(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(host="c", user="u", remote_path="/p", wave=3, run_id="r1", force=True)
         cmd_str = mock_run.call_args[0][0][-1]
@@ -250,7 +250,7 @@ class TestRunCombiner:
 
 class TestRunCombinerChecked:
     def test_returns_true_on_success(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="ok\n", stderr="", returncode=0)
             ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         assert ok is True
@@ -258,7 +258,7 @@ class TestRunCombinerChecked:
         assert err == ""
 
     def test_returns_false_on_failure(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="", stderr="boom", returncode=1)
             ok, out, err = remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         assert ok is False
@@ -266,7 +266,7 @@ class TestRunCombinerChecked:
         assert err == "boom"
 
     def test_force_threaded_through(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1", force=True)
         cmd_str = mock_run.call_args[0][0][-1]
@@ -275,7 +275,7 @@ class TestRunCombinerChecked:
 
 class TestRunCombinerShellQuoting:
     def test_remote_path_with_space_is_quoted(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(
                 host="c",
@@ -316,14 +316,14 @@ class TestModuleTimeoutConstants:
 
 class TestSshRunTimeout:
     def test_default_timeout_applied_when_omitted(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", host="c", user="u")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_overrides_default(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", host="c", user="u", timeout=7.5)
         kwargs = mock_run.call_args.kwargs
@@ -333,7 +333,7 @@ class TestSshRunTimeout:
         """Passing ``timeout=None`` is the documented escape hatch and
         must propagate as a literal ``None`` to ``subprocess.run``.
         """
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("ls", host="c", user="u", timeout=None)
         kwargs = mock_run.call_args.kwargs
@@ -342,7 +342,7 @@ class TestSshRunTimeout:
 
     def test_timeout_expired_reraised_as_timeout_error(self):
         cmd = "sleep 9999"
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd=cmd, timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
                 remote.ssh_run(cmd, host="cluster.example", user="alice")
@@ -353,7 +353,7 @@ class TestSshRunTimeout:
 
     def test_timeout_message_truncates_long_command(self):
         long_cmd = "echo " + ("x" * 500)
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd=long_cmd, timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
                 remote.ssh_run(long_cmd, host="c", user="u")
@@ -367,7 +367,7 @@ class TestSshRunTimeout:
         """``capture=False`` and ``timeout`` are orthogonal — the timeout
         still applies in streaming mode unless the caller opts out.
         """
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.ssh_run("tail -f log", host="c", user="u", capture=False)
         kwargs = mock_run.call_args.kwargs
@@ -377,7 +377,7 @@ class TestSshRunTimeout:
 
 class TestRsyncPushTimeout:
     def test_default_timeout_applied_when_omitted(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
                 host="c",
@@ -389,7 +389,7 @@ class TestRsyncPushTimeout:
         assert kwargs.get("timeout") == remote.RSYNC_TIMEOUT_SEC
 
     def test_explicit_timeout_overrides_default(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
                 host="c",
@@ -402,7 +402,7 @@ class TestRsyncPushTimeout:
         assert kwargs.get("timeout") == 42
 
     def test_explicit_none_disables_enforcement(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
                 host="c",
@@ -416,7 +416,7 @@ class TestRsyncPushTimeout:
         assert kwargs["timeout"] is None
 
     def test_timeout_expired_reraised_as_timeout_error(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="rsync ...", timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
                 remote.rsync_push(
@@ -435,7 +435,7 @@ class TestRsyncPushTimeout:
 
 class TestRsyncPullTimeout:
     def test_default_timeout_applied_when_omitted(self, tmp_path):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
                 host="c",
@@ -448,7 +448,7 @@ class TestRsyncPullTimeout:
         assert kwargs.get("timeout") == remote.RSYNC_TIMEOUT_SEC
 
     def test_explicit_none_disables_enforcement(self, tmp_path):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
                 host="c",
@@ -469,7 +469,7 @@ class TestDeployRuntimeTimeout:
     """
 
     def test_each_subprocess_call_has_ssh_timeout(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.deploy_runtime(host="c", user="u", remote_path="/p")
         for call in mock_run.call_args_list:
@@ -478,21 +478,21 @@ class TestDeployRuntimeTimeout:
 
 class TestRunCombinerTimeout:
     def test_default_timeout_threaded_through_to_ssh_run(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_threaded_through_to_ssh_run(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=15)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 15
 
     def test_explicit_none_threaded_through_to_ssh_run(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=None)
         kwargs = mock_run.call_args.kwargs
@@ -502,14 +502,14 @@ class TestRunCombinerTimeout:
 
 class TestRunCombinerCheckedTimeout:
     def test_default_timeout_threaded_through(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_threaded_through(self):
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=21)
         kwargs = mock_run.call_args.kwargs
@@ -520,7 +520,7 @@ class TestRunCombinerCheckedTimeout:
         callers can distinguish "remote returned non-zero" from "we
         never heard back".
         """
-        with patch("hpc_mapreduce.infra.remote.subprocess.run") as mock_run:
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
                 remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
