@@ -79,6 +79,22 @@ def _parse_remote_json(stdout: str, *, source_label: str) -> dict[str, Any]:
 _utcnow_iso = utcnow_iso
 
 
+@primitive(
+    name="submit-spec",
+    verb="submit",
+    side_effects=[
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
+        SideEffect("scheduler-submit", "<cluster>"),
+    ],
+    error_codes=[
+        errors.SpecInvalid,
+        errors.ClusterUnknown,
+        errors.SshUnreachable,
+        errors.SchedulerThrottled,
+    ],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def submit_and_record(
     experiment_dir: Path,
     *,
@@ -236,6 +252,17 @@ def _ssh_status_report(
     return _parse_remote_json(proc.stdout, source_label="status reporter")
 
 
+@primitive(
+    name="poll-run-status",
+    verb="query",
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),
+    ],
+    error_codes=[errors.JournalCorrupt, errors.SshUnreachable, errors.RemoteCommandFailed],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def record_status(
     experiment_dir: Path,
     run_id: str,
@@ -284,6 +311,19 @@ def record_status(
     return record
 
 
+@primitive(
+    name="combine-wave",
+    verb="mutate",
+    side_effects=[
+        SideEffect("ssh", "<cluster>"),
+        SideEffect("runs", "cluster-side combiner (python3 .hpc/_hpc_combiner.py)"),
+        SideEffect("writes-cluster", "<output_dir>/_combiner/wave_<N>.json"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)"),
+    ],
+    error_codes=[errors.SshUnreachable, errors.CombinerFailed, errors.JournalCorrupt],
+    idempotent=True,
+    idempotency_key="(run_id, wave)",
+)
 def combine_wave(
     experiment_dir: Path,
     run_id: str,
@@ -354,6 +394,17 @@ def derive_resubmit_request_id(
     return "rs_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
+@primitive(
+    name="resubmit-failed",
+    verb="mutate",
+    side_effects=[
+        SideEffect("scheduler-submit", "<cluster>"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters)"),
+    ],
+    error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
+    idempotent=True,
+    idempotency_key="request_id",
+)
 def resubmit_failed(
     experiment_dir: Path,
     run_id: str,
