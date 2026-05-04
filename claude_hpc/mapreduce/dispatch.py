@@ -184,9 +184,7 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
             "[claude-hpc] SIGTERM received; cluster preemption imminent",
             file=sys.stderr,
         )
-        _mark_preempted_in_sidecar(
-            sidecar_path, task_id, _utcnow_iso(), grace_sec=grace_sec
-        )
+        _mark_preempted_in_sidecar(sidecar_path, task_id, _utcnow_iso(), grace_sec=grace_sec)
 
         child = child_holder[0] if child_holder else None
         if child is not None and child.poll() is None:

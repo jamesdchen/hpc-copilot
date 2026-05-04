@@ -210,9 +210,7 @@ class TestMaxNodeMemClamp:
 
     def test_negative_ceiling_rejected(self):
         with pytest.raises(ValueError, match="ceiling_mb must be positive"):
-            recommend_mem_mb(
-                {}, ["a100"], user_default_mb=16384, ceiling_mb=-1
-            )
+            recommend_mem_mb({}, ["a100"], user_default_mb=16384, ceiling_mb=-1)
 
 
 # ─── samples-cutoff transition + bundled-yaml round-trip ───────────────────

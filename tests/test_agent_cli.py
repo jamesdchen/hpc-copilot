@@ -122,9 +122,7 @@ def test_capabilities_exposes_cluster_yaml_keys() -> None:
     data = _parse_envelope(out)["data"]
 
     keys = data.get("cluster_yaml_keys")
-    assert isinstance(keys, list) and keys, (
-        "cluster_yaml_keys must be a non-empty list"
-    )
+    assert isinstance(keys, list) and keys, "cluster_yaml_keys must be a non-empty list"
     # Each entry has the documented shape.
     for entry in keys:
         assert isinstance(entry, dict), entry
@@ -685,9 +683,7 @@ def test_resubmit_preempted_category_with_all_marked_raises_preempted(
     (runs_dir / "rid.json").write_text(json.dumps(sidecar))
 
     spec = tmp_path / "rs.json"
-    spec.write_text(
-        json.dumps({"failed_task_ids": [0, 1], "category": "preempted"})
-    )
+    spec.write_text(json.dumps({"failed_task_ids": [0, 1], "category": "preempted"}))
     env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
 
     rc, out, _ = _run_cli(
@@ -734,9 +730,7 @@ def test_resubmit_preempted_category_with_partial_marks_does_not_raise(
     (runs_dir / "rid.json").write_text(json.dumps(sidecar))
 
     spec = tmp_path / "rs.json"
-    spec.write_text(
-        json.dumps({"failed_task_ids": [0, 1], "category": "preempted"})
-    )
+    spec.write_text(json.dumps({"failed_task_ids": [0, 1], "category": "preempted"}))
     env_vars = {**os.environ, "HPC_JOURNAL_DIR": str(tmp_path / "j")}
 
     rc, out, _ = _run_cli(

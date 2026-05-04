@@ -18,7 +18,6 @@ import yaml  # type: ignore[import-untyped]
 
 from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
 
-
 # B-M4: declarative manifest of per-cluster yaml keys. Mirrors the
 # get_*() validators below; surfaced through cmd_capabilities so a
 # campus user learning the schema by inspection (without reading
@@ -31,9 +30,7 @@ CLUSTER_YAML_KEYS: list[dict[str, Any]] = [
         "key": "scheduler",
         "type": "string",
         "required": True,
-        "description": (
-            "One of 'sge' or 'slurm'. Routes the submission to the right backend."
-        ),
+        "description": ("One of 'sge' or 'slurm'. Routes the submission to the right backend."),
     },
     {
         "key": "ssh_target",
@@ -284,8 +281,7 @@ def get_max_node_mem_mb(cluster_config: dict[str, Any]) -> int | None:
         return None
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise ValueError(
-            f"max_node_mem_mb must be a positive int when set, got {raw!r} "
-            f"({type(raw).__name__})"
+            f"max_node_mem_mb must be a positive int when set, got {raw!r} ({type(raw).__name__})"
         )
     if raw <= 0:
         raise ValueError(f"max_node_mem_mb must be positive, got {raw}")

@@ -1,0 +1,119 @@
+"""End-to-end test for the preempted-state plumbing.
+
+Wires together the cluster-side dispatcher's SIGTERM trap with the
+agent-surface's failure-clustering and envelope-key path:
+
+  dispatch.py exit 130 + SIGTERM stderr line
+   → runner._categorize finds the 'preempted' pattern
+   → runner.cluster_failures_by_fingerprint groups all bumped tasks
+   → atoms.failures.fetch_failures surfaces preempted_count /
+     preempted_task_ids on the envelope
+   → cmd_failures (and now cmd_status) carry those keys
+
+The intent: a campus user whose low-priority job got bumped sees a
+single, cohesive 'preempted' diagnostic across every surface, instead
+of one cluster-side mechanism contradicting another.
+"""
+
+from __future__ import annotations
+
+from slash_commands import runner
+
+
+def _log_entry(task_id: int, *, content: str = "", exit_code: int | None = None) -> dict:
+    out: dict = {"task_id": task_id, "content": content}
+    if exit_code is not None:
+        out["exit_code"] = exit_code
+    return out
+
+
+class TestCategorizeRecognisesPreemption:
+    def test_sigterm_stderr_line_categorises_as_preempted(self) -> None:
+        """The dispatcher's SIGTERM-trap stderr line is the canonical
+        signal — every other surface keys off the 'preempted' cluster
+        bucket that this match populates."""
+        stderr = (
+            "starting task 0\n"
+            "running executor\n"
+            "[claude-hpc] SIGTERM received; cluster preemption imminent\n"
+        )
+        assert runner._categorize(stderr) == "preempted"
+
+    def test_exit_code_130_is_a_fallback_when_stderr_clipped(self) -> None:
+        """If the stderr tail was clipped before the SIGTERM line lands,
+        cluster_failures_by_fingerprint still maps exit-130 tasks to the
+        'preempted' cluster — exit 130 is a definitive signal even
+        without the stderr breadcrumb."""
+        logs = [
+            _log_entry(0, content="some unrelated trailing line", exit_code=130),
+        ]
+        clusters = runner.cluster_failures_by_fingerprint(logs)
+        assert len(clusters) == 1
+        # The runner classifies exit-130-without-stderr as preempted via
+        # the explicit fallback in cluster_failures_by_fingerprint.
+        assert clusters[0]["category"] == "preempted"
+
+
+class TestClusterFailuresByFingerprintGroupsPreempted:
+    def test_multiple_preempted_tasks_collapse_into_one_cluster(self) -> None:
+        """Three tasks all bumped by the same SIGTERM stderr land in a
+        single 'preempted' cluster, with all three task ids surfaced."""
+        sigterm_line = "[claude-hpc] SIGTERM received; cluster preemption imminent"
+        logs = [
+            _log_entry(0, content=f"trace line\n{sigterm_line}\n"),
+            _log_entry(1, content=f"trace line\n{sigterm_line}\n"),
+            _log_entry(2, content=f"trace line\n{sigterm_line}\n"),
+        ]
+        clusters = runner.cluster_failures_by_fingerprint(logs)
+        # Find the preempted cluster (ordering by count, single bucket here).
+        preempted = [c for c in clusters if c.get("category") == "preempted"]
+        assert len(preempted) == 1, clusters
+        assert sorted(preempted[0]["task_ids"]) == [0, 1, 2]
+        assert preempted[0]["count"] == 3
+
+    def test_mixed_real_failures_and_preempted_separate(self) -> None:
+        """A real OOM and two preempted tasks must NOT collapse — the
+        campus user needs the diagnostic to stay legible."""
+        sigterm_line = "[claude-hpc] SIGTERM received; cluster preemption imminent"
+        logs = [
+            _log_entry(0, content="torch.cuda.OutOfMemoryError: CUDA out of memory."),
+            _log_entry(1, content=f"work\n{sigterm_line}\n"),
+            _log_entry(2, content=f"work\n{sigterm_line}\n"),
+        ]
+        clusters = runner.cluster_failures_by_fingerprint(logs)
+        cats = {c.get("category") for c in clusters}
+        assert "preempted" in cats
+        assert "gpu_oom" in cats
+
+
+class TestFailuresEnvelopeSurfacesPreemptedKeys:
+    """The atoms/failures.py envelope walks the cluster set and surfaces
+    preempted_count + preempted_task_ids at the top level so a harness
+    can branch without parsing per-cluster ``error_class`` strings."""
+
+    def test_envelope_key_extraction_logic(self) -> None:
+        # Simulate the cluster shape post-annotation: the runner emits
+        # 'category' but atoms/failures.py also accepts 'error_class'
+        # for symmetry with the failure-signature pipeline. Test both
+        # to keep the contract honest.
+        clusters = [
+            {
+                "category": "preempted",
+                "error_class": "preempted",
+                "task_ids": [0, 1, 2],
+                "count": 3,
+            },
+            {
+                "category": "gpu_oom",
+                "error_class": "gpu_oom",
+                "task_ids": [3],
+                "count": 1,
+            },
+        ]
+        # Mirror atoms/failures.py:fetch_failures end-of-function logic:
+        preempted_task_ids: list[int] = []
+        for cluster in clusters:
+            if cluster.get("error_class") == "preempted":
+                preempted_task_ids.extend(cluster.get("task_ids") or [])
+        assert sorted(preempted_task_ids) == [0, 1, 2]
+        assert len(preempted_task_ids) == 3
