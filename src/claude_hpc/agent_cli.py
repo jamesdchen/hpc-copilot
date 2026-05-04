@@ -78,7 +78,7 @@ def _meta_idempotent(name: str) -> bool:
     in tests/test_idempotency.py guards against silent drift).
     """
     try:
-        from claude_hpc.operations import operations_catalog
+        from claude_hpc._internal.operations import operations_catalog
 
         for entry in operations_catalog():
             if entry.get("name") == name:
@@ -314,7 +314,7 @@ def _live_subcommands() -> list[str]:
 def cmd_capabilities(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.capabilities."""
     from claude_hpc.atoms.capabilities import capabilities
-    from claude_hpc.operations import render_llms_full
+    from claude_hpc._internal.operations import render_llms_full
 
     if getattr(args, "full", False):
         # Human/LLM-mode: emit a multi-section text blob (NOT the JSON

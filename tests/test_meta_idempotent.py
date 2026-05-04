@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from claude_hpc.agent_cli import _meta_idempotent
-from claude_hpc.operations import operations_catalog
+from claude_hpc._internal.operations import operations_catalog
 
 
 def test_meta_idempotent_matches_catalog() -> None:
