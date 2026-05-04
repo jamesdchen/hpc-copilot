@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/recall.input.json",
+  "title": "recall query spec",
+  "description": "Optional spec file for `hpc-mapreduce recall`. The same arguments are exposed as CLI flags (--root, --task-kind, --operator, --since, --limit) and the operator picks one path. The flag form is more convenient for shell pipelines; the spec form is more convenient when the calling agent already has a structured filter to pass.",
+  "type": "object",
+  "required": ["root"],
+  "additionalProperties": false,
+  "properties": {
+    "root": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Filesystem directory to walk (recursively) for interview.json files."
+    },
+    "task_kind": {
+      "type": "string",
+      "description": "Exact-match filter against intent.task_kind (e.g. 'ml-hparam-sweep', 'rl-rollout')."
+    },
+    "operator": {
+      "type": "string",
+      "description": "Exact-match filter against intent.produced_by.operator."
+    },
+    "since": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Only return campaigns with _materialized.at >= this ISO-8601 timestamp."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 20,
+      "description": "Cap on results returned. The total match count (pre-truncation) is reported via data.total_matching."
+    }
+  }
+}

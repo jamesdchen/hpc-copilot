@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Added — `recall` primitive: query past interview.json files
+
+`hpc-mapreduce recall --root <experiments-dir>` walks the tree for
+`interview.json` files (produced by the interview primitive), filters
+by `--task-kind` / `--operator` / `--since` (ISO-8601), and returns
+recency-sorted summaries (goal, task_kind, task_count, operator,
+materialized_at, cmd_sha). Substrate for "show me my last 5 LR sweeps"
+prompts in the next interview — closes the memory loop between
+campaigns.
+
+Read-only and idempotent. No persistent index; the operator passes the
+experiments root explicitly. Malformed `interview.json` files are
+skipped silently. Hard-capped at 10K files per scan.
+
+### Added — `interview.task_generator`: typed materializer for tasks.py
+
+The `task_generator` field in `interview.input.json` is now a typed
+`oneOf` (was a reserved bare-bones placeholder). When intent supplies a
+`task_generator`, the primitive generates tasks.py from the recipe
+instead of consuming an agent-written one. Five typed shapes:
+
+- `enumerated` — items list verbatim (most agnostic; covers eval, RL,
+  benchmark, data-shard campaigns).
+- `cartesian_product` — full cross-product over named axes.
+- `items_x_seeds` — items × seeds with `seed` merged into each item dict.
+- `numeric_logspace` — `param` swept geometrically over `[low, high]`.
+- `numeric_linspace` — `param` swept arithmetically over `[low, high]`.
+
+The expected task count is computed pre-flight from the recipe and
+cross-checked against `intent.task_count` *before* any disk write — a
+recipe-vs-count mismatch never leaves a partial tasks.py behind.
+Generator mode is byte-equivalently idempotent on re-run; an operator
+who hand-edits the produced tasks.py drops `task_generator` from the
+next intent and the primitive flips to validate-mode for the edited file.
+
 ### Added — `interview` primitive: persist campaign intent alongside tasks.py
 
 The interview between hpc-agent and either MARs or a human now produces

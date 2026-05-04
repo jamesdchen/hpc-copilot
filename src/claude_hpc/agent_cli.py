@@ -359,6 +359,27 @@ def cmd_interview(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: recall ────────────────────────────────────────────────────
+
+
+def cmd_recall(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.recall."""
+    from claude_hpc.atoms.recall import recall_campaigns
+
+    try:
+        data = recall_campaigns(
+            Path(args.root),
+            task_kind=getattr(args, "task_kind", None),
+            operator=getattr(args, "operator", None),
+            since=getattr(args, "since", None),
+            limit=int(getattr(args, "limit", 20)),
+        )
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
+    _ok(data, name="recall")
+    return EXIT_OK
+
+
 # ─── subcommand: discover ──────────────────────────────────────────────────
 
 
@@ -1444,6 +1465,41 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_iv.set_defaults(func=cmd_interview)
+
+    # recall
+    p_rc = sub.add_parser(
+        "recall",
+        help=(
+            "Query past interview.json files under --root. Returns "
+            "recency-sorted campaign summaries (goal, task_kind, "
+            "task_count, operator, materialized_at, cmd_sha) for use as "
+            "context in the next interview."
+        ),
+    )
+    p_rc.add_argument(
+        "--root",
+        required=True,
+        help="Filesystem directory to walk recursively for interview.json.",
+    )
+    p_rc.add_argument(
+        "--task-kind",
+        help="Exact-match filter against intent.task_kind.",
+    )
+    p_rc.add_argument(
+        "--operator",
+        help="Exact-match filter against intent.produced_by.operator.",
+    )
+    p_rc.add_argument(
+        "--since",
+        help="ISO-8601 timestamp; only campaigns materialized at or after this point are returned.",
+    )
+    p_rc.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum number of summaries to return (default 20).",
+    )
+    p_rc.set_defaults(func=cmd_recall)
 
     # discover
     p_disc = sub.add_parser(
