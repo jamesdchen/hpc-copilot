@@ -1,4 +1,4 @@
-"""Tests for hpc_mapreduce.map.dispatch — the cluster-side framework executor.
+"""Tests for claude_hpc.mapreduce.dispatch — the cluster-side framework executor.
 
 The dispatcher imports the user's ``.hpc/tasks.py``, reads the per-run
 sidecar at ``.hpc/runs/<run_id>.json`` for the executor command and
@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce.map import dispatch
-from hpc_mapreduce.reduce.status import check_results
+from claude_hpc.mapreduce import dispatch
+from claude_hpc.mapreduce.reduce.status import check_results
 from tests.conftest import make_sidecar_json, write_hpc_tasks
 
 

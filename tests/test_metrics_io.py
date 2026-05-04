@@ -1,4 +1,4 @@
-"""Tests for hpc_mapreduce.map.metrics_io.write_metrics."""
+"""Tests for claude_hpc.mapreduce.metrics_io.write_metrics."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from hpc_mapreduce.map.metrics_io import write_metrics
+from claude_hpc.mapreduce.metrics_io import write_metrics
 
 
 class TestWriteMetricsDestination:
@@ -89,7 +89,7 @@ class TestExecutorTemplateEmitsMetrics:
 
         template_path = (
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            + "/hpc_mapreduce/templates/starters/executor_template.py"
+            + "/claude_hpc/mapreduce/templates/starters/executor_template.py"
         )
         spec = importlib.util.spec_from_file_location(
             "executor_template_under_test", template_path

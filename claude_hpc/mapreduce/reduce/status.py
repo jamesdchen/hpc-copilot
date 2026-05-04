@@ -1,7 +1,7 @@
 """Job status checking, result validation, and status reporting.
 
 This module drives the LLM-orchestrator's ``/status`` loop.  The CLI entry
-point (``python -m hpc_mapreduce.reduce.status --run-id <id>``) emits JSON
+point (``python -m claude_hpc.mapreduce.reduce.status --run-id <id>``) emits JSON
 to stdout.  **Schema contract** (pinned; all four top-level keys ALWAYS
 present, never ``None``)::
 
@@ -321,7 +321,7 @@ def report_status(
     )
     err_paths = {str(tid): all_err[tid] for tid in failed_or_unknown if tid in all_err}
 
-    from hpc_mapreduce.reduce.metrics import reduce_resource_usage
+    from claude_hpc.mapreduce.reduce.metrics import reduce_resource_usage
 
     report: dict = {
         "result_dir": str(Path(result_dir).resolve()),
@@ -514,7 +514,7 @@ def report_status_from_tasks(
     )
     err_paths = {str(tid): all_err[tid] for tid in failed_or_unknown if tid in all_err}
 
-    from hpc_mapreduce.reduce.metrics import reduce_resource_usage
+    from claude_hpc.mapreduce.reduce.metrics import reduce_resource_usage
 
     report: dict = {
         "total_tasks": total,
@@ -602,7 +602,7 @@ def rollup_by_wave(report: dict, tasks_data: dict) -> dict[str, dict]:
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point - `python -m hpc_mapreduce.reduce.status`
+# CLI entry point - `python -m claude_hpc.mapreduce.reduce.status`
 # ---------------------------------------------------------------------------
 
 

@@ -133,10 +133,10 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 
 ### Closed-loop campaigns
 
-- `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` —
+- `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` —
   read-only per-iteration reduced metrics for a campaign, oldest-first.
   Pure local filesystem walk. Does not import `.hpc/tasks.py`.
-- `hpc_mapreduce.reduce.history.find_sidecars_by_campaign` /
+- `claude_hpc.mapreduce.reduce.history.find_sidecars_by_campaign` /
   `result_dirs_for_sidecar` — underlying primitives.
 - `hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)` —
   return `experiment_dir/.hpc/campaigns/<campaign_id>/`, creating it
@@ -293,7 +293,7 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    because they are guaranteed to be present at execution time. The current
    allowlist (kept in sync with `RUNTIME_MODULES_ALLOWED_IN_TEMPLATES` in
    `tests/test_boundary_contract.py`) is:
-   - `hpc_mapreduce.map.metrics_io` — the `write_metrics` sidecar writer.
+   - `claude_hpc.mapreduce.metrics_io` — the `write_metrics` sidecar writer.
      Stdlib-only, deployed alongside `combiner.py`. Templates use a lazy
      import gated on `$RESULT_DIR` so smoke tests still run without
      `claude-hpc` installed.

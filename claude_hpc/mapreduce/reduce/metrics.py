@@ -115,7 +115,7 @@ def reduce_by_grid_point(tasks_data: dict) -> dict[str, dict]:
         Per-task dict with ``tasks.<tid>.params`` and
         ``tasks.<tid>.result_dir`` fields. Typically the synthetic dict
         produced from a per-run sidecar + ``.hpc/tasks.py`` by
-        :func:`hpc_mapreduce.reduce.status._build_per_task_dict_from_sidecar`.
+        :func:`claude_hpc.mapreduce.reduce.status._build_per_task_dict_from_sidecar`.
         Tasks are grouped by their ``params`` dict (via the inlined
         ``run_id`` helper); any additional task-level keys are ignored.
 

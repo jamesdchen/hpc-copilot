@@ -7,7 +7,7 @@ chain in a single pytest run.
 
 The reporting side still consumes a per-task dict;
 ``_synthetic_per_task_dict`` builds one from the sidecar + tasks.py the same
-way ``hpc_mapreduce.reduce.status._build_per_task_dict_from_sidecar``
+way ``claude_hpc.mapreduce.reduce.status._build_per_task_dict_from_sidecar``
 does on the cluster, so the existing ``check_results_from_tasks``
 contract is unchanged.
 """
@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pytest
 
-import hpc_mapreduce
-from hpc_mapreduce.reduce.status import check_results_from_tasks
+import claude_hpc
+from claude_hpc.mapreduce.reduce.status import check_results_from_tasks
 
 STUB_SCRIPT = """\
 import os
@@ -76,7 +76,7 @@ def _materialize_run(
     )
 
     dispatch_dst = hpc / "_hpc_dispatch.py"
-    pkg_dispatch = Path(hpc_mapreduce.__file__).parent / "map" / "dispatch.py"
+    pkg_dispatch = Path(claude_hpc.__file__).parent / "mapreduce" / "dispatch.py"
     shutil.copyfile(pkg_dispatch, dispatch_dst)
     return dispatch_dst, kwargs_per_task, result_dir_template
 

@@ -51,7 +51,7 @@ def _read_metrics(metrics_path):
 def _grid_key(params):
     """Deterministic string ID from kwargs values, joined by ``_``.
 
-    Mirrors ``hpc_mapreduce.reduce.metrics.run_id`` semantics. Duplicated
+    Mirrors ``claude_hpc.mapreduce.reduce.metrics.run_id`` semantics. Duplicated
     here because the combiner is deployed standalone (no package).
     """
     raw = "_".join(str(v) for v in params.values())

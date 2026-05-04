@@ -1,15 +1,15 @@
 # Closed-loop campaigns
 
-A campaign is a sequence of `/submit` invocations sharing a `campaign_id` tag. The user's `.hpc/tasks.py` reads `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at module-load time to learn what prior iterations produced and decide what to run next. The framework provides:
+A campaign is a sequence of `/submit` invocations sharing a `campaign_id` tag. The user's `.hpc/tasks.py` reads `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at module-load time to learn what prior iterations produced and decide what to run next. The framework provides:
 
 | Component | What it does |
 |---|---|
 | `campaign_id` field on run sidecars (v2 schema) | Tags every successful submit with the campaign it belongs to. |
 | `--campaign-id` field on the submit spec | Sets the tag at submit time; threaded through `runner.submit_and_record` → `RunRecord.campaign_id`. |
 | `HPC_CAMPAIGN_ID` env var | Forwarded by every scheduler template (SGE / SLURM, CPU / GPU). The user's `tasks.py` (and the executor) read it on the cluster. |
-| `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` | Walks matching sidecars, runs `reduce_metrics` on each iteration's result_dirs, returns the per-iteration reduced-metric dicts oldest-first. Pure local read; no SSH. |
+| `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` | Walks matching sidecars, runs `reduce_metrics` on each iteration's result_dirs, returns the per-iteration reduced-metric dicts oldest-first. Pure local read; no SSH. |
 | `hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)` | Returns `.hpc/campaigns/<cid>/`, creating it idempotently. Reserved for strategy libraries to put their state files (Optuna SQLite, PBT checkpoints, walk-forward cursor, etc.). The framework writes nothing inside. |
-| `hpc_mapreduce.map.metrics_io.read_kw_env()` | Executor-side helper that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env var the dispatcher exported. Stdlib-only; deployed alongside the executor. |
+| `claude_hpc.mapreduce.metrics_io.read_kw_env()` | Executor-side helper that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env var the dispatcher exported. Stdlib-only; deployed alongside the executor. |
 | `hpc-mapreduce campaign status / list` | Read-only CLI inspection. |
 | `slash_commands/commands/campaign-hpc.md` | Conversational interview that scaffolds a campaign-aware `tasks.py`. The "loop" is the assistant repeatedly invoking `/submit-hpc campaign_id=<slug>` — there is no asyncio driver, no `run_campaign` callable, no Python orchestration to wire. Concurrency is opt-in by firing more submits before earlier ones finish. |
 
@@ -22,7 +22,7 @@ All three recipes share the same bootstrap:
 ```python
 # .hpc/tasks.py — campaign-aware
 import os
-from hpc_mapreduce.reduce.history import prior
+from claude_hpc.mapreduce.reduce.history import prior
 
 _PRIOR = prior(".", os.environ["HPC_CAMPAIGN_ID"]) if "HPC_CAMPAIGN_ID" in os.environ else []
 ```

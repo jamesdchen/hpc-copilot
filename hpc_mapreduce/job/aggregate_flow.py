@@ -37,7 +37,7 @@ from typing import Any
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.remote import rsync_pull, split_ssh_target
 from hpc_mapreduce.job.runs import read_run_sidecar
-from hpc_mapreduce.reduce.metrics import reduce_partials
+from claude_hpc.mapreduce.reduce.metrics import reduce_partials
 from slash_commands import errors, runner, session
 from slash_commands.runner import combine_wave, record_status
 

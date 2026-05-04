@@ -9,7 +9,7 @@
     "failed_task_ids": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 },
     "category": {
       "type": "string",
-      "description": "Must match hpc_mapreduce.reduce.classify.CATEGORIES exactly.",
+      "description": "Must match claude_hpc.mapreduce.reduce.classify.CATEGORIES exactly.",
       "enum": [
         "gpu_oom", "system_oom", "segv", "walltime", "node_failure",
         "queue_stall", "code_bug", "unknown"

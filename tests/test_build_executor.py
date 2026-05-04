@@ -26,7 +26,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from hpc_mapreduce import _PACKAGE_ROOT
+from claude_hpc import _PACKAGE_ROOT
 from hpc_mapreduce.job.discover import (
     ExecutorInfo,
     discover_executors,
@@ -42,7 +42,7 @@ def _load_template_module(path: Path):
     return mod
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mock_experiment"
-TEMPLATES_DIR = _PACKAGE_ROOT / "templates" / "starters"
+TEMPLATES_DIR = _PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
 
 
 # ─── discover_executors ───────────────────────────────────────────────────

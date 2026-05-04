@@ -147,15 +147,15 @@ from hpc_mapreduce.job.throughput import (
     build_wave_map,
     compute_submission_plan,
 )
-from hpc_mapreduce.map.metrics_io import write_metrics
-from hpc_mapreduce.reduce.classify import classify_failure
-from hpc_mapreduce.reduce.metrics import (
+from claude_hpc.mapreduce.metrics_io import write_metrics
+from claude_hpc.mapreduce.reduce.classify import classify_failure
+from claude_hpc.mapreduce.reduce.metrics import (
     reduce_by_grid_point,
     reduce_metrics,
     reduce_partials,
     reduce_resource_usage,
 )
-from hpc_mapreduce.reduce.status import (
+from claude_hpc.mapreduce.reduce.status import (
     check_results,
     check_results_from_tasks,
     detect_scheduler,
@@ -264,7 +264,12 @@ def get_template_path(scheduler: str, template: str) -> Path:
     # under the backend's authority.
     from claude_hpc.infra.backends import template_ext_for
     ext = template_ext_for(scheduler)
-    path = Path(__file__).parent / "templates" / scheduler / f"{template}{ext}"
+    # B7: templates moved to claude_hpc/mapreduce/templates/ as part of
+    # the package reorg. Resolve via the claude_hpc package root so this
+    # forwarder keeps working until the rest of __init__.py moves over.
+    import claude_hpc as _claude_hpc_pkg
+    _claude_hpc_root = Path(_claude_hpc_pkg.__file__).resolve().parent
+    path = _claude_hpc_root / "mapreduce" / "templates" / scheduler / f"{template}{ext}"
     if not path.exists():
         raise FileNotFoundError(f"Template not found: {path}")
     return path
