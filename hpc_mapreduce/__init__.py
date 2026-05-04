@@ -92,6 +92,12 @@ __all__ = [
     "run_combiner_checked",
     # Per-task metrics sidecar
     "write_metrics",
+    # Primitive registry (C′ — implementation + schemas as SoT)
+    "PrimitiveMeta",
+    "SideEffect",
+    "get_meta",
+    "get_registry",
+    "primitive",
 ]
 
 import importlib.util
@@ -161,6 +167,13 @@ from hpc_mapreduce.reduce.status import (
     rollup_by_grid_point,
 )
 
+from hpc_mapreduce._primitive import (
+    PrimitiveMeta,
+    SideEffect,
+    get_meta,
+    get_registry,
+    primitive,
+)
 from hpc_mapreduce.layout import JournalLayout, RepoLayout
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
