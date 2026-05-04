@@ -166,7 +166,7 @@ def _make_single_array_submission(
         errors.ClusterUnknown,
     ],
     idempotent=True,
-    idempotency_key="run_id",
+    idempotency_key="spec.run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
 )
 def submit_flow(

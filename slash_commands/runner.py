@@ -903,6 +903,13 @@ def cluster_failures_by_fingerprint(
         content = entry.get("content") or ""
         fp = fingerprint_stderr_tail(content)
         category = _categorize(content)
+        # D1c: VASPilot-pattern catalog returns a suggested_fix per error
+        # class so MARs can auto-resubmit with adjusted resources rather
+        # than asking the user. Importable as
+        # ``hpc_mapreduce.job.failure_signatures.classify``.
+        from hpc_mapreduce.job.failure_signatures import classify
+
+        sig = classify(content, entry.get("exit_code"))
         key = (category, fp)
         bucket = by_fp.setdefault(
             key,
@@ -912,6 +919,8 @@ def cluster_failures_by_fingerprint(
                 "count": 0,
                 "task_ids": [],
                 "sample": content[-200:].rstrip(),
+                "suggested_fix": sig["suggested_fix"],
+                "error_class": sig["error_class"],
             },
         )
         bucket["count"] += 1
