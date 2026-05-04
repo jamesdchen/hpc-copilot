@@ -34,19 +34,26 @@ __all__ = [
 import dataclasses
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 
+from hpc_mapreduce.infra.cache import TTLCache
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from slash_commands import errors
 
 # In-process cache so a single submit cycle that calls inspect-cluster
 # multiple times pays the SSH cost once. Keyed by (cluster, scheduler).
-_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
-_CACHE_TTL_SEC = 60.0
+# Stores the dict-form of :class:`ClusterSnapshot` (so re-reads survive
+# even if the snapshot dataclass shape evolves between writes).
+#
+# Migrated to :class:`TTLCache` (B6) — same 60-second horizon as the
+# pre-refactor module-level dict; gain is bounded LRU eviction + a
+# ``clear_all()`` test hook shared with backfill's probe cache.
+_CACHE: TTLCache[tuple[str, str], dict[str, Any]] = TTLCache(
+    "infra.inspect", ttl_sec=60.0, max_size=64
+)
 
 
 @dataclasses.dataclass
@@ -595,8 +602,8 @@ def inspect_cluster(
     cache_key = (cluster_name, scheduler)
     if use_cache:
         cached = _CACHE.get(cache_key)
-        if cached is not None and time.monotonic() - cached[0] < _CACHE_TTL_SEC:
-            return _snapshot_from_dict(cached[1])
+        if cached is not None:
+            return _snapshot_from_dict(cached)
     if runner is None:
         runner = _CommandRunner(host=cfg.get("host"), user=cfg.get("user"))
     if scheduler == "slurm":
@@ -619,7 +626,7 @@ def inspect_cluster(
     else:
         raise ValueError(f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}")
     if use_cache:
-        _CACHE[cache_key] = (time.monotonic(), snap.to_dict())
+        _CACHE.put(cache_key, snap.to_dict())
     return snap
 
 
