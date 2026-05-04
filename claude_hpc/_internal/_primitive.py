@@ -195,6 +195,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.campaign_status",
     "claude_hpc.atoms.capabilities",
     "claude_hpc.atoms.clusters",
+    "claude_hpc.atoms.failures",
     "claude_hpc.atoms.house_edge",
     "claude_hpc.atoms.list_in_flight",
     "claude_hpc.atoms.logs",

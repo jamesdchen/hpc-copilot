@@ -903,33 +903,9 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
 
 
-def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str, Any]]:
-    """Resolve the auto-retry policy for a run.
-
-    Precedence: per-run sidecar override (``auto_retry`` field, populated
-    by /submit when the user supplies a custom policy) > framework
-    defaults (:data:`runner.DEFAULT_AUTO_RETRY_POLICY`).
-
-    Always returns a non-empty dict so callers can rely on advice being
-    computed for every run.
-    """
-    try:
-        from claude_hpc.orchestrator.runs import read_run_sidecar
-    except ImportError:
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
-    try:
-        sidecar = read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
-    user_policy = sidecar.get("auto_retry")
-    if not isinstance(user_policy, dict):
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
-    valid = {
-        cat: pol
-        for cat, pol in user_policy.items()
-        if isinstance(cat, str) and isinstance(pol, dict)
-    }
-    return valid or dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+# Re-exported from claude_hpc.atoms.failures for back-compat with the
+# auto-retry resolver test suite, which imports the helper directly.
+from claude_hpc.atoms.failures import _resolve_auto_retry  # noqa: E402,F401
 
 
 def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, str]:
@@ -1203,111 +1179,26 @@ def cmd_logs(args: argparse.Namespace) -> int:
 # ─── subcommand: failures ──────────────────────────────────────────────────
 
 
-@primitive(
-    name="failures",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.SshUnreachable],
-    idempotent=True,
-)
 def cmd_failures(args: argparse.Namespace) -> int:
-    """Cluster failed tasks by stderr fingerprint for triage.
+    """Argparse adapter — primitive lives at claude_hpc.atoms.failures.
 
-    Re-polls status, fetches stderr for every failed task, and groups
-    them by fingerprint so 40 failures with the same root cause show up
-    as one cluster instead of 40 separate logs to read.
+    Cluster failed tasks by stderr fingerprint so 40 failures with the
+    same root cause show up as one cluster instead of 40 separate logs
+    to read.
     """
     if (rc := _require_ssh_agent()) is not None:
         return rc
 
-    record = session.load_run(args.experiment_dir, args.run_id)
-    if record is None:
-        raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
+    from claude_hpc.atoms.failures import fetch_failures
 
-    # Fresh poll: enumerate failed tasks.
-    report = runner._ssh_status_report(
-        ssh_target=record.ssh_target,
-        remote_path=record.remote_path,
-        run_id=args.run_id,
-        job_ids=record.job_ids,
-        job_name=record.job_name,
+    _ok(
+        fetch_failures(
+            experiment_dir=args.experiment_dir,
+            run_id=args.run_id,
+            lines=int(getattr(args, "lines", 30) or 30),
+        ),
+        name="failures",
     )
-    failed_ids: list[int] = []
-    for tid_str, info in (report.get("tasks") or {}).items():
-        if isinstance(info, dict) and info.get("status") == "failed":
-            try:
-                failed_ids.append(int(tid_str))
-            except (TypeError, ValueError):
-                continue
-
-    if not failed_ids:
-        _ok(
-            {
-                "run_id": args.run_id,
-                "failed_count": 0,
-                "clusters": [],
-                "note": "no failed tasks in current status report",
-            },
-            name="failures",
-        )
-        return EXIT_OK
-
-    # Cluster scheduler.
-    try:
-        clusters_cfg = load_clusters_config()
-    except Exception:  # noqa: BLE001
-        clusters_cfg = {}
-    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler") or "slurm"
-
-    logs = runner.fetch_task_logs(
-        ssh_target=record.ssh_target,
-        remote_path=record.remote_path,
-        job_name=record.job_name,
-        job_ids=record.job_ids,
-        scheduler=scheduler,
-        task_ids=failed_ids,
-        lines=int(getattr(args, "lines", 30) or 30),
-    )
-    clusters = runner.cluster_failures_by_fingerprint(logs)
-
-    # Auto-retry policy: resolve per-run sidecar override + framework
-    # defaults (runner.DEFAULT_AUTO_RETRY_POLICY). Annotate each cluster
-    # with which task ids are still eligible for an automated retry per
-    # the per-category max_attempts. Purely advisory — the actual
-    # resubmit remains the caller's job (matches existing /resubmit
-    # semantics).
-    auto_retry = _resolve_auto_retry(args.experiment_dir, args.run_id)
-    if auto_retry:
-        clusters = runner.annotate_clusters_with_retry_advice(
-            clusters,
-            auto_retry_policy=auto_retry,
-            record=record,
-        )
-
-    # Surface preempted-task count at the top level so a harness can
-    # branch on "campus user got bumped, resubmit cleanly" vs. "real
-    # failure, surface to user" without parsing the cluster
-    # ``error_class`` strings. Sourced from the failure_signatures
-    # catalog entry (exit_code=130 / "[claude-hpc] SIGTERM received"
-    # stderr line) — preempted tasks are guaranteed to land in the
-    # ``preempted`` cluster.
-    preempted_task_ids: list[int] = []
-    for cluster in clusters:
-        if cluster.get("error_class") == "preempted":
-            preempted_task_ids.extend(cluster.get("task_ids") or [])
-
-    data: dict[str, Any] = {
-        "run_id": args.run_id,
-        "failed_count": len(failed_ids),
-        "clusters": clusters,
-        "scheduler": scheduler,
-    }
-    if preempted_task_ids:
-        data["preempted_count"] = len(preempted_task_ids)
-        data["preempted_task_ids"] = sorted(preempted_task_ids)
-    if auto_retry:
-        data["auto_retry_policy"] = auto_retry
-    _ok(data, name="failures")
     return EXIT_OK
 
 
