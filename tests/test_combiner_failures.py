@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-import hpc_mapreduce
+import claude_hpc
 
 
 def _materialize_cluster_layout(
@@ -43,7 +43,7 @@ def _materialize_cluster_layout(
 
     # Place the combiner script as the cluster does.
     combiner_dst = hpc / "_hpc_combiner.py"
-    pkg_combiner = Path(hpc_mapreduce.__file__).parent / "map" / "combiner.py"
+    pkg_combiner = Path(claude_hpc.__file__).parent / "mapreduce" / "combiner.py"
     shutil.copyfile(pkg_combiner, combiner_dst)
     return combiner_dst
 
@@ -64,9 +64,7 @@ def _run_combiner(
 
 class TestMissingEnvVars:
     def test_missing_hpc_wave_exits_1(self, tmp_path: Path) -> None:
-        combiner = _materialize_cluster_layout(
-            tmp_path, kwargs_per_task=[], result_dirs=[]
-        )
+        combiner = _materialize_cluster_layout(tmp_path, kwargs_per_task=[], result_dirs=[])
         proc = _run_combiner(
             combiner_path=combiner,
             cwd=tmp_path,

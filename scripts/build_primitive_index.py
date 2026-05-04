@@ -108,7 +108,7 @@ def primitives_from_registry() -> list[dict]:
     migration window where some primitives might not be decorated yet.
     """
     sys.path.insert(0, str(REPO_ROOT))
-    from hpc_mapreduce._primitive import get_registry
+    from claude_hpc._internal._primitive import get_registry
 
     registered = get_registry()
     out: list[dict] = []
@@ -129,8 +129,7 @@ def primitives_from_registry() -> list[dict]:
                 # already understands; mixing dicts and strings stays
                 # backward-compatible with frontmatter-only sources.
                 "side_effects": [
-                    {se.kind: se.target} if se.target else se.kind
-                    for se in meta.side_effects
+                    {se.kind: se.target} if se.target else se.kind for se in meta.side_effects
                 ],
                 "error_codes": fm.get("error_codes", []),
                 "backed_by": backed_by,

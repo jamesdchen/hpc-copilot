@@ -1,12 +1,12 @@
-"""Tests for hpc_mapreduce.job.queue_simulator_inputs (DES sampling helpers)."""
+"""Tests for claude_hpc.forecast.queue_simulator_inputs (DES sampling helpers)."""
 
 from __future__ import annotations
 
-from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job.queue_simulator_inputs import (
+from claude_hpc.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
+from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 class TestArrivalStream:
@@ -16,7 +16,8 @@ class TestArrivalStream:
     def test_zero_rate_user_yields_no_arrivals(self):
         out = sample_arrival_stream(
             {"alice": {"median_submits_per_day": 0.0}},
-            horizon_sec=86400.0, seed=1,
+            horizon_sec=86400.0,
+            seed=1,
         )
         assert out == []
 
@@ -93,22 +94,31 @@ class TestArrivalStream:
 class TestResidualLifetimes:
     def _snap_with_running(self, elapsed_s=600, walltime_ask_default_extra=3600):
         n = NodeSnapshot(
-            name="n0", state="ALLOCATED",
-            real_mem_mb=64_000, alloc_mem_mb=32_000,
-            cpu_tot=8, cpu_alloc=4,
-            co_tenants=[{
-                "job_id": "jR",
-                "user": "alice",
-                "cpus": 4, "mem_gb": 32, "gpus": 0,
-                "elapsed_s": elapsed_s,
-                "state": "RUNNING",
-                "started_h_ago": elapsed_s / 3600.0,
-            }],
+            name="n0",
+            state="ALLOCATED",
+            real_mem_mb=64_000,
+            alloc_mem_mb=32_000,
+            cpu_tot=8,
+            cpu_alloc=4,
+            co_tenants=[
+                {
+                    "job_id": "jR",
+                    "user": "alice",
+                    "cpus": 4,
+                    "mem_gb": 32,
+                    "gpus": 0,
+                    "elapsed_s": elapsed_s,
+                    "state": "RUNNING",
+                    "started_h_ago": elapsed_s / 3600.0,
+                }
+            ],
             is_drained=False,
         )
         return ClusterSnapshot(
-            cluster="t", scheduler_kind="slurm",
-            now_iso="2026-04-28T10:00:00+00:00", nodes=[n],
+            cluster="t",
+            scheduler_kind="slurm",
+            now_iso="2026-04-28T10:00:00+00:00",
+            nodes=[n],
         )
 
     def test_default_profile_yields_nonneg_residual(self):

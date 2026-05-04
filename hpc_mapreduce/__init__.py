@@ -1,270 +1,86 @@
-"""hpc-mapreduce: MapReduce-style HPC orchestrator for Claude Code.
+"""Deprecation shim — package renamed to ``claude_hpc``.
 
-Provides pluggable HPC backends (SGE, SLURM), remote execution utilities,
-GPU selection, and array-batch dispatch driven by a user-written
-``.hpc/tasks.py``. Cluster infrastructure is configured via
-``clusters.yaml``; experiment setup is conversational.
+This file ONLY exists to keep ``from hpc_mapreduce import X`` and
+``import hpc_mapreduce.X.Y`` working for one release. Switch your
+imports to ``claude_hpc`` directly; the shim will be removed in a
+future release.
+
+The 4-domain split is laid out under ``claude_hpc/`` as:
+
+* ``claude_hpc.mapreduce`` — dispatch, combiner, metrics_io, reduce/, templates/
+* ``claude_hpc.infra``     — backends, ssh/rsync, GPU selection, inspect
+* ``claude_hpc.orchestrator`` — submit/monitor/aggregate flow primitives,
+  planner, runs, runtime priors, calibration, backfill, throughput,
+  constraints, resubmit, stages, discover, failure_signatures,
+  campaign_health, validate, campaign/
+* ``claude_hpc.forecast``  — queue-wait baseline, DES simulator,
+  microstructure features, residual lifetime, state forecast,
+  best-submit-window
+* ``claude_hpc._internal`` — shared utilities (_io, _time, _version,
+  _primitive, idempotency, layout, lifecycle, telemetry)
+* ``claude_hpc.atoms``     — CLI-only primitive dispatchers
 """
 
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _pkg_version
+from __future__ import annotations
 
-try:
-    __version__ = _pkg_version("claude-hpc")
-except PackageNotFoundError:  # pragma: no cover — running from a non-installed checkout
-    __version__ = "0.0.0+unknown"
+import importlib
+import sys
+import warnings
+from importlib.abc import Loader, MetaPathFinder
+from importlib.machinery import ModuleSpec
 
-__all__ = [
-    # Package root
-    "_PACKAGE_ROOT",
-    "__version__",
-    # Config & discovery
-    "load_clusters_config",
-    "get_template_path",
-    # Framework subdirectory layout (NEW — the .hpc/tasks.py model)
-    "HPC_SUBDIR",
-    "TASKS_FILENAME",
-    "RUNS_SUBDIR",
-    "framework_subdir",
-    "runs_subdir",
-    "tasks_path",
-    "load_tasks_module",
-    # Path resolution (B1) — canonical home for the three forwarders above
-    "RepoLayout",
-    "JournalLayout",
-    # Per-run sidecars (NEW)
-    "MAX_RUNS",
-    "SIDECAR_SCHEMA_VERSION",
-    "compute_cmd_sha",
-    "compute_tasks_py_sha",
-    "find_existing_runs",
-    "find_run_by_cmd_sha",
-    "prune_old_runs",
-    "read_run_sidecar",
-    "run_sidecar_path",
-    "write_run_sidecar",
-    # Remote execution
-    "ssh_run",
-    "rsync_push",
-    "rsync_pull",
-    "deploy_runtime",
-    # Job status & results
-    "check_results",
-    "check_results_from_tasks",
-    "report_status",
-    "report_status_from_tasks",
-    "rollup_by_grid_point",
-    "detect_scheduler",
-    # GPU selection
-    "pick_gpu",
-    # Reduce
-    "reduce_metrics",
-    "reduce_by_grid_point",
-    "reduce_partials",
-    "reduce_resource_usage",
-    "classify_failure",
-    # Executor discovery
-    "ExecutorInfo",
-    "discover_executors",
-    "is_executor_source",
-    # Cluster constraints
-    "ClusterConstraints",
-    "parse_constraints",
-    # Throughput optimizer
-    "WorkloadSpec",
-    "SubmissionPlan",
-    "compute_submission_plan",
-    "build_wave_map",
-    # Smart-submit data layer
-    "inspect_cluster",
-    "append_runtime_sample",
-    "roll_up_runtime_quantiles",
-    "plan_submit",
-    # Resubmit
-    "compact_task_ids",
-    "ResubmitBatch",
-    "ResubmitPlan",
-    "resubmit_plan",
-    # Remote
-    "run_combiner",
-    "run_combiner_checked",
-    # Per-task metrics sidecar
-    "write_metrics",
-    # Primitive registry (C′ — implementation + schemas as SoT)
-    "PrimitiveMeta",
-    "SideEffect",
-    "get_meta",
-    "get_registry",
-    "primitive",
-    "register_primitives",
-]
-
-import importlib.util
-from pathlib import Path
-from types import ModuleType
-
-from hpc_mapreduce.infra.clusters import load_clusters_config
-from hpc_mapreduce.infra.gpu import pick_gpu
-from hpc_mapreduce.infra.inspect import inspect_cluster
-from hpc_mapreduce.infra.remote import (
-    deploy_runtime,
-    rsync_pull,
-    rsync_push,
-    run_combiner,
-    run_combiner_checked,
-    ssh_run,
-)
-from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
-from hpc_mapreduce.job.discover import (
-    ExecutorInfo,
-    discover_executors,
-    is_executor_source,
-)
-from hpc_mapreduce.job.planner import plan_submit
-from hpc_mapreduce.job.resubmit import (
-    ResubmitBatch,
-    ResubmitPlan,
-    compact_task_ids,
-    resubmit_plan,
-)
-from hpc_mapreduce.job.runs import (
-    MAX_RUNS,
-    SIDECAR_SCHEMA_VERSION,
-    compute_cmd_sha,
-    compute_tasks_py_sha,
-    find_existing_runs,
-    find_run_by_cmd_sha,
-    prune_old_runs,
-    read_run_sidecar,
-    run_sidecar_path,
-    write_run_sidecar,
-)
-from hpc_mapreduce.job.runtime_prior import append_sample as append_runtime_sample
-from hpc_mapreduce.job.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
-from hpc_mapreduce.job.throughput import (
-    SubmissionPlan,
-    WorkloadSpec,
-    build_wave_map,
-    compute_submission_plan,
-)
-from hpc_mapreduce.map.metrics_io import write_metrics
-from hpc_mapreduce.reduce.classify import classify_failure
-from hpc_mapreduce.reduce.metrics import (
-    reduce_by_grid_point,
-    reduce_metrics,
-    reduce_partials,
-    reduce_resource_usage,
-)
-from hpc_mapreduce.reduce.status import (
-    check_results,
-    check_results_from_tasks,
-    detect_scheduler,
-    report_status,
-    report_status_from_tasks,
-    rollup_by_grid_point,
+warnings.warn(
+    "hpc_mapreduce has been renamed to claude_hpc. "
+    "Update your imports; the shim will be removed in a future release.",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
-from hpc_mapreduce._primitive import (
-    PrimitiveMeta,
-    SideEffect,
-    get_meta,
-    get_registry,
-    primitive,
-    register_primitives,
+# Re-export the top-level public API surface. ``from hpc_mapreduce
+# import X`` works for any X in ``claude_hpc.__all__``.
+from claude_hpc import *  # noqa: F401,F403,E402
+from claude_hpc import (  # noqa: F401,E402
+    _PACKAGE_ROOT,
+    __version__,
 )
-from hpc_mapreduce.layout import JournalLayout, RepoLayout
-
-_PACKAGE_ROOT = Path(__file__).resolve().parent
-
-# ---------------------------------------------------------------------------
-# Framework subdirectory layout (.hpc/)
-#
-# Canonical home: :class:`hpc_mapreduce.layout.RepoLayout`. The three
-# functions below are back-compat forwarders kept so external callers /
-# slash commands that imported them by name continue to work. New code
-# should prefer ``RepoLayout(experiment_dir).hpc`` / ``.runs`` /
-# ``.tasks`` directly.
-# ---------------------------------------------------------------------------
-
-HPC_SUBDIR: str = ".hpc"
-TASKS_FILENAME: str = "tasks.py"
-RUNS_SUBDIR: str = "runs"
 
 
-def framework_subdir(experiment_dir: Path) -> Path:
-    """Deprecated forwarder for ``RepoLayout(experiment_dir).hpc``.
+class _SubmoduleAlias(MetaPathFinder, Loader):
+    """Map ``hpc_mapreduce.X`` import requests onto ``claude_hpc.X``.
 
-    Returns ``experiment_dir/.hpc``, creating it idempotently and
-    writing ``.hpc/.gitignore`` on first call.
+    Without this, ``from hpc_mapreduce.executor_cli import flag`` would
+    raise ``ModuleNotFoundError`` because the shim's ``__init__.py``
+    only re-exports the top level — submodule paths aren't aliased by
+    ``from claude_hpc import *``. The meta path finder catches any
+    ``hpc_mapreduce.<sub>`` request, defers to claude_hpc, and shares
+    the same module object so identity-based checks still work.
     """
-    return RepoLayout(experiment_dir).hpc
+
+    _PREFIX = "hpc_mapreduce."
+
+    def find_spec(self, fullname, path, target=None):
+        if not fullname.startswith(self._PREFIX) or fullname == "hpc_mapreduce":
+            return None
+        # Synthesize a spec; create_module returns the real module.
+        return ModuleSpec(fullname, self)
+
+    def create_module(self, spec):
+        target = "claude_hpc." + spec.name[len(self._PREFIX) :]
+        try:
+            module = importlib.import_module(target)
+        except ImportError:
+            return None  # let normal import machinery raise
+        # Also expose at the legacy path so future ``import
+        # hpc_mapreduce.X`` skips the finder (cheaper).
+        sys.modules[spec.name] = module
+        return module
+
+    def exec_module(self, module):
+        # Module already executed by claude_hpc.X import; nothing to do.
+        return None
 
 
-def runs_subdir(experiment_dir: Path) -> Path:
-    """Deprecated forwarder for ``RepoLayout(experiment_dir).runs``.
-
-    Note: this is the *cluster sidecar* runs directory under
-    ``<experiment_dir>/.hpc/runs/``, NOT the journal runs directory
-    under ``~/.claude/hpc/<repo_hash>/runs/`` — that one is
-    :attr:`JournalLayout.runs`. The pre-B1 name collision was a P0 bug
-    source; ``RepoLayout`` / ``JournalLayout`` make it a type error.
-    """
-    return RepoLayout(experiment_dir).runs
-
-
-def tasks_path(experiment_dir: Path) -> Path:
-    """Deprecated forwarder for ``RepoLayout(experiment_dir).tasks``."""
-    return RepoLayout(experiment_dir).tasks
-
-
-def load_tasks_module(tasks_py_path: Path) -> ModuleType:
-    """Import a user's ``tasks.py`` from an arbitrary path via importlib.
-
-    The returned module must expose ``total()`` and ``resolve(task_id)``.
-    Callers should treat any ``AttributeError``, ``TypeError``, or
-    ``ImportError`` from the user's code as a submit-time error worth
-    surfacing, not a framework bug.
-    """
-    path = Path(tasks_py_path)
-    if not path.is_file():
-        raise FileNotFoundError(f"tasks.py not found: {path}")
-    spec = importlib.util.spec_from_file_location("hpc_user_tasks", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load tasks.py from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    if not hasattr(module, "total") or not hasattr(module, "resolve"):
-        raise AttributeError(
-            f"{path} must define both total() and resolve(task_id) — "
-            "see hpc_mapreduce/templates/tasks_example.py"
-        )
-    return module
-
-
-def get_template_path(scheduler: str, template: str) -> Path:
-    """Return the absolute path to a job template shipped with claude-hpc.
-
-    Parameters
-    ----------
-    scheduler : ``"sge"`` or ``"slurm"``
-    template : template name without extension (e.g. ``"cpu_array"``, ``"gpu_array"``)
-
-    Returns
-    -------
-    Path to the template file.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the resolved template does not exist on disk.
-    """
-    # B5-PR2: route through the backend registry instead of an inline
-    # ladder. ``template_ext`` is a class attribute on each backend
-    # (".sh" for SGE, ".slurm" for SLURM); this keeps the on-disk layout
-    # under the backend's authority.
-    from hpc_mapreduce.infra.backends import template_ext_for
-    ext = template_ext_for(scheduler)
-    path = Path(__file__).parent / "templates" / scheduler / f"{template}{ext}"
-    if not path.exists():
-        raise FileNotFoundError(f"Template not found: {path}")
-    return path
+# Install once. Idempotent: subsequent reloads of the shim won't
+# stack multiple finders.
+if not any(isinstance(f, _SubmoduleAlias) for f in sys.meta_path):
+    sys.meta_path.append(_SubmoduleAlias())

@@ -1,11 +1,11 @@
-"""Tests for hpc_mapreduce.job.resubmit — compact ID packing and plan building."""
+"""Tests for claude_hpc.orchestrator.resubmit — compact ID packing and plan building."""
 
 from __future__ import annotations
 
 import pytest
 
-from hpc_mapreduce.job.constraints import ClusterConstraints
-from hpc_mapreduce.job.resubmit import (
+from claude_hpc.orchestrator.constraints import ClusterConstraints
+from claude_hpc.orchestrator.resubmit import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
@@ -80,9 +80,7 @@ class TestResubmitPlanBatching:
         failed = [2, 5, 9, 20, 42]
         constraints = ClusterConstraints(max_array_size=3, max_concurrent_jobs=10)
 
-        plan = resubmit_plan(
-            task_count=60, failed_task_ids=failed, constraints=constraints
-        )
+        plan = resubmit_plan(task_count=60, failed_task_ids=failed, constraints=constraints)
 
         assert plan.total_batches >= 2
         assert len(plan.batches) >= 2
@@ -108,7 +106,7 @@ class TestFailureCategoryVocabulary:
     """
 
     def test_classifier_categories_are_all_valid_resubmit_categories(self):
-        from hpc_mapreduce.agent_cli import _VALID_RESUBMIT_CATEGORIES
+        from claude_hpc.agent_cli import _VALID_RESUBMIT_CATEGORIES
         from slash_commands.runner import _FAILURE_CATEGORY_PATTERNS
 
         emitted = {name for name, _ in _FAILURE_CATEGORY_PATTERNS}

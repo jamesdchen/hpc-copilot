@@ -22,7 +22,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce aggregate-flow --spec <path>
-  python: hpc_mapreduce.job.aggregate_flow.aggregate_flow
+  python: claude_hpc.orchestrator.aggregate_flow.aggregate_flow
 ---
 
 ## Purpose

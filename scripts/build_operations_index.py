@@ -29,10 +29,7 @@ OUT = REPO_ROOT / "docs" / "operations.md"
 VERB_DESCRIPTIONS = {
     "query": "Read-only, no side effects. Freely composable; cacheable.",
     "validate": "Read + binary health check. Same composability as `query`.",
-    "mutate": (
-        "Writes to journal / sidecar. "
-        "Need flock + idempotency-key consideration."
-    ),
+    "mutate": ("Writes to journal / sidecar. Need flock + idempotency-key consideration."),
     "submit": "Records a new submission (sidecar write + journal entry).",
     "scaffold": "Creates new files (e.g. starter executor templates).",
     "workflow": (
@@ -60,8 +57,8 @@ def render_row(op: dict) -> str:
     name = op["name"]
     cli = op.get("cli") or "_(Python-only)_"
     py = op.get("python") or "_(none)_"
-    inp = f"`hpc_mapreduce/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
-    out = f"`hpc_mapreduce/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
+    inp = f"`claude_hpc/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
+    out = f"`claude_hpc/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
     idem = "✓" if op.get("idempotent") else "✗"
     # Use the shared renderer so structured {verb: target} side-effect
     # entries from primitive frontmatter survive — the previous inline

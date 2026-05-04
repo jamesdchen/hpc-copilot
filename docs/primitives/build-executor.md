@@ -24,7 +24,7 @@ error_codes: []
 backed_by:
   cli: hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain]
     [--force]
-  python: hpc_mapreduce.agent_cli.cmd_build_executor
+  python: claude_hpc.agent_cli.cmd_build_executor
 exit_codes:
 - 0: ok
 - 1: spec_invalid / config_invalid
@@ -32,7 +32,7 @@ exit_codes:
 
 ## Purpose
 
-Scaffold a new executor `.py` file from a starter template under `hpc_mapreduce/templates/starters/`. The framework's only file-creation primitive — every other primitive is read-only or mutates only journal/sidecar files.
+Scaffold a new executor `.py` file from a starter template under `claude_hpc/templates/starters/`. The framework's only file-creation primitive — every other primitive is read-only or mutates only journal/sidecar files.
 
 ## Compose with
 

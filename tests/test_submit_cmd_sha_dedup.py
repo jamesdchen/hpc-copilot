@@ -10,9 +10,12 @@ running.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from slash_commands import runner
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_sidecar(experiment_dir: Path, run_id: str, **fields) -> Path:

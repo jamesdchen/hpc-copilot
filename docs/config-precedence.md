@@ -28,17 +28,17 @@ Notes:
 - Layer 4 (env vars) is *operator* config. Used by MARs and CI to point
   the framework at non-default state directories or alternate cluster
   catalogs.
-- Layer 5 (`hpc_mapreduce/config/clusters.yaml`) is the *package
+- Layer 5 (`claude_hpc/config/clusters.yaml`) is the *package
   default*. Ships inside the wheel; only edited via PR.
 
 ## Where each kind of config is consumed
 
 ### Cluster definitions
 
-- **Source of truth**: `hpc_mapreduce/config/clusters.yaml` (shipped
+- **Source of truth**: `claude_hpc/config/clusters.yaml` (shipped
   with the package).
-- **Loader**: `hpc_mapreduce.infra.clusters.load_clusters_config` —
-  re-exported as `hpc_mapreduce.load_clusters_config`.
+- **Loader**: `claude_hpc.infra.clusters.load_clusters_config` —
+  re-exported as `claude_hpc.load_clusters_config`.
 - **Override path**: set `HPC_CLUSTERS_CONFIG=/path/to/clusters.yaml`
   to redirect the loader at an alternate file. (CLI flag override is
   not currently exposed; an MAR running against a fork drops a sibling
@@ -58,10 +58,10 @@ Notes:
 
 ### Executor discovery
 
-- **Source**: `hpc_mapreduce.job.discover.discover_executors` walks
+- **Source**: `claude_hpc.orchestrator.discover.discover_executors` walks
   `--experiment-dir` (CLI) or the active experiment repo (slash).
 - **Reserved directory** (skipped wholesale): `.hpc/` — see `_SKIP_DIRS`
-  in `hpc_mapreduce/job/discover.py`. The framework files inside it
+  in `claude_hpc/orchestrator/discover.py`. The framework files inside it
   (`tasks.py`, `runs/<run_id>.json`, and on the cluster also
   `_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are never
   treated as user executors.
@@ -103,21 +103,21 @@ Notes:
   default).
 - Sidecar-level keys override cluster-level keys **field-by-field**;
   unset sidecar keys fall back to the cluster default. Implemented in
-  `hpc_mapreduce.job.constraints.parse_constraints`.
+  `claude_hpc.orchestrator.constraints.parse_constraints`.
 
 ## Env vars consumed
 
 | Var | Default | Read by | Effect |
 |---|---|---|---|
 | `HPC_JOURNAL_DIR` | `~/.claude/hpc` | `slash_commands/session.py` | Redirect journal storage. |
-| `HPC_CLUSTERS_CONFIG` | (package default) | `hpc_mapreduce/infra/clusters.py` | Use alternate `clusters.yaml`. |
-| `HPC_NO_SSH_MULTIPLEX` | unset | `hpc_mapreduce/agent_cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
+| `HPC_CLUSTERS_CONFIG` | (package default) | `claude_hpc/infra/clusters.py` | Use alternate `clusters.yaml`. |
+| `HPC_NO_SSH_MULTIPLEX` | unset | `claude_hpc/agent_cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
 | `SSH_AUTH_SOCK` | (set by ssh-agent) | `cmd_preflight` | Required for SSH auth; preflight fails if missing. |
-| `HPC_MAX_RUNS` | `500` | `hpc_mapreduce/job/runs.py` | Override the per-experiment cap on retained run sidecars. |
+| `HPC_MAX_RUNS` | `500` | `claude_hpc/orchestrator/runs.py` | Override the per-experiment cap on retained run sidecars. |
 | `HPC_RUN_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py` | Locates `.hpc/runs/<run_id>.json`. |
 | `HPC_TASK_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py` | 0-based task index. `TASK_ID` is accepted as a fallback for the env-var transition. |
 | `HPC_TASKS_PATH` | sibling of `_hpc_dispatch.py` | cluster-side `.hpc/_hpc_dispatch.py` | Override path to user's `tasks.py`. |
-| `HPC_CAMPAIGN_ID` | unset | scheduler templates → cluster-side dispatcher → user `tasks.py` | When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` calls `hpc_mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to get prior iterations' reduced metrics. |
+| `HPC_CAMPAIGN_ID` | unset | scheduler templates → cluster-side dispatcher → user `tasks.py` | When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` calls `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to get prior iterations' reduced metrics. |
 | `HPC_WAVE` | (none) | cluster-side `.hpc/_hpc_combiner.py` | Wave index when `--wave` is absent. |
 | `HPC_RUNTIME` | unset | scheduler templates | When `uv`, the template runs `uv sync` before dispatch. |
 

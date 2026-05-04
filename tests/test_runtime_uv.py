@@ -13,22 +13,22 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_mapreduce import _PACKAGE_ROOT
+from claude_hpc import _PACKAGE_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 TEMPLATES = [
-    _PACKAGE_ROOT / "templates" / "sge" / "cpu_array.sh",
-    _PACKAGE_ROOT / "templates" / "sge" / "gpu_array.sh",
-    _PACKAGE_ROOT / "templates" / "slurm" / "cpu_array.slurm",
-    _PACKAGE_ROOT / "templates" / "slurm" / "gpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "cpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "gpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "cpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "gpu_array.slurm",
 ]
 
 # Each per-scheduler template now sources the shared preamble for the
 # uv-sync block. Check the union of the template body + any preamble it
 # sources so the invariants survive the dedup.
-COMMON_PREAMBLE = _PACKAGE_ROOT / "templates" / "common" / "hpc_preamble.sh"
+COMMON_PREAMBLE = _PACKAGE_ROOT / "mapreduce" / "templates" / "common" / "hpc_preamble.sh"
 
 
 def _effective_template_text(template: Path) -> str:
@@ -44,9 +44,7 @@ def _effective_template_text(template: Path) -> str:
 def test_template_has_hpc_runtime_gate(template: Path) -> None:
     """Every template (or its sourced preamble) gates uv sync on HPC_RUNTIME."""
     text = _effective_template_text(template)
-    assert '"${HPC_RUNTIME:-}" = "uv"' in text, (
-        f"{template.name} missing HPC_RUNTIME=uv gate"
-    )
+    assert '"${HPC_RUNTIME:-}" = "uv"' in text, f"{template.name} missing HPC_RUNTIME=uv gate"
 
 
 @pytest.mark.parametrize("template", TEMPLATES, ids=lambda p: f"{p.parent.name}/{p.name}")
@@ -76,6 +74,8 @@ def test_submit_input_schema_accepts_runtime() -> None:
     """The submit.input.json schema accepts an optional runtime field."""
     import json
 
+    # Schemas have not yet moved to claude_hpc/ at this point in the
+    # reorg; resolve via the legacy alias (will be cleaned up in Step 8).
     schema_path = _PACKAGE_ROOT / "schemas" / "submit.input.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert "runtime" in schema["properties"]

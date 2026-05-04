@@ -61,7 +61,7 @@ Per-operation contracts live in `docs/primitives/` — this skill composes the [
    - `.hpc/tasks.py` — the user's `total()` / `resolve(task_id)` module. Per-task kwargs come from `tasks.resolve(i)`; per-task `result_dir` is the sidecar's `result_dir_template.format(task_id=i, run_id=<run_id>, **kwargs)`.
 
    ```python
-   from hpc_mapreduce import load_tasks_module, read_run_sidecar, tasks_path
+   from claude_hpc import load_tasks_module, read_run_sidecar, tasks_path
    sidecar = read_run_sidecar(experiment_dir, run_id)
    tasks = load_tasks_module(tasks_path(experiment_dir))
    ```
@@ -165,7 +165,7 @@ Keybinds:
 Invoke the module directly:
 
 ```bash
-python -m hpc_mapreduce.reduce.tui \
+python -m claude_hpc.mapreduce.reduce.tui \
     --run-id <run_id> \
     --job-ids <csv_job_ids> \
     --job-name <profile> \
@@ -208,7 +208,7 @@ mkdir -p .hpc/runs
 rsync -az $SSH_TARGET:$REMOTE_PATH/.hpc/runs/<run_id>.json ./.hpc/runs/<run_id>.json
 python -c '
 import json
-from hpc_mapreduce import load_tasks_module, tasks_path
+from claude_hpc import load_tasks_module, tasks_path
 sc = json.load(open(".hpc/runs/<run_id>.json"))
 print(sc["sidecar_schema_version"], sc["task_count"])
 print(load_tasks_module(tasks_path(".")).total())'
@@ -347,7 +347,7 @@ This guards against the "file count lies" failure mode (see anti-pattern at Step
 
 ### 4a.1 — Non-empty rows
 
-Re-invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive's underlying cluster-side reporter with `--min-rows N` (a flag of the on-cluster `python -m hpc_mapreduce.reduce.status` script that the primitive wraps; see `docs/cli-contract.md` for the cluster-side script's args). `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count). Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
+Re-invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive's underlying cluster-side reporter with `--min-rows N` (a flag of the on-cluster `python -m claude_hpc.mapreduce.reduce.status` script that the primitive wraps; see `docs/cli-contract.md` for the cluster-side script's args). `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count). Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
 
 ### 4a.2 — Spot-check 3 tasks
 

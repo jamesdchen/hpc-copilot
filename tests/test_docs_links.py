@@ -36,36 +36,92 @@ _BACKTICK_TOKEN = re.compile(r"`([a-z][a-z0-9_]+)`")
 # matched here is allowed without being an error_code.
 _DOC_VOCABULARY = {
     # Subcommands
-    "submit", "status", "aggregate", "reconcile", "resubmit", "preflight",
-    "discover", "list-in-flight", "clusters", "capabilities",
+    "submit",
+    "status",
+    "aggregate",
+    "reconcile",
+    "resubmit",
+    "preflight",
+    "discover",
+    "list-in-flight",
+    "clusters",
+    "capabilities",
     "build-executor",
     # Envelope keys
-    "ok", "data", "error_code", "category", "retry_safe", "remediation",
-    "message", "idempotent",
+    "ok",
+    "data",
+    "error_code",
+    "category",
+    "retry_safe",
+    "remediation",
+    "message",
+    "idempotent",
     # Status fields
-    "deduped", "lifecycle_state", "in_flight", "complete", "failed",
-    "abandoned", "all_ok", "checks", "stderr_tail", "stdout_tail",
-    "ssh_auth_sock", "cluster_tcp_22", "experiment_id",
-    "run_id", "job_ids", "total_tasks", "profile",
-    "ssh_target", "remote_path", "job_name", "wave", "seed",
-    "executor", "cmd_sha", "tasks.py", "_TASKS", "lr", "i",
-    "timestamp", "models", "rankings", "statistical_tests",
-    "qsub", "sbatch",
+    "deduped",
+    "lifecycle_state",
+    "in_flight",
+    "complete",
+    "failed",
+    "abandoned",
+    "all_ok",
+    "checks",
+    "stderr_tail",
+    "stdout_tail",
+    "ssh_auth_sock",
+    "cluster_tcp_22",
+    "experiment_id",
+    "run_id",
+    "job_ids",
+    "total_tasks",
+    "profile",
+    "ssh_target",
+    "remote_path",
+    "job_name",
+    "wave",
+    "seed",
+    "executor",
+    "cmd_sha",
+    "tasks.py",
+    "_TASKS",
+    "lr",
+    "i",
+    "timestamp",
+    "models",
+    "rankings",
+    "statistical_tests",
+    "qsub",
+    "sbatch",
     "last_status",
     # Programs and runtimes
-    "uv", "pip", "bash", "python", "python3",
-    "scancel", "qdel",
+    "uv",
+    "pip",
+    "bash",
+    "python",
+    "python3",
+    "scancel",
+    "qdel",
     # Booleans / JSON literals
-    "true", "false", "null",
+    "true",
+    "false",
+    "null",
     # Tier names
-    "scripts", "src", "probe.py", "meta.json", "metrics.json",
+    "scripts",
+    "src",
+    "probe.py",
+    "meta.json",
+    "metrics.json",
     "results/metrics.json",
     # Capabilities additions
-    "mars_skill_paths", "required_env",
+    "mars_skill_paths",
+    "required_env",
     # Categories
-    "user", "cluster", "network", "internal",
+    "user",
+    "cluster",
+    "network",
+    "internal",
     # Submit-spec fields
-    "cmd", "request_id",
+    "cmd",
+    "request_id",
 }
 
 
@@ -95,7 +151,7 @@ def test_mars_integration_error_codes_match_code() -> None:
             continue
         else:
             # Unknown token — fail with a useful message.
-            assert False, (
+            raise AssertionError(
                 f"docs/mars-integration.md mentions `{token}` in backticks, "
                 f"which is neither an error_code nor in the known "
                 f"vocabulary set. If it's a new error_code, add the class "
@@ -111,9 +167,7 @@ def test_mars_integration_error_codes_match_code() -> None:
         "cluster_unknown",
     }
     missing = must_document - seen_error_codes
-    assert not missing, (
-        f"docs/mars-integration.md is missing error_code rows for: {missing}"
-    )
+    assert not missing, f"docs/mars-integration.md is missing error_code rows for: {missing}"
 
 
 def test_mars_snippet_error_codes_match_code() -> None:
@@ -122,7 +176,7 @@ def test_mars_snippet_error_codes_match_code() -> None:
     for token in _BACKTICK_TOKEN.findall(text):
         if token in codes or token in _DOC_VOCABULARY:
             continue
-        assert False, (
+        raise AssertionError(
             f"experiment-runner.snippet.md mentions `{token}` which is "
             f"neither an error_code nor in the known vocabulary."
         )
@@ -130,18 +184,18 @@ def test_mars_snippet_error_codes_match_code() -> None:
 
 def test_mars_docs_env_vars_match_capabilities() -> None:
     """Env vars mentioned in docs must match capabilities.required_env."""
-    from hpc_mapreduce.agent_cli import _MARS_SKILL_NAMES  # noqa: F401  (just to ensure import)
-
     # Re-execute capabilities in-process to get the canonical list.
     import argparse
     from unittest.mock import patch
+
+    from claude_hpc.agent_cli import _MARS_SKILL_NAMES  # noqa: F401  (just to ensure import)
 
     captured: list[dict] = []
 
     def fake_emit(payload):
         captured.append(payload)
 
-    from hpc_mapreduce import agent_cli as cli
+    from claude_hpc import agent_cli as cli
 
     with patch.object(cli, "_emit", side_effect=fake_emit):
         cli.cmd_capabilities(argparse.Namespace())

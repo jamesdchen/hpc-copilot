@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from _shared import REPO_ROOT  # noqa: E402
 
-from hpc_mapreduce._primitive import get_registry, register_primitives  # noqa: E402
+from claude_hpc._internal._primitive import get_registry, register_primitives  # noqa: E402
 
 PRIMITIVES_DIR = REPO_ROOT / "docs" / "primitives"
 
@@ -121,9 +121,7 @@ def _build_frontmatter(meta, fm_existing: dict) -> dict:
     # Registry is SoT. Always overwrite from the decorator: prose
     # explanations the human authored on disk are no longer round-tripped
     # — they belong in the doc body, not the frontmatter.
-    fm["idempotency_key"] = (
-        meta.idempotency_key if meta.idempotency_key is not None else "none"
-    )
+    fm["idempotency_key"] = meta.idempotency_key if meta.idempotency_key is not None else "none"
     fm["error_codes"] = _render_error_codes(meta, fm_existing)
     if "backed_by" in fm_existing:
         fm["backed_by"] = fm_existing["backed_by"]
@@ -139,9 +137,7 @@ def _serialize(fm: dict) -> str:
     for k, v in fm.items():
         if k not in ordered:
             ordered[k] = v
-    return yaml.safe_dump(
-        ordered, sort_keys=False, default_flow_style=False, allow_unicode=True
-    )
+    return yaml.safe_dump(ordered, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
 
 def _split_frontmatter(text: str) -> tuple[str, str]:

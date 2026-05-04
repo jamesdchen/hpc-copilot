@@ -1,8 +1,8 @@
-"""Tests for ``hpc_mapreduce.job.user_profiles``."""
+"""Tests for ``claude_hpc.forecast.user_profiles``."""
 
 from __future__ import annotations
 
-from hpc_mapreduce.job import user_profiles as up
+from claude_hpc.forecast import user_profiles as up
 
 
 class TestUpdateAndRead:
@@ -111,11 +111,13 @@ class TestConvergence:
             up.update_profile(
                 tmp_path,
                 cluster="discovery",
-                observed_jobs=[{
-                    "user": "alice",
-                    "walltime_ask_sec": 3600,
-                    "elapsed_sec": 3000,
-                }],
+                observed_jobs=[
+                    {
+                        "user": "alice",
+                        "walltime_ask_sec": 3600,
+                        "elapsed_sec": 3000,
+                    }
+                ],
             )
         prof = up.read_profile(tmp_path, cluster="discovery", user="alice")
         assert prof is not None

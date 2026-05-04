@@ -22,25 +22,27 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "pytest>=8.0",
+    "types-PyYAML>=6.0",
 ]
 tui = [
     "rich>=13.0",
 ]
 
 [project.scripts]
-hpc-mapreduce = "hpc_mapreduce.agent_cli:main"
+hpc-mapreduce = "claude_hpc.agent_cli:main"
 
 [tool.setuptools.packages.find]
-include = ["hpc_mapreduce*", "slash_commands*"]
+include = ["claude_hpc*", "hpc_mapreduce*", "slash_commands*"]
 
 [tool.setuptools.package-data]
-hpc_mapreduce = [
+claude_hpc = [
     "config/*.yaml",
-    "templates/common/*.sh",
-    "templates/sge/*",
-    "templates/slurm/*",
-    "templates/starters/*.py",
     "schemas/*.json",
+    "mapreduce/templates/*.py",   # tasks_example.py, cli_dispatcher.py
+    "mapreduce/templates/common/*.sh",
+    "mapreduce/templates/sge/*",
+    "mapreduce/templates/slurm/*",
+    "mapreduce/templates/starters/*.py",
     "py.typed",
 ]
 

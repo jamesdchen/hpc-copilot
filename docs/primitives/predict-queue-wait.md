@@ -4,20 +4,24 @@ verb: query
 inputs:
 - name: profile
   type: string
-  description: Profile key (matches the runtime-prior pool the diurnal-MA backend reads).
+  description: Profile key (matches the runtime-prior pool the diurnal-MA backend
+    reads).
 - name: cluster
   type: string
   description: Cluster key from clusters.yaml.
 - name: at_iso
   type: string
-  description: Reference timestamp the forecast is for (UTC ISO-8601). null/omitted means "now".
+  description: Reference timestamp the forecast is for (UTC ISO-8601). null/omitted
+    means "now".
 - name: backend
   type: string
-  description: auto picks DES when prerequisites are present; des forces DES (falls back if no snapshot); diurnal_ma forces the v1 baseline.
+  description: auto picks DES when prerequisites are present; des forces DES (falls
+    back if no snapshot); diurnal_ma forces the v1 baseline.
   default: auto
 - name: n_replications
   type: int
-  description: Number of DES passes when the DES backend runs. Higher gives a tighter p10/p90 ladder.
+  description: Number of DES passes when the DES backend runs. Higher gives a tighter
+    p10/p90 ladder.
   default: 64
 - name: seed
   type: int
@@ -30,8 +34,9 @@ error_codes:
   category: spec
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]
-  python: hpc_mapreduce.job.queue_wait_baseline.predict_queue_wait
+  cli: hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma]
+    [--n-replications N] [--at-iso <iso>] [--seed N]
+  python: claude_hpc.forecast.queue_wait_baseline.predict_queue_wait
 exit_codes:
 - 0: ok
 - 2: spec_invalid

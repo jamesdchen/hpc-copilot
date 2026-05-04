@@ -14,7 +14,7 @@ their own ``tmp_path`` and ``monkeypatch``.
 
 Both helpers default to the v1 sidecar shape — that is what the
 existing fixtures wrote, and the production read path
-(:func:`hpc_mapreduce.job.runs.read_run_sidecar`) backfills v1 to v2
+(:func:`claude_hpc.orchestrator.runs.read_run_sidecar`) backfills v1 to v2
 on read.
 """
 
@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
+
+import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -88,9 +90,6 @@ def write_hpc_tasks(hpc_dir: Path, tasks: list[dict[str, Any]]) -> Path:
     return tasks_py
 
 
-import pytest
-
-
 @pytest.fixture(scope="session", autouse=True)
 def _register_primitives_once() -> None:
     """Populate the @primitive registry once per pytest session.
@@ -100,6 +99,6 @@ def _register_primitives_once() -> None:
     explicitly. Tests that exercise ``get_registry`` / ``get_meta``
     would otherwise hit the new RuntimeError. Idempotent.
     """
-    from hpc_mapreduce import register_primitives
+    from claude_hpc import register_primitives
 
     register_primitives()

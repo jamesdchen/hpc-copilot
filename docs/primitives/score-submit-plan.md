@@ -34,7 +34,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]
-  python: hpc_mapreduce.job.planner.plan_submit
+  python: claude_hpc.orchestrator.planner.plan_submit
 exit_codes:
 - 0: ok
 - 1: spec_invalid / cluster_unknown

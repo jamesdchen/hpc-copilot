@@ -1,4 +1,4 @@
-"""Tests for :mod:`hpc_mapreduce.idempotency`.
+"""Tests for :mod:`claude_hpc._internal.idempotency`.
 
 Exercises the resolver's three read paths (journal, sidecar,
 request_log) and the cancelled-record short-circuit.
@@ -11,20 +11,21 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce.idempotency import (
+from claude_hpc._internal.idempotency import (
     CmdShaKey,
     PriorResult,
     RequestIdKey,
     RunIdKey,
     dedup_check,
 )
-from hpc_mapreduce.job.runs import run_sidecar_path
+from claude_hpc.orchestrator.runs import run_sidecar_path
 from slash_commands import session
 
 
 def _ensure_journal_dirs(tmp_path: Path) -> None:
     # Make sure the journal lookup path resolves without env-var leak.
     import os
+
     os.environ["HPC_JOURNAL_DIR"] = str(tmp_path / "_journal")
 
 
@@ -105,7 +106,7 @@ def test_origin_labels_are_stable() -> None:
 
 
 def test_unknown_key_subclass_raises() -> None:
-    from hpc_mapreduce.idempotency import IdempotencyKey
+    from claude_hpc._internal.idempotency import IdempotencyKey
 
     class _Bogus(IdempotencyKey):
         def origin(self) -> str:

@@ -10,6 +10,7 @@ and journal writes meet.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shlex
@@ -17,10 +18,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce._primitive import SideEffect, primitive
-from hpc_mapreduce._time import utcnow_iso
-from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
-from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar
+from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._internal._time import utcnow_iso
+from claude_hpc.infra.remote import run_combiner_checked, ssh_run
+from claude_hpc.orchestrator.runs import find_run_by_cmd_sha, read_run_sidecar
 from slash_commands import errors, session
 from slash_commands.errors import RemoteCommandFailed
 from slash_commands.session import RunRecord, _atomic_write_json
@@ -74,7 +75,7 @@ def _parse_remote_json(stdout: str, *, source_label: str) -> dict[str, Any]:
 
 # Backwards-compatible alias for tests/external imports that referenced
 # the original helper here.  The canonical implementation now lives in
-# ``hpc_mapreduce._time`` so timestamps stay consistent across the
+# ``claude_hpc._internal._time`` so timestamps stay consistent across the
 # package.
 _utcnow_iso = utcnow_iso
 
@@ -163,16 +164,10 @@ def submit_and_record(
                         remote_path=str(sidecar_data.get("remote_path") or remote_path),
                         job_name=str(sidecar_data.get("job_name") or job_name),
                         job_ids=list(sidecar_data.get("job_ids") or []),
-                        total_tasks=int(
-                            sidecar_data.get("task_count") or total_tasks
-                        ),
-                        submitted_at=str(
-                            sidecar_data.get("submitted_at") or _utcnow_iso()
-                        ),
+                        total_tasks=int(sidecar_data.get("task_count") or total_tasks),
+                        submitted_at=str(sidecar_data.get("submitted_at") or _utcnow_iso()),
                         experiment_dir=str(Path(experiment_dir).resolve()),
-                        campaign_id=str(
-                            sidecar_data.get("campaign_id") or campaign_id
-                        ),
+                        campaign_id=str(sidecar_data.get("campaign_id") or campaign_id),
                     )
                     # Repair the journal so future load_run calls hit it
                     # directly without re-doing the cmd_sha scan.
@@ -237,7 +232,7 @@ def _ssh_status_report(
     job_ids_csv = ",".join(job_ids)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
-        f"python -m hpc_mapreduce.reduce.status "
+        f"python -m claude_hpc.mapreduce.reduce.status "
         f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "
@@ -257,7 +252,9 @@ def _ssh_status_report(
     verb="query",
     side_effects=[
         SideEffect("ssh", "<cluster>"),
-        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"),
+        SideEffect(
+            "writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"
+        ),
     ],
     error_codes=[errors.JournalCorrupt, errors.SshUnreachable, errors.RemoteCommandFailed],
     idempotent=True,
@@ -301,13 +298,11 @@ def record_status(
     # Cache the snapshot for cheap external reads. Best-effort: a write
     # failure here must not roll back the journal update.
     cache_path = session.runs_dir(experiment_dir) / f"{run_id}.last_status.json"
-    try:
-        # Atomic write so a concurrent reader never sees a half-written
-        # file.  ``Path.write_text`` truncates in place; readers that
-        # race with the writer would otherwise observe a JSONDecodeError.
+    # Atomic write so a concurrent reader never sees a half-written
+    # file.  ``Path.write_text`` truncates in place; readers that
+    # race with the writer would otherwise observe a JSONDecodeError.
+    with contextlib.suppress(OSError):
         _atomic_write_json(cache_path, summary)
-    except OSError:
-        pass
     return record
 
 
@@ -318,7 +313,10 @@ def record_status(
         SideEffect("ssh", "<cluster>"),
         SideEffect("runs", "cluster-side combiner (python3 .hpc/_hpc_combiner.py)"),
         SideEffect("writes-cluster", "<output_dir>/_combiner/wave_<N>.json"),
-        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)"),
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (combined_waves / failed_waves)",
+        ),
     ],
     error_codes=[errors.SshUnreachable, errors.CombinerFailed, errors.JournalCorrupt],
     idempotent=True,
@@ -399,7 +397,10 @@ def derive_resubmit_request_id(
     verb="mutate",
     side_effects=[
         SideEffect("scheduler-submit", "<cluster>"),
-        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters)"),
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per-task retry counters)",
+        ),
     ],
     error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
     idempotent=True,
@@ -471,7 +472,7 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     """Derive ``combined_waves`` from cluster artifacts.
 
     The combiner writes ``_combiner/wave_<N>.json`` per successful run
-    (see ``hpc_mapreduce/map/combiner.py``). We use the presence of
+    (see ``claude_hpc/map/combiner.py``). We use the presence of
     that file as the success marker.
     """
     user, host = _split_ssh_target(ssh_target)
@@ -509,7 +510,7 @@ def _ssh_alive_job_ids(
     """
     if not job_ids:
         return set()
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
 
     backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
@@ -654,7 +655,7 @@ def fetch_task_logs(
     """SSH to the cluster and tail each task's stderr log.
 
     Tries the most recent ``job_id`` first, falls back through earlier
-    ones (matching :func:`hpc_mapreduce.reduce.status.get_err_log_paths`
+    ones (matching :func:`claude_hpc.mapreduce.reduce.status.get_err_log_paths`
     semantics). Returns one dict per task; missing logs surface as
     ``{"task_id": int, "missing": True}``.
 
@@ -668,7 +669,8 @@ def fetch_task_logs(
     # B5-PR2: per-scheduler stderr-path templates live on the backend
     # class (``stderr_log_path``); this function is now transport (SSH)
     # plus retry-over-job-ids only.
-    from hpc_mapreduce.infra.backends import get_backend_class
+    from claude_hpc.infra.backends import get_backend_class
+
     backend_cls = get_backend_class(scheduler)
     user, host = _split_ssh_target(ssh_target)
     out: list[dict[str, Any]] = []
@@ -886,8 +888,8 @@ def cluster_failures_by_fingerprint(
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather
         # than asking the user. Importable as
-        # ``hpc_mapreduce.job.failure_signatures.classify``.
-        from hpc_mapreduce.job.failure_signatures import classify
+        # ``claude_hpc.orchestrator.failure_signatures.classify``.
+        from claude_hpc.orchestrator.failure_signatures import classify
 
         sig = classify(content, entry.get("exit_code"))
         key = (category, fp)

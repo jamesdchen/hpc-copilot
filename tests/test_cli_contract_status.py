@@ -1,4 +1,4 @@
-"""Contract test for `python -m hpc_mapreduce.reduce.status`.
+"""Contract test for `python -m claude_hpc.mapreduce.reduce.status`.
 
 Asserts stdout JSON has exactly the pinned 4 top-level keys
 (summary, tasks, rollup, errors) with the right types, so the LLM
@@ -14,7 +14,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _build_minimal_run(tmp_path: Path, *, run_id: str = "test_run") -> tuple[Path, Path]:
@@ -57,7 +60,7 @@ def _run_status(cwd: Path, run_id: str = "test_run") -> tuple[int, str, str]:
         [
             sys.executable,
             "-m",
-            "hpc_mapreduce.reduce.status",
+            "claude_hpc.mapreduce.reduce.status",
             "--run-id",
             run_id,
             "--scheduler",
@@ -129,9 +132,7 @@ class TestStatusCliContract:
         hpc = tmp_path / ".hpc"
         (hpc / "runs").mkdir(parents=True)
         (hpc / "tasks.py").write_text(
-            "_TASKS = [{}]\n"
-            "def total(): return 1\n"
-            "def resolve(i): return _TASKS[0]\n"
+            "_TASKS = [{}]\ndef total(): return 1\ndef resolve(i): return _TASKS[0]\n"
         )
         rc, out, _ = _run_status(tmp_path, run_id="does-not-exist")
         assert rc != 0

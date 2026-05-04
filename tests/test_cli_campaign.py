@@ -12,7 +12,7 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
-from hpc_mapreduce.job.runs import write_run_sidecar
+from claude_hpc.orchestrator.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 def _run_cli(*args: str) -> tuple[int, str, str]:
     proc = subprocess.run(
-        [sys.executable, "-m", "hpc_mapreduce", *args],
+        [sys.executable, "-m", "claude_hpc", *args],
         capture_output=True,
         text=True,
     )
@@ -130,7 +130,7 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
 
     import jsonschema
 
-    schema = json.loads((files("hpc_mapreduce.schemas") / "campaign.output.json").read_text())
+    schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
 
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
     rc, out, _ = _run_cli(
@@ -146,7 +146,7 @@ def test_campaign_list_envelope_validates_against_schema(tmp_path: Path) -> None
 
     import jsonschema
 
-    schema = json.loads((files("hpc_mapreduce.schemas") / "campaign.output.json").read_text())
+    schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
 
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
     rc, out, _ = _run_cli("campaign", "list", "--experiment-dir", str(tmp_path))

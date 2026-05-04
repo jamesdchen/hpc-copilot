@@ -34,7 +34,7 @@ error_codes:
   retry_safe: true
 backed_by:
   cli: hpc-mapreduce inspect-cluster --cluster <name> [...]
-  python: hpc_mapreduce.infra.inspect.inspect_cluster
+  python: claude_hpc.infra.inspect.inspect_cluster
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable

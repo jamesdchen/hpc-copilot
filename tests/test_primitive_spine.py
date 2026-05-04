@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce._primitive import (
+from claude_hpc._internal._primitive import (
     PrimitiveMeta,
     get_registry,
 )
@@ -38,6 +38,7 @@ def registry() -> dict[str, PrimitiveMeta]:
 
 # Item #3 — composes references must resolve.
 
+
 def test_composes_references_resolve(registry: dict[str, PrimitiveMeta]) -> None:
     """Every entry in ``meta.composes`` must be a :class:`PrimitiveMeta`
     that resolves back to a registry entry by both name and identity.
@@ -55,15 +56,11 @@ def test_composes_references_resolve(registry: dict[str, PrimitiveMeta]) -> None
     for name, meta in registry.items():
         for atom_meta in meta.composes:
             if not isinstance(atom_meta, PrimitiveMeta):
-                failures.append(
-                    f"{name!r} composes entry {atom_meta!r} is not a PrimitiveMeta"
-                )
+                failures.append(f"{name!r} composes entry {atom_meta!r} is not a PrimitiveMeta")
                 continue
             registered = registry.get(atom_meta.name)
             if registered is None:
-                failures.append(
-                    f"{name!r} composes {atom_meta.name!r}, not in registry"
-                )
+                failures.append(f"{name!r} composes {atom_meta.name!r}, not in registry")
                 continue
             if registered.func is not atom_meta.func:
                 failures.append(
@@ -77,6 +74,7 @@ def test_composes_references_resolve(registry: dict[str, PrimitiveMeta]) -> None
 # Same bug class as A1 (docs/primitives/check-preflight.md:14 pointed
 # at a missing module). The decorator stores a real function ref so
 # this test is trivial, but it pins the invariant going forward.
+
 
 def test_func_module_importable(registry: dict[str, PrimitiveMeta]) -> None:
     failures: list[str] = []
@@ -94,6 +92,7 @@ def test_func_module_importable(registry: dict[str, PrimitiveMeta]) -> None:
 
 # Item #6 — circular-import smoke test.
 
+
 def test_register_primitives_is_idempotent() -> None:
     """Calling register_primitives() twice must be a no-op.
 
@@ -107,7 +106,7 @@ def test_register_primitives_is_idempotent() -> None:
         [
             sys.executable,
             "-c",
-            "import hpc_mapreduce as hp\n"
+            "import claude_hpc as hp\n"
             "hp.register_primitives()\n"
             "first = dict(hp.get_registry())\n"
             "hp.register_primitives()\n"
@@ -119,8 +118,7 @@ def test_register_primitives_is_idempotent() -> None:
         timeout=30,
     )
     assert proc.returncode == 0, (
-        f"register_primitives idempotency check failed:\n"
-        f"stdout={proc.stdout}\nstderr={proc.stderr}"
+        f"register_primitives idempotency check failed:\nstdout={proc.stdout}\nstderr={proc.stderr}"
     )
 
 
@@ -185,10 +183,8 @@ def test_decorator_matches_frontmatter(registry: dict[str, PrimitiveMeta]) -> No
     assert not failures, (
         "Decorator/frontmatter drift — run "
         "``python scripts/build_primitive_frontmatter.py --write`` "
-        "to regenerate:\n  "
-        + "\n  ".join(failures)
+        "to regenerate:\n  " + "\n  ".join(failures)
     )
-
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +256,7 @@ def test_idempotency_key_names_input_schema_property(
     import json
     import re
 
-    schemas_dir = Path(__file__).resolve().parent.parent / "hpc_mapreduce" / "schemas"
+    schemas_dir = Path(__file__).resolve().parent.parent / "claude_hpc" / "schemas"
 
     def _input_schema_for(name: str) -> dict | None:
         for fname in (

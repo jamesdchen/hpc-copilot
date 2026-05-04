@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from hpc_mapreduce import agent_cli as cli
+from claude_hpc import agent_cli as cli
 
 
 def _run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """Invoke the CLI as a subprocess and return (exit_code, stdout, stderr)."""
     proc = subprocess.run(
-        [sys.executable, "-m", "hpc_mapreduce", *args],
+        [sys.executable, "-m", "claude_hpc", *args],
         capture_output=True,
         text=True,
         env=env,
@@ -922,7 +922,7 @@ def test_aggregate_reads_sidecar_defaults_for_require_and_expect(
     import argparse
     from unittest.mock import patch
 
-    from hpc_mapreduce.job.runs import write_run_sidecar
+    from claude_hpc.orchestrator.runs import write_run_sidecar
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
