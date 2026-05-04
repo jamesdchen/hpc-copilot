@@ -21,7 +21,7 @@ Small-file scp/rsync over SSH is especially slow (per-file TCP/SSH handshake). I
 ## Setup
 
 Read cluster definitions:
-- `clusters.yaml`: resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+- `clusters.yaml`: resolve path via `python -c 'from claude_hpc import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
 Determine cluster and connection:
 - If `$ARGUMENTS` contains `--cluster <name>`, use that cluster
@@ -92,7 +92,7 @@ If `data.escalation_reason` is set (e.g. `combiner_failed_max_retries:waves=3,7`
 Load `.hpc/runs/<run_id>.json` and `.hpc/tasks.py` to understand the submission structure:
 
 ```python
-from hpc_mapreduce import load_tasks_module, read_run_sidecar, tasks_path
+from claude_hpc import load_tasks_module, read_run_sidecar, tasks_path
 sidecar = read_run_sidecar(experiment_dir, run_id)
 tasks = load_tasks_module(tasks_path(experiment_dir))
 n = tasks.total()

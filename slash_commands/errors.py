@@ -227,5 +227,5 @@ class SchemaIncompat(HpcError):
         "The on-disk JSON was written by a newer (or older, foreign) "
         "claude-hpc version than this one supports. Upgrade the package "
         "or migrate the file. The supported version set is declared in "
-        "``hpc_mapreduce/_version.py:_MANIFEST``."
+        "``claude_hpc/_version.py:_MANIFEST``."
     )

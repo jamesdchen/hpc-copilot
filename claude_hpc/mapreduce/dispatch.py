@@ -17,7 +17,7 @@ Per-task identity comes from ``HPC_TASK_ID``; per-run identity from
    crashed mid-runs never pollute the final result directory.
 
 Stays zero-dependency — only Python stdlib, no imports from the
-``hpc_mapreduce`` package.
+``claude_hpc`` package.
 """
 
 import importlib.util
@@ -32,7 +32,7 @@ from pathlib import Path
 __all__ = ["main"]
 
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
-# ``SIDECAR_SCHEMA_VERSION`` in ``hpc_mapreduce/job/runs.py``. Hardcoded
+# ``SIDECAR_SCHEMA_VERSION`` in ``claude_hpc/orchestrator/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
 #
 # v2 added optional fields (wave_map, aggregate_defaults, ...). The

@@ -35,7 +35,7 @@ from typing import Any
 # ─── inlined from claude_hpc.executor_cli ───────────────────────────────
 #
 # This file is delivered to the cluster as ``.hpc/cli.py`` and runs in a
-# stdlib-only Python: the package ``hpc_mapreduce`` is NOT installed
+# stdlib-only Python: the package ``claude_hpc`` is NOT installed
 # there. The same constraint already drives the inline copies in
 # ``combine.py`` / ``dispatch.py``. We duplicate the (~30 LOC) Flag /
 # build_parser_from_flags surface verbatim rather than push the whole

@@ -314,7 +314,7 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     # A10: surface a sidecar-vs-package version mismatch once per
     # (run_id, sidecar_version). ``write_run_sidecar`` records
     # ``claude_hpc_version`` from the writer's installed package; readers
-    # compare against their own ``hpc_mapreduce.__version__``. Pure
+    # compare against their own ``claude_hpc.__version__``. Pure
     # observability — the read still succeeds; the warning lets us find
     # old sidecars in the wild.
     sidecar_version = data.get("claude_hpc_version")

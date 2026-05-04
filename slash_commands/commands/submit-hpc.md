@@ -7,7 +7,7 @@ All cluster commands run remotely via SSH. Code is synced from the local machine
 ## Setup
 
 Read cluster definitions:
-- `clusters.yaml`: resolve path via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+- `clusters.yaml`: resolve path via `python -c 'from claude_hpc import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
 Check for existing context (in priority order):
 
@@ -36,7 +36,7 @@ is confusing on inspection.
    - This only handles the case where the user wants to switch context away from a fresh `/submit-hpc` toward picking up an existing run; otherwise fall through to priority 1.
    - **Group by `campaign_id` when displaying multiple in-flight runs.** Each `RunRecord` carries a `campaign_id` field (empty string for open-loop submits). When the user has more than ~3 in-flight runs and at least one has a non-empty `campaign_id`, render the offer grouped: "Found 3 in-flight campaigns and 2 standalone runs: campaign `ml_ridge_q1` (4 iterations in flight, last completed iteration's loss=0.42), campaign `walk_forward_2026q1` (1 iteration in flight), …, plus 2 standalone runs (`<run_id_1>`, `<run_id_2>`). Resume one with /monitor-hpc / /campaign-hpc status, or start a new submission?" The flat list is fine for ≤3 runs.
 
-1. **Previous run**: If `.hpc/tasks.py` exists, the experiment has already been scaffolded. List the per-run sidecars under `.hpc/runs/` (newest-first via `find_existing_runs(experiment_dir)` from `hpc_mapreduce`) and offer: "Previous run: [run_id, profile, tasks, cluster, age]. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?"
+1. **Previous run**: If `.hpc/tasks.py` exists, the experiment has already been scaffolded. List the per-run sidecars under `.hpc/runs/` (newest-first via `find_existing_runs(experiment_dir)` from `claude_hpc`) and offer: "Previous run: [run_id, profile, tasks, cluster, age]. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?"
    - **Resubmit same** → reuse the existing `.hpc/tasks.py`, recompute `cmd_sha` (it'll match because `tasks.py` is unchanged), skip to Step 5 (sync + submit). The new sidecar's `run_id` differs but `cmd_sha` matches the prior run.
    - **Modify** → tell the user to edit `.hpc/tasks.py` directly (`_TASKS = [...]`), commit the change, and re-run `/submit-hpc`. The new `cmd_sha` will be different, so it's a fresh run.
    - **Start fresh** → only reachable when the user wants a clean reset; offer to delete `.hpc/tasks.py` so the scaffolding flow at Step 6 fires again.
@@ -55,7 +55,7 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
 
 ## Step 1: Discover Executors
 
-Invoke the [discover-executors](../../docs/primitives/discover-executors.md) primitive (`hpc_mapreduce.discover_executors(".")` returns `list[ExecutorInfo]`). The primitive scans `executors/`, `scripts/`, and `src/` (in that order, falling back to the repo root if none exist), filters out utilities and `__init__.py`, and classifies each executor by contract — see the primitive's Notes for the new-vs-old-contract rules.
+Invoke the [discover-executors](../../docs/primitives/discover-executors.md) primitive (`claude_hpc.discover_executors(".")` returns `list[ExecutorInfo]`). The primitive scans `executors/`, `scripts/`, and `src/` (in that order, falling back to the repo root if none exist), filters out utilities and `__init__.py`, and classifies each executor by contract — see the primitive's Notes for the new-vs-old-contract rules.
 
 Cache the resolved directory in Claude Code memory for this project. If the cached directory differs from the defaults, pass it through `search_dirs=(...)`. If the user explicitly names a different directory, honor it the same way.
 
@@ -83,7 +83,7 @@ Which do you want to run?
 If `discover_executors` returns an empty list, pivot to a scaffolding sub-interview right here (this absorbs what `/build-executor-hpc` used to be):
 
 1. Ask: "No executors found in `executors/` / `scripts/` / `src/`. Want me to scaffold one — what should it do?"
-2. Copy `hpc_mapreduce/templates/starters/executor_template.py` to a user-chosen path (default: `src/<name>.py`).
+2. Copy `claude_hpc/templates/starters/executor_template.py` to a user-chosen path (default: `src/<name>.py`).
 3. Walk the user through filling in `compute(args)` based on what they described — model fit/predict, simulation step, data transform, etc.
 4. Capture the flag set the user wants (this becomes that executor's entry in the FLAGS dict during Step 6b).
 5. Re-run `discover_executors` to confirm the new file is recognized, then continue to Step 2.
@@ -107,7 +107,7 @@ For multi-executor submissions: submit as **separate array jobs** (independent m
 
 ## Step 3: Plan the parallelization axis
 
-In the new model, the **task list lives in user-written `.hpc/tasks.py`**: a small Python module exposing `total()` and `resolve(task_id)`. Step 6 walks the user through writing it once per experiment, adapting from the canonical example at `hpc_mapreduce/templates/tasks_example.py`. From then on, the file is committed to git and reused on every submit.
+In the new model, the **task list lives in user-written `.hpc/tasks.py`**: a small Python module exposing `total()` and `resolve(task_id)`. Step 6 walks the user through writing it once per experiment, adapting from the canonical example at `claude_hpc/templates/tasks_example.py`. From then on, the file is committed to git and reused on every submit.
 
 Step 3's job is to gather enough context that Step 6 can write a sensible first draft. From executor CLI args and the user's intent, propose:
 
@@ -179,13 +179,13 @@ Build exclude list from:
 2. Standard patterns: `__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`
 3. Result directories (e.g., `results/`)
 
-The local `.hpc/` directory **does** ride rsync (so the cluster receives `tasks.py` and the in-flight `runs/<run_id>.json` sidecar). Don't add `.hpc/` to the exclude list. The framework files inside the cluster-side `.hpc/` (`_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are placed there separately by `deploy_runtime` and are protected from rsync `--delete` via `DEFAULT_RSYNC_EXCLUDES` in `hpc_mapreduce.infra.remote`.
+The local `.hpc/` directory **does** ride rsync (so the cluster receives `tasks.py` and the in-flight `runs/<run_id>.json` sidecar). Don't add `.hpc/` to the exclude list. The framework files inside the cluster-side `.hpc/` (`_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are placed there separately by `deploy_runtime` and are protected from rsync `--delete` via `DEFAULT_RSYNC_EXCLUDES` in `claude_hpc.infra.remote`.
 
 ## Step 4b: Compute Throughput Plan
 
 After grid expansion produces total_tasks, compute an optimized submission plan:
 
-1. **Load constraints**: `from hpc_mapreduce import ClusterConstraints, parse_constraints` — read constraints from `clusters.yaml` for the selected cluster, then overlay any per-profile constraints the user supplied in this submit interview (the resolved overrides will be persisted to the run sidecar's `constraints` field).
+1. **Load constraints**: `from claude_hpc import ClusterConstraints, parse_constraints` — read constraints from `clusters.yaml` for the selected cluster, then overlay any per-profile constraints the user supplied in this submit interview (the resolved overrides will be persisted to the run sidecar's `constraints` field).
 
 2. **Build workload**: `from claude_hpc.orchestrator.throughput import WorkloadSpec, compute_submission_plan` — construct a `WorkloadSpec` using `total_tasks` from grid expansion, plus `est_task_duration` if configured in the profile.
 
@@ -383,7 +383,7 @@ This is the **central agent-driven moment** that makes claude-hpc different from
 
 ```python
 from pathlib import Path
-from hpc_mapreduce import (
+from claude_hpc import (
     framework_subdir, tasks_path, load_tasks_module, compute_cmd_sha,
 )
 
@@ -407,14 +407,14 @@ If the user wants to change the axis, tell them to edit `.hpc/tasks.py` directly
 
 If `tp.exists()` is False, enter the scaffolding sub-flow:
 
-1. **Read the canonical example.** Resolve `hpc_mapreduce/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
+1. **Read the canonical example.** Resolve `claude_hpc/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
 
 2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and any `meta.json` at the experiment root for axis hints (parameter names, ranges, chunking intent, date windows). Recent run sidecars under `.hpc/runs/` are also a useful source — they capture the full kwargs dict from any previous `tasks.resolve(i)` materializations.
 
 3. **Walk the user through writing the file.** This is conversational, not template substitution. The agent:
    - Re-states the axis from Step 3 in concrete terms (e.g. "We're going to materialize a list of {seed, model} dicts, one per task — 4 tasks total. Sound right?").
    - Drafts a minimal `_TASKS` for that axis and shows it to the user.
-   - Builds the `FLAGS` dict — one entry per executor module path the user might run from this repo (at minimum, the executor picked in Step 1; can include siblings discovered in the same dir for forward-readiness). Each flag list uses `from hpc_mapreduce.executor_cli import flag, generic_args, gpu_args` and follows the example pattern: `[*generic_args(), flag("horizon", int, default=1), ...]`.
+   - Builds the `FLAGS` dict — one entry per executor module path the user might run from this repo (at minimum, the executor picked in Step 1; can include siblings discovered in the same dir for forward-readiness). Each flag list uses `from claude_hpc.executor_cli import flag, generic_args, gpu_args` and follows the example pattern: `[*generic_args(), flag("horizon", int, default=1), ...]`.
    - Lets the user paste a snippet, describe in prose, or point at existing code; the agent translates that into `_TASKS`, `total()`, `resolve(task_id)`, and the FLAGS dict.
    - Iterates. The user is the source of truth on what the axis means.
 
@@ -426,7 +426,7 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 
    ```python
    import shutil
-   from hpc_mapreduce import _PACKAGE_ROOT
+   from claude_hpc import _PACKAGE_ROOT
    shutil.copy(
        _PACKAGE_ROOT / "templates" / "cli_dispatcher.py",
        experiment_dir / ".hpc" / "cli.py",
@@ -454,7 +454,7 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 The materialized task list is the source of identity for the run:
 
 ```python
-from hpc_mapreduce import (
+from claude_hpc import (
     compute_cmd_sha, compute_tasks_py_sha, find_run_by_cmd_sha,
     write_run_sidecar, runs_subdir,
 )
@@ -492,7 +492,7 @@ sidecar_path = write_run_sidecar(
     experiment_dir,
     run_id=run_id,
     cmd_sha=cmd_sha,
-    claude_hpc_version=__import__("hpc_mapreduce").__version__,
+    claude_hpc_version=__import__("claude_hpc").__version__,
     submitted_at=datetime.now(timezone.utc).isoformat(),
     executor=run_cmd,                            # full shell cmd. New-contract: "python -m cli src.ml_ridge". Old-contract: "python3 src/ml_ridge.py".
     result_dir_template=result_dir_template,     # e.g. "results/{git_sha}/task_{task_id}"
@@ -554,7 +554,7 @@ Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework
    ```bash
    rsync -az --delete \
        --exclude='.git/' --exclude='__pycache__/' --exclude='*.pyc' \
-       --exclude='hpc_mapreduce/' \
+       --exclude='claude_hpc/' \
        --exclude='.hpc/_hpc_dispatch.py' \
        --exclude='.hpc/_hpc_combiner.py' \
        --exclude='.hpc/templates/' \
@@ -562,16 +562,16 @@ Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework
        . $SSH_TARGET:$REMOTE_PATH/
    ```
 
-   The `.hpc/_hpc_*.py` and `.hpc/templates/` excludes prevent `--delete` from wiping the framework files that `deploy_runtime` placed on the cluster. `DEFAULT_RSYNC_EXCLUDES` in `hpc_mapreduce.infra.remote` has these baked in; if you call `rsync_push` directly, you get them for free.
+   The `.hpc/_hpc_*.py` and `.hpc/templates/` excludes prevent `--delete` from wiping the framework files that `deploy_runtime` placed on the cluster. `DEFAULT_RSYNC_EXCLUDES` in `claude_hpc.infra.remote` has these baked in; if you call `rsync_push` directly, you get them for free.
 
 2. **`deploy_runtime`** scp's the framework files into `{remote_path}/.hpc/`:
    - `_hpc_dispatch.py` (the framework executor)
    - `_hpc_combiner.py`
    - `templates/{cpu_array,gpu_array}.{sh,slurm}`
-   - and the importable stubs `hpc_mapreduce/map/{context,metrics_io}.py` (these go to `{remote_path}/hpc_mapreduce/map/`, not `.hpc/`)
+   - and the importable stubs `claude_hpc/map/{context,metrics_io}.py` (these go to `{remote_path}/claude_hpc/map/`, not `.hpc/`)
 
    ```python
-   from hpc_mapreduce import deploy_runtime
+   from claude_hpc import deploy_runtime
    deploy_runtime(host=cluster.host, user=cluster.user, remote_path=remote_path)
    ```
 

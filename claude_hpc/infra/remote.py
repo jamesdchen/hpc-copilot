@@ -100,7 +100,7 @@ DEFAULT_RSYNC_EXCLUDES: list[str] = [
     "*.pyc",
     ".mypy_cache/",
     ".claude/",
-    "hpc_mapreduce/",  # protect deployed runtime stubs from --delete
+    "claude_hpc/",  # protect deployed runtime stubs from --delete
     # Protect framework files scp'd into the cluster-side .hpc/ from the
     # local rsync's --delete pass.  The local .hpc/ contains only
     # tasks.py + runs/<id>.json; the cluster also holds _hpc_dispatch.py,
@@ -256,7 +256,7 @@ def deploy_runtime(
 
     Two payloads:
 
-    1. **Importable stubs** in ``{remote_path}/hpc_mapreduce/map/``:
+    1. **Importable stubs** in ``{remote_path}/claude_hpc/mapreduce/``:
        ``metrics_io.py`` so user executors can do
        ``from claude_hpc.mapreduce.metrics_io import write_metrics`` on
        compute nodes without installing the full package.
@@ -282,11 +282,11 @@ def deploy_runtime(
     pkg_dir = Path(__file__).parent.parent
 
     ssh_run(
-        f"mkdir -p {remote_path_q}/hpc_mapreduce/map"
+        f"mkdir -p {remote_path_q}/claude_hpc/mapreduce"
         f" {remote_path_q}/.hpc/templates"
         f" {remote_path_q}/.hpc/templates/common"
-        f" && touch {remote_path_q}/hpc_mapreduce/__init__.py"
-        f" && touch {remote_path_q}/hpc_mapreduce/map/__init__.py",
+        f" && touch {remote_path_q}/claude_hpc/__init__.py"
+        f" && touch {remote_path_q}/claude_hpc/mapreduce/__init__.py",
         host=host,
         user=user,
     )
@@ -316,7 +316,7 @@ def deploy_runtime(
     # Note: ``map/context.py`` was previously pushed here but the source
     # module never existed on disk; the orphan reference would FileNotFound
     # at deploy time. Removed in regfix.
-    _scp(pkg_dir / "mapreduce" / "metrics_io.py", "hpc_mapreduce/map/metrics_io.py")
+    _scp(pkg_dir / "mapreduce" / "metrics_io.py", "claude_hpc/mapreduce/metrics_io.py")
 
     # Framework executor + combiner inside .hpc/.
     _scp(pkg_dir / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")

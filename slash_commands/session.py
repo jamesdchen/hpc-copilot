@@ -147,7 +147,7 @@ def runs_dir(experiment_dir: Path) -> Path:
     ``~/.claude/hpc/<repo_hash>/runs/``, NOT the cluster sidecar runs
     directory under ``<experiment_dir>/.hpc/runs/`` — that one is
     :attr:`claude_hpc._internal.layout.RepoLayout.runs` (also exported as
-    :func:`hpc_mapreduce.runs_subdir`). The pre-B1 collision between
+    :func:`claude_hpc.runs_subdir`). The pre-B1 collision between
     these two ``runs_*`` names was a P0 bug source; the
     ``RepoLayout`` / ``JournalLayout`` type split makes it a type
     error.

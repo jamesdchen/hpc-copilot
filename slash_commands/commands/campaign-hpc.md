@@ -15,7 +15,7 @@ If the user just wants one-shot parallel work with no feedback loop, use `/submi
 ## Setup
 
 Read cluster definitions:
-- `clusters.yaml`: resolve via `python -c 'from hpc_mapreduce import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+- `clusters.yaml`: resolve via `python -c 'from claude_hpc import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
 Pick a campaign:
 
@@ -79,7 +79,7 @@ Per iteration:
 ```python
 import json, subprocess
 from pathlib import Path
-from hpc_mapreduce import load_tasks_module, tasks_path
+from claude_hpc import load_tasks_module, tasks_path
 
 def run_one(spec_path, *, verb):
     """Invoke one workflow atom; return parsed envelope or raise."""

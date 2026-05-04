@@ -471,7 +471,7 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     """Derive ``combined_waves`` from cluster artifacts.
 
     The combiner writes ``_combiner/wave_<N>.json`` per successful run
-    (see ``hpc_mapreduce/map/combiner.py``). We use the presence of
+    (see ``claude_hpc/map/combiner.py``). We use the presence of
     that file as the success marker.
     """
     user, host = _split_ssh_target(ssh_target)
