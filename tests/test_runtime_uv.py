@@ -154,7 +154,11 @@ def test_template_no_nfs_staging_when_env_unset(template: Path) -> None:
     # that the staging block remains opt-in.
     if_idx = text.find('if [ -n "${HPC_NFS_DATA_DIR:-}" ]; then')
     assert if_idx >= 0, f"{template.name} missing gating if"
-    fi_idx = text.find("fi", if_idx)
+    # Match a standalone "fi" line, not a substring like "final" — a
+    # future contributor adding a comment containing "fi..." inside the
+    # staging block would otherwise sneak past this test.
+    fi_idx = text.find("\nfi\n", if_idx)
+    assert fi_idx >= 0, f"{template.name} missing closing fi for gating block"
     local_idx = text.find("export LOCAL_DATA_DIR=", if_idx)
     assert if_idx < local_idx < fi_idx, (
         f"{template.name} LOCAL_DATA_DIR export not inside the gating block"
