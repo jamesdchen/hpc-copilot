@@ -170,7 +170,7 @@ def _write_runner(
 class TestPreemptionSignalTrap:
     def test_sigterm_writes_preempted_at_to_sidecar(self, tmp_path):
         """A SIGTERM during executor runtime must populate
-        ``preempted_at`` on the per-task sidecar entry."""
+        ``preempt: {at, grace_sec}`` on the per-task sidecar entry."""
         result_root = tmp_path / "results"
         # Long-running executor — sleeps until killed.
         hpc = _scaffold(
@@ -226,13 +226,18 @@ class TestPreemptionSignalTrap:
         # Stderr must announce preemption.
         assert b"preemption imminent" in stderr_bytes, stderr_bytes
 
-        # Sidecar must have preempted_at populated for task 0.
+        # Sidecar must have preempt block populated for task 0.
         sidecar = json.loads((hpc / "runs" / "test_run.json").read_text())
         tasks = sidecar.get("tasks") or {}
         entry = tasks.get("0") or {}
-        assert "preempted_at" in entry, f"sidecar missing preempted_at for task 0; got {sidecar}"
+        assert "preempt" in entry, f"sidecar missing preempt for task 0; got {sidecar}"
+        preempt = entry["preempt"]
+        assert isinstance(preempt, dict), preempt
+        assert "at" in preempt and "grace_sec" in preempt, preempt
         # ISO-8601 with Z suffix.
-        assert entry["preempted_at"].endswith("Z"), entry["preempted_at"]
+        assert preempt["at"].endswith("Z"), preempt["at"]
+        # grace_sec round-trips the env override (set to 2 above).
+        assert preempt["grace_sec"] == 2, preempt
 
     def test_grace_sec_env_override_is_honored(self, tmp_path):
         """Setting HPC_PREEMPT_GRACE_SEC=1 forces a quick teardown

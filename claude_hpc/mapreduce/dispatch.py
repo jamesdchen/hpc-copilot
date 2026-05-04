@@ -42,9 +42,11 @@ __all__ = ["main"]
 _DEFAULT_PREEMPT_GRACE_SEC = 25
 
 # Exit code used when the dispatcher itself is preempted by the
-# scheduler. Matches the POSIX convention of 128 + signal number for
-# SIGINT (2), giving 130 — the agent surface maps this to
-# ``error_code: preempted``.
+# scheduler. 130 = 128 + 2 (SIGINT). claude-hpc treats the trapped
+# SIGTERM as if the executor received SIGINT, so the campus user's
+# agent harness sees the canonical "job interrupted" code regardless
+# of which signal the scheduler actually sent — preempted runs survive
+# as a clean, recognizable diagnostic instead of a noisy crash.
 _EXIT_PREEMPTED = 130
 
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
@@ -104,14 +106,19 @@ def _atomic_write_json(path, data):
         raise
 
 
-def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso):
-    """Write ``preempted_at`` to the per-task entry of *sidecar_path*.
+def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
+    """Write ``preempt: {at, grace_sec}`` to the per-task sidecar entry.
 
     Marks the run as bumped (preempted by higher-priority work), not
     failed. The agent harness reads this field to distinguish a clean
     resubmit from a real failure. Best-effort: a write error here must
     not prevent the dispatcher from exiting, since the SIGKILL window
     is short.
+
+    Namespaced under ``preempt`` (not flat ``preempted_at``) to avoid
+    field-name collisions with future preemption-related metadata and
+    to keep the sidecar reading clean for the campus user inspecting
+    a bumped run by hand.
     """
     try:
         sidecar = json.loads(Path(sidecar_path).read_text())
@@ -123,7 +130,7 @@ def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso):
     entry = tasks.setdefault(str(task_id), {})
     if not isinstance(entry, dict):
         return
-    entry["preempted_at"] = when_iso
+    entry["preempt"] = {"at": when_iso, "grace_sec": int(grace_sec)}
     # Sidecar lives on shared NFS; a transient write failure here is
     # survivable — the agent harness will fall back to exit-code 130
     # detection. Don't let it block the preemption-window teardown.
@@ -136,9 +143,9 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
 
     The handler:
       1. Logs to stderr (matches the existing dispatch.py prose style).
-      2. Writes ``preempted_at: <utcnow_iso>`` to the per-task entry of
-         the run sidecar so the agent harness can tell "bumped" from
-         "real failure".
+      2. Writes ``preempt: {at: <utcnow_iso>, grace_sec: <int>}`` to the
+         per-task entry of the run sidecar so the agent harness can tell
+         "bumped" from "real failure".
       3. Forwards SIGINT to the executor subprocess so its except blocks
          run during the cluster's preemption window.
       4. Waits up to *grace_sec* for the executor to exit cleanly.
@@ -155,7 +162,9 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
             "[claude-hpc] SIGTERM received; cluster preemption imminent",
             file=sys.stderr,
         )
-        _mark_preempted_in_sidecar(sidecar_path, task_id, _utcnow_iso())
+        _mark_preempted_in_sidecar(
+            sidecar_path, task_id, _utcnow_iso(), grace_sec=grace_sec
+        )
 
         child = child_holder[0] if child_holder else None
         if child is not None and child.poll() is None:
