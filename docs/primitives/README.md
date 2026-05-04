@@ -56,6 +56,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
+| [best-submit-window](best-submit-window.md) | yes | _none_ | `hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` |
 | [campaign-health](campaign-health.md) | yes | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` |
 | [campaign-list](campaign-list.md) | yes | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` |
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` |
@@ -69,6 +70,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` |
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` |
+| [predict-queue-wait](predict-queue-wait.md) | yes | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` |
 | [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
 | [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` |
 | [walltime-drift](walltime-drift.md) | yes | _none_ | `hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` |
