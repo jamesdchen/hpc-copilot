@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce.infra.backends.sge_remote import RemoteSGEBackend
 from hpc_mapreduce.infra.backends.slurm_remote import RemoteSlurmBackend
-from hpc_mapreduce.infra.remote import deploy_runtime, rsync_push, ssh_run
+from hpc_mapreduce.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
 from slash_commands import errors, runner, session
 
 if TYPE_CHECKING:
@@ -66,10 +66,14 @@ class SubmitFlowResult:
 
 
 def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    if "@" not in ssh_target:
-        raise errors.SpecInvalid(f"ssh_target must be 'user@host', got {ssh_target!r}")
-    user, host = ssh_target.split("@", 1)
-    return user, host
+    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
+    error type. The shared helper raises ``ValueError``; this flow
+    surfaces ``SpecInvalid`` so callers see a typed envelope error.
+    """
+    try:
+        return split_ssh_target(ssh_target)
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
 
 
 def _build_backend(

@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce.infra.remote import rsync_pull
+from hpc_mapreduce.infra.remote import rsync_pull, split_ssh_target
 from hpc_mapreduce.reduce.metrics import reduce_partials
 from slash_commands import errors, runner, session
 
@@ -68,10 +68,13 @@ class AggregateFlowResult:
 
 
 def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    if "@" not in ssh_target:
-        raise errors.SpecInvalid(f"ssh_target must be 'user@host', got {ssh_target!r}")
-    user, host = ssh_target.split("@", 1)
-    return user, host
+    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
+    error type. See :mod:`hpc_mapreduce.infra.remote.split_ssh_target`.
+    """
+    try:
+        return split_ssh_target(ssh_target)
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
 
 
 def _missing_waves(wave_map_keys: list[str], already_combined: list[int]) -> list[int]:
