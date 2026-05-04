@@ -237,7 +237,7 @@ class TestInspectClusterEntry:
         # the agent_cli envelope translator surfaced as `error_code:
         # internal`. The primitive doc declares `cluster_unknown` as the
         # correct code, so the raise is now typed.
-        from slash_commands import errors
+        from claude_hpc import errors
 
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))

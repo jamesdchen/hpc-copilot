@@ -34,7 +34,8 @@ from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
 from claude_hpc.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
 from claude_hpc.orchestrator.discover import discover_executors
-from slash_commands import errors, runner, session
+from claude_hpc import errors
+from slash_commands import runner, session
 from slash_commands.runner import submit_and_record
 
 if TYPE_CHECKING:

@@ -48,7 +48,7 @@ from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 from claude_hpc.infra.cache import TTLCache
 from claude_hpc.infra.clusters import load_clusters_config
-from slash_commands import errors
+from claude_hpc import errors
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

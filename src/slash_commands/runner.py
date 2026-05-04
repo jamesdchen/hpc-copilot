@@ -22,8 +22,9 @@ from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.infra.remote import run_combiner_checked, ssh_run
 from claude_hpc.orchestrator.runs import find_run_by_cmd_sha, read_run_sidecar
-from slash_commands import errors, session
-from slash_commands.errors import RemoteCommandFailed
+from claude_hpc import errors
+from claude_hpc.errors import RemoteCommandFailed
+from slash_commands import session
 from slash_commands.session import RunRecord, _atomic_write_json
 
 __all__ = [

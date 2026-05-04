@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-    from slash_commands.errors import HpcError
+    from claude_hpc.errors import HpcError
 
 
 VerbKind = Literal["query", "validate", "mutate", "submit", "scaffold", "workflow"]

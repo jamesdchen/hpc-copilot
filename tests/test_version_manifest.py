@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from claude_hpc._internal import _version
-from slash_commands import errors
+from claude_hpc import errors
 
 
 def test_compatibility_check_silent_on_supported() -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from slash_commands import errors as errors_mod
+from claude_hpc import errors as errors_mod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MARS_INTEGRATION = REPO_ROOT / "docs" / "mars-integration.md"

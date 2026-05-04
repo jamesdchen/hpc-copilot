@@ -52,7 +52,8 @@ from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.lifecycle import LifecycleState
 from claude_hpc.orchestrator.runs import read_run_sidecar
-from slash_commands import errors, runner, session
+from claude_hpc import errors
+from slash_commands import runner, session
 from slash_commands.runner import mark_terminal, record_status
 
 try:
