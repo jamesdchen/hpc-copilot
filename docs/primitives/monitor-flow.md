@@ -3,7 +3,7 @@ name: monitor-flow
 verb: workflow
 side_effects:
   - mutates: per-run journal entry's last_status (per poll)
-  - writes: <experiment_dir>/.hpc/runs/<run_id>.monitor.jsonl (one record per poll)
+  - writes: ~/.claude/hpc/<repo_hash>/runs/<run_id>.monitor.jsonl (one record per poll)
   - mutates: combined_waves / failed_waves on the journal record (per combined wave)
   - mutates: lifecycle_state to `complete` when every task reports complete
 idempotent: true
