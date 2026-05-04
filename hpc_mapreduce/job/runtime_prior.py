@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce._io import atomic_locked_update
-from hpc_mapreduce._time import utcnow_iso
+from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow_iso
 
 SCHEMA_VERSION: int = 1
 
@@ -95,6 +95,44 @@ def _normalise(doc: dict[str, Any] | None, profile: str, cluster: str) -> dict[s
     if not isinstance(doc.get("samples"), list):
         doc["samples"] = []
     return doc
+
+
+def _resolve_queue_wait_sec(
+    explicit: int | None,
+    started_at: str | None,
+    submitted_at_iso: str | None,
+) -> int | None:
+    """Return the queue-wait seconds for a sample.
+
+    Precedence:
+
+    1. *explicit* (from the caller) wins when given. Negative values are
+       rejected to None — a negative wait is meaningless.
+    2. Otherwise compute ``started_at - submitted_at_iso`` if both
+       timestamps are parseable ISO strings.
+    3. Negative deltas (clock skew between the submitting host and the
+       compute node) reject to None.
+    4. Anything missing/unparseable yields None.
+
+    Kept as a free function so the queue-wait baseline tests can exercise
+    derivation independently of the full ``append_sample`` path.
+    """
+    if explicit is not None:
+        try:
+            v = int(explicit)
+        except (TypeError, ValueError):
+            return None
+        return v if v >= 0 else None
+    if not started_at or not submitted_at_iso:
+        return None
+    sd = parse_iso_utc_or_none(submitted_at_iso)
+    st = parse_iso_utc_or_none(started_at)
+    if sd is None or st is None:
+        return None
+    delta = (st - sd).total_seconds()
+    if delta < 0:
+        return None
+    return int(round(delta))
 
 
 def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
@@ -142,6 +180,7 @@ def append_sample(
     cpus_requested: int | None = None,
     predicted_eta_sec: int | None = None,
     submitted_at_iso: str | None = None,
+    queue_wait_sec: int | None = None,
 ) -> Path:
     """Append a single runtime sample. Returns the file path written.
 
@@ -186,6 +225,15 @@ def append_sample(
         # measure scheduler calibration without any cross-module state.
         "predicted_eta_sec": predicted_eta_sec,
         "submitted_at_iso": submitted_at_iso,
+        # Queue-wait observation feeding the diurnal moving-average
+        # forecaster (`queue_wait_baseline.predict_queue_wait`). When the
+        # caller doesn't pass it explicitly we derive it from
+        # `started_at - submitted_at_iso` if both are parseable; a
+        # negative delta (clock skew) records None rather than a
+        # nonsense negative.
+        "queue_wait_sec": _resolve_queue_wait_sec(
+            queue_wait_sec, started_at, submitted_at_iso
+        ),
     }
 
     def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:
