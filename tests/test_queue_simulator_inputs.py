@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 from claude_hpc.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
+from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 class TestArrivalStream:

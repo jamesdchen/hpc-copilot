@@ -117,7 +117,7 @@ def _build_prompt(payload: dict[str, Any]) -> str:
     idempotent=True,
 )
 def campaign_health(
-    experiment_dir: "Path",
+    experiment_dir: Path,
     *,
     campaign_id: str | None = None,
     since_iso: str | None = None,

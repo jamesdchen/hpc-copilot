@@ -514,6 +514,7 @@ def _main(argv: list[str] | None = None) -> int:
     # so the existing poll loop (which reloads on each tick) can re-read
     # it cheaply.
     from pathlib import Path as _P
+
     from claude_hpc import load_tasks_module
     from claude_hpc.mapreduce.reduce.status import (
         _build_per_task_dict_from_sidecar,

@@ -24,14 +24,15 @@ from __future__ import annotations
 
 __all__ = ["atomic_locked_update"]
 
+import contextlib
 import json
 import os
 import tempfile
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 
 def _read_json_doc(path: Path) -> dict[str, Any] | None:
@@ -103,10 +104,8 @@ def atomic_locked_update(
             tmp.close()
             os.replace(tmp.name, path)
         except BaseException:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp.name)
-            except OSError:
-                pass
             raise
         finally:
             if not tmp.closed:
@@ -114,8 +113,6 @@ def atomic_locked_update(
         return new_doc
     finally:
         if fcntl is not None:
-            try:
+            with contextlib.suppress(OSError):
                 fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
         os.close(fd)

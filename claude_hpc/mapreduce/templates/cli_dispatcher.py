@@ -78,7 +78,7 @@ class Flag:
 
 
 def build_parser_from_flags(
-    flags: "list[Flag] | list[dict[str, Any]]",
+    flags: list[Flag] | list[dict[str, Any]],
     *,
     description: str = "",
 ) -> argparse.ArgumentParser:

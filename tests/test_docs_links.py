@@ -151,7 +151,7 @@ def test_mars_integration_error_codes_match_code() -> None:
             continue
         else:
             # Unknown token — fail with a useful message.
-            assert False, (
+            raise AssertionError(
                 f"docs/mars-integration.md mentions `{token}` in backticks, "
                 f"which is neither an error_code nor in the known "
                 f"vocabulary set. If it's a new error_code, add the class "
@@ -176,7 +176,7 @@ def test_mars_snippet_error_codes_match_code() -> None:
     for token in _BACKTICK_TOKEN.findall(text):
         if token in codes or token in _DOC_VOCABULARY:
             continue
-        assert False, (
+        raise AssertionError(
             f"experiment-runner.snippet.md mentions `{token}` which is "
             f"neither an error_code nor in the known vocabulary."
         )
@@ -184,11 +184,11 @@ def test_mars_snippet_error_codes_match_code() -> None:
 
 def test_mars_docs_env_vars_match_capabilities() -> None:
     """Env vars mentioned in docs must match capabilities.required_env."""
-    from claude_hpc.agent_cli import _MARS_SKILL_NAMES  # noqa: F401  (just to ensure import)
-
     # Re-execute capabilities in-process to get the canonical list.
     import argparse
     from unittest.mock import patch
+
+    from claude_hpc.agent_cli import _MARS_SKILL_NAMES  # noqa: F401  (just to ensure import)
 
     captured: list[dict] = []
 

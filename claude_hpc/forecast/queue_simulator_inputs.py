@@ -36,10 +36,12 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from claude_hpc.infra.inspect import ClusterSnapshot
 from claude_hpc.forecast.queue_simulator import SimJob, extract_running_jobs
+
+if TYPE_CHECKING:
+    from claude_hpc.infra.inspect import ClusterSnapshot
 
 __all__ = [
     "sample_arrival_stream",

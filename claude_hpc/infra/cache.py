@@ -40,14 +40,14 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
-from typing import Generic, Optional, TypeVar
+from typing import Generic, TypeVar
 
 K = TypeVar("K")
 V = TypeVar("V")
 
 # Global registry so :func:`clear_all` can flush every TTLCache the
 # process has created. Tests rely on this to keep instances hermetic.
-_REGISTRY: list["TTLCache"] = []
+_REGISTRY: list[TTLCache] = []
 
 
 class TTLCache(Generic[K, V]):
@@ -75,10 +75,10 @@ class TTLCache(Generic[K, V]):
         self.max_size = int(max_size)
         # OrderedDict: maps key -> (monotonic_written_at, value). The
         # insertion / move-to-end order is the LRU order.
-        self._data: "OrderedDict[K, tuple[float, V]]" = OrderedDict()
+        self._data: OrderedDict[K, tuple[float, V]] = OrderedDict()
         _REGISTRY.append(self)
 
-    def get(self, key: K) -> Optional[V]:
+    def get(self, key: K) -> V | None:
         """Return the cached value or ``None`` if absent / expired.
 
         On TTL miss the entry is dropped so the caller can re-populate

@@ -5,10 +5,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
-from claude_hpc.infra import inspect as ic
 from claude_hpc._internal.layout import RepoLayout
+from claude_hpc.infra import inspect as ic
 
 
 def _mk_snap(cluster: str, *, now_iso: str, nodes: int = 1) -> ic.ClusterSnapshot:

@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.orchestrator import runtime_prior as rp
 
-
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"
 

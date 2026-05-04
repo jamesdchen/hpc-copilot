@@ -12,7 +12,6 @@ import argparse
 import pytest
 
 from claude_hpc.executor_cli import (
-    Flag,
     build_parser_from_flags,
     flag,
     generic_args,

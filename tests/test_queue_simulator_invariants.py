@@ -15,13 +15,13 @@ Invariants covered:
 
 from __future__ import annotations
 
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 from claude_hpc.forecast.queue_simulator import (
     SimJob,
     available_resources,
     simulate_distribution,
     simulate_one_pass,
 )
+from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 def _snap(cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100"):

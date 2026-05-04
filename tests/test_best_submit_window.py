@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from claude_hpc.orchestrator import runtime_prior as rp
 from claude_hpc.forecast.best_submit_window import best_submit_windows
+from claude_hpc.orchestrator import runtime_prior as rp
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"
