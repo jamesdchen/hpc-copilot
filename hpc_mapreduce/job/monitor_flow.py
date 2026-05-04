@@ -42,7 +42,9 @@ What it intentionally does NOT do (in MVP)
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -50,6 +52,11 @@ from typing import TYPE_CHECKING, Any
 from hpc_mapreduce._time import utcnow_iso
 from hpc_mapreduce.job.runs import read_run_sidecar
 from slash_commands import errors, runner, session
+
+try:
+    import fcntl as _fcntl
+except ImportError:
+    _fcntl = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -104,6 +111,34 @@ def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
     return session.runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
 
 
+@contextlib.contextmanager
+def _flock_append(target: Path):
+    """Hold an exclusive flock on a sibling ``.lock`` while yielding.
+
+    Mirrors :func:`slash_commands.session._locked` so the slash-command
+    surface (which appends to the same ``.monitor.jsonl`` file) and this
+    workflow atom serialize their writes. Without flock, a concurrent
+    slash-command poll and an in-process monitor_flow tick can interleave
+    a partial JSON line and produce a torn record.
+
+    Best-effort on platforms without ``fcntl`` (Windows): degrades to a
+    no-op so the workflow primitive remains importable.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if _fcntl is None:
+        yield
+        return
+    lock = target.with_suffix(target.suffix + ".lock")
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            _fcntl.flock(fd, _fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _append_tick(
     experiment_dir: Path,
     run_id: str,
@@ -114,7 +149,11 @@ def _append_tick(
     lifecycle_state: str,
     next_tick_seconds: float | None,
 ) -> None:
-    """Append one JSONL record to ``<run_id>.monitor.jsonl`` (best-effort)."""
+    """Append one JSONL record to ``<run_id>.monitor.jsonl`` (best-effort).
+
+    Holds an exclusive flock for the duration of the append so a
+    concurrent slash-command writer can\'t interleave bytes mid-line.
+    """
     record = {
         "tick_id": utcnow_iso(),
         "run_id": run_id,
@@ -128,8 +167,7 @@ def _append_tick(
     }
     path = _tick_log_path(experiment_dir, run_id)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as f:
+        with _flock_append(path), path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
     except OSError:
         # Tick log writes must never crash the loop. The journal record
