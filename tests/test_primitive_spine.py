@@ -142,23 +142,19 @@ def _parse_frontmatter(path: Path) -> dict:
 
 
 def test_decorator_matches_frontmatter(registry: dict[str, PrimitiveMeta]) -> None:
-    """Soft drift detector during the migration window.
+    """Decorator metadata and frontmatter MUST agree exactly.
 
-    Today decorator metadata and frontmatter both exist; the
-    comparisons below catch genuine drift but also flag cosmetic
-    differences (e.g. frontmatter ``spec.run_id`` vs decorator
-    ``run_id``). Until every primitive's frontmatter is canonicalized,
-    this test SKIPS rather than fails — drift is reported in the test
-    output for visibility but doesn't block CI. Flip to a hard
-    assertion once decorators are the SoT and frontmatter is generated.
+    The registry is now the single source of truth and
+    ``scripts/build_primitive_frontmatter.py`` regenerates the YAML
+    block from it. Drift is a real bug; the CI gate runs ``--check``
+    on every PR so a developer who edits a primitive decorator without
+    regenerating the frontmatter has to fix the gap before merging.
     """
     docs_root = Path(__file__).resolve().parent.parent / "docs" / "primitives"
     failures: list[str] = []
     for name, meta in registry.items():
         md = docs_root / f"{name}.md"
         if not md.is_file():
-            # Decorator-only during the migration; frontmatter not yet
-            # authored. Skip — the no-orphan check is a separate test.
             continue
         fm = _parse_frontmatter(md)
         if not fm:
@@ -177,26 +173,21 @@ def test_decorator_matches_frontmatter(registry: dict[str, PrimitiveMeta]) -> No
                 f"decorator.idempotent={meta.idempotent}"
             )
         fm_key = fm.get("idempotency_key")
-        # Frontmatter idempotency_key values are free-form prose: the
-        # canonical key plus optional explanatory text after " — " or
-        # "(...)". Compare only the core token. ``none`` / ``None`` /
-        # missing all map to the decorator's None.
         if fm_key in ("none", "None", None):
-            fm_core = None
+            fm_core: str | None = None
         else:
-            fm_core = re.split(r"\s+—\s+|\s*\(", str(fm_key), maxsplit=1)[0].strip()
-            if not fm_core:
-                fm_core = None
+            fm_core = str(fm_key)
         if fm_core != meta.idempotency_key:
             failures.append(
-                f"{name}: frontmatter.idempotency_key core={fm_core!r} "
-                f"(raw={fm_key!r}) vs decorator.idempotency_key={meta.idempotency_key!r}"
+                f"{name}: frontmatter.idempotency_key={fm_key!r} "
+                f"vs decorator.idempotency_key={meta.idempotency_key!r}"
             )
-    if failures:
-        pytest.skip(
-            "Decorator/frontmatter drift (visibility only during migration):\n  "
-            + "\n  ".join(failures)
-        )
+    assert not failures, (
+        "Decorator/frontmatter drift — run "
+        "``python scripts/build_primitive_frontmatter.py --write`` "
+        "to regenerate:\n  "
+        + "\n  ".join(failures)
+    )
 
 
 
