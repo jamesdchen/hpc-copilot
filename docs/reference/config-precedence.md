@@ -43,7 +43,7 @@ Notes:
   to redirect the loader at an alternate file. (CLI flag override is
   not currently exposed; an MAR running against a fork drops a sibling
   YAML in place and points the env var at it.)
-- **Schema**: documented in `docs/boundary-contract.md` under "Config
+- **Schema**: documented in `docs/reference/boundary-contract.md` under "Config
   split"; the lint test `test_clusters_yaml_is_infra_only` enforces
   infra-only keys.
 
@@ -125,5 +125,5 @@ Notes:
 
 Adding a new env var, changing a precedence rule, or moving a value
 from one layer to another is a **breaking change**. Bump the package
-version and update this doc plus `docs/sync-checklist.md` in the same
+version and update this doc plus `docs/internals/sync-checklist.md` in the same
 PR.

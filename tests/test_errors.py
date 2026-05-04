@@ -16,7 +16,7 @@ import pytest
 
 from claude_hpc import errors
 
-# error_codes documented in docs/cli-spec.md and shipped as the envelope
+# error_codes documented in docs/reference/cli-spec.md and shipped as the envelope
 # JSON Schema enum. Source of truth for the contract.
 DOCUMENTED_ERROR_CODES = frozenset(
     {

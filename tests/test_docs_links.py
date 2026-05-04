@@ -13,8 +13,8 @@ from pathlib import Path
 from claude_hpc import errors as errors_mod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MARS_INTEGRATION = REPO_ROOT / "docs" / "mars-integration.md"
-MARS_SNIPPET = REPO_ROOT / "docs" / "mars" / "experiment-runner.snippet.md"
+MARS_INTEGRATION = REPO_ROOT / "docs" / "workflows" / "mars-integration.md"
+MARS_SNIPPET = REPO_ROOT / "docs" / "workflows" / "mars" / "experiment-runner.snippet.md"
 
 
 def _all_error_codes() -> set[str]:
@@ -176,7 +176,7 @@ def test_mars_integration_error_codes_match_code() -> None:
         else:
             # Unknown token — fail with a useful message.
             raise AssertionError(
-                f"docs/mars-integration.md mentions `{token}` in backticks, "
+                f"docs/workflows/mars-integration.md mentions `{token}` in backticks, "
                 f"which is neither an error_code nor in the known "
                 f"vocabulary set. If it's a new error_code, add the class "
                 f"to slash_commands/errors.py. If it's documentation "
@@ -191,7 +191,9 @@ def test_mars_integration_error_codes_match_code() -> None:
         "cluster_unknown",
     }
     missing = must_document - seen_error_codes
-    assert not missing, f"docs/mars-integration.md is missing error_code rows for: {missing}"
+    assert not missing, (
+        f"docs/workflows/mars-integration.md is missing error_code rows for: {missing}"
+    )
 
 
 def test_mars_snippet_error_codes_match_code() -> None:
@@ -228,7 +230,7 @@ def test_mars_docs_env_vars_match_capabilities() -> None:
     integration_text = _doc_text(MARS_INTEGRATION)
     for var in required_env:
         assert var in integration_text, (
-            f"docs/mars-integration.md does not mention required env var {var!r}"
+            f"docs/workflows/mars-integration.md does not mention required env var {var!r}"
         )
 
 
@@ -258,7 +260,7 @@ def test_mars_integration_does_not_track_uv_as_known_gap() -> None:
     'known gap'."""
     text = _doc_text(MARS_INTEGRATION)
     assert "track this as a known gap" not in text, (
-        "docs/mars-integration.md still calls cluster-side uv run a "
+        "docs/workflows/mars-integration.md still calls cluster-side uv run a "
         "'known gap'. Tier 1 closed the gap; update the Honoring-MARs-"
         "invariants table to reflect the new behavior."
     )

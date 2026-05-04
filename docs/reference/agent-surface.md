@@ -22,7 +22,7 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
   - Success: `{"ok": true, "idempotent": <bool>, "data": {...}}`
   - Failure: `{"ok": false, "error_code": "...", "category": "...", "retry_safe": <bool>, "remediation": "..."}`
   - See [`schemas/envelope.json`](../src/claude_hpc/schemas/envelope.json) and
-    [`docs/cli-spec.md`](cli-spec.md).
+    [`docs/reference/cli-spec.md`](cli-spec.md).
 - **Stable exit codes**: 0 ok, 1 user error, 2 cluster/network, 3 internal.
   An agent harness can dispatch on the exit code BEFORE parsing JSON.
 - **Versioned per-subcommand schemas**: `schemas/<name>.input.json`,
@@ -73,5 +73,5 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
 | Onboarding cost | high (LLM has to know flags) | medium (lib API) | high (services) | low (one binary) |
 
 If you want the design rationale in more depth, see
-[`docs/cli-spec.md`](cli-spec.md) for the contract and
+[`docs/reference/cli-spec.md`](cli-spec.md) for the contract and
 [`docs/primitives/`](primitives/) for the per-operation reference.

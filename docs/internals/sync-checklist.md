@@ -95,7 +95,7 @@ Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
 - **Shipped at**: `claude_hpc/config/clusters.yaml`.
 - **Loader**: `claude_hpc.load_clusters_config` (re-exported from
   `claude_hpc.infra.clusters`).
-- **Schema**: documented in `docs/boundary-contract.md` under "Config
+- **Schema**: documented in `docs/reference/boundary-contract.md` under "Config
   split". Allowed keys enforced by
   `tests/test_boundary_contract.py:test_clusters_yaml_is_infra_only`.
 
@@ -123,7 +123,7 @@ Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
 
 ### Exit-code → error_code mapping
 
-- **Documented in**: `docs/cli-spec.md` ("Exit code → error_code
+- **Documented in**: `docs/reference/cli-spec.md` ("Exit code → error_code
   mapping" section).
 - **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `claude_hpc/agent_cli.py`.
 
@@ -147,7 +147,7 @@ Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
 - **Helpers**: `claude_hpc.orchestrator.runs.{write,read}_run_sidecar`,
   `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`,
   `compute_cmd_sha`, `run_sidecar_path`. All re-exported at package
-  root; see `docs/boundary-contract.md`.
+  root; see `docs/reference/boundary-contract.md`.
 - **Retention**: `MAX_RUNS = 10`, oldest by mtime evicted on every
   write.
 - **Identity**: the `run_id` string is the sole identifier; sidecars

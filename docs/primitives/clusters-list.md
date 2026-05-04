@@ -25,4 +25,4 @@ List every cluster defined in the active `clusters.yaml`. The discovery step bef
 
 ## Notes
 
-Pure local config read; no SSH. Source resolved via the documented config-precedence order (see `docs/config-precedence.md`).
+Pure local config read; no SSH. Source resolved via the documented config-precedence order (see `docs/reference/config-precedence.md`).

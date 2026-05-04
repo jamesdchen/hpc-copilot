@@ -36,7 +36,7 @@ jobs:
         # docs/primitives/README.md auto-generated from frontmatter.
         run: python scripts/build_primitive_index.py --check
       - name: Operations index up to date
-        # docs/operations.md auto-generated from `hpc-mapreduce capabilities`.
+        # docs/generated/operations.md auto-generated from `hpc-mapreduce capabilities`.
         # If this fails after a frontmatter edit, regenerate with:
         #   uv run python scripts/build_operations_index.py
         run: python scripts/build_operations_index.py --check

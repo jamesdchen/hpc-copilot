@@ -2,7 +2,7 @@
 
 Each test below declares what IS permitted (an allowlist) and asserts that
 reality matches in both directions. Failures print actionable diffs that
-point back to ``docs/boundary-contract.md`` — the single source of truth for
+point back to ``docs/reference/boundary-contract.md`` — the single source of truth for
 the boundary between the framework and experiment repos.
 
 Stdlib only (``ast``, ``pathlib``) plus ``yaml`` (already a project
@@ -20,11 +20,11 @@ import claude_hpc
 from claude_hpc.orchestrator.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CONTRACT_DOC = "docs/boundary-contract.md"
+CONTRACT_DOC = "docs/reference/boundary-contract.md"
 
 
 # ---------------------------------------------------------------------------
-# Allowlists — keep in sync with docs/boundary-contract.md
+# Allowlists — keep in sync with docs/reference/boundary-contract.md
 # ---------------------------------------------------------------------------
 
 ALLOWED_EXPORTS = frozenset(
@@ -267,7 +267,7 @@ def test_core_does_not_import_templates() -> None:
 # ``claude_hpc/infra/remote.py``). Templates may import from these because
 # they are guaranteed to be present at execution time on the compute node.
 # Keep this list narrow; new entries require a matching update to
-# ``docs/boundary-contract.md``.
+# ``docs/reference/boundary-contract.md``.
 RUNTIME_MODULES_ALLOWED_IN_TEMPLATES = frozenset(
     {
         "claude_hpc.mapreduce.metrics_io",
@@ -304,7 +304,7 @@ def test_templates_do_not_import_core() -> None:
     Exception: a small allowlist of runtime modules deployed alongside the
     executor by ``deploy_runtime`` (see
     ``RUNTIME_MODULES_ALLOWED_IN_TEMPLATES``). New entries require a matching
-    update to ``docs/boundary-contract.md``.
+    update to ``docs/reference/boundary-contract.md``.
 
     Only the *deployed* template subdirectories (sge/, slurm/, common/,
     starters/) are scanned; ``tasks_example.py`` and ``cli_dispatcher.py``

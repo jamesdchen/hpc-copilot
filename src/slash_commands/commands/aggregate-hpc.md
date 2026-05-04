@@ -1,6 +1,6 @@
 Help me aggregate, validate, and analyze experiment results using the project configuration.
 
-Per-operation contracts live in `docs/primitives/` — this skill composes [combine-wave](../../docs/primitives/combine-wave.md) (per-wave aggregation) plus the surface-specific multi-wave orchestration, partial-pull, and final-aggregate flow. For envelope/exit-code shapes see `docs/cli-spec.md`.
+Per-operation contracts live in `docs/primitives/` — this skill composes [combine-wave](../../docs/primitives/combine-wave.md) (per-wave aggregation) plus the surface-specific multi-wave orchestration, partial-pull, and final-aggregate flow. For envelope/exit-code shapes see `docs/reference/cli-spec.md`.
 
 Aggregation runs on the cluster to avoid transferring many result files. Only summary files are downloaded locally.
 

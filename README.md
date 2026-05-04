@@ -3,7 +3,7 @@
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
 - **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/preflight`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1; preflight is folded into `/submit-hpc` Step 6b as an idempotent gate (with `/preflight` still available as a standalone diagnostic).
-- **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs). This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/agent-surface.md`](docs/agent-surface.md).
+- **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs). This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md).
 
 Both surfaces invoke `hpc-mapreduce <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (`claude_hpc.orchestrator.runner`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
 
@@ -24,6 +24,8 @@ Open the repo in Claude Code, then:
 ```bash
 pip install claude-hpc
 hpc-mapreduce preflight --cluster hoffman2                    # health check
+hpc-mapreduce interview --spec intent.json --campaign-dir <d> # persist campaign intent next to tasks.py
+hpc-mapreduce recall --root ~/experiments --task-kind <kind>  # query past interviews for next-interview grounding
 hpc-mapreduce submit --spec spec.json                          # JSON envelope on stdout
 hpc-mapreduce status --run-id <id>                             # one-shot snapshot; poll as needed
 hpc-mapreduce aggregate --run-id <id> --wave 1                 # combiner + result pull
@@ -31,15 +33,15 @@ hpc-mapreduce inspect-cluster --cluster <c>                    # per-node alloc/
 hpc-mapreduce runtime-prior --profile <p> --cluster <c>        # quantile rollup of past task runtimes
 hpc-mapreduce plan-submit --profile <p> --cluster <c>          # constraint scorecard for /submit-hpc
 ```
-Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/cli-spec.md`](docs/cli-spec.md); JSON Schema files for runtime validation under `hpc_mapreduce/schemas/`.
+Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/reference/cli-spec.md`](docs/reference/cli-spec.md); JSON Schema files for runtime validation under `hpc_mapreduce/schemas/`.
 
 ### Using with MARs
 
 claude-hpc plugs into MARs as a `Bash`-invokable tool from the existing
-`experiment-runner` agent. See **[`docs/mars-integration.md`](docs/mars-integration.md)**
+`experiment-runner` agent. See **[`docs/workflows/mars-integration.md`](docs/workflows/mars-integration.md)**
 for the proposal package: Bun.spawn env block, `error_code` → retry
 policy table, troubleshooting, and the paste-ready
-[`docs/mars/experiment-runner.snippet.md`](docs/mars/experiment-runner.snippet.md)
+[`docs/workflows/mars/experiment-runner.snippet.md`](docs/workflows/mars/experiment-runner.snippet.md)
 for `agents/experiment-runner.md`.
 
 The most common first-time failure is `Bun.spawn`'s empty default env
@@ -106,7 +108,7 @@ No config files required. Claude discovers your executors by reading their sourc
 
 ## How It Works
 
-The boundary between claude-hpc and your experiment repo is documented in [`docs/boundary-contract.md`](docs/boundary-contract.md) and enforced by `tests/test_boundary_contract.py`.
+The boundary between claude-hpc and your experiment repo is documented in [`docs/reference/boundary-contract.md`](docs/reference/boundary-contract.md) and enforced by `tests/test_boundary_contract.py`.
 
 1. Claude reads your executor scripts and their `--help` output.
 2. You describe what to run in natural language — Claude walks you through writing `.hpc/tasks.py` once: a small Python module exposing `total()` and `resolve(task_id)` that returns the per-task kwargs. The file is committed to git and reused on every subsequent submit.
@@ -118,6 +120,12 @@ The boundary between claude-hpc and your experiment repo is documented in [`docs
 ### Parallelism Model
 
 The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_mapreduce/templates/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
+
+### Memory across campaigns
+
+Two primitives — `interview` and `recall` — close the loop between consecutive campaigns. The interview agent (Claude Code or MARs) persists structured intent (`goal`, `task_count`, `budget`, `abort_if`, `task_generator`, `cluster_target`, `transcript`, provenance) into `<campaign_dir>/interview.json` next to the materialized `tasks.py`. The next interview calls `recall --root <experiments-dir>` to query past intents, returning recency-sorted summaries plus a 3-tier rollup (counts/histograms/quantiles, optional walltime aggregation, optional per-generator parameter envelopes). Observed ranges only — reasoning over them stays in the calling agent.
+
+See [`docs/workflows/memory-across-campaigns.md`](docs/workflows/memory-across-campaigns.md) for the full flow, including the `task_generator` typed materializer (5 shapes: `enumerated`, `cartesian_product`, `items_x_seeds`, `numeric_logspace`, `numeric_linspace`) and the `~/.claude-hpc/config.json:experiment_roots` default-root config.
 
 ### Throughput Optimization
 
@@ -138,7 +146,7 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 | `/submit-hpc` | Discover executors (scaffolds inline if none found), build grid conversationally, write `.hpc/tasks.py` with FLAGS dict + `.hpc/cli.py` dispatcher, sync code, submit array jobs |
 | `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate-hpc` | Validate completeness, run aggregation on cluster, download summaries |
-| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. See [`docs/campaign.md`](docs/campaign.md). |
+| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. See [`docs/workflows/campaign.md`](docs/workflows/campaign.md). |
 ## Configuration
 
 ### `clusters.yaml` (required)
@@ -156,6 +164,21 @@ hoffman2:
   conda_envs: [<your_env>]          # optional — Claude presents these as options
   gpu_types: [a100, h200, a6000]
 ```
+
+### `~/.claude-hpc/config.json` (optional)
+
+Per-user config for the `recall` primitive's default `--root`. List one or more directories under `experiment_roots` and `recall` walks them all when `--root` is omitted:
+
+```json
+{
+  "experiment_roots": [
+    "/home/user/experiments",
+    "/scratch/user/campaigns"
+  ]
+}
+```
+
+The `--root` CLI flag still wins when set. If neither flag nor config is present, `recall` errors with `spec_invalid` rather than silently falling back to cwd.
 
 ### Caching
 

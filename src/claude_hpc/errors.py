@@ -5,7 +5,7 @@ Both surfaces (slash commands and CLI) catch these and re-present:
 - Slash commands let them propagate; Claude Code formats for the human
 
 Adding new error_code values is a breaking change; bump the package version.
-The full enum is documented in ``docs/cli-spec.md``.
+The full enum is documented in ``docs/reference/cli-spec.md``.
 """
 
 from __future__ import annotations
