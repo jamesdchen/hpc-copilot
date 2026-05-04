@@ -142,9 +142,7 @@ def parse_walltime_to_sec(s: str | None) -> int:
     m = re.match(r"^(?:(?P<d>\d+)-)?(?P<h>\d{1,3}):(?P<m>\d{2}):(?P<s>\d{2})(?:\.\d+)?$", text)
     if m:
         days = int(m.group("d") or 0)
-        return (
-            days * 86400 + int(m.group("h")) * 3600 + int(m.group("m")) * 60 + int(m.group("s"))
-        )
+        return days * 86400 + int(m.group("h")) * 3600 + int(m.group("m")) * 60 + int(m.group("s"))
     # MM:SS
     m = re.match(r"^(\d+):(\d{2})$", text)
     if m:
