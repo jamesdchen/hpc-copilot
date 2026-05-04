@@ -57,7 +57,12 @@ SCHEMA_VERSION = 1
 # Resolve at import time. MARs (and any caller that wants its own state tree)
 # can set HPC_JOURNAL_DIR before importing this module to redirect the journal.
 HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
-TERMINAL_STATUSES = frozenset({"complete", "failed", "abandoned"})
+# B2: derived from the canonical hpc_mapreduce.lifecycle.JournalStatus
+# StrEnum so the literal can no longer drift from the rest of the codebase.
+# Re-exported as TERMINAL_STATUSES for back-compat.
+from hpc_mapreduce.lifecycle import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL  # noqa: E402
+
+TERMINAL_STATUSES = _LIFECYCLE_TERMINAL
 _UPDATABLE_FIELDS = frozenset(
     {
         "last_status",
@@ -260,7 +265,10 @@ def mark_run(
     stage: str | None = None,
 ) -> RunRecord:
     """Terminal transition. Updates status (and optionally stage)."""
-    if status not in {"in_flight", *TERMINAL_STATUSES}:
+    # Validate against the canonical JournalStatus StrEnum (B2).
+    from hpc_mapreduce.lifecycle import JournalStatus
+
+    if status not in set(JournalStatus):
         raise ValueError(f"mark_run: invalid status {status!r}")
     path = _run_path(experiment_dir, run_id)
     with _locked(path):
