@@ -37,7 +37,20 @@
       "properties": {
         "ok": { "const": true },
         "idempotent": { "type": "boolean" },
-        "data": { "type": "object" }
+        "data": { "type": "object" },
+        "partial_errors": {
+          "type": "array",
+          "description": "Optional top-level array surfacing soft per-source failures while the operation as a whole succeeded. Distinct from `data.errors`: this key documents *cluster-side* degradations (qhost timed out, one of N nodes unreachable, sacct unavailable) that the planner considered and chose to tolerate. Operations that genuinely failed should set ok:false instead.",
+          "items": {
+            "type": "object",
+            "required": ["code", "detail"],
+            "additionalProperties": false,
+            "properties": {
+              "code": { "type": "string", "description": "Machine-readable category, e.g. 'qhost_failed', 'scontrol_failed', 'qstat_unavailable', 'qacct_unavailable', 'malformed_row'." },
+              "detail": { "type": "string" }
+            }
+          }
+        }
       }
     },
     {
@@ -59,7 +72,9 @@
             "config_invalid",
             "combiner_failed",
             "cluster_timeout",
+            "cluster_partially_degraded",
             "outputs_missing",
+            "schema_incompat",
             "internal"
           ]
         },

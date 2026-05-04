@@ -23,6 +23,8 @@ __all__ = [
     "CombinerFailed",
     "ClusterTimeout",
     "OutputsMissing",
+    "ClusterPartiallyDegraded",
+    "SchemaIncompat",
 ]
 
 
@@ -173,6 +175,35 @@ class OutputsMissing(HpcError):
         "<remote_path>/_hpc_logs/ for per-task stderr if the resubmit "
         "doesn't produce the expected output."
     )
+
+
+class ClusterPartiallyDegraded(HpcError):
+    """One or more cluster-side data sources were unreachable but the
+    operation succeeded with partial data.
+
+    Carries a ``partial_errors`` list attribute of ``{code, detail}``
+    dicts so the agent_cli can surface the per-source failures to the
+    envelope's top-level ``partial_errors`` key. The operation that
+    raises this still set ok:true cluster-side; the exception is the
+    typed channel for surfacing what was missed.
+
+    Retry-safe because the typical cause is a transient scheduler
+    daemon stall (qhost, sacct).
+    """
+
+    error_code = "cluster_partially_degraded"
+    retry_safe = True
+    category = "cluster"
+    remediation = (
+        "One or more node-state queries (qhost, scontrol, sacct, qacct) "
+        "timed out or returned malformed output. The result is usable but "
+        "may under-count co-tenants or stale-bucket nodes. Re-run after a "
+        "short delay if planning quality matters."
+    )
+
+    def __init__(self, message: str, *, partial_errors: list[dict[str, str]] | None = None, **kwargs):
+        super().__init__(message, **kwargs)
+        self.partial_errors: list[dict[str, str]] = list(partial_errors or [])
 
 
 class SchemaIncompat(HpcError):
