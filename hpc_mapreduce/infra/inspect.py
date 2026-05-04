@@ -587,7 +587,9 @@ def inspect_cluster(
     """
     clusters = load_clusters_config(Path(config_path) if config_path is not None else None)
     if cluster_name not in clusters:
-        raise KeyError(f"unknown cluster {cluster_name!r}; check clusters.yaml")
+        raise errors.ClusterUnknown(
+            f"unknown cluster {cluster_name!r}; check clusters.yaml"
+        )
     cfg = clusters[cluster_name]
     scheduler = (cfg.get("scheduler") or "slurm").lower()
     cache_key = (cluster_name, scheduler)

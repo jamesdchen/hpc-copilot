@@ -1806,19 +1806,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     except ValueError as exc:
-        return _err(
-            error_code="spec_invalid",
-            message=str(exc),
-            category="user",
-            retry_safe=False,
-        )
+        # Route through the canonical errors enum rather than inlining
+        # the "spec_invalid" string — keeps error_code values centralised
+        # in slash_commands.errors.
+        return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except Exception as exc:  # noqa: BLE001 — last-resort envelope
-        return _err(
-            error_code="internal",
-            message=f"{type(exc).__name__}: {exc}",
-            category="internal",
-            retry_safe=False,
-        )
+        # The base HpcError carries error_code="internal" + category=
+        # "internal" by default, which matches the previous inline
+        # values. Wrap so callers see a uniform shape.
+        return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))
 
 
 if __name__ == "__main__":
