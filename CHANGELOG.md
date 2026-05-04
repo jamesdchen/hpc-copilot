@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Removed (BREAKING) — `hpc_mapreduce` deprecation shim
+
+The `hpc_mapreduce` shim package, added when the package was renamed
+to `claude_hpc` in the previous release, has been removed. Any code
+still importing `hpc_mapreduce.X` must update to `claude_hpc.X`.
+
+The CLI binary `hpc-mapreduce <subcommand>` is unchanged — it was
+always provided via `[project.scripts]` pointing at
+`claude_hpc.agent_cli:main`, not via the shim. MARs and any other
+agent harness that shells out to the binary needs no changes.
+
+The shim's job was to give one release of grace for downstream
+imports; that release has elapsed. Removing it eliminates the
+`DeprecationWarning` pollution at every import and simplifies the
+package layout.
+
 ### Added — template defenses for low-priority campus jobs (PR-B)
 
 Three survival defenses for the campus user submitting low-priority
