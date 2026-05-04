@@ -165,6 +165,42 @@ def test_template_no_nfs_staging_when_env_unset(template: Path) -> None:
     )
 
 
+_TEMPLATES_WITH_THREAD_REEXPORT = [
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "gpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "cpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "gpu_array.slurm",
+]
+
+
+@pytest.mark.parametrize(
+    "template",
+    _TEMPLATES_WITH_THREAD_REEXPORT,
+    ids=lambda p: f"{p.parent.name}/{p.name}",
+)
+def test_template_thread_reexport_honors_user_env_override(template: Path) -> None:
+    """B-M1: per-template OMP_NUM_THREADS / MKL_NUM_THREADS re-export
+    must read HPC_OMP_NUM_THREADS / HPC_MKL_NUM_THREADS first before
+    falling back to the scheduler-allocated core count. Without this
+    precedence the campus user's HPC_OMP_NUM_THREADS=4 would be
+    silently overridden on multi-threaded array jobs and the run
+    would oversubscribe its cgroup until OOM-killed.
+
+    sge/cpu_array.sh has NO per-template re-export — preamble defaults
+    apply — so it isn't checked here."""
+    text = template.read_text(encoding="utf-8")
+    # Must reference the env-override variable explicitly; a bare
+    # `$SLURM_CPUS_PER_TASK` would silently lose the user's override.
+    assert "HPC_OMP_NUM_THREADS" in text, (
+        f"{template.name} per-template OMP_NUM_THREADS must honor "
+        f"HPC_OMP_NUM_THREADS env override (campus user's per-experiment "
+        f"thread cap) before falling back to scheduler-allocated cores"
+    )
+    assert "HPC_MKL_NUM_THREADS" in text, (
+        f"{template.name} per-template MKL_NUM_THREADS must honor "
+        f"HPC_MKL_NUM_THREADS env override"
+    )
+
+
 def test_submit_input_schema_accepts_runtime() -> None:
     """The submit.input.json schema accepts an optional runtime field."""
     import json
