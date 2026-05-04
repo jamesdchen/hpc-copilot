@@ -3,7 +3,10 @@
 Designed to be invoked by automation (MARs orchestrator agents via the
 Bash tool, cron, scripts). Conventions:
 
-- Stdout is exclusively a single-line JSON envelope.
+- Stdout is exclusively a single-line JSON envelope. Exception:
+  ``capabilities --full`` emits a plain-text ``llms-full`` dump (one-shot
+  LLM context loading, analogous to ``--help``). Every other invocation
+  preserves the JSON-envelope contract.
 - Stderr carries free-form diagnostic prose (e.g. ``[dispatch] ERROR: …``
   emitted by ``hpc_mapreduce.map.dispatch`` and ``…map.combiner``); it is
   intended for humans tailing logs. Do not parse it as JSON.
@@ -259,34 +262,36 @@ def _mars_skill_paths() -> dict[str, str]:
     return out
 
 
-def cmd_capabilities(_args: argparse.Namespace) -> int:
-    from hpc_mapreduce.operations import operations_catalog
+def _live_subcommands() -> list[str]:
+    """Derive the subcommand list from the actual argparse tree.
+
+    Replaces the hand-typed literal that used to live here — the literal
+    drifted (it missed ``walltime-drift``, ``house-edge``, etc.) and had
+    no test backing it. Walking ``parser._subparsers._group_actions[0]
+    .choices`` gives the single source of truth.
+    """
+    parser = build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return sorted(action.choices)
+    return []
+
+
+def cmd_capabilities(args: argparse.Namespace) -> int:
+    from hpc_mapreduce.operations import operations_catalog, render_llms_full
+
+    if getattr(args, "full", False):
+        # Human/LLM-mode: emit a multi-section text blob (NOT the JSON
+        # envelope) modeled on Modal\'s llms-full.txt pattern. Documented
+        # exception to the stdout-is-JSON contract; analogous to --help.
+        sys.stdout.write(render_llms_full())
+        sys.stdout.flush()
+        return EXIT_OK
 
     _ok(
         {
             "version": hpc_mapreduce.__version__,
-            "subcommands": [
-                "submit",
-                "submit-flow",
-                "monitor-flow",
-                "aggregate-flow",
-                "status",
-                "aggregate",
-                "reconcile",
-                "resubmit",
-                "preflight",
-                "discover",
-                "list-in-flight",
-                "clusters",
-                "capabilities",
-                "build-executor",
-                "logs",
-                "failures",
-                "campaign",
-                "inspect-cluster",
-                "plan-submit",
-                "runtime-prior",
-            ],
+            "subcommands": _live_subcommands(),
             "supported_schedulers": ["sge", "slurm"],
             "schemas_dir": str(hpc_mapreduce._PACKAGE_ROOT / "schemas"),
             "journal_dir": str(session.HPC_HOMEDIR),
@@ -1398,6 +1403,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_cap = sub.add_parser(
         "capabilities",
         help="Machine-readable feature flags: subcommands, schedulers, schema dirs.",
+    )
+    p_cap.add_argument(
+        "--full",
+        action="store_true",
+        help=(
+            "Emit a plain-text llms-full dump (catalog + every primitive doc + "
+            "schemas + envelope + boundary contract + cli-spec). Exception to the "
+            "stdout-is-JSON contract; intended for one-shot LLM context loading."
+        ),
     )
     p_cap.set_defaults(func=cmd_capabilities)
 
