@@ -256,7 +256,12 @@ def get_template_path(scheduler: str, template: str) -> Path:
     FileNotFoundError
         If the resolved template does not exist on disk.
     """
-    ext = ".sh" if scheduler == "sge" else ".slurm"
+    # B5-PR2: route through the backend registry instead of an inline
+    # ladder. ``template_ext`` is a class attribute on each backend
+    # (".sh" for SGE, ".slurm" for SLURM); this keeps the on-disk layout
+    # under the backend's authority.
+    from hpc_mapreduce.infra.backends import template_ext_for
+    ext = template_ext_for(scheduler)
     path = Path(__file__).parent / "templates" / scheduler / f"{template}{ext}"
     if not path.exists():
         raise FileNotFoundError(f"Template not found: {path}")
