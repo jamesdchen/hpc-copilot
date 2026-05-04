@@ -458,7 +458,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
 
     with (
         patch(
-            "slash_commands.runner.combine_wave",
+            "claude_hpc.orchestrator.runner.combine_wave",
             return_value=(False, "", "boom: missing metrics"),
         ),
         patch.object(cli, "_emit", side_effect=fake_emit),

@@ -34,14 +34,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from claude_hpc import errors
+from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.remote import rsync_pull, split_ssh_target
 from claude_hpc.mapreduce.reduce.metrics import reduce_partials
+from claude_hpc.orchestrator import runner
+from claude_hpc.orchestrator.runner import combine_wave, record_status
 from claude_hpc.orchestrator.runs import read_run_sidecar
-from claude_hpc import errors
-from claude_hpc._internal import session
-from slash_commands import runner
-from slash_commands.runner import combine_wave, record_status
 
 __all__ = ["aggregate_flow", "AggregateFlowResult"]
 

@@ -11,7 +11,7 @@ single value:
 * ``claude_hpc.orchestrator.monitor_flow``'s ``lifecycle_state`` envelope
   field — workflow state including ``"timeout"``.
 * ``claude_hpc.mapreduce.reduce.status``'s per-task status strings.
-* ``slash_commands.runner.cluster_failures_by_fingerprint``'s emitted
+* ``claude_hpc.orchestrator.runner.cluster_failures_by_fingerprint``'s emitted
   category strings vs ``claude_hpc.agent_cli._VALID_RESUBMIT_CATEGORIES``'s
   accepted set — a real bug class where the classifier could emit a
   category the resubmit path silently rejected.
@@ -107,7 +107,7 @@ class TaskStatus(StrEnum):
 
 class FailureCategory(StrEnum):
     """Failure-fingerprint vocabulary, shared by the auto-classifier
-    in :func:`slash_commands.runner.cluster_failures_by_fingerprint`
+    in :func:`claude_hpc.orchestrator.runner.cluster_failures_by_fingerprint`
     and the resubmit path's ``--spec.category`` validation in
     :mod:`claude_hpc.agent_cli`.
 

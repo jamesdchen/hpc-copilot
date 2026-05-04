@@ -13,11 +13,11 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.infra.clusters import load_clusters_config
 from claude_hpc import errors
 from claude_hpc._internal import session
-from slash_commands import runner
+from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc.infra.clusters import load_clusters_config
+from claude_hpc.orchestrator import runner
 
 if TYPE_CHECKING:
     from pathlib import Path

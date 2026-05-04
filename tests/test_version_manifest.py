@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc._internal import _version
 from claude_hpc import errors
+from claude_hpc._internal import _version
 
 
 def test_compatibility_check_silent_on_supported() -> None:

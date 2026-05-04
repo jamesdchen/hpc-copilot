@@ -1,4 +1,4 @@
-"""Tests for ``slash_commands.runner.build_job_env``.
+"""Tests for ``claude_hpc.orchestrator.runner.build_job_env``.
 
 The helper threads the spec's ``runtime`` field into the qsub /
 sbatch env so the template's ``uv sync`` preamble fires when
@@ -7,7 +7,7 @@ sbatch env so the template's ``uv sync`` preamble fires when
 
 from __future__ import annotations
 
-from slash_commands.runner import build_job_env
+from claude_hpc.orchestrator.runner import build_job_env
 
 _BASE_ENV = {
     "EXECUTOR": "python3 .hpc/_hpc_dispatch.py",

@@ -1,4 +1,4 @@
-"""Tests for ``slash_commands.runner`` — the bundled mapreduce + journal ops.
+"""Tests for ``claude_hpc.orchestrator.runner`` — the bundled mapreduce + journal ops.
 
 SSH primitives are mocked so the tests exercise the wiring (journal-update
 ordering, retry counting, drift reconciliation) without touching a network.
@@ -16,7 +16,7 @@ import pytest
 from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
-from slash_commands import runner
+from claude_hpc.orchestrator import runner
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -124,7 +124,9 @@ def test_submit_and_record_rejects_empty_run_id(journal_home, experiment):
 
 def test_combine_wave_records_success(journal_home, experiment):
     _seed_run(experiment)
-    with patch("slash_commands.runner.run_combiner_checked", return_value=(True, "ok", "")) as m:
+    with patch(
+        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(True, "ok", "")
+    ) as m:
         ok, _, _ = runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -141,7 +143,9 @@ def test_combine_wave_records_success(journal_home, experiment):
 
 def test_combine_wave_records_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch("slash_commands.runner.run_combiner_checked", return_value=(False, "", "boom")):
+    with patch(
+        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(False, "", "boom")
+    ):
         ok, _, _ = runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -157,7 +161,9 @@ def test_combine_wave_records_failure(journal_home, experiment):
 
 def test_combine_wave_failed_then_success_clears_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch("slash_commands.runner.run_combiner_checked", return_value=(False, "", "boom")):
+    with patch(
+        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(False, "", "boom")
+    ):
         runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -165,7 +171,9 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
             ssh_target="user@h",
             remote_path="/x",
         )
-    with patch("slash_commands.runner.run_combiner_checked", return_value=(True, "ok", "")):
+    with patch(
+        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(True, "ok", "")
+    ):
         runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -218,7 +226,7 @@ def test_record_status_sets_checked_at(journal_home, experiment):
     _seed_run(experiment)
     payload = {"summary": {"complete": 7, "running": 3, "pending": 0, "failed": 1, "unknown": 0}}
     with patch(
-        "slash_commands.runner.ssh_run",
+        "claude_hpc.orchestrator.runner.ssh_run",
         return_value=_completed(stdout=json.dumps(payload)),
     ):
         record = runner.record_status(
@@ -246,7 +254,7 @@ def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive_squeue)
 
-    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.combined_waves == [0, 2]
@@ -265,7 +273,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
             return _completed(stdout="")
         return _completed(stdout="")
 
-    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert record.status == "abandoned"
     assert session.find_in_flight_runs(experiment) == []
@@ -284,7 +292,7 @@ def test_reconcile_idempotent(journal_home, experiment):
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive)
 
-    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
         first = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
         second = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert first.combined_waves == [0, 1]
@@ -325,7 +333,7 @@ def test_sge_alive_check_returns_empty_when_qstat_silent():
     every job_id and ``reconcile`` never marking runs abandoned.
     """
     with patch(
-        "slash_commands.runner.ssh_run",
+        "claude_hpc.orchestrator.runner.ssh_run",
         return_value=_completed(stdout=""),
     ) as m:
         alive = runner._ssh_alive_job_ids(
@@ -346,7 +354,7 @@ def test_sge_alive_check_emits_marker_for_each_alive_job():
     jobs that qstat knows about.
     """
     with patch(
-        "slash_commands.runner.ssh_run",
+        "claude_hpc.orchestrator.runner.ssh_run",
         return_value=_completed(stdout="__ALIVE__123\n__ALIVE__456\n"),
     ):
         alive = runner._ssh_alive_job_ids(
@@ -368,7 +376,7 @@ def test_slurm_alive_check_skips_sacct_so_completed_jobs_drop_off():
     and trusts squeue (which only lists active states).
     """
     with patch(
-        "slash_commands.runner.ssh_run",
+        "claude_hpc.orchestrator.runner.ssh_run",
         return_value=_completed(stdout=""),  # squeue: no active jobs
     ) as m:
         alive = runner._ssh_alive_job_ids(
@@ -388,7 +396,7 @@ def test_slurm_alive_check_accepts_squeue_output():
     indices like ``123_4``) still count as alive.
     """
     with patch(
-        "slash_commands.runner.ssh_run",
+        "claude_hpc.orchestrator.runner.ssh_run",
         return_value=_completed(stdout="123_4\n123_5\n"),
     ):
         alive = runner._ssh_alive_job_ids(
@@ -419,7 +427,7 @@ def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experime
             raise OSError("ssh: connection reset by peer")
         return _completed(stdout=alive_squeue)
 
-    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.combined_waves == [5]  # unchanged, fallback used
@@ -443,7 +451,7 @@ def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(journal_ho
             return _completed(stdout="")
         raise OSError("alive check ssh failed")
 
-    with patch("slash_commands.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.status == "in_flight"  # NOT abandoned
@@ -462,7 +470,7 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
     _seed_run(experiment)
     payload = {"summary": {"complete": 1, "running": 0, "failed": 0, "unknown": 0}}
     with patch(
-        "slash_commands.runner.ssh_run",
+        "claude_hpc.orchestrator.runner.ssh_run",
         return_value=_completed(stdout=json.dumps(payload)),
     ):
         runner.record_status(
