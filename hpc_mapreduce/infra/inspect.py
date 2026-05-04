@@ -37,6 +37,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from hpc_mapreduce._primitive import SideEffect, primitive
 from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 
 from hpc_mapreduce.infra.cache import TTLCache
@@ -573,6 +574,14 @@ class _CommandRunner:
 # --- public entry ---------------------------------------------------------
 
 
+@primitive(
+    name="inspect-cluster",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster>")],
+    error_codes=[errors.ClusterUnknown, errors.SshUnreachable],
+    idempotent=True,
+    idempotency_key="cluster_name",
+)
 def inspect_cluster(
     cluster_name: str,
     *,
