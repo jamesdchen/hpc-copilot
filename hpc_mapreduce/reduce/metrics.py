@@ -41,6 +41,37 @@ def _neumaier_sum(values: Iterable[float]) -> float:
     return s + c
 
 
+def _weighted_mean(entries: list[dict]) -> dict:
+    """Per-key weighted-mean rollup across a list of metric dicts.
+
+    Used by both :func:`reduce_metrics` (per-task sidecars) and
+    :func:`reduce_partials` (per-wave grid_points entries). Each entry
+    contributes its keys weighted by ``n_samples`` (default 1 per entry
+    when missing); the resulting ``n_samples`` is the plain sum.
+
+    Empty input returns an empty dict.
+    """
+    if not entries:
+        return {}
+
+    all_keys = {k for e in entries for k in e}
+    weights = [e.get("n_samples", 1) for e in entries]
+    agg: dict = {}
+
+    for key in sorted(all_keys):
+        if key == "n_samples":
+            agg["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
+            continue
+        pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
+        if not pairs:
+            continue
+        w_total = _neumaier_sum(w for _, w in pairs)
+        numerator = _neumaier_sum(v * w for v, w in pairs)
+        agg[key] = numerator / w_total if w_total else 0.0
+
+    return agg
+
+
 def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
     """Reduce per-task metrics JSON sidecars into a single summary.
 
@@ -70,25 +101,7 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
         except (json.JSONDecodeError, OSError):
             continue
 
-    if not entries:
-        return {}
-
-    all_keys = {k for e in entries for k in e}
-    weights = [e.get("n_samples", 1) for e in entries]
-    result: dict = {}
-
-    for key in sorted(all_keys):
-        if key == "n_samples":
-            result["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
-            continue
-        pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
-        if not pairs:
-            continue
-        w_total = _neumaier_sum(w for _, w in pairs)
-        numerator = _neumaier_sum(v * w for v, w in pairs)
-        result[key] = numerator / w_total if w_total else 0.0
-
-    return result
+    return _weighted_mean(entries)
 
 
 def reduce_by_grid_point(tasks_data: dict) -> dict[str, dict]:
@@ -164,31 +177,10 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
         for run_id, metrics in data.get("grid_points", {}).items():
             partials.setdefault(run_id, []).append(metrics)
 
-    # Weighted-mean aggregation per run_id (same logic as reduce_metrics)
-    results: dict[str, dict] = {}
-    for run_id, entries in partials.items():
-        if not entries:
-            results[run_id] = {}
-            continue
-
-        all_keys = {k for e in entries for k in e}
-        weights = [e.get("n_samples", 1) for e in entries]
-        agg: dict = {}
-
-        for key in sorted(all_keys):
-            if key == "n_samples":
-                agg["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
-                continue
-            pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
-            if not pairs:
-                continue
-            w_total = _neumaier_sum(w for _, w in pairs)
-            numerator = _neumaier_sum(v * w for v, w in pairs)
-            agg[key] = numerator / w_total if w_total else 0.0
-
-        results[run_id] = agg
-
-    return results
+    # Weighted-mean aggregation per run_id, sharing the helper with
+    # reduce_metrics so the two stay in lock-step on rounding and
+    # missing-key semantics.
+    return {run_id: _weighted_mean(entries) for run_id, entries in partials.items()}
 
 
 def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:
