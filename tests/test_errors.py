@@ -33,6 +33,7 @@ DOCUMENTED_ERROR_CODES = frozenset(
         "cluster_partially_degraded",
         "outputs_missing",
         "schema_incompat",
+        "preempted",
         "internal",
     }
 )
@@ -53,6 +54,7 @@ EXPECTED_SUBCLASSES = {
     "cluster_partially_degraded": errors.ClusterPartiallyDegraded,
     "outputs_missing": errors.OutputsMissing,
     "schema_incompat": errors.SchemaIncompat,
+    "preempted": errors.Preempted,
 }
 
 
@@ -114,7 +116,7 @@ def test_remediation_strings_are_actionable() -> None:
     inspect, validate, ...). Keeps remediation strings useful to agents.
     """
     imperative_verbs = re.compile(
-        r"\b(verify|check|run|set|install|inspect|validate|serialize|forward|ensure|configure|update)\b",
+        r"\b(verify|check|run|set|install|inspect|validate|serialize|forward|ensure|configure|update|resubmit)\b",
         re.IGNORECASE,
     )
     for cls in EXPECTED_SUBCLASSES.values():

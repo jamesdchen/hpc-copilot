@@ -25,6 +25,7 @@ __all__ = [
     "OutputsMissing",
     "ClusterPartiallyDegraded",
     "SchemaIncompat",
+    "Preempted",
 ]
 
 
@@ -206,6 +207,27 @@ class ClusterPartiallyDegraded(HpcError):
     ):
         super().__init__(message, **kwargs)
         self.partial_errors: list[dict[str, str]] = list(partial_errors or [])
+
+
+class Preempted(HpcError):
+    """A task or run was preempted by the scheduler.
+
+    Surfaces from the agent envelope when the cluster-side dispatcher
+    exited 130 (POSIX preempted) after trapping SIGTERM, or when the
+    per-task sidecar carries a ``preempted_at`` timestamp. The campus
+    user got bumped by higher-priority work, not failed; the harness
+    can resubmit cleanly without redoing already-completed work
+    (dispatch.py's metrics.json idempotency skip handles that).
+    """
+
+    error_code = "preempted"
+    retry_safe = True
+    category = "cluster"
+    remediation = (
+        "Job was preempted by the scheduler (higher-priority work "
+        "claimed the resources). Resubmit when ready; agent harnesses "
+        "can resubmit immediately."
+    )
 
 
 class SchemaIncompat(HpcError):
