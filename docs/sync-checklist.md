@@ -45,7 +45,7 @@ The full set of 12 values that may appear in an error envelope's
 | `outputs_missing` | `OutputsMissing` | cluster | yes |
 | `internal` | `HpcError` (base / catch-all) | internal | no |
 
-The same enum appears in `hpc_mapreduce/schemas/envelope.json`. Adding
+The same enum appears in `claude_hpc/schemas/envelope.json`. Adding
 a value requires updating both files.
 
 ### `failure_category` enum
@@ -53,7 +53,7 @@ a value requires updating both files.
 Values returned by `claude_hpc.mapreduce.reduce.classify.classify_failure`.
 Used by `/monitor-hpc` (slash) and any agent that wants to drive auto-retry
 policy. The complete list (`CATEGORIES` constant in
-`hpc_mapreduce/reduce/classify.py`):
+`claude_hpc/mapreduce/reduce/classify.py`):
 
 - `gpu_oom`
 - `system_oom`
@@ -92,9 +92,9 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 
 ### `clusters.yaml` schema
 
-- **Shipped at**: `hpc_mapreduce/config/clusters.yaml`.
-- **Loader**: `hpc_mapreduce.load_clusters_config` (re-exported from
-  `hpc_mapreduce.infra.clusters`).
+- **Shipped at**: `claude_hpc/config/clusters.yaml`.
+- **Loader**: `claude_hpc.load_clusters_config` (re-exported from
+  `claude_hpc.infra.clusters`).
 - **Schema**: documented in `docs/boundary-contract.md` under "Config
   split". Allowed keys enforced by
   `tests/test_boundary_contract.py:test_clusters_yaml_is_infra_only`.
@@ -117,7 +117,7 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 
 - **Lives in**: `<experiment>/.hpc/stages.py` (Python file exposing
   `def stages() -> list[dict]`).
-- **JSON Schema**: `hpc_mapreduce/schemas/stages.input.json`.
+- **JSON Schema**: `claude_hpc/schemas/stages.input.json`.
 - **Loader**: `claude_hpc.orchestrator.stages.load_stages` (validates against
   the schema and enforces unique names + resolved `depends_on`).
 
@@ -125,7 +125,7 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 
 - **Documented in**: `docs/cli-spec.md` ("Exit code → error_code
   mapping" section).
-- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `hpc_mapreduce/agent_cli.py`.
+- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `claude_hpc/agent_cli.py`.
 
 ### Last-status cache file
 
@@ -162,13 +162,13 @@ When you add a new invariant or change one of the above:
    defining file.
 3. Update the relevant downstream doc (`cli-spec.md`,
    `boundary-contract.md`, `schema.md`, `config-precedence.md`).
-4. Update the JSON Schema under `hpc_mapreduce/schemas/` if the
+4. Update the JSON Schema under `claude_hpc/schemas/` if the
    invariant is part of the CLI envelope contract.
 5. Bump the package version in `pyproject.toml`.
 
 ## Known discrepancies (v0.2.0)
 
 None at release. The `--spec.category` enum in
-`hpc_mapreduce/schemas/resubmit.input.json` is the canonical mirror of
-`CATEGORIES` in `hpc_mapreduce/reduce/classify.py`; if you add a new
+`claude_hpc/schemas/resubmit.input.json` is the canonical mirror of
+`CATEGORIES` in `claude_hpc/mapreduce/reduce/classify.py`; if you add a new
 failure category, update both files in the same commit.

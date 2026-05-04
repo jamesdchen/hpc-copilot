@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-mapreduce capabilities
-  python: hpc_mapreduce.agent_cli.cmd_capabilities
+  python: claude_hpc.agent_cli.cmd_capabilities
 exit_codes:
 - 0: ok
 ---

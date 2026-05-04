@@ -70,7 +70,7 @@ The Python surface that slash commands and library callers invoke:
 | Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `claude_hpc.mapreduce.reduce.history.prior` |
 | List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `slash_commands.session.find_in_flight_runs` |
 | Discover executors | [discover-executors](primitives/discover-executors.md) | `claude_hpc.orchestrator.discover.discover_executors` |
-| Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `hpc_mapreduce.infra.inspect.inspect_cluster` |
+| Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `claude_hpc.infra.inspect.inspect_cluster` |
 | Score submit plan | [score-submit-plan](primitives/score-submit-plan.md) | `claude_hpc.orchestrator.planner.plan_submit` |
 | Roll up runtime priors | [read-runtime-prior](primitives/read-runtime-prior.md) | `claude_hpc.orchestrator.runtime_prior.summarize` |
 
@@ -82,4 +82,4 @@ The framework also ships three cluster-side Python entry points that downstream 
 - `python3 .hpc/_hpc_dispatch.py` — backs the array-job execution. Reads `.hpc/tasks.py`, dispatches one task per `SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`.
 - `python3 .hpc/_hpc_combiner.py` — backs `combine-wave`'s remote call. Aggregates per-task partial reduce JSONs into a wave-level partial.
 
-Implementation lives in `hpc_mapreduce/reduce/`, `hpc_mapreduce/job/dispatch.py`, and `hpc_mapreduce/job/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.
+Implementation lives in `claude_hpc/mapreduce/reduce/`, `claude_hpc/orchestrator/dispatch.py`, and `claude_hpc/orchestrator/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.

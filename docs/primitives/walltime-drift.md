@@ -53,7 +53,7 @@ error_codes:
 backed_by:
   cli: hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>]
     [--base-safety-mult <f>]
-  python: hpc_mapreduce.agent_cli.cmd_walltime_drift
+  python: claude_hpc.agent_cli.cmd_walltime_drift
 exit_codes:
 - 0: ok
 - 1: spec_invalid
