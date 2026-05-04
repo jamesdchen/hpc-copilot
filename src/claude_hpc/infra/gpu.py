@@ -32,6 +32,8 @@ __all__ = ["pick_gpu", "parse_qstat_f", "score_gpus"]
 import re
 import subprocess
 
+from claude_hpc.infra.parsing import parse_qstat_columns
+
 
 def pick_gpu(
     preferred: list[str],
@@ -179,13 +181,15 @@ def parse_qstat_f(
     cfg = gpu_config or _DEFAULT_GPU_CONFIG
     agg: dict[str, dict] = {}
 
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line or not line.startswith("gpu_"):
+    # ``parse_qstat_columns`` strips blanks and discards header/separator
+    # rows; we additionally filter to lines whose primary column starts
+    # with ``gpu_`` (the queue prefix) since qstat -f also emits global
+    # status banners.
+    for parts in parse_qstat_columns(text, require_min_cols=3):
+        # Skip continuation lines (marked by leading "" sentinel).
+        if parts and parts[0] == "":
             continue
-
-        parts = line.split()
-        if len(parts) < 3:
+        if not parts[0].startswith("gpu_"):
             continue
 
         queue_host = parts[0]  # e.g. gpu_a100.q@g13
