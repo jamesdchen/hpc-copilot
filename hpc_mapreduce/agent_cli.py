@@ -1622,9 +1622,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_ps = sub.add_parser(
         "plan-submit",
         help=(
-            "Score candidate constraints for a submit. Combines inspect-cluster, "
-            "runtime priors, and the SEGV blacklist. Output is JSON the slash "
-            "command hands to Claude for cost-model judgment."
+            "Score candidate constraints for a submit. Combines inspect-cluster "
+            "and runtime priors. Output is JSON the slash command hands to "
+            "Claude for cost-model judgment."
         ),
     )
     _add_experiment_dir(p_ps)
