@@ -79,16 +79,16 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [combine-wave](combine-wave.md) | yes | ssh: `cluster`; runs: `cluster-side`; writes: `<output_dir>/_combiner/wave_<N>.json`; mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
-| [mark-run-terminal](mark-run-terminal.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; mutates: `<experiment_dir>/.hpc/runs/<run_id>.json` | `(none — Python-only primitive)` |
+| [mark-run-terminal](mark-run-terminal.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
 | [reconcile-journal](reconcile-journal.md) | yes | ssh: `3`; mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
 | [record-segv-blacklist](record-segv-blacklist.md) | yes | mutates: `<experiment_dir>/.hpc/blacklist/<cluster>.json` | `(none — Python-only primitive)` |
-| [resubmit-failed](resubmit-failed.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; mutates: `<experiment_dir>/.hpc/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
+| [resubmit-failed](resubmit-failed.md) | yes | mutates: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
 
 ### `submit` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [submit-spec](submit-spec.md) | yes | writes: `<experiment_dir>/.hpc/runs/<run_id>.json`; writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; rsyncs: `<experiment_dir>`; submits: `scheduler` | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
+| [submit-spec](submit-spec.md) | yes | writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; rsyncs: `<experiment_dir>`; submits: `scheduler` | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
 
 ### `scaffold` primitives
 
@@ -101,7 +101,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [aggregate-flow](aggregate-flow.md) | yes | mutates: `combined_waves`; writes: `<output_dir>/_combiner/`; writes: `<output_dir>/summaries/` | `hpc-mapreduce aggregate-flow --spec <path>` |
-| [monitor-flow](monitor-flow.md) | yes | mutates: `per-run`; writes: `<experiment_dir>/.hpc/runs/<run_id>.monitor.jsonl`; mutates: `combined_waves`; mutates: `lifecycle_state` | `hpc-mapreduce monitor-flow --spec <path>` |
+| [monitor-flow](monitor-flow.md) | yes | mutates: `per-run`; writes: `~/.claude/hpc/<repo_hash>/runs/<run_id>.monitor.jsonl`; mutates: `combined_waves`; mutates: `lifecycle_state` | `hpc-mapreduce monitor-flow --spec <path>` |
 | [submit-flow](submit-flow.md) | yes | rsyncs: `<experiment_dir>`; submits: `scheduler`; writes: `per-run` | `hpc-mapreduce submit-flow --spec <path>` |
 <!-- END PRIMITIVE CATALOG -->
 

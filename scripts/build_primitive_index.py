@@ -18,7 +18,9 @@ from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _shared import REPO_ROOT, sort_verbs, summarize_side_effects  # noqa: E402
+
 PRIMITIVES_DIR = REPO_ROOT / "docs" / "primitives"
 README = PRIMITIVES_DIR / "README.md"
 BEGIN = "<!-- BEGIN PRIMITIVE CATALOG -->"
@@ -42,21 +44,6 @@ def parse_frontmatter(path: Path) -> dict:
     return fm
 
 
-def summarize_side_effects(side_effects: list) -> str:
-    """Compact one-line rendering for the catalog cell."""
-    if not side_effects:
-        return "_none_"
-    parts: list[str] = []
-    for entry in side_effects:
-        if isinstance(entry, dict):
-            for verb, target in entry.items():
-                short_target = target.split(" ")[0].rstrip(",.;")
-                parts.append(f"{verb}: `{short_target}`")
-        else:
-            parts.append(str(entry))
-    return "; ".join(parts)
-
-
 def render_table(primitives: list[dict]) -> str:
     """Render the catalog grouped by verb.
 
@@ -73,13 +60,9 @@ def render_table(primitives: list[dict]) -> str:
         by_verb.setdefault(p["verb"], []).append(p)
 
     # Render verbs in the order that matches the architecture's tier story:
-    # read → mutate → submit/build → workflow. Verbs not in this list fall
-    # to the end alphabetically.
-    verb_order = ["query", "validate", "mutate", "submit", "scaffold", "workflow"]
-    sorted_verbs = sorted(
-        by_verb.keys(),
-        key=lambda v: (verb_order.index(v) if v in verb_order else len(verb_order), v),
-    )
+    # read → mutate → submit/build → workflow. Verbs not in the canonical
+    # list fall to the end alphabetically — see scripts/_shared.sort_verbs.
+    sorted_verbs = sort_verbs(list(by_verb.keys()))
 
     sections: list[str] = []
     for verb in sorted_verbs:

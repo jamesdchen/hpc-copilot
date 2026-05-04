@@ -41,6 +41,7 @@ from typing import Any
 from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 
 from hpc_mapreduce.infra.clusters import load_clusters_config
+from slash_commands import errors
 
 # In-process cache so a single submit cycle that calls inspect-cluster
 # multiple times pays the SSH cost once. Keyed by (cluster, scheduler).
