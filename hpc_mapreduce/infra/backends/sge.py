@@ -12,7 +12,12 @@ class SGEBackend(HPCBackend):
     # equivalent so supports_test_only_eta stays False; the planner
     # falls back to the runtime prior alone.
     scheduler_name = "sge"
-    template_ext = ".sge"
+    # On-disk SGE template extension is ``.sh`` (see
+    # hpc_mapreduce/templates/sge/*.sh). Keep this in sync with what
+    # ``get_template_path`` would return for the SGE branch — the
+    # historical ``__init__.py:get_template_path`` value was ``.sh``,
+    # not ``.sge``.
+    template_ext = ".sh"
     supports_test_only_eta = False
     # qsub prints either ``Your job 12345 ("name") has been submitted``
     # (single jobs) or ``Your job-array 12345.1-10:1 ("name") has been
