@@ -462,7 +462,14 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
         stress_cpu_load_frac=args.stress_cpu_load_frac,
         use_cache=not args.no_cache,
     )
-    _ok(snap.to_dict(), idempotent=True)
+    # B3: surface cluster-side soft failures (qhost timed out, scontrol
+    # parse error, sacct unavailable) at envelope-level ``partial_errors``
+    # rather than burying them inside ``data.errors`` where machine
+    # consumers tend to miss them. The legacy ``data.errors`` shape is
+    # kept (snap.to_dict() includes it) for one release as back-compat.
+    payload = snap.to_dict()
+    partial = list(payload.get("errors", []))
+    _ok(payload, idempotent=True, partial_errors=partial or None)
     return EXIT_OK
 
 
