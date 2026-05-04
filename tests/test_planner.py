@@ -87,7 +87,11 @@ class TestPlanSubmit:
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
-                tmp_path, profile="ml_ridge", cluster="discovery", candidates=["a100"]
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                candidates=["a100"],
+                adversarial=False,  # keep tests fast (no SSH probes)
             )
         assert out["needs_canary"] is True
         assert out["canary_plan"] is not None
@@ -97,7 +101,9 @@ class TestPlanSubmit:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
-            out = planner.plan_submit(tmp_path, profile="x", cluster="discovery")
+            out = planner.plan_submit(
+                tmp_path, profile="x", cluster="discovery", adversarial=False
+            )
         constraints = [c["constraint"] for c in out["candidates"]]
         # Default behavior: each gpu type + the union.
         assert "a100" in constraints
@@ -117,7 +123,11 @@ class TestPlanSubmit:
         )
         with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
-                tmp_path, profile="x", cluster="discovery", candidates=["a100"]
+                tmp_path,
+                profile="x",
+                cluster="discovery",
+                candidates=["a100"],
+                adversarial=False,
             )
         a100 = next(c for c in out["candidates"] if c["constraint"] == "a100")
         assert a100["healthy_nodes"] == []
@@ -136,7 +146,11 @@ class TestPlanSubmit:
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
-                tmp_path, profile="x", cluster="discovery", candidates=["v100"]
+                tmp_path,
+                profile="x",
+                cluster="discovery",
+                candidates=["v100"],
+                adversarial=False,
             )
         v100 = out["candidates"][0]
         assert v100["healthy_nodes"] == []
@@ -162,7 +176,11 @@ class TestPlanSubmit:
             )
         with patch("hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()):
             out = planner.plan_submit(
-                tmp_path, profile="ml_ridge", cluster="discovery", candidates=["a100"]
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                candidates=["a100"],
+                adversarial=False,
             )
         assert out["needs_canary"] is False
         c = out["candidates"][0]
@@ -239,3 +257,106 @@ class TestTestOnlyEtaParser:
     def test_unparseable_returns_none(self):
         assert planner._parse_test_only_eta("") is None
         assert planner._parse_test_only_eta("submission failed") is None
+
+
+class TestAdversarialPath:
+    """The default-on adversarial flow: walltime right-sizing + lattice probe."""
+
+    @staticmethod
+    def _canned_test_only(walltime_sec: int) -> str:
+        """Synthesize a `sbatch --test-only` line whose ETA is short for
+        small walltime asks and long for large ones — i.e., the smaller
+        ask wins, modeling realistic backfill behavior.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        # Larger walltime ⇒ later predicted start.
+        eta_min = max(1, walltime_sec // 60)
+        future = (datetime.now(timezone.utc) + timedelta(minutes=eta_min)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
+        return f"sbatch: Job 1 to start at {future} using 1 ..."
+
+    def test_recommended_tuple_picks_smallest_walltime(self, tmp_path, monkeypatch):
+        from hpc_mapreduce.job import backfill as bf
+
+        bf.clear_probe_cache()
+        cfg = _write_clusters(tmp_path)
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+        # Seed enough priors to clear the n_samples >= 5 floor.
+        for tid in range(8):
+            rp.append_sample(
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                run_id="r1",
+                task_id=tid,
+                gpu_type="a100",
+                node="d11-07",
+                elapsed_sec=1000,  # p95 = 1000s; ×1.30 = 1300s right-size
+            )
+
+        captured: list[int] = []
+
+        def fake_probe(scheduler, cluster_cfg, *, constraint, walltime_sec, mem_mb, cpus):
+            captured.append(walltime_sec)
+            return planner._parse_test_only_eta(self._canned_test_only(walltime_sec)), ""
+
+        with patch(
+            "hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()
+        ), patch(
+            "hpc_mapreduce.job.planner._eta_via_test_only_with_resources",
+            side_effect=fake_probe,
+        ):
+            out = planner.plan_submit(
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                candidates=["a100"],
+                # adversarial=True is the default
+            )
+
+        c = out["candidates"][0]
+        assert "recommended_tuple" in c, "adversarial path must populate recommended_tuple"
+        assert "backfill_probes" in c
+        # The 1.0× multiplier (1300s ≈ p95 × 1.30) wins because the canned
+        # probe maps smaller walltime → smaller ETA.
+        assert c["recommended_tuple"]["walltime_sec"] == 1300
+        assert c["recommended_tuple"]["predicted_eta_sec"] is not None
+        # Three lattice probes: 1.0×, 1.5×, 2.0× the right-sized walltime.
+        assert {p["walltime_sec"] for p in c["backfill_probes"]} == {1300, 1950, 2600}
+        # The legacy `eta_sec_via_test_only` field still probes once at 60s
+        # for backward compat; assert the lattice asks are the new additions.
+        adversarial_calls = [w for w in captured if w != 60]
+        assert sorted(adversarial_calls) == [1300, 1950, 2600]
+
+    def test_falls_back_when_no_priors(self, tmp_path, monkeypatch):
+        from hpc_mapreduce.job import backfill as bf
+
+        bf.clear_probe_cache()
+        cfg = _write_clusters(tmp_path)
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
+
+        def fake_probe(scheduler, cluster_cfg, *, constraint, walltime_sec, mem_mb, cpus):
+            return None, ""  # every probe fails
+
+        with patch(
+            "hpc_mapreduce.job.planner.inspect_cluster", return_value=_fake_snapshot()
+        ), patch(
+            "hpc_mapreduce.job.planner._eta_via_test_only_with_resources",
+            side_effect=fake_probe,
+        ):
+            out = planner.plan_submit(
+                tmp_path,
+                profile="ml_ridge",
+                cluster="discovery",
+                candidates=["a100"],
+            )
+        # No priors and no probe ETAs → recommended_tuple still surfaced
+        # with the rationale, but predicted_eta_sec is None so the slash
+        # command's auto-pick rule will skip and fall back.
+        c = out["candidates"][0]
+        rec = c["recommended_tuple"]
+        assert rec["predicted_eta_sec"] is None
+        assert "no usable prior" in rec["rationale"]
+        assert out["needs_canary"] is True  # still triggers the canary path

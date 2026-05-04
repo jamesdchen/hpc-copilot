@@ -241,6 +241,55 @@ No runtime priors exist for this `(profile, cluster)`. Don't try to score — su
 
 Score the candidates per the **Scoring rubric** in [score-submit-plan.md](../../docs/primitives/score-submit-plan.md) — formula, tie-break, walltime selection, and the empty-quantiles / empty-ETA edge cases all live in the primitive body. Pick the candidate with smallest `total_etc`.
 
+**Adversarial backfill mode** (default-on): `plan-submit` runs in adversarial mode by default. It exploits three orthogonal attack axes against the SLURM backfill scheduler:
+
+1. **Walltime shrink** — recommend p95 × 1.30 from `runtime_prior.elapsed_sec`. Tighter walltime asks fit narrower backfill gaps. Floor 10 min, requires ≥5 prior samples per GPU type.
+2. **Footprint shrink** — recommend `--mem` from `peak_host_mem_mb` (p95 × 1.50, ≥10 samples) and `--cpus-per-task` from `cpu_seconds_used / elapsed_sec` (p95 + 1, ≥10 samples). Both axes only **shrink below** the user's defaults — never grow — to avoid silent OOM/cliff kills.
+3. **Probe lattice** — sweep `(walltime × mem × constraint)` via `sbatch --test-only` and pick the variant SLURM predicts will start earliest.
+
+Each candidate report carries:
+
+- `recommended_tuple: {constraint, walltime_sec, mem_mb, cpus, predicted_eta_sec, rationale}` — the variant SLURM predicts will start earliest. Rationale is `walltime: ... | mem: ... | cpus: ...` so the user can audit each axis independently.
+- `backfill_probes: [...]` — the full lattice with predicted ETAs.
+
+The top-level report also carries two cluster-wide adversarial recommendations when you supply `--target-backfill-window-sec`, `--current-max-array-size`, and `--est-per-task-sec`:
+
+- `array_reshape: {current_max_array_size, recommended_max_array_size, rationale}` — submit smaller, more-numerous arrays so each becomes independently backfillable.
+- `walltime_split: {n_segments, segment_walltime_sec, requires_checkpointing, rationale}` — split a long task into chained shorter segments (capped at 8 by default). **`requires_checkpointing: true` means the executor must support resume from checkpoint.** Do NOT auto-apply walltime splitting if the executor isn't checkpoint-aware — every segment boundary kills work.
+
+**Auto-pick rule** (per-candidate): whenever the chosen candidate's `recommended_tuple.predicted_eta_sec is not None`, **automatically use** `recommended_tuple.walltime_sec`, `recommended_tuple.mem_mb`, `recommended_tuple.cpus`, and `recommended_tuple.constraint` for the sbatch invocation in Step 8 — no user prompt. SLURM has confirmed a fitting backfill window exists, so we take it. Surface the `rationale` field in the audit file so the choice is replayable.
+
+**Auto-apply rule** (cluster-wide): apply `array_reshape.recommended_max_array_size` automatically when present. **Do NOT auto-apply `walltime_split`** — confirm with the user that the executor checkpoints before chaining.
+
+Fall back to the original walltime/constraint only when:
+
+1. `recommended_tuple.predicted_eta_sec is None` (every probe failed), **or**
+2. `recommended_tuple.rationale` indicates "no usable" prior on all three axes simultaneously.
+
+Pass `--no-adversarial` to `plan-submit` only for debugging or on clusters that throttle `--test-only`.
+
+**Closed-loop calibration**: `plan-submit` automatically reads recent samples for the (profile, cluster) and tunes the walltime safety multiplier:
+
+- The top-level `walltime_drift` field reports `{base_safety_mult, adjusted_safety_mult, rationale}` whenever drift was applied. If the rationale says "loosened", the cluster has been cliff-killing recent jobs and the planner is being more conservative; if "tightened", the planner is being more aggressive because past asks were systematically padded.
+- After submission, write a prediction sidecar so post-completion ingestion can validate calibration:
+
+  ```python
+  from hpc_mapreduce.job.calibration import record_prediction_sidecar
+  record_prediction_sidecar(
+      experiment_dir=Path("."),
+      run_id=run_id,
+      predicted_eta_sec=recommended_tuple["predicted_eta_sec"],
+      constraint=recommended_tuple["constraint"],
+      walltime_sec=recommended_tuple["walltime_sec"],
+      mem_mb=recommended_tuple["mem_mb"],
+      cpus=recommended_tuple["cpus"],
+  )
+  ```
+
+  The monitor reads the sidecar back and includes `predicted_eta_sec` + `submitted_at_iso` when calling `runtime_prior.append_sample`. The `house-edge` subcommand then aggregates predicted-vs-actual queue time so you can see whether `--test-only` is finding real backfill windows.
+
+- Standalone diagnostics: `hpc-mapreduce walltime-drift --profile X --cluster Y` and `hpc-mapreduce house-edge --profile X --cluster Y` surface the per-cluster signals without re-running the full planner.
+
 For each chosen candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly, so it stays here in the slash command:
 
 - Co-tenant has been running >12h *and* holds >50% of CPU / mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).

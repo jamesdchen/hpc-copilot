@@ -392,6 +392,68 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: walltime-drift / house-edge (calibration) ────────────────
+
+
+def cmd_walltime_drift(args: argparse.Namespace) -> int:
+    from hpc_mapreduce.job.calibration import (
+        compute_walltime_drift,
+        recommend_safety_mult_adjustment,
+    )
+    from hpc_mapreduce.job.runtime_prior import read_samples
+
+    samples = read_samples(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        cmd_sha=args.cmd_sha,
+        only_successful=False,
+    )
+    drift = compute_walltime_drift(samples)
+    adjusted, rationale = recommend_safety_mult_adjustment(
+        drift, base_safety_mult=float(args.base_safety_mult)
+    )
+    _ok(
+        {
+            "n_recent": drift.n_recent,
+            "n_cliff_events": drift.n_cliff_events,
+            "n_near_misses": drift.n_near_misses,
+            "weighted_cliff_rate": drift.weighted_cliff_rate,
+            "median_utilization": drift.median_utilization,
+            "base_safety_mult": float(args.base_safety_mult),
+            "adjusted_safety_mult": adjusted,
+            "rationale": rationale,
+        },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
+def cmd_house_edge(args: argparse.Namespace) -> int:
+    from hpc_mapreduce.job.calibration import compute_house_edge
+    from hpc_mapreduce.job.runtime_prior import read_samples
+
+    samples = read_samples(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        cmd_sha=args.cmd_sha,
+        only_successful=True,
+    )
+    edge = compute_house_edge(samples)
+    _ok(
+        {
+            "n_with_prediction": edge.n_with_prediction,
+            "mean_delta_sec": edge.mean_delta_sec,
+            "median_delta_sec": edge.median_delta_sec,
+            "p95_delta_sec": edge.p95_delta_sec,
+            "calibration_ratio": edge.calibration_ratio,
+        },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
 # ─── subcommand: plan-submit ───────────────────────────────────────────────
 
 
@@ -409,6 +471,11 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
         cluster=args.cluster,
         candidates=candidates,
         cmd_sha=args.cmd_sha,
+        adversarial=not bool(getattr(args, "no_adversarial", False)),
+        walltime_safety_mult=float(getattr(args, "walltime_safety_mult", 1.30)),
+        target_backfill_window_sec=getattr(args, "target_backfill_window_sec", None),
+        current_max_array_size=getattr(args, "current_max_array_size", None),
+        est_per_task_sec=getattr(args, "est_per_task_sec", None),
     )
     _ok(out, idempotent=True)
     return EXIT_OK
@@ -1342,6 +1409,61 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="If set, filter runtime priors to samples with this cmd_sha.",
     )
+    p_ps.add_argument(
+        "--no-adversarial",
+        action="store_true",
+        help=(
+            "Disable the default backfill-attack mode. By default, plan-submit "
+            "right-sizes the walltime ask from runtime priors and probes a "
+            "(walltime × constraint) lattice via `sbatch --test-only` to find "
+            "the variant SLURM predicts will start earliest. Pass this flag "
+            "for debugging or on clusters that throttle --test-only. With "
+            "<5 prior samples per GPU type the right-sizing falls back to "
+            "the default walltime regardless."
+        ),
+    )
+    p_ps.add_argument(
+        "--walltime-safety-mult",
+        type=float,
+        default=1.30,
+        help=(
+            "Multiplier applied to the runtime prior's p95 to derive the "
+            "right-sized walltime ask. Default 1.30 (30%% pad). Lower = more "
+            "aggressive backfill targeting at higher risk of cliff-kill."
+        ),
+    )
+    p_ps.add_argument(
+        "--target-backfill-window-sec",
+        type=int,
+        default=None,
+        help=(
+            "Adversarial knob: if you've observed a typical backfill gap size "
+            "on this cluster (e.g., 1800 for 30 minutes), pass it here. "
+            "Triggers array-reshape and walltime-split recommendations sized "
+            "to fit that window."
+        ),
+    )
+    p_ps.add_argument(
+        "--current-max-array-size",
+        type=int,
+        default=None,
+        help=(
+            "Adversarial array-reshape input: the cluster's currently "
+            "configured max array size. When supplied (with optionally "
+            "--target-backfill-window-sec and --est-per-task-sec), the "
+            "report includes a `array_reshape` recommendation."
+        ),
+    )
+    p_ps.add_argument(
+        "--est-per-task-sec",
+        type=int,
+        default=None,
+        help=(
+            "Adversarial knob: estimated per-task runtime (typically the "
+            "p95 from `runtime-prior`). Used by array-reshape and "
+            "walltime-split recommendations."
+        ),
+    )
     p_ps.set_defaults(func=cmd_plan_submit)
 
     # runtime-prior
@@ -1358,6 +1480,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes).",
     )
     p_rp.set_defaults(func=cmd_runtime_prior)
+
+    # walltime-drift
+    p_wd = sub.add_parser(
+        "walltime-drift",
+        help=(
+            "Closed-loop calibration: measure cliff-kill rate from past "
+            "samples and recommend an adjusted safety_mult per cluster."
+        ),
+    )
+    _add_experiment_dir(p_wd)
+    p_wd.add_argument("--profile", required=True)
+    p_wd.add_argument("--cluster", required=True)
+    p_wd.add_argument("--cmd-sha", default=None)
+    p_wd.add_argument("--base-safety-mult", type=float, default=1.30)
+    p_wd.set_defaults(func=cmd_walltime_drift)
+
+    # house-edge
+    p_he = sub.add_parser(
+        "house-edge",
+        help=(
+            "Compare planner's --test-only predictions against observed "
+            "Submit→Start deltas. Validates that the lattice probe is "
+            "finding real backfill windows and surfaces miscalibration."
+        ),
+    )
+    _add_experiment_dir(p_he)
+    p_he.add_argument("--profile", required=True)
+    p_he.add_argument("--cluster", required=True)
+    p_he.add_argument("--cmd-sha", default=None)
+    p_he.set_defaults(func=cmd_house_edge)
 
     # clusters
     p_cl = sub.add_parser("clusters", help="Introspect available cluster definitions.")
