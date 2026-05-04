@@ -742,7 +742,7 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     iso = last_status.get("checked_at")
     if not isinstance(iso, str):
         return None
-    from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
+    from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
 
     ts = parse_iso_utc_or_none(iso)
     if ts is None:

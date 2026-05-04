@@ -115,7 +115,7 @@ class RunRecord:
         return cls(**{k: v for k, v in payload.items() if k in known})
 
 
-from hpc_mapreduce._time import utcnow_iso as _utcnow_iso  # noqa: E402
+from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: E402
 
 
 def repo_hash(experiment_dir: Path) -> str:

@@ -40,7 +40,7 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce._io import atomic_locked_update
-from hpc_mapreduce._time import parse_iso_utc_or_none
+from claude_hpc._internal._time import parse_iso_utc_or_none
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

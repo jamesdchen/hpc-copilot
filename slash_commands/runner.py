@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce._primitive import SideEffect, primitive
-from hpc_mapreduce._time import utcnow_iso
+from claude_hpc._internal._time import utcnow_iso
 from hpc_mapreduce.infra.remote import run_combiner_checked, ssh_run
 from hpc_mapreduce.job.runs import find_run_by_cmd_sha, read_run_sidecar
 from slash_commands import errors, session
@@ -74,7 +74,7 @@ def _parse_remote_json(stdout: str, *, source_label: str) -> dict[str, Any]:
 
 # Backwards-compatible alias for tests/external imports that referenced
 # the original helper here.  The canonical implementation now lives in
-# ``hpc_mapreduce._time`` so timestamps stay consistent across the
+# ``claude_hpc._internal._time`` so timestamps stay consistent across the
 # package.
 _utcnow_iso = utcnow_iso
 

@@ -31,7 +31,7 @@ tui = [
 hpc-mapreduce = "hpc_mapreduce.agent_cli:main"
 
 [tool.setuptools.packages.find]
-include = ["hpc_mapreduce*", "slash_commands*"]
+include = ["claude_hpc*", "hpc_mapreduce*", "slash_commands*"]
 
 [tool.setuptools.package-data]
 hpc_mapreduce = [

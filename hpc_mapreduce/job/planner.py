@@ -36,7 +36,7 @@ import re
 import subprocess
 from typing import TYPE_CHECKING, Any
 
-from hpc_mapreduce._time import parse_iso_utc, utcnow, utcnow_iso
+from claude_hpc._internal._time import parse_iso_utc, utcnow, utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path

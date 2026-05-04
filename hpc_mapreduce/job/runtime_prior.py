@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce._io import atomic_locked_update
-from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow_iso
+from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow_iso
 
 SCHEMA_VERSION: int = 1
 

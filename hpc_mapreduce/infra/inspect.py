@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_mapreduce._primitive import SideEffect, primitive
-from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow, utcnow_iso
+from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 
 from hpc_mapreduce.infra.cache import TTLCache
 from hpc_mapreduce.infra.clusters import load_clusters_config

@@ -34,7 +34,7 @@ from typing import Any
 # Allow ``python scripts/validate_des_predictor.py`` from a checkout.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hpc_mapreduce._time import parse_iso_utc_or_none
+from claude_hpc._internal._time import parse_iso_utc_or_none
 from hpc_mapreduce.infra.inspect import read_cluster_history
 from hpc_mapreduce.job.queue_simulator import SimJob, simulate_distribution
 from hpc_mapreduce.job.queue_simulator_inputs import (

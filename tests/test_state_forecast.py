@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hpc_mapreduce._time import utcnow_iso
+from claude_hpc._internal._time import utcnow_iso
 from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
 from hpc_mapreduce.job.state_forecast import forecast_state_at
 from hpc_mapreduce.job.user_profiles import UserProfile
