@@ -53,7 +53,8 @@ from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.lifecycle import LifecycleState
 from claude_hpc.orchestrator.runs import read_run_sidecar
 from claude_hpc import errors
-from slash_commands import runner, session
+from claude_hpc._internal import session
+from slash_commands import runner
 from slash_commands.runner import mark_terminal, record_status
 
 try:
@@ -118,7 +119,7 @@ def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
 def _flock_append(target: Path):
     """Hold an exclusive flock on a sibling ``.lock`` while yielding.
 
-    Mirrors :func:`slash_commands.session._locked` so the slash-command
+    Mirrors :func:`claude_hpc._internal.session._locked` so the slash-command
     surface (which appends to the same ``.monitor.jsonl`` file) and this
     workflow atom serialize their writes. Without flock, a concurrent
     slash-command poll and an in-process monitor_flow tick can interleave

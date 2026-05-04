@@ -136,18 +136,18 @@ class JournalLayout:
     def repo_hash(self) -> str:
         """12-char sha256 digest of the resolved experiment dir.
 
-        Delegates to :func:`slash_commands.session.repo_hash` so the
+        Delegates to :func:`claude_hpc._internal.session.repo_hash` so the
         canonical implementation stays in one place during the B1
         migration.
         """
-        from slash_commands.session import repo_hash as _rh
+        from claude_hpc._internal.session import repo_hash as _rh
 
         return _rh(self.experiment_dir)
 
     @property
     def root(self) -> Path:
         """``~/.claude/hpc/<repo_hash>/`` (or ``$HPC_JOURNAL_DIR``)."""
-        from slash_commands.session import journal_dir
+        from claude_hpc._internal.session import journal_dir
 
         return journal_dir(self.experiment_dir)
 

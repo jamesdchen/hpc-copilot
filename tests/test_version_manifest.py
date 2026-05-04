@@ -62,7 +62,7 @@ _WRITER_CONSTANTS = {
     # as inline literals (no module-level constant). Verified by other tests.
     "calibration_prediction": [],
     "status_rollup": [],
-    "session": [("src/slash_commands/session.py", "SCHEMA_VERSION")],
+    "session": [("src/claude_hpc/_internal/session.py", "SCHEMA_VERSION")],
 }
 
 

@@ -94,11 +94,11 @@ def test_journal_layout_runs_distinct_from_repo_layout(
 
 def test_journal_layout_root_honors_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
-    # ``slash_commands.session`` resolves ``HPC_HOMEDIR`` at import time;
+    # ``claude_hpc._internal.session`` resolves ``HPC_HOMEDIR`` at import time;
     # we have to reload it for the env override to bite.
     import importlib
 
-    import slash_commands.session as session
+    import claude_hpc._internal.session as session
 
     importlib.reload(session)
     try:
@@ -114,7 +114,7 @@ def test_journal_layout_run_record_path(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     import importlib
 
-    import slash_commands.session as session
+    import claude_hpc._internal.session as session
 
     importlib.reload(session)
     try:
