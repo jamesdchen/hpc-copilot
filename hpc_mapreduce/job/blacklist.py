@@ -33,16 +33,12 @@ __all__ = [
 ]
 
 import json
-import os
-import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from hpc_mapreduce._io import atomic_locked_update
 from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 SCHEMA_VERSION: int = 1
 DEFAULT_TTL_DAYS: int = 7
@@ -74,6 +70,18 @@ def _empty_doc() -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "entries": []}
 
 
+def _normalise(doc: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalise a parsed blacklist doc (or ``None``) to a well-shaped
+    dict with ``schema_version`` and a list ``entries``.
+    """
+    if not isinstance(doc, dict):
+        return _empty_doc()
+    doc.setdefault("schema_version", SCHEMA_VERSION)
+    if not isinstance(doc.get("entries"), list):
+        doc["entries"] = []
+    return doc
+
+
 def _read_doc(path: Path) -> dict[str, Any]:
     """Read the blacklist document; return an empty doc on any read error.
 
@@ -91,81 +99,19 @@ def _read_doc(path: Path) -> dict[str, Any]:
         doc = json.loads(text)
     except json.JSONDecodeError:
         return _empty_doc()
-    if not isinstance(doc, dict):
-        return _empty_doc()
-    doc.setdefault("schema_version", SCHEMA_VERSION)
-    if not isinstance(doc.get("entries"), list):
-        doc["entries"] = []
-    return doc
+    return _normalise(doc)
 
 
 def _atomic_write_locked(path: Path, doc: dict[str, Any]) -> None:
     """Atomically write *doc* to *path* with a flock-guarded swap.
 
     Backwards-compat shim retained for tests / external callers. Prefer
-    :func:`_with_locked_doc` for new code so the read happens inside the
-    lock — otherwise two concurrent writers can each read a stale doc,
-    mutate independently, and one's update will silently overwrite the
-    other's.
+    :func:`atomic_locked_update` for new code so the read happens inside
+    the lock — otherwise two concurrent writers can each read a stale
+    doc, mutate independently, and one's update will silently overwrite
+    the other's.
     """
-    _with_locked_doc(path, lambda _existing: doc)
-
-
-def _with_locked_doc(
-    path: Path,
-    mutate: Callable[[dict[str, Any]], dict[str, Any]],
-) -> dict[str, Any]:
-    """Acquire ``path``'s flock, read the current doc, apply ``mutate``,
-    and atomically replace ``path`` with the returned doc.
-
-    The read happens **inside** the lock so concurrent writers see a
-    serialized view. Returns the new document so callers can return it
-    without a second read.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    try:
-        import fcntl  # noqa: PLC0415 — POSIX-only import
-    except ImportError:
-        fcntl = None  # type: ignore[assignment]
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        if fcntl is not None:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        # Read inside the lock — this is the whole point of this helper.
-        existing = _read_doc(path)
-        new_doc = mutate(existing)
-        tmp = tempfile.NamedTemporaryFile(
-            "w",
-            delete=False,
-            dir=str(path.parent),
-            prefix=path.name + ".",
-            suffix=".tmp",
-            encoding="utf-8",
-        )
-        try:
-            json.dump(new_doc, tmp, indent=2, sort_keys=True)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp.close()
-            os.replace(tmp.name, path)
-        except BaseException:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            raise
-        finally:
-            if not tmp.closed:
-                tmp.close()
-        return new_doc
-    finally:
-        if fcntl is not None:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError:
-                pass
-        os.close(fd)
+    atomic_locked_update(path, lambda _existing: doc)
 
 
 def _filter_expired(entries: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
@@ -201,13 +147,14 @@ def prune_expired(experiment_dir: Path, cluster: str) -> int:
     path = blacklist_path(experiment_dir, cluster)
     counts = {"removed": 0}
 
-    def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
+    def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:
+        doc = _normalise(raw)
         before = len(doc.get("entries", []))
         doc["entries"] = _filter_expired(doc.get("entries", []), _now())
         counts["removed"] = before - len(doc["entries"])
         return doc
 
-    _with_locked_doc(path, _mutate)
+    atomic_locked_update(path, _mutate)
     return counts["removed"]
 
 
@@ -266,7 +213,8 @@ def record_segv(
     # Capture the target across the lock so we can return it.
     target_box: dict[str, Any] = {}
 
-    def _mutate(doc: dict[str, Any]) -> dict[str, Any]:
+    def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:
+        doc = _normalise(raw)
         # Drop expired entries on every write — keeps the file bounded.
         doc["entries"] = _filter_expired(doc.get("entries", []), ts_now)
 
@@ -308,6 +256,6 @@ def record_segv(
         target_box["target"] = target
         return doc
 
-    _with_locked_doc(path, _mutate)
+    atomic_locked_update(path, _mutate)
     target: dict[str, Any] = target_box["target"]
     return target
