@@ -201,4 +201,7 @@ class TestPredictionResult:
             "n_total_samples",
             "bucket_hour_of_week",
             "fallback_reason",
+            # Phase 1c: order-book adjustment factor. Defaults to 1.0
+            # when current_features is not supplied.
+            "features_adjustment_factor",
         }
