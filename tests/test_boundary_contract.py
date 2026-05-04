@@ -149,6 +149,14 @@ ALLOWED_CLUSTER_KEYS = frozenset(
         # the user wants to run.
         "cold_start_mem_buffer",
         "nfs_data_dir",
+        # Survival-defense knobs (PR-C): cold-start walltime trim
+        # (fits in backfill shadows the round-number jobs don't reach)
+        # and auto-daisy-chain controls (survives the cluster's hard
+        # walltime ceiling, default-off when checkpointing isn't
+        # detected so we don't silently waste compute).
+        "walltime_arbitrage",
+        "auto_daisy_chain",
+        "max_walltime_sec",
     }
 )
 

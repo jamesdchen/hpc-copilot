@@ -1,4 +1,12 @@
-"""Load cluster definitions from clusters.yaml."""
+"""Load cluster definitions from clusters.yaml.
+
+Also home to a small set of typed validator helpers for survival-shaped
+fields (cold-start mem buffer, NFS staging, walltime arbitrage,
+auto-daisy-chain, max walltime). Each helper applies a default and
+raises ``ValueError`` on a wrong-typed yaml value, so e.g. a string
+``"yes"`` where a bool is expected fails loudly at load time rather
+than silently disabling the feature.
+"""
 
 from __future__ import annotations
 
@@ -96,3 +104,81 @@ def get_nfs_data_dir(cluster_config: dict[str, Any]) -> str | None:
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError(f"nfs_data_dir must be a non-empty string when set, got {raw!r}")
     return raw
+
+
+def get_walltime_arbitrage(
+    cluster_config: dict[str, Any],
+    *,
+    default: bool = True,
+) -> bool:
+    """Read the per-cluster ``walltime_arbitrage`` flag (cold-start trim).
+
+    Default ``True``: the planner trims the user's nominal walltime ask
+    by 15min and floors to a 5min boundary when no runtime priors exist
+    to construct a smarter recommendation, so the campus user fits in
+    backfill shadows the round-number jobs don't reach. Set
+    ``walltime_arbitrage: false`` per-cluster to disable on a scheduler
+    where the trim isn't beneficial (e.g. a partition without backfill).
+
+    Schema validation: rejects non-bool values so ``"yes"``/``1``/``0``
+    don't silently flip the feature on or off.
+    """
+    raw = cluster_config.get("walltime_arbitrage", default)
+    if not isinstance(raw, bool):
+        raise ValueError(f"walltime_arbitrage must be a bool, got {raw!r} ({type(raw).__name__})")
+    return raw
+
+
+def get_auto_daisy_chain(cluster_config: dict[str, Any]) -> bool | None:
+    """Read the per-cluster ``auto_daisy_chain`` flag.
+
+    Three states:
+
+    - ``True``: always auto-daisy-chain when the ask exceeds the
+      cluster's max walltime minus a 1h queue-wait buffer. Use this
+      when you've verified your executor checkpoints reliably and want
+      to skip the per-run detection scan.
+    - ``False``: NEVER chain on this cluster — kill switch. The
+      "exceeds max walltime" error fires unmodified.
+    - Absent (returns ``None``): defer to ``detect_checkpointing``.
+      Chain only when past runs of ``(profile, cluster)`` produced
+      checkpoint-shaped files; otherwise emit the explanatory error
+      so the user can add checkpointing or opt in explicitly.
+
+    Schema validation: rejects non-bool / non-None values.
+    """
+    if "auto_daisy_chain" not in cluster_config:
+        return None
+    raw = cluster_config["auto_daisy_chain"]
+    if raw is None:
+        return None
+    if not isinstance(raw, bool):
+        raise ValueError(
+            f"auto_daisy_chain must be a bool when set, got {raw!r} ({type(raw).__name__})"
+        )
+    return raw
+
+
+def get_max_walltime_sec(
+    cluster_config: dict[str, Any],
+    *,
+    default: int = 86400,
+) -> int:
+    """Read the per-cluster ``max_walltime_sec`` (hard scheduler ceiling).
+
+    The cluster's hard walltime ceiling in seconds. Auto-daisy-chain
+    fires when an ask exceeds ``max_walltime_sec - 3600`` (the 1h
+    buffer absorbs queue-wait variance between segments). Default
+    ``86400`` (24h) is a typical campus-cluster ceiling; verify against
+    your scheduler's documented max and override per-cluster.
+
+    Schema validation: rejects non-int / non-positive values.
+    """
+    raw = cluster_config.get("max_walltime_sec", default)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError(
+            f"max_walltime_sec must be a positive int, got {raw!r} ({type(raw).__name__})"
+        )
+    if raw <= 0:
+        raise ValueError(f"max_walltime_sec must be positive, got {raw}")
+    return int(raw)

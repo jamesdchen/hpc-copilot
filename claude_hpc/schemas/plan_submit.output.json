@@ -40,6 +40,19 @@
           }
         }
       }
+    },
+    "walltime_arbitraged_from": {
+      "type": ["integer", "null"],
+      "description": "Original walltime ask in seconds before cold-start arbitrage trimmed it (the trim fits the campus user's job in backfill shadows higher-priority jobs don't reach). Null when arbitrage didn't fire (priors available, cluster opted out via walltime_arbitrage: false, or ask below the 1h floor)."
+    },
+    "daisy_chain_segments": {
+      "type": ["integer", "null"],
+      "description": "Number of dependency-chained segments the task was split into so it survives the cluster's hard walltime ceiling. Null when no chaining (ask fits within max_walltime_sec - 1h queue-wait buffer, or kill switch / detection blocked the chain)."
+    },
+    "daisy_chain_dep_jobids": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "Scheduler job IDs of each prior segment as observed at submit time (segment 0 has no parent, segment 1 holds on segment 0, etc.). Always null at plan_submit time; submit_flow populates it from the actual qsub/sbatch responses."
     }
   }
 }

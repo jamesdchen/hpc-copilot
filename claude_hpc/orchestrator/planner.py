@@ -41,7 +41,12 @@ from claude_hpc._internal._time import parse_iso_utc, utcnow, utcnow_iso
 if TYPE_CHECKING:
     from pathlib import Path
 
-from claude_hpc.infra.clusters import load_clusters_config
+from claude_hpc.infra.clusters import (
+    get_auto_daisy_chain,
+    get_max_walltime_sec,
+    get_walltime_arbitrage,
+    load_clusters_config,
+)
 from claude_hpc.infra.inspect import NodeSnapshot, inspect_cluster
 from claude_hpc.orchestrator.backfill import (
     BackfillProbe,
@@ -78,6 +83,7 @@ def plan_submit(
     target_backfill_window_sec: int | None = None,
     current_max_array_size: int | None = None,
     est_per_task_sec: int | None = None,
+    walltime_user_ask_sec: int | None = None,
 ) -> dict[str, Any]:
     """Score candidate constraints. Pure function over inputs + cluster snapshot.
 
@@ -97,6 +103,15 @@ def plan_submit(
     pad). Pass ``adversarial=False`` to disable the lattice probing
     entirely (useful for debugging or for clusters that throttle
     ``--test-only``).
+
+    *walltime_user_ask_sec* is the campus user's nominal walltime ask
+    (in seconds). When no candidate produces a ``recommended_tuple``
+    (i.e. the ``--test-only`` lattice probe has no priors to score) and
+    the cluster's ``walltime_arbitrage`` flag is True (default), the
+    planner returns a cold-start-trimmed walltime in
+    ``walltime_arbitraged_from`` so the user fits in backfill shadows
+    the round-number ask doesn't reach. Pass ``None`` to skip arbitrage
+    (the field is then ``null``).
     """
     clusters = load_clusters_config()
     if cluster not in clusters:
@@ -245,6 +260,65 @@ def plan_submit(
             "rationale": drift_rationale,
         }
 
+    # Cold-start walltime arbitrage. Fires only when the lattice probe
+    # produced no recommendation for ANY candidate (no priors to score)
+    # AND the cluster opted into arbitrage. Trims the user's nominal ask
+    # by 15min and floors to a 5min boundary so the campus user fits in
+    # backfill shadows the round-number ask doesn't reach. The lattice
+    # path supersedes this when priors exist.
+    walltime_arbitraged_from: int | None = None
+    # The lattice probe "wins" only when at least one candidate produced
+    # a non-None predicted_eta_sec — that's the signal that priors exist
+    # and the scheduler actually scored the right-sized resource tuple.
+    # Otherwise we're in cold-start territory and apply the trim.
+    has_lattice_pick = any(
+        (c.get("recommended_tuple") or {}).get("predicted_eta_sec") is not None
+        for c in candidate_reports
+    )
+    if walltime_user_ask_sec is not None and not has_lattice_pick and get_walltime_arbitrage(cfg):
+        from claude_hpc.orchestrator.walltime_arbitrage import arbitrage_walltime
+
+        trimmed = arbitrage_walltime(int(walltime_user_ask_sec))
+        if trimmed != walltime_user_ask_sec:
+            walltime_arbitraged_from = int(walltime_user_ask_sec)
+
+    # Auto-daisy-chain decision. Survives the cluster's hard walltime
+    # ceiling by splitting the ask into N segments where each segment
+    # N+1 holds on segment N (afterany on SLURM, hold_jid on SGE) so
+    # preempted segment N (exit 130 from PR-A) still triggers N+1.
+    daisy_chain_segments: int | None = None
+    if walltime_user_ask_sec is not None:
+        from claude_hpc.orchestrator.daisy_chain import (
+            compute_daisy_chain_plan,
+            should_daisy_chain,
+        )
+
+        max_wt = get_max_walltime_sec(cfg)
+        if should_daisy_chain(int(walltime_user_ask_sec), max_wt):
+            chain_override = get_auto_daisy_chain(cfg)
+            chain_decision: bool
+            if chain_override is False:
+                # Kill switch — never chain on this cluster.
+                raise ValueError(_daisy_chain_error_message(walltime_user_ask_sec, max_wt))
+            elif chain_override is True:
+                # Cluster explicitly opts in regardless of detection.
+                chain_decision = True
+            else:
+                # Detection-driven default: chain only when past runs
+                # have produced checkpoint-shaped files. False yields
+                # the explanatory error so the user can add
+                # checkpointing or set ``auto_daisy_chain: true``.
+                from claude_hpc.orchestrator.checkpoint_detect import detect_checkpointing
+
+                chain_decision = detect_checkpointing(
+                    experiment_dir, profile=profile, cluster=cluster
+                )
+                if not chain_decision:
+                    raise ValueError(_daisy_chain_error_message(walltime_user_ask_sec, max_wt))
+            if chain_decision:
+                plan = compute_daisy_chain_plan(int(walltime_user_ask_sec), max_walltime_sec=max_wt)
+                daisy_chain_segments = plan.n_segments
+
     return {
         "profile": profile,
         "cluster": cluster,
@@ -256,7 +330,36 @@ def plan_submit(
         "array_reshape": array_reshape,
         "walltime_split": walltime_split,
         "walltime_drift": drift_report,
+        "walltime_arbitraged_from": walltime_arbitraged_from,
+        "daisy_chain_segments": daisy_chain_segments,
+        # Filled at submit time once each segment's jobid is known. The
+        # plan layer cannot know jobids ahead of qsub/sbatch, so this is
+        # always null at plan_submit time and the caller (submit_flow)
+        # populates it from the actual scheduler responses.
+        "daisy_chain_dep_jobids": None,
     }
+
+
+def _daisy_chain_error_message(walltime_ask_sec: int, max_walltime_sec: int) -> str:
+    """Format the user-facing error explaining why a long ask was rejected.
+
+    Survival framing: the user asked for more than the cluster's hard
+    ceiling. We could chain, but only safely if past runs show the
+    executor actually checkpoints. The message tells the user how to
+    opt in (add checkpointing OR explicit cluster yaml override) so
+    they can survive the ceiling without silently wasting compute on a
+    chain that re-does work from scratch every segment.
+    """
+    return (
+        f"Task walltime ask {walltime_ask_sec}s exceeds cluster max "
+        f"{max_walltime_sec}s; no checkpoint files detected in past runs "
+        f"(looked in <exp>/.hpc/runs/*/result_dirs for patterns: "
+        f"checkpoint*, *.ckpt, state*.pkl, last*.pt, latest*.pt, "
+        f"model*.{{joblib,pkl,pt}}, epoch_*.{{pt,pkl}}). "
+        f"Add checkpointing to your executor (write to "
+        f"<result_dir>/checkpoint.* periodically), or set "
+        f"auto_daisy_chain: true in clusters.yaml to override."
+    )
 
 
 def _gpu_types_in_constraint(c: str) -> list[str]:
