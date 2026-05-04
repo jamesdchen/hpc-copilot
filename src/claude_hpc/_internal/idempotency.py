@@ -173,10 +173,11 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
         # _request_log helpers; the resolver hands off the lookup
         # rather than duplicate that file format here.
         try:
-            from claude_hpc.orchestrator.runner import (
-                _lookup_request_id,  # type: ignore[attr-defined]
-            )
+            from claude_hpc.orchestrator import runner as _runner_mod
         except ImportError:
+            return None
+        _lookup_request_id = getattr(_runner_mod, "_lookup_request_id", None)
+        if _lookup_request_id is None:
             return None
         try:
             run_id = _lookup_request_id(experiment_dir, key.request_id)
