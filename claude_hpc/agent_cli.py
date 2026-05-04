@@ -24,8 +24,6 @@ import argparse
 import functools
 import json
 import os
-import shutil
-import socket
 import subprocess
 import sys
 from importlib.resources import files as _resource_files
@@ -332,66 +330,13 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
 # ─── subcommand: preflight ─────────────────────────────────────────────────
 
 
-def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
-    return {"name": name, "ok": ok, "detail": detail}
-
-
-@primitive(
-    name="check-preflight",
-    verb="validate",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_preflight(args: argparse.Namespace) -> int:
-    checks: list[dict[str, Any]] = []
+    """Argparse adapter — primitive lives at claude_hpc.atoms.preflight."""
+    from claude_hpc.atoms.preflight import check_preflight
 
-    # SSH agent
-    sock = os.environ.get("SSH_AUTH_SOCK")
-    if not sock:
-        checks.append(_check("ssh_auth_sock", False, "SSH_AUTH_SOCK is not set"))
-    else:
-        try:
-            agent = subprocess.run(["ssh-add", "-l"], capture_output=True, text=True, timeout=5)
-            has_keys = agent.returncode == 0 and bool(agent.stdout.strip())
-            checks.append(
-                _check(
-                    "ssh_auth_sock",
-                    has_keys,
-                    "ssh-agent has no keys" if not has_keys else f"agent at {sock}",
-                )
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            checks.append(_check("ssh_auth_sock", False, f"ssh-add failed: {exc}"))
-
-    # Binaries on PATH
-    for binary in ("ssh", "rsync"):
-        path = shutil.which(binary)
-        checks.append(_check(f"{binary}_on_path", path is not None, path or "not found"))
-
-    # Clusters config parseable
-    try:
-        clusters = load_clusters_config()
-        checks.append(_check("clusters_yaml_parses", True, f"{len(clusters)} clusters defined"))
-    except (OSError, Exception) as exc:  # noqa: BLE001
-        clusters = {}
-        checks.append(_check("clusters_yaml_parses", False, str(exc)))
-
-    # If --cluster passed, attempt a TCP probe on port 22.
-    cluster_name = getattr(args, "cluster", None)
-    if cluster_name:
-        if cluster_name not in clusters:
-            checks.append(_check("cluster_known", False, f"{cluster_name!r} not in clusters.yaml"))
-        else:
-            host = clusters[cluster_name].get("host")
-            try:
-                with socket.create_connection((host, 22), timeout=3):
-                    checks.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
-            except OSError as exc:
-                checks.append(_check("cluster_tcp_22", False, f"{host}:22 — {exc}"))
-
-    all_ok = all(c["ok"] for c in checks)
-    _ok({"all_ok": all_ok, "checks": checks}, name="check-preflight")
-    return EXIT_OK if all_ok else EXIT_CLUSTER_ERROR
+    data = check_preflight(cluster=getattr(args, "cluster", None))
+    _ok(data, name="check-preflight")
+    return EXIT_OK if data["all_ok"] else EXIT_CLUSTER_ERROR
 
 
 # ─── subcommand: discover ──────────────────────────────────────────────────
