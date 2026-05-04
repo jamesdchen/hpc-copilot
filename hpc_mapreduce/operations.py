@@ -28,7 +28,7 @@ import hpc_mapreduce
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ["operations_catalog", "schema_for"]
+__all__ = ["operations_catalog", "render_llms_full", "schema_for"]
 
 _PACKAGE_ROOT = hpc_mapreduce._PACKAGE_ROOT
 
@@ -117,6 +117,104 @@ def operations_catalog() -> list[dict[str, Any]]:
         loaded = json.loads(baked.read_text(encoding="utf-8"))
         return loaded if isinstance(loaded, list) else []
     return []
+
+
+def _format_catalog_table(catalog: list[dict[str, Any]]) -> str:
+    """Render the operations catalog as a fixed-width text table."""
+    if not catalog:
+        return "(no operations available)"
+    headers = ("name", "verb", "idempotent", "side_effects", "cli")
+    rows: list[tuple[str, str, str, str, str]] = []
+    for entry in catalog:
+        rows.append(
+            (
+                str(entry.get("name", "")),
+                str(entry.get("verb", "")),
+                "yes" if entry.get("idempotent") else "no",
+                ",".join(entry.get("side_effects") or []) or "-",
+                str(entry.get("cli") or "-"),
+            )
+        )
+    widths = [max(len(h), *(len(r[i]) for r in rows)) for i, h in enumerate(headers)]
+    sep = "  ".join("-" * w for w in widths)
+    lines = ["  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)), sep]
+    lines.extend("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) for row in rows)
+    return "\n".join(lines)
+
+
+def _read_doc_file(rel: str) -> str:
+    """Read a doc file relative to the repo root; ``"(missing)"`` if absent."""
+    path = _PACKAGE_ROOT.parent / rel
+    if not path.is_file():
+        return f"(missing: {rel})"
+    return path.read_text(encoding="utf-8")
+
+
+def _read_schema_file(name: str) -> str:
+    """Pretty-print a schema JSON; ``"(missing)"`` if absent."""
+    path = _PACKAGE_ROOT / "schemas" / name
+    if not path.is_file():
+        return f"(missing: schemas/{name})"
+    try:
+        return json.dumps(json.loads(path.read_text(encoding="utf-8")), indent=2, sort_keys=True)
+    except json.JSONDecodeError:
+        return path.read_text(encoding="utf-8")
+
+
+def render_llms_full() -> str:
+    """Render the full claude-hpc API surface as one plain-text blob.
+
+    Modeled on Modal\'s ``llms-full.txt`` pattern: one CLI invocation
+    dumps the entire API surface (catalog table + every primitive\'s doc
+    + every primitive\'s input/output schema + the envelope contract +
+    boundary-contract + cli-spec) so an agent harness can load the whole
+    context in a single read.
+
+    Returns plain text suitable for human reading or LLM context loading
+    --- NOT the JSON envelope. ``hpc-mapreduce capabilities --full`` is
+    documented as an explicit human-mode flag analogous to ``--help``.
+    """
+    catalog = operations_catalog()
+    parts: list[str] = []
+    parts.append("# claude-hpc llms-full\n")
+    parts.append(f"_version: {hpc_mapreduce.__version__}_\n")
+
+    parts.append("\n## Catalog\n\n")
+    parts.append(_format_catalog_table(catalog))
+    parts.append("\n")
+
+    prims_dir = _primitives_dir()
+    if prims_dir is not None:
+        for entry in catalog:
+            name = entry["name"]
+            parts.append(f"\n## Primitive: {name}\n\n")
+            doc_path = prims_dir / f"{name}.md"
+            if doc_path.is_file():
+                parts.append(doc_path.read_text(encoding="utf-8"))
+            else:
+                parts.append(f"(no doc at docs/primitives/{name}.md)\n")
+            input_schema = entry.get("input_schema")
+            if input_schema:
+                parts.append(f"\n### Input schema: {input_schema}\n\n```json\n")
+                parts.append(_read_schema_file(input_schema))
+                parts.append("\n```\n")
+            output_schema = entry.get("output_schema")
+            if output_schema:
+                parts.append(f"\n### Output schema: {output_schema}\n\n```json\n")
+                parts.append(_read_schema_file(output_schema))
+                parts.append("\n```\n")
+
+    parts.append("\n## Envelope\n\n```json\n")
+    parts.append(_read_schema_file("envelope.json"))
+    parts.append("\n```\n")
+
+    parts.append("\n## Boundary contract\n\n")
+    parts.append(_read_doc_file("docs/boundary-contract.md"))
+
+    parts.append("\n## CLI spec\n\n")
+    parts.append(_read_doc_file("docs/cli-spec.md"))
+
+    return "".join(parts)
 
 
 def _from_frontmatters(prims_dir: Path) -> list[dict[str, Any]]:

@@ -173,3 +173,28 @@ class OutputsMissing(HpcError):
         "<remote_path>/_hpc_logs/ for per-task stderr if the resubmit "
         "doesn't produce the expected output."
     )
+
+
+class SchemaIncompat(HpcError):
+    """An on-disk JSON file declared a ``schema_version`` outside our
+    supported range for that domain.
+
+    Raised by :func:`hpc_mapreduce._version.compatibility_check` so the
+    five readers in the codebase (session, blacklist, runtime_prior,
+    calibration prediction, status rollup, per-run sidecar) all surface
+    the same error code.
+
+    Not retry-safe — the file on disk has a shape we cannot read.
+    Either the writer is newer than the reader (upgrade the package) or
+    the file was hand-edited / from a different repo.
+    """
+
+    error_code = "schema_incompat"
+    retry_safe = False
+    category = "internal"
+    remediation = (
+        "The on-disk JSON was written by a newer (or older, foreign) "
+        "claude-hpc version than this one supports. Upgrade the package "
+        "or migrate the file. The supported version set is declared in "
+        "``hpc_mapreduce/_version.py:_MANIFEST``."
+    )
