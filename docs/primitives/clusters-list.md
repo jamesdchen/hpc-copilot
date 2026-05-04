@@ -5,17 +5,13 @@ inputs: []
 side_effects: []
 idempotent: true
 idempotency_key: none
-error_codes:
-  - code: config_invalid
-    category: user
-    retry_safe: false
-    description: clusters.yaml is malformed.
+error_codes: []
 backed_by:
   cli: hpc-mapreduce clusters list
   python: hpc_mapreduce.agent_cli.cmd_clusters_list
 exit_codes:
-  - 0: ok
-  - 1: config_invalid
+- 0: ok
+- 1: config_invalid
 ---
 
 ## Purpose

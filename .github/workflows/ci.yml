@@ -33,5 +33,7 @@ jobs:
         run: mypy hpc_mapreduce
       - name: Lint primitive module list
         run: python scripts/lint_primitive_modules.py
+      - name: Check primitive frontmatter is regenerated from registry
+        run: python scripts/build_primitive_frontmatter.py --check
       - name: Pytest
         run: pytest -q

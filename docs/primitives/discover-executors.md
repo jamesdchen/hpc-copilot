@@ -4,16 +4,13 @@ verb: query
 side_effects: []
 idempotent: true
 idempotency_key: none
-error_codes:
-  - code: internal
-    category: internal
-    retry_safe: false
+error_codes: []
 backed_by:
   cli: hpc-mapreduce discover --experiment-dir <path>
   python: hpc_mapreduce.job.discover.discover_executors
 exit_codes:
-  - 0: ok
-  - 3: internal
+- 0: ok
+- 3: internal
 ---
 
 ## Purpose

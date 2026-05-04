@@ -2,31 +2,32 @@
 name: mark-run-terminal
 verb: mutate
 inputs:
-  - name: experiment_dir
-    type: path
-  - name: run_id
-    type: string
-  - name: status
-    type: enum
-    description: One of `complete`, `failed`, `abandoned`. Cannot be `in_flight` (use the natural lifecycle for that).
+- name: experiment_dir
+  type: path
+- name: run_id
+  type: string
+- name: status
+  type: enum
+  description: One of `complete`, `failed`, `abandoned`. Cannot be `in_flight` (use
+    the natural lifecycle for that).
 outputs:
-  - name: run_id
-    type: string
-  - name: lifecycle_state
-    type: enum
+- name: run_id
+  type: string
+- name: lifecycle_state
+  type: enum
 side_effects:
-  - mutates: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)
+- writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)
 idempotent: true
-idempotency_key: (run_id, status) — re-marking with the same terminal status is a no-op
+idempotency_key: run_id
 error_codes:
-  - code: journal_corrupt
-    category: internal
-    retry_safe: false
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
 backed_by:
   cli: (none — Python-only primitive)
   python: slash_commands.runner.mark_terminal
 exit_codes:
-  - n/a (Python-only)
+- n/a (Python-only)
 ---
 
 ## Purpose

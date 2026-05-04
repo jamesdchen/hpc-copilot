@@ -4,10 +4,7 @@ verb: query
 side_effects: []
 idempotent: true
 idempotency_key: none
-error_codes:
-  - code: internal
-    category: internal
-    retry_safe: false
+error_codes: []
 backed_by:
   cli: hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]
   python: hpc_mapreduce.job.campaign_health.campaign_health

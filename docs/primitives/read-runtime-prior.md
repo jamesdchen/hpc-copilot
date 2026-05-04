@@ -2,34 +2,31 @@
 name: read-runtime-prior
 verb: query
 inputs:
-  - name: profile
-    type: string
-  - name: cluster
-    type: string
-  - name: cmd_sha
-    type: string
-    description: Filter samples to one cmd_sha (recommended after .hpc/tasks.py edits).
-    default: null
-  - name: experiment_dir
-    type: path
-    default: cwd
+- name: profile
+  type: string
+- name: cluster
+  type: string
+- name: cmd_sha
+  type: string
+  description: Filter samples to one cmd_sha (recommended after .hpc/tasks.py edits).
+  default: null
+- name: experiment_dir
+  type: path
+  default: cwd
 side_effects: []
 idempotent: true
 idempotency_key: none
 error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-  - code: internal
-    category: internal
-    retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]
   python: hpc_mapreduce.job.runtime_prior.summarize
 exit_codes:
-  - 0: ok
-  - 1: spec_invalid
-  - 3: internal
+- 0: ok
+- 1: spec_invalid
+- 3: internal
 ---
 
 ## Purpose

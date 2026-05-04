@@ -2,47 +2,43 @@
 name: inspect-cluster
 verb: query
 inputs:
-  - name: cluster
-    type: string
-    description: Cluster key from clusters.yaml.
-  - name: sacct_window_hours
-    type: int
-    description: Co-tenant look-back window.
-    default: 24
-  - name: stress_alloc_mem_pct
-    type: float
-    description: AllocMem fraction above which a node is `is_stressed=true`.
-    default: 0.80
-  - name: stress_cpu_load_frac
-    type: float
-    description: CPULoad/CPUTot fraction above which a node is `is_stressed=true`.
-    default: 0.80
-  - name: no_cache
-    type: bool
-    description: Bypass the 60s in-process snapshot cache.
-    default: false
+- name: cluster
+  type: string
+  description: Cluster key from clusters.yaml.
+- name: sacct_window_hours
+  type: int
+  description: Co-tenant look-back window.
+  default: 24
+- name: stress_alloc_mem_pct
+  type: float
+  description: AllocMem fraction above which a node is `is_stressed=true`.
+  default: 0.8
+- name: stress_cpu_load_frac
+  type: float
+  description: CPULoad/CPUTot fraction above which a node is `is_stressed=true`.
+  default: 0.8
+- name: no_cache
+  type: bool
+  description: Bypass the 60s in-process snapshot cache.
+  default: false
 side_effects:
-  - ssh: cluster reachable on submit cluster
-  - cache: in-process snapshot cache (60s TTL by default)
+- ssh: <cluster>
 idempotent: true
-idempotency_key: cluster (within cache window)
+idempotency_key: cluster
 error_codes:
-  - code: ssh_unreachable
-    category: network
-    retry_safe: true
-  - code: cluster_unknown
-    category: user
-    retry_safe: false
-  - code: internal
-    category: internal
-    retry_safe: false
+- code: cluster_unknown
+  category: user
+  retry_safe: false
+- code: ssh_unreachable
+  category: network
+  retry_safe: true
 backed_by:
   cli: hpc-mapreduce inspect-cluster --cluster <name> [...]
   python: hpc_mapreduce.infra.inspect.inspect_cluster
 exit_codes:
-  - 0: ok
-  - 2: ssh_unreachable
-  - 3: cluster_unknown / internal
+- 0: ok
+- 2: ssh_unreachable
+- 3: cluster_unknown / internal
 ---
 
 ## Purpose

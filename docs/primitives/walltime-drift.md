@@ -2,60 +2,62 @@
 name: walltime-drift
 verb: query
 inputs:
-  - name: profile
-    type: string
-  - name: cluster
-    type: string
-  - name: cmd_sha
-    type: string
-    description: Filter samples to one cmd_sha (recommended after .hpc/tasks.py edits).
-    default: null
-  - name: base_safety_mult
-    type: float
-    default: 1.30
-    description: Starting safety multiplier the planner currently uses; the recommendation is computed relative to this value.
-  - name: experiment_dir
-    type: path
-    default: cwd
+- name: profile
+  type: string
+- name: cluster
+  type: string
+- name: cmd_sha
+  type: string
+  description: Filter samples to one cmd_sha (recommended after .hpc/tasks.py edits).
+  default: null
+- name: base_safety_mult
+  type: float
+  default: 1.3
+  description: Starting safety multiplier the planner currently uses; the recommendation
+    is computed relative to this value.
+- name: experiment_dir
+  type: path
+  default: cwd
 outputs:
-  - name: n_recent
-    type: integer
-    description: How many recent samples informed the drift estimate.
-  - name: n_cliff_events
-    type: integer
-    description: Count of past samples that hit the walltime cliff (kill-by-scheduler).
-  - name: n_near_misses
-    type: integer
-    description: Count of past samples that finished above a configurable utilization threshold of the wall they were granted.
-  - name: weighted_cliff_rate
-    type: number
-  - name: median_utilization
-    type: number
-  - name: base_safety_mult
-    type: number
-  - name: adjusted_safety_mult
-    type: number
-    description: Recommended safety_mult for the next plan-submit. May equal base when no signal.
-  - name: rationale
-    type: string
-    description: Human-readable one-liner explaining why the recommendation moved (or didn't).
+- name: n_recent
+  type: integer
+  description: How many recent samples informed the drift estimate.
+- name: n_cliff_events
+  type: integer
+  description: Count of past samples that hit the walltime cliff (kill-by-scheduler).
+- name: n_near_misses
+  type: integer
+  description: Count of past samples that finished above a configurable utilization
+    threshold of the wall they were granted.
+- name: weighted_cliff_rate
+  type: number
+- name: median_utilization
+  type: number
+- name: base_safety_mult
+  type: number
+- name: adjusted_safety_mult
+  type: number
+  description: Recommended safety_mult for the next plan-submit. May equal base when
+    no signal.
+- name: rationale
+  type: string
+  description: Human-readable one-liner explaining why the recommendation moved (or
+    didn't).
 side_effects: []
 idempotent: true
 idempotency_key: none
 error_codes:
-  - code: spec_invalid
-    category: user
-    retry_safe: false
-  - code: internal
-    category: internal
-    retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
 backed_by:
-  cli: hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]
+  cli: hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>]
+    [--base-safety-mult <f>]
   python: hpc_mapreduce.agent_cli.cmd_walltime_drift
 exit_codes:
-  - 0: ok
-  - 1: spec_invalid
-  - 3: internal
+- 0: ok
+- 1: spec_invalid
+- 3: internal
 ---
 
 ## Purpose
