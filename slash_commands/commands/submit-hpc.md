@@ -208,6 +208,10 @@ If constraints are not configured for the cluster or profile, skip this step and
 
 The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, invoke the [score-submit-plan](../../docs/primitives/score-submit-plan.md) primitive (`hpc-mapreduce plan-submit --profile <profile> --cluster <cluster>`); it combines a live snapshot of the cluster and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric below and picks one.
 
+### Optional pre-check: best submit window
+
+Before scoring constraints you can consult [best-submit-window](../../docs/primitives/best-submit-window.md) (`hpc-mapreduce best-submit-window --profile <p> --cluster <c> --within-hours 24 --top-k 5`) to surface low-traffic submit windows in the next 24 hours. This is purely advisory — the primitive sweeps the diurnal queue-wait predictor at hourly offsets and returns the `top_k` lowest-wait candidates. Useful when the user explicitly asks "is now a good time?" or when the current `score-submit-plan` envelope's candidates all carry long predicted waits. The slash command can offer "I see your predicted wait now is 4h; the queue is significantly emptier in 6h. Wait, or submit now?" — but the actual UX is up to the slash command; the primitive just exposes the data. Cold-start clusters return an empty `candidates` array; in that case fall through to the normal submit-now path.
+
 The envelope's `data` carries the candidate scorecards. Three branches:
 
 ### 4c-A: `needs_canary: true` (cold start)
