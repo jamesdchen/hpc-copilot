@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_mapreduce.job.runs import write_run_sidecar
+from claude_hpc.orchestrator.runs import write_run_sidecar
 from claude_hpc.mapreduce.reduce.history import (
     find_sidecars_by_campaign,
     prior,

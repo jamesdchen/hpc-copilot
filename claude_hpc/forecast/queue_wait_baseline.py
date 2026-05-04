@@ -37,7 +37,7 @@ field.
 Order-book adjustment (Phase 1c)
 --------------------------------
 When :func:`predict_queue_wait` is called with ``current_features`` —
-a :class:`~hpc_mapreduce.job.queue_features.QueueFeatures` snapshot
+a :class:`~claude_hpc.forecast.queue_features.QueueFeatures` snapshot
 computed at submit time — the diurnal MA is multiplied by a bounded
 factor derived from the current queue depth relative to a reference
 depth. The factor is clamped to ``[_MIN_FACTOR, _MAX_FACTOR]`` so a
@@ -54,12 +54,12 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
-from hpc_mapreduce.job.runtime_prior import read_samples
+from claude_hpc.orchestrator.runtime_prior import read_samples
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from hpc_mapreduce.job.queue_features import QueueFeatures
+    from claude_hpc.forecast.queue_features import QueueFeatures
 
 __all__ = ["PredictionResult", "predict_queue_wait"]
 
@@ -247,7 +247,7 @@ def predict_queue_wait(
     * ``"diurnal_ma"`` — runtime-prior pool bucketed by hour-of-week
       (the v1 baseline; cold-start fallback).
     * ``"des"`` — discrete-event simulator
-      (:mod:`hpc_mapreduce.job.queue_simulator`) running forward from
+      (:mod:`claude_hpc.forecast.queue_simulator`) running forward from
       the most recent persisted ``ClusterSnapshot``, sampling future
       arrivals per ``user_profiles`` and residual lifetimes per the
       per-user actual-over-ask ratio. Returns the candidate's wait
@@ -272,7 +272,7 @@ def predict_queue_wait(
     n_replications:
         Number of DES passes when ``backend`` resolves to ``"des"``.
     candidate:
-        Optional :class:`~hpc_mapreduce.job.queue_simulator.SimJob`.
+        Optional :class:`~claude_hpc.forecast.queue_simulator.SimJob`.
         When omitted, a 1-CPU / 4 GB / no-GPU candidate is used.
     seed:
         Forwarded to the DES samplers; deterministic when not None.
@@ -487,7 +487,7 @@ def _des_eligible(experiment_dir: "Path", *, cluster: str) -> _DESDecision:
     """
     try:
         from claude_hpc.infra.inspect import read_cluster_history
-        from hpc_mapreduce.job.queue_simulator import extract_running_jobs
+        from claude_hpc.forecast.queue_simulator import extract_running_jobs
     except ImportError as exc:
         return _DESDecision(False, f"import failed: {exc}", 0, 0)
 
@@ -503,7 +503,7 @@ def _des_eligible(experiment_dir: "Path", *, cluster: str) -> _DESDecision:
         return _DESDecision(True, "snapshot present, cluster idle", 0, 0)
 
     try:
-        from hpc_mapreduce.job.user_profiles import all_profiles
+        from claude_hpc.forecast.user_profiles import all_profiles
     except ImportError:
         return _DESDecision(
             False, "user_profiles module unavailable", len(running_users), 0
@@ -532,7 +532,7 @@ def _default_candidate(profile: str) -> Any:
     1 CPU, 4 GB, no GPU — useful for "how empty is the queue" probes; a
     real planner should always pass the actual submit shape.
     """
-    from hpc_mapreduce.job.queue_simulator import SimJob
+    from claude_hpc.forecast.queue_simulator import SimJob
 
     return SimJob(
         job_id=f"candidate-{profile}",
@@ -605,12 +605,12 @@ def _predict_des(
     a number rather than a hard error.
     """
     from claude_hpc.infra.inspect import read_cluster_history
-    from hpc_mapreduce.job.queue_simulator import (
+    from claude_hpc.forecast.queue_simulator import (
         SimJob,
         extract_running_jobs,
         simulate_distribution,
     )
-    from hpc_mapreduce.job.queue_simulator_inputs import (
+    from claude_hpc.forecast.queue_simulator_inputs import (
         sample_arrival_stream,
         sample_residual_lifetimes,
     )
@@ -632,7 +632,7 @@ def _predict_des(
     snap = snapshots[0]
 
     try:
-        from hpc_mapreduce.job.user_profiles import all_profiles
+        from claude_hpc.forecast.user_profiles import all_profiles
         profiles = all_profiles(experiment_dir, cluster=cluster)
     except ImportError:
         profiles = {}

@@ -189,23 +189,23 @@ def primitive(
 # the atom decorator must have run first to attach it.
 _PRIMITIVE_MODULES: tuple[str, ...] = (
     # Atoms first.
-    "hpc_mapreduce.job.runs",
-    "hpc_mapreduce.job.runtime_prior",
-    "hpc_mapreduce.job.calibration",
-    "hpc_mapreduce.job.discover",
-    "hpc_mapreduce.job.resubmit",
-    "hpc_mapreduce.job.planner",
-    "hpc_mapreduce.job.campaign_health",
+    "claude_hpc.orchestrator.runs",
+    "claude_hpc.orchestrator.runtime_prior",
+    "claude_hpc.orchestrator.calibration",
+    "claude_hpc.orchestrator.discover",
+    "claude_hpc.orchestrator.resubmit",
+    "claude_hpc.orchestrator.planner",
+    "claude_hpc.orchestrator.campaign_health",
     "claude_hpc.infra.inspect",
     "claude_hpc.infra.clusters",
     "hpc_mapreduce.agent_cli",
     "hpc_mapreduce.atoms.clusters",
     "slash_commands.runner",
-    "hpc_mapreduce.job.validate",
+    "claude_hpc.orchestrator.validate",
     # Composites — must come after every atom they reference.
-    "hpc_mapreduce.job.submit_flow",
-    "hpc_mapreduce.job.monitor_flow",
-    "hpc_mapreduce.job.aggregate_flow",
+    "claude_hpc.orchestrator.submit_flow",
+    "claude_hpc.orchestrator.monitor_flow",
+    "claude_hpc.orchestrator.aggregate_flow",
 )
 
 

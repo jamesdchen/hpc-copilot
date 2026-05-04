@@ -1,7 +1,7 @@
 """Sweep the queue-wait predictor over future hours and rank windows.
 
 Phase 3a: given a profile + cluster, evaluate
-:func:`hpc_mapreduce.job.queue_wait_baseline.predict_queue_wait` at every
+:func:`claude_hpc.forecast.queue_wait_baseline.predict_queue_wait` at every
 hour-of-week between now and ``now + within_hours``, then return the
 ``top_k`` windows sorted by ascending predicted wait.
 
@@ -23,7 +23,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from claude_hpc._internal._time import utcnow
-from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
+from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
 if TYPE_CHECKING:
     from pathlib import Path

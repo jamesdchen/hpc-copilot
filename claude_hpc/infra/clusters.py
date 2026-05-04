@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
+from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
 
 
 def load_clusters_config(path: Path | None = None) -> dict[str, Any]:

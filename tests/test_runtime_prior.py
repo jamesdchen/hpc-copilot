@@ -1,10 +1,10 @@
-"""Tests for hpc_mapreduce.job.runtime_prior — quantile rollups + atomic appends."""
+"""Tests for claude_hpc.orchestrator.runtime_prior — quantile rollups + atomic appends."""
 
 from __future__ import annotations
 
 import json
 
-from hpc_mapreduce.job import runtime_prior as rp
+from claude_hpc.orchestrator import runtime_prior as rp
 
 
 class TestAppendSample:

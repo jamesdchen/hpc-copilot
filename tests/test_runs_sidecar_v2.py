@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_mapreduce.job.runs import (
+from claude_hpc.orchestrator.runs import (
     SIDECAR_SCHEMA_VERSION,
     read_run_sidecar,
     run_sidecar_path,
@@ -262,7 +262,7 @@ class TestVersionMismatchWarning:
     def test_warning_fires_on_version_mismatch(self, tmp_path: Path) -> None:
         import warnings as _warnings
 
-        from hpc_mapreduce.job import runs as _runs_mod
+        from claude_hpc.orchestrator import runs as _runs_mod
 
         # Reset module-level dedup set so this test is hermetic regardless
         # of test ordering.
@@ -300,7 +300,7 @@ class TestVersionMismatchWarning:
     def test_warning_dedupes_per_run_and_version(self, tmp_path: Path) -> None:
         import warnings as _warnings
 
-        from hpc_mapreduce.job import runs as _runs_mod
+        from claude_hpc.orchestrator import runs as _runs_mod
 
         _runs_mod._warned_version_mismatch.clear()
         run_id = "20260101-000000-deadbee"
@@ -336,7 +336,7 @@ class TestVersionMismatchWarning:
         import warnings as _warnings
 
         from hpc_mapreduce import __version__ as pkg_version
-        from hpc_mapreduce.job import runs as _runs_mod
+        from claude_hpc.orchestrator import runs as _runs_mod
 
         _runs_mod._warned_version_mismatch.clear()
         run_id = "20260101-000000-cafebab"

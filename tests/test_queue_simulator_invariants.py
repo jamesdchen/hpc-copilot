@@ -16,7 +16,7 @@ Invariants covered:
 from __future__ import annotations
 
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_mapreduce.job.queue_simulator import (
+from claude_hpc.forecast.queue_simulator import (
     SimJob,
     available_resources,
     simulate_distribution,

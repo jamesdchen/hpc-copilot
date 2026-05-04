@@ -10,7 +10,7 @@ For each currently-running job in ``snap.co_tenants``:
 
 1. Look up the job's user in *profiles* (default: cold-start ratio).
 2. Predict the residual lifetime via
-   :func:`hpc_mapreduce.job.residual_lifetime.predict_residual_lifetime`.
+   :func:`claude_hpc.forecast.residual_lifetime.predict_residual_lifetime`.
 3. If the residual is ``<= t_offset_sec``, the job will have completed
    by T — sum its CPU / memory / GPU contribution into the
    "expected completed" pool.
@@ -18,7 +18,7 @@ For each currently-running job in ``snap.co_tenants``:
 The forecast assumes scheduler turnover during the window keeps
 allocation pressure roughly constant; it doesn't try to predict new
 arrivals (those go through the diurnal MA in
-:mod:`hpc_mapreduce.job.queue_wait_baseline`). The output is meant
+:mod:`claude_hpc.forecast.queue_wait_baseline`). The output is meant
 as an additional regression signal alongside the diurnal MA, not a
 standalone wait predictor.
 
@@ -35,8 +35,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from hpc_mapreduce.job.residual_lifetime import predict_residual_lifetime
-from hpc_mapreduce.job.user_profiles import UserProfile
+from claude_hpc.forecast.residual_lifetime import predict_residual_lifetime
+from claude_hpc.forecast.user_profiles import UserProfile
 
 if TYPE_CHECKING:
     from claude_hpc.infra.inspect import ClusterSnapshot

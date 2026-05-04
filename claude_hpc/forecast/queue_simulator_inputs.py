@@ -39,7 +39,7 @@ import random
 from typing import Any
 
 from claude_hpc.infra.inspect import ClusterSnapshot
-from hpc_mapreduce.job.queue_simulator import SimJob, extract_running_jobs
+from claude_hpc.forecast.queue_simulator import SimJob, extract_running_jobs
 
 __all__ = [
     "sample_arrival_stream",

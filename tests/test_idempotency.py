@@ -18,7 +18,7 @@ from claude_hpc._internal.idempotency import (
     RunIdKey,
     dedup_check,
 )
-from hpc_mapreduce.job.runs import run_sidecar_path
+from claude_hpc.orchestrator.runs import run_sidecar_path
 from slash_commands import session
 
 

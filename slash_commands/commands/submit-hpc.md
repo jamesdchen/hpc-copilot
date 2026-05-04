@@ -187,7 +187,7 @@ After grid expansion produces total_tasks, compute an optimized submission plan:
 
 1. **Load constraints**: `from hpc_mapreduce import ClusterConstraints, parse_constraints` — read constraints from `clusters.yaml` for the selected cluster, then overlay any per-profile constraints the user supplied in this submit interview (the resolved overrides will be persisted to the run sidecar's `constraints` field).
 
-2. **Build workload**: `from hpc_mapreduce.job.throughput import WorkloadSpec, compute_submission_plan` — construct a `WorkloadSpec` using `total_tasks` from grid expansion, plus `est_task_duration` if configured in the profile.
+2. **Build workload**: `from claude_hpc.orchestrator.throughput import WorkloadSpec, compute_submission_plan` — construct a `WorkloadSpec` using `total_tasks` from grid expansion, plus `est_task_duration` if configured in the profile.
 
 3. **Compute plan**: Call `compute_submission_plan(constraints, workload)` to get a `SubmissionPlan` with batched waves.
 
@@ -224,7 +224,7 @@ No runtime priors exist for this `(profile, cluster)`. Don't try to score — su
 4. On success, append a runtime sample:
 
    ```python
-   from hpc_mapreduce.job.runtime_prior import append_sample
+   from claude_hpc.orchestrator.runtime_prior import append_sample
    append_sample(
        experiment_dir=Path("."),
        profile=profile, cluster=cluster,
@@ -278,7 +278,7 @@ Pass `--no-adversarial` to `plan-submit` only for debugging or on clusters that 
 - After submission, write a prediction sidecar so post-completion ingestion can validate calibration:
 
   ```python
-  from hpc_mapreduce.job.calibration import record_prediction_sidecar
+  from claude_hpc.orchestrator.calibration import record_prediction_sidecar
   record_prediction_sidecar(
       experiment_dir=Path("."),
       run_id=run_id,

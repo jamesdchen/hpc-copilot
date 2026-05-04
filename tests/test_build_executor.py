@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 from claude_hpc import _PACKAGE_ROOT
-from hpc_mapreduce.job.discover import (
+from claude_hpc.orchestrator.discover import (
     ExecutorInfo,
     discover_executors,
     is_executor_source,

@@ -138,7 +138,7 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
   Pure local filesystem walk. Does not import `.hpc/tasks.py`.
 - `claude_hpc.mapreduce.reduce.history.find_sidecars_by_campaign` /
   `result_dirs_for_sidecar` — underlying primitives.
-- `hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)` —
+- `claude_hpc.orchestrator.campaign.campaign_dir(experiment_dir, campaign_id)` —
   return `experiment_dir/.hpc/campaigns/<campaign_id>/`, creating it
   idempotently. Reserved for strategy libraries to drop their own state
   files (Optuna SQLite, PBT checkpoints). The framework writes nothing

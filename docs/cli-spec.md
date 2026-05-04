@@ -16,7 +16,7 @@ The JSON Schemas under `hpc_mapreduce/schemas/` are the source of truth — agen
 - `resubmit.input.json` — `resubmit --spec` shape.
 - `campaign.output.json` — `campaign status` / `campaign list` data block.
 - `discover.output.json` — `discover` data block.
-- `stages.input.json` — output shape of `.hpc/stages.py::stages()` (loaded by `hpc_mapreduce.job.stages.load_stages`; not a CLI input but agents authoring `stages.py` should validate against this).
+- `stages.input.json` — output shape of `.hpc/stages.py::stages()` (loaded by `claude_hpc.orchestrator.stages.load_stages`; not a CLI input but agents authoring `stages.py` should validate against this).
 
 ## Conventions
 

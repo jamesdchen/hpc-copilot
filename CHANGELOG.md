@@ -4,7 +4,7 @@
 
 ### Removed (breaking) — SEGV blacklist feature
 
-The SEGV blacklist (`hpc_mapreduce.job.blacklist`, the
+The SEGV blacklist (`claude_hpc.orchestrator.blacklist`, the
 `record-segv-blacklist` primitive, the `record_segv` /
 `get_active_blacklist` exports) has been removed. The smart planner no
 longer consumes a blacklist signal; callers should drop any reference to
@@ -100,7 +100,7 @@ the feature.
   `errors.ClusterUnknown` so the typed exception flows through
   `_err_from_hpc` to produce the documented `error_code: cluster_unknown`.
 
-### Removed — `hpc_mapreduce.campaign.run_campaign` asyncio loop and `defaults` callbacks
+### Removed — `claude_hpc.orchestrator.campaign.run_campaign` asyncio loop and `defaults` callbacks
 
 The closed-loop driver is now the slash-command surface itself: the
 assistant repeatedly invokes `/submit-hpc campaign_id=<slug>` until
@@ -132,7 +132,7 @@ Kept (the small surface that actually mattered):
 - `HPC_CAMPAIGN_ID` env var threaded through scheduler templates.
 - `claude_hpc.mapreduce.reduce.history.prior(...)` for reading per-iteration
   reduced metrics back inside `tasks.py`.
-- `hpc_mapreduce.campaign.campaign_dir(...)` for strategy-state
+- `claude_hpc.orchestrator.campaign.campaign_dir(...)` for strategy-state
   placement (Optuna SQLite, PBT checkpoints).
 - `hpc-mapreduce campaign list / status` CLI inspection.
 
@@ -175,18 +175,18 @@ into a single `plan-submit` CLI subcommand:
   or `CPULoad/CPUTot >= 0.80` (both tunable). 60s in-process cache so a
   single submit cycle pays the SSH cost once. Both SLURM and SGE are
   supported.
-- **`hpc_mapreduce.job.blacklist`** — append-only SEGV journal at
+- **`claude_hpc.orchestrator.blacklist`** — append-only SEGV journal at
   `<repo>/.hpc/bad_nodes.<cluster>.json`. 7-day TTL, refreshed on
   repeat SEGVs. Atomic write under `fcntl.flock`. Evidence list capped
   at 5 most-recent entries per node. `record_segv()` is called by
   `/hpc-monitor` on `NODE_FAIL` / `exit -11`; `get_active()` is called
   by the planner with TTL filtering.
-- **`hpc_mapreduce.job.runtime_prior`** — append-only sample log at
+- **`claude_hpc.orchestrator.runtime_prior`** — append-only sample log at
   `<repo>/.hpc/runtimes/<profile>.<cluster>.json`. `roll_up_quantiles()`
   groups by `gpu_type` and computes p50 / p95 / p99 / mean / n_samples,
   with optional `cmd_sha` filter so a `.hpc/tasks.py` change can
   invalidate stale priors.
-- **`hpc_mapreduce.job.planner`** — `plan-submit --profile <p>
+- **`claude_hpc.orchestrator.planner`** — `plan-submit --profile <p>
   --cluster <c>` combines all three into the scorecard JSON the slash
   command hands to Claude. When no priors exist, `needs_canary: true`
   and `canary_plan` describes the 1-task probe to seed the priors.
@@ -227,12 +227,12 @@ end-to-end Optuna recipe in `docs/campaign.md`. None bind the framework
 to a specific tuning library; they collapse boilerplate the previous
 shape made every user write themselves.
 
-- **`hpc_mapreduce.campaign.campaign_dir(experiment_dir, campaign_id)`** —
+- **`claude_hpc.orchestrator.campaign.campaign_dir(experiment_dir, campaign_id)`** —
   canonical scratch directory `.hpc/campaigns/<cid>/`. Created
   idempotently. Reserved for strategy libraries to put state files
   (Optuna SQLite, PBT checkpoints, walk-forward cursor); the framework
   writes nothing inside.
-- **`hpc_mapreduce.campaign.defaults`** — three curried-function defaults
+- **`claude_hpc.orchestrator.campaign.defaults`** — three curried-function defaults
   for `run_campaign`'s callbacks:
   - `tasks_py_total_predicate(experiment_dir)` — re-imports `tasks.py`
     each call and returns `total() > 0`.
@@ -284,7 +284,7 @@ Surface area:
   - `find_sidecars_by_campaign` and `result_dirs_for_sidecar` for
     callers that need the underlying primitives. None of these import
     `.hpc/tasks.py` (the loop's calling module), so no recursion.
-- **`hpc_mapreduce.campaign.run_campaign`** — asyncio in-flight queue.
+- **`claude_hpc.orchestrator.campaign.run_campaign`** — asyncio in-flight queue.
   Maintains *concurrency* live submits, awaits the next-finished one
   (FIRST_COMPLETED), repeats until the user's `should_submit` predicate
   flips to False or a wall-clock budget elapses. Fully IO-injected

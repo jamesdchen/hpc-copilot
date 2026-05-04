@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 import hpc_mapreduce
-from hpc_mapreduce.job.discover import _SKIP_BASENAMES, _SKIP_DIRS
+from claude_hpc.orchestrator.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_DOC = "docs/boundary-contract.md"
@@ -259,7 +259,7 @@ def _imported_dotted_modules(path: Path) -> set[str]:
 
     Like :func:`_imported_top_level_modules` but returns the full dotted name
     so callers can distinguish ``claude_hpc.mapreduce.metrics_io`` (a deployed
-    runtime module) from ``hpc_mapreduce.job.runs`` (framework-internal).
+    runtime module) from ``claude_hpc.orchestrator.runs`` (framework-internal).
     """
     source = path.read_text(encoding="utf-8")
     try:

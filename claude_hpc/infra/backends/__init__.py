@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from hpc_mapreduce.job.throughput import JobBatch, SubmissionPlan
+    from claude_hpc.orchestrator.throughput import JobBatch, SubmissionPlan
 
 
 # Default fallback regex for parsing job IDs out of scheduler stdout.

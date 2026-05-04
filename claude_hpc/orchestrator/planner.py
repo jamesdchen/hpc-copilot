@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 from claude_hpc.infra.clusters import load_clusters_config
 from claude_hpc.infra.inspect import NodeSnapshot, inspect_cluster
-from hpc_mapreduce.job.backfill import (
+from claude_hpc.orchestrator.backfill import (
     BackfillProbe,
     ResourceTuple,
     build_lattice,
@@ -56,11 +56,11 @@ from hpc_mapreduce.job.backfill import (
     reshape_array_size_for_backfill,
     split_walltime_into_segments,
 )
-from hpc_mapreduce.job.calibration import (
+from claude_hpc.orchestrator.calibration import (
     compute_walltime_drift,
     recommend_safety_mult_adjustment,
 )
-from hpc_mapreduce.job.runtime_prior import read_samples, roll_up_quantiles
+from claude_hpc.orchestrator.runtime_prior import read_samples, roll_up_quantiles
 
 
 def plan_submit(
@@ -316,7 +316,7 @@ def _eta_via_des(
     not yet bootstrapped.
     """
     try:
-        from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
+        from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
         out = predict_queue_wait(
             experiment_dir, profile=profile, cluster=cluster,
             backend="auto", n_replications=16, seed=0,

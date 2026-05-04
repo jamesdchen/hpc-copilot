@@ -8,7 +8,7 @@ single value:
 * ``slash_commands.session.RunRecord.status`` — journal record status
   (set literal ``{"complete", "failed", "abandoned"}`` plus
   ``"in_flight"``).
-* ``hpc_mapreduce.job.monitor_flow``'s ``lifecycle_state`` envelope
+* ``claude_hpc.orchestrator.monitor_flow``'s ``lifecycle_state`` envelope
   field — workflow state including ``"timeout"``.
 * ``claude_hpc.mapreduce.reduce.status``'s per-task status strings.
 * ``slash_commands.runner.cluster_failures_by_fingerprint``'s emitted

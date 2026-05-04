@@ -1,11 +1,11 @@
-"""Tests for hpc_mapreduce.job.resubmit — compact ID packing and plan building."""
+"""Tests for claude_hpc.orchestrator.resubmit — compact ID packing and plan building."""
 
 from __future__ import annotations
 
 import pytest
 
-from hpc_mapreduce.job.constraints import ClusterConstraints
-from hpc_mapreduce.job.resubmit import (
+from claude_hpc.orchestrator.constraints import ClusterConstraints
+from claude_hpc.orchestrator.resubmit import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,

@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from claude_hpc import _PACKAGE_ROOT
-from hpc_mapreduce import _PACKAGE_ROOT as _LEGACY_PACKAGE_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -79,7 +78,7 @@ def test_submit_input_schema_accepts_runtime() -> None:
 
     # Schemas have not yet moved to claude_hpc/ at this point in the
     # reorg; resolve via the legacy alias (will be cleaned up in Step 8).
-    schema_path = _LEGACY_PACKAGE_ROOT / "schemas" / "submit.input.json"
+    schema_path = _PACKAGE_ROOT / "schemas" / "submit.input.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert "runtime" in schema["properties"]
     rt = schema["properties"]["runtime"]

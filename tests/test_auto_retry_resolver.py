@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from hpc_mapreduce.agent_cli import _resolve_auto_retry
-from hpc_mapreduce.job.runs import write_run_sidecar
+from claude_hpc.orchestrator.runs import write_run_sidecar
 from slash_commands.runner import DEFAULT_AUTO_RETRY_POLICY
 
 if TYPE_CHECKING:

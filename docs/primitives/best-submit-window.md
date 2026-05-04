@@ -27,7 +27,7 @@ error_codes:
 backed_by:
   cli: hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours
     N] [--top-k K]
-  python: hpc_mapreduce.job.best_submit_window.best_submit_windows
+  python: claude_hpc.forecast.best_submit_window.best_submit_windows
 exit_codes:
 - 0: ok
 - 3: internal

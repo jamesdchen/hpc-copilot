@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from claude_hpc.infra.clusters import load_clusters_config, load_constraints
-from hpc_mapreduce.job.constraints import ClusterConstraints, parse_constraints
+from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
 
 
 class TestClusterConstraints:

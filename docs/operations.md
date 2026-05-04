@@ -18,13 +18,13 @@ Read-only, no side effects. Freely composable; cacheable.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `hpc_mapreduce.job.campaign_health.campaign_health` | `hpc_mapreduce/schemas/campaign_health.input.json` | `hpc_mapreduce/schemas/campaign_health.output.json` |
+| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `claude_hpc.orchestrator.campaign_health.campaign_health` | `hpc_mapreduce/schemas/campaign_health.input.json` | `hpc_mapreduce/schemas/campaign_health.output.json` |
 | [`campaign-list`](primitives/campaign-list.md) | ✓ | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` | `hpc_mapreduce.agent_cli.cmd_campaign_list` | — | — |
 | [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` | `hpc_mapreduce.agent_cli.cmd_campaign_status` | — | — |
 | [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-mapreduce capabilities` | `hpc_mapreduce.agent_cli.cmd_capabilities` | — | `hpc_mapreduce/schemas/capabilities.output.json` |
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-mapreduce clusters describe <name>` | `hpc_mapreduce.agent_cli.cmd_clusters_describe` | — | `hpc_mapreduce/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-mapreduce clusters list` | `hpc_mapreduce.agent_cli.cmd_clusters_list` | — | `hpc_mapreduce/schemas/clusters_list.output.json` |
-| [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-mapreduce discover --experiment-dir <path>` | `hpc_mapreduce.job.discover.discover_executors` | — | `hpc_mapreduce/schemas/discover.output.json` |
+| [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-mapreduce discover --experiment-dir <path>` | `claude_hpc.orchestrator.discover.discover_executors` | — | `hpc_mapreduce/schemas/discover.output.json` |
 | [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-mapreduce failures --run-id <id> [--lines <n>]` | `hpc_mapreduce.agent_cli.cmd_failures` | — | — |
 | [`house-edge`](primitives/house-edge.md) | ✓ | _none_ | `hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` | `hpc_mapreduce.agent_cli.cmd_house_edge` | — | — |
 | [`inspect-cluster`](primitives/inspect-cluster.md) | ✓ | ssh | `hpc-mapreduce inspect-cluster --cluster <name> [...]` | `hpc_mapreduce.infra.inspect.inspect_cluster` | — | `hpc_mapreduce/schemas/inspect_cluster.output.json` |
@@ -42,7 +42,7 @@ Read + binary health check. Same composability as `query`.
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-mapreduce preflight [--cluster <name>]` | `hpc_mapreduce.agent_cli.cmd_preflight` | — | `hpc_mapreduce/schemas/preflight.output.json` |
-| [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `hpc_mapreduce.job.validate.validate_submission` | `hpc_mapreduce/schemas/validate.input.json` | `hpc_mapreduce/schemas/validate.output.json` |
+| [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `claude_hpc.orchestrator.validate.validate_submission` | `hpc_mapreduce/schemas/validate.input.json` | `hpc_mapreduce/schemas/validate.output.json` |
 
 ## `mutate` (4)
 
@@ -77,7 +77,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | rsync; ssh; writes-journal | `hpc-mapreduce aggregate-flow --spec <path>` | `hpc_mapreduce.job.aggregate_flow.aggregate_flow` | `hpc_mapreduce/schemas/aggregate_flow.input.json` | `hpc_mapreduce/schemas/aggregate_flow.output.json` |
-| [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-mapreduce monitor-flow --spec <path>` | `hpc_mapreduce.job.monitor_flow.monitor_flow` | `hpc_mapreduce/schemas/monitor_flow.input.json` | `hpc_mapreduce/schemas/monitor_flow.output.json` |
-| [`submit-flow`](primitives/submit-flow.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-mapreduce submit-flow --spec <path>` | `hpc_mapreduce.job.submit_flow.submit_flow` | `hpc_mapreduce/schemas/submit_flow.input.json` | `hpc_mapreduce/schemas/submit_flow.output.json` |
+| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | rsync; ssh; writes-journal | `hpc-mapreduce aggregate-flow --spec <path>` | `claude_hpc.orchestrator.aggregate_flow.aggregate_flow` | `hpc_mapreduce/schemas/aggregate_flow.input.json` | `hpc_mapreduce/schemas/aggregate_flow.output.json` |
+| [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-mapreduce monitor-flow --spec <path>` | `claude_hpc.orchestrator.monitor_flow.monitor_flow` | `hpc_mapreduce/schemas/monitor_flow.input.json` | `hpc_mapreduce/schemas/monitor_flow.output.json` |
+| [`submit-flow`](primitives/submit-flow.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-mapreduce submit-flow --spec <path>` | `claude_hpc.orchestrator.submit_flow.submit_flow` | `hpc_mapreduce/schemas/submit_flow.input.json` | `hpc_mapreduce/schemas/submit_flow.output.json` |
 
