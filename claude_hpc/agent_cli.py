@@ -1074,6 +1074,39 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
 
+    # A-M3: surface preempted runs as a typed Preempted exception at
+    # the envelope level. If every task_id the caller is trying to
+    # resubmit carries a ``preempt`` marker in the per-task sidecar
+    # (set by dispatch.py's SIGTERM handler), the campus user wasn't
+    # the one who failed — they got bumped by higher-priority work.
+    # Raising Preempted lets the agent harness branch on
+    # ``error_code: preempted`` instead of seeing a successful resubmit
+    # envelope and treating it like any other retry. The resubmit
+    # itself still happens after the harness handles the signal; we
+    # raise BEFORE doing the cluster-side work so the caller can
+    # decide whether to throttle.
+    if category == "preempted":
+        from claude_hpc.orchestrator.runs import read_run_sidecar as _read_sidecar
+
+        try:
+            sidecar = _read_sidecar(Path(args.experiment_dir), args.run_id)
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            sidecar = None
+        if sidecar is not None:
+            tasks_block = sidecar.get("tasks") or {}
+            failed_ids_int = [int(t) for t in failed]
+            all_preempted = bool(failed_ids_int) and all(
+                isinstance(tasks_block.get(str(tid)), dict)
+                and "preempt" in tasks_block.get(str(tid), {})
+                for tid in failed_ids_int
+            )
+            if all_preempted:
+                raise errors.Preempted(
+                    f"all {len(failed_ids_int)} task ids in resubmit spec carry "
+                    "preempt markers; the campus user got bumped by higher-priority "
+                    "work, not failed. Resubmit when scheduler pressure abates."
+                )
+
     record, deduped, request_id = runner.resubmit_failed(
         args.experiment_dir,
         args.run_id,

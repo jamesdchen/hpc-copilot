@@ -6,13 +6,13 @@
   "required": ["failed_task_ids", "category"],
   "additionalProperties": false,
   "properties": {
-    "failed_task_ids": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 },
+    "failed_task_ids": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 1 },
     "category": {
       "type": "string",
       "description": "Must match claude_hpc.mapreduce.reduce.classify.CATEGORIES exactly.",
       "enum": [
         "gpu_oom", "system_oom", "segv", "walltime", "node_failure",
-        "queue_stall", "code_bug", "unknown"
+        "queue_stall", "code_bug", "unknown", "preempted"
       ]
     },
     "overrides":   { "type": "object", "description": "Resource overrides for retry (mem, walltime, gpus, ...)." },
