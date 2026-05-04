@@ -75,6 +75,7 @@
             "cluster_partially_degraded",
             "outputs_missing",
             "schema_incompat",
+            "preempted",
             "internal"
           ]
         },
