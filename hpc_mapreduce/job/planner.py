@@ -57,7 +57,11 @@ from hpc_mapreduce.job.backfill import (
     split_walltime_into_segments,
 )
 from hpc_mapreduce.job.blacklist import get_active as get_active_blacklist
-from hpc_mapreduce.job.runtime_prior import roll_up_quantiles
+from hpc_mapreduce.job.calibration import (
+    compute_walltime_drift,
+    recommend_safety_mult_adjustment,
+)
+from hpc_mapreduce.job.runtime_prior import read_samples, roll_up_quantiles
 
 
 def plan_submit(
@@ -126,6 +130,25 @@ def plan_submit(
     mem_quantiles = rollup.get("mem_quantiles_mb") or {}
     cpu_quantiles = rollup.get("cpu_cores_quantiles") or {}
 
+    # Walltime drift: closed-loop calibration of the safety multiplier
+    # from observed cliff-kill rate. We read raw samples (not just the
+    # rollup) because drift needs per-sample (elapsed, requested,
+    # exit_code) triples, not just the elapsed quantiles.
+    drift_safety_mult = walltime_safety_mult
+    drift_rationale = ""
+    if adversarial:
+        drift_samples = read_samples(
+            experiment_dir,
+            profile=profile,
+            cluster=cluster,
+            cmd_sha=cmd_sha,
+            only_successful=False,  # cliff events are NOT successful
+        )
+        drift = compute_walltime_drift(drift_samples)
+        drift_safety_mult, drift_rationale = recommend_safety_mult_adjustment(
+            drift, base_safety_mult=walltime_safety_mult
+        )
+
     # Failure rates per GPU type (cluster-wide, last 30 days). Computed
     # lazily on first call; cluster query may fail and silently degrade.
     p_fail = _p_fail_by_gpu_type(snap, gpu_types, scheduler)
@@ -171,7 +194,7 @@ def plan_submit(
                     cpu_quantiles=cpu_quantiles,
                     cluster_cfg=cfg,
                     cluster_name=cluster,
-                    safety_mult=walltime_safety_mult,
+                    safety_mult=drift_safety_mult,
                     walltime_ceiling_sec=walltime_ceiling_sec,
                     base_mem_mb=base_mem_mb,
                     base_cpus=base_cpus,
@@ -215,6 +238,14 @@ def plan_submit(
                 "rationale": seg.rationale,
             }
 
+    drift_report: dict[str, Any] | None = None
+    if adversarial and drift_rationale:
+        drift_report = {
+            "base_safety_mult": walltime_safety_mult,
+            "adjusted_safety_mult": drift_safety_mult,
+            "rationale": drift_rationale,
+        }
+
     return {
         "profile": profile,
         "cluster": cluster,
@@ -226,6 +257,7 @@ def plan_submit(
         "blacklist_active_count": len(bl_entries),
         "array_reshape": array_reshape,
         "walltime_split": walltime_split,
+        "walltime_drift": drift_report,
     }
 
 

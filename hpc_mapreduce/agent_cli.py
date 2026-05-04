@@ -392,6 +392,68 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: walltime-drift / house-edge (calibration) ────────────────
+
+
+def cmd_walltime_drift(args: argparse.Namespace) -> int:
+    from hpc_mapreduce.job.calibration import (
+        compute_walltime_drift,
+        recommend_safety_mult_adjustment,
+    )
+    from hpc_mapreduce.job.runtime_prior import read_samples
+
+    samples = read_samples(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        cmd_sha=args.cmd_sha,
+        only_successful=False,
+    )
+    drift = compute_walltime_drift(samples)
+    adjusted, rationale = recommend_safety_mult_adjustment(
+        drift, base_safety_mult=float(args.base_safety_mult)
+    )
+    _ok(
+        {
+            "n_recent": drift.n_recent,
+            "n_cliff_events": drift.n_cliff_events,
+            "n_near_misses": drift.n_near_misses,
+            "weighted_cliff_rate": drift.weighted_cliff_rate,
+            "median_utilization": drift.median_utilization,
+            "base_safety_mult": float(args.base_safety_mult),
+            "adjusted_safety_mult": adjusted,
+            "rationale": rationale,
+        },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
+def cmd_house_edge(args: argparse.Namespace) -> int:
+    from hpc_mapreduce.job.calibration import compute_house_edge
+    from hpc_mapreduce.job.runtime_prior import read_samples
+
+    samples = read_samples(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        cmd_sha=args.cmd_sha,
+        only_successful=True,
+    )
+    edge = compute_house_edge(samples)
+    _ok(
+        {
+            "n_with_prediction": edge.n_with_prediction,
+            "mean_delta_sec": edge.mean_delta_sec,
+            "median_delta_sec": edge.median_delta_sec,
+            "p95_delta_sec": edge.p95_delta_sec,
+            "calibration_ratio": edge.calibration_ratio,
+        },
+        idempotent=True,
+    )
+    return EXIT_OK
+
+
 # ─── subcommand: plan-submit ───────────────────────────────────────────────
 
 
@@ -1418,6 +1480,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes).",
     )
     p_rp.set_defaults(func=cmd_runtime_prior)
+
+    # walltime-drift
+    p_wd = sub.add_parser(
+        "walltime-drift",
+        help=(
+            "Closed-loop calibration: measure cliff-kill rate from past "
+            "samples and recommend an adjusted safety_mult per cluster."
+        ),
+    )
+    _add_experiment_dir(p_wd)
+    p_wd.add_argument("--profile", required=True)
+    p_wd.add_argument("--cluster", required=True)
+    p_wd.add_argument("--cmd-sha", default=None)
+    p_wd.add_argument("--base-safety-mult", type=float, default=1.30)
+    p_wd.set_defaults(func=cmd_walltime_drift)
+
+    # house-edge
+    p_he = sub.add_parser(
+        "house-edge",
+        help=(
+            "Compare planner's --test-only predictions against observed "
+            "Submit→Start deltas. Validates that the lattice probe is "
+            "finding real backfill windows and surfaces miscalibration."
+        ),
+    )
+    _add_experiment_dir(p_he)
+    p_he.add_argument("--profile", required=True)
+    p_he.add_argument("--cluster", required=True)
+    p_he.add_argument("--cmd-sha", default=None)
+    p_he.set_defaults(func=cmd_house_edge)
 
     # clusters
     p_cl = sub.add_parser("clusters", help="Introspect available cluster definitions.")
