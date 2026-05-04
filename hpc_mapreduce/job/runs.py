@@ -56,14 +56,31 @@ _RUN_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
 
 
 def _runs_dir(experiment_dir: Path) -> Path:
-    return Path(experiment_dir) / ".hpc" / "runs"
+    """Deprecated alias for ``RepoLayout(experiment_dir).runs``.
+
+    Kept as an internal forwarder for module-internal callers. Note:
+    unlike :attr:`RepoLayout.runs` this does NOT mkdir the directory —
+    callers (``find_existing_runs``, ``prune_old_runs``) already handle
+    the absent-directory case by returning ``[]``.
+    """
+    from hpc_mapreduce.layout import RepoLayout
+
+    return RepoLayout(experiment_dir).hpc / "runs"
 
 
 def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
-    """Return the canonical path to a run's sidecar (file may not exist)."""
+    """Return the canonical path to a run's sidecar (file may not exist).
+
+    Forwarder for ``RepoLayout(experiment_dir).run_sidecar(run_id)`` plus
+    the run_id format validation that ``RepoLayout`` deliberately omits
+    (``RepoLayout`` is purely about path arithmetic; the format check is
+    a submit-time guard kept here).
+    """
+    from hpc_mapreduce.layout import RepoLayout
+
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError(f"invalid run_id: {run_id!r}")
-    return _runs_dir(experiment_dir) / f"{run_id}.json"
+    return RepoLayout(experiment_dir).run_sidecar(run_id)
 
 
 def compute_cmd_sha(tasks_module: Any) -> str:
