@@ -97,11 +97,7 @@ def recommend_resubmit_window(
         cluster=cluster,
         at_iso=None,
     )
-    submit_now_wait = (
-        int(now_pred.predicted_wait_sec)
-        if now_pred.predicted_wait_sec is not None
-        else None
-    )
+    submit_now_wait = now_pred.predicted_wait_sec
 
     candidates = best_submit_windows(
         experiment_dir,
@@ -118,8 +114,8 @@ def recommend_resubmit_window(
             submit_now_wait_sec=submit_now_wait,
             best_window=best,
             savings_sec=None,
-            within_hours=int(within_hours),
-            savings_threshold_sec=int(savings_threshold_sec),
+            within_hours=within_hours,
+            savings_threshold_sec=savings_threshold_sec,
         )
 
     savings = submit_now_wait - best.predicted_wait_sec
@@ -128,7 +124,7 @@ def recommend_resubmit_window(
         recommendation=verdict,
         submit_now_wait_sec=submit_now_wait,
         best_window=best,
-        savings_sec=int(savings),
-        within_hours=int(within_hours),
-        savings_threshold_sec=int(savings_threshold_sec),
+        savings_sec=savings,
+        within_hours=within_hours,
+        savings_threshold_sec=savings_threshold_sec,
     )

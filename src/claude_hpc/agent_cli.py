@@ -1183,44 +1183,41 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
     # itself still happens after the harness handles the signal; we
     # raise BEFORE doing the cluster-side work so the caller can
     # decide whether to throttle.
-    if category == "preempted":
+    sidecar: dict | None = None
+    if category == "preempted" or spec.get("consult_forecast", True):
         from claude_hpc.orchestrator.runs import read_run_sidecar as _read_sidecar
 
         try:
             sidecar = _read_sidecar(Path(args.experiment_dir), args.run_id)
         except (FileNotFoundError, OSError, json.JSONDecodeError):
             sidecar = None
-        if sidecar is not None:
-            tasks_block = sidecar.get("tasks") or {}
-            failed_ids_int = [int(t) for t in failed]
-            all_preempted = bool(failed_ids_int) and all(
-                isinstance(tasks_block.get(str(tid)), dict)
-                and "preempt" in tasks_block.get(str(tid), {})
-                for tid in failed_ids_int
+
+    if category == "preempted" and sidecar is not None:
+        tasks_block = sidecar.get("tasks") or {}
+        failed_ids_int = [int(t) for t in failed]
+        all_preempted = bool(failed_ids_int) and all(
+            isinstance(tasks_block.get(str(tid)), dict)
+            and "preempt" in tasks_block.get(str(tid), {})
+            for tid in failed_ids_int
+        )
+        if all_preempted:
+            raise errors.Preempted(
+                f"all {len(failed_ids_int)} task ids in resubmit spec carry "
+                "preempt markers; the campus user got bumped by higher-priority "
+                "work, not failed. Resubmit when scheduler pressure abates."
             )
-            if all_preempted:
-                raise errors.Preempted(
-                    f"all {len(failed_ids_int)} task ids in resubmit spec carry "
-                    "preempt markers; the campus user got bumped by higher-priority "
-                    "work, not failed. Resubmit when scheduler pressure abates."
-                )
 
     forecast_recommendation: dict | None = None
-    if spec.get("consult_forecast", True):
-        from claude_hpc.forecast.resubmit_advisor import recommend_resubmit_window
-        from claude_hpc.orchestrator.runs import read_run_sidecar as _read_sidecar_fc
+    if spec.get("consult_forecast", True) and sidecar is not None:
+        cluster = sidecar.get("cluster")
+        profile = sidecar.get("profile")
+        if isinstance(cluster, str) and isinstance(profile, str):
+            from claude_hpc.forecast.resubmit_advisor import recommend_resubmit_window
 
-        try:
-            sidecar_fc = _read_sidecar_fc(Path(args.experiment_dir), args.run_id)
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            sidecar_fc = None
-        cluster_fc = (sidecar_fc or {}).get("cluster")
-        profile_fc = (sidecar_fc or {}).get("profile")
-        if isinstance(cluster_fc, str) and isinstance(profile_fc, str):
             rec = recommend_resubmit_window(
                 Path(args.experiment_dir),
-                profile=profile_fc,
-                cluster=cluster_fc,
+                profile=profile,
+                cluster=cluster,
                 within_hours=int(spec.get("forecast_within_hours", 24)),
             )
             forecast_recommendation = rec.to_dict()
