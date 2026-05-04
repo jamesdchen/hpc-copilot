@@ -63,8 +63,24 @@ def _emit(envelope: dict[str, Any]) -> None:
     print(json.dumps(envelope, sort_keys=True), flush=True)
 
 
-def _ok(data: dict[str, Any], *, idempotent: bool) -> None:
-    _emit({"ok": True, "idempotent": idempotent, "data": data})
+def _ok(
+    data: dict[str, Any],
+    *,
+    idempotent: bool,
+    partial_errors: list[dict[str, str]] | None = None,
+) -> None:
+    """Emit an ok-true envelope.
+
+    *partial_errors*: optional list of ``{code, detail}`` dicts surfaced
+    at the top level of the envelope — distinct from ``data.errors``.
+    Used by primitives like ``inspect-cluster`` whose underlying data
+    source can be partially degraded (qhost timed out, sacct
+    unavailable) without the operation as a whole failing.
+    """
+    env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
+    if partial_errors:
+        env["partial_errors"] = list(partial_errors)
+    _emit(env)
 
 
 def _err(
