@@ -328,3 +328,37 @@ class TestAdversarialPath:
         assert rec["predicted_eta_sec"] is None
         assert "no usable prior" in rec["rationale"]
         assert out["needs_canary"] is True  # still triggers the canary path
+
+
+# ---------------------------------------------------------------------------
+# Phase 4f: DES ETA layered alongside test-only
+# ---------------------------------------------------------------------------
+
+
+class TestEtaViaDES:
+    def test_returns_none_without_snapshot_or_profiles(self, tmp_path):
+        from hpc_mapreduce.job.planner import _eta_via_des
+
+        # Empty experiment dir → no DES inputs.
+        assert _eta_via_des(tmp_path, "ml_ridge", "discovery") is None
+
+    def test_returns_int_when_des_eligible(self, tmp_path):
+        # Persist an idle snapshot — DES runs and returns 0.
+        from hpc_mapreduce.infra.inspect import (
+            ClusterSnapshot, NodeSnapshot, persist_snapshot,
+        )
+        from hpc_mapreduce.job.planner import _eta_via_des
+
+        snap = ClusterSnapshot(
+            cluster="discovery", scheduler_kind="slurm",
+            now_iso="2026-04-28T10:00:00+00:00",
+            nodes=[NodeSnapshot(
+                name="n0", state="IDLE", real_mem_mb=64_000, alloc_mem_mb=0,
+                cpu_tot=8, cpu_alloc=0, gres="", gres_used="", co_tenants=[],
+                is_drained=False,
+            )],
+        )
+        persist_snapshot(tmp_path, snap)
+        eta = _eta_via_des(tmp_path, "ml_ridge", "discovery")
+        # Idle snapshot + small candidate → 0 wait.
+        assert eta == 0

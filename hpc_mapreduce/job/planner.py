@@ -167,6 +167,12 @@ def plan_submit(
             eta_sec = _eta_via_test_only(scheduler, c, cfg)
         else:
             eta_sec = None
+        # Phase 4f: layered DES baseline. The DES p50 is independent of
+        # the live scheduler probe — it's a forecast against the most
+        # recent persisted snapshot. We surface it as a separate field
+        # so callers can compare the two ETAs (and the DES path stays
+        # available even when --test-only doesn't).
+        eta_sec_via_des = _eta_via_des(experiment_dir, profile, cluster)
         # Runtime prior quantiles for the GPU types in this constraint.
         c_quantiles = {gpu: quantiles[gpu] for gpu in gpu_set if gpu in quantiles}
         c_p_fail = {gpu: p_fail.get(gpu, 0.0) for gpu in gpu_set}
@@ -176,6 +182,7 @@ def plan_submit(
             "healthy_nodes": sorted(healthy),
             "stressed_nodes": stressed,
             "eta_sec_via_test_only": eta_sec,
+            "eta_sec_via_des": eta_sec_via_des,
             "runtime_prior_quantiles_sec": c_quantiles,
             "p_fail_30d": c_p_fail,
         }
@@ -295,6 +302,30 @@ def _stressed_summary(n: NodeSnapshot) -> dict[str, Any]:
         "GresUsed": n.gres_used,
         "co_tenants": list(n.co_tenants),
     }
+
+
+def _eta_via_des(
+    experiment_dir: "Path", profile: str, cluster: str,
+) -> int | None:
+    """Phase 4f: DES p50 wait estimate as an alternative ETA input.
+
+    Returns the DES backend's predicted_wait_sec in seconds, or ``None``
+    when the DES path is unavailable (no snapshot, no profiles, etc.).
+    Defensive: any exception from the DES path is swallowed and ``None``
+    is returned — the planner must keep working when the simulator is
+    not yet bootstrapped.
+    """
+    try:
+        from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
+        out = predict_queue_wait(
+            experiment_dir, profile=profile, cluster=cluster,
+            backend="auto", n_replications=16, seed=0,
+        )
+    except Exception:  # noqa: BLE001 — defensive
+        return None
+    if out.method != "des":
+        return None
+    return out.predicted_wait_sec
 
 
 def _eta_via_test_only(scheduler: str, constraint: str, cluster_cfg: dict[str, Any]) -> int | None:
