@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added — `hpc_mapreduce.layout` and `hpc_mapreduce.lifecycle` (B1, B2)
+
+- **B1** `hpc_mapreduce.layout` introduces `RepoLayout(experiment_dir)`
+  and `JournalLayout(experiment_dir)` — frozen dataclasses that replace
+  eight scattered path helpers (`framework_subdir`, `runs_subdir`,
+  `tasks_path`, `run_sidecar_path`, `_runs_dir`, `blacklist_path`,
+  `runtime_path`, `journal_dir` / `runs_dir` / `_run_path`). The two
+  classes are *types*, so the pre-B1 `runs_dir` (journal) vs
+  `runs_subdir` (cluster sidecar) name collision — which caused the
+  recent `wave_map` P0 — is now a static type error rather than a
+  prose-only convention. The eight helpers are kept as deprecated
+  forwarders for back-compat.
+- **B2** `hpc_mapreduce.lifecycle` introduces four `StrEnum`
+  vocabularies replacing the four scattered, drifting string sets that
+  preceded them: `JournalStatus` (RunRecord status),
+  `LifecycleState` (workflow envelope state), `TaskStatus` (per-task
+  status), `FailureCategory` (failure-fingerprint vocabulary).
+  `tests/test_lifecycle.py` cross-validates that the schema enums on
+  `monitor_flow.output.json`, `status.output.json`, and
+  `reconcile.output.json` match `LifecycleState`, that classifier
+  emissions are a subset of `FailureCategory`, and — pinning the A4
+  invariant — that classifier emissions are a subset of the resubmit
+  path's accepted set. The drift class is now unrepresentable.
+
 ### Fixed — cross-cutting audit (A1–A11)
 
 - **A1** `docs/primitives/check-preflight.md` frontmatter pointed
