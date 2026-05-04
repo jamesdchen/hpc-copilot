@@ -29,7 +29,6 @@ those need a sacct-based prior that is not yet plumbed through
 from __future__ import annotations
 
 import dataclasses
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
@@ -481,25 +480,25 @@ def pick_earliest(probes: list[BackfillProbe]) -> BackfillProbe | None:
 # seconds — e.g. from rounding in build_lattice — share a result. The cache
 # is keyed by (cluster_name, constraint, walltime_minute_bucket).
 
-_PROBE_CACHE: dict[tuple[str, str, int], tuple[float, BackfillProbe]] = {}
-_PROBE_CACHE_TTL_SEC: float = 60.0
+# Migrated to :class:`TTLCache` (B6). Same 60-second horizon and same
+# (cluster, constraint, walltime_minute_bucket) key shape as the
+# pre-refactor module-level dict; the generic cache adds bounded LRU
+# eviction and a ``clear_all()`` test hook shared with infra.inspect.
+from hpc_mapreduce.infra.cache import TTLCache as _TTLCache  # noqa: E402
+
+_PROBE_CACHE: _TTLCache[tuple[str, str, int], BackfillProbe] = _TTLCache(
+    "job.backfill.probe", ttl_sec=60.0, max_size=512
+)
 
 
 def _cache_get(cluster_name: str, t: ResourceTuple) -> BackfillProbe | None:
     key = (cluster_name, t.constraint, t.walltime_sec // 60)
-    hit = _PROBE_CACHE.get(key)
-    if hit is None:
-        return None
-    written_at, probe = hit
-    if time.monotonic() - written_at > _PROBE_CACHE_TTL_SEC:
-        _PROBE_CACHE.pop(key, None)
-        return None
-    return probe
+    return _PROBE_CACHE.get(key)
 
 
 def _cache_put(cluster_name: str, probe: BackfillProbe) -> None:
     key = (cluster_name, probe.tuple_.constraint, probe.tuple_.walltime_sec // 60)
-    _PROBE_CACHE[key] = (time.monotonic(), probe)
+    _PROBE_CACHE.put(key, probe)
 
 
 def clear_probe_cache() -> None:
