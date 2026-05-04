@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce._primitive import SideEffect, primitive
+from claude_hpc._internal._primitive import SideEffect, primitive
 from hpc_mapreduce.infra.remote import rsync_pull, split_ssh_target
 from hpc_mapreduce.job.runs import read_run_sidecar
 from hpc_mapreduce.reduce.metrics import reduce_partials

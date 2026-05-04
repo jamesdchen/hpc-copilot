@@ -21,7 +21,7 @@ from hpc_mapreduce import (
     get_registry,
     primitive,
 )
-from hpc_mapreduce._primitive import _REGISTRY
+from claude_hpc._internal._primitive import _REGISTRY
 
 
 def test_decorator_registers_under_given_name() -> None:

@@ -44,7 +44,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from hpc_mapreduce._primitive import SideEffect, primitive
+from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow, utcnow_iso
 
 from hpc_mapreduce.infra.cache import TTLCache

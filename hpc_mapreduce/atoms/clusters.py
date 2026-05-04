@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from hpc_mapreduce._primitive import primitive
+from claude_hpc._internal._primitive import primitive
 from hpc_mapreduce.infra.clusters import load_clusters_config
 from slash_commands import errors
 
