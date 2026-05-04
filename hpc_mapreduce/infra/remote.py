@@ -282,7 +282,9 @@ def deploy_runtime(
     pkg_dir = Path(__file__).parent.parent
 
     ssh_run(
-        f"mkdir -p {remote_path_q}/hpc_mapreduce/map {remote_path_q}/.hpc/templates"
+        f"mkdir -p {remote_path_q}/hpc_mapreduce/map"
+        f" {remote_path_q}/.hpc/templates"
+        f" {remote_path_q}/.hpc/templates/common"
         f" && touch {remote_path_q}/hpc_mapreduce/__init__.py"
         f" && touch {remote_path_q}/hpc_mapreduce/map/__init__.py",
         host=host,
@@ -325,6 +327,16 @@ def deploy_runtime(
                 pkg_dir / "templates" / sched / f"{kind}.{ext}",
                 f".hpc/templates/{kind}.{ext}",
             )
+
+    # Shared preambles sourced by the templates above
+    # (templates/common/hpc_preamble.sh + templates/common/gpu_preamble.sh).
+    # The per-template ``source "$(dirname "$0")/common/<name>.sh"`` calls
+    # resolve to .hpc/templates/common/<name>.sh on the cluster.
+    for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
+        _scp(
+            pkg_dir / "templates" / "common" / common_name,
+            f".hpc/templates/common/{common_name}",
+        )
 
     # Combiner is the last scp; return its CompletedProcess so callers
     # can inspect the trailing returncode.

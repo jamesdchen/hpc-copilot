@@ -150,13 +150,14 @@ class TestDeployRuntime:
             remote.deploy_runtime(host="c", user="u", remote_path="/p")
 
         all_calls = mock_run.call_args_list
-        # Expect 8 subprocess.run invocations:
-        #   1 ssh (mkdir -p hpc_mapreduce/map and .hpc/templates),
+        # Expect 11 subprocess.run invocations:
+        #   1 ssh (mkdir -p hpc_mapreduce/map, .hpc/templates, .hpc/templates/common),
         #   2 scp into hpc_mapreduce/map/ (context.py, metrics_io.py),
         #   1 scp into .hpc/_hpc_dispatch.py,
         #   4 scp into .hpc/templates/ (sge cpu/gpu, slurm cpu/gpu),
+        #   2 scp into .hpc/templates/common/ (hpc_preamble.sh, gpu_preamble.sh),
         #   1 scp into .hpc/_hpc_combiner.py.
-        assert len(all_calls) == 9, [c[0][0][:3] for c in all_calls]
+        assert len(all_calls) == 11, [c[0][0][:3] for c in all_calls]
 
         argvs = [c[0][0] for c in all_calls]
 
@@ -164,6 +165,7 @@ class TestDeployRuntime:
         assert argvs[0][0] == "ssh"
         assert "mkdir -p" in argvs[0][-1]
         assert ".hpc/templates" in argvs[0][-1]
+        assert ".hpc/templates/common" in argvs[0][-1]
 
         # Importable stubs into hpc_mapreduce/map/
         assert argvs[1][0] == "scp"
@@ -187,10 +189,20 @@ class TestDeployRuntime:
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
 
+        # Two shared preambles into .hpc/templates/common/
+        common_dsts = {argv[2] for argv in argvs[8:10]}
+        assert all(argv[0] == "scp" for argv in argvs[8:10])
+        assert any(
+            d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts
+        )
+        assert any(
+            d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts
+        )
+
         # Combiner is last
-        assert argvs[8][0] == "scp"
-        assert argvs[8][1].endswith("combiner.py")
-        assert argvs[8][2].endswith(":/p/.hpc/_hpc_combiner.py")
+        assert argvs[10][0] == "scp"
+        assert argvs[10][1].endswith("combiner.py")
+        assert argvs[10][2].endswith(":/p/.hpc/_hpc_combiner.py")
 
 
 # ---------------------------------------------------------------------------
