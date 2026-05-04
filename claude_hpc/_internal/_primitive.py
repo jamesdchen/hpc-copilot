@@ -197,6 +197,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.clusters",
     "claude_hpc.atoms.house_edge",
     "claude_hpc.atoms.list_in_flight",
+    "claude_hpc.atoms.logs",
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.walltime_drift",
     "slash_commands.runner",
