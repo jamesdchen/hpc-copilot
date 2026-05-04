@@ -142,14 +142,27 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
     """Install a SIGTERM handler that marks the run preempted and tears down.
 
     The handler:
-      1. Logs to stderr (matches the existing dispatch.py prose style).
-      2. Writes ``preempt: {at: <utcnow_iso>, grace_sec: <int>}`` to the
+      1. Ignores subsequent SIGTERMs for the rest of its lifetime
+         (re-entrancy guard — a flurry of SIGTERMs in the cluster's
+         preemption window must not recursively re-enter the handler
+         and call ``sys.exit`` while the outer call is still unwinding).
+      2. Logs to stderr (matches the existing dispatch.py prose style).
+      3. Writes ``preempt: {at: <utcnow_iso>, grace_sec: <int>}`` to the
          per-task entry of the run sidecar so the agent harness can tell
          "bumped" from "real failure".
-      3. Forwards SIGINT to the executor subprocess so its except blocks
-         run during the cluster's preemption window.
-      4. Waits up to *grace_sec* for the executor to exit cleanly.
-      5. Exits 130 — the POSIX-standard preempted exit code.
+      4. Forwards SIGINT to the executor subprocess so its except blocks
+         run during the cluster's preemption window. If the SIGTERM lands
+         in the race window between ``Popen()`` returning and the main
+         flow assigning into ``child_holder[0]``, falls back to
+         ``killpg`` on the dispatcher's own process group — which the
+         child inherits via ``preexec_fn=os.setpgrp`` — so no executor
+         is ever orphaned by the race.
+      5. Waits up to *grace_sec* for the executor to exit cleanly, then
+         escalates ``terminate() → wait(2) → kill()`` to guarantee
+         teardown. A zombie executor outliving the dispatcher would keep
+         writing to a half-rotated log and surprise the next user of
+         the same node.
+      6. Exits 130 — the POSIX-standard preempted exit code.
 
     *child_holder* is a single-element list holding the current
     ``subprocess.Popen`` (or ``None`` if no child is live yet); using a
@@ -158,6 +171,15 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
     """
 
     def _handler(signum, frame):
+        # A-H3: re-entrancy guard. Ignore further SIGTERMs for the rest
+        # of this process's life. SIG_IGN is set first because writing
+        # the sidecar and rsync-style waits below take measurable
+        # wall-clock; a second SIGTERM mid-handler would otherwise
+        # recurse into another sys.exit while the outer call is still
+        # unwinding — a footgun the campus user can't debug from a
+        # cluster log.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
         print(
             "[claude-hpc] SIGTERM received; cluster preemption imminent",
             file=sys.stderr,
@@ -174,8 +196,33 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
             while time.monotonic() < deadline and child.poll() is None:
                 time.sleep(0.5)
             if child.poll() is None:
+                # A-H2: escalate. The executor ignored or blocked the
+                # SIGINT we forwarded; terminate-then-kill so we don't
+                # leave an orphan that keeps writing to the next user's
+                # half-rotated log file after the cgroup eventually
+                # collects it.
                 with contextlib.suppress(OSError):
                     child.terminate()
+                try:
+                    child.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(OSError):
+                        child.kill()
+                    with contextlib.suppress(Exception):
+                        child.wait(timeout=2)
+        else:
+            # A-H1: race window. SIGTERM landed before the main flow
+            # could populate child_holder[0]. The Popen() call ran with
+            # preexec_fn=os.setpgrp, so the child (if it exists) is in
+            # our process group; signal the whole pgid so the executor
+            # gets the SIGINT even though we never saw the Popen handle.
+            # Best-effort: if there genuinely is no child yet, killpg
+            # is a no-op against ourselves (we're about to sys.exit
+            # anyway, and SIGINT to ourselves while SIGTERM is now
+            # ignored is harmless — the default Python SIGINT handler
+            # raises KeyboardInterrupt which sys.exit overrides).
+            with contextlib.suppress(OSError, ProcessLookupError):
+                os.killpg(os.getpgid(0), signal.SIGINT)
 
         sys.exit(_EXIT_PREEMPTED)
 
@@ -321,6 +368,14 @@ def main() -> None:
     # Trap it so we can mark the run as bumped (not failed) in the
     # sidecar and forward a clean SIGINT to the executor subprocess
     # before the cluster kills us.
+    # Setting HPC_PREEMPT_GRACE_SEC=0 means no grace — the SIGINT we
+    # forward to the executor must complete its except blocks in
+    # microseconds or its work is lost. Most campus users want the
+    # default 25s so the executor's atomic-write contract has time to
+    # land on disk before the cluster's SIGKILL arrives. A non-integer
+    # value (or a missing one) falls back to the default rather than
+    # erroring out — survival over strictness during the preemption
+    # window.
     try:
         grace_sec = int(os.environ.get("HPC_PREEMPT_GRACE_SEC") or _DEFAULT_PREEMPT_GRACE_SEC)
     except ValueError:
@@ -371,7 +426,16 @@ def main() -> None:
     # Use Popen (not subprocess.run) so the SIGTERM handler can reach
     # the child via *child_holder* and forward SIGINT during the
     # cluster's preemption grace window.
-    child = subprocess.Popen(executor, shell=True, env=env)
+    #
+    # preexec_fn=os.setpgrp puts the executor in its own process group
+    # rooted at the dispatcher's pgid. Closes A-H1: if SIGTERM lands
+    # between Popen() returning and the line that assigns into
+    # child_holder[0], the handler falls back to killpg on our pgid
+    # — which the child has just joined — instead of leaving the
+    # executor orphaned (inherited by init, eventually cleaned up by
+    # cgroup teardown but possibly still writing output in the
+    # meantime, surprising the next user of the same node).
+    child = subprocess.Popen(executor, shell=True, env=env, preexec_fn=os.setpgrp)
     child_holder[0] = child
     returncode = child.wait()
 
