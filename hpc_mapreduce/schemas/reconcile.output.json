@@ -10,7 +10,7 @@
     "run_id":          { "type": "string" },
     "lifecycle_state": {
       "type": "string",
-      "enum": ["in_flight", "complete", "failed", "abandoned"],
+      "enum": ["in_flight", "complete", "failed", "abandoned", "timeout"],
       "description": "Reconcile flips to 'abandoned' when recorded job_ids are non-empty but none are alive on the scheduler."
     },
     "combined_waves":  { "type": "array", "items": { "type": "integer" } },
