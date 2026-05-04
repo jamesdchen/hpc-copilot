@@ -36,7 +36,8 @@ import os
 import re
 import subprocess
 
-from claude_hpc.infra.parsing import parse_sacct_pipe_row, to_int as _to_int
+from claude_hpc.infra.parsing import parse_sacct_pipe_row
+from claude_hpc.infra.parsing import to_int as _to_int
 
 # sacct ``--format=`` list, kept here so the parser and the command
 # string never drift out of sync.
