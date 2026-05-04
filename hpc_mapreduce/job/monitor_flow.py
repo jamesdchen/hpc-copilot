@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce._primitive import SideEffect, primitive
-from hpc_mapreduce._time import utcnow_iso
+from claude_hpc._internal._time import utcnow_iso
 from hpc_mapreduce.lifecycle import LifecycleState
 from hpc_mapreduce.job.runs import read_run_sidecar
 from slash_commands import errors, runner, session

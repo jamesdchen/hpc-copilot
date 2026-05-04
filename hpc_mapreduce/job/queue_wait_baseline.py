@@ -53,7 +53,7 @@ import math
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
+from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
 from hpc_mapreduce.job.runtime_prior import read_samples
 
 if TYPE_CHECKING:

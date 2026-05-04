@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
-from hpc_mapreduce._time import utcnow
+from claude_hpc._internal._time import utcnow
 from hpc_mapreduce.job.queue_wait_baseline import predict_queue_wait
 
 if TYPE_CHECKING:

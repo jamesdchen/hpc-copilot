@@ -97,7 +97,7 @@ def validate_submission(
         fits = False
         estimated_start_iso: str | None = None
     else:
-        from hpc_mapreduce._time import utcnow
+        from claude_hpc._internal._time import utcnow
 
         ts = utcnow().timestamp() + int(eta_sec)
         from datetime import datetime, timezone

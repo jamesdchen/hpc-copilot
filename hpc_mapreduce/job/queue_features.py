@@ -43,7 +43,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
+from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
 
 if TYPE_CHECKING:
     from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
