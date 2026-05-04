@@ -107,7 +107,7 @@ def load_stages_module(stages_py_path: Path) -> ModuleType:
     if not hasattr(module, "stages") or not callable(module.stages):
         raise AttributeError(
             f"{path} must define a stages() callable returning list[dict] — "
-            "see hpc_mapreduce/schemas/stages.input.json"
+            "see claude_hpc/schemas/stages.input.json"
         )
     return module
 

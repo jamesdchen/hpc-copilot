@@ -26,7 +26,7 @@ def _neumaier_sum(values: Iterable[float]) -> float:
 
     Keeps reductions order-invariant within one ULP across task counts and
     dynamic ranges that would drift under plain ``sum``. Kept in sync with
-    the copy in ``hpc_mapreduce/map/combiner.py``; the combiner runs
+    the copy in ``claude_hpc/mapreduce/combiner.py``; the combiner runs
     standalone on the cluster and cannot import from this package.
     """
     s = 0.0

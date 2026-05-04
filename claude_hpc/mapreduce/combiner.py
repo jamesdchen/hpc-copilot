@@ -7,7 +7,7 @@ completes. It reads per-task ``metrics.json`` sidecars and aggregates
 them into per-wave partial results grouped by grid point.
 
 Stays zero-dependency — only Python stdlib, no imports from the
-``hpc_mapreduce`` package.
+``claude_hpc`` package.
 
 CLI:
 
@@ -63,7 +63,7 @@ def _neumaier_sum(values):
 
     Reduces accumulated float rounding error. Handles the case where the
     running sum is smaller than the incoming term, which classic Kahan
-    does not. Duplicated verbatim in ``hpc_mapreduce/reduce/metrics.py``.
+    does not. Duplicated verbatim in ``claude_hpc/mapreduce/reduce/metrics.py``.
     """
     s = 0.0
     c = 0.0

@@ -17,7 +17,7 @@ Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-f
 4. The parallelization axis lives in `.hpc/tasks.py` (`total()` + `resolve(task_id)`); the agent walks the user through writing it during `/submit` Step 6. Verify task count locally before submitting:
 
    ```bash
-   python -c 'from hpc_mapreduce import load_tasks_module, tasks_path; print(load_tasks_module(tasks_path(".")).total())'
+   python -c 'from claude_hpc import load_tasks_module, tasks_path; print(load_tasks_module(tasks_path(".")).total())'
    ```
 
    If unexpectedly large (>1000), stop and surface to the caller.

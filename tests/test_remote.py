@@ -152,8 +152,8 @@ class TestDeployRuntime:
 
         all_calls = mock_run.call_args_list
         # Expect 10 subprocess.run invocations:
-        #   1 ssh (mkdir -p hpc_mapreduce/map, .hpc/templates, .hpc/templates/common),
-        #   1 scp into hpc_mapreduce/map/ (metrics_io.py),
+        #   1 ssh (mkdir -p claude_hpc/mapreduce, .hpc/templates, .hpc/templates/common),
+        #   1 scp into claude_hpc/mapreduce/ (metrics_io.py),
         #   1 scp into .hpc/_hpc_dispatch.py,
         #   4 scp into .hpc/templates/ (sge cpu/gpu, slurm cpu/gpu),
         #   2 scp into .hpc/templates/common/ (hpc_preamble.sh, gpu_preamble.sh),
@@ -168,10 +168,10 @@ class TestDeployRuntime:
         assert ".hpc/templates" in argvs[0][-1]
         assert ".hpc/templates/common" in argvs[0][-1]
 
-        # Importable stub into hpc_mapreduce/map/
+        # Importable stub into claude_hpc/mapreduce/
         assert argvs[1][0] == "scp"
         assert argvs[1][1].endswith("metrics_io.py")
-        assert argvs[1][2].endswith(":/p/hpc_mapreduce/map/metrics_io.py")
+        assert argvs[1][2].endswith(":/p/claude_hpc/mapreduce/metrics_io.py")
 
         # Framework executor into .hpc/
         assert argvs[2][0] == "scp"

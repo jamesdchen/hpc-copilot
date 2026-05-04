@@ -17,7 +17,7 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
     Searches (in order):
     1. Explicit *path* argument
     2. ``HPC_CLUSTERS_CONFIG`` env var (full path to a yaml file)
-    3. ``config/clusters.yaml`` shipped inside the ``hpc_mapreduce`` package
+    3. ``config/clusters.yaml`` shipped inside the ``claude_hpc`` package
     """
     if path is None:
         env_path = os.environ.get("HPC_CLUSTERS_CONFIG")

@@ -61,7 +61,7 @@ Per-operation contracts live in `docs/primitives/` — this skill composes the [
    - `.hpc/tasks.py` — the user's `total()` / `resolve(task_id)` module. Per-task kwargs come from `tasks.resolve(i)`; per-task `result_dir` is the sidecar's `result_dir_template.format(task_id=i, run_id=<run_id>, **kwargs)`.
 
    ```python
-   from hpc_mapreduce import load_tasks_module, read_run_sidecar, tasks_path
+   from claude_hpc import load_tasks_module, read_run_sidecar, tasks_path
    sidecar = read_run_sidecar(experiment_dir, run_id)
    tasks = load_tasks_module(tasks_path(experiment_dir))
    ```
@@ -208,7 +208,7 @@ mkdir -p .hpc/runs
 rsync -az $SSH_TARGET:$REMOTE_PATH/.hpc/runs/<run_id>.json ./.hpc/runs/<run_id>.json
 python -c '
 import json
-from hpc_mapreduce import load_tasks_module, tasks_path
+from claude_hpc import load_tasks_module, tasks_path
 sc = json.load(open(".hpc/runs/<run_id>.json"))
 print(sc["sidecar_schema_version"], sc["task_count"])
 print(load_tasks_module(tasks_path(".")).total())'

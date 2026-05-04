@@ -5,11 +5,11 @@ four readers each implement a private "I read N, what does the doc
 say?" check:
 
 * ``slash_commands/session.py`` — session journal (``SCHEMA_VERSION = 1``)
-* ``hpc_mapreduce/job/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
-* ``hpc_mapreduce/job/calibration.py`` — calibration prediction sidecar (``schema_version = 1`` literal)
-* ``hpc_mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
+* ``claude_hpc/orchestrator/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
+* ``claude_hpc/orchestrator/calibration.py`` — calibration prediction sidecar (``schema_version = 1`` literal)
+* ``claude_hpc/mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
 
-Plus the per-run sidecar (``hpc_mapreduce/job/runs.py``,
+Plus the per-run sidecar (``claude_hpc/orchestrator/runs.py``,
 ``SIDECAR_SCHEMA_VERSION = 2``) which has been coordinated with
 ``map/dispatch.py`` since the P0 v2 fix.
 
@@ -83,7 +83,7 @@ def compatibility_check(domain: str, found: int) -> None:
     backfills (e.g. v1 sidecars without ``wave_map``).
     """
     # Local import: ``slash_commands.errors`` imports nothing from
-    # ``hpc_mapreduce`` so this is safe, but the import is inside the
+    # ``claude_hpc`` so this is safe, but the import is inside the
     # function so module load order is robust to future refactors.
     from slash_commands import errors as _errors
 

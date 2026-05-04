@@ -1,12 +1,12 @@
 """Per-task metrics sidecar writer.
 
 Stdlib-only.  Safe to import from an executor running on a cluster compute
-node without the full ``hpc_mapreduce`` install -- this module is deployed
+node without the full ``claude_hpc`` install -- this module is deployed
 alongside ``combiner.py`` by :func:`claude_hpc.infra.remote.deploy_runtime`.
 
 Executors call :func:`write_metrics` at the end of their run to drop a
 ``metrics.json`` sidecar into ``$RESULT_DIR``.  The combiner
-(``hpc_mapreduce/map/combiner.py``) reads that sidecar per task to
+(``claude_hpc/mapreduce/combiner.py``) reads that sidecar per task to
 aggregate metrics per grid point.
 """
 
@@ -37,7 +37,7 @@ def read_kw_env() -> dict[str, str]:
     (open-loop task with no kwargs, or running outside the dispatcher).
 
     Stdlib-only; safe to import from an executor running on a cluster
-    compute node without the full ``hpc_mapreduce`` install — same
+    compute node without the full ``claude_hpc`` install — same
     deployment guarantee as :func:`write_metrics`.
     """
     return {
@@ -50,7 +50,7 @@ def read_kw_env() -> dict[str, str]:
 def write_metrics(metrics: dict, *, result_dir: str | None = None) -> str:
     """Write ``metrics.json`` atomically into *result_dir* (default ``$RESULT_DIR``).
 
-    The dispatcher (``hpc_mapreduce/map/dispatch.py``) sets ``RESULT_DIR`` to
+    The dispatcher (``claude_hpc/mapreduce/dispatch.py``) sets ``RESULT_DIR`` to
     the per-task WIP directory, so writing there means the sidecar is
     promoted atomically with the rest of the task's raw outputs on success.
     If the task crashes after the sidecar is written, the WIP dir is

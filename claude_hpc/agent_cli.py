@@ -15,7 +15,7 @@ Bash tool, cron, scripts). Conventions:
 - Subcommands with non-trivial inputs accept ``--spec path/to/spec.json``.
 
 The full schema for each subcommand is documented in ``docs/cli-spec.md``
-and shipped as JSON Schema files under ``hpc_mapreduce/schemas/``.
+and shipped as JSON Schema files under ``claude_hpc/schemas/``.
 """
 
 from __future__ import annotations
@@ -239,7 +239,7 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
 
     Validation is opt-in via *schema_name* so callers without a matching
     schema (e.g. ad-hoc dicts) still work, but every CLI subcommand that
-    has one in ``hpc_mapreduce/schemas/<name>.input.json`` should pass
+    has one in ``claude_hpc/schemas/<name>.input.json`` should pass
     it.  Validation failures map to ``SpecInvalid`` with the schema
     field path in the message — far more useful to a calling agent than
     the Python ``int("abc")`` traceback we used to surface.
@@ -260,7 +260,7 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
 
 
 def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
-    """Validate *payload* against ``hpc_mapreduce/schemas/<schema_name>.input.json``.
+    """Validate *payload* against ``claude_hpc/schemas/<schema_name>.input.json``.
 
     Raises :class:`errors.SpecInvalid` on schema mismatch.  When the
     ``jsonschema`` library is unavailable (older installs that haven't
@@ -303,7 +303,7 @@ _MARS_SKILL_NAMES = (
 
 def _mars_skill_paths() -> dict[str, str]:
     # Skills live one level up from the package (skills/ is a sibling of
-    # hpc_mapreduce/ in the source tree). Wheel-only deploys won't ship
+    # claude_hpc/ in the source tree). Wheel-only deploys won't ship
     # them — return only entries that resolve to an existing file so a
     # consumer can rely on every value being a real path.
     skills_root = claude_hpc._PACKAGE_ROOT.parent / "skills"
@@ -967,7 +967,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
 def cmd_submit_flow(args: argparse.Namespace) -> int:
     """Workflow atom — pre-flight + rsync + deploy + qsub + record in one shot.
 
-    See ``hpc_mapreduce/job/submit_flow.py`` for the pipeline contract
+    See ``claude_hpc/job/submit_flow.py`` for the pipeline contract
     and ``schemas/submit_flow.{input,output}.json`` for the envelope
     shapes. Idempotent on ``run_id`` via the same dedup mechanism as
     ``submit``.
@@ -1029,7 +1029,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
 def cmd_monitor_flow(args: argparse.Namespace) -> int:
     """Workflow atom — poll a run to terminal-or-budget; auto-combine waves.
 
-    See ``hpc_mapreduce/job/monitor_flow.py`` for the loop contract and
+    See ``claude_hpc/job/monitor_flow.py`` for the loop contract and
     ``schemas/monitor_flow.{input,output}.json`` for the envelope shapes.
     Internal poll loop runs to terminal lifecycle, wall-clock budget,
     or escalation; emits one envelope at the end. Pairs with
@@ -1073,7 +1073,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
 def cmd_aggregate_flow(args: argparse.Namespace) -> int:
     """Workflow atom — ensure all waves combined, pull partials, reduce locally.
 
-    See ``hpc_mapreduce/job/aggregate_flow.py`` for the pipeline contract
+    See ``claude_hpc/job/aggregate_flow.py`` for the pipeline contract
     and ``schemas/aggregate_flow.{input,output}.json`` for the envelope
     shapes. Pairs with submit-flow + monitor-flow as the third workflow
     atom — the campaign loop's per-iteration tail is

@@ -1,7 +1,7 @@
 """Primitive registry — runtime catalog of all hpc-mapreduce primitives.
 
 Implementation is SoT for behavior (the decorated function). JSON
-schemas under ``hpc_mapreduce/schemas/`` are SoT for the wire contract.
+schemas under ``claude_hpc/schemas/`` are SoT for the wire contract.
 ``docs/primitives/*.md`` and ``operations.py``'s catalog are *views*
 generated from this registry plus the schemas.
 
@@ -9,7 +9,7 @@ Decoration convention
 ---------------------
 
 Most primitives have a clean Python entry point — a public function in
-``hpc_mapreduce/job/`` or ``hpc_mapreduce/infra/`` that performs the
+``claude_hpc/orchestrator/`` or ``claude_hpc/forecast/`` or ``claude_hpc/infra/`` that performs the
 operation. Decorate that function directly with ``@primitive(...)``.
 
 Some primitives have no inner Python helper — their behavior lives in
@@ -245,7 +245,7 @@ def get_registry() -> dict[str, PrimitiveMeta]:
     if not _REGISTRATION_DONE:
         raise RuntimeError(
             "Primitive registry queried before register_primitives() "
-            "was called. Call hpc_mapreduce.register_primitives() at "
+            "was called. Call claude_hpc.register_primitives() at "
             "process startup."
         )
     return dict(_REGISTRY)
@@ -256,7 +256,7 @@ def get_meta(name: str) -> PrimitiveMeta:
     if not _REGISTRATION_DONE:
         raise RuntimeError(
             "Primitive registry queried before register_primitives() "
-            "was called. Call hpc_mapreduce.register_primitives() at "
+            "was called. Call claude_hpc.register_primitives() at "
             "process startup."
         )
     return _REGISTRY[name]

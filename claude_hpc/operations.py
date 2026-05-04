@@ -5,7 +5,7 @@ of dicts describing each operation: its verb tier, idempotency, side
 effects, CLI invocation, Python entry point, and the schema files
 that pin its input/output shapes (where they exist).
 
-Used by :func:`hpc_mapreduce.agent_cli.cmd_capabilities` to expose the
+Used by :func:`claude_hpc.agent_cli.cmd_capabilities` to expose the
 operation catalog over the JSON envelope, so external agents can
 discover what's invokable without reading any docs. The same data
 drives `docs/operations.md` via `scripts/build_operations_index.py`.
@@ -37,7 +37,7 @@ _PACKAGE_ROOT = claude_hpc._PACKAGE_ROOT
 def _primitives_dir() -> Path | None:
     """Locate `docs/primitives/` from the package root.
 
-    Source-tree installs: `<repo>/hpc_mapreduce/` is the package, so the
+    Source-tree installs: `<repo>/claude_hpc/` is the package, so the
     parent is `<repo>/` and frontmatters live at `<repo>/docs/primitives/`.
     Wheel installs don't ship docs/; this returns None and callers fall
     through to the baked operations.json (when implemented).
