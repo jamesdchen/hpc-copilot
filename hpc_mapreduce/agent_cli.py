@@ -363,7 +363,7 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
             ],
             "operations": operations_catalog(),
         },
-        idempotent=True,
+        name="capabilities",
     )
     return EXIT_OK
 
@@ -429,7 +429,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
                 checks.append(_check("cluster_tcp_22", False, f"{host}:22 — {exc}"))
 
     all_ok = all(c["ok"] for c in checks)
-    _ok({"all_ok": all_ok, "checks": checks}, idempotent=True)
+    _ok({"all_ok": all_ok, "checks": checks}, name="check-preflight")
     return EXIT_OK if all_ok else EXIT_CLUSTER_ERROR
 
 
@@ -452,7 +452,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
     meta = _build_mars_meta_block(Path(args.experiment_dir))
     if meta is not None:
         data["meta"] = meta
-    _ok(data, idempotent=True)
+    _ok(data, name="discover-executors")
     return EXIT_OK
 
 
@@ -505,7 +505,7 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
     # kept (snap.to_dict() includes it) for one release as back-compat.
     payload = snap.to_dict()
     partial = list(payload.get("errors", []))
-    _ok(payload, idempotent=True, partial_errors=partial or None)
+    _ok(payload, name="inspect-cluster", partial_errors=partial or None)
     return EXIT_OK
 
 
@@ -528,7 +528,7 @@ def cmd_runtime_prior(args: argparse.Namespace) -> int:
         cluster=args.cluster,
         cmd_sha=args.cmd_sha,
     )
-    _ok(out, idempotent=True)
+    _ok(out, name="read-runtime-prior")
     return EXIT_OK
 
 
@@ -571,7 +571,45 @@ def cmd_walltime_drift(args: argparse.Namespace) -> int:
             "adjusted_safety_mult": adjusted,
             "rationale": rationale,
         },
-        idempotent=True,
+        name="walltime-drift",
+    )
+    return EXIT_OK
+
+
+@primitive(
+    name="best-submit-window",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.HpcError],
+    idempotent=True,
+)
+def cmd_best_submit_window(args: argparse.Namespace) -> int:
+    """Surface the top_k lowest-wait submit windows in the next horizon.
+
+    Sweeps the diurnal queue-wait predictor at hourly offsets up to
+    ``--within-hours`` and returns the top ``--top-k`` candidates.
+    Cold-start hours are excluded from the ranking. The slash command
+    consumes the result to suggest "submit now" vs. "wait until
+    <hour>".
+    """
+    from hpc_mapreduce.job.best_submit_window import best_submit_windows
+
+    candidates = best_submit_windows(
+        args.experiment_dir,
+        profile=args.profile,
+        cluster=args.cluster,
+        within_hours=int(args.within_hours),
+        top_k=int(args.top_k),
+    )
+    _ok(
+        {
+            "profile": args.profile,
+            "cluster": args.cluster,
+            "within_hours": int(args.within_hours),
+            "top_k": int(args.top_k),
+            "candidates": [c.to_dict() for c in candidates],
+        },
+        name="best-submit-window",
     )
     return EXIT_OK
 
@@ -603,7 +641,7 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
             "p95_delta_sec": edge.p95_delta_sec,
             "calibration_ratio": edge.calibration_ratio,
         },
-        idempotent=True,
+        name="house-edge",
     )
     return EXIT_OK
 
@@ -638,44 +676,23 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
         current_max_array_size=getattr(args, "current_max_array_size", None),
         est_per_task_sec=getattr(args, "est_per_task_sec", None),
     )
-    _ok(out, idempotent=True)
+    _ok(out, name="score-submit-plan")
     return EXIT_OK
 
 
-@primitive(
-    name="clusters-list",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_clusters_list(_args: argparse.Namespace) -> int:
-    clusters = load_clusters_config()
-    _ok(
-        {
-            "clusters": [
-                {"name": name, "host": cfg.get("host"), "scheduler": cfg.get("scheduler")}
-                for name, cfg in clusters.items()
-            ]
-        },
-        idempotent=True,
-    )
+    """Argparse adapter — primitive lives at hpc_mapreduce.atoms.clusters."""
+    from hpc_mapreduce.atoms.clusters import list_clusters
+
+    _ok(list_clusters(), name="clusters-list")
     return EXIT_OK
 
 
-@primitive(
-    name="clusters-describe",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.ClusterUnknown],
-    idempotent=True,
-)
 def cmd_clusters_describe(args: argparse.Namespace) -> int:
-    clusters = load_clusters_config()
-    if args.name not in clusters:
-        raise errors.ClusterUnknown(
-            f"unknown cluster {args.name!r}; run `hpc-mapreduce clusters list`"
-        )
-    _ok({"name": args.name, "config": clusters[args.name]}, idempotent=True)
+    """Argparse adapter — primitive lives at hpc_mapreduce.atoms.clusters."""
+    from hpc_mapreduce.atoms.clusters import describe_cluster
+
+    _ok(describe_cluster(name=args.name), name="clusters-describe")
     return EXIT_OK
 
 
@@ -728,7 +745,7 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
             d["campaign_id"] = r.campaign_id
         return d
 
-    _ok({"runs": [_row(r) for r in records]}, idempotent=True)
+    _ok({"runs": [_row(r) for r in records]}, name="list-in-flight")
     return EXIT_OK
 
 
@@ -763,7 +780,7 @@ def cmd_campaign_status(args: argparse.Namespace) -> int:
             "history": history,
             "run_ids": [s["run_id"] for s in sidecars],
         },
-        idempotent=True,
+        name="campaign-status",
     )
     return EXIT_OK
 
@@ -791,7 +808,7 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
             counts[cid] += 1
     _ok(
         {"campaigns": [{"campaign_id": cid, "iterations": n} for cid, n in sorted(counts.items())]},
-        idempotent=True,
+        name="campaign-list",
     )
     return EXIT_OK
 
@@ -828,7 +845,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     # querying `campaign list` / `campaign status`.
     if updated.campaign_id:
         data["campaign_id"] = updated.campaign_id
-    _ok(data, idempotent=True)
+    _ok(data, name="poll-run-status")
     return EXIT_OK
 
 
@@ -886,7 +903,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "run_id": spec["run_id"],
                 "dry_run": True,
             },
-            idempotent=True,
+            name="submit-spec",
         )
         return EXIT_OK
 
@@ -909,7 +926,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
             "total_tasks": record.total_tasks,
             "deduped": deduped,
         },
-        idempotent=True,  # honest now that submit_and_record dedups
+        name="submit-spec",  # honest now that submit_and_record dedups
     )
     return EXIT_OK
 
@@ -946,7 +963,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
                 "canary": bool(spec.get("canary", True)),
                 "dry_run": True,
             },
-            idempotent=True,
+            name="submit-flow",
         )
         return EXIT_OK
 
@@ -972,7 +989,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         slurm_cluster=spec.get("slurm_cluster"),
         partial_ok=bool(spec.get("partial_ok", False)),
     )
-    _ok(result.to_envelope_data(), idempotent=True)
+    _ok(result.to_envelope_data(), name="submit-flow")
     return EXIT_OK
 
 
@@ -1003,7 +1020,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
                 "auto_combine_waves": spec.get("auto_combine_waves", True),
                 "dry_run": True,
             },
-            idempotent=True,
+            name="monitor-flow",
         )
         return EXIT_OK
 
@@ -1016,7 +1033,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
         combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
         file_glob=spec.get("file_glob", "*"),
     )
-    _ok(result.to_envelope_data(), idempotent=True)
+    _ok(result.to_envelope_data(), name="monitor-flow")
     return EXIT_OK
 
 
@@ -1046,7 +1063,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
                 "output_dir": spec.get("output_dir"),
                 "dry_run": True,
             },
-            idempotent=True,
+            name="aggregate-flow",
         )
         return EXIT_OK
 
@@ -1060,7 +1077,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
         summary_glob=spec.get("summary_glob"),
         results_subdir=spec.get("results_subdir", "results"),
     )
-    _ok(result.to_envelope_data(), idempotent=True)
+    _ok(result.to_envelope_data(), name="aggregate-flow")
     return EXIT_OK
 
 
@@ -1282,7 +1299,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
         },
         # Honest now that resubmit_failed dedups on request_id: a replay
         # with the same spec is a no-op, just like submit.
-        idempotent=True,
+        name="resubmit-failed",
     )
     return EXIT_OK
 
@@ -1320,7 +1337,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             "failed_waves": record.failed_waves,
             "last_status": record.last_status,
         },
-        idempotent=True,
+        name="reconcile-journal",
     )
     return EXIT_OK
 
@@ -1408,7 +1425,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
     }
     if note is not None:
         data["note"] = note
-    _ok(data, idempotent=True)
+    _ok(data, name="logs")
     return EXIT_OK
 
 
@@ -1460,7 +1477,7 @@ def cmd_failures(args: argparse.Namespace) -> int:
                 "clusters": [],
                 "note": "no failed tasks in current status report",
             },
-            idempotent=True,
+            name="failures",
         )
         return EXIT_OK
 
@@ -1504,7 +1521,7 @@ def cmd_failures(args: argparse.Namespace) -> int:
     }
     if auto_retry:
         data["auto_retry_policy"] = auto_retry
-    _ok(data, idempotent=True)
+    _ok(data, name="failures")
     return EXIT_OK
 
 
@@ -1536,7 +1553,7 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
             category="internal",
             retry_safe=False,
         )
-    _ok(data, idempotent=True)
+    _ok(data, name="campaign-health")
     return EXIT_OK
 
 
@@ -1573,7 +1590,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
     dest.write_text(src.read_text())
     _ok(
         {"path": str(dest.resolve()), "type": args.type, "source": str(src)},
-        idempotent=False,
+        name="build-executor",
     )
     return EXIT_OK
 
@@ -1779,6 +1796,23 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_he)
     _add_profile_cluster_cmdsha(p_he)
     p_he.set_defaults(func=cmd_house_edge)
+
+    # best-submit-window
+    p_bsw = sub.add_parser(
+        "best-submit-window",
+        help=(
+            "Sweep the diurnal queue-wait predictor over the next "
+            "--within-hours hours and surface the top_k lowest-wait "
+            "submit candidates. Used by /submit-hpc Step 4c to advise "
+            "submit-now vs. wait-for-window."
+        ),
+    )
+    _add_experiment_dir(p_bsw)
+    p_bsw.add_argument("--profile", required=True)
+    p_bsw.add_argument("--cluster", required=True)
+    p_bsw.add_argument("--within-hours", type=int, default=24)
+    p_bsw.add_argument("--top-k", type=int, default=5)
+    p_bsw.set_defaults(func=cmd_best_submit_window)
 
     # clusters
     p_cl = sub.add_parser("clusters", help="Introspect available cluster definitions.")

@@ -199,6 +199,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_mapreduce.infra.inspect",
     "hpc_mapreduce.infra.clusters",
     "hpc_mapreduce.agent_cli",
+    "hpc_mapreduce.atoms.clusters",
     "slash_commands.runner",
     "hpc_mapreduce.job.validate",
     # Composites — must come after every atom they reference.
