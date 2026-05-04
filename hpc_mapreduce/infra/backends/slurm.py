@@ -112,6 +112,32 @@ class SlurmBackend(HPCBackend):
         from hpc_mapreduce.infra.backends.query import query_sacct
         return query_sacct(job_ids, cluster=slurm_cluster)
 
+    @staticmethod
+    def inspect_cluster(
+        cluster_name: str,
+        cfg: dict,
+        *,
+        sacct_window_hours: int = 24,
+        stress_alloc_mem_pct: float = 0.80,
+        stress_cpu_load_frac: float = 0.80,
+        runner=None,
+    ):
+        """Dispatch to :func:`_slurm_inspect` for SLURM.
+
+        Unified signature with :meth:`SGEBackend.inspect_cluster`; SLURM
+        consumes ``sacct_window_hours`` (used to scope the failure-rate
+        sacct query) while SGE ignores it.
+        """
+        from hpc_mapreduce.infra.inspect import _slurm_inspect
+        return _slurm_inspect(
+            cluster_name,
+            cfg,
+            sacct_window_hours=sacct_window_hours,
+            stress_alloc_mem_pct=stress_alloc_mem_pct,
+            stress_cpu_load_frac=stress_cpu_load_frac,
+            runner=runner,
+        )
+
     def _build_command(
         self,
         task_range: str,

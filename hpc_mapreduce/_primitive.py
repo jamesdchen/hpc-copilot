@@ -30,12 +30,14 @@ time, not silently absorbed.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import importlib
-from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     from slash_commands.errors import HpcError
 
 
@@ -83,7 +85,7 @@ def primitive(
     *,
     name: str,
     verb: VerbKind,
-    composes: Iterable[str] | None = None,
+    composes: Iterable[Callable[..., Any] | str] | None = None,
     side_effects: Iterable[SideEffect] | None = None,
     error_codes: Iterable[type[HpcError]] | None = None,
     idempotent: bool = True,
@@ -96,6 +98,16 @@ def primitive(
     The decorated function IS the primitive's behavior. Decorator
     parameters carry the metadata that other layers (operations.py,
     primitive frontmatter, build_*_index.py) used to duplicate by hand.
+
+    ``composes`` accepts function references to atom primitives that
+    have already been decorated with ``@primitive(...)``; each callable
+    must carry the decorator-attached ``_primitive_meta`` attribute.
+    String names are also accepted for back-compat (looked up in the
+    live ``_REGISTRY`` at decoration time). Either way, the decorator
+    MUST be evaluated AFTER the atoms it references — see the ordering
+    convention in ``_PRIMITIVE_MODULES``. A rename of an atom function
+    becomes an import-time ``NameError`` rather than a CI test failure
+    on a stale string.
 
     Re-registering the *same* function under the same name is a no-op
     (lets test reloads and stale __pycache__ work). Registering a
@@ -110,11 +122,34 @@ def primitive(
             raise ValueError(
                 f"Primitive {name!r} already registered (by {existing!r})"
             )
+        resolved_composes: list[PrimitiveMeta] = []
+        for c in composes or ():
+            if callable(c):
+                ref_meta = getattr(c, "_primitive_meta", None)
+                if ref_meta is None:
+                    raise ValueError(
+                        f"composes references {c!r} which is not a "
+                        "registered primitive (no _primitive_meta "
+                        "attribute — atom must be decorated before "
+                        "composites that reference it)"
+                    )
+                resolved_composes.append(ref_meta)
+            elif isinstance(c, str):
+                if c not in _REGISTRY:
+                    raise ValueError(
+                        f"composes references {c!r} which is not a "
+                        "registered primitive"
+                    )
+                resolved_composes.append(_REGISTRY[c])
+            else:
+                raise ValueError(
+                    f"composes entries must be callables or names, got {c!r}"
+                )
         meta = PrimitiveMeta(
             name=name,
             verb=verb,
             func=func,
-            composes=tuple(composes or ()),
+            composes=tuple(resolved_composes),
             side_effects=tuple(side_effects or ()),
             error_codes=tuple(error_codes or ()),
             idempotent=idempotent,
@@ -149,64 +184,53 @@ def get_meta(name: str) -> PrimitiveMeta:
 # new module that adds @primitive(...) MUST be appended here; a CI lint
 # (``scripts/lint_primitive_modules.py``) catches drift at lint time
 # without paying a runtime auto-discovery cost.
+#
+# ORDERING: atoms must precede the composites that reference them.
+# Composite ``@primitive(composes=[atom_func, ...])`` decorators look
+# up each atom_func's ``_primitive_meta`` attribute at decoration time;
+# the atom decorator must have run first to attach it.
 _PRIMITIVE_MODULES: tuple[str, ...] = (
-    "hpc_mapreduce.job.submit_flow",
-    "hpc_mapreduce.job.monitor_flow",
-    "hpc_mapreduce.job.aggregate_flow",
+    # Atoms first.
     "hpc_mapreduce.job.runs",
     "hpc_mapreduce.job.runtime_prior",
     "hpc_mapreduce.job.calibration",
     "hpc_mapreduce.job.discover",
     "hpc_mapreduce.job.resubmit",
     "hpc_mapreduce.job.planner",
+    "hpc_mapreduce.job.campaign_health",
     "hpc_mapreduce.infra.inspect",
     "hpc_mapreduce.infra.clusters",
     "hpc_mapreduce.agent_cli",
     "slash_commands.runner",
     "hpc_mapreduce.job.validate",
+    # Composites — must come after every atom they reference.
+    "hpc_mapreduce.job.submit_flow",
+    "hpc_mapreduce.job.monitor_flow",
+    "hpc_mapreduce.job.aggregate_flow",
 )
 
-# Recursion guards for ``_ensure_imported`` (item #6 of the C′
-# breakage list — "circular import risk"). A primitive module's
-# top-level @primitive(...) call decorates a function whose definition
-# can transitively trigger imports. If any of those imports re-enters
-# ``get_registry()`` while we are mid-import, ``_ensure_imported``
-# would loop. ``_IMPORTING`` short-circuits the inner call so the
-# outermost frame completes the import sequence atomically;
-# ``_IMPORT_DONE`` makes subsequent calls cheap.
+# Recursion guards for ``_ensure_imported``.
 _IMPORTING: bool = False
 _IMPORT_DONE: bool = False
 
 
 def _ensure_imported() -> None:
-    """Force-import every module that registers a primitive.
-
-    Imports the explicit ``_PRIMITIVE_MODULES`` list. Each module's
-    @primitive(...) calls register on import. The ``_IMPORTING`` guard
-    prevents recursion if decorated code triggers ``get_registry()``
-    during its own module-load.
-    """
+    """Force-import every module that registers a primitive."""
     global _IMPORTING, _IMPORT_DONE
     if _IMPORT_DONE or _IMPORTING:
         return
     _IMPORTING = True
     try:
         for modname in _PRIMITIVE_MODULES:
-            try:
+            with contextlib.suppress(ImportError):
                 importlib.import_module(modname)
-            except ImportError:
-                pass
     finally:
         _IMPORTING = False
         _IMPORT_DONE = True
 
 
 def _reset_for_tests() -> None:
-    """Test helper: clear the registry and reset the import latch.
-
-    Not part of the public API. Tests that need a clean registry
-    snapshot call this before re-importing primitive modules.
-    """
+    """Test helper: clear the registry and reset the import latch."""
     global _IMPORT_DONE
     _REGISTRY.clear()
     _IMPORT_DONE = False

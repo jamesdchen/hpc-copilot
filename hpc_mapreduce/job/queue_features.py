@@ -41,10 +41,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hpc_mapreduce._time import parse_iso_utc_or_none, utcnow
-from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
+
+if TYPE_CHECKING:
+    from hpc_mapreduce.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 __all__ = ["QueueFeatures", "compute_features"]
 

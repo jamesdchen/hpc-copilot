@@ -40,6 +40,7 @@ def test_decorator_registers_under_given_name() -> None:
         assert my_op() == 7
     finally:
         _REGISTRY.pop(fname, None)
+        _REGISTRY.pop(atom_name, None)
 
 
 def test_decorator_attaches_meta_attribute() -> None:
@@ -117,13 +118,23 @@ def test_side_effect_dataclass_immutable() -> None:
 
 
 def test_primitive_meta_carries_all_fields() -> None:
-    """All decorator kwargs round-trip onto the PrimitiveMeta."""
+    """All decorator kwargs round-trip onto the PrimitiveMeta.
+
+    ``composes`` now holds ``PrimitiveMeta`` refs (resolved from
+    function refs at decoration time). Register a stub atom so the
+    composes lookup succeeds.
+    """
+    atom_name = "test-carries-fields-atom"
     fname = "test-carries-fields"
+
+    @primitive(name=atom_name, verb="query")
+    def atom_op() -> None:
+        pass
 
     @primitive(
         name=fname,
         verb="workflow",
-        composes=["a", "b"],
+        composes=[atom_op],
         side_effects=[SideEffect("rsync", "x"), SideEffect("ssh", "y")],
         idempotent=False,
         idempotency_key="run_id",
@@ -136,7 +147,9 @@ def test_primitive_meta_carries_all_fields() -> None:
     try:
         meta = get_meta(fname)
         assert isinstance(meta, PrimitiveMeta)
-        assert meta.composes == ("a", "b")
+        assert len(meta.composes) == 1
+        assert meta.composes[0].name == atom_name
+        assert meta.composes[0].func is atom_op
         assert meta.side_effects == (
             SideEffect("rsync", "x"),
             SideEffect("ssh", "y"),
