@@ -6,9 +6,27 @@ from claude_hpc.orchestrator.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:
-    """The catalog covers the 9 documented failure modes (segv was
-    removed when the SEGV blacklist feature was deleted)."""
-    assert len(CATALOG) == 9
+    """The catalog covers the 10 documented failure modes (segv was
+    removed when the SEGV blacklist feature was deleted; preempted was
+    added when dispatch.py learned to trap SIGTERM)."""
+    assert len(CATALOG) == 10
+
+
+def test_preempted_matches_exit_130() -> None:
+    """Cluster-side dispatch.py exits 130 after trapping SIGTERM —
+    classify() must surface this as ``preempted`` so the harness can
+    resubmit cleanly without escalating to the user."""
+    out = classify("[claude-hpc] SIGTERM received; cluster preemption imminent\n", 130)
+    assert out["error_class"] == "preempted"
+    assert out["suggested_fix"] == {"action": "resubmit-preempted"}
+
+
+def test_preempted_matches_exit_130_alone() -> None:
+    """Even without the dispatch.py stderr line (e.g. log clipped),
+    exit code 130 alone is enough to classify as preempted because the
+    catalog entry runs at priority>=90."""
+    out = classify("", 130)
+    assert out["error_class"] == "preempted"
 
 
 def test_gpu_oom_matches_cuda_pattern() -> None:

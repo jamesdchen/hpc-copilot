@@ -50,6 +50,18 @@ class FailureSignature:
 
 CATALOG: list[FailureSignature] = [
     FailureSignature(
+        error_class="preempted",
+        stderr_pattern=re.compile(
+            r"\[claude-hpc\] SIGTERM received; cluster preemption imminent",
+        ),
+        # Cluster-side dispatch.py exits 130 after trapping SIGTERM —
+        # the campus user got bumped by higher-priority work, not
+        # failed. The harness should resubmit cleanly.
+        exit_code=130,
+        suggested_fix={"action": "resubmit-preempted"},
+        priority=100,
+    ),
+    FailureSignature(
         error_class="gpu_oom",
         stderr_pattern=re.compile(
             r"CUDA out of memory|RuntimeError: cuda runtime error.*out of memory|"

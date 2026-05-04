@@ -794,6 +794,37 @@ def test_cluster_failures_categorizes_known_modes():
     assert {"gpu_oom", "walltime", "import_error"}.issubset(cats)
 
 
+def test_cluster_failures_groups_preempted_tasks():
+    """The campus user's bumped jobs (cluster preemption) must group
+    under a single ``preempted`` cluster regardless of whether the
+    dispatcher's SIGTERM-trap stderr line is in the tail or only the
+    exit code (130) is present."""
+    logs = [
+        # Two tasks with the dispatcher's SIGTERM-trap stderr line.
+        {
+            "task_id": 1,
+            "content": "[claude-hpc] SIGTERM received; cluster preemption imminent\n",
+            "exit_code": 130,
+        },
+        {
+            "task_id": 2,
+            "content": "[claude-hpc] SIGTERM received; cluster preemption imminent\n",
+            "exit_code": 130,
+        },
+        # One task where the stderr was clipped but exit code is 130.
+        {"task_id": 3, "content": "", "exit_code": 130},
+    ]
+    clusters = runner.cluster_failures_by_fingerprint(logs)
+    preempted_clusters = [c for c in clusters if c["category"] == "preempted"]
+    # All three tasks land under the preempted category (possibly
+    # split across two clusters by fingerprint, since the empty-stderr
+    # task has a different fingerprint).
+    preempted_tids: list[int] = []
+    for c in preempted_clusters:
+        preempted_tids.extend(c["task_ids"])
+    assert sorted(preempted_tids) == [1, 2, 3]
+
+
 def test_cluster_failures_buckets_missing_logs():
     logs = [
         {"task_id": 7, "missing": True},

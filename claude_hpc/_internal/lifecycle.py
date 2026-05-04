@@ -141,3 +141,7 @@ class FailureCategory(StrEnum):
     PERMISSION_DENIED = "permission_denied"
     DISK_FULL = "disk_full"
     PYTHON_TRACEBACK = "python_traceback"
+    # PR-A: cluster preempted the campus user's low-priority job.
+    # Bumped, not failed; harness should resubmit cleanly without
+    # surfacing a real failure to the user.
+    PREEMPTED = "preempted"

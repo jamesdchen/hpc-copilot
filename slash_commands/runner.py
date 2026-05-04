@@ -712,6 +712,13 @@ def fetch_task_logs(
 # Patterns that strongly identify a failure category, ordered most-specific first.
 # Matched case-insensitively against the joined log tail.  The first hit wins.
 _FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # The campus user got bumped, not failed. Match the dispatcher's
+    # SIGTERM-trap stderr line so the cluster groups all preempted
+    # tasks together and the harness can resubmit cleanly.
+    (
+        "preempted",
+        re.compile(r"\[claude-hpc\] SIGTERM received; cluster preemption imminent"),
+    ),
     ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
     ("system_oom", re.compile(r"\boom-killer\b|\bMemoryError\b|killed.*signal 9", re.I)),
     (
@@ -885,6 +892,12 @@ def cluster_failures_by_fingerprint(
         content = entry.get("content") or ""
         fp = fingerprint_stderr_tail(content)
         category = _categorize(content)
+        # Exit-code-130 fallback: the dispatcher's SIGTERM-trap stderr
+        # line may have been clipped from the log tail, but exit 130
+        # is still a definitive preempted signal. Match the campus
+        # user's bumped jobs to the ``preempted`` cluster regardless.
+        if category == "unknown" and entry.get("exit_code") == 130:
+            category = "preempted"
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather
         # than asking the user. Importable as
