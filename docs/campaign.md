@@ -87,7 +87,7 @@ def _study() -> optuna.Study:
 # Replay any prior reduced metrics into the Optuna study so it sees the
 # full history before proposing the next trial.
 _study_handle = _study()
-for prior_entry, run_id in zip(_PRIOR, [s["run_id"] for s in __import__("hpc_mapreduce").reduce.history.find_sidecars_by_campaign(".", os.environ.get("HPC_CAMPAIGN_ID", ""))]):
+for prior_entry, run_id in zip(_PRIOR, [s["run_id"] for s in __import__("claude_hpc").mapreduce.reduce.history.find_sidecars_by_campaign(".", os.environ.get("HPC_CAMPAIGN_ID", ""))]):
     if not prior_entry:
         continue
     # Optuna trial numbers come from the study; we replay only metrics
@@ -188,7 +188,7 @@ hpc-mapreduce campaign list --experiment-dir .
 hpc-mapreduce campaign status --campaign-id ml_ridge_optuna_q1 --experiment-dir .
 ```
 
-Both subcommands emit JSON envelopes following `docs/cli-spec.md`; the data block is pinned by `hpc_mapreduce/schemas/campaign.output.json`.
+Both subcommands emit JSON envelopes following `docs/cli-spec.md`; the data block is pinned by `claude_hpc/schemas/campaign.output.json`.
 
 ## Resume semantics
 

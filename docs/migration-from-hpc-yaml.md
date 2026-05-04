@@ -37,7 +37,7 @@ multi-stage DAGs.
 | top-level `remote_path` | sidecar `remote_path` (v2) | First-class field. |
 | top-level `metrics` (sort order) | hardcoded alphabetical default + CLI override | No persisted setting. |
 | top-level `cluster_envs` | `clusters.yaml` `conda_envs` | Already in `clusters.yaml`; remaining overrides should fold there. |
-| `stages:` (multi-stage DAG) | **`.hpc/stages.py`** exposing `def stages() -> list[dict]` | New file. JSON Schema at `hpc_mapreduce/schemas/stages.input.json`. The only legacy field with no sidecar home. |
+| `stages:` (multi-stage DAG) | **`.hpc/stages.py`** exposing `def stages() -> list[dict]` | New file. JSON Schema at `claude_hpc/schemas/stages.input.json`. The only legacy field with no sidecar home. |
 
 ## Step-by-step migration
 

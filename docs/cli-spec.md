@@ -1,12 +1,12 @@
 # `hpc-mapreduce` CLI Specification
 
-Cross-cutting contract for the shell CLI shipped at `hpc_mapreduce/agent_cli.py` (entry point `hpc-mapreduce`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
+Cross-cutting contract for the shell CLI shipped at `claude_hpc/agent_cli.py` (entry point `hpc-mapreduce`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
 
 The slash-command surface in `slash_commands/commands/` is documented elsewhere; both surfaces compose from the primitive layer.
 
 ## Schemas (machine-readable contracts)
 
-The JSON Schemas under `hpc_mapreduce/schemas/` are the source of truth — agents constructing or validating envelopes should validate against the schema, not parse this markdown.
+The JSON Schemas under `claude_hpc/schemas/` are the source of truth — agents constructing or validating envelopes should validate against the schema, not parse this markdown.
 
 - `envelope.json` — universal stdout envelope (success / error).
 - `submit.input.json`, `submit.output.json` — `submit --spec` shape.
@@ -61,11 +61,11 @@ some subcommands keep for back-compat. Consumers should prefer
 }
 ```
 
-Source of truth: `hpc_mapreduce/schemas/envelope.json` and the `HpcError` hierarchy in `slash_commands/errors.py`.
+Source of truth: `claude_hpc/schemas/envelope.json` and the `HpcError` hierarchy in `slash_commands/errors.py`.
 
 ## Exit code → error_code mapping
 
-Wired in `hpc_mapreduce/agent_cli.py` (`_EXIT_CODE_BY_CATEGORY`).
+Wired in `claude_hpc/agent_cli.py` (`_EXIT_CODE_BY_CATEGORY`).
 
 | Exit | Category | Meaning | error_codes that map here |
 |---|---|---|---|

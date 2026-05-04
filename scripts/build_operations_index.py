@@ -60,8 +60,8 @@ def render_row(op: dict) -> str:
     name = op["name"]
     cli = op.get("cli") or "_(Python-only)_"
     py = op.get("python") or "_(none)_"
-    inp = f"`hpc_mapreduce/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
-    out = f"`hpc_mapreduce/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
+    inp = f"`claude_hpc/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
+    out = f"`claude_hpc/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
     idem = "✓" if op.get("idempotent") else "✗"
     # Use the shared renderer so structured {verb: target} side-effect
     # entries from primitive frontmatter survive — the previous inline

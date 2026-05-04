@@ -39,7 +39,7 @@ error_codes:
   retry_safe: true
 backed_by:
   cli: hpc-mapreduce failures --run-id <id> [--lines <n>]
-  python: hpc_mapreduce.agent_cli.cmd_failures
+  python: claude_hpc.agent_cli.cmd_failures
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable / remote_command_failed
@@ -52,7 +52,7 @@ Re-poll status, fetch stderr for every failed task, and group them by
 fingerprint so 40 failures with the same root cause show up as one
 cluster instead of 40 logs to read. Each cluster carries an inferred
 `category` from the canonical failure-category vocabulary (see
-`hpc_mapreduce/agent_cli.py::_VALID_RESUBMIT_CATEGORIES`).
+`claude_hpc/agent_cli.py::_VALID_RESUBMIT_CATEGORIES`).
 
 When an auto-retry policy is configured for the run, each cluster is
 annotated with which task ids are still eligible for an automated

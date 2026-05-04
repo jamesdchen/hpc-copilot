@@ -39,7 +39,7 @@ def main() -> int:
     # which references @primitive(...) prose) is never a registration
     # site; skip explicitly so the regex doesn't pick up docstring
     # mentions.
-    self_path = (REPO / "hpc_mapreduce" / "_primitive.py").resolve()
+    self_path = (REPO / "claude_hpc" / "_internal" / "_primitive.py").resolve()
 
     found: set[str] = set()
     for p in REPO.rglob("*.py"):
@@ -65,7 +65,7 @@ def main() -> int:
         for m in sorted(missing):
             print(f"  {m}")
         print(
-            "\nAdd them to _PRIMITIVE_MODULES in hpc_mapreduce/_primitive.py."
+            "\nAdd them to _PRIMITIVE_MODULES in claude_hpc/_internal/_primitive.py."
         )
         return 1
     return 0
