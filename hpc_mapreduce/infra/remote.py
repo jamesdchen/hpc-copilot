@@ -24,6 +24,7 @@ from __future__ import annotations
 __all__ = [
     "SSH_TIMEOUT_SEC",
     "RSYNC_TIMEOUT_SEC",
+    "split_ssh_target",
     "ssh_run",
     "rsync_push",
     "rsync_pull",
@@ -45,6 +46,21 @@ from typing import Any, Final
 # minutes before declaring the transfer hung.
 SSH_TIMEOUT_SEC = 60
 RSYNC_TIMEOUT_SEC = 1800
+
+
+def split_ssh_target(ssh_target: str) -> tuple[str, str]:
+    """Split a ``user@host`` string into ``(user, host)``.
+
+    Raises :class:`ValueError` (caller may rewrap as
+    :class:`slash_commands.errors.SpecInvalid`) when the input does not
+    contain the ``@`` separator. Used by both ``submit_flow`` and
+    ``aggregate_flow`` (and the slash-command runner) to validate
+    cluster-spec ``ssh_target`` fields before invoking ssh/rsync.
+    """
+    if "@" not in ssh_target:
+        raise ValueError(f"ssh_target must be 'user@host', got {ssh_target!r}")
+    user, host = ssh_target.split("@", 1)
+    return user, host
 
 
 def _ssh_multiplex_opts() -> list[str]:
