@@ -61,14 +61,14 @@ The Python surface that slash commands and library callers invoke:
 
 | Operation | Primitive | Python entry point |
 |---|---|---|
-| Record a submission | [submit-spec](primitives/submit-spec.md) | `slash_commands.runner.submit_and_record` |
-| Poll one run's status | [poll-run-status](primitives/poll-run-status.md) | `slash_commands.runner.record_status` |
-| Combine one wave | [combine-wave](primitives/combine-wave.md) | `slash_commands.runner.combine_wave` |
-| Record a resubmission | [resubmit-failed](primitives/resubmit-failed.md) | `slash_commands.runner.resubmit_failed` |
-| Reconcile journal vs cluster | [reconcile-journal](primitives/reconcile-journal.md) | `slash_commands.runner.reconcile` |
-| Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `slash_commands.runner.mark_terminal` |
+| Record a submission | [submit-spec](primitives/submit-spec.md) | `claude_hpc.orchestrator.runner.submit_and_record` |
+| Poll one run's status | [poll-run-status](primitives/poll-run-status.md) | `claude_hpc.orchestrator.runner.record_status` |
+| Combine one wave | [combine-wave](primitives/combine-wave.md) | `claude_hpc.orchestrator.runner.combine_wave` |
+| Record a resubmission | [resubmit-failed](primitives/resubmit-failed.md) | `claude_hpc.orchestrator.runner.resubmit_failed` |
+| Reconcile journal vs cluster | [reconcile-journal](primitives/reconcile-journal.md) | `claude_hpc.orchestrator.runner.reconcile` |
+| Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `claude_hpc.orchestrator.runner.mark_terminal` |
 | Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `claude_hpc.mapreduce.reduce.history.prior` |
-| List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `slash_commands.session.find_in_flight_runs` |
+| List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `claude_hpc._internal.session.find_in_flight_runs` |
 | Discover executors | [discover-executors](primitives/discover-executors.md) | `claude_hpc.orchestrator.discover.discover_executors` |
 | Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `claude_hpc.infra.inspect.inspect_cluster` |
 | Score submit plan | [score-submit-plan](primitives/score-submit-plan.md) | `claude_hpc.orchestrator.planner.plan_submit` |

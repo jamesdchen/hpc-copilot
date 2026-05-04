@@ -20,7 +20,7 @@ error_codes:
   description: The on-cluster reporter exited non-zero; surface stderr.
 backed_by:
   cli: hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]
-  python: slash_commands.runner.record_status
+  python: claude_hpc.orchestrator.runner.record_status
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable / remote_command_failed (check retry_safe)

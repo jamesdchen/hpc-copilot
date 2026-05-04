@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-    from slash_commands.errors import HpcError
+    from claude_hpc.errors import HpcError
 
 
 VerbKind = Literal["query", "validate", "mutate", "submit", "scaffold", "workflow"]
@@ -201,7 +201,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.logs",
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.walltime_drift",
-    "slash_commands.runner",
+    "claude_hpc.orchestrator.runner",
     "claude_hpc.orchestrator.validate",
     # Composites — must come after every atom they reference.
     "claude_hpc.orchestrator.submit_flow",

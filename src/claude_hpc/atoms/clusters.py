@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from claude_hpc import errors
 from claude_hpc._internal._primitive import primitive
 from claude_hpc.infra.clusters import load_clusters_config
-from slash_commands import errors
 
 
 @primitive(

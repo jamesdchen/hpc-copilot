@@ -31,7 +31,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`inspect-cluster`](primitives/inspect-cluster.md) | ✓ | ssh | `hpc-mapreduce inspect-cluster --cluster <name> [...]` | `claude_hpc.infra.inspect.inspect_cluster` | — | `claude_hpc/schemas/inspect_cluster.output.json` |
 | [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` | `claude_hpc.atoms.list_in_flight.list_in_flight` | — | `claude_hpc/schemas/list_in_flight.output.json` |
 | [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` | `claude_hpc.atoms.logs.fetch_logs` | — | — |
-| [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` | `slash_commands.runner.record_status` | — | `claude_hpc/schemas/status.output.json` |
+| [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` | `claude_hpc.orchestrator.runner.record_status` | — | `claude_hpc/schemas/status.output.json` |
 | [`predict-queue-wait`](primitives/predict-queue-wait.md) | ✓ | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` | `claude_hpc.agent_cli.cmd_predict_queue_wait` | `claude_hpc/schemas/predict_queue_wait.input.json` | `claude_hpc/schemas/predict_queue_wait.output.json` |
 | [`read-runtime-prior`](primitives/read-runtime-prior.md) | ✓ | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` | `claude_hpc.agent_cli.cmd_runtime_prior` | — | `claude_hpc/schemas/runtime_prior.output.json` |
 | [`score-submit-plan`](primitives/score-submit-plan.md) | ✓ | ssh | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` | `claude_hpc.agent_cli.cmd_plan_submit` | — | `claude_hpc/schemas/plan_submit.output.json` |
@@ -52,10 +52,10 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `slash_commands.runner.combine_wave` | — | `claude_hpc/schemas/combine_wave.output.json` |
-| [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `(none — Python-only primitive)` | `slash_commands.runner.mark_terminal` | — | — |
+| [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `claude_hpc.orchestrator.runner.combine_wave` | — | `claude_hpc/schemas/combine_wave.output.json` |
+| [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `(none — Python-only primitive)` | `claude_hpc.orchestrator.runner.mark_terminal` | — | — |
 | [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` | `claude_hpc.agent_cli.cmd_reconcile` | — | `claude_hpc/schemas/reconcile.output.json` |
-| [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` | `slash_commands.runner.resubmit_failed` | `claude_hpc/schemas/resubmit.input.json` | — |
+| [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` | `claude_hpc.orchestrator.runner.resubmit_failed` | `claude_hpc/schemas/resubmit.input.json` | — |
 
 ## `submit` (1)
 
@@ -63,7 +63,7 @@ Records a new submission (sidecar write + journal entry).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `slash_commands.runner.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
+| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `claude_hpc.orchestrator.runner.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
 
 ## `scaffold` (1)
 

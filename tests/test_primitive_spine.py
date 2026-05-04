@@ -200,7 +200,7 @@ def test_error_codes_subclass_hpc_error(registry: dict[str, PrimitiveMeta]) -> N
     passes a non-HpcError class (e.g. ValueError) to the decorator, which
     typing tools won't catch at all call sites.
     """
-    from slash_commands.errors import HpcError
+    from claude_hpc.errors import HpcError
 
     failures: list[str] = []
     for name, meta in registry.items():

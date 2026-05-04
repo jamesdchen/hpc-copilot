@@ -4,7 +4,7 @@ The framework has five idempotency mechanisms with no shared shape:
 
 1. Frontmatter ``idempotent: true|false`` (advisory; per-primitive).
 2. Envelope ``idempotent`` (hardcoded per call site, ~47 callers).
-3. ``run_id``-keyed dedup in :func:`slash_commands.runner.submit_and_record`.
+3. ``run_id``-keyed dedup in :func:`claude_hpc.orchestrator.runner.submit_and_record`.
 4. ``cmd_sha``-keyed :func:`claude_hpc.orchestrator.runs.find_run_by_cmd_sha`
    (wired to ``submit_and_record`` in item A5).
 5. ``request_id``-keyed resubmit dedup in ``slash_commands/runner.py``.
@@ -137,9 +137,9 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
     should be free to re-submit work that was explicitly cancelled.
     """
     # Local imports keep this module's import graph cheap and avoid
-    # circular dependencies with slash_commands which imports
+    # circular dependencies with the runner module which imports
     # session lazily.
-    from slash_commands import session
+    from claude_hpc._internal import session
 
     if isinstance(key, RunIdKey):
         record = session.load_run(experiment_dir, key.run_id)
@@ -169,12 +169,15 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
         return PriorResult(origin="sidecar", run_id=run_id, details=data)
 
     if isinstance(key, RequestIdKey):
-        # Request-log dedup is owned by slash_commands.runner's
+        # Request-log dedup is owned by claude_hpc.orchestrator.runner's
         # _request_log helpers; the resolver hands off the lookup
         # rather than duplicate that file format here.
         try:
-            from slash_commands.runner import _lookup_request_id  # type: ignore[attr-defined]
+            from claude_hpc.orchestrator import runner as _runner_mod
         except ImportError:
+            return None
+        _lookup_request_id = getattr(_runner_mod, "_lookup_request_id", None)
+        if _lookup_request_id is None:
             return None
         try:
             run_id = _lookup_request_id(experiment_dir, key.request_id)

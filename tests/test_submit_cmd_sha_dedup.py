@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from slash_commands import runner
+from claude_hpc.orchestrator import runner
 
 if TYPE_CHECKING:
     from pathlib import Path

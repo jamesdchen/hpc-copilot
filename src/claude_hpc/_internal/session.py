@@ -17,7 +17,7 @@ Storage layout (one tree per experiment cwd):
 
 `repo_hash` is `sha256(experiment_dir.resolve())[:12]`. Pure IO; no SSH,
 no mapreduce imports. Composition with cluster-mutating ops lives in
-``slash_commands.runner``.
+``claude_hpc.orchestrator.runner``.
 """
 
 from __future__ import annotations
@@ -300,7 +300,7 @@ def _all_run_files(experiment_dir: Path) -> list[Path]:
     if not rdir.exists():
         return []
     # Exclude ``*.last_status.json`` cache snapshots written by
-    # ``slash_commands.runner.record_status`` — they share the runs/
+    # ``claude_hpc.orchestrator.runner.record_status`` — they share the runs/
     # directory but are not journal records.  Including them here
     # made every status poll touch the directory's mtime and force
     # a full index rebuild on the next ``find_in_flight_runs``.

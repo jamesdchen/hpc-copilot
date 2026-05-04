@@ -107,7 +107,7 @@ class TestFailureCategoryVocabulary:
 
     def test_classifier_categories_are_all_valid_resubmit_categories(self):
         from claude_hpc.agent_cli import _VALID_RESUBMIT_CATEGORIES
-        from slash_commands.runner import _FAILURE_CATEGORY_PATTERNS
+        from claude_hpc.orchestrator.runner import _FAILURE_CATEGORY_PATTERNS
 
         emitted = {name for name, _ in _FAILURE_CATEGORY_PATTERNS}
         missing = emitted - _VALID_RESUBMIT_CATEGORIES

@@ -5,13 +5,13 @@ drifted independently — every CHANGELOG-grade bug we shipped in this
 area boiled down to two of those vocabularies disagreeing about a
 single value:
 
-* ``slash_commands.session.RunRecord.status`` — journal record status
+* ``claude_hpc._internal.session.RunRecord.status`` — journal record status
   (set literal ``{"complete", "failed", "abandoned"}`` plus
   ``"in_flight"``).
 * ``claude_hpc.orchestrator.monitor_flow``'s ``lifecycle_state`` envelope
   field — workflow state including ``"timeout"``.
 * ``claude_hpc.mapreduce.reduce.status``'s per-task status strings.
-* ``slash_commands.runner.cluster_failures_by_fingerprint``'s emitted
+* ``claude_hpc.orchestrator.runner.cluster_failures_by_fingerprint``'s emitted
   category strings vs ``claude_hpc.agent_cli._VALID_RESUBMIT_CATEGORIES``'s
   accepted set — a real bug class where the classifier could emit a
   category the resubmit path silently rejected.
@@ -51,7 +51,7 @@ __all__ = [
 
 
 class JournalStatus(StrEnum):
-    """Status field on :class:`slash_commands.session.RunRecord`.
+    """Status field on :class:`claude_hpc._internal.session.RunRecord`.
 
     ``in_flight`` while the run is being monitored; transitions to one
     of the three terminal values when the workflow ends.
@@ -64,7 +64,7 @@ class JournalStatus(StrEnum):
 
 
 # Convenience set of terminal :class:`JournalStatus` values.
-# ``slash_commands.session`` historically exposed this same set as a
+# ``claude_hpc._internal.session`` historically exposed this same set as a
 # module-level ``TERMINAL_STATUSES = frozenset({...})``. Now derived
 # from the StrEnum so it cannot drift.
 TERMINAL_STATUSES = frozenset(
@@ -107,7 +107,7 @@ class TaskStatus(StrEnum):
 
 class FailureCategory(StrEnum):
     """Failure-fingerprint vocabulary, shared by the auto-classifier
-    in :func:`slash_commands.runner.cluster_failures_by_fingerprint`
+    in :func:`claude_hpc.orchestrator.runner.cluster_failures_by_fingerprint`
     and the resubmit path's ``--spec.category`` validation in
     :mod:`claude_hpc.agent_cli`.
 

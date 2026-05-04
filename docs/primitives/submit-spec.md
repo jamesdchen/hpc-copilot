@@ -26,7 +26,7 @@ error_codes:
     protects against double-submit).
 backed_by:
   cli: hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]
-  python: slash_commands.runner.submit_and_record
+  python: claude_hpc.orchestrator.runner.submit_and_record
 exit_codes:
 - 0: ok
 - 1: user error (spec_invalid / cluster_unknown)
@@ -48,7 +48,7 @@ This separation exists because the qsub call itself is scheduler-specific (and t
 
 ## Idempotency
 
-Replays with the same `run_id` are no-ops: the call returns `deduped=true` and does not re-issue qsub. The wrapper `slash_commands.runner.submit_and_record` is keyed on `run_id` (which is itself derived from `cmd_sha`, so a re-run of an unchanged `.hpc/tasks.py` produces the same `run_id`). Callers who see `deduped=true` should switch to `poll-run-status` rather than re-running the upstream qsub.
+Replays with the same `run_id` are no-ops: the call returns `deduped=true` and does not re-issue qsub. The wrapper `claude_hpc.orchestrator.runner.submit_and_record` is keyed on `run_id` (which is itself derived from `cmd_sha`, so a re-run of an unchanged `.hpc/tasks.py` produces the same `run_id`). Callers who see `deduped=true` should switch to `poll-run-status` rather than re-running the upstream qsub.
 
 ## Compose with
 

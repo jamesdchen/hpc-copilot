@@ -1,6 +1,6 @@
 # Surface Sync Checklist
 
-Both surfaces share the atomic-ops layer (`slash_commands/runner.py`)
+Both surfaces share the atomic-ops layer (`claude_hpc/orchestrator/runner.py`)
 for any mutating op. Anything below MUST stay aligned across the two
 surfaces; changing it is a breaking change requiring a version bump.
 
@@ -19,7 +19,7 @@ update both surfaces and bump the version.
 - **Validation**: `claude_hpc.orchestrator.runs.run_sidecar_path` accepts any
   string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
   sidecars sorted chronologically by mtime ↔ filename.
-- **Defined in**: `slash_commands/runner.py:submit_and_record` —
+- **Defined in**: `claude_hpc/orchestrator/runner.py:submit_and_record` —
   `run_id` is a required keyword.
 - **Public contract**: MARs and orchestrator agents may key state on
   this. Renaming the format breaks every downstream consumer.
@@ -28,7 +28,7 @@ update both surfaces and bump the version.
 
 The full set of 12 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
-`slash_commands/errors.py`.
+`claude_hpc/errors.py`.
 
 | `error_code` | Class | `category` | `retry_safe` |
 |---|---|---|---|
@@ -79,14 +79,14 @@ Possible values of `RunRecord.status`:
 - `abandoned` — terminal, no `job_ids` are alive on the scheduler
   (set by `runner.reconcile`).
 
-Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
+Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
 + default `status="in_flight"` on `RunRecord`). Validated in
 `mark_run`.
 
 ### Journal `schema_version`
 
 - **Current value**: `1` (the constant `SCHEMA_VERSION` in
-  `slash_commands/session.py`).
+  `claude_hpc/_internal/session.py`).
 - Records with a mismatched `schema_version` are skipped (warned, not
   raised) by `load_run`. Bumping requires a migration story.
 
@@ -130,7 +130,7 @@ Defined in `slash_commands/session.py` (`TERMINAL_STATUSES` frozenset
 ### Last-status cache file
 
 - **Path**: `<HPC_JOURNAL_DIR>/<repo_hash>/runs/<run_id>.last_status.json`.
-- **Writer**: `slash_commands/runner.py:record_status` (best-effort;
+- **Writer**: `claude_hpc/orchestrator/runner.py:record_status` (best-effort;
   a write failure does not roll back the journal update).
 - **Reader**: any consumer — agent, human, `jq` pipeline, file
   watcher. Mtime tells the caller how stale the snapshot is.

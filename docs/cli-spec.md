@@ -61,7 +61,7 @@ some subcommands keep for back-compat. Consumers should prefer
 }
 ```
 
-Source of truth: `claude_hpc/schemas/envelope.json` and the `HpcError` hierarchy in `slash_commands/errors.py`.
+Source of truth: `claude_hpc/schemas/envelope.json` and the `HpcError` hierarchy in `claude_hpc/errors.py`.
 
 ## Exit code → error_code mapping
 
