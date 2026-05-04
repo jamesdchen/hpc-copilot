@@ -45,9 +45,9 @@ _SYSTEM_OOM = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _QUEUE_STALL = re.compile(r"queue[_\s-]?stall|stalled in queue", re.IGNORECASE)
-# Tagged separately from node_failure so /monitor-hpc can record an entry to
-# the per-cluster blacklist (hpc_mapreduce.job.blacklist) — a SEGV without a
-# Python traceback is the strongest "node may be silently degraded" signal.
+# Tagged separately from node_failure — a SEGV without a Python
+# traceback is the strongest "node may be silently degraded" signal,
+# which /monitor-hpc surfaces to the user instead of auto-handling.
 _SEGV = re.compile(
     r"Segmentation fault"
     r"|SIGSEGV"

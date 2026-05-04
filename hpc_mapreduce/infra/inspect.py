@@ -11,8 +11,8 @@ the ingredients for resource-quality-aware submission decisions:
 - Drain / down state.
 
 The resulting JSON is fed into :mod:`hpc_mapreduce.job.planner` (Phase 4)
-which combines it with runtime priors and a SEGV blacklist to score
-candidate constraints. It is also useful standalone for ad-hoc cluster
+which combines it with runtime priors to score candidate constraints.
+It is also useful standalone for ad-hoc cluster
 debugging via ``hpc-mapreduce inspect-cluster --cluster <c>``.
 
 This module is intentionally permissive: scheduler outputs vary between

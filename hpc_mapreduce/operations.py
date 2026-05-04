@@ -60,7 +60,7 @@ def _parse_frontmatter(path: Path) -> dict:
 
 def _cli_subcommand(backed_by: dict) -> str | None:
     cli = backed_by.get("cli", "") if isinstance(backed_by, dict) else ""
-    if not cli.startswith("hpc-mapreduce "):
+    if not cli or not cli.startswith("hpc-mapreduce "):
         return None
     rest = cli[len("hpc-mapreduce ") :].strip()
     tokens = rest.split(" ")

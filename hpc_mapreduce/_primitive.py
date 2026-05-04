@@ -67,7 +67,7 @@ class PrimitiveMeta:
     name: str
     verb: VerbKind
     func: Callable[..., Any]
-    composes: tuple[str, ...] = ()
+    composes: tuple[PrimitiveMeta, ...] = ()
     side_effects: tuple[SideEffect, ...] = ()
     error_codes: tuple[type[HpcError], ...] = ()
     idempotent: bool = True

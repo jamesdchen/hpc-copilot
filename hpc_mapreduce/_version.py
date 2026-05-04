@@ -1,11 +1,10 @@
 """Cross-domain schema-version manifest + compatibility-check helper.
 
-Five JSON shapes in the codebase carry a ``schema_version`` field and
-five readers each implement a private "I read N, what does the doc
+Four JSON shapes in the codebase carry a ``schema_version`` field and
+four readers each implement a private "I read N, what does the doc
 say?" check:
 
 * ``slash_commands/session.py`` — session journal (``SCHEMA_VERSION = 1``)
-* ``hpc_mapreduce/job/blacklist.py`` — SEGV blacklist (``SCHEMA_VERSION = 1``)
 * ``hpc_mapreduce/job/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
 * ``hpc_mapreduce/job/calibration.py`` — calibration prediction sidecar (``schema_version = 1`` literal)
 * ``hpc_mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
@@ -48,8 +47,6 @@ _MANIFEST: Mapping[str, tuple[int, ...]] = {
     # Per-run sidecar — v1→v2 migration landed in the P0 fix; both must
     # remain readable while old runs are still in flight.
     "sidecar": (1, 2),
-    # SEGV blacklist — only v1 has shipped.
-    "blacklist": (1,),
     # Runtime priors — only v1 has shipped.
     "runtime_prior": (1,),
     # Calibration prediction sidecar — only v1 has shipped.
