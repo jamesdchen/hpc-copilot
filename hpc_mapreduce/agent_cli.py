@@ -2074,6 +2074,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Populate the primitive registry once before any subcommand
+    # dispatch — without this, get_registry() raises RuntimeError
+    # (the previous auto-import path silently swallowed ImportError
+    # and made missing-decorator bugs hard to diagnose).
+    from hpc_mapreduce._primitive import register_primitives
+
+    register_primitives()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

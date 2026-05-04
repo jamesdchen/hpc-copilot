@@ -96,6 +96,7 @@ __all__ = [
     "get_meta",
     "get_registry",
     "primitive",
+    "register_primitives",
 ]
 
 import importlib.util
@@ -169,6 +170,7 @@ from hpc_mapreduce._primitive import (
     get_meta,
     get_registry,
     primitive,
+    register_primitives,
 )
 from hpc_mapreduce.layout import JournalLayout, RepoLayout
 

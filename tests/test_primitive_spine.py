@@ -94,25 +94,33 @@ def test_func_module_importable(registry: dict[str, PrimitiveMeta]) -> None:
 
 # Item #6 — circular-import smoke test.
 
-def test_clean_import_does_not_raise() -> None:
-    """Importing hpc_mapreduce in a fresh interpreter must not raise.
+def test_register_primitives_is_idempotent() -> None:
+    """Calling register_primitives() twice must be a no-op.
 
-    A primitive module that triggers _ensure_imported() during its own
-    module-load (e.g. via a top-level get_registry() call) would loop
-    without the recursion guard. This test fails loudly if anything
-    regresses."""
+    The new explicit path replaces the previous _ensure_imported()
+    auto-import on first registry query. Idempotency guarantees that
+    any double-call (e.g. main() -> register_primitives() followed by a
+    test fixture also calling it) doesn't re-register and trip the
+    "primitive already registered" guard.
+    """
     proc = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import hpc_mapreduce; hpc_mapreduce.get_registry()",
+            "import hpc_mapreduce as hp\n"
+            "hp.register_primitives()\n"
+            "first = dict(hp.get_registry())\n"
+            "hp.register_primitives()\n"
+            "second = dict(hp.get_registry())\n"
+            "assert first.keys() == second.keys(), (first, second)\n",
         ],
         capture_output=True,
         text=True,
         timeout=30,
     )
     assert proc.returncode == 0, (
-        f"clean import failed:\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        f"register_primitives idempotency check failed:\n"
+        f"stdout={proc.stdout}\nstderr={proc.stderr}"
     )
 
 

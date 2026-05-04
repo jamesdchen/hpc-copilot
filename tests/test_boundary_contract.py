@@ -110,6 +110,7 @@ ALLOWED_EXPORTS = frozenset(
         "get_meta",
         "get_registry",
         "primitive",
+        "register_primitives",
     }
 )
 
