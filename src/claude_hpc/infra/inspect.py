@@ -55,6 +55,9 @@ from claude_hpc.infra.parsing import (
     parse_mem_to_mb as _parse_mem_to_mb,
 )
 from claude_hpc.infra.parsing import (
+    parse_qstat_columns,
+)
+from claude_hpc.infra.parsing import (
     parse_sacct_pipe_row,
 )
 from claude_hpc.infra.parsing import (
@@ -458,29 +461,12 @@ def _parse_qhost(text: str) -> list[NodeSnapshot]:
     """
     nodes: list[NodeSnapshot] = []
     current: NodeSnapshot | None = None
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        if line.startswith("HOSTNAME") or line.startswith("---") or line.startswith("global"):
-            current = None
-            continue
-        if not line[0].isspace():
-            cols = line.split()
-            if len(cols) < 8:
-                continue
-            host = cols[0]
-            current = NodeSnapshot(name=host)
-            current.cpu_tot = _to_int_or_none(cols[2])
-            current.cpu_load = _to_float_or_none(cols[6])
-            if current.cpu_load is not None and current.cpu_tot:
-                current.cpu_load_frac = round(current.cpu_load / max(current.cpu_tot, 1), 4)
-            current.real_mem_mb = _parse_mem_to_mb(cols[7])
-            mem_used = _parse_mem_to_mb(cols[8])
-            if current.real_mem_mb and mem_used is not None and current.real_mem_mb > 0:
-                current.alloc_mem_mb = mem_used
-                current.alloc_mem_pct = round(mem_used / current.real_mem_mb, 4)
-            nodes.append(current)
-        else:
+    # ``parse_qstat_columns`` skips blank lines and the standard
+    # header/separator/global rows; continuation lines (resource
+    # attributes that belong to the most recent host) come back with a
+    # sentinel "" leading column so we can re-attach them.
+    for cols in parse_qstat_columns(text):
+        if cols and cols[0] == "":
             # Resource attribute line for the current host. Accepts both
             # the prefixed form (e.g. ``hl:gpu=2``, ``gl:gpu_used=1``)
             # used by most SGE installs and the bare form (``gpu=2``)
@@ -490,13 +476,28 @@ def _parse_qhost(text: str) -> list[NodeSnapshot]:
             # the two values.
             if current is None:
                 continue
-            text_line = line.strip()
+            text_line = " ".join(cols[1:])
             m_used = re.search(r"(?:[A-Za-z]+:)?gpu_used=(\S+)", text_line)
             if m_used:
                 current.gres_used = f"gpu:{m_used.group(1)}"
             m_free = re.search(r"(?<![A-Za-z_])(?:[A-Za-z]+:)?gpu=(\S+)", text_line)
             if m_free:
                 current.gres = f"gpu:{m_free.group(1)}"
+            continue
+        if len(cols) < 8:
+            continue
+        host = cols[0]
+        current = NodeSnapshot(name=host)
+        current.cpu_tot = _to_int_or_none(cols[2])
+        current.cpu_load = _to_float_or_none(cols[6])
+        if current.cpu_load is not None and current.cpu_tot:
+            current.cpu_load_frac = round(current.cpu_load / max(current.cpu_tot, 1), 4)
+        current.real_mem_mb = _parse_mem_to_mb(cols[7])
+        mem_used = _parse_mem_to_mb(cols[8])
+        if current.real_mem_mb and mem_used is not None and current.real_mem_mb > 0:
+            current.alloc_mem_mb = mem_used
+            current.alloc_mem_pct = round(mem_used / current.real_mem_mb, 4)
+        nodes.append(current)
     return nodes
 
 
