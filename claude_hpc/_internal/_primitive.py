@@ -191,6 +191,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.infra.inspect",
     "claude_hpc.infra.clusters",
     "claude_hpc.agent_cli",
+    "claude_hpc.atoms.capabilities",
     "claude_hpc.atoms.clusters",
     "slash_commands.runner",
     "claude_hpc.orchestrator.validate",

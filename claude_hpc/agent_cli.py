@@ -292,28 +292,9 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
 # ─── subcommand: capabilities ──────────────────────────────────────────────
 
 
-_MARS_SKILL_NAMES = (
-    "hpc-submit",
-    "hpc-status",
-    "hpc-preflight",
-    "hpc-aggregate",
-    "hpc-build-executor",
-    "hpc-campaign",
-)
-
-
-def _mars_skill_paths() -> dict[str, str]:
-    # Skills live one level up from the package (skills/ is a sibling of
-    # claude_hpc/ in the source tree). Wheel-only deploys won't ship
-    # them — return only entries that resolve to an existing file so a
-    # consumer can rely on every value being a real path.
-    skills_root = claude_hpc._PACKAGE_ROOT.parent / "skills"
-    out: dict[str, str] = {}
-    for name in _MARS_SKILL_NAMES:
-        path = skills_root / name / "SKILL.md"
-        if path.is_file():
-            out[name] = str(path.resolve())
-    return out
+# Re-exported from claude_hpc.atoms.capabilities for back-compat with
+# tests that import the constant directly from agent_cli.
+from claude_hpc.atoms.capabilities import _MARS_SKILL_NAMES  # noqa: E402,F401
 
 
 def _live_subcommands() -> list[str]:
@@ -331,41 +312,20 @@ def _live_subcommands() -> list[str]:
     return []
 
 
-@primitive(
-    name="capabilities",
-    verb="query",
-    side_effects=[],
-    idempotent=True,
-)
 def cmd_capabilities(args: argparse.Namespace) -> int:
-    from claude_hpc.operations import operations_catalog, render_llms_full
+    """Argparse adapter — primitive lives at claude_hpc.atoms.capabilities."""
+    from claude_hpc.atoms.capabilities import capabilities
+    from claude_hpc.operations import render_llms_full
 
     if getattr(args, "full", False):
         # Human/LLM-mode: emit a multi-section text blob (NOT the JSON
-        # envelope) modeled on Modal\'s llms-full.txt pattern. Documented
+        # envelope) modeled on Modal's llms-full.txt pattern. Documented
         # exception to the stdout-is-JSON contract; analogous to --help.
         sys.stdout.write(render_llms_full())
         sys.stdout.flush()
         return EXIT_OK
 
-    _ok(
-        {
-            "version": claude_hpc.__version__,
-            "subcommands": _live_subcommands(),
-            "supported_schedulers": ["sge", "slurm"],
-            "schemas_dir": str(claude_hpc._PACKAGE_ROOT / "schemas"),
-            "journal_dir": str(session.HPC_HOMEDIR),
-            "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
-            "mars_skill_paths": _mars_skill_paths(),
-            "required_env": [
-                "SSH_AUTH_SOCK",
-                "HPC_JOURNAL_DIR",
-                "HPC_CLUSTERS_CONFIG",
-            ],
-            "operations": operations_catalog(),
-        },
-        name="capabilities",
-    )
+    _ok(capabilities(subcommands=_live_subcommands()), name="capabilities")
     return EXIT_OK
 
 
