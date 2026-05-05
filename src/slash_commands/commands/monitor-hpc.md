@@ -6,15 +6,17 @@ Per-operation contracts live in `docs/primitives/` — this skill composes the [
 >
 > Every `/monitor-hpc` invocation is **one tick that arms the next tick**, not a one-off. Before exiting, you MUST do exactly one of:
 >
-> 1. **Arm `CronCreate`** for any tick that may outlive the session (delay ≥ 5 min, or any HPC queue-wait — i.e. essentially always for HPC). Survives session boundaries.
-> 2. **Arm `ScheduleWakeup`** only for sub-5-min in-session ticks where adaptive cadence matters.
+> 1. **Arm `CronCreate`** for any tick that may outlive the chat session is open (which for HPC monitoring is essentially always). Survives turn boundaries within the session; dies when the session ends.
+> 2. **`/loop <interval> /monitor-hpc <args>`** when the user wants to drive the cadence themselves.
 > 3. **Skip arming** only when the run reached a terminal state (`complete` / `failed` / `abandoned`) — and in that case you MUST cancel any existing cron for this run_id.
 >
 > Then emit the final line of stdout in this exact form:
 >
->     armed: <cron|wakeup|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
+>     armed: <cron|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
 >
 > `none` is only valid when terminal-state cleanup ran. Anything else (including silent exit) is a spec violation. If you are about to exit without this line, you have not completed the tick — restart Step 5.
+>
+> A Stop hook in `~/.claude/settings.json` (installed via `hpc-mapreduce hook-install`) verifies this line and blocks termination if missing.
 
 ## Setup
 
@@ -111,7 +113,7 @@ Run `python -m <executor_module> --help` (extract the module from the profile's 
 
 1. **Sanity-check before and after.** Run Step 0.5 pre-flight before scheduling the next tick; run Step 4a post-flight before aggregating in Step 4b. File counts lie and stale job IDs waste hours — never skip these gates.
 2. **Act autonomously on known failures.** For OOM, walltime, and node failures, immediately resubmit with appropriate resource overrides. Do NOT ask for permission. Only pause for code bugs or unrecognized errors.
-3. **Adaptive re-invocation, not streaming.** After each tick, schedule exactly one follow-up. Pick the mechanism by horizon: **`CronCreate`** when the next tick may outlive this session (delay ≥ 5 min, or any HPC queue-wait scenario), **`ScheduleWakeup`** for sub-5-min in-session ticks where adaptive cadence matters more than session-independence. The user can also run `/loop <interval> /monitor-hpc <args>` to drive ticks themselves. Pick the delay from Step 5's adaptive table. Do **not** arm a persistent `Monitor` subprocess — it wastes the 5-min prompt cache and burns an idle process. State is recovered from the run journal at each tick.
+3. **Adaptive re-invocation, not streaming.** After each tick, schedule exactly one follow-up via **`CronCreate`** (the only programmatic mechanism with a documented public API in Claude Code; ``ScheduleWakeup`` is internal/undocumented and must not be used). Pick the cadence from Step 5's adaptive table. The user can also drive ticks themselves via `/loop <interval> /monitor-hpc <args>`. Do **not** arm a persistent `Monitor` subprocess — it wastes the 5-min prompt cache and burns an idle process. State is recovered from the run journal at each tick.
 4. **Silent-by-default tick output.** Each tick writes a structured record to `.hpc/runs/<run_id>.monitor.jsonl` (the **tick log**, see next section) and produces **no console output** unless an action was taken (auto-resubmit), a terminal state was reached (`complete` / `failed` / `abandoned`), or the user must intervene (code bug, unknown failure, second-strike combiner failure). All status / rollup / pre-flight / post-flight observations go to the JSONL — they are never narrated to the conversation. Token cost adds up across hour-scale monitoring; the silent-by-default policy keeps it bounded. When the user comes back and asks "what happened" / "status" / "summarize", switch into **Summary mode** (Step 7) which reads the JSONL and produces a single digest.
 
 ## Tick log
@@ -433,9 +435,9 @@ If the current stage completes and another stage has `depends_on` pointing to th
 
 **Skip if state is `all_complete` (Step 4b done), fully abandoned, or `has_failures` with no auto-recoverable category.** Report done and stop.
 
-Otherwise, schedule exactly **one** follow-up tick. Pick the mechanism by horizon:
+Otherwise, schedule exactly **one** follow-up tick. Two valid mechanisms (the only ones backed by documented public Claude Code tools):
 
-- **`CronCreate`** (default for any tick ≥ 5 min, and for any HPC-queue-wait scenario regardless of delay): registers a recurring scheduled task that survives the session. Use this whenever the next tick may fire after the chat is closed — which for HPC monitoring is essentially always.
+- **`CronCreate`** (default, programmatic): registers a recurring scheduled task. Use this for every tick except those where the user explicitly invoked `/loop`.
   ```
   CronCreate(
       schedule="*/<minutes> * * * *",   # e.g. "*/5 * * * *" for 5-min cadence
@@ -443,18 +445,13 @@ Otherwise, schedule exactly **one** follow-up tick. Pick the mechanism by horizo
       reason="<one sentence: what we're waiting for>",
   )
   ```
-  If a previous tick already created a cron for this run_id, `CronUpdate` (or cancel-and-recreate) when the adaptive table calls for a different cadence; reuse the same `prompt` so the cron is idempotent on the run. Each tick is responsible for cancelling its own cron when the run reaches a terminal state.
+  If a previous tick already created a cron for this run_id, `CronUpdate` (or `CronDelete` + `CronCreate`) when the adaptive table calls for a different cadence; reuse the same `prompt` so the cron is idempotent on the run. Each tick is responsible for cancelling its own cron when the run reaches a terminal state.
 
-- **`ScheduleWakeup`** (in-session only, sub-5-min ticks): one-shot self-firing wake-up. Use this only when the cadence calls for < 5 min (warm-cache regime) AND the chat is expected to stay open. Dies with the session, so unsuitable for hour-scale waits.
-  ```
-  ScheduleWakeup(
-      delaySeconds=<adaptive — see table below>,
-      prompt="/monitor-hpc <same args you were invoked with>",
-      reason="<one sentence: what we're waiting for>",
-  )
-  ```
+  **Session scope**: cron tasks live in the current Claude Code session and stop firing when the user closes the app. Re-armed automatically on `--resume`. For HPC monitoring this is fine — when the user reopens, the in-flight resume path (Setup) re-creates the cron from the journal.
 
-- **`/loop <interval> /monitor-hpc <args>`** (user-driven): a recurring self-pacing loop the user can ctrl-c. Use this when the user explicitly says they want to drive the cadence themselves.
+- **`/loop <interval> /monitor-hpc <args>`** (user-driven): a recurring self-pacing loop the user can ctrl-c. Use only when the user explicitly invoked `/loop`.
+
+> **Do not call `ScheduleWakeup`.** It's an internal/undocumented Claude Code tool, not in the public tools reference, and may be scoped to `/loop` internals only. Using it is off-spec.
 
 Then exit. The next invocation re-enters from Setup, hydrates state from the run journal (`session.find_in_flight_runs`), and runs Step 0.5 → Step 1 again.
 
@@ -462,16 +459,15 @@ Then exit. The next invocation re-enters from Setup, hydrates state from the run
 
 Every invocation MUST emit this line as the last line of stdout, regardless of which mechanism was chosen (or whether one was needed):
 
-    armed: <cron|wakeup|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
+    armed: <cron|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
 
 | Mechanism | When | Cadence field |
 |---|---|---|
 | `cron`     | CronCreate registered or updated for this run_id | the schedule's interval in seconds (e.g. 300 for `*/5 * * * *`) |
-| `wakeup`   | ScheduleWakeup armed (in-session, sub-5-min only) | `delaySeconds` you passed |
 | `loop`     | User explicitly invoked via `/loop` | the user-chosen interval in seconds |
 | `none`     | Run reached terminal state and any prior cron was cancelled | `0` |
 
-If you cannot construct this line, you have not completed the tick — go back to Step 5 and arm a follow-up. Silent exit is a spec violation.
+If you cannot construct this line, you have not completed the tick — go back to Step 5 and arm a follow-up. Silent exit is a spec violation enforced by the Stop hook installed via `hpc-mapreduce hook-install`.
 
 ### Adaptive delay table
 
@@ -504,11 +500,10 @@ The follow-up `/monitor-hpc` invocation re-runs Step 1 and **diffs against the l
 
 ### When the follow-up fires
 
-- **CronCreate**: fires in a fresh session at the registered cadence regardless of whether the original chat is open. Setup hydrates from `session.find_in_flight_runs` and runs `runner.reconcile` before Step 0.5. This is the path that makes overnight / multi-hour HPC monitoring work without the user keeping a chat open.
-- **In-session ScheduleWakeup**: resumes the same conversation with the journal as ground truth — no re-explanation needed. Dies if the user closes the chat.
+- **CronCreate**: fires in the same Claude Code session at the registered cadence as long as the app is open. Survives turn boundaries (user closing one chat and starting another within the same session, idle waits between turns). Dies when the user closes Claude Code; on `--resume` of an unexpired cron, fires resume. Setup hydrates from `session.find_in_flight_runs` and runs `runner.reconcile` before Step 0.5.
 - **`/loop` user-driven**: Setup hydrates from `session.find_in_flight_runs` and runs `runner.reconcile` before Step 0.5; otherwise identical to a CronCreate-fired tick.
 
-**Terminal-state cleanup**: when a tick observes `summary.complete == total` (or any other terminal state), it MUST cancel the cron for that run_id before exiting. Forgetting this leaves a dead cron firing forever against a finished run.
+**Terminal-state cleanup**: when a tick observes `summary.complete == total` (or any other terminal state), it MUST cancel the cron for that run_id via `CronDelete` before exiting. Forgetting this leaves a dead cron firing forever against a finished run.
 
 Either way the slash command is responsible for its own state — never assume a long-lived in-memory variable persists across ticks.
 
@@ -556,7 +551,7 @@ Summary mode is the **only** time `/monitor-hpc` is allowed to be verbose. Don't
 ## Context Management
 
 1. **Each tick is independent.** One `/monitor-hpc` invocation = one tick (Setup → preflight → status → react → write tick record → schedule next → exit). State persists in the run journal + the tick log, not in the conversation.
-2. **One status query per tick.** Pre-flight + Step 1 reporter run once. The agent does NOT loop internally; the next tick comes from `CronCreate` (default), `ScheduleWakeup` (in-session sub-5-min), or `/loop` (user-driven).
+2. **One status query per tick.** Pre-flight + Step 1 reporter run once. The agent does NOT loop internally; the next tick comes from `CronCreate` (default) or `/loop` (user-driven).
 3. **Diffs go in the tick record, not the console.** Compare Step 1's `summary`/`tasks` against the prior tick's record (last line of the JSONL). Populate `diff_from_prev`. If state is fully unchanged the diff is empty arrays — that's fine; the JSONL grows but the console stays silent.
 4. **Minimize tool output.** Use `tail -20` for logs. Prefer compact status commands over verbose output.
-5. **If the session ends:** `CronCreate`-scheduled ticks survive — they fire in a fresh session, hydrate state from the run journal, and continue monitoring. In-session `ScheduleWakeup`s die with the session; if you used one for a hour-scale wait by mistake, re-run `/monitor-hpc` (no args) and switch to `CronCreate` on the first tick. The run journal at `~/.claude/hpc/<repo_hash>/` always carries last-known status; `runner.reconcile` re-derives ground truth before Step 0.5.
+5. **If the session ends:** `CronCreate`-scheduled ticks die when Claude Code closes; on `--resume` of an unexpired cron they fire again. If the user reopens after a long absence, re-running `/monitor-hpc` (no args) hydrates the in-flight run from the journal at `~/.claude/hpc/<repo_hash>/`, runs `runner.reconcile`, and re-arms the cron. The journal always carries last-known status.

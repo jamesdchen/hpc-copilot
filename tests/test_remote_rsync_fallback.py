@@ -39,9 +39,7 @@ def test_rsync_push_uses_rsync_when_available(tmp_path: Path) -> None:
         patch("claude_hpc.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
         patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
     ):
-        remote.rsync_push(
-            host="h", user="u", remote_path="/r", local_path=tmp_path, exclude=[]
-        )
+        remote.rsync_push(host="h", user="u", remote_path="/r", local_path=tmp_path, exclude=[])
     cmd = run_mock.call_args[0][0]
     assert cmd[0] == "rsync"
     assert "-az" in cmd
@@ -53,9 +51,7 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
     fake_run = _ok()
     with (
         patch("claude_hpc.infra.remote.shutil.which", return_value=None),
-        patch(
-            "claude_hpc.infra.remote.subprocess.run", return_value=fake_run
-        ) as run_mock,
+        patch("claude_hpc.infra.remote.subprocess.run", return_value=fake_run) as run_mock,
         patch("claude_hpc.infra.remote.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
