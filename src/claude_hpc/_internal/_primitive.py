@@ -185,7 +185,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.orchestrator.runtime_prior",
     "claude_hpc.orchestrator.calibration",
     "claude_hpc.orchestrator.discover",
-    "claude_hpc.orchestrator.resubmit",
+    "claude_hpc.orchestrator.resubmit_batching",
     "claude_hpc.orchestrator.planner",
     "claude_hpc.orchestrator.campaign_health",
     "claude_hpc.infra.inspect",
