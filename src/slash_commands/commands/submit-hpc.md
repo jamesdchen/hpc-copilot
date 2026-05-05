@@ -110,10 +110,10 @@ For multi-executor submissions: submit as **separate array jobs** (independent m
 ```bash
 hpc-mapreduce submit-flow-batch \
     --experiment-dir <exp> \
-    --spec /tmp/iter-batch.json     # JSON list of submit-flow specs
+    --spec /tmp/iter-batch.json     # {"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}
 ```
 
-Each list entry matches `schemas/submit_flow.input.json`; all entries MUST share `ssh_target` and `remote_path`. The batch does ONE rsync_push + ONE deploy_runtime, then qsubs each spec in turn over the multiplexed ssh `ControlMaster`. Results come back as `data.results: [<per-spec envelope>, ...]` in the same order as the input. Already-journaled `run_id`s dedup per-spec without firing rsync/deploy. Single-executor submissions still use plain `submit-flow`.
+The spec file is an object with a `specs` array (each entry matching `schemas/submit_flow.input.json`); all entries MUST share `ssh_target` and `remote_path`. `rsync_excludes` and `skip_preflight` apply once across the bundle. The batch does ONE rsync_push + ONE deploy_runtime, then qsubs each spec in turn over the multiplexed ssh `ControlMaster`. Results come back as `data.results: [<per-spec envelope>, ...]` in the same order as the input. Already-journaled `run_id`s dedup per-spec without firing rsync/deploy. Single-executor submissions still use plain `submit-flow`.
 
 ## Step 3: Plan the parallelization axis
 
@@ -533,6 +533,8 @@ For multi-executor submissions, write one sidecar per executor — `run_id` and 
 
 `write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 500; override via `HPC_MAX_RUNS`). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
 
+**Don't pass `job_ids` here.** The sidecar at this point is a *pending* artifact: ready for the cluster-side dispatcher to read but not yet associated with any qsub'd job. Step 7b–8's `submit-flow` invokes `submit_and_record` after qsub returns, which calls `update_run_sidecar_job_ids` to stamp the freshly-allocated job ids onto this same file. A sidecar that ends the pipeline still missing `job_ids` — i.e. rsync or qsub failed before submit_and_record ran — is the half-baked-sidecar signal `prune_orphan_sidecars` and `submit_flow_batch`'s auto-cleanup key on. You don't need to handle the failure path here; the next submit will silently sweep the orphan.
+
 ## Step 6b: Pre-flight Gate
 
 Verify the local environment can submit to `<cluster>` BEFORE any SSH/rsync. Used to live as a standalone `/preflight` command; now folded in here with a per-cluster cache so it only re-checks when stale.
@@ -658,7 +660,7 @@ On error envelopes, branch by `error_code` per `submit-flow`'s contract (`ssh_un
 
 To opt out of the canary (already smoke-tested or single-task submission), set `"canary": false` in the spec — the slash command's `--no-canary` flag from Step 2 maps directly here.
 
-**Multi-executor / multi-spec submissions: route through `submit-flow-batch`** instead of looping `submit-flow` per spec. The motivating problem: `submit-flow` does ~13 ssh handshakes per call; N parallel calls (one per executor or one per profile) trip cluster sshd `MaxStartups` and leave half-baked sidecars. `submit-flow-batch` accepts a JSON list of the same per-spec shape above, validates that all entries share `(ssh_target, remote_path)`, then collapses to one rsync_push + one deploy_runtime + N qsubs reusing the ssh ControlMaster:
+**Multi-executor / multi-spec submissions: route through `submit-flow-batch`** instead of looping `submit-flow` per spec. The motivating problem: `submit-flow` does ~13 ssh handshakes per call; N parallel calls (one per executor or one per profile) trip cluster sshd `MaxStartups` and leave half-baked sidecars. `submit-flow-batch` accepts an object `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` where each entry under `specs` matches the per-spec shape above; it validates that all entries share `(ssh_target, remote_path)` and collapses to one rsync_push + one deploy_runtime + N qsubs reusing the ssh ControlMaster:
 
 ```bash
 hpc-mapreduce submit-flow-batch --spec specs.json --experiment-dir .

@@ -129,8 +129,9 @@ In either path: invoke another iteration's `submit-flow` before the previous one
 **Bundle when fanning out N>1 specs to one cluster.** Per-spec `submit-flow` does ~13 ssh handshakes (1 probe + 1 rsync + 11 scp/ssh in `deploy_runtime` + 1 qsub). N parallel specs hit the cluster's sshd `MaxStartups` limit (CARC's 30/60s default trips at ~4 simultaneous fresh-start submissions; we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts). The fix is `submit-flow-batch`: it does one rsync + one deploy across all specs sharing `(ssh_target, remote_path)`, then qsubs each in turn over the multiplexed ssh ControlMaster. Use it whenever the iteration produces >1 specs to the same cluster:
 
 ```bash
-# JSON list of submit-flow specs (each matching schemas/submit_flow.input.json).
-# All entries MUST share ssh_target + remote_path.
+# spec file: {"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}
+# Each entry under "specs" matches schemas/submit_flow.input.json; all
+# entries MUST share ssh_target + remote_path.
 hpc-mapreduce submit-flow-batch \
     --experiment-dir <exp> \
     --spec .hpc/campaigns/<slug>/iter-<N>.specs.json

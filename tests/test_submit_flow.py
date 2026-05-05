@@ -236,6 +236,46 @@ class TestSubmitFlowBatch:
         assert all(r.deduped for r in results)
         assert [r.run_id for r in results] == ["r0", "r1"]
 
+    def test_auto_prunes_orphan_sidecars_at_start(self, tmp_path: Any, _journal_home: Any) -> None:
+        """Half-baked sidecars from a prior failed batch are silently swept
+        before the next batch starts — no manual /prune-orphan-sidecars call."""
+        from claude_hpc.flows import submit_flow as sf_module
+        from claude_hpc.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from claude_hpc.state.runs import run_sidecar_path, write_run_sidecar
+
+        # Seed a half-baked sidecar (no job_ids, no journal record).
+        orphan_id = "20260101-000000-orphan01"
+        write_run_sidecar(
+            tmp_path,
+            run_id=orphan_id,
+            cmd_sha="0" * 64,
+            claude_hpc_version="0.2.0",
+            submitted_at="2026-01-01T00:00:00Z",
+            executor="python3 src/run.py",
+            result_dir_template="results/{seed}",
+            task_count=4,
+            tasks_py_sha="1" * 64,
+        )
+        assert run_sidecar_path(tmp_path, orphan_id).is_file()
+
+        # Run the next batch with a fresh spec.
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"job_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            submit_flow_batch(experiment_dir=tmp_path, specs=[_spec("r_new")])
+
+        # The orphan sidecar is gone.
+        assert not run_sidecar_path(tmp_path, orphan_id).is_file()
+
     def test_partial_dedup_only_fresh_specs_run(self, tmp_path: Any, _journal_home: Any) -> None:
         """Half the specs are already journaled — only the fresh ones get qsubbed."""
         from claude_hpc._internal import session
