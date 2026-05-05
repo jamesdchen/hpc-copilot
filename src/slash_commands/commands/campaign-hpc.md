@@ -97,6 +97,12 @@ while load_tasks_module(tasks_path(".")).total() > 0:
     submit_spec = build_submit_spec(slug, n, base_submit_spec)        # caller helper
     Path(f".hpc/campaigns/{slug}/iter-{n:04d}.submit.json").write_text(json.dumps(submit_spec))
     submit_data = run_one(f".hpc/campaigns/{slug}/iter-{n:04d}.submit.json", verb="submit-flow")
+    # If build_submit_spec emits a LIST instead of a single dict (e.g. an
+    # optuna `ask` returned 5 candidates this iteration), write the list
+    # to ...submit-batch.json and use verb="submit-flow-batch" instead.
+    # The batch atom does ONE rsync + ONE deploy across all specs, then
+    # qsubs each in turn — the right shape whenever an iteration produces
+    # >1 specs sharing one cluster.
     if submit_data["deduped"]:
         # Replay — original cluster jobs already running. Skip submit, monitor only.
         pass
@@ -119,6 +125,18 @@ Both atoms emit the same `{"ok": ..., "data": {...}}` shape, so the campaign loo
 ### Concurrency
 
 In either path: invoke another iteration's `submit-flow` before the previous one finishes if you want K-in-flight. The cluster scheduler runs them in parallel. Optuna's `constant_liar=True` and similar mechanisms specifically support this.
+
+**Bundle when fanning out N>1 specs to one cluster.** Per-spec `submit-flow` does ~13 ssh handshakes (1 probe + 1 rsync + 11 scp/ssh in `deploy_runtime` + 1 qsub). N parallel specs hit the cluster's sshd `MaxStartups` limit (CARC's 30/60s default trips at ~4 simultaneous fresh-start submissions; we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts). The fix is `submit-flow-batch`: it does one rsync + one deploy across all specs sharing `(ssh_target, remote_path)`, then qsubs each in turn over the multiplexed ssh ControlMaster. Use it whenever the iteration produces >1 specs to the same cluster:
+
+```bash
+# JSON list of submit-flow specs (each matching schemas/submit_flow.input.json).
+# All entries MUST share ssh_target + remote_path.
+hpc-mapreduce submit-flow-batch \
+    --experiment-dir <exp> \
+    --spec .hpc/campaigns/<slug>/iter-<N>.specs.json
+```
+
+The envelope's `data.results` is a per-spec list; treat each entry the same as a `submit-flow` envelope. Heterogeneous batches (different clusters in one call) raise `spec_invalid` — group by `(ssh_target, remote_path)` first and call `submit-flow-batch` once per group. Single-spec calls still go through plain `submit-flow`; the batch path is only worth it for N>1.
 
 ### Strategy feedback (telling Optuna / etc. about results)
 

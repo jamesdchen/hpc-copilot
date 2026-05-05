@@ -119,7 +119,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; rsync: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate-flow --spec <path>` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce monitor-flow --spec <path>` |
 | [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow --spec <path>` |
-| [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `` |
+| [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow-batch --spec <path>` |
 <!-- END PRIMITIVE CATALOG -->
 
 ## How slash commands and skills consume primitives

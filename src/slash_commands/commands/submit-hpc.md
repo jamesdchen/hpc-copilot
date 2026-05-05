@@ -105,6 +105,16 @@ Parse `$ARGUMENTS` or the user's natural language request:
 
 For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Each gets its own `run_id` and per-run sidecar at `.hpc/runs/<run_id>.json`; the same `.hpc/tasks.py` is reused if the parallelization axis matches, otherwise the agent writes a new one (the file is the single seam between executors and the framework).
 
+**Bundle the qsub fan-out into one rsync + one deploy** when N>1 executors share `(ssh_target, remote_path)`. Naïvely calling `submit-flow` (or running this slash command's Step 7+ pipeline) once per executor sends ~13×N ssh handshakes at the cluster's sshd and trips `MaxStartups` (CARC's default ratelimits at ~4 simultaneous fresh-start submissions; we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts, leaving half-baked sidecars). Use `submit-flow-batch` instead:
+
+```bash
+hpc-mapreduce submit-flow-batch \
+    --experiment-dir <exp> \
+    --spec /tmp/iter-batch.json     # JSON list of submit-flow specs
+```
+
+Each list entry matches `schemas/submit_flow.input.json`; all entries MUST share `ssh_target` and `remote_path`. The batch does ONE rsync_push + ONE deploy_runtime, then qsubs each spec in turn over the multiplexed ssh `ControlMaster`. Results come back as `data.results: [<per-spec envelope>, ...]` in the same order as the input. Already-journaled `run_id`s dedup per-spec without firing rsync/deploy. Single-executor submissions still use plain `submit-flow`.
+
 ## Step 3: Plan the parallelization axis
 
 In the new model, the **task list lives in user-written `.hpc/tasks.py`**: a small Python module exposing `total()` and `resolve(task_id)`. Step 6 walks the user through writing it once per experiment, adapting from the canonical example at `claude_hpc/templates/tasks_example.py`. From then on, the file is committed to git and reused on every submit.
@@ -572,7 +582,7 @@ Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework
 
    ```python
    from claude_hpc import deploy_runtime
-   deploy_runtime(host=cluster.host, user=cluster.user, remote_path=remote_path)
+   deploy_runtime(ssh_target=cluster.ssh_target, remote_path=remote_path)
    ```
 
    Run **after** `rsync_push` (rsync's `--delete` would otherwise blow away the freshly-scp'd files; the excludes above protect them, but ordering remains important on every submit).
@@ -647,6 +657,14 @@ Parse the envelope:
 On error envelopes, branch by `error_code` per `submit-flow`'s contract (`ssh_unreachable`, `remote_command_failed`, `spec_invalid`).
 
 To opt out of the canary (already smoke-tested or single-task submission), set `"canary": false` in the spec — the slash command's `--no-canary` flag from Step 2 maps directly here.
+
+**Multi-executor / multi-spec submissions: route through `submit-flow-batch`** instead of looping `submit-flow` per spec. The motivating problem: `submit-flow` does ~13 ssh handshakes per call; N parallel calls (one per executor or one per profile) trip cluster sshd `MaxStartups` and leave half-baked sidecars. `submit-flow-batch` accepts a JSON list of the same per-spec shape above, validates that all entries share `(ssh_target, remote_path)`, then collapses to one rsync_push + one deploy_runtime + N qsubs reusing the ssh ControlMaster:
+
+```bash
+hpc-mapreduce submit-flow-batch --spec specs.json --experiment-dir .
+```
+
+The envelope is `{"ok": true, "data": {"results": [<per-spec submit-flow envelope>, ...], "n_results": N}}`. Parse each entry with the same dedup/error logic as a single `submit-flow` call. Heterogeneous batches (different clusters in one list) raise `spec_invalid` — the slash command should split by `(ssh_target, remote_path)` and call once per group.
 
 **Note on canary semantics:** `submit-flow`'s canary is a smoke test of the submission machinery (qsub accepts the spec; scheduler returns a job ID). It does NOT wait for canary completion or verify outputs — that elaborate "wait for terminal + grep logs + check artifacts" protocol stays here in the slash command (see "Canary verification" below) for the human-interactive path. Higher-level workflows like `/campaign-hpc` rely on the lighter check.
 
