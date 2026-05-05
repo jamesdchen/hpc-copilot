@@ -38,7 +38,9 @@ __all__ = [
     "AXES_SCHEMA_VERSION",
     "axes_path",
     "axes_schema",
+    "compute_wave_map",
     "pick_array_axis",
+    "pick_array_axis_warm",
     "read_axes",
     "validate_axes",
     "write_axes",
@@ -71,12 +73,25 @@ def validate_axes(data: dict[str, Any]) -> None:
 def write_axes(
     experiment_dir: Path | str,
     *,
+    axes: list[dict[str, Any]] | None = None,
     homogeneous_axes: list[str] | None = None,
 ) -> Path:
-    """Write the axes config atomically and return its path."""
+    """Write the axes config atomically and return its path.
+
+    Cross-validation: if both *axes* and *homogeneous_axes* are supplied,
+    every name in *homogeneous_axes* must appear in *axes*; otherwise a
+    :class:`ValueError` is raised before any file write.
+    """
     payload: dict[str, Any] = {"axes_schema_version": AXES_SCHEMA_VERSION}
+    if axes is not None:
+        payload["axes"] = [dict(a) for a in axes]
     if homogeneous_axes is not None:
         payload["homogeneous_axes"] = list(homogeneous_axes)
+    if axes is not None and homogeneous_axes:
+        axis_names = {a["name"] for a in axes}
+        unknown = [n for n in homogeneous_axes if n not in axis_names]
+        if unknown:
+            raise ValueError(f"homogeneous_axes references axes not in axes list: {unknown}")
     validate_axes(payload)
     target = axes_path(experiment_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -142,3 +157,141 @@ def pick_array_axis(
         None,
         f"no homogeneous_axes entry matches available axes {available_axes!r}",
     )
+
+
+def pick_array_axis_warm(
+    experiment_dir: Path | str,
+    *,
+    cmd_sha: str | None = None,
+    min_samples: int = 5,
+) -> tuple[str | None, str]:
+    """Warm-path picker — pick the lowest-CV axis from runtime priors.
+
+    Reads runtime samples written by :mod:`claude_hpc.state.runtime_prior`,
+    filters to those carrying an ``axis_bindings`` field (added when the
+    cluster-side dispatcher records per-task axis values), groups by axis,
+    and returns the axis name with the lowest coefficient of variation
+    (stddev / mean of elapsed_sec). Falls back to ``(None, reason)`` when
+    fewer than *min_samples* qualifying samples exist or no axis can
+    be evaluated.
+
+    .. note::
+
+       Inert until cluster-side dispatcher writes ``axis_bindings`` into
+       runtime samples — see follow-up TODO. The function is wired in
+       so callers can integrate now; it returns ``(None, "...")`` until
+       samples grow the field.
+    """
+    config = read_axes(experiment_dir)
+    if config is None or not config.get("axes"):
+        return None, "no axes.yaml or no axes enumeration"
+
+    try:
+        from claude_hpc.state.runtime_prior import read_samples
+    except ImportError:
+        return None, "runtime_prior not importable"
+
+    try:
+        samples = read_samples(Path(experiment_dir), cmd_sha=cmd_sha)
+    except Exception as exc:
+        return None, f"runtime_prior read failed: {exc}"
+
+    qualifying = [
+        s
+        for s in (samples or [])
+        if isinstance(s, dict)
+        and isinstance(s.get("axis_bindings"), dict)
+        and isinstance(s.get("elapsed_sec"), (int, float))
+        and int(s.get("exit_code", 1)) == 0
+    ]
+    if len(qualifying) < min_samples:
+        return None, f"only {len(qualifying)} qualifying samples (< {min_samples})"
+
+    axis_names = [a["name"] for a in config["axes"]]
+    cv_per_axis: dict[str, float] = {}
+    for name in axis_names:
+        # Group elapsed_sec by this axis's value, holding others fixed.
+        # Implementation: bucket by all axis values *except* this one;
+        # within each bucket compute CV across this axis; average.
+        buckets: dict[tuple[Any, ...], list[float]] = {}
+        for s in qualifying:
+            bindings = s["axis_bindings"]
+            if name not in bindings:
+                continue
+            other_key = tuple(sorted((k, v) for k, v in bindings.items() if k != name))
+            buckets.setdefault(other_key, []).append(float(s["elapsed_sec"]))
+        if not buckets:
+            continue
+        cvs: list[float] = []
+        for values in buckets.values():
+            if len(values) < 2:
+                continue
+            mean = sum(values) / len(values)
+            if mean <= 0:
+                continue
+            var = sum((v - mean) ** 2 for v in values) / len(values)
+            cvs.append((var**0.5) / mean)
+        if cvs:
+            cv_per_axis[name] = sum(cvs) / len(cvs)
+
+    if not cv_per_axis:
+        return None, "no axis had >=2-sample buckets to compute CV"
+
+    chosen = min(cv_per_axis, key=lambda k: cv_per_axis[k])
+    return chosen, f"lowest CV ({cv_per_axis[chosen]:.4f}) of {len(cv_per_axis)} axes"
+
+
+def compute_wave_map(
+    experiment_dir: Path | str,
+    *,
+    picked_axis: str,
+) -> dict[int, list[int]]:
+    """Build a wave_map keyed by wave_id, valued by task_ids.
+
+    Reads ``axes.yaml``'s ordered ``axes`` list and computes a wave per
+    cross-product of the non-picked axes. Within each wave, ``task_ids``
+    enumerate the picked axis. The cartesian-product convention is
+    last-axis-varies-fastest (numpy / row-major)::
+
+        task_id = sum(coords[i] * prod(sizes[i+1:]) for i in range(len(axes)))
+
+    If ``axes.yaml`` is absent or has no ``axes`` enumeration, raises
+    :class:`ValueError` — the caller (typically submit-flow) is expected
+    to have already verified the file is present before calling.
+    """
+    from itertools import product as _product
+
+    config = read_axes(experiment_dir)
+    if config is None:
+        raise ValueError("axes.yaml not found")
+    axes = config.get("axes")
+    if not axes:
+        raise ValueError("axes.yaml has no 'axes' enumeration")
+
+    names = [a["name"] for a in axes]
+    sizes = [int(a["size"]) for a in axes]
+    if picked_axis not in names:
+        raise ValueError(f"picked_axis {picked_axis!r} not in axes {names!r}")
+    picked_idx = names.index(picked_axis)
+
+    # Strides for row-major task_id encoding.
+    strides = [1] * len(axes)
+    for i in range(len(axes) - 2, -1, -1):
+        strides[i] = strides[i + 1] * sizes[i + 1]
+
+    other_indices = [i for i in range(len(axes)) if i != picked_idx]
+    other_sizes = [sizes[i] for i in other_indices]
+
+    wave_map: dict[int, list[int]] = {}
+    for wave_id, other_combo in enumerate(_product(*[range(s) for s in other_sizes])):
+        coords = [0] * len(axes)
+        for k, idx in enumerate(other_indices):
+            coords[idx] = other_combo[k]
+        task_ids: list[int] = []
+        for picked_val in range(sizes[picked_idx]):
+            coords[picked_idx] = picked_val
+            tid = sum(c * strides[i] for i, c in enumerate(coords))
+            task_ids.append(tid)
+        wave_map[wave_id] = sorted(task_ids)
+
+    return wave_map
