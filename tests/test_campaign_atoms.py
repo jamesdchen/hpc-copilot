@@ -153,3 +153,123 @@ def test_advance_continue_when_no_criteria(campaign_with_history: Path) -> None:
         campaign_id="camp_a",
     )
     assert out["decision"] == "continue"
+
+
+# ─── manifest-defaulting ────────────────────────────────────────────────────
+
+
+def test_budget_defaults_from_manifest(campaign_with_history: Path) -> None:
+    from claude_hpc.campaign.manifest import write_manifest
+
+    write_manifest(
+        campaign_with_history,
+        campaign_id="camp_a",
+        budget={"max_jobs": 3, "max_tasks": None, "max_walltime_sec": None},
+    )
+    out = campaign_budget(experiment_dir=campaign_with_history, campaign_id="camp_a")
+    assert out["budget"]["max_jobs"] == 3
+    assert out["exhausted"] is True
+
+
+def test_cli_arg_wins_over_manifest_budget(campaign_with_history: Path) -> None:
+    from claude_hpc.campaign.manifest import write_manifest
+
+    write_manifest(
+        campaign_with_history,
+        campaign_id="camp_a",
+        budget={"max_jobs": 3},
+    )
+    out = campaign_budget(
+        experiment_dir=campaign_with_history,
+        campaign_id="camp_a",
+        max_jobs=100,  # explicit override
+    )
+    assert out["budget"]["max_jobs"] == 100
+    assert out["exhausted"] is False
+
+
+def test_converged_defaults_from_manifest(campaign_with_history: Path) -> None:
+    from claude_hpc.campaign.manifest import write_manifest
+
+    write_manifest(
+        campaign_with_history,
+        campaign_id="camp_a",
+        stop_criteria={"metric": "loss", "target": 0.4, "direction": "minimize"},
+    )
+    out = campaign_converged(experiment_dir=campaign_with_history, campaign_id="camp_a")
+    assert out["converged"] is True
+    assert "target_met" in out["reason"]
+
+
+def test_advance_uses_manifest_for_both_blocks(campaign_with_history: Path) -> None:
+    from claude_hpc.campaign.manifest import write_manifest
+
+    write_manifest(
+        campaign_with_history,
+        campaign_id="camp_a",
+        budget={"max_jobs": 100},
+        stop_criteria={"metric": "loss", "target": 0.4, "direction": "minimize"},
+    )
+    out = campaign_advance(experiment_dir=campaign_with_history, campaign_id="camp_a")
+    assert out["decision"] == "stop_converged"
+
+
+def test_corrupt_manifest_does_not_tank(campaign_with_history: Path) -> None:
+    from claude_hpc.campaign.manifest import manifest_path
+
+    path = manifest_path(campaign_with_history, "camp_a")
+    path.write_text("{not valid json")
+    out = campaign_budget(experiment_dir=campaign_with_history, campaign_id="camp_a")
+    assert out["budget"]["max_jobs"] is None
+
+
+# ─── campaign-init ──────────────────────────────────────────────────────────
+
+
+def test_campaign_init_writes_manifest(tmp_path: Path) -> None:
+    from claude_hpc.atoms.campaign_init import campaign_init
+    from claude_hpc.campaign.manifest import read_manifest
+
+    out = campaign_init(
+        experiment_dir=tmp_path,
+        campaign_id="camp_z",
+        goal="lowest val loss",
+        max_iters=20,
+        metric="loss",
+        target=0.1,
+        max_jobs=50,
+        strategy_name="optuna-tpe",
+        strategy_params_json='{"n_startup_trials": 10}',
+    )
+    assert out["campaign_id"] == "camp_z"
+    manifest = read_manifest(tmp_path, "camp_z")
+    assert manifest is not None
+    assert manifest["goal"] == "lowest val loss"
+    assert manifest["budget"]["max_jobs"] == 50
+    assert manifest["stop_criteria"]["target"] == 0.1
+    assert manifest["strategy"]["name"] == "optuna-tpe"
+    assert manifest["strategy"]["params"] == {"n_startup_trials": 10}
+
+
+def test_campaign_init_minimal(tmp_path: Path) -> None:
+    from claude_hpc.atoms.campaign_init import campaign_init
+    from claude_hpc.campaign.manifest import read_manifest
+
+    campaign_init(experiment_dir=tmp_path, campaign_id="camp_z")
+    manifest = read_manifest(tmp_path, "camp_z")
+    assert manifest is not None
+    assert "budget" not in manifest
+    assert "stop_criteria" not in manifest
+    assert "strategy" not in manifest
+
+
+def test_campaign_init_rejects_non_object_strategy_params(tmp_path: Path) -> None:
+    from claude_hpc.atoms.campaign_init import campaign_init
+
+    with pytest.raises(ValueError, match="strategy-params-json must decode"):
+        campaign_init(
+            experiment_dir=tmp_path,
+            campaign_id="camp_z",
+            strategy_name="custom",
+            strategy_params_json="[1, 2, 3]",
+        )

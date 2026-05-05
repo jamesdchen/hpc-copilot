@@ -675,6 +675,32 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_campaign_init(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_init."""
+    from claude_hpc.atoms.campaign_init import campaign_init
+
+    _ok(
+        campaign_init(
+            experiment_dir=args.experiment_dir,
+            campaign_id=args.campaign_id,
+            goal=args.goal,
+            max_iters=args.max_iters,
+            metric=args.metric,
+            target=args.target,
+            direction=args.direction,
+            plateau_window=args.plateau_window,
+            plateau_tolerance=args.plateau_tolerance,
+            max_jobs=args.max_jobs,
+            max_tasks=args.max_tasks,
+            max_walltime_sec=args.max_walltime_sec,
+            strategy_name=args.strategy_name,
+            strategy_params_json=args.strategy_params_json,
+        ),
+        name="campaign-init",
+    )
+    return EXIT_OK
+
+
 def cmd_campaign_replay(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_replay."""
     from claude_hpc.atoms.campaign_replay import campaign_replay
@@ -1807,6 +1833,31 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_camp_ls)
     p_camp_ls.set_defaults(func=cmd_campaign_list)
 
+    p_camp_in = p_camp_sub.add_parser(
+        "init",
+        help="Write the campaign manifest from CLI args.",
+    )
+    _add_experiment_dir(p_camp_in)
+    p_camp_in.add_argument("--campaign-id", required=True)
+    p_camp_in.add_argument("--goal", type=str, default="")
+    p_camp_in.add_argument("--max-iters", type=int, default=None)
+    p_camp_in.add_argument("--metric", type=str, default=None)
+    p_camp_in.add_argument("--target", type=float, default=None)
+    p_camp_in.add_argument("--direction", choices=["minimize", "maximize"], default=None)
+    p_camp_in.add_argument("--plateau-window", type=int, default=None)
+    p_camp_in.add_argument("--plateau-tolerance", type=float, default=None)
+    p_camp_in.add_argument("--max-jobs", type=int, default=None)
+    p_camp_in.add_argument("--max-tasks", type=int, default=None)
+    p_camp_in.add_argument("--max-walltime-sec", type=int, default=None)
+    p_camp_in.add_argument("--strategy-name", type=str, default=None)
+    p_camp_in.add_argument(
+        "--strategy-params-json",
+        type=str,
+        default=None,
+        help="JSON object for strategy.params (round-tripped untouched).",
+    )
+    p_camp_in.set_defaults(func=cmd_campaign_init)
+
     p_camp_rp = p_camp_sub.add_parser(
         "replay",
         help="Return the last N iterations of a campaign with reduced metrics.",
@@ -1825,9 +1876,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_camp_cv.add_argument("--max-iters", type=int, default=None)
     p_camp_cv.add_argument("--metric", type=str, default=None)
     p_camp_cv.add_argument("--target", type=float, default=None)
-    p_camp_cv.add_argument("--direction", choices=["minimize", "maximize"], default="minimize")
+    p_camp_cv.add_argument("--direction", choices=["minimize", "maximize"], default=None)
     p_camp_cv.add_argument("--plateau-window", type=int, default=None)
-    p_camp_cv.add_argument("--plateau-tolerance", type=float, default=0.0)
+    p_camp_cv.add_argument("--plateau-tolerance", type=float, default=None)
     p_camp_cv.set_defaults(func=cmd_campaign_converged)
 
     p_camp_bg = p_camp_sub.add_parser(
@@ -1853,9 +1904,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_camp_ad.add_argument("--max-iters", type=int, default=None)
     p_camp_ad.add_argument("--metric", type=str, default=None)
     p_camp_ad.add_argument("--target", type=float, default=None)
-    p_camp_ad.add_argument("--direction", choices=["minimize", "maximize"], default="minimize")
+    p_camp_ad.add_argument("--direction", choices=["minimize", "maximize"], default=None)
     p_camp_ad.add_argument("--plateau-window", type=int, default=None)
-    p_camp_ad.add_argument("--plateau-tolerance", type=float, default=0.0)
+    p_camp_ad.add_argument("--plateau-tolerance", type=float, default=None)
     p_camp_ad.add_argument("--max-jobs", type=int, default=None)
     p_camp_ad.add_argument("--max-tasks", type=int, default=None)
     p_camp_ad.add_argument("--max-walltime-sec", type=int, default=None)

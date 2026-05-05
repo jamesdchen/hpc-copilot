@@ -53,8 +53,28 @@ def campaign_budget(
 
     Returns ``{spent: {...}, budget: {...}, remaining: {...}, exhausted: bool, reason: str}``.
     A ``None`` cap means "untracked" and never triggers exhaustion.
+
+    Manifest defaults: any cap left as ``None`` falls back to the
+    matching field under ``budget`` in ``<campaign_dir>/manifest.json``
+    if the manifest exists. Explicit CLI args always win.
     """
+    from claude_hpc.campaign.manifest import read_manifest
     from claude_hpc.mapreduce.reduce.history import find_sidecars_by_campaign
+
+    manifest_budget: dict[str, Any] = {}
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except Exception:
+        manifest = None
+    if manifest is not None:
+        manifest_budget = manifest.get("budget") or {}
+
+    if max_jobs is None:
+        max_jobs = manifest_budget.get("max_jobs")
+    if max_tasks is None:
+        max_tasks = manifest_budget.get("max_tasks")
+    if max_walltime_sec is None:
+        max_walltime_sec = manifest_budget.get("max_walltime_sec")
 
     sidecars = find_sidecars_by_campaign(experiment_dir, campaign_id)
     spent_jobs = len(sidecars)

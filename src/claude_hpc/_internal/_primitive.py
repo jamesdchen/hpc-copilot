@@ -195,6 +195,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.campaign_advance",
     "claude_hpc.atoms.campaign_budget",
     "claude_hpc.atoms.campaign_converged",
+    "claude_hpc.atoms.campaign_init",
     "claude_hpc.atoms.campaign_list",
     "claude_hpc.atoms.campaign_replay",
     "claude_hpc.atoms.campaign_status",
