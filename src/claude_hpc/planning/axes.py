@@ -54,7 +54,8 @@ _SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "schemas" / "axes.
 
 def axes_schema() -> dict[str, Any]:
     """Load and return the axes JSON Schema as a dict."""
-    return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    return data
 
 
 def axes_path(experiment_dir: Path | str) -> Path:
@@ -136,11 +137,19 @@ def pick_array_axis(
     match are silently skipped (a separate validator should warn about
     those at deploy time).
 
-    This is the cold path: it reads only :data:`homogeneous_axes`. The
-    warm path (lowest-CV from runtime priors) is planned and will
-    supersede this; the cold-start fallback then continues to live
-    here.
+    Tries the warm path first (lowest-CV from runtime priors); falls
+    back to the cold path (first homogeneous_axes entry) when warm
+    has insufficient signal. The two-path behavior is silent: callers
+    don't choose; the picker upgrades automatically as samples
+    accumulate.
     """
+    # Warm path: prefer observed CV when we have data.
+    warm_name, _ = pick_array_axis_warm(experiment_dir)
+    if warm_name is not None and (available_axes is None or warm_name in available_axes):
+        return warm_name, f"warm-path lowest-CV axis ({warm_name!r})"
+    # Warm picked None or an axis we can't honor; fall through to cold.
+
+    # Cold path.
     config = read_axes(experiment_dir)
     if config is None:
         return None, "no axes.yaml"
@@ -149,10 +158,13 @@ def pick_array_axis(
         return None, "homogeneous_axes is empty"
     if available_axes is None:
         chosen = homogeneous[0]
-        return chosen, f"first entry in homogeneous_axes ({chosen!r})"
+        return chosen, f"cold-path first homogeneous_axes entry ({chosen!r})"
     for name in homogeneous:
         if name in available_axes:
-            return name, f"first homogeneous_axes entry that matches tasks.py AXES ({name!r})"
+            return (
+                name,
+                f"cold-path first homogeneous_axes entry that matches tasks.py AXES ({name!r})",
+            )
     return (
         None,
         f"no homogeneous_axes entry matches available axes {available_axes!r}",
@@ -186,15 +198,29 @@ def pick_array_axis_warm(
     if config is None or not config.get("axes"):
         return None, "no axes.yaml or no axes enumeration"
 
+    # Aggregate samples across every (profile, cluster) pair in
+    # <experiment>/.hpc/runtimes/. The warm picker runs experiment-wide
+    # rather than per-(profile, cluster); axes.yaml is also experiment-wide.
     try:
-        from claude_hpc.state.runtime_prior import read_samples
+        from claude_hpc._internal.layout import RepoLayout
     except ImportError:
         return None, "runtime_prior not importable"
 
-    try:
-        samples = read_samples(Path(experiment_dir), cmd_sha=cmd_sha)
-    except Exception as exc:
-        return None, f"runtime_prior read failed: {exc}"
+    runtimes_dir = RepoLayout(Path(experiment_dir)).runtimes
+    samples: list[dict[str, Any]] = []
+    if runtimes_dir.is_dir():
+        for runtime_file in sorted(runtimes_dir.glob("*.json")):
+            try:
+                doc = json.loads(runtime_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(doc, dict):
+                continue
+            for s in doc.get("samples") or []:
+                if isinstance(s, dict):
+                    samples.append(s)
+    if cmd_sha is not None:
+        samples = [s for s in samples if s.get("cmd_sha") == cmd_sha]
 
     qualifying = [
         s

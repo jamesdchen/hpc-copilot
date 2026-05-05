@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
-from unittest.mock import patch
 
 import jsonschema
 import pytest
@@ -229,16 +229,25 @@ def test_warm_returns_none_when_axes_yaml_lacks_enumeration(tmp_path: Path) -> N
     assert "no axes" in reason
 
 
+def _seed_runtime_doc(experiment_dir: Path, samples: list[dict]) -> None:
+    """Write a runtime-priors doc with the given samples to .hpc/runtimes/."""
+    runtimes = experiment_dir / ".hpc" / "runtimes"
+    runtimes.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "profile": "test",
+        "cluster": "test",
+        "schema_version": 2,
+        "samples": samples,
+    }
+    (runtimes / "test.test.json").write_text(json.dumps(doc), encoding="utf-8")
+
+
 def test_warm_returns_none_when_no_qualifying_samples(tmp_path: Path) -> None:
     write_axes(
         tmp_path,
         axes=[{"name": "window", "size": 5}],
     )
-    with patch(
-        "claude_hpc.state.runtime_prior.read_samples",
-        return_value=[],
-    ):
-        name, reason = pick_array_axis_warm(tmp_path, min_samples=5)
+    name, reason = pick_array_axis_warm(tmp_path, min_samples=5)
     assert name is None
     assert "qualifying samples" in reason
 
@@ -265,10 +274,7 @@ def test_warm_picks_lowest_cv_when_samples_carry_axis_bindings(tmp_path: Path) -
                     "axis_bindings": {"model": model, "window": w},
                 }
             )
-    with patch(
-        "claude_hpc.state.runtime_prior.read_samples",
-        return_value=samples,
-    ):
-        name, reason = pick_array_axis_warm(tmp_path, min_samples=5)
+    _seed_runtime_doc(tmp_path, samples)
+    name, reason = pick_array_axis_warm(tmp_path, min_samples=5)
     assert name == "window"
     assert "lowest CV" in reason

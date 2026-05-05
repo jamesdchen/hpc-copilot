@@ -56,7 +56,7 @@ from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow_iso
 if TYPE_CHECKING:
     from pathlib import Path
 
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 
 # Per-(profile, cluster) sample-count cap. Override via HPC_MAX_RUNTIME_SAMPLES.
 # A long campaign easily produces hundreds of thousands of tasks; the prior is
@@ -184,6 +184,7 @@ def append_sample(
     predicted_eta_sec: int | None = None,
     submitted_at_iso: str | None = None,
     queue_wait_sec: int | None = None,
+    axis_bindings: dict[str, Any] | None = None,
 ) -> Path:
     """Append a single runtime sample. Returns the file path written.
 
@@ -235,6 +236,10 @@ def append_sample(
         # negative delta (clock skew) records None rather than a
         # nonsense negative.
         "queue_wait_sec": _resolve_queue_wait_sec(queue_wait_sec, started_at, submitted_at_iso),
+        # v2 axis_bindings — dict of {axis_name: value} from tasks.py.resolve(task_id).
+        # Empty dict for samples appended without bindings (e.g. legacy callers); the
+        # warm-path picker filters those out via len-check.
+        "axis_bindings": dict(axis_bindings) if axis_bindings else {},
     }
 
     def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:

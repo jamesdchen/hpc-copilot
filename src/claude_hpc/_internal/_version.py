@@ -51,8 +51,10 @@ _MANIFEST: Mapping[str, tuple[int, ...]] = {
     # Per-run sidecar — v1→v2 migration landed in the P0 fix; both must
     # remain readable while old runs are still in flight.
     "sidecar": (1, 2),
-    # Runtime priors — only v1 has shipped.
-    "runtime_prior": (1,),
+    # Runtime priors — v1 lacked axis_bindings; v2 added it. Clean break:
+    # v1 samples are soft-skipped (treated as empty) so the warm-path
+    # axis picker doesn't silently use bindings-less data.
+    "runtime_prior": (2,),
     # Calibration prediction sidecar — only v1 has shipped.
     "calibration_prediction": (1,),
     # Status rollup — v1 was the legacy shape; v2 is the cmd_sha-keyed
