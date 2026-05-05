@@ -37,6 +37,7 @@ __all__ = [
     "prune_orphan_sidecars",
     "read_run_sidecar",
     "run_sidecar_path",
+    "update_run_sidecar_job_ids",
     "write_run_sidecar",
 ]
 
@@ -159,6 +160,12 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "runtime": None,
     "auto_retry": None,
     "aggregate_defaults": None,
+    # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
+    # sidecar without job_ids (and without a journal record) is the half-
+    # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
+    # `[]`) so the backfill stays distinguishable from a deliberate
+    # "no job ids yet" empty list at write time.
+    "job_ids": None,
 }
 
 # Hardened return-shape defaults. ``read_run_sidecar`` always fills these
@@ -255,6 +262,7 @@ def write_run_sidecar(
     runtime: str | None = None,
     auto_retry: dict[str, Any] | None = None,
     aggregate_defaults: dict[str, Any] | None = None,
+    job_ids: list[str] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -311,6 +319,7 @@ def write_run_sidecar(
         "runtime": runtime,
         "auto_retry": auto_retry,
         "aggregate_defaults": aggregate_defaults,
+        "job_ids": list(job_ids) if job_ids is not None else None,
     }
     for k, v in v2_values.items():
         if v is not None:
@@ -447,27 +456,75 @@ def find_run_by_cmd_sha(
 
 
 def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
-    """Return True if the sidecar for *run_id* has no live journal record.
+    """Return True if the sidecar for *run_id* never landed a cluster job.
 
-    A sidecar is "orphan" when ``<exp>/.hpc/runs/<run_id>.json`` exists
-    on disk but ``~/.claude/hpc/<repo_hash>/runs/<run_id>.json`` either
-    does not exist or has an empty ``job_ids`` list. The journal record
-    is written by :func:`runner.submit_and_record` only after qsub /
-    sbatch returns a job id, so its absence means no cluster job was
-    ever created.
+    A sidecar is orphan when BOTH:
 
-    Used by :func:`find_run_by_cmd_sha` (skip orphans during resume
+    * Its ``job_ids`` field is empty/missing (set by
+      :func:`update_run_sidecar_job_ids` after a successful qsub).
+    * No live journal record exists for the same ``run_id`` (or the
+      journal record's ``job_ids`` is empty).
+
+    Either signal alone is not enough:
+
+    * Sidecar with ``job_ids`` and no journal — that's the journal-wipe
+      recovery contract (machine swap / ``rm -rf ~/.claude/hpc/``);
+      :func:`runner.submit_and_record` will reconstruct the journal from
+      the sidecar's ``job_ids``.
+    * Empty sidecar ``job_ids`` but a live journal with ``job_ids`` —
+      pre-existing v2 sidecars that predate the post-qsub finalize hook;
+      we trust the journal and treat the sidecar as committed.
+
+    Used by :func:`find_run_by_cmd_sha` (opt-in skip during resume
     detection) and :func:`prune_orphan_sidecars` (delete them).
     """
     from claude_hpc._internal import session
 
+    # Sidecar-side signal: was finalize_run_sidecar_job_ids ever called?
+    sidecar_path = run_sidecar_path(experiment_dir, run_id)
+    sidecar_job_ids: list[str] | None = None
+    try:
+        sidecar_data = json.loads(sidecar_path.read_text())
+        raw = sidecar_data.get("job_ids")
+        if isinstance(raw, list):
+            sidecar_job_ids = [str(j) for j in raw]
+    except (OSError, json.JSONDecodeError):
+        sidecar_job_ids = None
+
+    # Journal-side signal: did submit_and_record run to completion?
     try:
         record = session.load_run(experiment_dir, run_id)
     except Exception:  # noqa: BLE001 — journal corruption == treat as orphan
-        return True
-    if record is None:
-        return True
-    return not record.job_ids
+        record = None
+
+    sidecar_committed = bool(sidecar_job_ids)
+    journal_committed = record is not None and bool(record.job_ids)
+    return not (sidecar_committed or journal_committed)
+
+
+def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[str]) -> Path:
+    """Rewrite an existing sidecar with *job_ids* set; return its path.
+
+    Called from :func:`runner.submit_and_record` immediately after qsub
+    returns. Loads the sidecar in place, sets ``job_ids``, and atomically
+    rewrites — preserving all other v2 config fields (resources, env,
+    constraints, …) untouched. This is the post-qsub finalize that
+    distinguishes a real run from the half-baked sidecar Step 6d wrote
+    before rsync.
+
+    Idempotent: re-running with the same *job_ids* is a no-op rewrite.
+    Raises :class:`FileNotFoundError` if no sidecar exists for *run_id*
+    (the caller should have written one earlier in the pipeline).
+    """
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        raise FileNotFoundError(f"run sidecar not found: {target}")
+    data: dict[str, Any] = json.loads(target.read_text())
+    data["job_ids"] = [str(j) for j in job_ids]
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    tmp.replace(target)
+    return target
 
 
 @primitive(

@@ -557,3 +557,71 @@ def test_find_run_by_cmd_sha_with_skip_orphans_drops_half_baked(
     kwargs["cmd_sha"] = cmd_sha
     write_run_sidecar(tmp_path, **kwargs)
     assert find_run_by_cmd_sha(tmp_path, cmd_sha, skip_orphans=True) is None
+
+
+# ---------------------------------------------------------------------------
+# job_ids on the sidecar — pending vs committed signal
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_with_job_ids_is_not_orphan_even_without_journal(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """Journal-wipe recovery: a sidecar that finalize_run_sidecar_job_ids
+    stamped is the canonical 'job ran on the cluster' signal — even if
+    the journal at ~/.claude/hpc/<repo_hash>/ has since been wiped."""
+    from claude_hpc.state.runs import is_orphan_sidecar, write_run_sidecar
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs(), job_ids=["12345"])
+    assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is False
+
+
+def test_sidecar_without_job_ids_or_journal_is_orphan(_journal_home: Path, tmp_path: Path) -> None:
+    """The half-baked case: Step 6d wrote the sidecar but qsub never ran."""
+    from claude_hpc.state.runs import is_orphan_sidecar, write_run_sidecar
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is True
+
+
+def test_update_sidecar_job_ids_atomically_stamps_existing_sidecar(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """Post-qsub finalize: load + set + atomic rewrite, preserving v2 fields."""
+    from claude_hpc.state.runs import (
+        is_orphan_sidecar,
+        read_run_sidecar,
+        update_run_sidecar_job_ids,
+        write_run_sidecar,
+    )
+
+    # Write a "pending" sidecar with rich v2 fields (mirrors the slash
+    # command Step 6d call shape).
+    write_run_sidecar(
+        tmp_path,
+        **_common_required_kwargs(),
+        cluster="hoffman2",
+        resources={"cpus": 8, "mem": "64G"},
+    )
+    rid = "20260101-000000-deadbee"
+    assert is_orphan_sidecar(tmp_path, rid) is True
+
+    # Finalize it.
+    update_run_sidecar_job_ids(tmp_path, rid, ["job_42", "job_43"])
+
+    data = read_run_sidecar(tmp_path, rid)
+    assert data["job_ids"] == ["job_42", "job_43"]
+    # v2 fields preserved verbatim.
+    assert data["cluster"] == "hoffman2"
+    assert data["resources"] == {"cpus": 8, "mem": "64G"}
+    assert is_orphan_sidecar(tmp_path, rid) is False
+
+
+def test_update_sidecar_job_ids_raises_when_sidecar_missing(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """Caller-side bug: finalize before write. Surface, don't synthesize."""
+    from claude_hpc.state.runs import update_run_sidecar_job_ids
+
+    with pytest.raises(FileNotFoundError):
+        update_run_sidecar_job_ids(tmp_path, "20260101-000000-nope0000", ["12345"])

@@ -258,7 +258,7 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
     return loaded
 
 
-def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
+def _validate_against_schema(payload: Any, schema_name: str) -> None:
     """Validate *payload* against ``claude_hpc/schemas/<schema_name>.input.json``.
 
     Raises :class:`errors.SpecInvalid` on schema mismatch.  When the
@@ -1078,14 +1078,21 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     from claude_hpc.flows.submit_flow import SubmitSpec, submit_flow_batch
 
     raw = _load_spec(args.spec, schema_name=None)
-    if not isinstance(raw, list):
+    # Wrapper-shape validation (object with `specs` array, per-entry
+    # required keys via submit_flow_batch.input.json), then full per-entry
+    # validation against submit_flow.input.json. The two schemas overlap
+    # on the required-keys check; the wrapper exists so an agent / external
+    # orchestrator can sanity-check the bundle in one call.
+    _validate_against_schema(raw, "submit_flow_batch")
+    if not isinstance(raw, dict) or "specs" not in raw:
         return _err(
             error_code="spec_invalid",
-            message="submit-flow-batch spec must be a JSON list of per-spec dicts",
+            message="submit-flow-batch spec must be an object with a 'specs' list",
             category="user-error",
             retry_safe=False,
         )
-    for entry in raw:
+    spec_list = raw["specs"]
+    for entry in spec_list:
         _validate_against_schema(entry, "submit_flow")
     specs = [
         SubmitSpec(
@@ -1107,7 +1114,7 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
             slurm_cluster=s.get("slurm_cluster"),
             partial_ok=bool(s.get("partial_ok", False)),
         )
-        for s in raw
+        for s in spec_list
     ]
 
     if args.dry_run:
@@ -1126,8 +1133,8 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     results = submit_flow_batch(
         experiment_dir=args.experiment_dir,
         specs=specs,
-        rsync_excludes=raw[0].get("rsync_excludes") if raw else None,
-        skip_preflight=bool(raw[0].get("skip_preflight", False)) if raw else False,
+        rsync_excludes=raw.get("rsync_excludes"),
+        skip_preflight=bool(raw.get("skip_preflight", False)),
     )
     _ok(
         {"results": [r.to_envelope_data() for r in results], "n_results": len(results)},
@@ -2175,7 +2182,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_sfb)
     _add_spec_and_dry_run(
         p_sfb,
-        schema_hint="JSON list of items matching schemas/submit_flow.input.json",
+        schema_hint="schemas/submit_flow_batch.input.json (array of submit_flow.input.json items)",
         dry_run_help="Validate the batch + report shared targets; no SSH/rsync/qsub.",
     )
     p_sfb.set_defaults(func=cmd_submit_flow_batch)

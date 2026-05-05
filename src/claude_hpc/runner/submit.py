@@ -122,6 +122,19 @@ def submit_and_record(
         campaign_id=campaign_id,
     )
     session.upsert_run(experiment_dir, record)
+    # Post-qsub finalize: stamp the per-experiment sidecar with the job_ids
+    # we just got back. This is what distinguishes a real run from the
+    # half-baked sidecar Step 6d of /submit-hpc writes before rsync — see
+    # :func:`claude_hpc.state.runs.is_orphan_sidecar`. Best-effort: if the
+    # sidecar isn't on disk yet (callers that skipped Step 6d), we don't
+    # synthesize one — the journal record alone is enough to deflect the
+    # orphan check.
+    try:
+        from claude_hpc.state.runs import update_run_sidecar_job_ids
+
+        update_run_sidecar_job_ids(experiment_dir, run_id, list(job_ids))
+    except FileNotFoundError:
+        pass
     return record, False
 
 

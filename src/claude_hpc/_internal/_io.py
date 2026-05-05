@@ -22,7 +22,7 @@ back to a no-lock atomic write — same behaviour as the original
 
 from __future__ import annotations
 
-__all__ = ["atomic_locked_update"]
+__all__ = ["atomic_locked_update", "advisory_flock"]
 
 import contextlib
 import json
@@ -31,7 +31,7 @@ import tempfile
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
 
@@ -113,6 +113,58 @@ def atomic_locked_update(
         return new_doc
     finally:
         if fcntl is not None:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def advisory_flock(
+    lock_path: Path,
+    *,
+    blocking: bool = True,
+) -> Iterator[bool]:
+    """Per-process advisory ``fcntl.flock`` around a code block.
+
+    Yields ``True`` if the lock was acquired, ``False`` if *blocking*
+    is False and another process held it. On non-POSIX platforms (no
+    ``fcntl``), always yields ``True`` — the lock degrades to a
+    permissions-only sentinel since we have no real cross-process
+    serialization, and the caller is expected to tolerate the race.
+
+    Use case: serialize parallel ``submit-flow`` calls from different
+    shells targeting the same cluster (``~/.claude/hpc/<repo>/.submit_lock``).
+    The lock is advisory — only callers who flock the same path
+    coordinate; the underlying file system operations remain unprotected.
+
+    The lock file itself is created (``mkdir -p`` on the parent) and
+    left in place; it's a sentinel, never read or written. If the
+    process dies, the kernel releases the flock automatically.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl  # noqa: PLC0415 — POSIX-only import
+    except ImportError:
+        # Windows / no-fcntl: degrade to no-op. We still touch the file
+        # so callers can rely on it existing (e.g. for ad-hoc inspection).
+        with contextlib.suppress(OSError):
+            lock_path.touch(exist_ok=True)
+        yield True
+        return
+
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    acquired = False
+    try:
+        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        try:
+            fcntl.flock(fd, flags)
+            acquired = True
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        if acquired:
             with contextlib.suppress(OSError):
                 fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)

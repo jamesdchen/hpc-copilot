@@ -6,7 +6,7 @@ side_effects:
 - scheduler-submit: <cluster> (one qsub per spec)
 - writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per spec)
 idempotent: true
-idempotency_key: (spec.run_id for spec in specs)
+idempotency_key: specs.run_id
 error_codes:
 - code: spec_invalid
   category: user
@@ -36,7 +36,7 @@ backed_by:
 
 This is the right shape whenever a campaign iteration or a multi-executor `/submit-hpc` produces >1 specs to the same cluster. The naïve `submit-flow`-per-spec path sends ~13×N ssh handshakes at the cluster's sshd and trips `MaxStartups` (CARC's default ratelimits at ~4 simultaneous fresh-start submissions; we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts, with half-baked sidecars left behind).
 
-Field-level contract: each list entry in the spec file matches `schemas/submit_flow.input.json`. The output envelope's `data.results` is a list of per-spec result records in input order; each entry has the same shape as a single `submit-flow` envelope's `data`.
+Field-level contract: the spec file is an object `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}`. Each entry under `specs` matches `schemas/submit_flow.input.json`. `rsync_excludes` and `skip_preflight` apply once across the bundle (the rsync runs once; the preflight probe runs once). The output envelope's `data.results` is a list of per-spec result records in input order; each entry has the same shape as a single `submit-flow` envelope's `data`.
 
 ## Compose with
 

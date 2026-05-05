@@ -39,6 +39,7 @@ from claude_hpc.runner import submit_and_record
 from claude_hpc.state.discover import discover_executors
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from claude_hpc.infra.backends import HPCBackend
@@ -482,7 +483,7 @@ def _submit_one_spec(
         errors.ClusterUnknown,
     ],
     idempotent=True,
-    idempotency_key="(spec.run_id for spec in specs)",
+    idempotency_key="specs.run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
 )
 def submit_flow_batch(
@@ -521,6 +522,54 @@ def submit_flow_batch(
     """
     if not specs:
         return []
+
+    # Per-repo advisory submit lock: serialize multiple `submit-flow` /
+    # `submit-flow-batch` invocations against the same experiment so two
+    # shells firing simultaneously don't BOTH fan out N qsubs at the
+    # cluster's sshd. The lock is advisory (other code paths don't take
+    # it) and per-repo (`<journal_home>/.submit_lock`); cross-cluster
+    # parallelism is still allowed when each cluster has its own
+    # experiment_dir. Disable via ``HPC_SUBMIT_NO_LOCK=1`` (tests, or
+    # users who deliberately want concurrent submits).
+    import os
+
+    from claude_hpc._internal import _io, session
+
+    use_lock = os.environ.get("HPC_SUBMIT_NO_LOCK") != "1"
+    lock_path = session.journal_dir(experiment_dir) / ".submit_lock"
+    lock_ctx = _io.advisory_flock(lock_path) if use_lock else _noop_lock_ctx()
+    with lock_ctx:
+        return _submit_flow_batch_locked(
+            experiment_dir=experiment_dir,
+            specs=specs,
+            rsync_excludes=rsync_excludes,
+            skip_preflight=skip_preflight,
+        )
+
+
+@contextlib.contextmanager
+def _noop_lock_ctx() -> Iterator[bool]:
+    """Stand-in for advisory_flock when HPC_SUBMIT_NO_LOCK=1."""
+    yield True
+
+
+def _submit_flow_batch_locked(
+    *,
+    experiment_dir: Path,
+    specs: list[SubmitSpec],
+    rsync_excludes: list[str] | None,
+    skip_preflight: bool,
+) -> list[SubmitFlowResult]:
+    """Body of :func:`submit_flow_batch`, executed under the per-repo lock."""
+    # Auto-cleanup: drop sidecars from earlier failed batches before doing
+    # anything else. Without this, a half-baked sidecar from yesterday's
+    # rate-limited submit would still surface to find_run_by_cmd_sha and
+    # to the agent's resume-detection prompts. The prune is silent on
+    # success (returns []); if it deletes anything, the cluster traffic
+    # we're about to send is fresh anyway.
+    from claude_hpc.state.runs import prune_orphan_sidecars
+
+    prune_orphan_sidecars(experiment_dir)
 
     # Single-target invariant: rsync + deploy can only target one place.
     targets = {(s.ssh_target, s.remote_path) for s in specs}
