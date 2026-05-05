@@ -23,6 +23,8 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+from claude_hpc._internal._primitive import SideEffect, primitive
+
 __all__ = [
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
@@ -30,7 +32,9 @@ __all__ = [
     "compute_tasks_py_sha",
     "find_existing_runs",
     "find_run_by_cmd_sha",
+    "is_orphan_sidecar",
     "prune_old_runs",
+    "prune_orphan_sidecars",
     "read_run_sidecar",
     "run_sidecar_path",
     "write_run_sidecar",
@@ -410,11 +414,22 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     return hits
 
 
-def find_run_by_cmd_sha(experiment_dir: Path, cmd_sha: str) -> Path | None:
+def find_run_by_cmd_sha(
+    experiment_dir: Path, cmd_sha: str, *, skip_orphans: bool = False
+) -> Path | None:
     """Return the newest sidecar matching *cmd_sha*, or ``None`` if absent.
 
     Compares the full cmd_sha string. Iterates newest-first so a fresh
     resume detection picks the most recent matching run.
+
+    *skip_orphans* (default False) preserves the journal-wipe recovery
+    contract: a sidecar with no journal record is the canonical signal
+    that the journal at ``~/.claude/hpc/<repo_hash>/`` was wiped (machine
+    swap, rm -rf) and ``submit_and_record`` should reconstruct from the
+    sidecar instead of re-qsub'ing a job the cluster already has running.
+    Pass ``skip_orphans=True`` only after a known-failed batch where the
+    sidecars without journal records are guaranteed to be half-baked
+    (e.g. inside the prune primitive) — see :func:`prune_orphan_sidecars`.
     """
     if not cmd_sha:
         return None
@@ -423,9 +438,71 @@ def find_run_by_cmd_sha(experiment_dir: Path, cmd_sha: str) -> Path | None:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("cmd_sha") == cmd_sha:
-            return path
+        if data.get("cmd_sha") != cmd_sha:
+            continue
+        if skip_orphans and is_orphan_sidecar(experiment_dir, path.stem):
+            continue
+        return path
     return None
+
+
+def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
+    """Return True if the sidecar for *run_id* has no live journal record.
+
+    A sidecar is "orphan" when ``<exp>/.hpc/runs/<run_id>.json`` exists
+    on disk but ``~/.claude/hpc/<repo_hash>/runs/<run_id>.json`` either
+    does not exist or has an empty ``job_ids`` list. The journal record
+    is written by :func:`runner.submit_and_record` only after qsub /
+    sbatch returns a job id, so its absence means no cluster job was
+    ever created.
+
+    Used by :func:`find_run_by_cmd_sha` (skip orphans during resume
+    detection) and :func:`prune_orphan_sidecars` (delete them).
+    """
+    from claude_hpc._internal import session
+
+    try:
+        record = session.load_run(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — journal corruption == treat as orphan
+        return True
+    if record is None:
+        return True
+    return not record.job_ids
+
+
+@primitive(
+    name="prune-orphan-sidecars",
+    verb="mutate",
+    side_effects=[
+        SideEffect("removes-files", "<experiment>/.hpc/runs/*.json (orphans only)"),
+    ],
+    idempotent=True,
+)
+def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:
+    """Delete every orphan sidecar under ``<exp>/.hpc/runs/``.
+
+    Returns the list of run_ids whose sidecars were removed (for a
+    diagnostic banner in the slash-command flow). Idempotent —
+    re-invocations after the first pass are no-ops.
+
+    Use case: a campaign batch hit cluster-side ssh rate limits, leaving
+    half-baked sidecars from the failed submissions. Those sidecars
+    would otherwise show up to :func:`find_run_by_cmd_sha` and the
+    runtime-prior aggregator without a corresponding cluster job. Run
+    this primitive after the batch finishes (or as part of `/resume-hpc`
+    or `/setup_hpc`) to clean them up.
+    """
+    deleted: list[str] = []
+    for path in find_existing_runs(experiment_dir):
+        run_id = path.stem
+        if not is_orphan_sidecar(experiment_dir, run_id):
+            continue
+        try:
+            path.unlink()
+            deleted.append(run_id)
+        except OSError:
+            continue
+    return deleted
 
 
 def prune_old_runs(experiment_dir: Path, keep: int = MAX_RUNS) -> list[Path]:

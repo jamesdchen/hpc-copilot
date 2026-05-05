@@ -28,6 +28,18 @@ def _force_rsync_present():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _disable_ssh_backoff(monkeypatch):
+    """Skip backoff retries + sleep entirely so single-call argv tests stay fast.
+
+    The backoff helper's retry loop would otherwise repeat each subprocess
+    mock 5 times for genuine throttle markers, breaking ``call_args``
+    assertions. Tests that *want* to exercise the backoff path live in
+    :class:`TestSshBackoff` below and clear this env var locally.
+    """
+    monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")
+
+
 def _cp(stdout="", stderr="", returncode=0):
     """Mimic subprocess.CompletedProcess enough for the remote module."""
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
@@ -537,3 +549,71 @@ class TestRunCombinerCheckedTimeout:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
                 remote.run_combiner_checked(ssh_target="u@c", remote_path="/p", wave=0, run_id="r1")
+
+
+# ---------------------------------------------------------------------------
+# SSH rate-limit backoff
+# ---------------------------------------------------------------------------
+
+
+class TestSshBackoff:
+    @pytest.fixture(autouse=True)
+    def _enable_backoff(self, monkeypatch):
+        """Local override: enable backoff and pin delays to zero for speed."""
+        monkeypatch.delenv("HPC_SSH_NO_BACKOFF", raising=False)
+        monkeypatch.setattr("claude_hpc.infra.remote._BACKOFF_DELAYS_SEC", (0.0,) * 4)
+        # Ensure no actual sleeping in the very-rare-edge case the schedule
+        # is consulted directly.
+        monkeypatch.setattr("claude_hpc.infra.remote.time.sleep", lambda _: None)
+
+    def test_ssh_run_retries_on_throttle_marker_then_succeeds(self):
+        throttle_cp = _cp(
+            stderr="kex_exchange_identification: Connection closed by remote host",
+            returncode=255,
+        )
+        ok_cp = _cp(stdout="hi\n", returncode=0)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = [throttle_cp, throttle_cp, ok_cp]
+            result = remote.ssh_run("ls", ssh_target="u@c")
+        assert result.returncode == 0
+        assert mock_run.call_count == 3  # two throttles + one success
+
+    def test_ssh_run_does_not_retry_on_normal_failure(self):
+        """Auth failures, command-not-found etc must surface immediately."""
+        bad_cp = _cp(stderr="Permission denied (publickey).", returncode=255)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = bad_cp
+            result = remote.ssh_run("ls", ssh_target="u@c")
+        assert result.returncode == 255
+        assert mock_run.call_count == 1
+
+    def test_ssh_run_retries_then_gives_up_after_schedule(self):
+        throttle_cp = _cp(stderr="ssh_exchange_identification: Connection closed", returncode=255)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = throttle_cp
+            result = remote.ssh_run("ls", ssh_target="u@c")
+        # 1 initial + 4 retries = 5 attempts total when all return throttle.
+        assert mock_run.call_count == 5
+        assert result.returncode == 255
+
+    def test_rsync_push_retries_on_protocol_marker(self):
+        throttle_cp = _cp(
+            stderr=(
+                "ssh_exchange_identification: Connection closed by remote host\n"
+                "rsync error: error in rsync protocol data stream (code 12)"
+            ),
+            returncode=12,
+        )
+        ok_cp = _cp(returncode=0)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = [throttle_cp, ok_cp]
+            result = remote.rsync_push(ssh_target="u@c", remote_path="/p", local_path="/tmp/x")
+        assert result.returncode == 0
+        assert mock_run.call_count == 2
+
+    def test_timeout_error_retries_then_raises(self):
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with pytest.raises(TimeoutError):
+                remote.ssh_run("ls", ssh_target="u@c")
+        assert mock_run.call_count == 5  # 1 initial + 4 retries

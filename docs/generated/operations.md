@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**37 operations total**: 34 primitive atoms + 3 workflow atoms.
+**38 operations total**: 35 primitive atoms + 3 workflow atoms.
 
 ## How to read this page
 
@@ -53,7 +53,7 @@ Read + binary health check. Same composability as `query`.
 | [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-mapreduce preflight [--cluster <name>]` | `claude_hpc.atoms.preflight.check_preflight` | — | `claude_hpc/schemas/preflight.output.json` |
 | [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `claude_hpc.planning.validate.validate_submission` | `claude_hpc/schemas/validate.input.json` | `claude_hpc/schemas/validate.output.json` |
 
-## `mutate` (4)
+## `mutate` (5)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -61,6 +61,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 |---|---|---|---|---|---|---|
 | [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `claude_hpc.runner.combine.combine_wave` | — | `claude_hpc/schemas/combine_wave.output.json` |
 | [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `(none — Python-only primitive)` | `claude_hpc.runner.reconcile.mark_terminal` | — | — |
+| [`prune-orphan-sidecars`](primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `claude_hpc.state.runs.prune_orphan_sidecars` | — | — |
 | [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` | `claude_hpc.agent_cli.cmd_reconcile` | — | `claude_hpc/schemas/reconcile.output.json` |
 | [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` | `claude_hpc.runner.resubmit.resubmit_failed` | `claude_hpc/schemas/resubmit.input.json` | — |
 

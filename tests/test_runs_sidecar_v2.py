@@ -443,3 +443,117 @@ def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
     write_run_sidecar(tmp_path, wave_map=explicit, **kwargs)
     out = read_run_sidecar(tmp_path, kwargs["run_id"])
     assert out["wave_map"] == explicit
+
+
+# ---------------------------------------------------------------------------
+# Orphan sidecar detection + prune primitive
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    from claude_hpc._internal import session
+
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
+    return home
+
+
+def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
+    """Write a journal RunRecord matching *run_id* with the given job_ids."""
+    from claude_hpc._internal import session
+    from claude_hpc._internal.session import RunRecord
+
+    record = RunRecord(
+        run_id=run_id,
+        profile="p",
+        cluster="c",
+        ssh_target="user@h",
+        remote_path="/x",
+        job_name="j",
+        job_ids=job_ids,
+        total_tasks=1,
+        submitted_at="2026-01-01T00:00:00+00:00",
+        experiment_dir=str(experiment.resolve()),
+    )
+    session.upsert_run(experiment, record)
+
+
+def test_is_orphan_when_no_journal_record(_journal_home: Path, tmp_path: Path) -> None:
+    from claude_hpc.state.runs import is_orphan_sidecar
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is True
+
+
+def test_is_not_orphan_when_journal_has_job_ids(_journal_home: Path, tmp_path: Path) -> None:
+    from claude_hpc.state.runs import is_orphan_sidecar
+
+    kwargs = _common_required_kwargs()
+    write_run_sidecar(tmp_path, **kwargs)
+    _seed_journal(tmp_path, kwargs["run_id"], job_ids=["12345"])
+    assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is False
+
+
+def test_is_orphan_when_journal_has_empty_job_ids(_journal_home: Path, tmp_path: Path) -> None:
+    from claude_hpc.state.runs import is_orphan_sidecar
+
+    kwargs = _common_required_kwargs()
+    write_run_sidecar(tmp_path, **kwargs)
+    _seed_journal(tmp_path, kwargs["run_id"], job_ids=[])
+    assert is_orphan_sidecar(tmp_path, kwargs["run_id"]) is True
+
+
+def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_path: Path) -> None:
+    from claude_hpc.state.runs import prune_orphan_sidecars, run_sidecar_path
+
+    real_kwargs = _common_required_kwargs(run_id="20260101-000000-real0001")
+    orphan_kwargs = _common_required_kwargs(run_id="20260101-000001-orphan02")
+    write_run_sidecar(tmp_path, **real_kwargs)
+    write_run_sidecar(tmp_path, **orphan_kwargs)
+    _seed_journal(tmp_path, real_kwargs["run_id"], job_ids=["999"])
+
+    deleted = prune_orphan_sidecars(tmp_path)
+    assert deleted == [orphan_kwargs["run_id"]]
+    assert run_sidecar_path(tmp_path, real_kwargs["run_id"]).is_file()
+    assert not run_sidecar_path(tmp_path, orphan_kwargs["run_id"]).is_file()
+
+
+def test_prune_orphan_sidecars_idempotent(_journal_home: Path, tmp_path: Path) -> None:
+    from claude_hpc.state.runs import prune_orphan_sidecars
+
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    first = prune_orphan_sidecars(tmp_path)
+    second = prune_orphan_sidecars(tmp_path)
+    assert len(first) == 1
+    assert second == []
+
+
+def test_find_run_by_cmd_sha_default_preserves_journal_wipe_recovery(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """Default behaviour: a sidecar without a journal record IS findable
+    so :func:`runner.submit_and_record` can reconstruct the journal."""
+    from claude_hpc.state.runs import find_run_by_cmd_sha
+
+    cmd_sha = "f" * 64
+    kwargs = _common_required_kwargs()
+    kwargs["cmd_sha"] = cmd_sha
+    write_run_sidecar(tmp_path, **kwargs)
+    # No journal record — but default match still hits, preserving the
+    # journal-wipe recovery contract.
+    found = find_run_by_cmd_sha(tmp_path, cmd_sha)
+    assert found is not None and found.stem == kwargs["run_id"]
+
+
+def test_find_run_by_cmd_sha_with_skip_orphans_drops_half_baked(
+    _journal_home: Path, tmp_path: Path
+) -> None:
+    """Opt-in flag for callers that have already pruned the failed batch."""
+    from claude_hpc.state.runs import find_run_by_cmd_sha
+
+    cmd_sha = "e" * 64
+    kwargs = _common_required_kwargs()
+    kwargs["cmd_sha"] = cmd_sha
+    write_run_sidecar(tmp_path, **kwargs)
+    assert find_run_by_cmd_sha(tmp_path, cmd_sha, skip_orphans=True) is None
