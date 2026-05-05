@@ -35,7 +35,7 @@ def _effective_template_text(template: Path) -> str:
     """Return the per-template text concatenated with any sourced preamble."""
     body = template.read_text(encoding="utf-8")
     sourced = ""
-    if 'source "$(dirname "$0")/common/hpc_preamble.sh"' in body:
+    if 'source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"' in body:
         sourced += "\n" + COMMON_PREAMBLE.read_text(encoding="utf-8")
     return body + sourced
 

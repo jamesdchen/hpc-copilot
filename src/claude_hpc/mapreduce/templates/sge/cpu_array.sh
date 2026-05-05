@@ -40,7 +40,7 @@ REPO_DIR="${REPO_DIR:-.}"
 # --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---
 # See claude_hpc/mapreduce/templates/common/hpc_preamble.sh — deployed alongside
 # this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.
-source "$(dirname "$0")/common/hpc_preamble.sh"
+source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"
 
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"
