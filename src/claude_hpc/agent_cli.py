@@ -790,6 +790,46 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.monitor_arm.
+
+    Reads a JSON ``--spec`` describing the current run state and emits
+    the cron/loop/none decision + ``armed:`` line + cron_create_args.
+    The slash-command epilogue copies ``armed_line`` verbatim and (when
+    ``arm == "cron"``) passes ``cron_create_args`` to ``CronCreate``.
+    """
+    from claude_hpc.atoms.monitor_arm import decide_monitor_arm
+
+    raw = _load_spec(args.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="decide-monitor-arm input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    try:
+        out = decide_monitor_arm(**raw)
+    except TypeError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(out, name="decide-monitor-arm")
+    return EXIT_OK
+
+
+def cmd_monitor_summary(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.monitor_summary."""
+    from claude_hpc.atoms.monitor_summary import monitor_summary
+
+    out = monitor_summary(args.experiment_dir, run_id=args.run_id)
+    _ok(out, name="monitor-summary")
+    return EXIT_OK
+
+
 def cmd_axes_init(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.axes_init."""
     from claude_hpc.atoms.axes_init import axes_init
@@ -1854,6 +1894,46 @@ def build_parser() -> argparse.ArgumentParser:
         dry_run_help="Validate the spec but don't write tasks.py.",
     )
     p_btp.set_defaults(func=cmd_build_tasks_py)
+
+    # decide-monitor-arm
+    p_dma = sub.add_parser(
+        "decide-monitor-arm",
+        help=(
+            "Pick cron/loop/none + cadence + cron schedule string from "
+            "the run's current summary. Returns the literal armed: line "
+            "the slash command must emit (Stop hook checks for it) and "
+            "ready-to-pass CronCreate args. Replaces /monitor-hpc Step 5 "
+            "agent judgment."
+        ),
+    )
+    _add_spec_and_dry_run(
+        p_dma,
+        schema_hint=(
+            "{run_id, summary, total_tasks, invocation_argv, "
+            "user_invoked_via_loop?, eta_sec?, pace_unstable?, queue_wait_sec?}"
+        ),
+        dry_run_help="Validate but don't emit (the primitive has no side effects anyway).",
+    )
+    p_dma.set_defaults(func=cmd_decide_monitor_arm)
+
+    # monitor-summary
+    p_ms = sub.add_parser(
+        "monitor-summary",
+        help=(
+            "Render the canonical user-facing tick summary for a run. "
+            "Reads .hpc/runs/<run_id>.monitor.jsonl + the run journal "
+            "and returns {lifecycle_state, headline, body, armed_hint}. "
+            "Slash command prints these verbatim."
+        ),
+    )
+    _add_experiment_dir(p_ms)
+    p_ms.add_argument(
+        "--run-id",
+        type=str,
+        required=True,
+        help="Run identifier (matches the .hpc/runs/<run_id>.json sidecar stem).",
+    )
+    p_ms.set_defaults(func=cmd_monitor_summary)
 
     # preflight
     p_pre = sub.add_parser(

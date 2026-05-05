@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**42 operations total**: 38 primitive atoms + 4 workflow atoms.
+**44 operations total**: 40 primitive atoms + 4 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `claude-hpc` is a CLI atom or a Python-only primitive that em
 
 **Discoverability**: `hpc-mapreduce capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (24)
+## `query` (26)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -31,6 +31,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-mapreduce capabilities` | `claude_hpc.atoms.capabilities.capabilities` | — | `claude_hpc/schemas/capabilities.output.json` |
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-mapreduce clusters describe <name>` | `claude_hpc.atoms.clusters.describe_cluster` | — | `claude_hpc/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-mapreduce clusters list` | `claude_hpc.atoms.clusters.list_clusters` | — | `claude_hpc/schemas/clusters_list.output.json` |
+| [`decide-monitor-arm`](primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-mapreduce decide-monitor-arm --spec <path>` | `claude_hpc.atoms.monitor_arm.decide_monitor_arm` | — | — |
 | [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-mapreduce discover --experiment-dir <path>` | `claude_hpc.state.discover.discover_executors` | — | `claude_hpc/schemas/discover.output.json` |
 | [`discover-reducers`](primitives/discover-reducers.md) | ✓ | _none_ | `hpc-mapreduce discover-reducers --experiment-dir <path>` | `claude_hpc.state.discover.discover_reducers` | — | — |
 | [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-mapreduce failures --run-id <id> [--lines <n>]` | `claude_hpc.atoms.failures.fetch_failures` | — | `claude_hpc/schemas/failures.output.json` |
@@ -38,6 +39,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`inspect-cluster`](primitives/inspect-cluster.md) | ✓ | ssh | `hpc-mapreduce inspect-cluster --cluster <name> [...]` | `claude_hpc.infra.inspect.inspect_cluster` | — | `claude_hpc/schemas/inspect_cluster.output.json` |
 | [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` | `claude_hpc.atoms.list_in_flight.list_in_flight` | — | `claude_hpc/schemas/list_in_flight.output.json` |
 | [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` | `claude_hpc.atoms.logs.fetch_logs` | — | — |
+| [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-mapreduce monitor-summary --experiment-dir <path> --run-id <id>` | `claude_hpc.atoms.monitor_summary.monitor_summary` | — | — |
 | [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` | `claude_hpc.runner.status.record_status` | — | `claude_hpc/schemas/status.output.json` |
 | [`predict-queue-wait`](primitives/predict-queue-wait.md) | ✓ | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` | `claude_hpc.agent_cli.cmd_predict_queue_wait` | `claude_hpc/schemas/predict_queue_wait.input.json` | `claude_hpc/schemas/predict_queue_wait.output.json` |
 | [`read-runtime-prior`](primitives/read-runtime-prior.md) | ✓ | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` | `claude_hpc.agent_cli.cmd_runtime_prior` | — | `claude_hpc/schemas/runtime_prior.output.json` |

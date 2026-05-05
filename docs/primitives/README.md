@@ -67,6 +67,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-mapreduce capabilities` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-mapreduce clusters describe <name>` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-mapreduce clusters list` |
+| [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-mapreduce decide-monitor-arm --spec <path>` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-mapreduce discover --experiment-dir <path>` |
 | [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-mapreduce discover-reducers --experiment-dir <path>` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-mapreduce failures --run-id <id> [--lines <n>]` |
@@ -74,6 +75,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [inspect-cluster](inspect-cluster.md) | yes | ssh: `<cluster>` | `hpc-mapreduce inspect-cluster --cluster <name> [...]` |
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` |
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
+| [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-mapreduce monitor-summary --experiment-dir <path> --run-id <id>` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` |
 | [predict-queue-wait](predict-queue-wait.md) | yes | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` |
 | [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
