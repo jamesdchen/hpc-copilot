@@ -32,6 +32,29 @@
       "maximum": 168,
       "default": 24,
       "description": "Horizon (hours) for the resubmit-window advisor. Ignored unless consult_forecast is true."
+    },
+    "submit_to_cluster": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, claude-hpc composes resubmit_plan + backend.submit_array to actually re-issue the failed tasks to the scheduler with the planner-adjusted overrides applied as extra_flags. When false (the legacy default), the operation is journal-only and the caller is responsible for the qsub. Requires script, backend, and job_name to be set when true."
+    },
+    "script": {
+      "type": "string",
+      "description": "Path on the cluster to the submission script (#SBATCH/#$ template). Required when submit_to_cluster is true; ignored otherwise."
+    },
+    "backend": {
+      "type": "string",
+      "enum": ["slurm", "sge_remote"],
+      "description": "Scheduler backend kind. Required when submit_to_cluster is true; ignored otherwise."
+    },
+    "job_name": {
+      "type": "string",
+      "description": "Job name for the resubmitted batches. Required when submit_to_cluster is true; ignored otherwise."
+    },
+    "job_env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Environment variables to forward to each resubmitted batch. Same shape submit-flow accepts. Ignored unless submit_to_cluster is true."
     }
   }
 }

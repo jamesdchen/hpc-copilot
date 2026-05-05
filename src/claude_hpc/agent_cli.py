@@ -1184,6 +1184,11 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
         request_id=spec.get("request_id"),
         consult_forecast=bool(spec.get("consult_forecast", True)),
         forecast_within_hours=int(spec.get("forecast_within_hours", 24)),
+        submit_to_cluster=bool(spec.get("submit_to_cluster", False)),
+        script=spec.get("script"),
+        backend=spec.get("backend"),
+        job_name=spec.get("job_name"),
+        job_env=spec.get("job_env"),
     )
     _ok(
         result.to_envelope_data(),
