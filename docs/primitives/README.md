@@ -57,8 +57,12 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [best-submit-window](best-submit-window.md) | yes | _none_ | `hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` |
+| [campaign-advance](campaign-advance.md) | yes | _none_ | `` |
+| [campaign-budget](campaign-budget.md) | yes | _none_ | `` |
+| [campaign-converged](campaign-converged.md) | yes | _none_ | `` |
 | [campaign-health](campaign-health.md) | yes | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` |
 | [campaign-list](campaign-list.md) | yes | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` |
+| [campaign-replay](campaign-replay.md) | yes | _none_ | `` |
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` |
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-mapreduce capabilities` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-mapreduce clusters describe <name>` |
@@ -103,6 +107,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
+| [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `` |
 | [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `` |
 
 ### `workflow` primitives
