@@ -126,16 +126,15 @@ Both atoms emit the same `{"ok": ..., "data": {...}}` shape, so the campaign loo
 
 In either path: invoke another iteration's `submit-flow` before the previous one finishes if you want K-in-flight. The cluster scheduler runs them in parallel. Optuna's `constant_liar=True` and similar mechanisms specifically support this.
 
-**Bundle when fanning out N>1 specs to one cluster.** Per-spec `submit-flow` does ~13 ssh handshakes (1 probe + 1 rsync + 11 scp/ssh in `deploy_runtime` + 1 qsub). N parallel specs hit the cluster's sshd `MaxStartups` limit (CARC's 30/60s default trips at ~4 simultaneous fresh-start submissions; we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts). The fix is `submit-flow-batch`: it does one rsync + one deploy across all specs sharing `(ssh_target, remote_path)`, then qsubs each in turn over the multiplexed ssh ControlMaster. Use it whenever the iteration produces >1 specs to the same cluster:
+**For iterations producing N>1 specs to one cluster**, write the spec as `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` (each entry under `specs` matches `schemas/submit_flow.input.json`; all entries MUST share `ssh_target` + `remote_path`). `submit-flow` auto-dispatches to the bundled path — ONE rsync + ONE deploy across all specs, then qsubs each in turn over the multiplexed ssh ControlMaster:
 
 ```bash
-# spec file: {"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}
-# Each entry under "specs" matches schemas/submit_flow.input.json; all
-# entries MUST share ssh_target + remote_path.
-hpc-mapreduce submit-flow-batch \
+hpc-mapreduce submit-flow \
     --experiment-dir <exp> \
     --spec .hpc/campaigns/<slug>/iter-<N>.specs.json
 ```
+
+Without this, N parallel single-spec submits send ~13×N ssh handshakes and trip the cluster's sshd `MaxStartups` (CARC's default ratelimits at ~4 simultaneous fresh-start submissions; we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts).
 
 The envelope's `data.results` is a per-spec list; treat each entry the same as a `submit-flow` envelope. Heterogeneous batches (different clusters in one call) raise `spec_invalid` — group by `(ssh_target, remote_path)` first and call `submit-flow-batch` once per group. Single-spec calls still go through plain `submit-flow`; the batch path is only worth it for N>1.
 

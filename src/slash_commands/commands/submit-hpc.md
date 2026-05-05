@@ -105,15 +105,7 @@ Parse `$ARGUMENTS` or the user's natural language request:
 
 For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Each gets its own `run_id` and per-run sidecar at `.hpc/runs/<run_id>.json`; the same `.hpc/tasks.py` is reused if the parallelization axis matches, otherwise the agent writes a new one (the file is the single seam between executors and the framework).
 
-**Bundle the qsub fan-out into one rsync + one deploy** when N>1 executors share `(ssh_target, remote_path)`. Naïvely calling `submit-flow` (or running this slash command's Step 7+ pipeline) once per executor sends ~13×N ssh handshakes at the cluster's sshd and trips `MaxStartups` (CARC's default ratelimits at ~4 simultaneous fresh-start submissions; we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts, leaving half-baked sidecars). Use `submit-flow-batch` instead:
-
-```bash
-hpc-mapreduce submit-flow-batch \
-    --experiment-dir <exp> \
-    --spec /tmp/iter-batch.json     # {"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}
-```
-
-The spec file is an object with a `specs` array (each entry matching `schemas/submit_flow.input.json`); all entries MUST share `ssh_target` and `remote_path`. `rsync_excludes` and `skip_preflight` apply once across the bundle. The batch does ONE rsync_push + ONE deploy_runtime, then qsubs each spec in turn over the multiplexed ssh `ControlMaster`. Results come back as `data.results: [<per-spec envelope>, ...]` in the same order as the input. Already-journaled `run_id`s dedup per-spec without firing rsync/deploy. Single-executor submissions still use plain `submit-flow`.
+**For N>1 executors sharing `(ssh_target, remote_path)`, write one batch spec file** instead of N per-executor specs. `submit-flow` auto-dispatches: pass it `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` and it routes to `submit-flow-batch` internally, doing ONE rsync_push + ONE deploy_runtime + N qsubs over the multiplexed ssh ControlMaster. Pass it a single dict and it runs the per-spec pipeline as before. Same `hpc-mapreduce submit-flow --spec X` call either way. All entries under `specs` MUST share `ssh_target` + `remote_path`; heterogeneous batches raise `spec_invalid`. The motivation: N parallel single-spec submits send ~13×N ssh handshakes at the cluster's sshd and trip `MaxStartups` — we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts.
 
 ## Step 3: Plan the parallelization axis
 
@@ -660,13 +652,7 @@ On error envelopes, branch by `error_code` per `submit-flow`'s contract (`ssh_un
 
 To opt out of the canary (already smoke-tested or single-task submission), set `"canary": false` in the spec — the slash command's `--no-canary` flag from Step 2 maps directly here.
 
-**Multi-executor / multi-spec submissions: route through `submit-flow-batch`** instead of looping `submit-flow` per spec. The motivating problem: `submit-flow` does ~13 ssh handshakes per call; N parallel calls (one per executor or one per profile) trip cluster sshd `MaxStartups` and leave half-baked sidecars. `submit-flow-batch` accepts an object `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` where each entry under `specs` matches the per-spec shape above; it validates that all entries share `(ssh_target, remote_path)` and collapses to one rsync_push + one deploy_runtime + N qsubs reusing the ssh ControlMaster:
-
-```bash
-hpc-mapreduce submit-flow-batch --spec specs.json --experiment-dir .
-```
-
-The envelope is `{"ok": true, "data": {"results": [<per-spec submit-flow envelope>, ...], "n_results": N}}`. Parse each entry with the same dedup/error logic as a single `submit-flow` call. Heterogeneous batches (different clusters in one list) raise `spec_invalid` — the slash command should split by `(ssh_target, remote_path)` and call once per group.
+**Multi-executor / multi-spec submissions**: write the spec as `{"specs": [<per-spec dict>, ...], "rsync_excludes": [...], "skip_preflight": ...}` (each entry under `specs` matches the per-spec shape above). `submit-flow` detects the batch shape and auto-routes to the bundled path — same `hpc-mapreduce submit-flow --spec X --experiment-dir .` call. Entries MUST share `(ssh_target, remote_path)`; mixed-cluster batches raise `spec_invalid` (split by target and call once per group). The envelope wraps `{"results": [<per-spec submit-flow envelope>, ...], "n_results": N}`; parse each entry with the same dedup/error logic.
 
 **Note on canary semantics:** `submit-flow`'s canary is a smoke test of the submission machinery (qsub accepts the spec; scheduler returns a job ID). It does NOT wait for canary completion or verify outputs — that elaborate "wait for terminal + grep logs + check artifacts" protocol stays here in the slash command (see "Canary verification" below) for the human-interactive path. Higher-level workflows like `/campaign-hpc` rely on the lighter check.
 

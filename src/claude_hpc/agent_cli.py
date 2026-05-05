@@ -1037,10 +1037,23 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     and ``schemas/submit_flow.{input,output}.json`` for the envelope
     shapes. Idempotent on ``run_id`` via the same dedup mechanism as
     ``submit``.
+
+    **Auto-dispatch**: if the loaded spec is a batch shape (an object
+    with a ``specs`` list, matching ``submit_flow_batch.input.json``)
+    this subcommand transparently routes to
+    :func:`cmd_submit_flow_batch`. Single-spec callers see no change;
+    multi-spec callers don't have to know about a separate CLI.
     """
+    spec = _load_spec(args.spec, schema_name=None)
+    # Auto-dispatch: any shape that the batch CLI accepts (an object
+    # with a `specs` list) routes there, bypassing the per-spec path.
+    # Lets the slash command always say "call submit-flow" and stay
+    # right whether the iteration emits 1 spec or N.
+    if isinstance(spec, dict) and isinstance(spec.get("specs"), list):
+        return cmd_submit_flow_batch(args)
+
     from claude_hpc.flows.submit_flow import submit_flow
 
-    spec = _load_spec(args.spec, schema_name=None)
     # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
     # caller can opt in via either path. Flag wins over spec when both
     # are set (CLI is the more explicit override).
@@ -2188,9 +2201,10 @@ def build_parser() -> argparse.ArgumentParser:
         "submit-flow",
         help=(
             "Workflow atom: pre-flight + rsync + deploy + qsub + record in "
-            "one shot. Lets higher-level workflows (campaigns, sweeps) "
-            "compose the submit pipeline as a single CLI call instead of "
-            "agent-driving /submit-hpc. Idempotent on run_id."
+            "one shot. Auto-dispatches to submit-flow-batch when the spec "
+            "is a {specs: [...]} object — callers always invoke this one "
+            "subcommand whether the iteration emits 1 spec or N. Idempotent "
+            "on run_id (or per-spec run_id when batched)."
         ),
     )
     p_sf.add_argument(
