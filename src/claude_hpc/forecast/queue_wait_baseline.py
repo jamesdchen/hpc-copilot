@@ -54,7 +54,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
-from claude_hpc.orchestrator.runtime_prior import read_samples
+from claude_hpc.forecast.runtime_prior import read_samples
 
 if TYPE_CHECKING:
     from pathlib import Path

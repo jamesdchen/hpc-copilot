@@ -579,7 +579,7 @@ def calibrate_probes(
     """Apply per-GPU-type house-edge factors to each probe's ETA.
 
     *edges_by_gpu_type* is the dict returned by
-    :func:`~claude_hpc.orchestrator.calibration.compute_house_edge_by_gpu_type`.
+    :func:`~claude_hpc.forecast.calibration.compute_house_edge_by_gpu_type`.
     *gpu_types_for_constraint* extracts the constraint's GPU pool — the
     planner already has this helper (``_gpu_types_in_constraint``);
     callers can pass it directly.

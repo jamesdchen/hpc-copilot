@@ -182,8 +182,8 @@ def primitive(
 _PRIMITIVE_MODULES: tuple[str, ...] = (
     # Atoms first.
     "claude_hpc.orchestrator.runs",
-    "claude_hpc.orchestrator.runtime_prior",
-    "claude_hpc.orchestrator.calibration",
+    "claude_hpc.forecast.runtime_prior",
+    "claude_hpc.forecast.calibration",
     "claude_hpc.orchestrator.discover",
     "claude_hpc.orchestrator.resubmit_batching",
     "claude_hpc.orchestrator.planner",
@@ -203,7 +203,11 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.recall",
     "claude_hpc.atoms.walltime_drift",
-    "claude_hpc.orchestrator.runner",
+    "claude_hpc.orchestrator.runner.submit",
+    "claude_hpc.orchestrator.runner.status",
+    "claude_hpc.orchestrator.runner.combine",
+    "claude_hpc.orchestrator.runner.resubmit",
+    "claude_hpc.orchestrator.runner.reconcile",
     "claude_hpc.orchestrator.validate",
     # Composites — must come after every atom they reference.
     "claude_hpc.orchestrator.submit_flow",
