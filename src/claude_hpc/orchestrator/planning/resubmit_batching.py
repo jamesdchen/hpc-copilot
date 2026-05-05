@@ -3,19 +3,19 @@
 When a grid job finishes with some failed tasks, ``/status`` (and the LLM)
 needs to resubmit exactly those task IDs — possibly under adjusted resources
 (more memory, a longer walltime) — without duplicating the on-cluster
-batching logic that lives in :mod:`claude_hpc.orchestrator.throughput`.
+batching logic that lives in :mod:`claude_hpc.orchestrator.planning.throughput`.
 
 This module provides:
 
 * :func:`compact_task_ids` — pack a sorted list of task IDs into an
   ``sbatch``/``qsub`` array expression (``"3,7,12-14"`` etc.).
 * :class:`ResubmitPlan` / :class:`ResubmitBatch` — the resubmission
-  analogue of :class:`~claude_hpc.orchestrator.throughput.SubmissionPlan`, whose
+  analogue of :class:`~claude_hpc.orchestrator.planning.throughput.SubmissionPlan`, whose
   ``task_range`` strings can be *non-contiguous* since the failed IDs are
   arbitrary.
 * :func:`resubmit_plan` — build a :class:`ResubmitPlan` from a known task
   count and a list of failed task IDs, reusing
-  :func:`~claude_hpc.orchestrator.throughput.compute_submission_plan` to split the
+  :func:`~claude_hpc.orchestrator.planning.throughput.compute_submission_plan` to split the
   failures into batches that honour the cluster's ``max_array_size`` and
   ``max_concurrent_jobs`` limits.
 
@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import dataclasses
 
-from claude_hpc.orchestrator.constraints import ClusterConstraints
-from claude_hpc.orchestrator.throughput import WorkloadSpec, compute_submission_plan
+from claude_hpc.orchestrator.planning.constraints import ClusterConstraints
+from claude_hpc.orchestrator.planning.throughput import WorkloadSpec, compute_submission_plan
 
 __all__ = [
     "compact_task_ids",
@@ -79,7 +79,7 @@ def compact_task_ids(ids: list[int]) -> str:
 class ResubmitBatch:
     """One batch within a resubmission plan.
 
-    Unlike :class:`~claude_hpc.orchestrator.throughput.JobBatch`, the task IDs in
+    Unlike :class:`~claude_hpc.orchestrator.planning.throughput.JobBatch`, the task IDs in
     a resubmit batch are arbitrary (non-contiguous), so ``task_range`` is
     produced by :func:`compact_task_ids` rather than a simple
     ``"start-end"`` formatter.
@@ -142,7 +142,7 @@ def resubmit_plan(
         the job template.
     constraints:
         Optional cluster constraints governing batching.  Defaults to
-        :class:`~claude_hpc.orchestrator.constraints.ClusterConstraints` (i.e.
+        :class:`~claude_hpc.orchestrator.planning.constraints.ClusterConstraints` (i.e.
         ``max_array_size=1000``, ``max_concurrent_jobs=10``).
 
     Returns
@@ -161,8 +161,8 @@ def resubmit_plan(
     Notes
     -----
     Batching is delegated to
-    :func:`~claude_hpc.orchestrator.throughput.compute_submission_plan`: we
-    submit a :class:`~claude_hpc.orchestrator.throughput.WorkloadSpec` with
+    :func:`~claude_hpc.orchestrator.planning.throughput.compute_submission_plan`: we
+    submit a :class:`~claude_hpc.orchestrator.planning.throughput.WorkloadSpec` with
     ``total_tasks = len(failed_task_ids)``, then map each resulting
     ``JobBatch``'s contiguous ``task_start..task_end`` window (1-based
     indexes into the sorted failed list) back to the original task IDs.

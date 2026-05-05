@@ -181,13 +181,13 @@ def primitive(
 # the atom decorator must have run first to attach it.
 _PRIMITIVE_MODULES: tuple[str, ...] = (
     # Atoms first.
-    "claude_hpc.orchestrator.runs",
+    "claude_hpc.orchestrator.state.runs",
     "claude_hpc.forecast.runtime_prior",
     "claude_hpc.forecast.calibration",
-    "claude_hpc.orchestrator.discover",
-    "claude_hpc.orchestrator.resubmit_batching",
-    "claude_hpc.orchestrator.planner",
-    "claude_hpc.orchestrator.campaign_health",
+    "claude_hpc.orchestrator.state.discover",
+    "claude_hpc.orchestrator.planning.resubmit_batching",
+    "claude_hpc.orchestrator.planning.planner",
+    "claude_hpc.orchestrator.state.campaign_health",
     "claude_hpc.infra.inspect",
     "claude_hpc.infra.clusters",
     "claude_hpc.agent_cli",
@@ -208,11 +208,11 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.orchestrator.runner.combine",
     "claude_hpc.orchestrator.runner.resubmit",
     "claude_hpc.orchestrator.runner.reconcile",
-    "claude_hpc.orchestrator.validate",
+    "claude_hpc.orchestrator.state.validate",
     # Composites — must come after every atom they reference.
-    "claude_hpc.orchestrator.submit_flow",
-    "claude_hpc.orchestrator.monitor_flow",
-    "claude_hpc.orchestrator.aggregate_flow",
+    "claude_hpc.orchestrator.flows.submit_flow",
+    "claude_hpc.orchestrator.flows.monitor_flow",
+    "claude_hpc.orchestrator.flows.aggregate_flow",
 )
 
 

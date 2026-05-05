@@ -14,7 +14,7 @@ their own ``tmp_path`` and ``monkeypatch``.
 
 Both helpers default to the v1 sidecar shape — that is what the
 existing fixtures wrote, and the production read path
-(:func:`claude_hpc.orchestrator.runs.read_run_sidecar`) backfills v1 to v2
+(:func:`claude_hpc.orchestrator.state.runs.read_run_sidecar`) backfills v1 to v2
 on read.
 """
 

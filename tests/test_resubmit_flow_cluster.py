@@ -18,7 +18,7 @@ import pytest
 from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
-from claude_hpc.orchestrator.resubmit_flow import (
+from claude_hpc.orchestrator.flows.resubmit_flow import (
     render_overrides_to_extra_flags,
     resubmit_flow,
 )

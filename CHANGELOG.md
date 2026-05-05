@@ -267,7 +267,7 @@ only by checkpointing actually working.
 
 The chain is **default-off when checkpointing isn't detected** so we
 don't silently waste compute. The new
-`claude_hpc.orchestrator.checkpoint_detect.detect_checkpointing`
+`claude_hpc.orchestrator.state.checkpoint_detect.detect_checkpointing`
 helper walks past run output dirs (`<exp>/.hpc/runs/*/result_dirs`)
 for files matching `checkpoint*`, `*.ckpt`, `state*.pkl`, `last*.pt`,
 `latest*.pt`, `model*.{joblib,pkl,pt}`, `epoch_*.{pt,pkl}`. Returns
@@ -415,7 +415,7 @@ stdlib-only constraint on `dispatch.py` and `combiner.py` are all
 preserved exactly.
 
 The `cmd_capabilities` output's `python` field now reflects the new
-module paths (e.g. `claude_hpc.orchestrator.submit_flow.submit_flow`
+module paths (e.g. `claude_hpc.orchestrator.flows.submit_flow.submit_flow`
 instead of `hpc_mapreduce.job.submit_flow.submit_flow`); agents that
 shell out by `cli` are unaffected.
 
@@ -603,7 +603,7 @@ into a single `plan-submit` CLI subcommand:
   groups by `gpu_type` and computes p50 / p95 / p99 / mean / n_samples,
   with optional `cmd_sha` filter so a `.hpc/tasks.py` change can
   invalidate stale priors.
-- **`claude_hpc.orchestrator.planner`** — `plan-submit --profile <p>
+- **`claude_hpc.orchestrator.planning.planner`** — `plan-submit --profile <p>
   --cluster <c>` combines all three into the scorecard JSON the slash
   command hands to Claude. When no priors exist, `needs_canary: true`
   and `canary_plan` describes the 1-task probe to seed the priors.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import shlex
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from claude_hpc import errors
 from claude_hpc._internal import session
@@ -14,6 +14,9 @@ from claude_hpc._internal.session import RunRecord, _atomic_write_json
 from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra import remote
 from claude_hpc.orchestrator.runner._ssh import _parse_remote_json, _split_ssh_target
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _ssh_status_report(

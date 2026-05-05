@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_hpc.mapreduce.reduce.metrics import reduce_metrics
-from claude_hpc.orchestrator.runs import find_existing_runs, read_run_sidecar
+from claude_hpc.orchestrator.state.runs import find_existing_runs, read_run_sidecar
 
 __all__ = [
     "find_sidecars_by_campaign",
