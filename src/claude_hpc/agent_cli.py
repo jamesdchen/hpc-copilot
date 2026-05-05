@@ -1825,9 +1825,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_camp_cv.add_argument("--max-iters", type=int, default=None)
     p_camp_cv.add_argument("--metric", type=str, default=None)
     p_camp_cv.add_argument("--target", type=float, default=None)
-    p_camp_cv.add_argument(
-        "--direction", choices=["minimize", "maximize"], default="minimize"
-    )
+    p_camp_cv.add_argument("--direction", choices=["minimize", "maximize"], default="minimize")
     p_camp_cv.add_argument("--plateau-window", type=int, default=None)
     p_camp_cv.add_argument("--plateau-tolerance", type=float, default=0.0)
     p_camp_cv.set_defaults(func=cmd_campaign_converged)
@@ -1855,9 +1853,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_camp_ad.add_argument("--max-iters", type=int, default=None)
     p_camp_ad.add_argument("--metric", type=str, default=None)
     p_camp_ad.add_argument("--target", type=float, default=None)
-    p_camp_ad.add_argument(
-        "--direction", choices=["minimize", "maximize"], default="minimize"
-    )
+    p_camp_ad.add_argument("--direction", choices=["minimize", "maximize"], default="minimize")
     p_camp_ad.add_argument("--plateau-window", type=int, default=None)
     p_camp_ad.add_argument("--plateau-tolerance", type=float, default=0.0)
     p_camp_ad.add_argument("--max-jobs", type=int, default=None)

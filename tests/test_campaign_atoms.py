@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -13,6 +12,9 @@ from claude_hpc.atoms.campaign_budget import campaign_budget
 from claude_hpc.atoms.campaign_converged import campaign_converged
 from claude_hpc.atoms.campaign_replay import campaign_replay
 from claude_hpc.state.runs import write_run_sidecar
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _seed_run(
