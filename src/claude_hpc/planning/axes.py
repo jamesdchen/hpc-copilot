@@ -205,12 +205,18 @@ def pick_array_axis_warm(
     that's fine for an experiment running on one cluster but can produce
     apples-to-oranges CV when multiple clusters share an experiment.
 
-    .. note::
+    Pipeline that populates the samples this picker reads:
 
-       Inert until cluster-side dispatcher writes ``axis_bindings`` into
-       runtime samples — see follow-up TODO. The function is wired in
-       so callers can integrate now; it returns ``(None, "...")`` until
-       samples grow the field.
+    1. Cluster-side dispatcher (``mapreduce/dispatch.py``) writes
+       ``<result_dir>/_runtime.json`` per task with timing + axis_bindings.
+    2. Cluster-side combiner aggregates them into
+       ``_combiner/wave_<N>.runtime.json`` per wave.
+    3. Local-side ``aggregate_flow`` rsync_pulls ``_combiner/`` and calls
+       :func:`claude_hpc.state.runtime_prior.ingest_runtime_samples_from_combiner_dir`,
+       which appends the rows to ``runtimes/<profile>.<cluster>.json``.
+
+    The picker silently falls back to the cold path when no qualifying
+    samples exist yet (first submit on a fresh experiment).
     """
     config = read_axes(experiment_dir)
     if config is None or not config.get("axes"):

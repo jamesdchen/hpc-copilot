@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from claude_hpc.state import runtime_prior as rp
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestAppendSample:
@@ -254,3 +258,201 @@ class TestDocFileShape:
         assert doc["profile"] == "p"
         assert doc["cluster"] == "c"
         assert isinstance(doc["samples"], list)
+
+
+# ---------------------------------------------------------------------------
+# ingest_runtime_samples_from_combiner_dir
+# ---------------------------------------------------------------------------
+
+
+class TestIngestFromCombinerDir:
+    def test_walks_wave_runtime_files_and_appends(self, tmp_path: Path) -> None:
+        from claude_hpc.state.runtime_prior import (
+            ingest_runtime_samples_from_combiner_dir,
+            read_samples,
+        )
+
+        combiner_dir = tmp_path / "_combiner"
+        combiner_dir.mkdir()
+        (combiner_dir / "wave_0.runtime.json").write_text(
+            json.dumps(
+                {
+                    "wave": 0,
+                    "run_id": "r1",
+                    "samples": [
+                        {
+                            "task_id": 0,
+                            "run_id": "r1",
+                            "started_at": "2026-05-01T00:00:00+00:00",
+                            "ended_at": "2026-05-01T01:00:00+00:00",
+                            "elapsed_sec": 3600,
+                            "exit_code": 0,
+                            "node": "d11-07",
+                            "gpu_type": "a100",
+                            "axis_bindings": {"model": "lgbm", "window": 5},
+                        },
+                        {
+                            "task_id": 1,
+                            "run_id": "r1",
+                            "started_at": "2026-05-01T00:00:00+00:00",
+                            "ended_at": "2026-05-01T02:00:00+00:00",
+                            "elapsed_sec": 7200,
+                            "exit_code": 0,
+                            "node": "d11-08",
+                            "gpu_type": "a100",
+                            "axis_bindings": {"model": "xgb", "window": 5},
+                        },
+                    ],
+                }
+            )
+        )
+
+        n = ingest_runtime_samples_from_combiner_dir(
+            combiner_dir,
+            experiment_dir=tmp_path,
+            profile="p",
+            cluster="c",
+            cmd_sha="abc123",
+        )
+        assert n == 2
+
+        samples = read_samples(tmp_path, profile="p", cluster="c")
+        assert len(samples) == 2
+        # The warm picker keys on axis_bindings — check it survived.
+        bindings = sorted((s["axis_bindings"]["model"], s["elapsed_sec"]) for s in samples)
+        assert bindings == [("lgbm", 3600), ("xgb", 7200)]
+
+    def test_idempotent_on_rerun(self, tmp_path: Path) -> None:
+        """append_sample dedups (run_id, task_id), so re-ingest is safe."""
+        from claude_hpc.state.runtime_prior import (
+            ingest_runtime_samples_from_combiner_dir,
+            read_samples,
+        )
+
+        combiner_dir = tmp_path / "_combiner"
+        combiner_dir.mkdir()
+        (combiner_dir / "wave_0.runtime.json").write_text(
+            json.dumps(
+                {
+                    "wave": 0,
+                    "run_id": "r1",
+                    "samples": [
+                        {
+                            "task_id": 0,
+                            "run_id": "r1",
+                            "elapsed_sec": 100,
+                            "exit_code": 0,
+                            "node": "d11-07",
+                            "gpu_type": "a100",
+                            "axis_bindings": {"model": "lgbm"},
+                        },
+                    ],
+                }
+            )
+        )
+
+        ingest_runtime_samples_from_combiner_dir(
+            combiner_dir, experiment_dir=tmp_path, profile="p", cluster="c"
+        )
+        ingest_runtime_samples_from_combiner_dir(
+            combiner_dir, experiment_dir=tmp_path, profile="p", cluster="c"
+        )
+        samples = read_samples(tmp_path, profile="p", cluster="c")
+        assert len(samples) == 1  # not 2
+
+    def test_missing_dir_returns_zero(self, tmp_path: Path) -> None:
+        from claude_hpc.state.runtime_prior import (
+            ingest_runtime_samples_from_combiner_dir,
+        )
+
+        n = ingest_runtime_samples_from_combiner_dir(
+            tmp_path / "does_not_exist",
+            experiment_dir=tmp_path,
+            profile="p",
+            cluster="c",
+        )
+        assert n == 0
+
+    def test_malformed_runtime_file_skipped(self, tmp_path: Path) -> None:
+        """A bad JSON file shouldn't tank the whole ingest."""
+        from claude_hpc.state.runtime_prior import (
+            ingest_runtime_samples_from_combiner_dir,
+            read_samples,
+        )
+
+        combiner_dir = tmp_path / "_combiner"
+        combiner_dir.mkdir()
+        (combiner_dir / "wave_0.runtime.json").write_text("not valid json")
+        (combiner_dir / "wave_1.runtime.json").write_text(
+            json.dumps(
+                {
+                    "wave": 1,
+                    "run_id": "r1",
+                    "samples": [
+                        {
+                            "task_id": 5,
+                            "run_id": "r1",
+                            "elapsed_sec": 50,
+                            "exit_code": 0,
+                            "node": "d11-07",
+                            "gpu_type": "a100",
+                            "axis_bindings": {"model": "lgbm"},
+                        },
+                    ],
+                }
+            )
+        )
+
+        n = ingest_runtime_samples_from_combiner_dir(
+            combiner_dir, experiment_dir=tmp_path, profile="p", cluster="c"
+        )
+        assert n == 1
+        assert len(read_samples(tmp_path, profile="p", cluster="c")) == 1
+
+    def test_warm_picker_picks_up_after_ingest(self, tmp_path: Path) -> None:
+        """End-to-end: ingest → warm picker can rank axes by CV."""
+        from claude_hpc.planning.axes import (
+            pick_array_axis_warm,
+            write_axes,
+        )
+        from claude_hpc.state.runtime_prior import (
+            ingest_runtime_samples_from_combiner_dir,
+        )
+
+        write_axes(
+            tmp_path,
+            axes=[
+                {"name": "model", "size": 3},
+                {"name": "window", "size": 5},
+            ],
+        )
+        combiner_dir = tmp_path / "_combiner"
+        combiner_dir.mkdir()
+        # window varies cheaply (constant per model); model varies wildly.
+        samples = []
+        for tid, (model, base) in enumerate(
+            [("A", 100.0)] * 5 + [("B", 200.0)] * 5 + [("C", 300.0)] * 5
+        ):
+            samples.append(
+                {
+                    "task_id": tid,
+                    "run_id": "r1",
+                    "elapsed_sec": int(base),
+                    "exit_code": 0,
+                    "node": "d11-07",
+                    "gpu_type": "a100",
+                    "axis_bindings": {"model": model, "window": tid % 5},
+                }
+            )
+        (combiner_dir / "wave_0.runtime.json").write_text(
+            json.dumps({"wave": 0, "run_id": "r1", "samples": samples})
+        )
+
+        n = ingest_runtime_samples_from_combiner_dir(
+            combiner_dir, experiment_dir=tmp_path, profile="p", cluster="c"
+        )
+        assert n == 15
+
+        name, reason = pick_array_axis_warm(tmp_path, min_samples=5)
+        # Window has 0-CV within each model (constant runtime); model has high CV.
+        assert name == "window", f"expected window (low-CV), got {name!r} ({reason})"
