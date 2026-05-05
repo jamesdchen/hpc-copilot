@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**31 operations total**: 28 primitive atoms + 3 workflow atoms.
+**36 operations total**: 33 primitive atoms + 3 workflow atoms.
 
 ## How to read this page
 
@@ -14,15 +14,19 @@ Every operation in `claude-hpc` is a CLI atom or a Python-only primitive that em
 
 **Discoverability**: `hpc-mapreduce capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (19)
+## `query` (23)
 
 Read-only, no side effects. Freely composable; cacheable.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`best-submit-window`](primitives/best-submit-window.md) | ✓ | _none_ | `hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` | `claude_hpc.agent_cli.cmd_best_submit_window` | `claude_hpc/schemas/best_submit_window.input.json` | `claude_hpc/schemas/best_submit_window.output.json` |
-| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `claude_hpc.campaign.campaign_health.campaign_health` | `claude_hpc/schemas/campaign_health.input.json` | `claude_hpc/schemas/campaign_health.output.json` |
+| [`campaign-advance`](primitives/campaign-advance.md) | ✓ | _none_ | `_(Python-only)_` | `claude_hpc.atoms.campaign_advance.campaign_advance` | — | — |
+| [`campaign-budget`](primitives/campaign-budget.md) | ✓ | _none_ | `_(Python-only)_` | `claude_hpc.atoms.campaign_budget.campaign_budget` | — | — |
+| [`campaign-converged`](primitives/campaign-converged.md) | ✓ | _none_ | `_(Python-only)_` | `claude_hpc.atoms.campaign_converged.campaign_converged` | — | — |
+| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `claude_hpc.atoms.campaign_health.campaign_health` | `claude_hpc/schemas/campaign_health.input.json` | `claude_hpc/schemas/campaign_health.output.json` |
 | [`campaign-list`](primitives/campaign-list.md) | ✓ | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` | `claude_hpc.atoms.campaign_list.campaign_list` | — | — |
+| [`campaign-replay`](primitives/campaign-replay.md) | ✓ | _none_ | `_(Python-only)_` | `claude_hpc.atoms.campaign_replay.campaign_replay` | — | — |
 | [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` | `claude_hpc.atoms.campaign_status.campaign_status` | — | — |
 | [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-mapreduce capabilities` | `claude_hpc.atoms.capabilities.capabilities` | — | `claude_hpc/schemas/capabilities.output.json` |
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-mapreduce clusters describe <name>` | `claude_hpc.atoms.clusters.describe_cluster` | — | `claude_hpc/schemas/clusters_describe.output.json` |
@@ -68,13 +72,14 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `claude_hpc.runner.submit.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
 
-## `scaffold` (2)
+## `scaffold` (3)
 
 Creates new files (e.g. starter executor templates).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`build-executor`](primitives/build-executor.md) | ✗ | writes-file | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` | `claude_hpc.agent_cli.cmd_build_executor` | — | `claude_hpc/schemas/build_executor.output.json` |
+| [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `_(Python-only)_` | `claude_hpc.atoms.campaign_init.campaign_init` | — | — |
 | [`interview`](primitives/interview.md) | ✓ | file_write | `_(Python-only)_` | `claude_hpc.atoms.interview.record_interview` | `claude_hpc/schemas/interview.input.json` | `claude_hpc/schemas/interview.output.json` |
 
 ## `workflow` (3)
