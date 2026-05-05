@@ -146,9 +146,7 @@ def build_submit_spec(
         schema validation.
     """
     if backend not in {"sge_remote", "slurm"}:
-        raise errors.SpecInvalid(
-            f"backend must be 'sge_remote' or 'slurm', got {backend!r}"
-        )
+        raise errors.SpecInvalid(f"backend must be 'sge_remote' or 'slurm', got {backend!r}")
     try:
         validate_ssh_target(ssh_target)
     except ValueError as exc:
@@ -223,9 +221,7 @@ def _validate(spec: dict[str, Any]) -> None:
     except ImportError:
         return  # defence-in-depth; primitive callers still upstream-validate
     try:
-        schema_text = (
-            _resource_files("claude_hpc.schemas") / "submit_flow.input.json"
-        ).read_text()
+        schema_text = (_resource_files("claude_hpc.schemas") / "submit_flow.input.json").read_text()
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
