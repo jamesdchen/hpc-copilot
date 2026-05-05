@@ -225,6 +225,23 @@ def write_run_sidecar(
         "task_count": int(task_count),
         "tasks_py_sha": tasks_py_sha,
     }
+    # Silent axes-driven wave_map: when the caller didn't supply one,
+    # check for <experiment>/.hpc/axes.yaml. If present with a full
+    # axes enumeration AND a homogeneous_axes hint (or warm priors),
+    # derive wave_map from the picked axis. Absent/partial axes.yaml
+    # leaves wave_map as None — existing behavior.
+    if wave_map is None:
+        try:
+            from claude_hpc.planning.axes import compute_wave_map, pick_array_axis
+
+            picked_name, _ = pick_array_axis(experiment_dir)
+            if picked_name is not None:
+                derived = compute_wave_map(experiment_dir, picked_axis=picked_name)
+                wave_map = {str(k): list(v) for k, v in derived.items()}
+        except (FileNotFoundError, ValueError, Exception):  # noqa: BLE001
+            # Best-effort. Schema/config errors fall through silently;
+            # the sidecar is still written without wave_map.
+            wave_map = None
     if wave_map is not None:
         sidecar["wave_map"] = {str(k): list(v) for k, v in wave_map.items()}
     if extra:
