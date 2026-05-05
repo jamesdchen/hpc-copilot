@@ -498,7 +498,14 @@ def main() -> None:
         fd, tmp = tempfile.mkstemp(prefix="_runtime.", suffix=".tmp", dir=result_dir)
         try:
             with os.fdopen(fd, "w") as fh:
-                json.dump(runtime_payload, fh, sort_keys=True)
+                # default=str so numpy ints / datetimes / Path objects /
+                # any other non-JSON-native value coming back from
+                # ``tasks.resolve(task_id)`` falls back to repr instead of
+                # silently nuking the runtime sample. The warm picker
+                # treats axis_bindings as opaque keys for grouping —
+                # consistent string repr is enough; native typing isn't
+                # required.
+                json.dump(runtime_payload, fh, sort_keys=True, default=str)
             os.replace(tmp, runtime_path)
         except BaseException:
             with contextlib.suppress(OSError):

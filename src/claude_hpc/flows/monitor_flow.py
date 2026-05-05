@@ -46,7 +46,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
@@ -61,8 +61,7 @@ try:
 except ImportError:
     _fcntl = None  # type: ignore[assignment]
 
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 __all__ = ["monitor_flow", "MonitorFlowResult"]
 
@@ -264,6 +263,51 @@ def _write_failed_task_ids(
     target.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
+    """Pull `_combiner/wave_*.runtime.json` from the cluster and ingest.
+
+    The runtime-prior pipeline normally runs from `aggregate_flow`. This
+    hook lets `monitor_flow` feed the warm-axis-picker even when the
+    user never invokes `/aggregate-hpc` (e.g. they read metrics on the
+    cluster directly, or only care about pass/fail). Best-effort:
+    failures are swallowed — monitor's job is lifecycle, not priors.
+
+    Pull is filtered to just the runtime sidecars (~1 file per wave,
+    typically <100KB total) — cheap relative to a full `_combiner/`
+    pull. Idempotent: re-running on the same run is safe because
+    `append_sample` dedups on `(run_id, task_id)`.
+    """
+    from tempfile import mkdtemp
+
+    from claude_hpc.infra.remote import rsync_pull
+    from claude_hpc.state.runs import read_run_sidecar
+    from claude_hpc.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
+
+    try:
+        local_dir = Path(mkdtemp(prefix="hpc_runtime_pull_"))
+        result = rsync_pull(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            remote_subdir="_combiner",
+            local_dir=str(local_dir),
+            include=["wave_*.runtime.json"],
+        )
+        if result.returncode != 0:
+            return 0
+        cmd_sha = None
+        with contextlib.suppress(FileNotFoundError, OSError):
+            cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
+        return ingest_runtime_samples_from_combiner_dir(
+            local_dir,
+            experiment_dir=experiment_dir,
+            profile=record.profile,
+            cluster=record.cluster,
+            cmd_sha=cmd_sha,
+        )
+    except (OSError, TimeoutError):
+        return 0
+
+
 def _is_terminal(
     last_status: dict[str, Any],
     total_tasks: int,
@@ -445,6 +489,7 @@ def monitor_flow(
                 lifecycle_state=LifecycleState.COMPLETE,
                 next_tick_seconds=None,
             )
+            _ingest_runtime_at_terminal(experiment_dir, record=record)
             return MonitorFlowResult(
                 run_id=run_id,
                 lifecycle_state=LifecycleState.COMPLETE,
@@ -465,6 +510,7 @@ def monitor_flow(
                 lifecycle_state=LifecycleState.FAILED,
                 next_tick_seconds=None,
             )
+            _ingest_runtime_at_terminal(experiment_dir, record=record)
             return MonitorFlowResult(
                 run_id=run_id,
                 lifecycle_state=LifecycleState.FAILED,
@@ -487,6 +533,7 @@ def monitor_flow(
                 lifecycle_state=LifecycleState.TIMEOUT,
                 next_tick_seconds=None,
             )
+            _ingest_runtime_at_terminal(experiment_dir, record=record)
             return MonitorFlowResult(
                 run_id=run_id,
                 lifecycle_state=LifecycleState.TIMEOUT,
