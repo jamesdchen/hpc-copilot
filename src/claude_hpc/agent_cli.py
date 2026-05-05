@@ -470,7 +470,7 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
     idempotent=True,
 )
 def cmd_runtime_prior(args: argparse.Namespace) -> int:
-    from claude_hpc.orchestrator.runtime_prior import roll_up_quantiles
+    from claude_hpc.forecast.runtime_prior import roll_up_quantiles
 
     out = roll_up_quantiles(
         args.experiment_dir,

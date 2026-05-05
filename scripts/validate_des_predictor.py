@@ -41,7 +41,7 @@ from claude_hpc.forecast.queue_simulator_inputs import (
     sample_residual_lifetimes,
 )
 from claude_hpc.infra.inspect import read_cluster_history
-from claude_hpc.orchestrator.runtime_prior import read_samples
+from claude_hpc.forecast.runtime_prior import read_samples
 
 
 def _percentile(xs: list[float], p: float) -> float:

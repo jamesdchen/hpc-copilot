@@ -72,7 +72,7 @@ The Python surface that slash commands and library callers invoke:
 | Discover executors | [discover-executors](primitives/discover-executors.md) | `claude_hpc.orchestrator.discover.discover_executors` |
 | Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `claude_hpc.infra.inspect.inspect_cluster` |
 | Score submit plan | [score-submit-plan](primitives/score-submit-plan.md) | `claude_hpc.orchestrator.planner.plan_submit` |
-| Roll up runtime priors | [read-runtime-prior](primitives/read-runtime-prior.md) | `claude_hpc.orchestrator.runtime_prior.summarize` |
+| Roll up runtime priors | [read-runtime-prior](primitives/read-runtime-prior.md) | `claude_hpc.forecast.runtime_prior.summarize` |
 
 ## Internal cluster-side scripts (not primitives)
 

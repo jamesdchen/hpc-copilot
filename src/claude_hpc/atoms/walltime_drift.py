@@ -38,11 +38,11 @@ def walltime_drift(
     near-miss count, median utilisation) and recommends an adjustment
     to ``base_safety_mult``.
     """
-    from claude_hpc.orchestrator.calibration import (
+    from claude_hpc.forecast.calibration import (
         compute_walltime_drift,
         recommend_safety_mult_adjustment,
     )
-    from claude_hpc.orchestrator.runtime_prior import read_samples
+    from claude_hpc.forecast.runtime_prior import read_samples
 
     samples = read_samples(
         experiment_dir,

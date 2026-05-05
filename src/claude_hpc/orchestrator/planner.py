@@ -48,7 +48,7 @@ from claude_hpc.infra.clusters import (
     load_clusters_config,
 )
 from claude_hpc.infra.inspect import NodeSnapshot, inspect_cluster
-from claude_hpc.orchestrator.backfill import (
+from claude_hpc.forecast.backfill import (
     BackfillProbe,
     ResourceTuple,
     build_lattice,
@@ -63,12 +63,12 @@ from claude_hpc.orchestrator.backfill import (
     reshape_array_size_for_backfill,
     split_walltime_into_segments,
 )
-from claude_hpc.orchestrator.calibration import (
+from claude_hpc.forecast.calibration import (
     compute_house_edge_by_gpu_type,
     compute_walltime_drift,
     recommend_safety_mult_adjustment,
 )
-from claude_hpc.orchestrator.runtime_prior import read_samples, roll_up_quantiles
+from claude_hpc.forecast.runtime_prior import read_samples, roll_up_quantiles
 
 
 def plan_submit(
@@ -287,7 +287,7 @@ def plan_submit(
         for c in candidate_reports
     )
     if walltime_user_ask_sec is not None and not has_lattice_pick and get_walltime_arbitrage(cfg):
-        from claude_hpc.orchestrator.walltime_arbitrage import arbitrage_walltime
+        from claude_hpc.forecast.walltime_arbitrage import arbitrage_walltime
 
         trimmed = arbitrage_walltime(int(walltime_user_ask_sec))
         if trimmed != walltime_user_ask_sec:

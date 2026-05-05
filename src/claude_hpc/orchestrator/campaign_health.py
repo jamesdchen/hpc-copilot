@@ -144,7 +144,7 @@ def campaign_health(
 
     if profile and cluster:
         try:
-            from claude_hpc.orchestrator.runtime_prior import read_samples
+            from claude_hpc.forecast.runtime_prior import read_samples
 
             samples = read_samples(
                 experiment_dir,

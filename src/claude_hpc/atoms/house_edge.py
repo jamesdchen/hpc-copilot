@@ -35,8 +35,8 @@ def house_edge(
     Reads only successful samples — the calibration we care about is
     over runs that finished, not failed/cancelled ones.
     """
-    from claude_hpc.orchestrator.calibration import compute_house_edge
-    from claude_hpc.orchestrator.runtime_prior import read_samples
+    from claude_hpc.forecast.calibration import compute_house_edge
+    from claude_hpc.forecast.runtime_prior import read_samples
 
     samples = read_samples(
         experiment_dir,
