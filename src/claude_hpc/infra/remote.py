@@ -40,8 +40,12 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Default subprocess timeouts (in seconds).  ``ssh_run`` covers login-node
 # commands, including the status-reporter SSH calls that exec python and may
@@ -136,6 +140,94 @@ def _truncate(text: str, limit: int = 120) -> str:
     return text[:limit] + "..."
 
 
+# Rate-limit / throttle markers in stderr that indicate the cluster's sshd
+# refused the connection (MaxStartups, fail2ban, PAM session limits) — i.e.
+# transient, retryable errors. A plain wrong-host or auth failure is NOT
+# retried. Match case-insensitively to be robust to different OpenSSH /
+# distro spellings.
+_SSH_THROTTLE_MARKERS: tuple[str, ...] = (
+    # Suffix-trimmed so we match both "Connection closed by remote host"
+    # and "Connection closed" (sshd may log either).
+    "ssh_exchange_identification: connection closed",
+    "kex_exchange_identification: connection closed",
+    "kex_exchange_identification: read: connection reset",
+    "connection reset by peer",
+    "connection refused",
+    # rsync surfaces the underlying ssh failure verbatim plus its own marker:
+    "rsync error: error in rsync protocol data stream",
+)
+
+# Backoff schedule for transient ssh/rsync failures. Caller sees up to
+# 4 retries with delays 2s/4s/8s/16s — total ~30s of waiting. Long enough
+# to ride through a sshd MaxStartups burst, short enough that a permanent
+# failure surfaces in well under a minute.
+_BACKOFF_DELAYS_SEC: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0)
+
+
+def _is_throttle_failure(cp: subprocess.CompletedProcess[str]) -> bool:
+    """True if *cp* looks like an ssh rate-limit failure worth retrying.
+
+    We consider non-zero returncode + a known sshd-throttle marker in
+    stderr to be transient. A bare timeout (which raises before reaching
+    here) is also transient and handled by the caller's except clause.
+    """
+    if cp.returncode == 0:
+        return False
+    blob = ((cp.stderr or "") + "\n" + (cp.stdout or "")).lower()
+    return any(marker in blob for marker in _SSH_THROTTLE_MARKERS)
+
+
+def _with_ssh_backoff(
+    fn: Callable[[], subprocess.CompletedProcess[str]],
+    *,
+    label: str,
+) -> subprocess.CompletedProcess[str]:
+    """Call *fn* with exponential-backoff retry on transient ssh failures.
+
+    *fn* is a zero-arg thunk that performs the ssh/scp/rsync subprocess
+    and returns its CompletedProcess. We retry on:
+
+    * :class:`TimeoutError` raised by the underlying wrapper, AND
+    * non-zero returncode whose stderr matches a known sshd-throttle
+      marker (see :data:`_SSH_THROTTLE_MARKERS`).
+
+    Permanent failures (auth refused, host unreachable, command not
+    found) return immediately with the failing CompletedProcess.
+
+    *label* is interpolated into the optional log line so the caller's
+    diagnostic identifies which step is being retried (e.g. ``"rsync
+    push"``, ``"scp dispatch.py"``). Disable retries entirely by setting
+    ``HPC_SSH_NO_BACKOFF=1`` (useful in tests that mock subprocess.run).
+    """
+    if os.environ.get("HPC_SSH_NO_BACKOFF") == "1":
+        return fn()
+
+    last_cp: subprocess.CompletedProcess[str] | None = None
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((0.0, *_BACKOFF_DELAYS_SEC)):
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            cp = fn()
+        except TimeoutError as exc:
+            last_exc = exc
+            last_cp = None
+            continue
+        last_cp = cp
+        last_exc = None
+        if not _is_throttle_failure(cp):
+            return cp
+        # Throttle marker — retry unless we've exhausted the schedule.
+        if attempt == len(_BACKOFF_DELAYS_SEC):
+            return cp
+    # Exhausted retries on TimeoutError specifically.
+    if last_exc is not None and last_cp is None:
+        raise last_exc
+    # Should be unreachable; mypy needs the guarantee.
+    assert last_cp is not None, f"_with_ssh_backoff exhausted with no result for {label}"
+    return last_cp
+
+
 def ssh_run(
     cmd: str,
     *,
@@ -175,17 +267,21 @@ def ssh_run(
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
     argv = ["ssh", *_ssh_multiplex_opts(), ssh_target, cmd]
-    try:
-        return subprocess.run(
-            argv,
-            capture_output=capture,
-            text=True,
-            timeout=effective_timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"ssh to {ssh_target} timed out after {effective_timeout}s: {_truncate(cmd)}"
-        ) from exc
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                argv,
+                capture_output=capture,
+                text=True,
+                timeout=effective_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"ssh to {ssh_target} timed out after {effective_timeout}s: {_truncate(cmd)}"
+            ) from exc
+
+    return _with_ssh_backoff(_run, label=f"ssh {ssh_target}")
 
 
 def _have_rsync() -> bool:
@@ -359,18 +455,21 @@ def rsync_push(
     if delete:
         flags.append("--delete")
 
-    try:
-        return subprocess.run(
-            [*flags, *exclude_flags, src, dst],
-            capture_output=True,
-            text=True,
-            timeout=effective_timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"rsync push to {ssh_target} timed out after {effective_timeout}s: "
-            f"{_truncate(f'{src} -> {dst}')}"
-        ) from exc
+    def _run() -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                [*flags, *exclude_flags, src, dst],
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"rsync push to {ssh_target} timed out after {effective_timeout}s: "
+                f"{_truncate(f'{src} -> {dst}')}"
+            ) from exc
+
+    return _with_ssh_backoff(_run, label=f"rsync push {ssh_target}")
 
 
 def deploy_runtime(
@@ -417,24 +516,28 @@ def deploy_runtime(
 
     def _scp(src: Path, dst_rel: str) -> subprocess.CompletedProcess[str]:
         dst = f"{ssh_target}:{shlex.quote(remote_path)}/{dst_rel}"
-        try:
-            return subprocess.run(
-                ["scp", str(src), dst],
-                capture_output=True,
-                text=True,
-                timeout=SSH_TIMEOUT_SEC,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError(
-                f"scp to {ssh_target} timed out after {SSH_TIMEOUT_SEC}s: {src.name}"
-            ) from exc
-        except FileNotFoundError as exc:
-            # scp binary missing on the local host. Surface as
-            # FileNotFoundError so callers can distinguish "no scp on
-            # PATH" from a remote authentication failure.
-            raise FileNotFoundError(
-                f"scp binary not found while copying {src.name}: {exc}"
-            ) from exc
+
+        def _run() -> subprocess.CompletedProcess[str]:
+            try:
+                return subprocess.run(
+                    ["scp", str(src), dst],
+                    capture_output=True,
+                    text=True,
+                    timeout=SSH_TIMEOUT_SEC,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError(
+                    f"scp to {ssh_target} timed out after {SSH_TIMEOUT_SEC}s: {src.name}"
+                ) from exc
+            except FileNotFoundError as exc:
+                # scp binary missing on the local host. Surface as
+                # FileNotFoundError so callers can distinguish "no scp on
+                # PATH" from a remote authentication failure.
+                raise FileNotFoundError(
+                    f"scp binary not found while copying {src.name}: {exc}"
+                ) from exc
+
+        return _with_ssh_backoff(_run, label=f"scp {src.name}")
 
     # Importable stubs (used inside cluster jobs by user code).
     #
@@ -636,15 +739,18 @@ def rsync_pull(
             filter_flags += [f"--include={pattern}"]
         filter_flags += ["--exclude=*"]
 
-    try:
-        return subprocess.run(
-            ["rsync", "-az", *filter_flags, src, dst],
-            capture_output=True,
-            text=True,
-            timeout=effective_timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"rsync pull from {ssh_target} timed out after {effective_timeout}s: "
-            f"{_truncate(f'{src} -> {dst}')}"
-        ) from exc
+    def _run() -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["rsync", "-az", *filter_flags, src, dst],
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"rsync pull from {ssh_target} timed out after {effective_timeout}s: "
+                f"{_truncate(f'{src} -> {dst}')}"
+            ) from exc
+
+    return _with_ssh_backoff(_run, label=f"rsync pull {ssh_target}")
