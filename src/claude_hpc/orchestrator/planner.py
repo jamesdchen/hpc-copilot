@@ -53,7 +53,9 @@ from claude_hpc.orchestrator.backfill import (
     ResourceTuple,
     build_lattice,
     cached_probe,
+    calibrate_probes,
     pick_earliest,
+    pick_earliest_calibrated,
     probe_lattice,
     recommend_cpus,
     recommend_mem_mb,
@@ -62,6 +64,7 @@ from claude_hpc.orchestrator.backfill import (
     split_walltime_into_segments,
 )
 from claude_hpc.orchestrator.calibration import (
+    compute_house_edge_by_gpu_type,
     compute_walltime_drift,
     recommend_safety_mult_adjustment,
 )
@@ -144,6 +147,7 @@ def plan_submit(
     # exit_code) triples, not just the elapsed quantiles.
     drift_safety_mult = walltime_safety_mult
     drift_rationale = ""
+    drift_samples: list[dict[str, Any]] = []
     if adversarial:
         drift_samples = read_samples(
             experiment_dir,
@@ -156,6 +160,12 @@ def plan_submit(
         drift_safety_mult, drift_rationale = recommend_safety_mult_adjustment(
             drift, base_safety_mult=walltime_safety_mult
         )
+
+    # House-edge calibration ratios (per gpu_type) feed lattice ranking
+    # in _adversarial_report so the predicted ETA gets corrected by the
+    # observed (predicted, actual) drift before pick_earliest. Pre-
+    # computed once here so each candidate doesn't re-bucket the pool.
+    edges_by_gpu_type = compute_house_edge_by_gpu_type(drift_samples) if drift_samples else {}
 
     # Failure rates per GPU type (cluster-wide, last 30 days). Computed
     # lazily on first call; cluster query may fail and silently degrade.
@@ -215,6 +225,7 @@ def plan_submit(
                     base_mem_mb=base_mem_mb,
                     base_cpus=base_cpus,
                     target_backfill_window_sec=target_backfill_window_sec,
+                    edges_by_gpu_type=edges_by_gpu_type,
                 )
             )
         candidate_reports.append(report)
@@ -519,6 +530,7 @@ def _adversarial_report(
     base_mem_mb: int,
     base_cpus: int,
     target_backfill_window_sec: int | None = None,
+    edges_by_gpu_type: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Right-size walltime + footprint, probe lattice for a single candidate.
 
@@ -599,18 +611,40 @@ def _adversarial_report(
         return BackfillProbe(tuple_=t, eta_sec=eta, raw_test_only=raw)
 
     probes = probe_lattice(lattice, cached_probe(cluster_name, _probe))
-    pick = pick_earliest(probes)
 
-    probes_out = [
-        {
-            "constraint": p.tuple_.constraint,
-            "walltime_sec": p.tuple_.walltime_sec,
-            "mem_mb": p.tuple_.mem_mb,
-            "cpus": p.tuple_.cpus,
-            "eta_sec": p.eta_sec,
-        }
-        for p in probes
-    ]
+    # House-edge calibration: pair the raw `--test-only` ETAs with the
+    # observed-vs-predicted ratios from prior runs, bucketed by GPU
+    # type, so the lattice rank reflects what the cluster *will* do
+    # rather than what the scheduler *says* it will do. When no
+    # calibration data exists for a probe's pool the raw ETA passes
+    # through; when it does, the worst-case ratio across pool members
+    # (clamped to [0.1×, 10×]) scales the ETA before pick_earliest.
+    calibrated = calibrate_probes(
+        probes,
+        edges_by_gpu_type=edges_by_gpu_type or {},
+        gpu_types_for_constraint=_gpu_types_in_constraint,
+    )
+    cal_pick = pick_earliest_calibrated(calibrated)
+    pick = cal_pick.probe if cal_pick is not None else pick_earliest(probes)
+
+    cal_by_constraint = {
+        (c.probe.tuple_.constraint, c.probe.tuple_.walltime_sec, c.probe.tuple_.mem_mb): c
+        for c in calibrated
+    }
+    probes_out = []
+    for p in probes:
+        cal = cal_by_constraint.get((p.tuple_.constraint, p.tuple_.walltime_sec, p.tuple_.mem_mb))
+        probes_out.append(
+            {
+                "constraint": p.tuple_.constraint,
+                "walltime_sec": p.tuple_.walltime_sec,
+                "mem_mb": p.tuple_.mem_mb,
+                "cpus": p.tuple_.cpus,
+                "eta_sec": p.eta_sec,
+                "eta_sec_calibrated": cal.eta_sec_calibrated if cal else None,
+                "calibration_factor": cal.factor if cal else None,
+            }
+        )
     combined_rationale = f"walltime: {wt_rationale} | mem: {mem_rationale} | cpus: {cpu_rationale}"
     if pick is None:
         recommended: dict[str, Any] | None = {
