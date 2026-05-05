@@ -93,6 +93,7 @@ The verb partitions primitives into bands the reader can scan independently:
 |---|---|---|---|
 | [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
+| [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
 
@@ -118,6 +119,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; rsync: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate-flow --spec <path>` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce monitor-flow --spec <path>` |
 | [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow --spec <path>` |
+| [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `` |
 <!-- END PRIMITIVE CATALOG -->
 
 ## How slash commands and skills consume primitives

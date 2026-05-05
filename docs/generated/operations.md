@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**38 operations total**: 35 primitive atoms + 3 workflow atoms.
+**39 operations total**: 35 primitive atoms + 4 workflow atoms.
 
 ## How to read this page
 
@@ -84,7 +84,7 @@ Creates new files (e.g. starter executor templates).
 | [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `_(Python-only)_` | `claude_hpc.atoms.campaign_init.campaign_init` | — | — |
 | [`interview`](primitives/interview.md) | ✓ | file_write | `_(Python-only)_` | `claude_hpc.atoms.interview.record_interview` | `claude_hpc/schemas/interview.input.json` | `claude_hpc/schemas/interview.output.json` |
 
-## `workflow` (3)
+## `workflow` (4)
 
 End-to-end pipelines composing other primitives. Same envelope shape as primitives — indistinguishable to higher-level callers (the Composite property).
 
@@ -93,4 +93,5 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | rsync; ssh; writes-journal | `hpc-mapreduce aggregate-flow --spec <path>` | `claude_hpc.flows.aggregate_flow.aggregate_flow` | `claude_hpc/schemas/aggregate_flow.input.json` | `claude_hpc/schemas/aggregate_flow.output.json` |
 | [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-mapreduce monitor-flow --spec <path>` | `claude_hpc.flows.monitor_flow.monitor_flow` | `claude_hpc/schemas/monitor_flow.input.json` | `claude_hpc/schemas/monitor_flow.output.json` |
 | [`submit-flow`](primitives/submit-flow.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-mapreduce submit-flow --spec <path>` | `claude_hpc.flows.submit_flow.submit_flow` | `claude_hpc/schemas/submit_flow.input.json` | `claude_hpc/schemas/submit_flow.output.json` |
+| [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | rsync; scheduler-submit; writes-journal | `_(Python-only)_` | `claude_hpc.flows.submit_flow.submit_flow_batch` | — | — |
 
