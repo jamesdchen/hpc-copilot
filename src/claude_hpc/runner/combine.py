@@ -8,7 +8,7 @@ from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra import remote
-from claude_hpc.orchestrator.runner._ssh import _split_ssh_target
+from claude_hpc.runner._ssh import _split_ssh_target
 
 if TYPE_CHECKING:
     from pathlib import Path

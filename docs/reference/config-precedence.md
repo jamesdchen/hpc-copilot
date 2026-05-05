@@ -58,10 +58,10 @@ Notes:
 
 ### Executor discovery
 
-- **Source**: `claude_hpc.orchestrator.state.discover.discover_executors` walks
+- **Source**: `claude_hpc.state.discover.discover_executors` walks
   `--experiment-dir` (CLI) or the active experiment repo (slash).
 - **Reserved directory** (skipped wholesale): `.hpc/` — see `_SKIP_DIRS`
-  in `claude_hpc/orchestrator/discover.py`. The framework files inside it
+  in `claude_hpc/state/discover.py`. The framework files inside it
   (`tasks.py`, `runs/<run_id>.json`, and on the cluster also
   `_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are never
   treated as user executors.
@@ -103,7 +103,7 @@ Notes:
   default).
 - Sidecar-level keys override cluster-level keys **field-by-field**;
   unset sidecar keys fall back to the cluster default. Implemented in
-  `claude_hpc.orchestrator.planning.constraints.parse_constraints`.
+  `claude_hpc.planning.constraints.parse_constraints`.
 
 ## Env vars consumed
 
@@ -113,7 +113,7 @@ Notes:
 | `HPC_CLUSTERS_CONFIG` | (package default) | `claude_hpc/infra/clusters.py` | Use alternate `clusters.yaml`. |
 | `HPC_NO_SSH_MULTIPLEX` | unset | `claude_hpc/agent_cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
 | `SSH_AUTH_SOCK` | (set by ssh-agent) | `cmd_preflight` | Required for SSH auth; preflight fails if missing. |
-| `HPC_MAX_RUNS` | `500` | `claude_hpc/orchestrator/runs.py` | Override the per-experiment cap on retained run sidecars. |
+| `HPC_MAX_RUNS` | `500` | `claude_hpc/state/runs.py` | Override the per-experiment cap on retained run sidecars. |
 | `HPC_RUN_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py` | Locates `.hpc/runs/<run_id>.json`. |
 | `HPC_TASK_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py` | 0-based task index. `TASK_ID` is accepted as a fallback for the env-var transition. |
 | `HPC_TASKS_PATH` | sibling of `_hpc_dispatch.py` | cluster-side `.hpc/_hpc_dispatch.py` | Override path to user's `tasks.py`. |

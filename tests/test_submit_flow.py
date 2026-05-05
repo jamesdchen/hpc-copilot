@@ -1,5 +1,5 @@
 """Unit tests for the cluster-config / NFS-staging resolution branch in
-``claude_hpc.orchestrator.flows.submit_flow``.
+``claude_hpc.flows.submit_flow``.
 
 These don't exercise the full submit pipeline (which needs a live
 cluster). They isolate the small bit of logic that decides whether
@@ -94,7 +94,7 @@ class TestLoadClustersConfigBubblesUp:
     in an unexpected partition and surprise the user."""
 
     def test_load_error_propagates_through_resolution(self) -> None:
-        from claude_hpc.orchestrator.flows import submit_flow as sf_module
+        from claude_hpc.flows import submit_flow as sf_module
 
         with mock.patch.object(
             sf_module,

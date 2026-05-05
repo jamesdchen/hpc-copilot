@@ -17,7 +17,7 @@ of one cluster-side mechanism contradicting another.
 
 from __future__ import annotations
 
-from claude_hpc.orchestrator import runner
+from claude_hpc import runner
 
 
 def _log_entry(task_id: int, *, content: str = "", exit_code: int | None = None) -> dict:

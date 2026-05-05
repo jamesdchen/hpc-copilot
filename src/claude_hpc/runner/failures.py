@@ -200,8 +200,8 @@ def cluster_failures_by_fingerprint(
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather
         # than asking the user. Importable as
-        # ``claude_hpc.orchestrator.state.failure_signatures.classify``.
-        from claude_hpc.orchestrator.state.failure_signatures import classify
+        # ``claude_hpc.runner.failure_signatures.classify``.
+        from claude_hpc.runner.failure_signatures import classify
 
         sig = classify(content, entry.get("exit_code"))
         key = (category, fp)

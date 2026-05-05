@@ -6,7 +6,7 @@ import shlex
 from typing import Any
 
 from claude_hpc.infra import remote
-from claude_hpc.orchestrator.runner._ssh import _split_ssh_target
+from claude_hpc.runner._ssh import _split_ssh_target
 
 
 def fetch_task_logs(

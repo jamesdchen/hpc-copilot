@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc.forecast.residual_lifetime import predict_residual_lifetime
-from claude_hpc.forecast.user_profiles import UserProfile
+from claude_hpc.state.user_profiles import UserProfile
 
 if TYPE_CHECKING:
     from claude_hpc.infra.inspect import ClusterSnapshot
