@@ -12,9 +12,9 @@ observed reality:
 from __future__ import annotations
 
 from claude_hpc.orchestrator.backfill import (
-    BackfillProbe,
     CALIBRATION_FACTOR_CEILING,
     CALIBRATION_FACTOR_FLOOR,
+    BackfillProbe,
     ResourceTuple,
     calibrate_probes,
     pick_earliest_calibrated,
