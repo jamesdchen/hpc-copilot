@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**36 operations total**: 33 primitive atoms + 3 workflow atoms.
+**37 operations total**: 34 primitive atoms + 3 workflow atoms.
 
 ## How to read this page
 
@@ -72,12 +72,13 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `claude_hpc.runner.submit.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
 
-## `scaffold` (3)
+## `scaffold` (4)
 
 Creates new files (e.g. starter executor templates).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
+| [`axes-init`](primitives/axes-init.md) | ✓ | writes-sidecar | `_(Python-only)_` | `claude_hpc.atoms.axes_init.axes_init` | — | — |
 | [`build-executor`](primitives/build-executor.md) | ✗ | writes-file | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` | `claude_hpc.agent_cli.cmd_build_executor` | — | `claude_hpc/schemas/build_executor.output.json` |
 | [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `_(Python-only)_` | `claude_hpc.atoms.campaign_init.campaign_init` | — | — |
 | [`interview`](primitives/interview.md) | ✓ | file_write | `_(Python-only)_` | `claude_hpc.atoms.interview.record_interview` | `claude_hpc/schemas/interview.input.json` | `claude_hpc/schemas/interview.output.json` |

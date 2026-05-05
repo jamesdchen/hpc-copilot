@@ -689,6 +689,26 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_axes_init(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.axes_init."""
+    from claude_hpc.atoms.axes_init import axes_init
+
+    homogeneous = (
+        [s.strip() for s in args.homogeneous_axes.split(",") if s.strip()]
+        if args.homogeneous_axes
+        else []
+    )
+    _ok(
+        axes_init(
+            experiment_dir=args.experiment_dir,
+            homogeneous_axes=homogeneous,
+            force=args.force,
+        ),
+        name="axes-init",
+    )
+    return EXIT_OK
+
+
 def cmd_campaign_init(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_init."""
     from claude_hpc.atoms.campaign_init import campaign_init
@@ -1540,6 +1560,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the target settings path (default: ~/.claude/settings.json).",
     )
     p_hook.set_defaults(func=cmd_hook_install)
+
+    # axes-init
+    p_axes = sub.add_parser(
+        "axes-init",
+        help=(
+            "Write <experiment>/.hpc/axes.yaml with per-axis homogeneity "
+            "hints used by the cold-start axis_picker. The agent typically "
+            "calls this once per repo at deploy time after introspecting "
+            "tasks.py."
+        ),
+    )
+    _add_experiment_dir(p_axes)
+    p_axes.add_argument(
+        "--homogeneous-axes",
+        type=str,
+        default="",
+        help="Comma-separated axis names to mark homogeneous (e.g. 'window,fold').",
+    )
+    p_axes.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing axes.yaml. Default is refuse-without-force.",
+    )
+    p_axes.set_defaults(func=cmd_axes_init)
 
     # preflight
     p_pre = sub.add_parser(
