@@ -51,10 +51,10 @@ echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "============================================"
 
 # --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---
-source "$(dirname "$0")/common/hpc_preamble.sh"
+source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"
 
 # --- Shared GPU preamble (CUDA_VISIBLE_DEVICES warn + PYTORCH_CUDA_ALLOC_CONF) ---
-source "$(dirname "$0")/common/gpu_preamble.sh"
+source "$REPO_DIR/.hpc/templates/common/gpu_preamble.sh"
 
 # Bind CPU threads to allocated cores ($NSLOTS — SGE-specific).
 # Honors the campus user's HPC_OMP_NUM_THREADS / HPC_MKL_NUM_THREADS env
