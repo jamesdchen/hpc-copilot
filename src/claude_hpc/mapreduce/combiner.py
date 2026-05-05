@@ -232,7 +232,7 @@ def main(max_workers=None, argv=None):
     # --- Read metrics per task (parallelized — I/O-bound over NFS) ---
     errors = []
     groups = {}  # grid_key -> list of metric dicts
-    readable = []  # (tid, grid_key, metrics_path)
+    readable = []  # (tid, grid_key, metrics_path, runtime_path)
 
     for tid in task_ids:
         try:
@@ -254,25 +254,43 @@ def main(max_workers=None, argv=None):
         if not os.path.isfile(metrics_path):
             errors.append(f"task {tid}: metrics.json not found")
             continue
-        readable.append((tid, _grid_key(kwargs), metrics_path))
+        # Per-task runtime sidecar (timing + axis_bindings) is optional —
+        # the dispatcher writes it best-effort. Missing → no warm-picker
+        # contribution for this task; the rest of the pipeline still
+        # works fine.
+        runtime_path = os.path.join(result_dir, "_runtime.json")
+        runtime_path = runtime_path if os.path.isfile(runtime_path) else None
+        readable.append((tid, _grid_key(kwargs), metrics_path, runtime_path))
 
     workers = max_workers if max_workers is not None else _default_max_workers()
     workers = max(1, min(workers, len(readable))) if readable else 1
 
+    runtime_rows = []  # one dict per task with a readable _runtime.json
     if readable:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             future_to_info = {
-                pool.submit(_read_metrics, metrics_path): (tid, grid_key)
-                for tid, grid_key, metrics_path in readable
+                pool.submit(_read_metrics, metrics_path): (tid, grid_key, runtime_path)
+                for tid, grid_key, metrics_path, runtime_path in readable
             }
             for future in future_to_info:
-                tid, grid_key = future_to_info[future]
+                tid, grid_key, runtime_path = future_to_info[future]
                 try:
                     metrics = future.result()
                 except (json.JSONDecodeError, OSError) as exc:
                     errors.append(f"task {tid}: failed to read metrics.json: {exc}")
                     continue
                 groups.setdefault(grid_key, []).append(metrics)
+                # Best-effort runtime row. A malformed _runtime.json is
+                # logged into errors but does NOT abort the wave —
+                # warm-axis-picker contribution is optional, the
+                # combiner's primary output (wave_<N>.json) is the
+                # critical artifact.
+                if runtime_path is not None:
+                    try:
+                        with open(runtime_path) as rfh:
+                            runtime_rows.append(json.load(rfh))
+                    except (json.JSONDecodeError, OSError) as exc:
+                        errors.append(f"task {tid}: failed to read _runtime.json: {exc}")
 
     # --- Aggregate per grid point ---
     grid_points = {}
@@ -305,6 +323,29 @@ def main(max_workers=None, argv=None):
         raise
 
     print(f"[combiner] wrote {out_path}")
+
+    # Runtime sidecar — feeds the warm-axis-picker on the local side via
+    # ``aggregate_flow``'s ingest step. Skip emission entirely when no
+    # rows survived (e.g. dispatcher couldn't write _runtime.json — most
+    # likely permission issue) so the local rsync_pull doesn't pick up
+    # an empty file. Atomic write same as wave_<N>.json.
+    if runtime_rows:
+        runtime_out = os.path.join(out_dir, f"wave_{wave}.runtime.json")
+        runtime_payload = {
+            "wave": wave,
+            "run_id": run_id,
+            "samples": runtime_rows,
+        }
+        fd, tmp = tempfile.mkstemp(prefix="wave_", suffix=".runtime.json.tmp", dir=out_dir)
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(runtime_payload, f, indent=2, sort_keys=True)
+            os.replace(tmp, runtime_out)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+        print(f"[combiner] wrote {runtime_out} ({len(runtime_rows)} runtime samples)")
 
 
 if __name__ == "__main__":

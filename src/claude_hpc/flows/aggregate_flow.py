@@ -261,6 +261,34 @@ def aggregate_flow(
     # Reduce locally.
     aggregated = reduce_partials(combiner_local)
 
+    # Ingest runtime samples (timing + axis_bindings) from the pulled
+    # ``wave_*.runtime.json`` files into <experiment>/.hpc/runtimes/.
+    # Best-effort: a missing or malformed runtime sidecar must NOT abort
+    # the aggregate (the user wants their metrics, not a prior
+    # bookkeeping failure). The warm-axis-picker on the next submit
+    # picks up whatever landed.
+    try:
+        from claude_hpc.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
+
+        ingested = ingest_runtime_samples_from_combiner_dir(
+            combiner_local,
+            experiment_dir=experiment_dir,
+            profile=record.profile,
+            cluster=record.cluster,
+            cmd_sha=(
+                read_run_sidecar(experiment_dir, run_id).get("cmd_sha")
+                if combiner_local.is_dir()
+                else None
+            ),
+        )
+        if ingested:
+            print(
+                f"[aggregate-flow] ingested {ingested} runtime samples "
+                f"into .hpc/runtimes/{record.profile}.{record.cluster}.json"
+            )
+    except (FileNotFoundError, OSError):
+        pass
+
     # Optionally pull summaries.
     summaries_local: str | None = None
     if pull_summaries:
