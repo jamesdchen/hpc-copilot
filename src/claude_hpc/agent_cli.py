@@ -419,6 +419,37 @@ def cmd_discover(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: discover-reducers ─────────────────────────────────────────
+
+
+def cmd_discover_reducers(args: argparse.Namespace) -> int:
+    """Surface candidate reducer / aggregator scripts in the experiment repo.
+
+    The motivating failure mode: at /aggregate-hpc time the agent writes
+    a fresh QLIKE / RMSE / etc. aggregator instead of finding the one
+    the user already committed. This subcommand calls
+    :func:`claude_hpc.state.discover.discover_reducers` so the slash
+    command can route through a CLI primitive instead of grep'ing the
+    repo by hand.
+    """
+    from claude_hpc.state.discover import discover_reducers
+
+    infos = discover_reducers(args.experiment_dir)
+    data = {
+        "reducers": [
+            {
+                "name": i.name,
+                "path": str(i.path),
+                "matches": list(i.matches),
+                "docstring": i.docstring,
+            }
+            for i in infos
+        ]
+    }
+    _ok(data, name="discover-reducers")
+    return EXIT_OK
+
+
 def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
     """Assemble the ``meta`` block for the discover envelope.
 
@@ -1791,6 +1822,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_disc)
     p_disc.set_defaults(func=cmd_discover)
+
+    # discover-reducers
+    p_dr = sub.add_parser(
+        "discover-reducers",
+        help=(
+            "List candidate reducer / aggregator scripts in --experiment-dir "
+            "(matches by filename stem and top-level function names like "
+            "aggregate / reduce / score). Use at /aggregate-hpc time to find "
+            "an existing reducer instead of writing a fresh one."
+        ),
+    )
+    _add_experiment_dir(p_dr)
+    p_dr.set_defaults(func=cmd_discover_reducers)
 
     # inspect-cluster
     p_ic = sub.add_parser(
