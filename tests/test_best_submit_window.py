@@ -2,41 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from claude_hpc.forecast.best_submit_window import best_submit_windows
-from claude_hpc.orchestrator import runtime_prior as rp
+from tests.conftest import seed_diurnal_dip
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"
 
 
 def _seed_with_dip(tmp_path):
-    """Seed 14 days of samples with a wide low-traffic dip at 03-06 UTC.
-
-    Hours 03-06 UTC every day get a much shorter queue wait. The
-    window is wide enough that the diurnal predictor's ±1h blend
-    fallback still recovers a low predicted wait when the target
-    bucket itself is sparse.
-    """
-    base = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
-    for day in range(14):
-        for hour in range(24):
-            for offset_min in (0, 30):
-                ts = base + timedelta(days=day, hours=hour, minutes=offset_min)
-                wait = 100 if 3 <= hour <= 6 else 1500
-                rp.append_sample(
-                    tmp_path,
-                    profile=PROFILE,
-                    cluster=CLUSTER,
-                    run_id=f"r{day}-{hour}-{offset_min}",
-                    task_id=0,
-                    gpu_type="a100",
-                    node="d11-07",
-                    elapsed_sec=4150,
-                    submitted_at_iso=ts.isoformat(),
-                    queue_wait_sec=wait,
-                )
+    seed_diurnal_dip(tmp_path, profile=PROFILE, cluster=CLUSTER)
 
 
 class TestSweep:

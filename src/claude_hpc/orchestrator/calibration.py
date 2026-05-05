@@ -43,6 +43,7 @@ __all__ = [
     "compute_walltime_drift",
     "recommend_safety_mult_adjustment",
     "compute_house_edge",
+    "compute_house_edge_by_gpu_type",
     "record_prediction_sidecar",
     "read_prediction_sidecar",
     "prediction_sidecar_path",
@@ -249,6 +250,40 @@ def compute_house_edge(samples: list[dict[str, Any]]) -> HouseEdge:
         p95_delta_sec=round(p95, 1),
         calibration_ratio=round(cal, 3) if cal is not None else None,
     )
+
+
+def compute_house_edge_by_gpu_type(
+    samples: list[dict[str, Any]],
+    *,
+    min_samples: int = 5,
+) -> dict[str, HouseEdge]:
+    """Bucket *samples* by ``gpu_type`` and compute :class:`HouseEdge` per bucket.
+
+    The single-bucket :func:`compute_house_edge` pools across every
+    constraint class, which papers over exactly the asymmetry the
+    forecaster needs to respect: ``--test-only`` is systematically
+    pessimistic on "inferior" resources (fewer GPUs, weaker types) that
+    quietly slot into backfill, and optimistic on the contended
+    flagship pools. Per-GPU-type buckets surface that asymmetry.
+
+    Buckets with fewer than *min_samples* paired (predicted, actual)
+    observations are dropped — a 2-sample bucket would let one freak
+    wait dominate the ratio. Callers consuming the return value should
+    treat a missing key as "no calibration; trust raw ETA".
+    """
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    for s in samples:
+        gpu_type = s.get("gpu_type")
+        if not isinstance(gpu_type, str) or not gpu_type:
+            continue
+        by_type.setdefault(gpu_type, []).append(s)
+
+    out: dict[str, HouseEdge] = {}
+    for gpu_type, group in by_type.items():
+        edge = compute_house_edge(group)
+        if edge.n_with_prediction >= min_samples and edge.calibration_ratio is not None:
+            out[gpu_type] = edge
+    return out
 
 
 def _actual_queue_sec(sample: dict[str, Any]) -> float | None:

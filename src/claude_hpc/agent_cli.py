@@ -1142,7 +1142,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 #     (gpu_oom, system_oom, walltime, node_failure, import_error,
 #      file_not_found, permission_denied, disk_full, python_traceback)
 #   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
-# A test in tests/test_resubmit.py asserts the classifier never emits a
+# A test in tests/test_resubmit_batching.py asserts the classifier never emits a
 # category outside this set.
 # B2: derived from the canonical FailureCategory StrEnum.
 # Pre-B2 this was a literal frozenset that drifted from the classifier
@@ -1172,56 +1172,26 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
 
-    # A-M3: surface preempted runs as a typed Preempted exception at
-    # the envelope level. If every task_id the caller is trying to
-    # resubmit carries a ``preempt`` marker in the per-task sidecar
-    # (set by dispatch.py's SIGTERM handler), the campus user wasn't
-    # the one who failed — they got bumped by higher-priority work.
-    # Raising Preempted lets the agent harness branch on
-    # ``error_code: preempted`` instead of seeing a successful resubmit
-    # envelope and treating it like any other retry. The resubmit
-    # itself still happens after the harness handles the signal; we
-    # raise BEFORE doing the cluster-side work so the caller can
-    # decide whether to throttle.
-    if category == "preempted":
-        from claude_hpc.orchestrator.runs import read_run_sidecar as _read_sidecar
+    from claude_hpc.orchestrator.resubmit_flow import resubmit_flow
 
-        try:
-            sidecar = _read_sidecar(Path(args.experiment_dir), args.run_id)
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            sidecar = None
-        if sidecar is not None:
-            tasks_block = sidecar.get("tasks") or {}
-            failed_ids_int = [int(t) for t in failed]
-            all_preempted = bool(failed_ids_int) and all(
-                isinstance(tasks_block.get(str(tid)), dict)
-                and "preempt" in tasks_block.get(str(tid), {})
-                for tid in failed_ids_int
-            )
-            if all_preempted:
-                raise errors.Preempted(
-                    f"all {len(failed_ids_int)} task ids in resubmit spec carry "
-                    "preempt markers; the campus user got bumped by higher-priority "
-                    "work, not failed. Resubmit when scheduler pressure abates."
-                )
-
-    record, deduped, request_id = runner.resubmit_failed(
-        args.experiment_dir,
+    result = resubmit_flow(
+        Path(args.experiment_dir),
         args.run_id,
         failed_task_ids=[int(t) for t in failed],
         category=category,
         overrides=spec.get("overrides"),
         new_job_ids=spec.get("new_job_ids"),
         request_id=spec.get("request_id"),
+        consult_forecast=bool(spec.get("consult_forecast", True)),
+        forecast_within_hours=int(spec.get("forecast_within_hours", 24)),
+        submit_to_cluster=bool(spec.get("submit_to_cluster", False)),
+        script=spec.get("script"),
+        backend=spec.get("backend"),
+        job_name=spec.get("job_name"),
+        job_env=spec.get("job_env"),
     )
     _ok(
-        {
-            "run_id": record.run_id,
-            "retries": record.retries,
-            "job_ids": record.job_ids,
-            "request_id": request_id,
-            "deduped": deduped,
-        },
+        result.to_envelope_data(),
         # Honest now that resubmit_failed dedups on request_id: a replay
         # with the same spec is a no-op, just like submit.
         name="resubmit-failed",
