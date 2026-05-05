@@ -310,6 +310,20 @@ def _live_subcommands() -> list[str]:
     return []
 
 
+def cmd_hook_install(args: argparse.Namespace) -> int:
+    """Install claude-hpc's bundled Stop hooks into ~/.claude/settings.json.
+
+    Idempotent: re-running with already-installed hooks is a no-op. Use
+    ``--dry-run`` to preview the merge without writing.
+    """
+    from claude_hpc.hooks.install import install_hooks
+
+    settings_path = Path(args.settings).expanduser() if args.settings else None
+    summary = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
+    _ok(summary, name="hook-install")
+    return EXIT_OK
+
+
 def cmd_capabilities(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.capabilities."""
     from claude_hpc._internal.operations import render_llms_full
@@ -1504,6 +1518,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_cap.set_defaults(func=cmd_capabilities)
+
+    # hook-install
+    p_hook = sub.add_parser(
+        "hook-install",
+        help=(
+            "Install claude-hpc Stop hooks into ~/.claude/settings.json so "
+            "the agent is held to slash-command exit contracts (e.g. "
+            "/monitor-hpc must emit an `armed:` line)."
+        ),
+    )
+    p_hook.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the merge without writing to settings.json.",
+    )
+    p_hook.add_argument(
+        "--settings",
+        type=str,
+        default=None,
+        help="Override the target settings path (default: ~/.claude/settings.json).",
+    )
+    p_hook.set_defaults(func=cmd_hook_install)
 
     # preflight
     p_pre = sub.add_parser(

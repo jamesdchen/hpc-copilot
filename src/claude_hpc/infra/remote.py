@@ -222,9 +222,7 @@ def _tar_ssh_push(
     ssh_remote_cmd = f"mkdir -p {shlex.quote(remote_path)} && tar x -C {shlex.quote(remote_path)}"
     ssh_cmd = ["ssh", "-o", "BatchMode=yes", target, ssh_remote_cmd]
 
-    tar_proc = subprocess.Popen(
-        tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         assert tar_proc.stdout is not None
         ssh_proc = subprocess.run(
@@ -284,13 +282,10 @@ def _scp_pull(
 
     scp_cmd = ["scp", "-r", "-o", "BatchMode=yes", src, dst]
     try:
-        return subprocess.run(
-            scp_cmd, capture_output=True, text=True, timeout=timeout
-        )
+        return subprocess.run(scp_cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(
-            f"scp pull from {host} timed out after {timeout}s: "
-            f"{_truncate(f'{src} -> {dst}')}"
+            f"scp pull from {host} timed out after {timeout}s: {_truncate(f'{src} -> {dst}')}"
         ) from exc
 
 
