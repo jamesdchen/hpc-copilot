@@ -1142,7 +1142,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 #     (gpu_oom, system_oom, walltime, node_failure, import_error,
 #      file_not_found, permission_denied, disk_full, python_traceback)
 #   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
-# A test in tests/test_resubmit.py asserts the classifier never emits a
+# A test in tests/test_resubmit_batching.py asserts the classifier never emits a
 # category outside this set.
 # B2: derived from the canonical FailureCategory StrEnum.
 # Pre-B2 this was a literal frozenset that drifted from the classifier

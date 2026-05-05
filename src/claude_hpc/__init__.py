@@ -146,7 +146,7 @@ from claude_hpc.orchestrator.discover import (
     is_executor_source,
 )
 from claude_hpc.orchestrator.planner import plan_submit
-from claude_hpc.orchestrator.resubmit import (
+from claude_hpc.orchestrator.resubmit_batching import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
