@@ -90,11 +90,13 @@ def campaign_converged(
 
     if metric and plateau_window is not None and len(metric_values) >= int(plateau_window) + 1:
         window = int(plateau_window)
-        prior_best = _best(metric_values[: -window], direction)
+        prior_best = _best(metric_values[:-window], direction)
         recent_best = _best(metric_values[-window:], direction)
         if prior_best is not None and recent_best is not None:
             improved = (
-                (prior_best - recent_best) if direction == "minimize" else (recent_best - prior_best)
+                (prior_best - recent_best)
+                if direction == "minimize"
+                else (recent_best - prior_best)
             )
             if improved <= float(plateau_tolerance):
                 return {
