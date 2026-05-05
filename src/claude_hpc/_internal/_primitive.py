@@ -188,7 +188,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.state.discover",
     "claude_hpc.planning.resubmit_batching",
     "claude_hpc.planning.planner",
-    "claude_hpc.campaign.campaign_health",
+    "claude_hpc.atoms.campaign_health",
     "claude_hpc.infra.inspect",
     "claude_hpc.infra.clusters",
     "claude_hpc.agent_cli",
