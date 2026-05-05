@@ -479,9 +479,26 @@ Resume (re-dispatch only failed tasks) or fresh (new run_id)?
 - **Resume**: call `/monitor-hpc --run-id <prior.stem>` (or `report_status` directly) to enumerate failing task IDs, then build a `ResubmitPlan` via `resubmit_plan(task_count=tasks.total(), failed_task_ids=[...])` and submit via `backend.submit_plan(plan, ...)`. The new sidecar (written below) carries the same `cmd_sha` but a fresh `run_id` — both runs share provenance via the SHA.
 - **Fresh**: ask the user how they want the new run distinguished (e.g. a different result_dir suffix, a profile name change, or simply accept that the new sidecar is a deliberate rerun). The new `cmd_sha` will only differ if `tasks.py` itself changes.
 
-### Step 6d: Compute the throughput plan and write the sidecar
+### Step 6d: Compute the throughput plan, write the sidecar, build the submit-flow spec
 
-With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Then write the per-run sidecar — this is the audit-trail artifact `/monitor-hpc` and `/aggregate-hpc` read on the cluster:
+With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Two artifacts land here:
+
+1. **The per-run sidecar** at `<experiment>/.hpc/runs/<run_id>.json` — audit trail that the cluster-side dispatcher and the local-side `/monitor-hpc` / `/aggregate-hpc` read.
+2. **The submit-flow spec** — the input to `submit-flow`. Use the **`build-submit-spec`** primitive instead of hand-assembling the dict; it synthesizes the `EXECUTOR` / `HPC_RUN_ID` / `HPC_CMD_SHA` / `HPC_TASK_COUNT` / `REPO_DIR` / `MODULES` / `CONDA_SOURCE` / `CONDA_ENV` / `HPC_RUNTIME` / `HPC_CAMPAIGN_ID` keys, picks the canonical script path from `(backend, is_gpu)`, and validates against `schemas/submit_flow.input.json` before returning.
+
+```bash
+# After the interview + planner have resolved every field:
+hpc-mapreduce build-submit-spec --spec /tmp/resolved.json > /tmp/submit_spec.json
+# /tmp/resolved.json is a flat dict of the kwargs the agent collected:
+#   profile, cluster, ssh_target, remote_path, run_id, cmd_sha,
+#   total_tasks, backend, is_gpu, modules, conda_source, conda_env,
+#   runtime, campaign_id, canary, ...  (see build_submit_spec docstring
+#   for the full kwargs list).
+# The envelope's `data` field is the assembled submit-flow spec —
+# drop it into a file and feed it to submit-flow.
+```
+
+Per-run sidecar still happens here too:
 
 ```python
 run_id = f"{profile}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{cmd_sha[:8]}"

@@ -720,6 +720,39 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_build_submit_spec(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.build_submit_spec.
+
+    Accepts a JSON ``--spec <file>`` of resolved interview values
+    (profile/cluster/ssh_target/.../cmd_sha/total_tasks/...) and emits
+    the assembled + schema-validated ``submit_flow.input.json`` dict
+    on stdout's ``data`` field. Pipe it straight into
+    ``submit-flow --spec``.
+    """
+    from claude_hpc.atoms.build_submit_spec import build_submit_spec
+
+    raw = _load_spec(args.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="build-submit-spec input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    try:
+        spec = build_submit_spec(**raw)
+    except TypeError as exc:
+        # Caller passed an unknown / missing kwarg.
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(spec, name="build-submit-spec")
+    return EXIT_OK
+
+
 def cmd_axes_init(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.axes_init."""
     from claude_hpc.atoms.axes_init import axes_init
@@ -1739,6 +1772,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite an existing axes.yaml. Default is refuse-without-force.",
     )
     p_axes.set_defaults(func=cmd_axes_init)
+
+    # build-submit-spec
+    p_bss = sub.add_parser(
+        "build-submit-spec",
+        help=(
+            "Assemble + validate a submit_flow.input.json spec from "
+            "resolved interview values (profile/cluster/ssh_target/.../"
+            "cmd_sha/total_tasks). Emits the spec on stdout. Slash "
+            "commands pipe the output straight into 'submit-flow --spec'."
+        ),
+    )
+    _add_spec_and_dry_run(
+        p_bss,
+        schema_hint="JSON object of resolved interview kwargs (see build_submit_spec docstring)",
+        dry_run_help="Build + validate the spec but don't emit (smoke check).",
+    )
+    p_bss.set_defaults(func=cmd_build_submit_spec)
 
     # preflight
     p_pre = sub.add_parser(

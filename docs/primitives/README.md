@@ -110,6 +110,7 @@ The verb partitions primitives into bands the reader can scan independently:
 |---|---|---|---|
 | [axes-init](axes-init.md) | yes | writes-sidecar: `<experiment>/.hpc/axes.yaml` | `` |
 | [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
+| [build-submit-spec](build-submit-spec.md) | yes | _none_ | `hpc-mapreduce build-submit-spec --spec <path>` |
 | [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `` |
 | [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `` |
 

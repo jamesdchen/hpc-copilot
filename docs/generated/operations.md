@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**40 operations total**: 36 primitive atoms + 4 workflow atoms.
+**41 operations total**: 37 primitive atoms + 4 workflow atoms.
 
 ## How to read this page
 
@@ -74,7 +74,7 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `claude_hpc.runner.submit.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
 
-## `scaffold` (4)
+## `scaffold` (5)
 
 Creates new files (e.g. starter executor templates).
 
@@ -82,6 +82,7 @@ Creates new files (e.g. starter executor templates).
 |---|---|---|---|---|---|---|
 | [`axes-init`](primitives/axes-init.md) | ✓ | writes-sidecar | `_(Python-only)_` | `claude_hpc.atoms.axes_init.axes_init` | — | — |
 | [`build-executor`](primitives/build-executor.md) | ✗ | writes-file | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` | `claude_hpc.agent_cli.cmd_build_executor` | — | `claude_hpc/schemas/build_executor.output.json` |
+| [`build-submit-spec`](primitives/build-submit-spec.md) | ✓ | _none_ | `hpc-mapreduce build-submit-spec --spec <path>` | `claude_hpc.atoms.build_submit_spec.build_submit_spec` | — | — |
 | [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `_(Python-only)_` | `claude_hpc.atoms.campaign_init.campaign_init` | — | — |
 | [`interview`](primitives/interview.md) | ✓ | file_write | `_(Python-only)_` | `claude_hpc.atoms.interview.record_interview` | `claude_hpc/schemas/interview.input.json` | `claude_hpc/schemas/interview.output.json` |
 
