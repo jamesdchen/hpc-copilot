@@ -13,11 +13,10 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc import errors
+from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
-from claude_hpc.orchestrator import runner
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,7 +33,7 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
     computed for every run.
     """
     try:
-        from claude_hpc.orchestrator.state.runs import read_run_sidecar
+        from claude_hpc.state.runs import read_run_sidecar
     except ImportError:
         return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
     try:

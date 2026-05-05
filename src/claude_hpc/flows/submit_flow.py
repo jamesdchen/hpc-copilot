@@ -2,7 +2,7 @@
 
 A workflow atom (vs a primitive atom) chains multiple SSH/scheduler/disk
 operations into one composable unit with a single envelope output. Where
-:func:`claude_hpc.orchestrator.runner.submit_and_record` is the bookkeeping
+:func:`claude_hpc.runner.submit_and_record` is the bookkeeping
 primitive (writes a sidecar; never touches the cluster), ``submit_flow``
 is the end-to-end pipeline: it actually rsyncs, deploys framework files,
 optionally fires a 1-task canary, qsubs the array, and records to the
@@ -28,16 +28,15 @@ import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc import errors
+from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.agent_cli import cmd_plan_submit
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
 from claude_hpc.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
-from claude_hpc.orchestrator import runner
-from claude_hpc.orchestrator.runner import submit_and_record
-from claude_hpc.orchestrator.state.discover import discover_executors
+from claude_hpc.runner import submit_and_record
+from claude_hpc.state.discover import discover_executors
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -383,7 +382,7 @@ def submit_flow(
     # run sidecar so the two are reconcilable but the sidecar's frozen
     # schema doesn't need a bump for this opt-in flag.
     if partial_ok:
-        from claude_hpc.orchestrator.state.runs import run_sidecar_path
+        from claude_hpc.state.runs import run_sidecar_path
 
         marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
         with contextlib.suppress(OSError):

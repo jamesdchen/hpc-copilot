@@ -36,7 +36,7 @@ def house_edge(
     over runs that finished, not failed/cancelled ones.
     """
     from claude_hpc.forecast.calibration import compute_house_edge
-    from claude_hpc.forecast.runtime_prior import read_samples
+    from claude_hpc.state.runtime_prior import read_samples
 
     samples = read_samples(
         experiment_dir,

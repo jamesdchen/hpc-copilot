@@ -31,11 +31,10 @@ from pathlib import Path
 from typing import Any
 
 import claude_hpc
-from claude_hpc import errors
+from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.orchestrator import runner
-from claude_hpc.orchestrator.state.discover import (
+from claude_hpc.state.discover import (
     detect_mars_tier,
     discover_executors,
     read_meta_json,
@@ -470,7 +469,7 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
     idempotent=True,
 )
 def cmd_runtime_prior(args: argparse.Namespace) -> int:
-    from claude_hpc.forecast.runtime_prior import roll_up_quantiles
+    from claude_hpc.state.runtime_prior import roll_up_quantiles
 
     out = roll_up_quantiles(
         args.experiment_dir,
@@ -599,7 +598,7 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
 def cmd_plan_submit(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
-    from claude_hpc.orchestrator.planning.planner import plan_submit
+    from claude_hpc.planning.planner import plan_submit
 
     candidates: list[str] | None = None
     if args.candidates:
@@ -739,7 +738,7 @@ def _preempted_summary_from_sidecar(
     None as "no preempt info to surface", not an error.
     """
     try:
-        from claude_hpc.orchestrator.state.runs import (
+        from claude_hpc.state.runs import (
             read_run_sidecar as _read_sidecar_for_status,
         )
 
@@ -858,7 +857,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     shapes. Idempotent on ``run_id`` via the same dedup mechanism as
     ``submit``.
     """
-    from claude_hpc.orchestrator.flows.submit_flow import submit_flow
+    from claude_hpc.flows.submit_flow import submit_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
@@ -922,7 +921,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
     ``submit-flow`` for the campaign composition pattern
     ``submit-flow → monitor-flow → next iteration``.
     """
-    from claude_hpc.orchestrator.flows.monitor_flow import monitor_flow
+    from claude_hpc.flows.monitor_flow import monitor_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     _validate_against_schema(spec, "monitor_flow")
@@ -965,7 +964,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
     atom — the campaign loop's per-iteration tail is
     ``submit-flow → monitor-flow → aggregate-flow → next iter``.
     """
-    from claude_hpc.orchestrator.flows.aggregate_flow import aggregate_flow
+    from claude_hpc.flows.aggregate_flow import aggregate_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     _validate_against_schema(spec, "aggregate_flow")
@@ -1013,7 +1012,7 @@ def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, 
     config validity is enforced by ``/submit``, not the aggregate path.
     """
     try:
-        from claude_hpc.orchestrator.state.runs import read_run_sidecar
+        from claude_hpc.state.runs import read_run_sidecar
     except ImportError:
         return {}
     try:
@@ -1029,7 +1028,7 @@ def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, 
 
 
 def cmd_aggregate(args: argparse.Namespace) -> int:
-    # The aggregation pipeline is driven by claude_hpc.orchestrator.runner.combine_wave
+    # The aggregation pipeline is driven by claude_hpc.runner.combine_wave
     # plus the user-supplied combiner script on the cluster. The CLI wraps it
     # with three optional, framework-agnostic guarantees:
     #   --require-outputs <template>  : every per-task output exists before
@@ -1138,7 +1137,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 
 
 # Canonical failure-category vocabulary. Must be the UNION of:
-#   - the auto-classifier in claude_hpc.orchestrator.runner.cluster_failures_by_fingerprint
+#   - the auto-classifier in claude_hpc.runner.cluster_failures_by_fingerprint
 #     (gpu_oom, system_oom, walltime, node_failure, import_error,
 #      file_not_found, permission_denied, disk_full, python_traceback)
 #   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
@@ -1146,7 +1145,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 # category outside this set.
 # B2: derived from the canonical FailureCategory StrEnum.
 # Pre-B2 this was a literal frozenset that drifted from the classifier
-# emissions in claude_hpc.orchestrator.runner; A4 landed the union as a literal,
+# emissions in claude_hpc.runner; A4 landed the union as a literal,
 # B2 makes the literal redundant by sourcing from the StrEnum so the
 # drift class cannot recur. test_lifecycle.py asserts the cross-set
 # invariants (classifier emissions ⊆ accepted ⊆ FailureCategory).
@@ -1172,7 +1171,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
 
-    from claude_hpc.orchestrator.flows.resubmit_flow import resubmit_flow
+    from claude_hpc.flows.resubmit_flow import resubmit_flow
 
     result = resubmit_flow(
         Path(args.experiment_dir),
@@ -1307,11 +1306,11 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     """Aggregate run-history into a campaign-health payload (D2a).
 
     Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
-    decorator lives on ``claude_hpc.orchestrator.state.campaign_health.campaign_health``
+    decorator lives on ``claude_hpc.campaign.campaign_health.campaign_health``
     (the module-level implementation), matching the ``backed_by.python``
     pointer in ``docs/primitives/campaign-health.md``.
     """
-    from claude_hpc.orchestrator.state.campaign_health import campaign_health
+    from claude_hpc.campaign.campaign_health import campaign_health
 
     try:
         data = campaign_health(

@@ -54,7 +54,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
-from claude_hpc.forecast.runtime_prior import read_samples
+from claude_hpc.state.runtime_prior import read_samples
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -505,7 +505,7 @@ def _des_eligible(experiment_dir: Path, *, cluster: str) -> _DESDecision:
         return _DESDecision(True, "snapshot present, cluster idle", 0, 0)
 
     try:
-        from claude_hpc.forecast.user_profiles import all_profiles
+        from claude_hpc.state.user_profiles import all_profiles
     except ImportError:
         return _DESDecision(False, "user_profiles module unavailable", len(running_users), 0)
     profiles = all_profiles(experiment_dir, cluster=cluster)
@@ -636,7 +636,7 @@ def _predict_des(
     snap = snapshots[0]
 
     try:
-        from claude_hpc.forecast.user_profiles import all_profiles
+        from claude_hpc.state.user_profiles import all_profiles
 
         profiles = all_profiles(experiment_dir, cluster=cluster)
     except ImportError:

@@ -30,7 +30,7 @@ Two responsibilities:
    ``cmd_sha`` (when supplied).
 
 This module's responsibilities are distinct from
-``claude_hpc.orchestrator.planning.throughput``: throughput.py turns a single
+``claude_hpc.planning.throughput``: throughput.py turns a single
 duration estimate + cluster constraints into a wave-packed plan, while
 this module *produces* the duration estimate from history.
 """

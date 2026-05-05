@@ -14,11 +14,11 @@ from __future__ import annotations
 # back-compat with external callers and tests that imported them from the
 # pre-split flat module. Keep the noqa.
 from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: F401
-from claude_hpc.orchestrator.runner._ssh import (
+from claude_hpc.runner._ssh import (
     _parse_remote_json,  # noqa: F401
     _split_ssh_target,  # noqa: F401
 )
-from claude_hpc.orchestrator.runner.aggregate import (
+from claude_hpc.runner.aggregate import (
     _read_remote_sidecar,  # noqa: F401
     _wave_task_ids,  # noqa: F401
     build_provenance,
@@ -26,8 +26,8 @@ from claude_hpc.orchestrator.runner.aggregate import (
     verify_per_task_outputs,
     write_remote_provenance,
 )
-from claude_hpc.orchestrator.runner.combine import combine_wave
-from claude_hpc.orchestrator.runner.failures import (
+from claude_hpc.runner.combine import combine_wave
+from claude_hpc.runner.failures import (
     _FAILURE_CATEGORY_PATTERNS,  # noqa: F401
     _FINGERPRINT_NOISE,  # noqa: F401
     DEFAULT_AUTO_RETRY_POLICY,
@@ -36,22 +36,22 @@ from claude_hpc.orchestrator.runner.failures import (
     cluster_failures_by_fingerprint,
     fingerprint_stderr_tail,
 )
-from claude_hpc.orchestrator.runner.logs import fetch_task_logs
-from claude_hpc.orchestrator.runner.reconcile import (
+from claude_hpc.runner.logs import fetch_task_logs
+from claude_hpc.runner.reconcile import (
     _ssh_alive_job_ids,  # noqa: F401
     _ssh_list_combined_waves,  # noqa: F401
     mark_terminal,
     reconcile,
 )
-from claude_hpc.orchestrator.runner.resubmit import (
+from claude_hpc.runner.resubmit import (
     derive_resubmit_request_id,
     resubmit_failed,
 )
-from claude_hpc.orchestrator.runner.status import (
+from claude_hpc.runner.status import (
     _ssh_status_report,  # noqa: F401
     record_status,
 )
-from claude_hpc.orchestrator.runner.submit import build_job_env, submit_and_record
+from claude_hpc.runner.submit import build_job_env, submit_and_record
 
 __all__ = [
     "submit_and_record",

@@ -8,9 +8,10 @@ generated from this registry plus the schemas.
 Decoration convention
 ---------------------
 
-Most primitives have a clean Python entry point — a public function in
-``claude_hpc/orchestrator/`` or ``claude_hpc/forecast/`` or ``claude_hpc/infra/`` that performs the
-operation. Decorate that function directly with ``@primitive(...)``.
+Most primitives have a clean Python entry point — a public function in one
+of the engine subpackages (``runner/``, ``planning/``, ``state/``,
+``forecast/``, ``flows/``, or ``infra/``) that performs the operation.
+Decorate that function directly with ``@primitive(...)``.
 
 Some primitives have no inner Python helper — their behavior lives in
 the ``cmd_*`` dispatcher in ``agent_cli.py`` (e.g. ``capabilities``,
@@ -181,13 +182,13 @@ def primitive(
 # the atom decorator must have run first to attach it.
 _PRIMITIVE_MODULES: tuple[str, ...] = (
     # Atoms first.
-    "claude_hpc.orchestrator.state.runs",
-    "claude_hpc.forecast.runtime_prior",
+    "claude_hpc.state.runs",
+    "claude_hpc.state.runtime_prior",
     "claude_hpc.forecast.calibration",
-    "claude_hpc.orchestrator.state.discover",
-    "claude_hpc.orchestrator.planning.resubmit_batching",
-    "claude_hpc.orchestrator.planning.planner",
-    "claude_hpc.orchestrator.state.campaign_health",
+    "claude_hpc.state.discover",
+    "claude_hpc.planning.resubmit_batching",
+    "claude_hpc.planning.planner",
+    "claude_hpc.campaign.campaign_health",
     "claude_hpc.infra.inspect",
     "claude_hpc.infra.clusters",
     "claude_hpc.agent_cli",
@@ -203,16 +204,16 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.recall",
     "claude_hpc.atoms.walltime_drift",
-    "claude_hpc.orchestrator.runner.submit",
-    "claude_hpc.orchestrator.runner.status",
-    "claude_hpc.orchestrator.runner.combine",
-    "claude_hpc.orchestrator.runner.resubmit",
-    "claude_hpc.orchestrator.runner.reconcile",
-    "claude_hpc.orchestrator.state.validate",
+    "claude_hpc.runner.submit",
+    "claude_hpc.runner.status",
+    "claude_hpc.runner.combine",
+    "claude_hpc.runner.resubmit",
+    "claude_hpc.runner.reconcile",
+    "claude_hpc.planning.validate",
     # Composites — must come after every atom they reference.
-    "claude_hpc.orchestrator.flows.submit_flow",
-    "claude_hpc.orchestrator.flows.monitor_flow",
-    "claude_hpc.orchestrator.flows.aggregate_flow",
+    "claude_hpc.flows.submit_flow",
+    "claude_hpc.flows.monitor_flow",
+    "claude_hpc.flows.aggregate_flow",
 )
 
 

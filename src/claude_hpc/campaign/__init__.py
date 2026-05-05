@@ -26,6 +26,6 @@ PBT, …) live as Python libraries the user imports inside their own
 
 from __future__ import annotations
 
-from claude_hpc.orchestrator.campaign.dirs import campaign_dir
+from claude_hpc.campaign.dirs import campaign_dir
 
 __all__ = ["campaign_dir"]

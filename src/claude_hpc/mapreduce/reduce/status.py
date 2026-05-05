@@ -692,7 +692,7 @@ def _main() -> int:
     # task-keyed dict the reporting code consumes. Use the canonical
     # hardened reader so wave_map / task_count / result_dir_template are
     # guaranteed to be present.
-    from claude_hpc.orchestrator.state.runs import read_run_sidecar  # noqa: PLC0415 — lazy
+    from claude_hpc.state.runs import read_run_sidecar  # noqa: PLC0415 — lazy
 
     try:
         sidecar = read_run_sidecar(Path("."), args.run_id)

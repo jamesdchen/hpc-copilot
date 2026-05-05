@@ -42,7 +42,7 @@ def walltime_drift(
         compute_walltime_drift,
         recommend_safety_mult_adjustment,
     )
-    from claude_hpc.forecast.runtime_prior import read_samples
+    from claude_hpc.state.runtime_prior import read_samples
 
     samples = read_samples(
         experiment_dir,

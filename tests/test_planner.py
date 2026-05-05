@@ -1,4 +1,4 @@
-"""Tests for claude_hpc.orchestrator.planning.planner — integration via mocked snapshot."""
+"""Tests for claude_hpc.planning.planner — integration via mocked snapshot."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_hpc.forecast import runtime_prior as rp
 from claude_hpc.infra import inspect as ins
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from claude_hpc.orchestrator.planning import planner
+from claude_hpc.planning import planner
+from claude_hpc.state import runtime_prior as rp
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +85,7 @@ class TestPlanSubmit:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -103,7 +103,7 @@ class TestPlanSubmit:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(tmp_path, profile="x", cluster="discovery", adversarial=False)
@@ -117,7 +117,7 @@ class TestPlanSubmit:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -150,7 +150,7 @@ class TestPlanSubmit:
                 elapsed_sec=1000 + tid * 100,
             )
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -280,11 +280,11 @@ class TestAdversarialPath:
 
         with (
             patch(
-                "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+                "claude_hpc.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             patch(
-                "claude_hpc.orchestrator.planning.planner._eta_via_test_only_with_resources",
+                "claude_hpc.planning.planner._eta_via_test_only_with_resources",
                 side_effect=fake_probe,
             ),
         ):
@@ -322,11 +322,11 @@ class TestAdversarialPath:
 
         with (
             patch(
-                "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+                "claude_hpc.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             patch(
-                "claude_hpc.orchestrator.planning.planner._eta_via_test_only_with_resources",
+                "claude_hpc.planning.planner._eta_via_test_only_with_resources",
                 side_effect=fake_probe,
             ),
         ):
@@ -363,7 +363,7 @@ class TestColdStartWalltimeArbitrage:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -409,11 +409,11 @@ class TestColdStartWalltimeArbitrage:
 
         with (
             patch(
-                "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+                "claude_hpc.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             patch(
-                "claude_hpc.orchestrator.planning.planner._eta_via_test_only_with_resources",
+                "claude_hpc.planning.planner._eta_via_test_only_with_resources",
                 side_effect=fake_probe,
             ),
         ):
@@ -441,7 +441,7 @@ class TestColdStartWalltimeArbitrage:
         )
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg_path))
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -459,7 +459,7 @@ class TestColdStartWalltimeArbitrage:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -478,7 +478,7 @@ class TestColdStartWalltimeArbitrage:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.orchestrator.planning.planner.inspect_cluster",
+            "claude_hpc.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -499,7 +499,7 @@ class TestColdStartWalltimeArbitrage:
 
 class TestEtaViaDES:
     def test_returns_none_without_snapshot_or_profiles(self, tmp_path):
-        from claude_hpc.orchestrator.planning.planner import _eta_via_des
+        from claude_hpc.planning.planner import _eta_via_des
 
         # Empty experiment dir → no DES inputs.
         assert _eta_via_des(tmp_path, "ml_ridge", "discovery") is None
@@ -511,7 +511,7 @@ class TestEtaViaDES:
             NodeSnapshot,
             persist_snapshot,
         )
-        from claude_hpc.orchestrator.planning.planner import _eta_via_des
+        from claude_hpc.planning.planner import _eta_via_des
 
         snap = ClusterSnapshot(
             cluster="discovery",
