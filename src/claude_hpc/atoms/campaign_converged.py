@@ -84,8 +84,9 @@ def campaign_converged(
         metric = manifest_stop.get("metric")
     if target is None:
         target = manifest_stop.get("target")
-    if direction is None:
-        direction = manifest_stop.get("direction") or "minimize"
+    resolved_direction: Literal["minimize", "maximize"] = (
+        direction if direction is not None else (manifest_stop.get("direction") or "minimize")
+    )
     if plateau_window is None:
         plateau_window = manifest_stop.get("plateau_window")
     if plateau_tolerance is None:
@@ -103,10 +104,10 @@ def campaign_converged(
         }
 
     metric_values = _extract_metric(history, metric) if metric else []
-    best = _best(metric_values, direction)
+    best = _best(metric_values, resolved_direction)
 
     if metric and target is not None and best is not None:
-        meets = best <= float(target) if direction == "minimize" else best >= float(target)
+        meets = best <= float(target) if resolved_direction == "minimize" else best >= float(target)
         if meets:
             return {
                 "converged": True,
@@ -117,12 +118,12 @@ def campaign_converged(
 
     if metric and plateau_window is not None and len(metric_values) >= int(plateau_window) + 1:
         window = int(plateau_window)
-        prior_best = _best(metric_values[:-window], direction)
-        recent_best = _best(metric_values[-window:], direction)
+        prior_best = _best(metric_values[:-window], resolved_direction)
+        recent_best = _best(metric_values[-window:], resolved_direction)
         if prior_best is not None and recent_best is not None:
             improved = (
                 (prior_best - recent_best)
-                if direction == "minimize"
+                if resolved_direction == "minimize"
                 else (recent_best - prior_best)
             )
             if improved <= float(plateau_tolerance):
