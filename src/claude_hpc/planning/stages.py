@@ -39,7 +39,7 @@ STAGES_FILENAME: str = "stages.py"
 
 # JSON Schema lives next to submit.input.json / status.output.json so the
 # package-data glob in pyproject.toml ships it automatically.
-_SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent.parent / "schemas" / "stages.input.json"
+_SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "schemas" / "stages.input.json"
 
 
 def stages_path(experiment_dir: Path) -> Path:

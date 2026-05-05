@@ -5,12 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from claude_hpc.forecast import queue_wait_baseline as qwb
-from claude_hpc.forecast import runtime_prior as rp
 from claude_hpc.infra.inspect import (
     ClusterSnapshot,
     NodeSnapshot,
     persist_snapshot,
 )
+from claude_hpc.state import runtime_prior as rp
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"

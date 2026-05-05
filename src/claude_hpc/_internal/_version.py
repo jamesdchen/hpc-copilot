@@ -5,12 +5,12 @@ four readers each implement a private "I read N, what does the doc
 say?" check:
 
 * ``slash_commands/session.py`` — session journal (``SCHEMA_VERSION = 1``)
-* ``claude_hpc/forecast/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
+* ``claude_hpc/state/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
 * ``claude_hpc/forecast/calibration.py`` — calibration prediction
   sidecar (``schema_version = 1`` literal)
 * ``claude_hpc/mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
 
-Plus the per-run sidecar (``claude_hpc/orchestrator/state/runs.py``,
+Plus the per-run sidecar (``claude_hpc/state/runs.py``,
 ``SIDECAR_SCHEMA_VERSION = 2``) which has been coordinated with
 ``map/dispatch.py`` since the P0 v2 fix.
 

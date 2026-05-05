@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.orchestrator.runner`` — the bundled mapreduce + journal ops.
+"""Tests for ``claude_hpc.runner`` — the bundled mapreduce + journal ops.
 
 SSH primitives are mocked so the tests exercise the wiring (journal-update
 ordering, retry counting, drift reconciliation) without touching a network.
@@ -13,10 +13,9 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_hpc import errors
+from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
-from claude_hpc.orchestrator import runner
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -1,7 +1,7 @@
 """Shared I/O primitives for the primitives layer.
 
 Currently exposes :func:`atomic_locked_update`, the read-modify-write
-helper used by :mod:`claude_hpc.forecast.runtime_prior` to mutate JSON
+helper used by :mod:`claude_hpc.state.runtime_prior` to mutate JSON
 documents under a ``fcntl`` advisory lock with an atomic rename.
 
 The helper deliberately keeps a tight API:

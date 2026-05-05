@@ -4,7 +4,7 @@ Mirrors :class:`claude_hpc.infra.backends.sge_remote.RemoteSGEBackend`
 for SLURM clusters. Constructor takes a ``remote_repo`` path and an
 ``ssh_run`` callable; the local SLURM binary is never called.
 
-Used by :func:`claude_hpc.orchestrator.flows.submit_flow.submit_flow` when the spec's
+Used by :func:`claude_hpc.flows.submit_flow.submit_flow` when the spec's
 ``backend == "slurm"`` and the cluster's scheduler is SLURM (the common
 case for hoffman2-class hosts is SGE, but discovery2 / many newer
 clusters are SLURM).

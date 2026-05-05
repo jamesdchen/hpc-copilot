@@ -135,7 +135,7 @@ def campaign_health(
 
     Returns the payload pinned by ``schemas/campaign_health.output.json``.
     """
-    from claude_hpc.orchestrator.state.runs import find_existing_runs, read_run_sidecar
+    from claude_hpc.state.runs import find_existing_runs, read_run_sidecar
 
     samples: list[dict[str, Any]] = []
     n_runs = 0
@@ -144,7 +144,7 @@ def campaign_health(
 
     if profile and cluster:
         try:
-            from claude_hpc.forecast.runtime_prior import read_samples
+            from claude_hpc.state.runtime_prior import read_samples
 
             samples = read_samples(
                 experiment_dir,

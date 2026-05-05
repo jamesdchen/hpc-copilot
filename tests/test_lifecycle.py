@@ -69,7 +69,7 @@ def test_lifecycle_state_matches_reconcile_schema() -> None:
 
 def test_failure_category_includes_classifier_emissions() -> None:
     """Every category the classifier emits must round-trip through FailureCategory."""
-    from claude_hpc.orchestrator import runner
+    from claude_hpc import runner
 
     classifier_emits = {cat for cat, _ in runner._FAILURE_CATEGORY_PATTERNS}
     canonical = {fc.value for fc in FailureCategory}
@@ -94,8 +94,7 @@ def test_classifier_emissions_subset_of_resubmit_accepted() -> None:
     unrepresentable. If the classifier ever emits a category the
     resubmit silently rejects, this fails.
     """
-    from claude_hpc import agent_cli
-    from claude_hpc.orchestrator import runner
+    from claude_hpc import agent_cli, runner
 
     classifier_emits = {cat for cat, _ in runner._FAILURE_CATEGORY_PATTERNS}
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)

@@ -14,7 +14,7 @@ their own ``tmp_path`` and ``monkeypatch``.
 
 Both helpers default to the v1 sidecar shape — that is what the
 existing fixtures wrote, and the production read path
-(:func:`claude_hpc.orchestrator.state.runs.read_run_sidecar`) backfills v1 to v2
+(:func:`claude_hpc.state.runs.read_run_sidecar`) backfills v1 to v2
 on read.
 """
 
@@ -110,7 +110,7 @@ def seed_diurnal_dip(
     """
     from datetime import datetime, timedelta, timezone
 
-    from claude_hpc.forecast import runtime_prior as rp
+    from claude_hpc.state import runtime_prior as rp
 
     base = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
     dip_set = frozenset(dip_hours)

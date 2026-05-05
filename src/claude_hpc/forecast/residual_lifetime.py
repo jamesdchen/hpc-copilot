@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from claude_hpc.forecast.user_profiles import UserProfile
+    from claude_hpc.state.user_profiles import UserProfile
 
 __all__ = ["predict_residual_lifetime", "MIN_OBSERVATIONS_FOR_PROFILE"]
 

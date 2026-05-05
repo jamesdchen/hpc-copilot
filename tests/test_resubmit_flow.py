@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.orchestrator.flows.resubmit_flow.resubmit_flow``.
+"""Tests for ``claude_hpc.flows.resubmit_flow.resubmit_flow``.
 
 Covers the macro layer composing preempted-detection, planner, advisor,
 and journal-update. The constituent atoms have their own focused
@@ -16,12 +16,12 @@ import pytest
 from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
-from claude_hpc.forecast import best_submit_window as bsw
-from claude_hpc.forecast import queue_wait_baseline as qwb
-from claude_hpc.orchestrator.flows.resubmit_flow import (
+from claude_hpc.flows.resubmit_flow import (
     ResubmitFlowResult,
     resubmit_flow,
 )
+from claude_hpc.forecast import best_submit_window as bsw
+from claude_hpc.forecast import queue_wait_baseline as qwb
 from tests.conftest import make_sidecar_json, seed_diurnal_dip
 
 if TYPE_CHECKING:
