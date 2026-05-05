@@ -98,13 +98,12 @@ class _CommandRunner:
     pure parser tests don't need SSH keys.
     """
 
-    def __init__(self, *, host: str | None, user: str | None, timeout: float = 60.0):
-        self.host = host
-        self.user = user
+    def __init__(self, *, ssh_target: str | None, timeout: float = 60.0):
+        self.ssh_target = ssh_target
         self.timeout = timeout
 
     def run(self, cmd: str) -> tuple[int, str, str]:
-        if self.host is None or self.user is None:
+        if self.ssh_target is None:
             # Local probe — used by tests in CI that mock subprocess.
             try:
                 cp = subprocess.run(
@@ -122,7 +121,7 @@ class _CommandRunner:
         from claude_hpc.infra.remote import ssh_run
 
         try:
-            cp = ssh_run(cmd, host=self.host, user=self.user, timeout=self.timeout)
+            cp = ssh_run(cmd, ssh_target=self.ssh_target, timeout=self.timeout)
             return cp.returncode, cp.stdout or "", cp.stderr or ""
         except TimeoutError as exc:
             return 124, "", str(exc)

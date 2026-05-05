@@ -16,7 +16,6 @@ from __future__ import annotations
 from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: F401
 from claude_hpc.runner._ssh import (
     _parse_remote_json,  # noqa: F401
-    _split_ssh_target,  # noqa: F401
 )
 from claude_hpc.runner.aggregate import (
     _read_remote_sidecar,  # noqa: F401

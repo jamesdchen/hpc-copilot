@@ -8,7 +8,6 @@ from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.infra import remote
-from claude_hpc.runner._ssh import _split_ssh_target
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -48,10 +47,8 @@ def combine_wave(
     mark the wave combined. Returns ``(ok, stdout, stderr)`` from
     :func:`run_combiner_checked`.
     """
-    user, host = _split_ssh_target(ssh_target)
     ok, stdout, stderr = remote.run_combiner_checked(
-        host=host,
-        user=user,
+        ssh_target=ssh_target,
         remote_path=remote_path,
         wave=wave,
         run_id=run_id,

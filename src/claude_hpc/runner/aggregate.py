@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra import remote
-from claude_hpc.runner._ssh import _parse_remote_json, _split_ssh_target
+from claude_hpc.runner._ssh import _parse_remote_json
 
 if TYPE_CHECKING:
     from claude_hpc._internal.session import RunRecord
@@ -24,10 +24,9 @@ if TYPE_CHECKING:
 
 def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> dict[str, Any]:
     """SSH-cat the per-run sidecar at ``.hpc/runs/<run_id>.json``."""
-    user, host = _split_ssh_target(ssh_target)
     sidecar_rel = f".hpc/runs/{run_id}.json"
     cmd = f"cat {shlex.quote(f'{remote_path}/{sidecar_rel}')}"
-    proc = remote.ssh_run(cmd, host=host, user=user)
+    proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
             f"failed to read remote sidecar at {remote_path}/{sidecar_rel}: "
@@ -79,7 +78,6 @@ def verify_per_task_outputs(
     if not task_ids:
         return []
     expected = [template.format(task_id=tid) for tid in task_ids]
-    user, host = _split_ssh_target(ssh_target)
     paths_inline = " ".join(shlex.quote(p) for p in expected)
     script = (
         f"cd {shlex.quote(remote_path)} && "
@@ -87,7 +85,7 @@ def verify_per_task_outputs(
         f'[ -f "$f" ] || echo "MISSING:$f"; '
         f"done"
     )
-    proc = remote.ssh_run(script, host=host, user=user)
+    proc = remote.ssh_run(script, ssh_target=ssh_target)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
             f"per-task output existence check failed: {proc.stderr.strip()[:500]}"
@@ -114,7 +112,6 @@ def verify_combiner_artifact(
     Returns ``(ok, detail)``.  *detail* is "ok" on success or a short
     human-readable reason on failure.
     """
-    user, host = _split_ssh_target(ssh_target)
     full_path = f"{remote_path.rstrip('/')}/{expect_output.lstrip('/')}"
     if expect_output.endswith(".json"):
         # python3 -c returns 0 on parse success; non-zero (with stderr) on
@@ -127,7 +124,7 @@ def verify_combiner_artifact(
         )
     else:
         script = f"[ -f {shlex.quote(full_path)} ] && echo OK || echo MISSING"
-    proc = remote.ssh_run(script, host=host, user=user)
+    proc = remote.ssh_run(script, ssh_target=ssh_target)
     out_tail = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
     if out_tail == "OK":
         return True, "ok"
@@ -169,7 +166,6 @@ def write_remote_provenance(
     appears in the aggregate envelope so this is a convenience, not a
     contract.
     """
-    user, host = _split_ssh_target(ssh_target)
     full_output = f"{remote_path.rstrip('/')}/{expect_output.lstrip('/')}"
     output_dir = full_output.rsplit("/", 1)[0] if "/" in full_output else remote_path
     sidecar = f"{output_dir.rstrip('/')}/_provenance.json"
@@ -181,7 +177,7 @@ def write_remote_provenance(
     script = (
         f"mkdir -p {shlex.quote(output_dir)} && echo {b64} | base64 -d > {shlex.quote(sidecar)}"
     )
-    proc = remote.ssh_run(script, host=host, user=user)
+    proc = remote.ssh_run(script, ssh_target=ssh_target)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
             f"failed to write provenance sidecar at {sidecar}: {proc.stderr.strip()[:500]}"

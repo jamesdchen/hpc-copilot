@@ -12,7 +12,6 @@ from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.infra import remote
-from claude_hpc.runner._ssh import _split_ssh_target
 from claude_hpc.runner.status import _ssh_status_report
 
 if TYPE_CHECKING:
@@ -26,9 +25,8 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     (see ``claude_hpc/map/combiner.py``). We use the presence of
     that file as the success marker.
     """
-    user, host = _split_ssh_target(ssh_target)
     cmd = f"cd {shlex.quote(remote_path)} && ls _combiner/wave_*.json 2>/dev/null || true"
-    proc = remote.ssh_run(cmd, host=host, user=user)
+    proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
         return []
     waves: set[int] = set()
@@ -64,9 +62,8 @@ def _ssh_alive_job_ids(
     from claude_hpc.infra.backends import get_backend_class
 
     backend_cls = get_backend_class(scheduler)
-    user, host = _split_ssh_target(ssh_target)
     cmd = backend_cls.build_alive_check_cmd(job_ids)
-    proc = remote.ssh_run(cmd, host=host, user=user)
+    proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     return backend_cls.parse_alive_output(proc.stdout, job_ids)
 
 
