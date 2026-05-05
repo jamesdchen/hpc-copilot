@@ -21,7 +21,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`best-submit-window`](primitives/best-submit-window.md) | ✓ | _none_ | `hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` | `claude_hpc.agent_cli.cmd_best_submit_window` | `claude_hpc/schemas/best_submit_window.input.json` | `claude_hpc/schemas/best_submit_window.output.json` |
-| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `claude_hpc.campaign.campaign_health.campaign_health` | `claude_hpc/schemas/campaign_health.input.json` | `claude_hpc/schemas/campaign_health.output.json` |
+| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `claude_hpc.atoms.campaign_health.campaign_health` | `claude_hpc/schemas/campaign_health.input.json` | `claude_hpc/schemas/campaign_health.output.json` |
 | [`campaign-list`](primitives/campaign-list.md) | ✓ | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` | `claude_hpc.atoms.campaign_list.campaign_list` | — | — |
 | [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` | `claude_hpc.atoms.campaign_status.campaign_status` | — | — |
 | [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-mapreduce capabilities` | `claude_hpc.atoms.capabilities.capabilities` | — | `claude_hpc/schemas/capabilities.output.json` |

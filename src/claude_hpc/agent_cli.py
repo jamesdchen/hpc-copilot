@@ -1306,11 +1306,11 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     """Aggregate run-history into a campaign-health payload (D2a).
 
     Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
-    decorator lives on ``claude_hpc.campaign.campaign_health.campaign_health``
+    decorator lives on ``claude_hpc.atoms.campaign_health.campaign_health``
     (the module-level implementation), matching the ``backed_by.python``
     pointer in ``docs/primitives/campaign-health.md``.
     """
-    from claude_hpc.campaign.campaign_health import campaign_health
+    from claude_hpc.atoms.campaign_health import campaign_health
 
     try:
         data = campaign_health(
