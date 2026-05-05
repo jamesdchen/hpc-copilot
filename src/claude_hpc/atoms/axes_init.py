@@ -30,18 +30,24 @@ if TYPE_CHECKING:
 def axes_init(
     *,
     experiment_dir: Path,
+    axes: list[dict[str, Any]] | None = None,
     homogeneous_axes: list[str] | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Write ``<experiment>/.hpc/axes.yaml`` with the supplied homogeneity hints.
+    """Write ``<experiment>/.hpc/axes.yaml`` with the supplied hints.
 
     Refuses to overwrite an existing ``axes.yaml`` unless ``force=True`` —
     the user may have hand-edited it. The framework's contract: every
     field in axes.yaml is one the framework can independently act on,
     so re-deriving without consent could clobber an intentional override.
 
-    Returns ``{axes_path, homogeneous_axes, wrote, reason}``. ``wrote``
-    is False when the file already existed and ``force`` was not set.
+    *axes* is the ordered list of every parallel axis, each item
+    ``{"name": str, "size": int}``. The order defines the
+    cartesian-product convention used by :func:`compute_wave_map`.
+    *homogeneous_axes* is the cold-start hint for the picker; if
+    supplied alongside *axes*, every name must appear in *axes*.
+
+    Returns ``{axes_path, axes, homogeneous_axes, wrote, reason}``.
     """
     from claude_hpc.planning.axes import axes_path, write_axes
 
@@ -49,6 +55,7 @@ def axes_init(
     if target.exists() and not force:
         return {
             "axes_path": str(target),
+            "axes": list(axes or []),
             "homogeneous_axes": list(homogeneous_axes or []),
             "wrote": False,
             "reason": (
@@ -57,12 +64,18 @@ def axes_init(
             ),
         }
 
-    written = write_axes(
-        experiment_dir,
-        homogeneous_axes=list(homogeneous_axes) if homogeneous_axes is not None else None,
-    )
+    try:
+        written = write_axes(
+            experiment_dir,
+            axes=axes,
+            homogeneous_axes=list(homogeneous_axes) if homogeneous_axes is not None else None,
+        )
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
+
     return {
         "axes_path": str(written),
+        "axes": list(axes or []),
         "homogeneous_axes": list(homogeneous_axes or []),
         "wrote": True,
         "reason": f"wrote {written}",

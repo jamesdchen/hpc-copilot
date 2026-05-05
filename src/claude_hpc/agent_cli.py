@@ -698,9 +698,24 @@ def cmd_axes_init(args: argparse.Namespace) -> int:
         if args.homogeneous_axes
         else []
     )
+    axes_list: list[dict[str, object]] = []
+    if args.axes:
+        for tok in args.axes.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            if ":" not in tok:
+                raise SystemExit(f"--axes entry {tok!r} must be NAME:SIZE")
+            name, _, size_s = tok.partition(":")
+            try:
+                size = int(size_s)
+            except ValueError as exc:
+                raise SystemExit(f"--axes entry {tok!r} has non-integer size") from exc
+            axes_list.append({"name": name.strip(), "size": size})
     _ok(
         axes_init(
             experiment_dir=args.experiment_dir,
+            axes=axes_list or None,
             homogeneous_axes=homogeneous,
             force=args.force,
         ),
@@ -1572,6 +1587,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_experiment_dir(p_axes)
+    p_axes.add_argument(
+        "--axes",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated NAME:SIZE pairs for every parallel axis "
+            "(e.g. 'model:4,data:3,window:20'). Order defines the "
+            "cartesian-product convention; required for submit-flow's "
+            "wave_map building."
+        ),
+    )
     p_axes.add_argument(
         "--homogeneous-axes",
         type=str,
