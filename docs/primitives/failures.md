@@ -72,7 +72,7 @@ the actual resubmit remains the caller's job (matches `/resubmit`).
   when the fresh status poll reports no failed tasks.
 - The category vocabulary is the union of the auto-classifier's
   emitted categories and the human-supplied taxonomy; the per-test
-  invariant in `tests/test_resubmit.py` keeps the two surfaces in sync.
+  invariant in `tests/test_resubmit_batching.py` keeps the two surfaces in sync.
 - Idempotent in the sense that a re-poll over the same set of failed
   tasks produces the same clustering — the fingerprinting is
   deterministic.

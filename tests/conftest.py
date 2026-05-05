@@ -90,6 +90,49 @@ def write_hpc_tasks(hpc_dir: Path, tasks: list[dict[str, Any]]) -> Path:
     return tasks_py
 
 
+def seed_diurnal_dip(
+    tmp_path: Path,
+    *,
+    profile: str,
+    cluster: str,
+    days: int = 14,
+    dip_hours: tuple[int, ...] = (3, 4, 5, 6),
+    dip_wait_sec: int = 100,
+    busy_wait_sec: int = 1500,
+) -> None:
+    """Seed the runtime-prior pool with a diurnal queue-wait pattern.
+
+    Two samples per hour for *days* days (UTC). Hours in *dip_hours*
+    receive ``dip_wait_sec``; all other hours receive ``busy_wait_sec``.
+    Used by the queue-wait baseline / best-submit-window / resubmit
+    advisor tests, which all need a dense diurnal signal that the
+    ±1h blend fallback can recover even when a target bucket is sparse.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from claude_hpc.orchestrator import runtime_prior as rp
+
+    base = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
+    dip_set = frozenset(dip_hours)
+    for day in range(days):
+        for hour in range(24):
+            for offset_min in (0, 30):
+                ts = base + timedelta(days=day, hours=hour, minutes=offset_min)
+                wait = dip_wait_sec if hour in dip_set else busy_wait_sec
+                rp.append_sample(
+                    tmp_path,
+                    profile=profile,
+                    cluster=cluster,
+                    run_id=f"r{day}-{hour}-{offset_min}",
+                    task_id=0,
+                    gpu_type="a100",
+                    node="d11-07",
+                    elapsed_sec=4150,
+                    submitted_at_iso=ts.isoformat(),
+                    queue_wait_sec=wait,
+                )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _register_primitives_once() -> None:
     """Populate the @primitive registry once per pytest session.

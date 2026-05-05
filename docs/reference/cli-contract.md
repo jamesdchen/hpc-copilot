@@ -53,7 +53,7 @@ Each `submit-spec` invocation writes a per-run sidecar to `.hpc/runs/<run_id>.js
 - `campaign_id` tags the run as part of a closed-loop campaign. The `HPC_CAMPAIGN_ID` env var is forwarded to the cluster by every scheduler template; the user's `tasks.py` reads it back via `os.environ` to call `campaign-status`'s Python form (`claude_hpc.mapreduce.reduce.history.prior`) on prior iterations.
 - Retention: at most `claude_hpc.orchestrator.runs.MAX_RUNS` (default 500; override via `HPC_MAX_RUNS` env var) sidecars are kept per experiment directory. Oldest by mtime are evicted on every write.
 
-When resuming a prior run, the slash command matches the recomputed `cmd_sha` against existing sidecars via `find_run_by_cmd_sha` and delegates to `claude_hpc.orchestrator.resubmit.resubmit_plan(task_count=, failed_task_ids=)` for the failing task IDs; see `slash_commands/commands/submit-hpc.md` for the interactive resume-vs-fresh prompt.
+When resuming a prior run, the slash command matches the recomputed `cmd_sha` against existing sidecars via `find_run_by_cmd_sha` and delegates to `claude_hpc.orchestrator.resubmit_batching.resubmit_plan(task_count=, failed_task_ids=)` for the failing task IDs; see `slash_commands/commands/submit-hpc.md` for the interactive resume-vs-fresh prompt.
 
 ## Python entry points
 
