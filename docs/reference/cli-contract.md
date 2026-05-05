@@ -47,13 +47,13 @@ Each `submit-spec` invocation writes a per-run sidecar to `.hpc/runs/<run_id>.js
 }
 ```
 
-- `cmd_sha` is computed by `claude_hpc.orchestrator.runs.compute_cmd_sha`: `SHA-256(join("\n", json.dumps(tasks.resolve(i), sort_keys=True) for i in range(tasks.total())))`. Stable across equivalent task lists; changes whenever `.hpc/tasks.py` changes the kwargs returned by `resolve`.
+- `cmd_sha` is computed by `claude_hpc.orchestrator.state.runs.compute_cmd_sha`: `SHA-256(join("\n", json.dumps(tasks.resolve(i), sort_keys=True) for i in range(tasks.total())))`. Stable across equivalent task lists; changes whenever `.hpc/tasks.py` changes the kwargs returned by `resolve`.
 - The user's task definition lives in `.hpc/tasks.py` (a Python module exposing `total()` and `resolve(task_id)`); the sidecar references it but does not duplicate per-task data.
 - The block from `cluster` through `aggregate_defaults` is the **v2 config snapshot**: every successful `submit-spec` captures the full config it ran under so subsequent primitives read context from the sidecar instead of an external config file. All v2 fields are optional at write time; `read_run_sidecar` backfills missing keys with `None` so callers see a uniform shape regardless of when the sidecar was written.
 - `campaign_id` tags the run as part of a closed-loop campaign. The `HPC_CAMPAIGN_ID` env var is forwarded to the cluster by every scheduler template; the user's `tasks.py` reads it back via `os.environ` to call `campaign-status`'s Python form (`claude_hpc.mapreduce.reduce.history.prior`) on prior iterations.
-- Retention: at most `claude_hpc.orchestrator.runs.MAX_RUNS` (default 500; override via `HPC_MAX_RUNS` env var) sidecars are kept per experiment directory. Oldest by mtime are evicted on every write.
+- Retention: at most `claude_hpc.orchestrator.state.runs.MAX_RUNS` (default 500; override via `HPC_MAX_RUNS` env var) sidecars are kept per experiment directory. Oldest by mtime are evicted on every write.
 
-When resuming a prior run, the slash command matches the recomputed `cmd_sha` against existing sidecars via `find_run_by_cmd_sha` and delegates to `claude_hpc.orchestrator.resubmit_batching.resubmit_plan(task_count=, failed_task_ids=)` for the failing task IDs; see `slash_commands/commands/submit-hpc.md` for the interactive resume-vs-fresh prompt.
+When resuming a prior run, the slash command matches the recomputed `cmd_sha` against existing sidecars via `find_run_by_cmd_sha` and delegates to `claude_hpc.orchestrator.planning.resubmit_batching.resubmit_plan(task_count=, failed_task_ids=)` for the failing task IDs; see `slash_commands/commands/submit-hpc.md` for the interactive resume-vs-fresh prompt.
 
 ## Python entry points
 
@@ -69,9 +69,9 @@ The Python surface that slash commands and library callers invoke:
 | Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `claude_hpc.orchestrator.runner.mark_terminal` |
 | Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `claude_hpc.mapreduce.reduce.history.prior` |
 | List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `claude_hpc._internal.session.find_in_flight_runs` |
-| Discover executors | [discover-executors](primitives/discover-executors.md) | `claude_hpc.orchestrator.discover.discover_executors` |
+| Discover executors | [discover-executors](primitives/discover-executors.md) | `claude_hpc.orchestrator.state.discover.discover_executors` |
 | Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `claude_hpc.infra.inspect.inspect_cluster` |
-| Score submit plan | [score-submit-plan](primitives/score-submit-plan.md) | `claude_hpc.orchestrator.planner.plan_submit` |
+| Score submit plan | [score-submit-plan](primitives/score-submit-plan.md) | `claude_hpc.orchestrator.planning.planner.plan_submit` |
 | Roll up runtime priors | [read-runtime-prior](primitives/read-runtime-prior.md) | `claude_hpc.forecast.runtime_prior.summarize` |
 
 ## Internal cluster-side scripts (not primitives)

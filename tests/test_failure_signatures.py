@@ -1,8 +1,8 @@
-"""Tests for claude_hpc.orchestrator.failure_signatures.classify."""
+"""Tests for claude_hpc.orchestrator.state.failure_signatures.classify."""
 
 from __future__ import annotations
 
-from claude_hpc.orchestrator.failure_signatures import CATALOG, classify
+from claude_hpc.orchestrator.state.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:

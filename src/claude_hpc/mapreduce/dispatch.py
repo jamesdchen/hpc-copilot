@@ -50,7 +50,7 @@ _DEFAULT_PREEMPT_GRACE_SEC = 25
 _EXIT_PREEMPTED = 130
 
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
-# ``SIDECAR_SCHEMA_VERSION`` in ``claude_hpc/orchestrator/runs.py``. Hardcoded
+# ``SIDECAR_SCHEMA_VERSION`` in ``claude_hpc/orchestrator/state/runs.py``. Hardcoded
 # here because this module must stay stdlib-only.
 #
 # v2 added optional fields (wave_map, aggregate_defaults, ...). The

@@ -112,6 +112,8 @@ from claude_hpc._internal._primitive import (
     register_primitives,
 )
 from claude_hpc._internal.layout import JournalLayout, RepoLayout
+from claude_hpc.forecast.runtime_prior import append_sample as append_runtime_sample
+from claude_hpc.forecast.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
 from claude_hpc.infra.clusters import load_clusters_config
 from claude_hpc.infra.gpu import pick_gpu
 from claude_hpc.infra.inspect import inspect_cluster
@@ -139,20 +141,26 @@ from claude_hpc.mapreduce.reduce.status import (
     report_status_from_tasks,
     rollup_by_grid_point,
 )
-from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
-from claude_hpc.orchestrator.discover import (
-    ExecutorInfo,
-    discover_executors,
-    is_executor_source,
-)
-from claude_hpc.orchestrator.planner import plan_submit
-from claude_hpc.orchestrator.resubmit_batching import (
+from claude_hpc.orchestrator.planning.constraints import ClusterConstraints, parse_constraints
+from claude_hpc.orchestrator.planning.planner import plan_submit
+from claude_hpc.orchestrator.planning.resubmit_batching import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
     resubmit_plan,
 )
-from claude_hpc.orchestrator.runs import (
+from claude_hpc.orchestrator.planning.throughput import (
+    SubmissionPlan,
+    WorkloadSpec,
+    build_wave_map,
+    compute_submission_plan,
+)
+from claude_hpc.orchestrator.state.discover import (
+    ExecutorInfo,
+    discover_executors,
+    is_executor_source,
+)
+from claude_hpc.orchestrator.state.runs import (
     MAX_RUNS,
     SIDECAR_SCHEMA_VERSION,
     compute_cmd_sha,
@@ -163,14 +171,6 @@ from claude_hpc.orchestrator.runs import (
     read_run_sidecar,
     run_sidecar_path,
     write_run_sidecar,
-)
-from claude_hpc.forecast.runtime_prior import append_sample as append_runtime_sample
-from claude_hpc.forecast.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
-from claude_hpc.orchestrator.throughput import (
-    SubmissionPlan,
-    WorkloadSpec,
-    build_wave_map,
-    compute_submission_plan,
 )
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent

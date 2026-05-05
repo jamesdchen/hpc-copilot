@@ -1,12 +1,18 @@
 """Job definition modules: discovery, constraints, throughput, runs."""
 
-from claude_hpc.orchestrator.constraints import ClusterConstraints, parse_constraints
-from claude_hpc.orchestrator.discover import (
+from claude_hpc.orchestrator.planning.constraints import ClusterConstraints, parse_constraints
+from claude_hpc.orchestrator.planning.throughput import (
+    JobBatch,
+    SubmissionPlan,
+    WorkloadSpec,
+    compute_submission_plan,
+)
+from claude_hpc.orchestrator.state.discover import (
     ExecutorInfo,
     discover_executors,
     is_executor_source,
 )
-from claude_hpc.orchestrator.runs import (
+from claude_hpc.orchestrator.state.runs import (
     MAX_RUNS,
     SIDECAR_SCHEMA_VERSION,
     compute_cmd_sha,
@@ -17,12 +23,6 @@ from claude_hpc.orchestrator.runs import (
     read_run_sidecar,
     run_sidecar_path,
     write_run_sidecar,
-)
-from claude_hpc.orchestrator.throughput import (
-    JobBatch,
-    SubmissionPlan,
-    WorkloadSpec,
-    compute_submission_plan,
 )
 
 __all__ = [

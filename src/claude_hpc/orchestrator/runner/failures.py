@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal.session import RunRecord
-
+if TYPE_CHECKING:
+    from claude_hpc._internal.session import RunRecord
 
 # Patterns that strongly identify a failure category, ordered most-specific first.
 # Matched case-insensitively against the joined log tail.  The first hit wins.
@@ -200,8 +200,8 @@ def cluster_failures_by_fingerprint(
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather
         # than asking the user. Importable as
-        # ``claude_hpc.orchestrator.failure_signatures.classify``.
-        from claude_hpc.orchestrator.failure_signatures import classify
+        # ``claude_hpc.orchestrator.state.failure_signatures.classify``.
+        from claude_hpc.orchestrator.state.failure_signatures import classify
 
         sig = classify(content, entry.get("exit_code"))
         key = (category, fp)

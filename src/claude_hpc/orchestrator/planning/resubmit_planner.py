@@ -19,7 +19,7 @@ existing pure atoms:
 * ``cold_start_mem_buffer`` from :mod:`claude_hpc.infra.clusters` — grow
   the memory ask by N% when no prior exists, clamped by the cluster's
   ``max_node_mem_mb`` ceiling.
-* :func:`~claude_hpc.orchestrator.daisy_chain.should_daisy_chain` — flag
+* :func:`~claude_hpc.orchestrator.planning.daisy_chain.should_daisy_chain` — flag
   (advisory) when the adjusted walltime exceeds the cluster's hard
   scheduler ceiling so the caller knows segmentation is required.
 
@@ -40,6 +40,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc.forecast.runtime_prior import read_samples
+from claude_hpc.forecast.walltime_arbitrage import arbitrage_walltime
 from claude_hpc.infra.clusters import (
     get_auto_daisy_chain,
     get_cold_start_mem_buffer,
@@ -48,9 +50,7 @@ from claude_hpc.infra.clusters import (
     get_walltime_arbitrage,
     load_clusters_config,
 )
-from claude_hpc.orchestrator.daisy_chain import should_daisy_chain
-from claude_hpc.forecast.runtime_prior import read_samples
-from claude_hpc.forecast.walltime_arbitrage import arbitrage_walltime
+from claude_hpc.orchestrator.planning.daisy_chain import should_daisy_chain
 
 if TYPE_CHECKING:
     from pathlib import Path

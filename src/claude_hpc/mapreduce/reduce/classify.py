@@ -5,7 +5,7 @@ auto-resubmit, adjust resources, or stop and escalate to the user.  See
 ``slash_commands/commands/status.md`` for the action table keyed on these labels.
 
 Implementation note: the bulk of the (stderr -> category) regex table lives in
-:mod:`claude_hpc.orchestrator.failure_signatures` (the newer, agent-resubmit
+:mod:`claude_hpc.orchestrator.state.failure_signatures` (the newer, agent-resubmit
 catalog).  This module is a thin wrapper that delegates the shared categories
 (gpu_oom, system_oom, walltime, node_failure, code_bug, unknown) to
 :func:`failure_signatures.classify` and remaps the result into the older
@@ -29,7 +29,7 @@ __all__ = ["classify_failure", "CATEGORIES"]
 
 import re
 
-from claude_hpc.orchestrator.failure_signatures import classify as _classify_signature
+from claude_hpc.orchestrator.state.failure_signatures import classify as _classify_signature
 
 #: Valid return values, ordered roughly by specificity.
 CATEGORIES = (

@@ -19,7 +19,7 @@ from claude_hpc._internal.idempotency import (
     RunIdKey,
     dedup_check,
 )
-from claude_hpc.orchestrator.runs import run_sidecar_path
+from claude_hpc.orchestrator.state.runs import run_sidecar_path
 
 
 def _ensure_journal_dirs(tmp_path: Path) -> None:

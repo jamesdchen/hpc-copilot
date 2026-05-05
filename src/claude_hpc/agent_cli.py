@@ -35,7 +35,7 @@ from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.orchestrator import runner
-from claude_hpc.orchestrator.discover import (
+from claude_hpc.orchestrator.state.discover import (
     detect_mars_tier,
     discover_executors,
     read_meta_json,
@@ -599,7 +599,7 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
 def cmd_plan_submit(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
-    from claude_hpc.orchestrator.planner import plan_submit
+    from claude_hpc.orchestrator.planning.planner import plan_submit
 
     candidates: list[str] | None = None
     if args.candidates:
@@ -739,7 +739,7 @@ def _preempted_summary_from_sidecar(
     None as "no preempt info to surface", not an error.
     """
     try:
-        from claude_hpc.orchestrator.runs import (
+        from claude_hpc.orchestrator.state.runs import (
             read_run_sidecar as _read_sidecar_for_status,
         )
 
@@ -858,7 +858,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     shapes. Idempotent on ``run_id`` via the same dedup mechanism as
     ``submit``.
     """
-    from claude_hpc.orchestrator.submit_flow import submit_flow
+    from claude_hpc.orchestrator.flows.submit_flow import submit_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
@@ -922,7 +922,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
     ``submit-flow`` for the campaign composition pattern
     ``submit-flow → monitor-flow → next iteration``.
     """
-    from claude_hpc.orchestrator.monitor_flow import monitor_flow
+    from claude_hpc.orchestrator.flows.monitor_flow import monitor_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     _validate_against_schema(spec, "monitor_flow")
@@ -965,7 +965,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
     atom — the campaign loop's per-iteration tail is
     ``submit-flow → monitor-flow → aggregate-flow → next iter``.
     """
-    from claude_hpc.orchestrator.aggregate_flow import aggregate_flow
+    from claude_hpc.orchestrator.flows.aggregate_flow import aggregate_flow
 
     spec = _load_spec(args.spec, schema_name=None)
     _validate_against_schema(spec, "aggregate_flow")
@@ -1013,7 +1013,7 @@ def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, 
     config validity is enforced by ``/submit``, not the aggregate path.
     """
     try:
-        from claude_hpc.orchestrator.runs import read_run_sidecar
+        from claude_hpc.orchestrator.state.runs import read_run_sidecar
     except ImportError:
         return {}
     try:
@@ -1172,7 +1172,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
 
-    from claude_hpc.orchestrator.resubmit_flow import resubmit_flow
+    from claude_hpc.orchestrator.flows.resubmit_flow import resubmit_flow
 
     result = resubmit_flow(
         Path(args.experiment_dir),
@@ -1307,11 +1307,11 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     """Aggregate run-history into a campaign-health payload (D2a).
 
     Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
-    decorator lives on ``claude_hpc.orchestrator.campaign_health.campaign_health``
+    decorator lives on ``claude_hpc.orchestrator.state.campaign_health.campaign_health``
     (the module-level implementation), matching the ``backed_by.python``
     pointer in ``docs/primitives/campaign-health.md``.
     """
-    from claude_hpc.orchestrator.campaign_health import campaign_health
+    from claude_hpc.orchestrator.state.campaign_health import campaign_health
 
     try:
         data = campaign_health(

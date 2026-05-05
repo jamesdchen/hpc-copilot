@@ -1,11 +1,11 @@
-"""Tests for claude_hpc.orchestrator.resubmit_batching — compact ID packing and plan building."""
+"""Tests for claude_hpc.orchestrator.planning.resubmit_batching — compact ID packing and plan building."""  # noqa: E501
 
 from __future__ import annotations
 
 import pytest
 
-from claude_hpc.orchestrator.constraints import ClusterConstraints
-from claude_hpc.orchestrator.resubmit_batching import (
+from claude_hpc.orchestrator.planning.constraints import ClusterConstraints
+from claude_hpc.orchestrator.planning.resubmit_batching import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,

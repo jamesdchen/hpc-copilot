@@ -9,7 +9,7 @@ error_codes: []
 backed_by:
   cli: hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb
     <m> --cpus <c>
-  python: claude_hpc.orchestrator.validate.validate_submission
+  python: claude_hpc.orchestrator.state.validate.validate_submission
 ---
 
 ## Purpose
