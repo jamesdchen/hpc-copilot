@@ -152,10 +152,11 @@ def main() -> int:
         "reason": (
             "/monitor-hpc spec violation: every invocation must emit a final "
             "line of the form `armed: <cron|loop|none> run_id=<X> cadence=<Y>s "
-            'reason="<short>"` (see slash_commands/commands/monitor-hpc.md, '
-            "Step 5: Required final line). Restart Step 5 — pick CronCreate "
-            "(default) or /loop, then emit the line as the very last line of "
-            "your response."
+            'reason="<short>"`. Don\'t hand-author this line — call '
+            "`hpc-mapreduce decide-monitor-arm --spec <state>` and copy the "
+            "envelope's `data.armed_line` verbatim as the very last line of "
+            "your response (the primitive also emits `data.cron_create_args` "
+            "ready to pass to CronCreate when arm == \"cron\")."
         ),
     }
     print(json.dumps(decision))

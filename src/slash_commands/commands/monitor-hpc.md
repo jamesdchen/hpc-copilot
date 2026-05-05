@@ -431,59 +431,47 @@ After aggregation:
 
 If the current stage completes and another stage has `depends_on` pointing to this stage, check the `depends_on` graph for newly unblocked stages. For each unblocked stage, prompt: "Stage `<next_stage>` is now unblocked (depends on `<this_stage>`). Submit it? (`/submit-hpc <profile_name>.<next_stage>`)"
 
-## Step 5: Schedule the Next Tick
+## Step 5: Schedule the Next Tick (route through `decide-monitor-arm`)
 
-**Skip if state is `all_complete` (Step 4b done), fully abandoned, or `has_failures` with no auto-recoverable category.** Report done and stop.
+**Don't hand-author the arm decision or the `armed:` line.** Call the `decide-monitor-arm` primitive — it's the single source of truth for the adaptive table, the cron schedule string, and the literal `armed:` line the Stop hook checks for:
 
-Otherwise, schedule exactly **one** follow-up tick. Two valid mechanisms (the only ones backed by documented public Claude Code tools):
+```bash
+# Spec file: the run's current state.
+cat > /tmp/arm_spec.json <<EOF
+{
+  "run_id": "$RUN_ID",
+  "summary": $LAST_STATUS_SUMMARY,         # {complete, running, pending, failed}
+  "total_tasks": $TOTAL_TASKS,
+  "invocation_argv": "/monitor-hpc $ORIGINAL_ARGS",
+  "user_invoked_via_loop": $USER_LOOP,     # true iff this tick is under /loop
+  "eta_sec": $ETA_OR_NULL,                 # optional; from Step 1's pace estimate
+  "pace_unstable": false,                  # optional
+  "queue_wait_sec": null                   # optional; from queue-wait predictor
+}
+EOF
+hpc-mapreduce decide-monitor-arm --spec /tmp/arm_spec.json
+```
 
-- **`CronCreate`** (default, programmatic): registers a recurring scheduled task. Use this for every tick except those where the user explicitly invoked `/loop`.
-  ```
-  CronCreate(
-      schedule="*/<minutes> * * * *",   # e.g. "*/5 * * * *" for 5-min cadence
-      prompt="/monitor-hpc <same args you were invoked with>",
-      reason="<one sentence: what we're waiting for>",
-  )
-  ```
-  If a previous tick already created a cron for this run_id, `CronUpdate` (or `CronDelete` + `CronCreate`) when the adaptive table calls for a different cadence; reuse the same `prompt` so the cron is idempotent on the run. Each tick is responsible for cancelling its own cron when the run reaches a terminal state.
+The envelope's `data` carries:
 
-  **Session scope**: cron tasks live in the current Claude Code session and stop firing when the user closes the app. Re-armed automatically on `--resume`. For HPC monitoring this is fine — when the user reopens, the in-flight resume path (Setup) re-creates the cron from the journal.
+* `arm` — `cron` / `loop` / `none`
+* `cadence_sec`, `schedule`, `reason`
+* **`armed_line`** — copy this VERBATIM as the very last line of your response. The Stop hook (installed via `hpc-mapreduce hook-install`) blocks the turn if it's missing or doesn't match the regex. The primitive guarantees a matching line; hand-authoring is the failure mode this fix exists to eliminate.
+* **`cron_create_args`** — when `arm == "cron"`, pass these three keys (`schedule`, `prompt`, `reason`) directly into `CronCreate`. No string formatting on your end.
 
-- **`/loop <interval> /monitor-hpc <args>`** (user-driven): a recurring self-pacing loop the user can ctrl-c. Use only when the user explicitly invoked `/loop`.
+**Two valid arm mechanisms** (the only ones backed by documented public Claude Code tools):
 
-> **Do not call `ScheduleWakeup`.** It's an internal/undocumented Claude Code tool, not in the public tools reference, and may be scoped to `/loop` internals only. Using it is off-spec.
+- **`CronCreate`** (default; `arm == "cron"`): pass `data.cron_create_args` verbatim. If a previous tick already created a cron for this run_id and the cadence changed, `CronUpdate` (or `CronDelete` + `CronCreate`) — same prompt so the cron is idempotent on the run.
+- **`/loop`-driven** (`arm == "loop"`): the user is already driving the cadence; do NOT register a cron, just emit the `armed_line`.
+- **Terminal** (`arm == "none"`): the run is complete / failed / abandoned / timeout. Cancel any prior cron via `CronDelete`, emit the `armed_line`, exit. The primitive sets `cadence_sec=0` and `cron_create_args=null` to make this unambiguous.
+
+> **Do not call `ScheduleWakeup`.** It's an internal/undocumented Claude Code tool, not in the public tools reference, and not emitted by `decide-monitor-arm`.
 
 Then exit. The next invocation re-enters from Setup, hydrates state from the run journal (`session.find_in_flight_runs`), and runs Step 0.5 → Step 1 again.
 
-### Required final line — exit contract
+### Required final line — exit contract (still enforced)
 
-Every invocation MUST emit this line as the last line of stdout, regardless of which mechanism was chosen (or whether one was needed):
-
-    armed: <cron|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
-
-| Mechanism | When | Cadence field |
-|---|---|---|
-| `cron`     | CronCreate registered or updated for this run_id | the schedule's interval in seconds (e.g. 300 for `*/5 * * * *`) |
-| `loop`     | User explicitly invoked via `/loop` | the user-chosen interval in seconds |
-| `none`     | Run reached terminal state and any prior cron was cancelled | `0` |
-
-If you cannot construct this line, you have not completed the tick — go back to Step 5 and arm a follow-up. Silent exit is a spec violation enforced by the Stop hook installed via `hpc-mapreduce hook-install`.
-
-### Adaptive delay table
-
-Pick `delaySeconds` from Step 1's baseline. Two regimes — sub-cache (stays warm, cheap) and super-cache (one cache miss buys a much longer wait). **Avoid 300–900s** — that range pays the cache miss without amortizing it.
-
-| Condition | Delay | Cache regime |
-|---|---|---|
-| ETA < 10 min, anything running | 60s | warm |
-| ETA 10–30 min, stable pace | 180s | warm |
-| ETA 10–30 min, unstable pace | 90s | warm |
-| ETA > 30 min, stable pace | 270s | warm (just under 5-min cache TTL) |
-| All-pending or queue waits >30 min | 1200–1800s | super-cache, one miss amortized over a long wait |
-| Hour-scale HPC queue (cluster congested) | 3600s | super-cache |
-| All tasks pending >15 min, unchanged 2 ticks | go to Step 2 (`queue_stall`) instead of rescheduling | — |
-
-Fallback (no progress data): 90s if anything is running, 1800s if all pending.
+The Stop hook checks for `armed: <cron|loop|none> run_id=<X> cadence=<Y>s reason="<short>"` as the last line of stdout. `decide-monitor-arm`'s `data.armed_line` is exactly this format — copy-paste, no edits. If you find yourself constructing the line by hand, you've drifted off the spec; restart Step 5 and use the primitive.
 
 ### Reacting on the next tick
 
@@ -525,28 +513,24 @@ Either way the slash command is responsible for its own state — never assume a
 
 **The default is silent.** Token cost is the reason — at 5-minute monitoring on a 24-hour run, a single chatty tick × 290 ticks adds up fast.
 
-## Step 7: Summary mode
+## Step 7: Summary mode (route through `monitor-summary`)
 
 Triggered by either:
 
 - `$ARGUMENTS` ends in the literal token `summary` (e.g. `/monitor-hpc summary`, `/monitor-hpc <run_id> summary`), OR
 - The user's natural-language message asks "what happened" / "how's it going" / "status" / "summarize" while there is at least one in-flight run with a tick log on disk.
 
-In this mode, do **not** run Step 0.5 / Step 1 / SSH polling. Do NOT contact the cluster. Read `.hpc/runs/<run_id>.monitor.jsonl` and emit a digest:
+In this mode, do **not** run Step 0.5 / Step 1 / SSH polling. Do NOT contact the cluster. **Don't hand-author the summary** — call the `monitor-summary` primitive, which reads `.hpc/runs/<run_id>.monitor.jsonl` + the run journal and returns the canonical user-facing digest:
 
-```
-Run <run_id>  ({lifecycle_state}, {age_since_first_tick})
-  Ticks: {N} over {wall_clock_observed}
-  Last summary: {complete}/{total} complete, {running} running, {pending} pending, {failed} failed
-  Throughput: {complete_delta_per_minute_recent} complete/min (last 30 min)
-  Actions taken: {grouped: e.g. "3 auto-resubmits (system_oom×2, walltime×1), 2 waves combined"}
-  Recent escalations: {if any console_emitted ticks with multi-line output, surface their tick_ids}
-  Next tick: in {next_tick_seconds}s (or "terminal — no further ticks")
+```bash
+hpc-mapreduce monitor-summary --experiment-dir . --run-id <run_id>
 ```
 
-If the run is terminal, also include the final post-flight outcome (read from the last tick record's `actions`).
+The envelope's `data` carries `{lifecycle_state, headline, body, armed_hint}`. Print `headline` then `body` verbatim — that's the entire summary the user sees. The framing is byte-stable across ticks for the same input state, so consecutive summary requests don't drift in wording.
 
-Summary mode is the **only** time `/monitor-hpc` is allowed to be verbose. Don't repeat it across consecutive turns unless the user asks again.
+When `lifecycle_state` is terminal (`complete` / `failed` / `abandoned` / `timeout`), `armed_hint` is null — the slash command exits without re-arming. Otherwise, `armed_hint` reminds you to call `decide-monitor-arm` next; in summary mode the arm step is skipped (the user just wanted a digest), but the `armed:` exit-line is still required because the Stop hook runs unconditionally — call `decide-monitor-arm` and emit its `armed_line` after the summary body.
+
+Summary mode is the **only** time `/monitor-hpc` is allowed to be verbose (one `monitor-summary` envelope's worth, no more). Don't repeat the digest across consecutive turns unless the user asks again.
 
 ## Context Management
 
