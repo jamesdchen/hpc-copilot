@@ -124,6 +124,8 @@ def pick_array_axis(
     experiment_dir: Path | str,
     *,
     available_axes: list[str] | None = None,
+    profile: str | None = None,
+    cluster: str | None = None,
 ) -> tuple[str | None, str]:
     """Cold-start axis picker — return ``(axis_name, reason)``.
 
@@ -137,6 +139,13 @@ def pick_array_axis(
     match are silently skipped (a separate validator should warn about
     those at deploy time).
 
+    *profile* / *cluster*, if supplied, scope the warm-path CV to a
+    single ``runtimes/<profile>.<cluster>.json`` file — the right call
+    at submit time when we know which combination is queueing. Omitted,
+    the warm picker aggregates across every runtime file under the
+    experiment, which can mix apples-to-oranges runtimes (different
+    queue, different GPU) and produce misleading CV.
+
     Tries the warm path first (lowest-CV from runtime priors); falls
     back to the cold path (first homogeneous_axes entry) when warm
     has insufficient signal. The two-path behavior is silent: callers
@@ -144,7 +153,7 @@ def pick_array_axis(
     accumulate.
     """
     # Warm path: prefer observed CV when we have data.
-    warm_name, _ = pick_array_axis_warm(experiment_dir)
+    warm_name, _ = pick_array_axis_warm(experiment_dir, profile=profile, cluster=cluster)
     if warm_name is not None and (available_axes is None or warm_name in available_axes):
         return warm_name, f"warm-path lowest-CV axis ({warm_name!r})"
     # Warm picked None or an axis we can't honor; fall through to cold.
@@ -175,17 +184,26 @@ def pick_array_axis_warm(
     experiment_dir: Path | str,
     *,
     cmd_sha: str | None = None,
+    profile: str | None = None,
+    cluster: str | None = None,
     min_samples: int = 5,
 ) -> tuple[str | None, str]:
     """Warm-path picker — pick the lowest-CV axis from runtime priors.
 
     Reads runtime samples written by :mod:`claude_hpc.state.runtime_prior`,
-    filters to those carrying an ``axis_bindings`` field (added when the
-    cluster-side dispatcher records per-task axis values), groups by axis,
-    and returns the axis name with the lowest coefficient of variation
-    (stddev / mean of elapsed_sec). Falls back to ``(None, reason)`` when
-    fewer than *min_samples* qualifying samples exist or no axis can
-    be evaluated.
+    filters to those carrying a non-empty ``axis_bindings`` field (added
+    when the cluster-side dispatcher records per-task axis values), groups
+    by axis, and returns the axis name with the lowest coefficient of
+    variation (stddev / mean of elapsed_sec). Falls back to
+    ``(None, reason)`` when fewer than *min_samples* qualifying samples
+    exist or no axis can be evaluated.
+
+    *profile* / *cluster* scope the search to a single
+    ``runtimes/<profile>.<cluster>.json`` file — recommended at submit
+    time so CV isn't mixed across queues / GPU types. Omitted, the
+    picker aggregates across every runtime file under the experiment;
+    that's fine for an experiment running on one cluster but can produce
+    apples-to-oranges CV when multiple clusters share an experiment.
 
     .. note::
 
@@ -198,27 +216,32 @@ def pick_array_axis_warm(
     if config is None or not config.get("axes"):
         return None, "no axes.yaml or no axes enumeration"
 
-    # Aggregate samples across every (profile, cluster) pair in
-    # <experiment>/.hpc/runtimes/. The warm picker runs experiment-wide
-    # rather than per-(profile, cluster); axes.yaml is also experiment-wide.
     try:
         from claude_hpc._internal.layout import RepoLayout
     except ImportError:
         return None, "runtime_prior not importable"
 
-    runtimes_dir = RepoLayout(Path(experiment_dir)).runtimes
+    layout = RepoLayout(Path(experiment_dir))
+    runtimes_dir = layout.runtimes
     samples: list[dict[str, Any]] = []
-    if runtimes_dir.is_dir():
-        for runtime_file in sorted(runtimes_dir.glob("*.json")):
-            try:
-                doc = json.loads(runtime_file.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if not isinstance(doc, dict):
-                continue
-            for s in doc.get("samples") or []:
-                if isinstance(s, dict):
-                    samples.append(s)
+    if profile is not None and cluster is not None:
+        # Scoped lookup — single file, no glob.
+        target = layout.runtime_prior(profile, cluster)
+        files: list[Path] = [target] if target.is_file() else []
+    elif runtimes_dir.is_dir():
+        files = sorted(runtimes_dir.glob("*.json"))
+    else:
+        files = []
+    for runtime_file in files:
+        try:
+            doc = json.loads(runtime_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for s in doc.get("samples") or []:
+            if isinstance(s, dict):
+                samples.append(s)
     if cmd_sha is not None:
         samples = [s for s in samples if s.get("cmd_sha") == cmd_sha]
 
@@ -227,6 +250,7 @@ def pick_array_axis_warm(
         for s in (samples or [])
         if isinstance(s, dict)
         and isinstance(s.get("axis_bindings"), dict)
+        and len(s["axis_bindings"]) > 0
         and isinstance(s.get("elapsed_sec"), (int, float))
         and int(s.get("exit_code", 1)) == 0
     ]
