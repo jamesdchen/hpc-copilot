@@ -10,7 +10,7 @@ say?" check:
   sidecar (``schema_version = 1`` literal)
 * ``claude_hpc/mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
 
-Plus the per-run sidecar (``claude_hpc/orchestrator/runs.py``,
+Plus the per-run sidecar (``claude_hpc/orchestrator/state/runs.py``,
 ``SIDECAR_SCHEMA_VERSION = 2``) which has been coordinated with
 ``map/dispatch.py`` since the P0 v2 fix.
 

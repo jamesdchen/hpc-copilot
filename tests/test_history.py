@@ -14,7 +14,7 @@ from claude_hpc.mapreduce.reduce.history import (
     prior,
     result_dirs_for_sidecar,
 )
-from claude_hpc.orchestrator.runs import write_run_sidecar
+from claude_hpc.orchestrator.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path

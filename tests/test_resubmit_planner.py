@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.orchestrator.resubmit_planner.plan_resubmit_overrides``."""
+"""Tests for ``claude_hpc.orchestrator.planning.resubmit_planner.plan_resubmit_overrides``."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from claude_hpc.forecast import runtime_prior as rp
-from claude_hpc.orchestrator.resubmit_planner import (
+from claude_hpc.orchestrator.planning.resubmit_planner import (
     MIN_PRIOR_SAMPLES,
     plan_resubmit_overrides,
 )

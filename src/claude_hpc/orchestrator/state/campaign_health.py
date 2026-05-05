@@ -135,7 +135,7 @@ def campaign_health(
 
     Returns the payload pinned by ``schemas/campaign_health.output.json``.
     """
-    from claude_hpc.orchestrator.runs import find_existing_runs, read_run_sidecar
+    from claude_hpc.orchestrator.state.runs import find_existing_runs, read_run_sidecar
 
     samples: list[dict[str, Any]] = []
     n_runs = 0

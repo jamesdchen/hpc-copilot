@@ -14,9 +14,9 @@ update both surfaces and bump the version.
 
 - **Recommended format**: `f"{profile}-{utc_ts}-{cmd_sha[:8]}"` where
   `utc_ts` is `YYYYMMDD-HHMMSS` and `cmd_sha` is computed by
-  `claude_hpc.orchestrator.runs.compute_cmd_sha(tasks_module)` over the
+  `claude_hpc.orchestrator.state.runs.compute_cmd_sha(tasks_module)` over the
   materialized `[tasks.resolve(i) for i in range(tasks.total())]`.
-- **Validation**: `claude_hpc.orchestrator.runs.run_sidecar_path` accepts any
+- **Validation**: `claude_hpc.orchestrator.state.runs.run_sidecar_path` accepts any
   string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
   sidecars sorted chronologically by mtime ↔ filename.
 - **Defined in**: `claude_hpc/orchestrator/runner.py:submit_and_record` —
@@ -102,8 +102,8 @@ Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
 ### Per-run sidecar v2 schema
 
 - **Lives in**: `<experiment>/.hpc/runs/<run_id>.json`.
-- **Writer**: `claude_hpc.orchestrator.runs.write_run_sidecar`.
-- **Reader**: `claude_hpc.orchestrator.runs.read_run_sidecar` (backfills v1
+- **Writer**: `claude_hpc.orchestrator.state.runs.write_run_sidecar`.
+- **Reader**: `claude_hpc.orchestrator.state.runs.read_run_sidecar` (backfills v1
   records with v2 keys defaulted to None).
 - **Fields**: identity (`run_id`, `cmd_sha`, `tasks_py_sha`,
   `submitted_at`, `claude_hpc_version`), executor (`executor`,
@@ -118,7 +118,7 @@ Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
 - **Lives in**: `<experiment>/.hpc/stages.py` (Python file exposing
   `def stages() -> list[dict]`).
 - **JSON Schema**: `claude_hpc/schemas/stages.input.json`.
-- **Loader**: `claude_hpc.orchestrator.stages.load_stages` (validates against
+- **Loader**: `claude_hpc.orchestrator.planning.stages.load_stages` (validates against
   the schema and enforces unique names + resolved `depends_on`).
 
 ### Exit-code → error_code mapping
@@ -144,7 +144,7 @@ Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
   `cmd_sha`, `claude_hpc_version`, `submitted_at`, `executor`,
   `result_dir_template`, `task_count`, `tasks_py_sha`, optional
   `wave_map` and `extra` pocket.
-- **Helpers**: `claude_hpc.orchestrator.runs.{write,read}_run_sidecar`,
+- **Helpers**: `claude_hpc.orchestrator.state.runs.{write,read}_run_sidecar`,
   `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`,
   `compute_cmd_sha`, `run_sidecar_path`. All re-exported at package
   root; see `docs/reference/boundary-contract.md`.

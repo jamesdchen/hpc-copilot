@@ -72,7 +72,7 @@ _ENV_VAR = "HPC_TELEMETRY_SINK"
 def flock_append(target: Path):
     """Yield with an exclusive flock on a sibling ``.lock`` file.
 
-    Mirrors :func:`claude_hpc.orchestrator.monitor_flow._flock_append` and
+    Mirrors :func:`claude_hpc.orchestrator.flows.monitor_flow._flock_append` and
     :func:`claude_hpc._internal.session._locked` so all three writers to
     ``<run_id>.monitor.jsonl`` serialize their appends. Without flock,
     a concurrent monitor_flow tick and slash-command poll can produce

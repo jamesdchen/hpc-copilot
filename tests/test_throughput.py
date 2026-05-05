@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from claude_hpc.orchestrator.constraints import ClusterConstraints
-from claude_hpc.orchestrator.throughput import (
+from claude_hpc.orchestrator.planning.constraints import ClusterConstraints
+from claude_hpc.orchestrator.planning.throughput import (
     WorkloadSpec,
     build_wave_map,
     compute_submission_plan,

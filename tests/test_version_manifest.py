@@ -56,7 +56,7 @@ def test_supported_versions_returns_tuple() -> None:
 # of (file, constant_name) pairs. We use one canonical writer per
 # domain even when readers exist in multiple files.
 _WRITER_CONSTANTS = {
-    "sidecar": [("src/claude_hpc/orchestrator/runs.py", "SIDECAR_SCHEMA_VERSION")],
+    "sidecar": [("src/claude_hpc/orchestrator/state/runs.py", "SIDECAR_SCHEMA_VERSION")],
     "runtime_prior": [("src/claude_hpc/forecast/runtime_prior.py", "SCHEMA_VERSION")],
     # calibration_prediction and status_rollup write their schema_version
     # as inline literals (no module-level constant). Verified by other tests.
