@@ -46,10 +46,9 @@ def _sample(gpu_type: str, predicted: int, actual_offset: int) -> dict:
 
 class TestComputeHouseEdgeByGpuType:
     def test_buckets_by_gpu_type(self):
-        samples = (
-            [_sample("a100", predicted=300, actual_offset=900) for _ in range(5)]
-            + [_sample("a40", predicted=300, actual_offset=150) for _ in range(5)]
-        )
+        samples = [_sample("a100", predicted=300, actual_offset=900) for _ in range(5)] + [
+            _sample("a40", predicted=300, actual_offset=150) for _ in range(5)
+        ]
         edges = compute_house_edge_by_gpu_type(samples)
         assert set(edges.keys()) == {"a100", "a40"}
         # a100: actual/predicted = 900/300 = 3.0 (scheduler optimistic)
@@ -59,10 +58,9 @@ class TestComputeHouseEdgeByGpuType:
 
     def test_drops_undersized_buckets(self):
         # min_samples=5 (default); a40 has only 3 paired samples.
-        samples = (
-            [_sample("a100", predicted=300, actual_offset=900) for _ in range(5)]
-            + [_sample("a40", predicted=300, actual_offset=150) for _ in range(3)]
-        )
+        samples = [_sample("a100", predicted=300, actual_offset=900) for _ in range(5)] + [
+            _sample("a40", predicted=300, actual_offset=150) for _ in range(3)
+        ]
         edges = compute_house_edge_by_gpu_type(samples)
         assert "a100" in edges
         assert "a40" not in edges
