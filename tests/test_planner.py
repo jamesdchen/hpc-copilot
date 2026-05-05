@@ -9,7 +9,7 @@ import pytest
 from claude_hpc.infra import inspect as ins
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 from claude_hpc.orchestrator import planner
-from claude_hpc.orchestrator import runtime_prior as rp
+from claude_hpc.forecast import runtime_prior as rp
 
 
 @pytest.fixture(autouse=True)
@@ -250,7 +250,7 @@ class TestAdversarialPath:
         return f"sbatch: Job 1 to start at {future} using 1 ..."
 
     def test_recommended_tuple_picks_smallest_walltime(self, tmp_path, monkeypatch):
-        from claude_hpc.orchestrator import backfill as bf
+        from claude_hpc.forecast import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -304,7 +304,7 @@ class TestAdversarialPath:
         assert sorted(adversarial_calls) == [1300, 1950, 2600]
 
     def test_falls_back_when_no_priors(self, tmp_path, monkeypatch):
-        from claude_hpc.orchestrator import backfill as bf
+        from claude_hpc.forecast import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -369,7 +369,7 @@ class TestColdStartWalltimeArbitrage:
     def test_arbitrage_does_not_fire_when_priors_pin_a_winner(self, tmp_path, monkeypatch):
         # Priors exist AND lattice probe returns a real ETA → the
         # lattice path supersedes arbitrage; we do NOT trim.
-        from claude_hpc.orchestrator import backfill as bf
+        from claude_hpc.forecast import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)

@@ -1,10 +1,10 @@
-"""Tests for claude_hpc.orchestrator.backfill — right-sizing + lattice probing."""
+"""Tests for claude_hpc.forecast.backfill — right-sizing + lattice probing."""
 
 from __future__ import annotations
 
 import pytest
 
-from claude_hpc.orchestrator import backfill as bf
+from claude_hpc.forecast import backfill as bf
 
 
 @pytest.fixture(autouse=True)

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_hpc.orchestrator import runtime_prior as rp
+from claude_hpc.forecast import runtime_prior as rp
 from claude_hpc.orchestrator.resubmit_planner import (
     MIN_PRIOR_SAMPLES,
     plan_resubmit_overrides,

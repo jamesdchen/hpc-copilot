@@ -224,7 +224,7 @@ No runtime priors exist for this `(profile, cluster)`. Don't try to score — su
 4. On success, append a runtime sample:
 
    ```python
-   from claude_hpc.orchestrator.runtime_prior import append_sample
+   from claude_hpc.forecast.runtime_prior import append_sample
    append_sample(
        experiment_dir=Path("."),
        profile=profile, cluster=cluster,
@@ -278,7 +278,7 @@ Pass `--no-adversarial` to `plan-submit` only for debugging or on clusters that 
 - After submission, write a prediction sidecar so post-completion ingestion can validate calibration:
 
   ```python
-  from claude_hpc.orchestrator.calibration import record_prediction_sidecar
+  from claude_hpc.forecast.calibration import record_prediction_sidecar
   record_prediction_sidecar(
       experiment_dir=Path("."),
       run_id=run_id,

@@ -164,8 +164,8 @@ from claude_hpc.orchestrator.runs import (
     run_sidecar_path,
     write_run_sidecar,
 )
-from claude_hpc.orchestrator.runtime_prior import append_sample as append_runtime_sample
-from claude_hpc.orchestrator.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
+from claude_hpc.forecast.runtime_prior import append_sample as append_runtime_sample
+from claude_hpc.forecast.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
 from claude_hpc.orchestrator.throughput import (
     SubmissionPlan,
     WorkloadSpec,

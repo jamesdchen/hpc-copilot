@@ -11,7 +11,7 @@ from claude_hpc.infra.inspect import (
     NodeSnapshot,
     persist_snapshot,
 )
-from claude_hpc.orchestrator import runtime_prior as rp
+from claude_hpc.forecast import runtime_prior as rp
 
 
 def _load_script():

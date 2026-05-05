@@ -110,7 +110,7 @@ def seed_diurnal_dip(
     """
     from datetime import datetime, timedelta, timezone
 
-    from claude_hpc.orchestrator import runtime_prior as rp
+    from claude_hpc.forecast import runtime_prior as rp
 
     base = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
     dip_set = frozenset(dip_hours)

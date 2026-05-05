@@ -125,7 +125,7 @@ def test_submit_and_record_rejects_empty_run_id(journal_home, experiment):
 def test_combine_wave_records_success(journal_home, experiment):
     _seed_run(experiment)
     with patch(
-        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(True, "ok", "")
+        "claude_hpc.infra.remote.run_combiner_checked", return_value=(True, "ok", "")
     ) as m:
         ok, _, _ = runner.combine_wave(
             experiment,
@@ -144,7 +144,7 @@ def test_combine_wave_records_success(journal_home, experiment):
 def test_combine_wave_records_failure(journal_home, experiment):
     _seed_run(experiment)
     with patch(
-        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(False, "", "boom")
+        "claude_hpc.infra.remote.run_combiner_checked", return_value=(False, "", "boom")
     ):
         ok, _, _ = runner.combine_wave(
             experiment,
@@ -162,7 +162,7 @@ def test_combine_wave_records_failure(journal_home, experiment):
 def test_combine_wave_failed_then_success_clears_failure(journal_home, experiment):
     _seed_run(experiment)
     with patch(
-        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(False, "", "boom")
+        "claude_hpc.infra.remote.run_combiner_checked", return_value=(False, "", "boom")
     ):
         runner.combine_wave(
             experiment,
@@ -172,7 +172,7 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
             remote_path="/x",
         )
     with patch(
-        "claude_hpc.orchestrator.runner.run_combiner_checked", return_value=(True, "ok", "")
+        "claude_hpc.infra.remote.run_combiner_checked", return_value=(True, "ok", "")
     ):
         runner.combine_wave(
             experiment,
@@ -226,7 +226,7 @@ def test_record_status_sets_checked_at(journal_home, experiment):
     _seed_run(experiment)
     payload = {"summary": {"complete": 7, "running": 3, "pending": 0, "failed": 1, "unknown": 0}}
     with patch(
-        "claude_hpc.orchestrator.runner.ssh_run",
+        "claude_hpc.infra.remote.ssh_run",
         return_value=_completed(stdout=json.dumps(payload)),
     ):
         record = runner.record_status(
@@ -254,7 +254,7 @@ def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive_squeue)
 
-    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.combined_waves == [0, 2]
@@ -273,7 +273,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
             return _completed(stdout="")
         return _completed(stdout="")
 
-    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert record.status == "abandoned"
     assert session.find_in_flight_runs(experiment) == []
@@ -292,7 +292,7 @@ def test_reconcile_idempotent(journal_home, experiment):
             return _completed(stdout=cluster_waves)
         return _completed(stdout=alive)
 
-    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh):
         first = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
         second = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert first.combined_waves == [0, 1]
@@ -333,7 +333,7 @@ def test_sge_alive_check_returns_empty_when_qstat_silent():
     every job_id and ``reconcile`` never marking runs abandoned.
     """
     with patch(
-        "claude_hpc.orchestrator.runner.ssh_run",
+        "claude_hpc.infra.remote.ssh_run",
         return_value=_completed(stdout=""),
     ) as m:
         alive = runner._ssh_alive_job_ids(
@@ -354,7 +354,7 @@ def test_sge_alive_check_emits_marker_for_each_alive_job():
     jobs that qstat knows about.
     """
     with patch(
-        "claude_hpc.orchestrator.runner.ssh_run",
+        "claude_hpc.infra.remote.ssh_run",
         return_value=_completed(stdout="__ALIVE__123\n__ALIVE__456\n"),
     ):
         alive = runner._ssh_alive_job_ids(
@@ -376,7 +376,7 @@ def test_slurm_alive_check_skips_sacct_so_completed_jobs_drop_off():
     and trusts squeue (which only lists active states).
     """
     with patch(
-        "claude_hpc.orchestrator.runner.ssh_run",
+        "claude_hpc.infra.remote.ssh_run",
         return_value=_completed(stdout=""),  # squeue: no active jobs
     ) as m:
         alive = runner._ssh_alive_job_ids(
@@ -396,7 +396,7 @@ def test_slurm_alive_check_accepts_squeue_output():
     indices like ``123_4``) still count as alive.
     """
     with patch(
-        "claude_hpc.orchestrator.runner.ssh_run",
+        "claude_hpc.infra.remote.ssh_run",
         return_value=_completed(stdout="123_4\n123_5\n"),
     ):
         alive = runner._ssh_alive_job_ids(
@@ -427,7 +427,7 @@ def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experime
             raise OSError("ssh: connection reset by peer")
         return _completed(stdout=alive_squeue)
 
-    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.combined_waves == [5]  # unchanged, fallback used
@@ -451,7 +451,7 @@ def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(journal_ho
             return _completed(stdout="")
         raise OSError("alive check ssh failed")
 
-    with patch("claude_hpc.orchestrator.runner.ssh_run", side_effect=fake_ssh):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.status == "in_flight"  # NOT abandoned
@@ -470,7 +470,7 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
     _seed_run(experiment)
     payload = {"summary": {"complete": 1, "running": 0, "failed": 0, "unknown": 0}}
     with patch(
-        "claude_hpc.orchestrator.runner.ssh_run",
+        "claude_hpc.infra.remote.ssh_run",
         return_value=_completed(stdout=json.dumps(payload)),
     ):
         runner.record_status(
@@ -508,7 +508,7 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
         # Existence check: pretend task 1's output is missing.
         return _completed(stdout="MISSING:results/metrics.1.json\n", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         missing = runner.verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -529,7 +529,7 @@ def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, ex
             return _completed(stdout=sidecar_json)
         return _completed(stdout="", returncode=0)  # nothing missing
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         missing = runner.verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -553,7 +553,7 @@ def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(journa
             return _completed(stdout=sidecar_json)
         return _completed(stdout="", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         runner.verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -571,7 +571,7 @@ def test_verify_combiner_artifact_ok_for_valid_json():
         # python3 -c json.load returns 0; script echoes OK.
         return _completed(stdout="OK\n", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         ok, detail = runner.verify_combiner_artifact(
             ssh_target="user@host",
             remote_path="/exp",
@@ -585,7 +585,7 @@ def test_verify_combiner_artifact_missing():
     def fake_ssh_run(cmd, *, host, user, **_kw):
         return _completed(stdout="MISSING\n", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         ok, detail = runner.verify_combiner_artifact(
             ssh_target="user@host",
             remote_path="/exp",
@@ -599,7 +599,7 @@ def test_verify_combiner_artifact_invalid_json():
     def fake_ssh_run(cmd, *, host, user, **_kw):
         return _completed(stdout="INVALID_JSON\n", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         ok, detail = runner.verify_combiner_artifact(
             ssh_target="user@host",
             remote_path="/exp",
@@ -855,7 +855,7 @@ def test_fetch_task_logs_returns_content_for_slurm():
         # First job_id attempt found.
         return _completed(stdout="FOUND\nline1\nline2\nline3\n", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         logs = runner.fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -878,7 +878,7 @@ def test_fetch_task_logs_marks_missing_when_all_job_ids_have_no_log():
     def fake_ssh_run(cmd, *, host, user, **_kw):
         return _completed(stdout="MISSING\n", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         logs = runner.fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -901,7 +901,7 @@ def test_fetch_task_logs_falls_back_to_earlier_job_id():
     def fake_ssh_run(cmd, *, host, user, **_kw):
         return sequence.pop(0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         logs = runner.fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -922,7 +922,7 @@ def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
         captured.append(cmd)
         return _completed(stdout="FOUND\nbody\n", returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         logs = runner.fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
@@ -942,7 +942,7 @@ def test_write_remote_provenance_writes_sidecar_path():
         captured.append(cmd)
         return _completed(returncode=0)
 
-    with patch.object(runner, "ssh_run", side_effect=fake_ssh_run):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
         path = runner.write_remote_provenance(
             ssh_target="user@host",
             remote_path="/exp",

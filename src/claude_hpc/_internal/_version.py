@@ -5,8 +5,8 @@ four readers each implement a private "I read N, what does the doc
 say?" check:
 
 * ``slash_commands/session.py`` — session journal (``SCHEMA_VERSION = 1``)
-* ``claude_hpc/orchestrator/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
-* ``claude_hpc/orchestrator/calibration.py`` — calibration prediction
+* ``claude_hpc/forecast/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
+* ``claude_hpc/forecast/calibration.py`` — calibration prediction
   sidecar (``schema_version = 1`` literal)
 * ``claude_hpc/mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
 

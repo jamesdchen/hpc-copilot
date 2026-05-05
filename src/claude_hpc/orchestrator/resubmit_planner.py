@@ -14,7 +14,7 @@ share submit's atoms" critique.
 :func:`plan_resubmit_overrides` closes the gap by composing the
 existing pure atoms:
 
-* :func:`~claude_hpc.orchestrator.walltime_arbitrage.arbitrage_walltime`
+* :func:`~claude_hpc.forecast.walltime_arbitrage.arbitrage_walltime`
   — trim the walltime ask to fit backfill shadows when no prior exists.
 * ``cold_start_mem_buffer`` from :mod:`claude_hpc.infra.clusters` — grow
   the memory ask by N% when no prior exists, clamped by the cluster's
@@ -28,7 +28,7 @@ with fewer than ``MIN_PRIOR_SAMPLES`` successful samples is treated as
 cold, and the survival atoms apply. Once a prior accumulates the atoms
 no-op (the prior already encodes the right safety margin via the
 walltime-drift calibration loop in
-:mod:`claude_hpc.orchestrator.calibration`).
+:mod:`claude_hpc.forecast.calibration`).
 
 This module is **pure** over its inputs + the runtime-prior pool on
 disk. Both ``cmd_resubmit`` and any future ``resubmit_flow`` macro
@@ -49,8 +49,8 @@ from claude_hpc.infra.clusters import (
     load_clusters_config,
 )
 from claude_hpc.orchestrator.daisy_chain import should_daisy_chain
-from claude_hpc.orchestrator.runtime_prior import read_samples
-from claude_hpc.orchestrator.walltime_arbitrage import arbitrage_walltime
+from claude_hpc.forecast.runtime_prior import read_samples
+from claude_hpc.forecast.walltime_arbitrage import arbitrage_walltime
 
 if TYPE_CHECKING:
     from pathlib import Path

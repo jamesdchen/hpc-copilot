@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_hpc._internal._time import parse_iso_utc, utcnow_iso
-from claude_hpc.orchestrator.runtime_prior import coerce_pos_int as _coerce_pos_int
+from claude_hpc.forecast.runtime_prior import coerce_pos_int as _coerce_pos_int
 
 __all__ = [
     "WalltimeDrift",
