@@ -85,10 +85,7 @@ def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
     if len(axes) == 1:
         ax = axes[0]
         return (
-            f"_TASKS: list[dict] = [\n"
-            f"    {{{ax['name']!r}: v}}\n"
-            f"    for v in {ax['values']!r}\n"
-            f"]"
+            f"_TASKS: list[dict] = [\n    {{{ax['name']!r}: v}}\n    for v in {ax['values']!r}\n]"
         )
     names = [ax["name"] for ax in axes]
     values = [ax["values"] for ax in axes]

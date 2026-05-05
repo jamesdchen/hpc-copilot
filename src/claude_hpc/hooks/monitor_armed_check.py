@@ -156,7 +156,7 @@ def main() -> int:
             "`hpc-mapreduce decide-monitor-arm --spec <state>` and copy the "
             "envelope's `data.armed_line` verbatim as the very last line of "
             "your response (the primitive also emits `data.cron_create_args` "
-            "ready to pass to CronCreate when arm == \"cron\")."
+            'ready to pass to CronCreate when arm == "cron").'
         ),
     }
     print(json.dumps(decision))

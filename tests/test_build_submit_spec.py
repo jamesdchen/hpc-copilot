@@ -142,6 +142,16 @@ def test_assembled_spec_passes_submit_flow_input_schema() -> None:
     )
     # The primitive runs jsonschema.validate inside; reaching this line
     # means it passed. Sanity-check the obvious required fields:
-    for k in ("profile", "cluster", "ssh_target", "remote_path", "run_id",
-              "total_tasks", "backend", "job_name", "script", "job_env"):
+    for k in (
+        "profile",
+        "cluster",
+        "ssh_target",
+        "remote_path",
+        "run_id",
+        "total_tasks",
+        "backend",
+        "job_name",
+        "script",
+        "job_env",
+    ):
         assert k in spec

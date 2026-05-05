@@ -1888,8 +1888,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_spec_and_dry_run(
         p_btp,
         schema_hint=(
-            "{axes: [{name, values}], "
-            "flags_by_executor: {module: [{name, type, default?}]}}"
+            "{axes: [{name, values}], flags_by_executor: {module: [{name, type, default?}]}}"
         ),
         dry_run_help="Validate the spec but don't write tasks.py.",
     )
