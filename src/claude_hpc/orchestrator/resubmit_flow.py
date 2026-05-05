@@ -273,10 +273,7 @@ def resubmit_flow(
             category=category,
             overrides=effective_overrides,
         )
-        already_done = (
-            existing is not None
-            and existing.last_resubmit_request_id == derived_rid
-        )
+        already_done = existing is not None and existing.last_resubmit_request_id == derived_rid
         if not already_done:
             cluster_job_ids = _submit_resubmit_batches(
                 experiment_dir=experiment_dir,
@@ -455,14 +452,11 @@ def _extract_cluster_profile(
     )
 
 
-def _raise_if_all_preempted(
-    sidecar: dict, failed_task_ids: list[int]
-) -> None:
+def _raise_if_all_preempted(sidecar: dict, failed_task_ids: list[int]) -> None:
     tasks_block = sidecar.get("tasks") or {}
     ids_int = [int(t) for t in failed_task_ids]
     all_preempted = bool(ids_int) and all(
-        isinstance(tasks_block.get(str(tid)), dict)
-        and "preempt" in tasks_block.get(str(tid), {})
+        isinstance(tasks_block.get(str(tid)), dict) and "preempt" in tasks_block.get(str(tid), {})
         for tid in ids_int
     )
     if all_preempted:
