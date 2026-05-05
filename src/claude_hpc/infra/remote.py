@@ -35,6 +35,7 @@ __all__ = [
 
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Final
@@ -178,6 +179,121 @@ def ssh_run(
         ) from exc
 
 
+def _have_rsync() -> bool:
+    """Return True if an ``rsync`` binary is on PATH.
+
+    Detection at runtime via :func:`shutil.which`. Activates the scp/tar
+    fallback when False (typically Windows hosts without WSL/MSYS rsync).
+    """
+    return shutil.which("rsync") is not None
+
+
+def _tar_ssh_push(
+    *,
+    host: str,
+    user: str,
+    remote_path: str,
+    local_path: str | Path,
+    exclude: list[str],
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Push *local_path* to *remote_path* via ``tar c | ssh tar x``.
+
+    Used as the rsync_push fallback when rsync is absent. Respects the
+    same *exclude* patterns as rsync (passed through to ``tar
+    --exclude``). Returns a CompletedProcess so callers can inspect the
+    same fields (returncode, stderr) they would for rsync.
+
+    Implementation: spawn ``tar c`` and ``ssh tar x`` as two Popens
+    connected by a pipe; both must exit zero for success. ``--delete``
+    semantics are not preserved — the remote dir is left as-is and tar
+    overlays files on top, so stale files persist. Callers needing a
+    clean slate should ssh-rm the remote dir first.
+    """
+    target = _target(user, host)
+    src_dir = str(local_path).rstrip("/\\")
+
+    # tar excludes mirror rsync's pattern shape (relative paths under src).
+    tar_excludes: list[str] = []
+    for pattern in exclude:
+        tar_excludes += [f"--exclude={pattern.rstrip('/')}"]
+
+    tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
+    ssh_remote_cmd = f"mkdir -p {shlex.quote(remote_path)} && tar x -C {shlex.quote(remote_path)}"
+    ssh_cmd = ["ssh", "-o", "BatchMode=yes", target, ssh_remote_cmd]
+
+    tar_proc = subprocess.Popen(
+        tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    try:
+        assert tar_proc.stdout is not None
+        ssh_proc = subprocess.run(
+            ssh_cmd,
+            stdin=tar_proc.stdout,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        tar_proc.stdout.close()
+        tar_proc.wait(timeout=timeout)
+        tar_stderr_bytes = tar_proc.stderr.read() if tar_proc.stderr else b""
+    except subprocess.TimeoutExpired as exc:
+        tar_proc.kill()
+        raise TimeoutError(
+            f"tar/ssh push to {host} timed out after {timeout}s: "
+            f"{_truncate(f'{src_dir} -> {target}:{remote_path}')}"
+        ) from exc
+    finally:
+        if tar_proc.stderr is not None:
+            tar_proc.stderr.close()
+
+    tar_stderr = tar_stderr_bytes.decode(errors="replace")
+    combined_stderr = "\n".join(filter(None, [tar_stderr.strip(), ssh_proc.stderr.strip()]))
+    rc = ssh_proc.returncode if ssh_proc.returncode != 0 else tar_proc.returncode
+
+    return subprocess.CompletedProcess(
+        args=tar_cmd + ["|"] + ssh_cmd,
+        returncode=rc,
+        stdout=ssh_proc.stdout,
+        stderr=combined_stderr,
+    )
+
+
+def _scp_pull(
+    *,
+    host: str,
+    user: str,
+    remote_path: str,
+    remote_subdir: str,
+    local_dir: str | Path,
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Pull *remote_subdir* to *local_dir* via ``scp -r``.
+
+    Used as the rsync_pull fallback when rsync is absent. The *include*
+    filter is not honored (scp has no equivalent); callers passing a
+    restrictive include will receive the entire subdirectory. For the
+    payloads claude-hpc actually pulls (``_combiner/wave_*.json`` and
+    optional per-task summaries), this is acceptable.
+    """
+    target = _target(user, host)
+    src = f"{target}:{remote_path.rstrip('/')}/{remote_subdir.strip('/')}/"
+    dst_path = Path(local_dir)
+    dst_path.mkdir(parents=True, exist_ok=True)
+    dst = str(dst_path)
+
+    scp_cmd = ["scp", "-r", "-o", "BatchMode=yes", src, dst]
+    try:
+        return subprocess.run(
+            scp_cmd, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"scp pull from {host} timed out after {timeout}s: "
+            f"{_truncate(f'{src} -> {dst}')}"
+        ) from exc
+
+
 def rsync_push(
     *,
     host: str,
@@ -189,6 +305,11 @@ def rsync_push(
     timeout: float | None = _DEFAULT,
 ) -> subprocess.CompletedProcess[str]:
     """Sync a local directory to a remote host using rsync.
+
+    On hosts where the ``rsync`` binary is not on PATH (typically
+    Windows without WSL / MSYS rsync), automatically falls back to a
+    ``tar c | ssh tar x`` pipeline. The fallback honors *exclude* but
+    silently drops *delete* — stale files on the remote persist.
 
     Parameters
     ----------
@@ -205,7 +326,7 @@ def rsync_push(
         if *None*.
     delete:
         If True (default), pass ``--delete`` so removed local files are
-        also removed on the remote.
+        also removed on the remote. Ignored on the tar/ssh fallback.
     timeout:
         Per-call subprocess timeout in seconds.  When omitted, the module
         default :data:`RSYNC_TIMEOUT_SEC` is applied.  Pass ``timeout=None``
@@ -219,6 +340,17 @@ def rsync_push(
     """
     if exclude is None:
         exclude = DEFAULT_RSYNC_EXCLUDES
+    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+
+    if not _have_rsync():
+        return _tar_ssh_push(
+            host=host,
+            user=user,
+            remote_path=remote_path,
+            local_path=local_path,
+            exclude=exclude,
+            timeout=effective_timeout,
+        )
 
     exclude_flags: list[str] = []
     for pattern in exclude:
@@ -231,7 +363,6 @@ def rsync_push(
     if delete:
         flags.append("--delete")
 
-    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
     try:
         return subprocess.run(
             [*flags, *exclude_flags, src, dst],
@@ -501,6 +632,18 @@ def rsync_pull(
     dst_path.mkdir(parents=True, exist_ok=True)
     dst = str(dst_path).rstrip("/\\") + "/"
 
+    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+
+    if not _have_rsync():
+        return _scp_pull(
+            host=host,
+            user=user,
+            remote_path=remote_path,
+            remote_subdir=remote_subdir,
+            local_dir=local_dir,
+            timeout=effective_timeout,
+        )
+
     filter_flags: list[str] = []
     if include is not None:
         filter_flags += ["--include=*/"]
@@ -508,7 +651,6 @@ def rsync_pull(
             filter_flags += [f"--include={pattern}"]
         filter_flags += ["--exclude=*"]
 
-    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
     try:
         return subprocess.run(
             ["rsync", "-az", *filter_flags, src, dst],
