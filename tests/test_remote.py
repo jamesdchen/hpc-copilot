@@ -16,6 +16,18 @@ import pytest
 from claude_hpc.infra import remote
 
 
+@pytest.fixture(autouse=True)
+def _force_rsync_present():
+    """Pin _have_rsync to True so existing tests exercise the rsync branch.
+
+    Tests for the scp/tar fallback live in test_remote_rsync_fallback.py
+    and explicitly patch ``shutil.which`` themselves; this fixture only
+    affects the rsync-branch tests in this file.
+    """
+    with patch("claude_hpc.infra.remote._have_rsync", return_value=True):
+        yield
+
+
 def _cp(stdout="", stderr="", returncode=0):
     """Mimic subprocess.CompletedProcess enough for the remote module."""
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
