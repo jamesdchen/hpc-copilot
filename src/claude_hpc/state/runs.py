@@ -172,9 +172,7 @@ _HARDENED_DEFAULTS: dict[str, Any] = {
 _warned_version_mismatch: set[tuple[str, str]] = set()
 
 
-def _maybe_derive_wave_map(
-    experiment_dir: Path, *, task_count: int
-) -> dict[str, list[int]] | None:
+def _maybe_derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str, list[int]] | None:
     """Best-effort axes-driven wave_map derivation. Returns None on any miss.
 
     Silent on the happy path; emits a :class:`UserWarning` only when

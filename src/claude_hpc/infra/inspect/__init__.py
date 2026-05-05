@@ -127,7 +127,7 @@ def inspect_cluster(
         if cached is not None:
             return _snapshot_from_dict(cached)
     if runner is None:
-        runner = _CommandRunner(host=cfg.get("host"), user=cfg.get("user"))
+        runner = _CommandRunner(ssh_target=cfg.get("ssh_target"))
     # B5-PR2: dispatch through the backend registry. Each backend's
     # ``inspect_cluster`` classmethod normalises kwargs for its scheduler
     # (e.g. SGE ignores ``sacct_window_hours``); a missing backend

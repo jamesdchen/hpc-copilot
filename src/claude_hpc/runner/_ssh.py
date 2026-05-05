@@ -8,14 +8,6 @@ from typing import Any
 from claude_hpc.errors import RemoteCommandFailed
 
 
-def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    """Split a ``user@host`` target into ``(user, host)``."""
-    if "@" not in ssh_target:
-        raise ValueError(f"ssh_target must be 'user@host', got {ssh_target!r}")
-    user, host = ssh_target.split("@", 1)
-    return user, host
-
-
 def _parse_remote_json(stdout: str, *, source_label: str) -> dict[str, Any]:
     """Parse JSON emitted by a remote process; raise typed error on failure.
 

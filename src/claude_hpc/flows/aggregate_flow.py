@@ -37,7 +37,7 @@ from typing import Any
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.infra.remote import rsync_pull, split_ssh_target
+from claude_hpc.infra.remote import rsync_pull, validate_ssh_target
 from claude_hpc.mapreduce.reduce.metrics import reduce_partials
 from claude_hpc.runner import combine_wave, record_status
 from claude_hpc.state.runs import read_run_sidecar
@@ -71,12 +71,12 @@ class AggregateFlowResult:
         }
 
 
-def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
-    error type. See :mod:`claude_hpc.infra.remote.split_ssh_target`.
+def _validate_ssh_target(ssh_target: str) -> str:
+    """Wrap :func:`validate_ssh_target` to raise the surface-appropriate
+    error type. See :mod:`claude_hpc.infra.remote.validate_ssh_target`.
     """
     try:
-        return split_ssh_target(ssh_target)
+        return validate_ssh_target(ssh_target)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
 
@@ -209,7 +209,7 @@ def aggregate_flow(
     out = experiment_dir / "_aggregated" / run_id if output_dir is None else Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    user, host = _split_ssh_target(record.ssh_target)
+    _validate_ssh_target(record.ssh_target)
 
     # Read the sidecar's wave_map (record carries combined_waves but not
     # wave_map — that lives in the per-run sidecar JSON, under
@@ -245,8 +245,7 @@ def aggregate_flow(
     # Pull the combined partials.
     combiner_local = out / "_combiner"
     pull = rsync_pull(
-        host=host,
-        user=user,
+        ssh_target=record.ssh_target,
         remote_path=record.remote_path,
         remote_subdir="_combiner",
         local_dir=str(combiner_local),
@@ -267,8 +266,7 @@ def aggregate_flow(
     if pull_summaries:
         sl = out / "summaries"
         sp = rsync_pull(
-            host=host,
-            user=user,
+            ssh_target=record.ssh_target,
             remote_path=record.remote_path,
             remote_subdir=results_subdir,
             local_dir=str(sl),

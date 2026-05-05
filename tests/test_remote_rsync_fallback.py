@@ -39,7 +39,7 @@ def test_rsync_push_uses_rsync_when_available(tmp_path: Path) -> None:
         patch("claude_hpc.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
         patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
     ):
-        remote.rsync_push(host="h", user="u", remote_path="/r", local_path=tmp_path, exclude=[])
+        remote.rsync_push(ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[])
     cmd = run_mock.call_args[0][0]
     assert cmd[0] == "rsync"
     assert "-az" in cmd
@@ -62,8 +62,7 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
         tar_proc.wait.return_value = 0
 
         result = remote.rsync_push(
-            host="h",
-            user="u",
+            ssh_target="u@h",
             remote_path="/r",
             local_path=tmp_path,
             exclude=[".git/", "__pycache__/"],
@@ -88,8 +87,7 @@ def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
         patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
     ):
         remote.rsync_pull(
-            host="h",
-            user="u",
+            ssh_target="u@h",
             remote_path="/r",
             remote_subdir="_combiner",
             local_dir=tmp_path / "out",
@@ -104,8 +102,7 @@ def test_rsync_pull_falls_back_to_scp_when_rsync_missing(tmp_path: Path) -> None
         patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
     ):
         remote.rsync_pull(
-            host="h",
-            user="u",
+            ssh_target="u@h",
             remote_path="/r",
             remote_subdir="_combiner",
             local_dir=tmp_path / "out",
@@ -135,7 +132,7 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
         tar_proc.wait.return_value = 0
 
         result = remote.rsync_push(
-            host="h", user="u", remote_path="/r", local_path=tmp_path, exclude=[]
+            ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[]
         )
     assert result.returncode == 2
     assert "connect refused" in result.stderr

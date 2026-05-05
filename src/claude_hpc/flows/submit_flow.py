@@ -34,7 +34,7 @@ from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.agent_cli import cmd_plan_submit
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
-from claude_hpc.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
+from claude_hpc.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
 from claude_hpc.runner import submit_and_record
 from claude_hpc.state.discover import discover_executors
 
@@ -71,13 +71,13 @@ class SubmitFlowResult:
         }
 
 
-def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
+def _validate_ssh_target(ssh_target: str) -> str:
+    """Wrap :func:`validate_ssh_target` to raise the surface-appropriate
     error type. The shared helper raises ``ValueError``; this flow
     surfaces ``SpecInvalid`` so callers see a typed envelope error.
     """
     try:
-        return split_ssh_target(ssh_target)
+        return validate_ssh_target(ssh_target)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
 
@@ -100,10 +100,10 @@ def _build_backend(
     are never used here. submit-flow is for laptop-driven submissions
     only.
     """
-    user, host = _split_ssh_target(ssh_target)
+    _validate_ssh_target(ssh_target)
 
     def ssh(cmd: str):
-        return ssh_run(cmd, host=host, user=user)
+        return ssh_run(cmd, ssh_target=ssh_target)
 
     if backend_name == "sge_remote":
         keys = pass_env_keys if pass_env_keys is not None else job_env_keys
@@ -237,12 +237,12 @@ def submit_flow(
             canary_done=False,
         )
 
-    user, host = _split_ssh_target(ssh_target)
+    _validate_ssh_target(ssh_target)
 
     # Pre-flight: a single SSH probe is the cheapest "is the cluster
     # reachable" signal. Caller can skip if they just ran `check-preflight`.
     if not skip_preflight:
-        probe = ssh_run("true", host=host, user=user)
+        probe = ssh_run("true", ssh_target=ssh_target)
         if probe.returncode != 0:
             raise errors.SshUnreachable(
                 f"pre-flight ssh probe to {ssh_target} failed (exit {probe.returncode}): "
@@ -251,8 +251,7 @@ def submit_flow(
 
     # Push code.
     push_result = rsync_push(
-        host=host,
-        user=user,
+        ssh_target=ssh_target,
         remote_path=remote_path,
         local_path=experiment_dir,
         exclude=rsync_excludes,
@@ -264,7 +263,7 @@ def submit_flow(
         )
 
     # Deploy framework files.
-    deploy_runtime(host=host, user=user, remote_path=remote_path)
+    deploy_runtime(ssh_target=ssh_target, remote_path=remote_path)
 
     # Honour the runtime tag — submit-spec docs say HPC_RUNTIME=uv makes
     # the cluster-side template's `uv sync` preamble fire. Caller may or

@@ -6,7 +6,6 @@ import shlex
 from typing import Any
 
 from claude_hpc.infra import remote
-from claude_hpc.runner._ssh import _split_ssh_target
 
 
 def fetch_task_logs(
@@ -39,7 +38,6 @@ def fetch_task_logs(
     from claude_hpc.infra.backends import get_backend_class
 
     backend_cls = get_backend_class(scheduler)
-    user, host = _split_ssh_target(ssh_target)
     out: list[dict[str, Any]] = []
     for tid in task_ids:
         found: dict[str, Any] | None = None
@@ -51,7 +49,7 @@ def fetch_task_logs(
                 f"echo FOUND; tail -n {int(lines)} {quoted}; "
                 f"else echo MISSING; fi"
             )
-            proc = remote.ssh_run(script, host=host, user=user)
+            proc = remote.ssh_run(script, ssh_target=ssh_target)
             if proc.returncode != 0:
                 # SSH itself blew up; attribute to this attempt and try
                 # the next job_id rather than aborting the whole batch.

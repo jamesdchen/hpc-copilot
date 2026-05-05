@@ -488,9 +488,8 @@ def _eta_via_test_only_with_resources(
 
     if not get_backend_class(scheduler).supports_test_only_eta:
         return None, ""
-    host = cluster_cfg.get("host")
-    user = cluster_cfg.get("user")
-    if not host or not user:
+    ssh_target = cluster_cfg.get("ssh_target")
+    if not ssh_target:
         return None, ""
     try:
         from claude_hpc.infra.remote import ssh_run
@@ -509,7 +508,7 @@ def _eta_via_test_only_with_resources(
         "--wrap='true' 2>&1 || true"
     )
     try:
-        cp = ssh_run(cmd, host=host, user=user, timeout=15)
+        cp = ssh_run(cmd, ssh_target=ssh_target, timeout=15)
     except (TimeoutError, subprocess.SubprocessError, FileNotFoundError, OSError):
         return None, ""
     text = (cp.stdout or "") + (cp.stderr or "")
