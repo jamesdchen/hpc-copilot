@@ -172,6 +172,59 @@ _HARDENED_DEFAULTS: dict[str, Any] = {
 _warned_version_mismatch: set[tuple[str, str]] = set()
 
 
+def _maybe_derive_wave_map(
+    experiment_dir: Path, *, task_count: int
+) -> dict[str, list[int]] | None:
+    """Best-effort axes-driven wave_map derivation. Returns None on any miss.
+
+    Silent on the happy path; emits a :class:`UserWarning` only when
+    ``axes.yaml`` is present with a full enumeration but the cartesian
+    product of axis sizes disagrees with *task_count* — that's a sign
+    of a misconfigured deploy and the user wants to hear about it.
+    """
+    import jsonschema
+    import yaml
+
+    try:
+        from claude_hpc.planning.axes import (
+            compute_wave_map,
+            pick_array_axis,
+            read_axes,
+        )
+    except ImportError:
+        return None
+
+    try:
+        config = read_axes(experiment_dir)
+    except (jsonschema.ValidationError, yaml.YAMLError, ValueError, OSError):
+        return None
+    if config is None or not config.get("axes"):
+        return None
+
+    sizes = [int(a["size"]) for a in config["axes"]]
+    product = 1
+    for s in sizes:
+        product *= s
+    if product != task_count:
+        warnings.warn(
+            f"axes.yaml product ({product}) != task_count ({task_count}); "
+            "skipping auto-derived wave_map. Re-run /hpc-axes-init or pass "
+            "wave_map explicitly.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return None
+
+    picked_name, _ = pick_array_axis(experiment_dir)
+    if picked_name is None:
+        return None
+    try:
+        derived = compute_wave_map(experiment_dir, picked_axis=picked_name)
+    except (ValueError, jsonschema.ValidationError):
+        return None
+    return {str(k): list(v) for k, v in derived.items()}
+
+
 def write_run_sidecar(
     experiment_dir: Path,
     *,
@@ -213,6 +266,15 @@ def write_run_sidecar(
     every successful ``/submit`` should populate the ones that apply, so
     subsequent commands (``/aggregate``, ``/status``, ``/resubmit``) can
     rebuild full context without consulting any external config file.
+
+    Auto-derived ``wave_map``: when *wave_map* is None and
+    ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,
+    the picker (warm-then-cold) selects an array axis and
+    :func:`compute_wave_map` derives the assignment. The cartesian
+    product of axis sizes must equal *task_count*; on mismatch we emit
+    a :class:`UserWarning` and fall through (sidecar is still written
+    without ``wave_map``). This integration is silent on the happy
+    path — callers that already pass *wave_map* are unaffected.
     """
     sidecar: dict[str, Any] = {
         "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
@@ -225,23 +287,8 @@ def write_run_sidecar(
         "task_count": int(task_count),
         "tasks_py_sha": tasks_py_sha,
     }
-    # Silent axes-driven wave_map: when the caller didn't supply one,
-    # check for <experiment>/.hpc/axes.yaml. If present with a full
-    # axes enumeration AND a homogeneous_axes hint (or warm priors),
-    # derive wave_map from the picked axis. Absent/partial axes.yaml
-    # leaves wave_map as None — existing behavior.
     if wave_map is None:
-        try:
-            from claude_hpc.planning.axes import compute_wave_map, pick_array_axis
-
-            picked_name, _ = pick_array_axis(experiment_dir)
-            if picked_name is not None:
-                derived = compute_wave_map(experiment_dir, picked_axis=picked_name)
-                wave_map = {str(k): list(v) for k, v in derived.items()}
-        except (FileNotFoundError, ValueError, Exception):  # noqa: BLE001
-            # Best-effort. Schema/config errors fall through silently;
-            # the sidecar is still written without wave_map.
-            wave_map = None
+        wave_map = _maybe_derive_wave_map(experiment_dir, task_count=int(task_count))
     if wave_map is not None:
         sidecar["wave_map"] = {str(k): list(v) for k, v in wave_map.items()}
     if extra:

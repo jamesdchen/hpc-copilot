@@ -361,3 +361,85 @@ class TestVersionMismatchWarning:
         assert not any(
             "claude-hpc" in str(w.message) and "but reader is" in str(w.message) for w in caught
         ), "matching versions should not warn"
+
+
+# ---------------------------------------------------------------------------
+# Auto-derived wave_map from axes.yaml
+# ---------------------------------------------------------------------------
+
+
+def test_auto_derive_wave_map_from_axes_yaml(tmp_path: Path) -> None:
+    """Caller omits wave_map; axes.yaml present → sidecar carries derived map."""
+    from claude_hpc.planning.axes import write_axes
+
+    write_axes(
+        tmp_path,
+        axes=[{"name": "model", "size": 2}, {"name": "window", "size": 3}],
+        homogeneous_axes=["window"],
+    )
+    kwargs = _common_required_kwargs()
+    kwargs["task_count"] = 6  # 2 * 3
+    write_run_sidecar(tmp_path, **kwargs)
+    out = read_run_sidecar(tmp_path, kwargs["run_id"])
+    # window picked → 2 waves of 3 task_ids each.
+    assert out["wave_map"] == {"0": [0, 1, 2], "1": [3, 4, 5]}
+
+
+def test_auto_derive_skipped_without_axes_yaml(tmp_path: Path) -> None:
+    """No axes.yaml → wave_map remains absent (read backfills to {})."""
+    write_run_sidecar(tmp_path, **_common_required_kwargs())
+    out = read_run_sidecar(tmp_path, "20260101-000000-deadbee")
+    assert out["wave_map"] == {}
+
+
+def test_auto_derive_skipped_when_axes_yaml_lacks_enumeration(tmp_path: Path) -> None:
+    """axes.yaml present but no axes list → no derivation, no warning."""
+    import warnings as _warnings
+
+    from claude_hpc.planning.axes import write_axes
+
+    write_axes(tmp_path, homogeneous_axes=["window"])
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        write_run_sidecar(tmp_path, **_common_required_kwargs())
+    assert not any("axes.yaml product" in str(w.message) for w in caught)
+    out = read_run_sidecar(tmp_path, "20260101-000000-deadbee")
+    assert out["wave_map"] == {}
+
+
+def test_auto_derive_warns_on_axes_product_mismatch(tmp_path: Path) -> None:
+    """axes-product != task_count → UserWarning, no derived wave_map."""
+    import warnings as _warnings
+
+    from claude_hpc.planning.axes import write_axes
+
+    write_axes(
+        tmp_path,
+        axes=[{"name": "model", "size": 2}, {"name": "window", "size": 3}],
+    )
+    kwargs = _common_required_kwargs()
+    kwargs["task_count"] = 7  # mismatch — axes say 6
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
+        write_run_sidecar(tmp_path, **kwargs)
+    assert any(
+        "axes.yaml product" in str(w.message) and "task_count" in str(w.message) for w in caught
+    ), "mismatch should emit a UserWarning"
+    out = read_run_sidecar(tmp_path, kwargs["run_id"])
+    assert out["wave_map"] == {}  # backfill default
+
+
+def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
+    """Caller-supplied wave_map is preserved verbatim; no axes.yaml lookup."""
+    from claude_hpc.planning.axes import write_axes
+
+    write_axes(
+        tmp_path,
+        axes=[{"name": "model", "size": 2}, {"name": "window", "size": 3}],
+    )
+    kwargs = _common_required_kwargs()
+    kwargs["task_count"] = 6
+    explicit = {"0": [0, 1, 2, 3, 4, 5]}  # different from any derivation
+    write_run_sidecar(tmp_path, wave_map=explicit, **kwargs)
+    out = read_run_sidecar(tmp_path, kwargs["run_id"])
+    assert out["wave_map"] == explicit
