@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/axes.json",
+  "title": "experiment axes config",
+  "description": "Per-experiment hints for the axis_picker. Lives at <experiment>/.hpc/axes.yaml. The framework only stores fields it can independently act on; experiment-specific reasoning about WHY an axis is homogeneous lives in the agent's chat context, not here.",
+  "type": "object",
+  "required": ["axes_schema_version"],
+  "additionalProperties": false,
+  "properties": {
+    "axes_schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "homogeneous_axes": {
+      "type": "array",
+      "description": "Names of axes the deployer believes have low runtime-cost variance. The cold-start axis_picker promotes the first one (filtered by tasks.py's AXES) onto the task array. Once runtime priors exist, the warm-path picker uses observed CV instead and treats this list as a fallback.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    }
+  }
+}
