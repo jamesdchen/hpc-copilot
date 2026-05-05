@@ -149,9 +149,7 @@ class TestWarmPath:
 
 
 class TestDaisyChain:
-    def test_flags_chain_required_when_walltime_exceeds_max(
-        self, tmp_path, monkeypatch
-    ):
+    def test_flags_chain_required_when_walltime_exceeds_max(self, tmp_path, monkeypatch):
         # Cluster max 24h, ask 30h → chain required (with the 1h buffer).
         _write_clusters_yaml(
             tmp_path,
@@ -170,9 +168,7 @@ class TestDaisyChain:
         assert "daisy_chain" in out.rationales
 
     def test_no_chain_flag_when_within_ceiling(self, tmp_path, monkeypatch):
-        _write_clusters_yaml(
-            tmp_path, monkeypatch, max_walltime_sec=86400, auto_daisy_chain=True
-        )
+        _write_clusters_yaml(tmp_path, monkeypatch, max_walltime_sec=86400, auto_daisy_chain=True)
         out = plan_resubmit_overrides(
             tmp_path,
             profile=PROFILE,

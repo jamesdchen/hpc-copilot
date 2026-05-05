@@ -614,8 +614,7 @@ def calibrate_probes(
         ratios = [
             float(edges_by_gpu_type[g].calibration_ratio)
             for g in gpu_types
-            if g in edges_by_gpu_type
-            and edges_by_gpu_type[g].calibration_ratio is not None
+            if g in edges_by_gpu_type and edges_by_gpu_type[g].calibration_ratio is not None
         ]
         if not ratios:
             out.append(

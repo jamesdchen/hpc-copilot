@@ -119,9 +119,7 @@ class TestSpecValidation:
 
 
 class TestPreemptedDetection:
-    def test_all_preempted_raises_preempted(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_all_preempted_raises_preempted(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(
             experiment,
@@ -170,9 +168,7 @@ class TestPreemptedDetection:
 
 
 class TestPlannerWiring:
-    def test_cold_start_grows_mem_in_planner(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_cold_start_grows_mem_in_planner(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch, cold_start_mem_buffer=0.15)
         _seed(experiment)
         result = resubmit_flow(
@@ -204,9 +200,7 @@ class TestPlannerWiring:
         record = session.load_run(experiment, RUN_ID)
         assert record.retries["1"]["overrides"]["mem_mb"] == 18_400
 
-    def test_no_planner_when_cluster_unknown(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_no_planner_when_cluster_unknown(self, journal_home, experiment, tmp_path, monkeypatch):
         # Sidecar references a cluster the loaded yaml doesn't know about.
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(experiment, cluster="ghost_cluster")
@@ -229,9 +223,7 @@ class TestPlannerWiring:
         assert result.planner.overrides == {"mem_mb": 16_000}
         assert result.planner.cold_start is False
 
-    def test_no_planner_when_sidecar_missing(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_no_planner_when_sidecar_missing(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(experiment)
         # Remove the sidecar after seeding.
@@ -270,9 +262,7 @@ class TestForecastWiring:
         assert result.forecast_recommendation is not None
         assert result.forecast_recommendation.recommendation == "wait"
 
-    def test_forecast_skipped_when_disabled(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_forecast_skipped_when_disabled(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(experiment)
         result = resubmit_flow(
@@ -304,9 +294,7 @@ class TestJournalUpdate:
         assert result.retries["3"]["attempts"] == 1
         assert result.retries["7"]["attempts"] == 1
 
-    def test_dedupes_on_explicit_request_id(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_dedupes_on_explicit_request_id(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(experiment)
         kwargs: dict = dict(
