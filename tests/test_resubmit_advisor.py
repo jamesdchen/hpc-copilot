@@ -24,9 +24,7 @@ def _pin_now(monkeypatch, dt: datetime) -> None:
 
 
 class TestRecommendation:
-    def test_busy_hour_recommends_wait_when_dip_is_within_horizon(
-        self, tmp_path, monkeypatch
-    ):
+    def test_busy_hour_recommends_wait_when_dip_is_within_horizon(self, tmp_path, monkeypatch):
         _seed_with_dip(tmp_path)
         # Pin now to Mon 14:00 UTC — a busy bucket. Dip at 03-06 sits
         # inside the next 24h.
@@ -93,9 +91,7 @@ class TestRecommendation:
         _seed_with_dip(tmp_path)
         _pin_now(monkeypatch, datetime(2026, 4, 15, 14, 0, 0, tzinfo=timezone.utc))
 
-        rec = recommend_resubmit_window(
-            tmp_path, profile=PROFILE, cluster=CLUSTER, within_hours=24
-        )
+        rec = recommend_resubmit_window(tmp_path, profile=PROFILE, cluster=CLUSTER, within_hours=24)
         d = rec.to_dict()
         assert d["recommendation"] == "wait"
         assert d["best_window"] is not None

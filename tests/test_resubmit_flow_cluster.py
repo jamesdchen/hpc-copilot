@@ -133,6 +133,7 @@ class _StubBackend:
 def _make_factory(stub: _StubBackend):
     def factory(**_kwargs):
         return stub
+
     return factory
 
 
@@ -155,16 +156,19 @@ class TestRenderOverridesToExtraFlags:
             {"mem_mb": 32_000, "walltime_sec": 14400, "gpus": 2, "cpus": 8},
         )
         assert flags == [
-            "-l", "h_data=32000M",
-            "-l", "h_rt=04:00:00",
-            "-l", "gpu=2",
-            "-pe", "shared", "8",
+            "-l",
+            "h_data=32000M",
+            "-l",
+            "h_rt=04:00:00",
+            "-l",
+            "gpu=2",
+            "-pe",
+            "shared",
+            "8",
         ]
 
     def test_unknown_keys_drop_silently(self):
-        flags = render_overrides_to_extra_flags(
-            "slurm", {"unknown_knob": 42, "mem_mb": 16_000}
-        )
+        flags = render_overrides_to_extra_flags("slurm", {"unknown_knob": 42, "mem_mb": 16_000})
         assert flags == ["--mem=16000M"]
 
     def test_empty_overrides_returns_empty_list(self):
@@ -249,9 +253,7 @@ class TestClusterSubmission:
         record = session.load_run(experiment, RUN_ID)
         assert result.new_job_ids[0] in record.job_ids
 
-    def test_skips_qsub_on_dedupe(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_skips_qsub_on_dedupe(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(experiment)
         stub = _StubBackend()
