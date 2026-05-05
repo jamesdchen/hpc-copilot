@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/campaign_manifest.json",
+  "title": "campaign manifest",
+  "description": "Audit record at <campaign_dir>/manifest.json. The framework only stores fields it can independently act on (budget, stop_criteria via campaign-budget / campaign-converged) plus opaque context (goal, strategy.params). Never required by primitives — purely descriptive.",
+  "type": "object",
+  "required": ["manifest_schema_version", "campaign_id"],
+  "additionalProperties": false,
+  "properties": {
+    "manifest_schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "goal": {
+      "type": "string",
+      "description": "Free-form prose; framework treats as opaque text (not parsed)."
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_jobs": {"type": ["integer", "null"], "minimum": 0},
+        "max_tasks": {"type": ["integer", "null"], "minimum": 0},
+        "max_walltime_sec": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "stop_criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_iters": {"type": ["integer", "null"], "minimum": 0},
+        "metric": {"type": ["string", "null"]},
+        "target": {"type": ["number", "null"]},
+        "direction": {"type": "string", "enum": ["minimize", "maximize"]},
+        "plateau_window": {"type": ["integer", "null"], "minimum": 1},
+        "plateau_tolerance": {"type": "number", "minimum": 0}
+      }
+    },
+    "strategy": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Free string for human/agent display only; framework never dispatches on this."
+        },
+        "params": {
+          "type": "object",
+          "description": "Opaque to the framework. Round-tripped untouched.",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

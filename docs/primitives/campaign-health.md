@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]
-  python: claude_hpc.campaign.campaign_health.campaign_health
+  python: claude_hpc.atoms.campaign_health.campaign_health
 ---
 
 ## Purpose

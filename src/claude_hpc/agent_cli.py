@@ -675,6 +675,107 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_campaign_init(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_init."""
+    from claude_hpc.atoms.campaign_init import campaign_init
+
+    _ok(
+        campaign_init(
+            experiment_dir=args.experiment_dir,
+            campaign_id=args.campaign_id,
+            goal=args.goal,
+            max_iters=args.max_iters,
+            metric=args.metric,
+            target=args.target,
+            direction=args.direction,
+            plateau_window=args.plateau_window,
+            plateau_tolerance=args.plateau_tolerance,
+            max_jobs=args.max_jobs,
+            max_tasks=args.max_tasks,
+            max_walltime_sec=args.max_walltime_sec,
+            strategy_name=args.strategy_name,
+            strategy_params_json=args.strategy_params_json,
+        ),
+        name="campaign-init",
+    )
+    return EXIT_OK
+
+
+def cmd_campaign_replay(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_replay."""
+    from claude_hpc.atoms.campaign_replay import campaign_replay
+
+    _ok(
+        campaign_replay(
+            experiment_dir=args.experiment_dir,
+            campaign_id=args.campaign_id,
+            last_n=args.last_n,
+        ),
+        name="campaign-replay",
+    )
+    return EXIT_OK
+
+
+def cmd_campaign_converged(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_converged."""
+    from claude_hpc.atoms.campaign_converged import campaign_converged
+
+    _ok(
+        campaign_converged(
+            experiment_dir=args.experiment_dir,
+            campaign_id=args.campaign_id,
+            max_iters=args.max_iters,
+            metric=args.metric,
+            target=args.target,
+            direction=args.direction,
+            plateau_window=args.plateau_window,
+            plateau_tolerance=args.plateau_tolerance,
+        ),
+        name="campaign-converged",
+    )
+    return EXIT_OK
+
+
+def cmd_campaign_budget(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_budget."""
+    from claude_hpc.atoms.campaign_budget import campaign_budget
+
+    _ok(
+        campaign_budget(
+            experiment_dir=args.experiment_dir,
+            campaign_id=args.campaign_id,
+            max_jobs=args.max_jobs,
+            max_tasks=args.max_tasks,
+            max_walltime_sec=args.max_walltime_sec,
+        ),
+        name="campaign-budget",
+    )
+    return EXIT_OK
+
+
+def cmd_campaign_advance(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.campaign_advance."""
+    from claude_hpc.atoms.campaign_advance import campaign_advance
+
+    _ok(
+        campaign_advance(
+            experiment_dir=args.experiment_dir,
+            campaign_id=args.campaign_id,
+            max_iters=args.max_iters,
+            metric=args.metric,
+            target=args.target,
+            direction=args.direction,
+            plateau_window=args.plateau_window,
+            plateau_tolerance=args.plateau_tolerance,
+            max_jobs=args.max_jobs,
+            max_tasks=args.max_tasks,
+            max_walltime_sec=args.max_walltime_sec,
+        ),
+        name="campaign-advance",
+    )
+    return EXIT_OK
+
+
 # ─── subcommand: status ────────────────────────────────────────────────────
 
 
@@ -1306,11 +1407,11 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     """Aggregate run-history into a campaign-health payload (D2a).
 
     Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
-    decorator lives on ``claude_hpc.campaign.campaign_health.campaign_health``
+    decorator lives on ``claude_hpc.atoms.campaign_health.campaign_health``
     (the module-level implementation), matching the ``backed_by.python``
     pointer in ``docs/primitives/campaign-health.md``.
     """
-    from claude_hpc.campaign.campaign_health import campaign_health
+    from claude_hpc.atoms.campaign_health import campaign_health
 
     try:
         data = campaign_health(
@@ -1731,6 +1832,85 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_camp_ls)
     p_camp_ls.set_defaults(func=cmd_campaign_list)
+
+    p_camp_in = p_camp_sub.add_parser(
+        "init",
+        help="Write the campaign manifest from CLI args.",
+    )
+    _add_experiment_dir(p_camp_in)
+    p_camp_in.add_argument("--campaign-id", required=True)
+    p_camp_in.add_argument("--goal", type=str, default="")
+    p_camp_in.add_argument("--max-iters", type=int, default=None)
+    p_camp_in.add_argument("--metric", type=str, default=None)
+    p_camp_in.add_argument("--target", type=float, default=None)
+    p_camp_in.add_argument("--direction", choices=["minimize", "maximize"], default=None)
+    p_camp_in.add_argument("--plateau-window", type=int, default=None)
+    p_camp_in.add_argument("--plateau-tolerance", type=float, default=None)
+    p_camp_in.add_argument("--max-jobs", type=int, default=None)
+    p_camp_in.add_argument("--max-tasks", type=int, default=None)
+    p_camp_in.add_argument("--max-walltime-sec", type=int, default=None)
+    p_camp_in.add_argument("--strategy-name", type=str, default=None)
+    p_camp_in.add_argument(
+        "--strategy-params-json",
+        type=str,
+        default=None,
+        help="JSON object for strategy.params (round-tripped untouched).",
+    )
+    p_camp_in.set_defaults(func=cmd_campaign_init)
+
+    p_camp_rp = p_camp_sub.add_parser(
+        "replay",
+        help="Return the last N iterations of a campaign with reduced metrics.",
+    )
+    _add_experiment_dir(p_camp_rp)
+    p_camp_rp.add_argument("--campaign-id", required=True)
+    p_camp_rp.add_argument("--last-n", type=int, default=5)
+    p_camp_rp.set_defaults(func=cmd_campaign_replay)
+
+    p_camp_cv = p_camp_sub.add_parser(
+        "converged",
+        help="Apply user-supplied stop criteria to a campaign's history.",
+    )
+    _add_experiment_dir(p_camp_cv)
+    p_camp_cv.add_argument("--campaign-id", required=True)
+    p_camp_cv.add_argument("--max-iters", type=int, default=None)
+    p_camp_cv.add_argument("--metric", type=str, default=None)
+    p_camp_cv.add_argument("--target", type=float, default=None)
+    p_camp_cv.add_argument("--direction", choices=["minimize", "maximize"], default=None)
+    p_camp_cv.add_argument("--plateau-window", type=int, default=None)
+    p_camp_cv.add_argument("--plateau-tolerance", type=float, default=None)
+    p_camp_cv.set_defaults(func=cmd_campaign_converged)
+
+    p_camp_bg = p_camp_sub.add_parser(
+        "budget",
+        help="Roll up campaign-level spend and compare to optional caps.",
+    )
+    _add_experiment_dir(p_camp_bg)
+    p_camp_bg.add_argument("--campaign-id", required=True)
+    p_camp_bg.add_argument("--max-jobs", type=int, default=None)
+    p_camp_bg.add_argument("--max-tasks", type=int, default=None)
+    p_camp_bg.add_argument("--max-walltime-sec", type=int, default=None)
+    p_camp_bg.set_defaults(func=cmd_campaign_budget)
+
+    p_camp_ad = p_camp_sub.add_parser(
+        "advance",
+        help=(
+            "Decide the next campaign action (continue / stop_converged / "
+            "stop_over_budget / wait_in_flight)."
+        ),
+    )
+    _add_experiment_dir(p_camp_ad)
+    p_camp_ad.add_argument("--campaign-id", required=True)
+    p_camp_ad.add_argument("--max-iters", type=int, default=None)
+    p_camp_ad.add_argument("--metric", type=str, default=None)
+    p_camp_ad.add_argument("--target", type=float, default=None)
+    p_camp_ad.add_argument("--direction", choices=["minimize", "maximize"], default=None)
+    p_camp_ad.add_argument("--plateau-window", type=int, default=None)
+    p_camp_ad.add_argument("--plateau-tolerance", type=float, default=None)
+    p_camp_ad.add_argument("--max-jobs", type=int, default=None)
+    p_camp_ad.add_argument("--max-tasks", type=int, default=None)
+    p_camp_ad.add_argument("--max-walltime-sec", type=int, default=None)
+    p_camp_ad.set_defaults(func=cmd_campaign_advance)
 
     # status
     p_st = sub.add_parser(
