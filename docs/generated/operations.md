@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**39 operations total**: 35 primitive atoms + 4 workflow atoms.
+**40 operations total**: 36 primitive atoms + 4 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `claude-hpc` is a CLI atom or a Python-only primitive that em
 
 **Discoverability**: `hpc-mapreduce capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (23)
+## `query` (24)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -32,6 +32,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-mapreduce clusters describe <name>` | `claude_hpc.atoms.clusters.describe_cluster` | — | `claude_hpc/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-mapreduce clusters list` | `claude_hpc.atoms.clusters.list_clusters` | — | `claude_hpc/schemas/clusters_list.output.json` |
 | [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-mapreduce discover --experiment-dir <path>` | `claude_hpc.state.discover.discover_executors` | — | `claude_hpc/schemas/discover.output.json` |
+| [`discover-reducers`](primitives/discover-reducers.md) | ✓ | _none_ | `hpc-mapreduce discover-reducers --experiment-dir <path>` | `claude_hpc.state.discover.discover_reducers` | — | — |
 | [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-mapreduce failures --run-id <id> [--lines <n>]` | `claude_hpc.atoms.failures.fetch_failures` | — | `claude_hpc/schemas/failures.output.json` |
 | [`house-edge`](primitives/house-edge.md) | ✓ | _none_ | `hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` | `claude_hpc.atoms.house_edge.house_edge` | — | — |
 | [`inspect-cluster`](primitives/inspect-cluster.md) | ✓ | ssh | `hpc-mapreduce inspect-cluster --cluster <name> [...]` | `claude_hpc.infra.inspect.inspect_cluster` | — | `claude_hpc/schemas/inspect_cluster.output.json` |

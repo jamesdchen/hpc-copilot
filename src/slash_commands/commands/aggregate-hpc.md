@@ -162,9 +162,18 @@ Task completeness:
 ## Step 4: Aggregate on Cluster
 
 Determine the aggregation command:
-1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it
-2. Else look for aggregation scripts in the repo (e.g., `scripts/aggregate.py`, `src/evaluation.py`)
-3. Else ask the user: "What command should I run to aggregate results?"
+1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it.
+2. Else invoke the **`discover-reducers`** primitive — DO NOT grep / write a fresh reducer first:
+   ```bash
+   hpc-mapreduce discover-reducers --experiment-dir .
+   ```
+   The envelope's `data.reducers` is a list of candidate `.py` files matched by filename stem (`aggregate.py`, `qlike.py`, `score.py`, etc.) or top-level function names (`def aggregate(...)`, `def reduce(...)`, `def score(...)`). Each entry carries `path`, `matches` (the signals that hit, e.g. `["name:qlike", "function:aggregate"]`), and the first line of the module docstring. Multi-signal hits sort first.
+   - **One candidate** that obviously matches the loss the user asked for → use it as `aggregate_cmd` and confirm with one short sentence.
+   - **Multiple candidates** → list them (path + docstring + matches) and ask the user which one. Don't pick silently.
+   - **Zero candidates** → fall through to step 3.
+3. Else ask the user: "I didn't find an existing reducer matching `<loss>` in `<repo>` (`hpc-mapreduce discover-reducers` returned nothing). Should I write one, or do you have an aggregation command I should use?" Surface that you searched explicitly so they don't assume you skipped the step.
+
+Writing a fresh reducer when one already exists is a common failure mode — the user has historically committed loss functions like QLIKE / RMSE / MAE under `scripts/`, `aggregators/`, `src/eval/`, etc., and a fresh one duplicates code AND drifts from the canonical implementation. The `discover-reducers` primitive exists specifically to bridge that gap; route through it.
 
 Run the aggregation command on the cluster. The command may operate per grid point (with `RESULT_DIR` set to each grid point's result directory) or globally if the command handles discovery itself.
 

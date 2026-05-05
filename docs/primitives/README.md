@@ -68,6 +68,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-mapreduce clusters describe <name>` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-mapreduce clusters list` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-mapreduce discover --experiment-dir <path>` |
+| [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-mapreduce discover-reducers --experiment-dir <path>` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-mapreduce failures --run-id <id> [--lines <n>]` |
 | [house-edge](house-edge.md) | yes | _none_ | `hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` |
 | [inspect-cluster](inspect-cluster.md) | yes | ssh: `<cluster>` | `hpc-mapreduce inspect-cluster --cluster <name> [...]` |
