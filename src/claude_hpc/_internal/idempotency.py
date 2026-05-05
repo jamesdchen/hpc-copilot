@@ -4,8 +4,8 @@ The framework has five idempotency mechanisms with no shared shape:
 
 1. Frontmatter ``idempotent: true|false`` (advisory; per-primitive).
 2. Envelope ``idempotent`` (hardcoded per call site, ~47 callers).
-3. ``run_id``-keyed dedup in :func:`claude_hpc.orchestrator.runner.submit_and_record`.
-4. ``cmd_sha``-keyed :func:`claude_hpc.orchestrator.state.runs.find_run_by_cmd_sha`
+3. ``run_id``-keyed dedup in :func:`claude_hpc.runner.submit_and_record`.
+4. ``cmd_sha``-keyed :func:`claude_hpc.state.runs.find_run_by_cmd_sha`
    (wired to ``submit_and_record`` in item A5).
 5. ``request_id``-keyed resubmit dedup in ``slash_commands/runner.py``.
 
@@ -154,7 +154,7 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
         )
 
     if isinstance(key, CmdShaKey):
-        from claude_hpc.orchestrator.state.runs import find_run_by_cmd_sha, read_run_sidecar
+        from claude_hpc.state.runs import find_run_by_cmd_sha, read_run_sidecar
 
         sidecar_path = find_run_by_cmd_sha(experiment_dir, key.cmd_sha)
         if sidecar_path is None:
@@ -169,11 +169,11 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
         return PriorResult(origin="sidecar", run_id=run_id, details=data)
 
     if isinstance(key, RequestIdKey):
-        # Request-log dedup is owned by claude_hpc.orchestrator.runner's
+        # Request-log dedup is owned by claude_hpc.runner's
         # _request_log helpers; the resolver hands off the lookup
         # rather than duplicate that file format here.
         try:
-            from claude_hpc.orchestrator import runner as _runner_mod
+            from claude_hpc import runner as _runner_mod
         except ImportError:
             return None
         _lookup_request_id = getattr(_runner_mod, "_lookup_request_id", None)

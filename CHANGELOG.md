@@ -267,7 +267,7 @@ only by checkpointing actually working.
 
 The chain is **default-off when checkpointing isn't detected** so we
 don't silently waste compute. The new
-`claude_hpc.orchestrator.state.checkpoint_detect.detect_checkpointing`
+`claude_hpc.planning.checkpoint_detect.detect_checkpointing`
 helper walks past run output dirs (`<exp>/.hpc/runs/*/result_dirs`)
 for files matching `checkpoint*`, `*.ckpt`, `state*.pkl`, `last*.pt`,
 `latest*.pt`, `model*.{joblib,pkl,pt}`, `epoch_*.{pt,pkl}`. Returns
@@ -415,7 +415,7 @@ stdlib-only constraint on `dispatch.py` and `combiner.py` are all
 preserved exactly.
 
 The `cmd_capabilities` output's `python` field now reflects the new
-module paths (e.g. `claude_hpc.orchestrator.flows.submit_flow.submit_flow`
+module paths (e.g. `claude_hpc.flows.submit_flow.submit_flow`
 instead of `hpc_mapreduce.job.submit_flow.submit_flow`); agents that
 shell out by `cli` are unaffected.
 
@@ -517,7 +517,7 @@ the feature.
   `errors.ClusterUnknown` so the typed exception flows through
   `_err_from_hpc` to produce the documented `error_code: cluster_unknown`.
 
-### Removed — `claude_hpc.orchestrator.campaign.run_campaign` asyncio loop and `defaults` callbacks
+### Removed — `claude_hpc.campaign.run_campaign` asyncio loop and `defaults` callbacks
 
 The closed-loop driver is now the slash-command surface itself: the
 assistant repeatedly invokes `/submit-hpc campaign_id=<slug>` until
@@ -549,7 +549,7 @@ Kept (the small surface that actually mattered):
 - `HPC_CAMPAIGN_ID` env var threaded through scheduler templates.
 - `claude_hpc.mapreduce.reduce.history.prior(...)` for reading per-iteration
   reduced metrics back inside `tasks.py`.
-- `claude_hpc.orchestrator.campaign.campaign_dir(...)` for strategy-state
+- `claude_hpc.campaign.campaign_dir(...)` for strategy-state
   placement (Optuna SQLite, PBT checkpoints).
 - `hpc-mapreduce campaign list / status` CLI inspection.
 
@@ -598,12 +598,12 @@ into a single `plan-submit` CLI subcommand:
   at 5 most-recent entries per node. `record_segv()` is called by
   `/hpc-monitor` on `NODE_FAIL` / `exit -11`; `get_active()` is called
   by the planner with TTL filtering.
-- **`claude_hpc.forecast.runtime_prior`** — append-only sample log at
+- **`claude_hpc.state.runtime_prior`** — append-only sample log at
   `<repo>/.hpc/runtimes/<profile>.<cluster>.json`. `roll_up_quantiles()`
   groups by `gpu_type` and computes p50 / p95 / p99 / mean / n_samples,
   with optional `cmd_sha` filter so a `.hpc/tasks.py` change can
   invalidate stale priors.
-- **`claude_hpc.orchestrator.planning.planner`** — `plan-submit --profile <p>
+- **`claude_hpc.planning.planner`** — `plan-submit --profile <p>
   --cluster <c>` combines all three into the scorecard JSON the slash
   command hands to Claude. When no priors exist, `needs_canary: true`
   and `canary_plan` describes the 1-task probe to seed the priors.
@@ -644,12 +644,12 @@ end-to-end Optuna recipe in `docs/workflows/campaign.md`. None bind the framewor
 to a specific tuning library; they collapse boilerplate the previous
 shape made every user write themselves.
 
-- **`claude_hpc.orchestrator.campaign.campaign_dir(experiment_dir, campaign_id)`** —
+- **`claude_hpc.campaign.campaign_dir(experiment_dir, campaign_id)`** —
   canonical scratch directory `.hpc/campaigns/<cid>/`. Created
   idempotently. Reserved for strategy libraries to put state files
   (Optuna SQLite, PBT checkpoints, walk-forward cursor); the framework
   writes nothing inside.
-- **`claude_hpc.orchestrator.campaign.defaults`** — three curried-function defaults
+- **`claude_hpc.campaign.defaults`** — three curried-function defaults
   for `run_campaign`'s callbacks:
   - `tasks_py_total_predicate(experiment_dir)` — re-imports `tasks.py`
     each call and returns `total() > 0`.
@@ -701,7 +701,7 @@ Surface area:
   - `find_sidecars_by_campaign` and `result_dirs_for_sidecar` for
     callers that need the underlying primitives. None of these import
     `.hpc/tasks.py` (the loop's calling module), so no recursion.
-- **`claude_hpc.orchestrator.campaign.run_campaign`** — asyncio in-flight queue.
+- **`claude_hpc.campaign.run_campaign`** — asyncio in-flight queue.
   Maintains *concurrency* live submits, awaits the next-finished one
   (FIRST_COMPLETED), repeats until the user's `should_submit` predicate
   flips to False or a wall-clock budget elapses. Fully IO-injected

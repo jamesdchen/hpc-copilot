@@ -1,11 +1,11 @@
-"""Tests for claude_hpc.orchestrator.planning.resubmit_batching — compact ID packing and plan building."""  # noqa: E501
+"""Tests for claude_hpc.planning.resubmit_batching — compact ID packing and plan building."""  # noqa: E501
 
 from __future__ import annotations
 
 import pytest
 
-from claude_hpc.orchestrator.planning.constraints import ClusterConstraints
-from claude_hpc.orchestrator.planning.resubmit_batching import (
+from claude_hpc.planning.constraints import ClusterConstraints
+from claude_hpc.planning.resubmit_batching import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
@@ -107,7 +107,7 @@ class TestFailureCategoryVocabulary:
 
     def test_classifier_categories_are_all_valid_resubmit_categories(self):
         from claude_hpc.agent_cli import _VALID_RESUBMIT_CATEGORIES
-        from claude_hpc.orchestrator.runner import _FAILURE_CATEGORY_PATTERNS
+        from claude_hpc.runner import _FAILURE_CATEGORY_PATTERNS
 
         emitted = {name for name, _ in _FAILURE_CATEGORY_PATTERNS}
         missing = emitted - _VALID_RESUBMIT_CATEGORIES

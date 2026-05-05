@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from claude_hpc.infra.backends.sge import SGEBackend
 from claude_hpc.infra.backends.slurm import SlurmBackend
-from claude_hpc.orchestrator.planning.throughput import JobBatch, SubmissionPlan
+from claude_hpc.planning.throughput import JobBatch, SubmissionPlan
 
 # ---------------------------------------------------------------------------
 # fixtures / helpers

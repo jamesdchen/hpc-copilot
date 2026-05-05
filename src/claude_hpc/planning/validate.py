@@ -78,7 +78,7 @@ def validate_submission(
     # flag formatting, walltime formatting, parse regex). If the planner
     # ever switches probe implementations, validate inherits the change
     # for free.
-    from claude_hpc.orchestrator.planning.planner import _eta_via_test_only_with_resources
+    from claude_hpc.planning.planner import _eta_via_test_only_with_resources
 
     eta_sec, raw_text = _eta_via_test_only_with_resources(
         scheduler,

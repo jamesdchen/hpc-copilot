@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra import remote
-from claude_hpc.orchestrator.runner._ssh import _parse_remote_json, _split_ssh_target
+from claude_hpc.runner._ssh import _parse_remote_json, _split_ssh_target
 
 if TYPE_CHECKING:
     from claude_hpc._internal.session import RunRecord

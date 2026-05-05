@@ -61,7 +61,6 @@ from claude_hpc.forecast.calibration import (
     compute_walltime_drift,
     recommend_safety_mult_adjustment,
 )
-from claude_hpc.forecast.runtime_prior import read_samples, roll_up_quantiles
 from claude_hpc.infra.clusters import (
     get_auto_daisy_chain,
     get_max_walltime_sec,
@@ -69,6 +68,7 @@ from claude_hpc.infra.clusters import (
     load_clusters_config,
 )
 from claude_hpc.infra.inspect import NodeSnapshot, inspect_cluster
+from claude_hpc.state.runtime_prior import read_samples, roll_up_quantiles
 
 
 def plan_submit(
@@ -299,7 +299,7 @@ def plan_submit(
     # preempted segment N (exit 130 from PR-A) still triggers N+1.
     daisy_chain_segments: int | None = None
     if walltime_user_ask_sec is not None:
-        from claude_hpc.orchestrator.planning.daisy_chain import (
+        from claude_hpc.planning.daisy_chain import (
             compute_daisy_chain_plan,
             should_daisy_chain,
         )
@@ -319,7 +319,7 @@ def plan_submit(
                 # have produced checkpoint-shaped files. False yields
                 # the explanatory error so the user can add
                 # checkpointing or set ``auto_daisy_chain: true``.
-                from claude_hpc.orchestrator.state.checkpoint_detect import detect_checkpointing
+                from claude_hpc.planning.checkpoint_detect import detect_checkpointing
 
                 chain_decision = detect_checkpointing(
                     experiment_dir, profile=profile, cluster=cluster

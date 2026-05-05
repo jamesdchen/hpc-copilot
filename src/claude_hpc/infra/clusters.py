@@ -16,7 +16,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-from claude_hpc.orchestrator.planning.constraints import ClusterConstraints, parse_constraints
+from claude_hpc.planning.constraints import ClusterConstraints, parse_constraints
 
 # B-M4: declarative manifest of per-cluster yaml keys. Mirrors the
 # get_*() validators below; surfaced through cmd_capabilities so a

@@ -1,10 +1,10 @@
-"""Tests for claude_hpc.forecast.runtime_prior — quantile rollups + atomic appends."""
+"""Tests for claude_hpc.state.runtime_prior — quantile rollups + atomic appends."""
 
 from __future__ import annotations
 
 import json
 
-from claude_hpc.forecast import runtime_prior as rp
+from claude_hpc.state import runtime_prior as rp
 
 
 class TestAppendSample:

@@ -458,7 +458,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
 
     with (
         patch(
-            "claude_hpc.orchestrator.runner.combine_wave",
+            "claude_hpc.runner.combine_wave",
             return_value=(False, "", "boom: missing metrics"),
         ),
         patch.object(cli, "_emit", side_effect=fake_emit),
@@ -1100,7 +1100,7 @@ def test_aggregate_reads_sidecar_defaults_for_require_and_expect(
     import argparse
     from unittest.mock import patch
 
-    from claude_hpc.orchestrator.state.runs import write_run_sidecar
+    from claude_hpc.state.runs import write_run_sidecar
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")

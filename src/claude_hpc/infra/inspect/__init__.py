@@ -10,7 +10,7 @@ the ingredients for resource-quality-aware submission decisions:
   resource shares and how long they've been running.
 - Drain / down state.
 
-The resulting JSON is fed into :mod:`claude_hpc.orchestrator.planning.planner` (Phase 4)
+The resulting JSON is fed into :mod:`claude_hpc.planning.planner` (Phase 4)
 which combines it with runtime priors to score candidate constraints.
 It is also useful standalone for ad-hoc cluster
 debugging via ``hpc-mapreduce inspect-cluster --cluster <c>``.

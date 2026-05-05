@@ -23,7 +23,7 @@ The public boundary also now includes the **shell CLI** at
 shape, subcommand list, and exit-code contract are documented in
 [`docs/reference/cli-spec.md`](cli-spec.md) and the JSON Schemas under
 `claude_hpc/schemas/`. The CLI calls into the same atomic-ops layer
-(`claude_hpc/orchestrator/runner.py`) that the slash commands use, so the
+(`claude_hpc/runner/`) that the slash commands use, so the
 invariants in [`docs/internals/sync-checklist.md`](sync-checklist.md) bind both.
 
 ### Package root
@@ -138,7 +138,7 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
   Pure local filesystem walk. Does not import `.hpc/tasks.py`.
 - `claude_hpc.mapreduce.reduce.history.find_sidecars_by_campaign` /
   `result_dirs_for_sidecar` — underlying primitives.
-- `claude_hpc.orchestrator.campaign.campaign_dir(experiment_dir, campaign_id)` —
+- `claude_hpc.campaign.campaign_dir(experiment_dir, campaign_id)` —
   return `experiment_dir/.hpc/campaigns/<campaign_id>/`, creating it
   idempotently. Reserved for strategy libraries to drop their own state
   files (Optuna SQLite, PBT checkpoints). The framework writes nothing
@@ -266,7 +266,7 @@ directory `.hpc/`**:
 The framework reserves the **`.hpc/` directory** inside experiment
 repos. The discovery scanner skips this directory wholesale via
 `_SKIP_DIRS` in
-[`claude_hpc/orchestrator/discover.py`](../src/claude_hpc/orchestrator/discover.py), so
+[`claude_hpc/state/discover.py`](../src/claude_hpc/state/discover.py), so
 nothing inside it is misclassified as an executor. Experiment authors
 must not place user-code files (executors, libraries) under `.hpc/`.
 
@@ -340,7 +340,7 @@ Specifically:
   `claude_hpc/__init__.py`, list it in the appropriate section above,
   and add it to `ALLOWED_EXPORTS` in the test.
 - New reserved filename → add it to `_SKIP_BASENAMES` in
-  `claude_hpc/orchestrator/discover.py`, list it under "Reserved filenames"
+  `claude_hpc/state/discover.py`, list it under "Reserved filenames"
   above, and add it to `RESERVED_FILES` in the test.
 - New cluster-config key → add it to `ALLOWED_CLUSTER_KEYS` in the test
   and document it under "Config split" (and in `docs/schema.md` if

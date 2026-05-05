@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.orchestrator.planning.stages`` loader and JSON Schema validation."""
+"""Tests for ``claude_hpc.planning.stages`` loader and JSON Schema validation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import jsonschema
 import pytest
 
-from claude_hpc.orchestrator.planning.stages import (
+from claude_hpc.planning.stages import (
     STAGES_FILENAME,
     load_stages,
     load_stages_module,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from claude_hpc.infra.clusters import load_clusters_config, load_constraints
-from claude_hpc.orchestrator.planning.constraints import ClusterConstraints, parse_constraints
+from claude_hpc.planning.constraints import ClusterConstraints, parse_constraints
 
 
 class TestClusterConstraints:

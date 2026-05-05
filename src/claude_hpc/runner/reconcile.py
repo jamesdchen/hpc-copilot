@@ -12,8 +12,8 @@ from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.infra import remote
-from claude_hpc.orchestrator.runner._ssh import _split_ssh_target
-from claude_hpc.orchestrator.runner.status import _ssh_status_report
+from claude_hpc.runner._ssh import _split_ssh_target
+from claude_hpc.runner.status import _ssh_status_report
 
 if TYPE_CHECKING:
     from claude_hpc._internal.session import RunRecord
