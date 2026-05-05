@@ -1,4 +1,4 @@
-"""Tests for :func:`claude_hpc.orchestrator.walltime_arbitrage.arbitrage_walltime`.
+"""Tests for :func:`claude_hpc.forecast.walltime_arbitrage.arbitrage_walltime`.
 
 The helper is a pure function over an integer ask. We pin every boundary
 case so the cold-start fallback shape (``- 15min, floor to 5min``) cannot
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_hpc.orchestrator.walltime_arbitrage import arbitrage_walltime
+from claude_hpc.forecast.walltime_arbitrage import arbitrage_walltime
 
 
 class TestArbitrageWalltime:

@@ -244,7 +244,7 @@ collides with every other 4:00:00 ask — the round numbers every
 well-funded job requests are also the slots backfill schedulers
 reserve. Asking 3:45:00 instead fits in backfill shadows the
 4:00:00 jobs don't reach. The new helper
-`claude_hpc.orchestrator.walltime_arbitrage.arbitrage_walltime`
+`claude_hpc.forecast.walltime_arbitrage.arbitrage_walltime`
 subtracts 15min and floors to a 5min boundary; below a 1h floor the
 ask passes through unchanged so short tasks aren't cliff-killed.
 The planner (`plan_submit`) applies the trim only when the
@@ -598,7 +598,7 @@ into a single `plan-submit` CLI subcommand:
   at 5 most-recent entries per node. `record_segv()` is called by
   `/hpc-monitor` on `NODE_FAIL` / `exit -11`; `get_active()` is called
   by the planner with TTL filtering.
-- **`claude_hpc.orchestrator.runtime_prior`** — append-only sample log at
+- **`claude_hpc.forecast.runtime_prior`** — append-only sample log at
   `<repo>/.hpc/runtimes/<profile>.<cluster>.json`. `roll_up_quantiles()`
   groups by `gpu_type` and computes p50 / p95 / p99 / mean / n_samples,
   with optional `cmd_sha` filter so a `.hpc/tasks.py` change can
