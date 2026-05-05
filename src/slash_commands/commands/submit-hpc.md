@@ -413,16 +413,34 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 
 2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and any `meta.json` at the experiment root for axis hints (parameter names, ranges, chunking intent, date windows). Recent run sidecars under `.hpc/runs/` are also a useful source — they capture the full kwargs dict from any previous `tasks.resolve(i)` materializations.
 
-3. **Walk the user through writing the file.** This is conversational, not template substitution. The agent:
-   - Re-states the axis from Step 3 in concrete terms (e.g. "We're going to materialize a list of {seed, model} dicts, one per task — 4 tasks total. Sound right?").
-   - Drafts a minimal `_TASKS` for that axis and shows it to the user.
-   - Builds the `FLAGS` dict — one entry per executor module path the user might run from this repo (at minimum, the executor picked in Step 1; can include siblings discovered in the same dir for forward-readiness). Each flag list uses `from claude_hpc.executor_cli import flag, generic_args, gpu_args` and follows the example pattern: `[*generic_args(), flag("horizon", int, default=1), ...]`.
-   - Lets the user paste a snippet, describe in prose, or point at existing code; the agent translates that into `_TASKS`, `total()`, `resolve(task_id)`, and the FLAGS dict.
-   - Iterates. The user is the source of truth on what the axis means.
+3. **Walk the user through naming the axes.** Conversational, not template-substitution: the agent re-states the axis from Step 3 ("We're going to fan out over `{model, horizon, seed}` — 12 total tasks, sound right?") and confirms the values. The user can paste a snippet, describe in prose, or point at existing code; the agent translates intent into a list of `{name, values}` dicts and a per-executor flag list.
 
-   Eager memoization is the **convention, not a choice**: `_TASKS` is materialized at module load, `total()` returns `len(_TASKS)`, `resolve(i)` returns `_TASKS[i]`. This gives free `cmd_sha`, submit-time error catching, and laptop-inspectability. Lazy variants are not encouraged.
+4. **Generate the file via the `build-tasks-py` primitive — don't hand-author it.** The primitive synthesizes the canonical Pattern 1 (cartesian product) layout from the axes + flags spec and validates the result is syntactically valid Python:
 
-   The kwargs returned by `resolve(task_id)` must use names that match the FLAGS list's `flag(name, ...)` entries (with underscores; argparse converts to `--hyphenated` automatically). A typo here surfaces as `argparse: unrecognized arguments` on the cluster — not as a friendly KeyError.
+   ```bash
+   # Spec file the agent writes from the interview answers:
+   cat > /tmp/tasks_spec.json <<EOF
+   {
+     "axes": [
+       {"name": "horizon", "values": [1, 5]},
+       {"name": "seed", "values": [42, 1337]}
+     ],
+     "flags_by_executor": {
+       "src.ml_ridge": [
+         {"name": "horizon", "type": "int", "default": 1},
+         {"name": "seed", "type": "int", "default": 42}
+       ]
+     }
+   }
+   EOF
+   hpc-mapreduce build-tasks-py --spec /tmp/tasks_spec.json --experiment-dir .
+   ```
+
+   The envelope's `data` reports `{path, wrote, n_tasks}`. **Refuses to overwrite** an existing `.hpc/tasks.py` without `--force` so a user's hand-edited Pattern 2 (chunking) or Pattern 3 (date-window) conversion survives a re-submission.
+
+   When the user wants Pattern 2/3, generate the Pattern 1 starting point first, then have them edit `.hpc/tasks.py` to switch — the contract is just `FLAGS / total() / resolve()`, so any pattern that satisfies it is fine. The framework never overwrites a hand-edited file.
+
+   The kwargs returned by `resolve(task_id)` must use names that match the FLAGS list's `flag(name, ...)` entries (with underscores; argparse converts to `--hyphenated` automatically). A typo here surfaces as `argparse: unrecognized arguments` on the cluster — not as a friendly KeyError. The primitive enforces this on generation, but a hand-edit can drift; re-running `build-tasks-py --force` is the canonical fix.
 
 4. **Copy the dispatcher.** Whether or not the experiment is using the new `compute(args)` contract, drop in the framework's static dispatcher so the cluster job script can invoke `python -m cli <executor_module> ...`:
 
@@ -437,16 +455,11 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 
    This file is one-time scaffolding — never regenerated even when `tasks.py FLAGS` changes (the dispatcher reads FLAGS at runtime).
 
-5. **Write the tasks.py and commit both files.**
+5. **Commit the generated files.** `build-tasks-py` already wrote `.hpc/tasks.py`; the dispatcher copy in step 4 wrote `.hpc/cli.py`. Just commit:
 
-   ```python
-   tp.write_text(final_source)          # the full tasks.py text
-   import subprocess
-   subprocess.run(["git", "add", str(tp), str(experiment_dir / ".hpc" / "cli.py")], check=True)
-   subprocess.run(
-       ["git", "commit", "-m", f"Scaffold .hpc/tasks.py + cli.py for {executor_name}"],
-       check=True,
-   )
+   ```bash
+   git add .hpc/tasks.py .hpc/cli.py
+   git commit -m "Scaffold .hpc/tasks.py + cli.py for $EXECUTOR_NAME"
    ```
 
    Print the commit SHA. **No push** — the user controls when their work goes upstream. If the working tree is detached or the directory is not a git repo, warn the user and continue (the files still get written; commit is best-effort). Subsequent submits hit Step 6a and skip this entire sub-flow.

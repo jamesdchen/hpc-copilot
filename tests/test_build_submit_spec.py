@@ -98,7 +98,15 @@ def test_optional_passthroughs() -> None:
 
 def test_omitted_optional_fields_not_in_output() -> None:
     spec = build_submit_spec(**_required())
-    for k in ("pass_env_keys", "rsync_excludes", "slurm_account", "slurm_cluster", "campaign_id", "runtime"):
+    omitted = (
+        "pass_env_keys",
+        "rsync_excludes",
+        "slurm_account",
+        "slurm_cluster",
+        "campaign_id",
+        "runtime",
+    )
+    for k in omitted:
         assert k not in spec, f"{k!r} should be omitted when not supplied"
 
 

@@ -753,6 +753,43 @@ def cmd_build_submit_spec(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_build_tasks_py(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.build_tasks_py.
+
+    Accepts a JSON ``--spec <file>`` of ``{axes, flags_by_executor,
+    force?}`` and scaffolds ``<experiment>/.hpc/tasks.py`` from the
+    canonical Pattern 1 (cartesian product) template. Refuses to
+    overwrite without ``force=true`` so hand-edited Pattern 2/3
+    conversions survive across re-runs.
+    """
+    from claude_hpc.atoms.build_tasks_py import build_tasks_py
+
+    raw = _load_spec(args.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="build-tasks-py input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    try:
+        out = build_tasks_py(
+            experiment_dir=args.experiment_dir,
+            axes=raw.get("axes") or [],
+            flags_by_executor=raw.get("flags_by_executor") or {},
+            force=bool(raw.get("force", False) or args.force),
+        )
+    except TypeError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(out, name="build-tasks-py")
+    return EXIT_OK
+
+
 def cmd_axes_init(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.axes_init."""
     from claude_hpc.atoms.axes_init import axes_init
@@ -1789,6 +1826,34 @@ def build_parser() -> argparse.ArgumentParser:
         dry_run_help="Build + validate the spec but don't emit (smoke check).",
     )
     p_bss.set_defaults(func=cmd_build_submit_spec)
+
+    # build-tasks-py
+    p_btp = sub.add_parser(
+        "build-tasks-py",
+        help=(
+            "Scaffold <experiment>/.hpc/tasks.py from the canonical "
+            "cartesian-product template (Pattern 1 of tasks_example.py). "
+            "Spec file is {axes: [{name, values}], flags_by_executor: "
+            "{module_path: [{name, type, default?}]}}. Refuses to "
+            "overwrite an existing tasks.py without --force so "
+            "hand-edited Pattern 2/3 conversions survive."
+        ),
+    )
+    _add_experiment_dir(p_btp)
+    p_btp.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing .hpc/tasks.py.",
+    )
+    _add_spec_and_dry_run(
+        p_btp,
+        schema_hint=(
+            "{axes: [{name, values}], "
+            "flags_by_executor: {module: [{name, type, default?}]}}"
+        ),
+        dry_run_help="Validate the spec but don't write tasks.py.",
+    )
+    p_btp.set_defaults(func=cmd_build_tasks_py)
 
     # preflight
     p_pre = sub.add_parser(
