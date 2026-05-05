@@ -58,7 +58,7 @@ Notes:
 
 ### Executor discovery
 
-- **Source**: `claude_hpc.orchestrator.discover.discover_executors` walks
+- **Source**: `claude_hpc.orchestrator.state.discover.discover_executors` walks
   `--experiment-dir` (CLI) or the active experiment repo (slash).
 - **Reserved directory** (skipped wholesale): `.hpc/` — see `_SKIP_DIRS`
   in `claude_hpc/orchestrator/discover.py`. The framework files inside it
@@ -103,7 +103,7 @@ Notes:
   default).
 - Sidecar-level keys override cluster-level keys **field-by-field**;
   unset sidecar keys fall back to the cluster default. Implemented in
-  `claude_hpc.orchestrator.constraints.parse_constraints`.
+  `claude_hpc.orchestrator.planning.constraints.parse_constraints`.
 
 ## Env vars consumed
 

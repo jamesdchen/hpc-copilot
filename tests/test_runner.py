@@ -124,9 +124,7 @@ def test_submit_and_record_rejects_empty_run_id(journal_home, experiment):
 
 def test_combine_wave_records_success(journal_home, experiment):
     _seed_run(experiment)
-    with patch(
-        "claude_hpc.infra.remote.run_combiner_checked", return_value=(True, "ok", "")
-    ) as m:
+    with patch("claude_hpc.infra.remote.run_combiner_checked", return_value=(True, "ok", "")) as m:
         ok, _, _ = runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -143,9 +141,7 @@ def test_combine_wave_records_success(journal_home, experiment):
 
 def test_combine_wave_records_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch(
-        "claude_hpc.infra.remote.run_combiner_checked", return_value=(False, "", "boom")
-    ):
+    with patch("claude_hpc.infra.remote.run_combiner_checked", return_value=(False, "", "boom")):
         ok, _, _ = runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -161,9 +157,7 @@ def test_combine_wave_records_failure(journal_home, experiment):
 
 def test_combine_wave_failed_then_success_clears_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch(
-        "claude_hpc.infra.remote.run_combiner_checked", return_value=(False, "", "boom")
-    ):
+    with patch("claude_hpc.infra.remote.run_combiner_checked", return_value=(False, "", "boom")):
         runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -171,9 +165,7 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
             ssh_target="user@h",
             remote_path="/x",
         )
-    with patch(
-        "claude_hpc.infra.remote.run_combiner_checked", return_value=(True, "ok", "")
-    ):
+    with patch("claude_hpc.infra.remote.run_combiner_checked", return_value=(True, "ok", "")):
         runner.combine_wave(
             experiment,
             "ml_ridge_abcd1234",

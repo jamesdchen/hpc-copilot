@@ -25,7 +25,7 @@ def campaign_list(*, experiment_dir: Path) -> dict[str, Any]:
     are missing, unreadable, or carry no ``campaign_id``; counts the
     rest by campaign id. Returns the campaigns sorted alphabetically.
     """
-    from claude_hpc.orchestrator.runs import find_existing_runs, read_run_sidecar
+    from claude_hpc.orchestrator.state.runs import find_existing_runs, read_run_sidecar
 
     counts: Counter[str] = Counter()
     for path in find_existing_runs(experiment_dir):

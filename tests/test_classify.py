@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from claude_hpc.mapreduce.reduce.classify import CATEGORIES, classify_failure
-from claude_hpc.orchestrator.failure_signatures import classify as classify_signature
+from claude_hpc.orchestrator.state.failure_signatures import classify as classify_signature
 
 
 def test_gpu_oom_torch_message():

@@ -1,6 +1,6 @@
 """``monitor-flow``: workflow atom that polls a run to terminal.
 
-Pairs with :func:`claude_hpc.orchestrator.submit_flow.submit_flow` to give
+Pairs with :func:`claude_hpc.orchestrator.flows.submit_flow.submit_flow` to give
 higher-level workflows (campaigns, sweeps) a clean composition path:
 ``submit-flow → monitor-flow → next iteration``. Both atoms expose the
 same envelope shape, so the campaign loop's per-iteration code is just
@@ -55,7 +55,7 @@ from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.lifecycle import LifecycleState
 from claude_hpc.orchestrator import runner
 from claude_hpc.orchestrator.runner import mark_terminal, record_status
-from claude_hpc.orchestrator.runs import read_run_sidecar
+from claude_hpc.orchestrator.state.runs import read_run_sidecar
 
 try:
     import fcntl as _fcntl
@@ -232,7 +232,7 @@ def _read_partial_ok(experiment_dir: Path, run_id: str) -> bool:
     sidecar field) so the sidecar's frozen schema does not need to bump
     for this opt-in flag. See ``submit_flow.partial_ok``.
     """
-    from claude_hpc.orchestrator.runs import run_sidecar_path
+    from claude_hpc.orchestrator.state.runs import run_sidecar_path
 
     marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
     return marker.is_file()
@@ -252,7 +252,7 @@ def _write_failed_task_ids(
     documented in the D2b primitive doc — kept on disk (not in the
     sidecar) so aggregate-flow can read it without a sidecar parse.
     """
-    from claude_hpc.orchestrator.runs import run_sidecar_path
+    from claude_hpc.orchestrator.state.runs import run_sidecar_path
 
     target = run_sidecar_path(experiment_dir, run_id).with_suffix(".failed.json")
     target.parent.mkdir(parents=True, exist_ok=True)

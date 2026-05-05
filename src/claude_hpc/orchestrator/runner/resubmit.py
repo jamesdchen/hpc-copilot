@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._internal.session import RunRecord
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from claude_hpc._internal.session import RunRecord
 
 
 def derive_resubmit_request_id(

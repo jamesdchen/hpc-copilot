@@ -9,7 +9,7 @@ expression" dance — diverging on which survival atoms fire and how
 overrides reach the scheduler.
 
 :func:`resubmit_flow` is the macro that closes the loop. It mirrors
-:func:`~claude_hpc.orchestrator.submit_flow.submit_flow`'s shape —
+:func:`~claude_hpc.orchestrator.flows.submit_flow.submit_flow`'s shape —
 frozen result dataclass, keyword-only args, raises typed errors — and
 composes:
 
@@ -18,7 +18,7 @@ composes:
    when every failed task carries a preempt marker, before any
    cluster-side work.
 3. **Survival planner** —
-   :func:`~claude_hpc.orchestrator.resubmit_planner.plan_resubmit_overrides`
+   :func:`~claude_hpc.orchestrator.planning.resubmit_planner.plan_resubmit_overrides`
    applies the same atoms ``plan_submit`` runs, so a cold-start retry
    gets the mem buffer + walltime arbitrage the initial submit would
    have applied.
@@ -28,7 +28,7 @@ composes:
    the agent can throttle into a cheaper diurnal window.
 5. **Cluster-side resubmission** (opt-in via ``submit_to_cluster=True``)
    — composes the *same* atoms submit_flow uses on the resubmit shape:
-   :func:`~claude_hpc.orchestrator.resubmit_batching.resubmit_plan`
+   :func:`~claude_hpc.orchestrator.planning.resubmit_batching.resubmit_plan`
    packs the failed IDs into compact array expressions, the scheduler
    backend (Slurm/SGE) submits each batch with the planner-adjusted
    overrides rendered as ``extra_flags``, and the resulting job IDs
@@ -53,12 +53,12 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc import errors
 from claude_hpc._internal.lifecycle import FailureCategory
 from claude_hpc.orchestrator import runner
-from claude_hpc.orchestrator.resubmit_batching import resubmit_plan
-from claude_hpc.orchestrator.resubmit_planner import (
+from claude_hpc.orchestrator.planning.resubmit_batching import resubmit_plan
+from claude_hpc.orchestrator.planning.resubmit_planner import (
     PlannedResubmitOverrides,
     plan_resubmit_overrides,
 )
-from claude_hpc.orchestrator.runs import read_run_sidecar
+from claude_hpc.orchestrator.state.runs import read_run_sidecar
 
 if TYPE_CHECKING:
     import json as _json  # noqa: F401  # for type-checker symbol stability
@@ -346,11 +346,11 @@ def _submit_resubmit_batches(
       rendered as scheduler flags.
 
     *backend_factory* is an injection seam for tests — when ``None``
-    the production :func:`~claude_hpc.orchestrator.submit_flow._build_backend`
+    the production :func:`~claude_hpc.orchestrator.flows.submit_flow._build_backend`
     constructs a real SSH-backed scheduler client. Tests pass a stub
     that records calls without touching a network.
     """
-    from claude_hpc.orchestrator.constraints import ClusterConstraints
+    from claude_hpc.orchestrator.planning.constraints import ClusterConstraints
 
     plan = resubmit_plan(
         task_count=max(total_tasks, max(failed_task_ids) + 1),
@@ -362,7 +362,7 @@ def _submit_resubmit_batches(
     extra_flags = render_overrides_to_extra_flags(scheduler, effective_overrides)
 
     if backend_factory is None:
-        from claude_hpc.orchestrator.submit_flow import _build_backend
+        from claude_hpc.orchestrator.flows.submit_flow import _build_backend
 
         backend_obj = _build_backend(
             backend_name=scheduler,
@@ -407,7 +407,7 @@ def _submit_one_batch(
 ) -> str:
     """Submit one batch with a precomputed array expression. Returns the job id.
 
-    Mirrors :func:`~claude_hpc.orchestrator.submit_flow._make_single_array_submission`
+    Mirrors :func:`~claude_hpc.orchestrator.flows.submit_flow._make_single_array_submission`
     but accepts an arbitrary ``task_range`` (e.g., ``"3,7,12-14"``)
     instead of hardcoding ``"1-N"``, and threads ``extra_flags`` so the
     planner-adjusted overrides land on the qsub command line.

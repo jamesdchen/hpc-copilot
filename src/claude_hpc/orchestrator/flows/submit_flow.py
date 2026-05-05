@@ -36,8 +36,8 @@ from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
 from claude_hpc.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
 from claude_hpc.orchestrator import runner
-from claude_hpc.orchestrator.discover import discover_executors
 from claude_hpc.orchestrator.runner import submit_and_record
+from claude_hpc.orchestrator.state.discover import discover_executors
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -383,7 +383,7 @@ def submit_flow(
     # run sidecar so the two are reconcilable but the sidecar's frozen
     # schema doesn't need a bump for this opt-in flag.
     if partial_ok:
-        from claude_hpc.orchestrator.runs import run_sidecar_path
+        from claude_hpc.orchestrator.state.runs import run_sidecar_path
 
         marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
         with contextlib.suppress(OSError):

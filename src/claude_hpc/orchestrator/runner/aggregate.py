@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import json
 import shlex
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._time import utcnow_iso
-from claude_hpc._internal.session import RunRecord
 from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra import remote
 from claude_hpc.orchestrator.runner._ssh import _parse_remote_json, _split_ssh_target
+
+if TYPE_CHECKING:
+    from claude_hpc._internal.session import RunRecord
 
 
 def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> dict[str, Any]:

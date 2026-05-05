@@ -10,14 +10,17 @@ SSH calls and journal writes meet.
 
 from __future__ import annotations
 
-from claude_hpc._internal._time import utcnow_iso as _utcnow_iso
+# Private symbols (leading underscore) are intentional re-exports for
+# back-compat with external callers and tests that imported them from the
+# pre-split flat module. Keep the noqa.
+from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: F401
 from claude_hpc.orchestrator.runner._ssh import (
-    _parse_remote_json,
-    _split_ssh_target,
+    _parse_remote_json,  # noqa: F401
+    _split_ssh_target,  # noqa: F401
 )
 from claude_hpc.orchestrator.runner.aggregate import (
-    _read_remote_sidecar,
-    _wave_task_ids,
+    _read_remote_sidecar,  # noqa: F401
+    _wave_task_ids,  # noqa: F401
     build_provenance,
     verify_combiner_artifact,
     verify_per_task_outputs,
@@ -25,18 +28,18 @@ from claude_hpc.orchestrator.runner.aggregate import (
 )
 from claude_hpc.orchestrator.runner.combine import combine_wave
 from claude_hpc.orchestrator.runner.failures import (
-    _FAILURE_CATEGORY_PATTERNS,
-    _FINGERPRINT_NOISE,
+    _FAILURE_CATEGORY_PATTERNS,  # noqa: F401
+    _FINGERPRINT_NOISE,  # noqa: F401
     DEFAULT_AUTO_RETRY_POLICY,
-    _categorize,
+    _categorize,  # noqa: F401
     annotate_clusters_with_retry_advice,
     cluster_failures_by_fingerprint,
     fingerprint_stderr_tail,
 )
 from claude_hpc.orchestrator.runner.logs import fetch_task_logs
 from claude_hpc.orchestrator.runner.reconcile import (
-    _ssh_alive_job_ids,
-    _ssh_list_combined_waves,
+    _ssh_alive_job_ids,  # noqa: F401
+    _ssh_list_combined_waves,  # noqa: F401
     mark_terminal,
     reconcile,
 )
@@ -44,7 +47,10 @@ from claude_hpc.orchestrator.runner.resubmit import (
     derive_resubmit_request_id,
     resubmit_failed,
 )
-from claude_hpc.orchestrator.runner.status import _ssh_status_report, record_status
+from claude_hpc.orchestrator.runner.status import (
+    _ssh_status_report,  # noqa: F401
+    record_status,
+)
 from claude_hpc.orchestrator.runner.submit import build_job_env, submit_and_record
 
 __all__ = [

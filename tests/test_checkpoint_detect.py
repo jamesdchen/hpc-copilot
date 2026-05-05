@@ -1,4 +1,4 @@
-"""Tests for :func:`claude_hpc.orchestrator.checkpoint_detect.detect_checkpointing`.
+"""Tests for :func:`claude_hpc.orchestrator.state.checkpoint_detect.detect_checkpointing`.
 
 The detector gates auto-daisy-chain. A false positive silently wastes
 compute (chained job whose stage-1 doesn't checkpoint dies on
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from claude_hpc.orchestrator.checkpoint_detect import detect_checkpointing
+from claude_hpc.orchestrator.state.checkpoint_detect import detect_checkpointing
 
 if TYPE_CHECKING:
     from pathlib import Path

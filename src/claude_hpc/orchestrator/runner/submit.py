@@ -11,7 +11,7 @@ from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.session import RunRecord
-from claude_hpc.orchestrator.runs import find_run_by_cmd_sha, read_run_sidecar
+from claude_hpc.orchestrator.state.runs import find_run_by_cmd_sha, read_run_sidecar
 
 
 @primitive(

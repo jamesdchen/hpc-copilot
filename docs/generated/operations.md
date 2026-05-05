@@ -21,13 +21,13 @@ Read-only, no side effects. Freely composable; cacheable.
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`best-submit-window`](primitives/best-submit-window.md) | ✓ | _none_ | `hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` | `claude_hpc.agent_cli.cmd_best_submit_window` | `claude_hpc/schemas/best_submit_window.input.json` | `claude_hpc/schemas/best_submit_window.output.json` |
-| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `claude_hpc.orchestrator.campaign_health.campaign_health` | `claude_hpc/schemas/campaign_health.input.json` | `claude_hpc/schemas/campaign_health.output.json` |
+| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `claude_hpc.orchestrator.state.campaign_health.campaign_health` | `claude_hpc/schemas/campaign_health.input.json` | `claude_hpc/schemas/campaign_health.output.json` |
 | [`campaign-list`](primitives/campaign-list.md) | ✓ | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` | `claude_hpc.atoms.campaign_list.campaign_list` | — | — |
 | [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` | `claude_hpc.atoms.campaign_status.campaign_status` | — | — |
 | [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-mapreduce capabilities` | `claude_hpc.atoms.capabilities.capabilities` | — | `claude_hpc/schemas/capabilities.output.json` |
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-mapreduce clusters describe <name>` | `claude_hpc.atoms.clusters.describe_cluster` | — | `claude_hpc/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-mapreduce clusters list` | `claude_hpc.atoms.clusters.list_clusters` | — | `claude_hpc/schemas/clusters_list.output.json` |
-| [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-mapreduce discover --experiment-dir <path>` | `claude_hpc.orchestrator.discover.discover_executors` | — | `claude_hpc/schemas/discover.output.json` |
+| [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-mapreduce discover --experiment-dir <path>` | `claude_hpc.orchestrator.state.discover.discover_executors` | — | `claude_hpc/schemas/discover.output.json` |
 | [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-mapreduce failures --run-id <id> [--lines <n>]` | `claude_hpc.atoms.failures.fetch_failures` | — | `claude_hpc/schemas/failures.output.json` |
 | [`house-edge`](primitives/house-edge.md) | ✓ | _none_ | `hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` | `claude_hpc.atoms.house_edge.house_edge` | — | — |
 | [`inspect-cluster`](primitives/inspect-cluster.md) | ✓ | ssh | `hpc-mapreduce inspect-cluster --cluster <name> [...]` | `claude_hpc.infra.inspect.inspect_cluster` | — | `claude_hpc/schemas/inspect_cluster.output.json` |
@@ -47,7 +47,7 @@ Read + binary health check. Same composability as `query`.
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-mapreduce preflight [--cluster <name>]` | `claude_hpc.atoms.preflight.check_preflight` | — | `claude_hpc/schemas/preflight.output.json` |
-| [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `claude_hpc.orchestrator.validate.validate_submission` | `claude_hpc/schemas/validate.input.json` | `claude_hpc/schemas/validate.output.json` |
+| [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `claude_hpc.orchestrator.state.validate.validate_submission` | `claude_hpc/schemas/validate.input.json` | `claude_hpc/schemas/validate.output.json` |
 
 ## `mutate` (4)
 
@@ -83,7 +83,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | rsync; ssh; writes-journal | `hpc-mapreduce aggregate-flow --spec <path>` | `claude_hpc.orchestrator.aggregate_flow.aggregate_flow` | `claude_hpc/schemas/aggregate_flow.input.json` | `claude_hpc/schemas/aggregate_flow.output.json` |
-| [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-mapreduce monitor-flow --spec <path>` | `claude_hpc.orchestrator.monitor_flow.monitor_flow` | `claude_hpc/schemas/monitor_flow.input.json` | `claude_hpc/schemas/monitor_flow.output.json` |
-| [`submit-flow`](primitives/submit-flow.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-mapreduce submit-flow --spec <path>` | `claude_hpc.orchestrator.submit_flow.submit_flow` | `claude_hpc/schemas/submit_flow.input.json` | `claude_hpc/schemas/submit_flow.output.json` |
+| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | rsync; ssh; writes-journal | `hpc-mapreduce aggregate-flow --spec <path>` | `claude_hpc.orchestrator.flows.aggregate_flow.aggregate_flow` | `claude_hpc/schemas/aggregate_flow.input.json` | `claude_hpc/schemas/aggregate_flow.output.json` |
+| [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-mapreduce monitor-flow --spec <path>` | `claude_hpc.orchestrator.flows.monitor_flow.monitor_flow` | `claude_hpc/schemas/monitor_flow.input.json` | `claude_hpc/schemas/monitor_flow.output.json` |
+| [`submit-flow`](primitives/submit-flow.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-mapreduce submit-flow --spec <path>` | `claude_hpc.orchestrator.flows.submit_flow.submit_flow` | `claude_hpc/schemas/submit_flow.input.json` | `claude_hpc/schemas/submit_flow.output.json` |
 

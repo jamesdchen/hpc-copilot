@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from claude_hpc.agent_cli import _resolve_auto_retry
 from claude_hpc.orchestrator.runner import DEFAULT_AUTO_RETRY_POLICY
-from claude_hpc.orchestrator.runs import write_run_sidecar
+from claude_hpc.orchestrator.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
