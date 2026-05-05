@@ -2,6 +2,20 @@ Monitor running HPC jobs via SSH and take corrective action.
 
 Per-operation contracts live in `docs/primitives/` — this skill composes the [poll-run-status](../../docs/primitives/poll-run-status.md), [combine-wave](../../docs/primitives/combine-wave.md), [resubmit-failed](../../docs/primitives/resubmit-failed.md), [reconcile-journal](../../docs/primitives/reconcile-journal.md), and [mark-run-terminal](../../docs/primitives/mark-run-terminal.md) primitives behind a tick-driven adaptive monitoring loop. For envelope/exit-code shapes see `docs/reference/cli-spec.md`.
 
+> ## ⚠️ EXIT CONTRACT — read before anything else
+>
+> Every `/monitor-hpc` invocation is **one tick that arms the next tick**, not a one-off. Before exiting, you MUST do exactly one of:
+>
+> 1. **Arm `CronCreate`** for any tick that may outlive the session (delay ≥ 5 min, or any HPC queue-wait — i.e. essentially always for HPC). Survives session boundaries.
+> 2. **Arm `ScheduleWakeup`** only for sub-5-min in-session ticks where adaptive cadence matters.
+> 3. **Skip arming** only when the run reached a terminal state (`complete` / `failed` / `abandoned`) — and in that case you MUST cancel any existing cron for this run_id.
+>
+> Then emit the final line of stdout in this exact form:
+>
+>     armed: <cron|wakeup|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
+>
+> `none` is only valid when terminal-state cleanup ran. Anything else (including silent exit) is a spec violation. If you are about to exit without this line, you have not completed the tick — restart Step 5.
+
 ## Setup
 
 1. **Resolve experiment dir**: `experiment_dir = cwd`.
@@ -443,6 +457,21 @@ Otherwise, schedule exactly **one** follow-up tick. Pick the mechanism by horizo
 - **`/loop <interval> /monitor-hpc <args>`** (user-driven): a recurring self-pacing loop the user can ctrl-c. Use this when the user explicitly says they want to drive the cadence themselves.
 
 Then exit. The next invocation re-enters from Setup, hydrates state from the run journal (`session.find_in_flight_runs`), and runs Step 0.5 → Step 1 again.
+
+### Required final line — exit contract
+
+Every invocation MUST emit this line as the last line of stdout, regardless of which mechanism was chosen (or whether one was needed):
+
+    armed: <cron|wakeup|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
+
+| Mechanism | When | Cadence field |
+|---|---|---|
+| `cron`     | CronCreate registered or updated for this run_id | the schedule's interval in seconds (e.g. 300 for `*/5 * * * *`) |
+| `wakeup`   | ScheduleWakeup armed (in-session, sub-5-min only) | `delaySeconds` you passed |
+| `loop`     | User explicitly invoked via `/loop` | the user-chosen interval in seconds |
+| `none`     | Run reached terminal state and any prior cron was cancelled | `0` |
+
+If you cannot construct this line, you have not completed the tick — go back to Step 5 and arm a follow-up. Silent exit is a spec violation.
 
 ### Adaptive delay table
 
