@@ -52,17 +52,44 @@ def campaign_converged(
     max_iters: int | None = None,
     metric: str | None = None,
     target: float | None = None,
-    direction: Literal["minimize", "maximize"] = "minimize",
+    direction: Literal["minimize", "maximize"] | None = None,
     plateau_window: int | None = None,
-    plateau_tolerance: float = 0.0,
+    plateau_tolerance: float | None = None,
 ) -> dict[str, Any]:
     """Apply stop criteria to the campaign's reduced-metric history.
 
     Returns ``{converged, reason, iterations, best_metric, ...}``.
     The agent reads ``converged`` to decide whether to launch the next
     iteration; ``reason`` is human-readable for the slash-command UX.
+
+    Manifest defaults: any arg left as ``None`` falls back to the
+    matching field under ``stop_criteria`` in
+    ``<campaign_dir>/manifest.json`` if the manifest exists. Explicit
+    CLI args always win.
     """
+    from claude_hpc.campaign.manifest import read_manifest
     from claude_hpc.mapreduce.reduce.history import prior
+
+    manifest_stop: dict[str, Any] = {}
+    try:
+        manifest = read_manifest(experiment_dir, campaign_id)
+    except Exception:
+        manifest = None
+    if manifest is not None:
+        manifest_stop = manifest.get("stop_criteria") or {}
+
+    if max_iters is None:
+        max_iters = manifest_stop.get("max_iters")
+    if metric is None:
+        metric = manifest_stop.get("metric")
+    if target is None:
+        target = manifest_stop.get("target")
+    if direction is None:
+        direction = manifest_stop.get("direction") or "minimize"
+    if plateau_window is None:
+        plateau_window = manifest_stop.get("plateau_window")
+    if plateau_tolerance is None:
+        plateau_tolerance = float(manifest_stop.get("plateau_tolerance") or 0.0)
 
     history = prior(experiment_dir, campaign_id)
     n_iters = sum(1 for entry in history if entry)  # only completed iters
