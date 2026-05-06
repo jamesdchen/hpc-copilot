@@ -22,6 +22,8 @@ from dataclasses import asdict, dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from claude_hpc import errors
+from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal._time import utcnow
 from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
@@ -53,6 +55,13 @@ class WindowCandidate:
         return asdict(self)
 
 
+@primitive(
+    name="best-submit-window",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.HpcError],
+    idempotent=True,
+)
 def best_submit_windows(
     experiment_dir: Path,
     *,

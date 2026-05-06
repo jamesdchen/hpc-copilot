@@ -51,7 +51,9 @@ import os
 import statistics
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc import errors
 from claude_hpc._internal._io import atomic_locked_update
+from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow_iso
 
 if TYPE_CHECKING:
@@ -357,6 +359,13 @@ def _quantile(values: list[int], q: float) -> int:
     return int(round(s[lo] * (1 - frac) + s[hi] * frac))
 
 
+@primitive(
+    name="read-runtime-prior",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def roll_up_quantiles(
     experiment_dir: Path,
     *,

@@ -33,7 +33,6 @@ from typing import Any
 import claude_hpc
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.state.discover import (
     detect_mars_tier,
     discover_executors,
@@ -534,13 +533,6 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
 # ─── subcommand: runtime-prior ─────────────────────────────────────────────
 
 
-@primitive(
-    name="read-runtime-prior",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_runtime_prior(args: argparse.Namespace) -> int:
     from claude_hpc.state.runtime_prior import roll_up_quantiles
 
@@ -574,13 +566,6 @@ def cmd_walltime_drift(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-@primitive(
-    name="best-submit-window",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.HpcError],
-    idempotent=True,
-)
 def cmd_best_submit_window(args: argparse.Namespace) -> int:
     """Surface the top_k lowest-wait submit windows in the next horizon.
 
@@ -621,13 +606,6 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-@primitive(
-    name="predict-queue-wait",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     """Forecast queue-wait seconds for a hypothetical submit.
 
@@ -681,13 +659,6 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
 # ─── subcommand: plan-submit ───────────────────────────────────────────────
 
 
-@primitive(
-    name="score-submit-plan",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster> (delegates to inspect-cluster)")],
-    error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.ClusterUnknown],
-    idempotent=True,
-)
 def cmd_plan_submit(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -1734,20 +1705,6 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
 # ─── subcommand: reconcile ─────────────────────────────────────────────────
 
 
-@primitive(
-    name="reconcile-journal",
-    verb="mutate",
-    side_effects=[
-        SideEffect(
-            "writes-journal",
-            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
-        ),
-        SideEffect("ssh", "<cluster>"),
-    ],
-    error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
-    idempotent=True,
-    idempotency_key="run_id",
-)
 def cmd_reconcile(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -1877,38 +1834,16 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
 # ─── subcommand: build-executor ────────────────────────────────────────────
 
 
-@primitive(
-    name="build-executor",
-    verb="scaffold",
-    side_effects=[
-        SideEffect(
-            "writes-file",
-            "<output_dir>/<name>.py (refuses to overwrite without --force)",
-        ),
-    ],
-    idempotent=False,
-)
 def cmd_build_executor(args: argparse.Namespace) -> int:
-    starters = claude_hpc._PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
-    template_map = {
-        "plain": starters / "executor_template.py",
-    }
-    if args.type not in template_map:
-        raise errors.SpecInvalid(
-            f"unknown --type {args.type!r}; choose from {sorted(template_map)}"
-        )
-    src = template_map[args.type]
-    if not src.exists():
-        raise errors.ConfigInvalid(f"template missing on disk: {src}")
-    dest = (args.output_dir / args.name).with_suffix(".py")
-    if dest.exists() and not args.force:
-        raise errors.SpecInvalid(f"refusing to overwrite {dest}; pass --force to overwrite")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_text(src.read_text())
-    _ok(
-        {"path": str(dest.resolve()), "type": args.type, "source": str(src)},
-        name="build-executor",
+    from claude_hpc.atoms.build_executor import build_executor
+
+    data = build_executor(
+        output_dir=args.output_dir,
+        name=args.name,
+        type=args.type,
+        force=args.force,
     )
+    _ok(data, name="build-executor")
     return EXIT_OK
 
 

@@ -36,6 +36,8 @@ import re
 import subprocess
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc import errors
+from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import parse_iso_utc, utcnow, utcnow_iso
 
 if TYPE_CHECKING:
@@ -71,6 +73,13 @@ from claude_hpc.infra.inspect import NodeSnapshot, inspect_cluster
 from claude_hpc.state.runtime_prior import read_samples, roll_up_quantiles
 
 
+@primitive(
+    name="score-submit-plan",
+    verb="query",
+    side_effects=[SideEffect("ssh", "<cluster> (delegates to inspect-cluster)")],
+    error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.ClusterUnknown],
+    idempotent=True,
+)
 def plan_submit(
     experiment_dir: Path,
     *,

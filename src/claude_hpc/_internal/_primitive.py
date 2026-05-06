@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -52,6 +52,10 @@ if TYPE_CHECKING:
 
 
 VerbKind = Literal["query", "validate", "mutate", "submit", "scaffold", "workflow"]
+
+# Preserve the decorated function's signature so mypy sees the original
+# return type at call sites (the decorator returns the func unchanged).
+F = TypeVar("F", bound="Callable[..., Any]")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -103,7 +107,7 @@ def primitive(
     idempotency_key: str | None = None,
     exit_codes: Iterable[tuple[int, str]] | None = None,
     description: str | None = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+) -> Callable[[F], F]:
     """Register a primitive in the runtime catalog.
 
     The decorated function IS the primitive's behavior. Decorator
@@ -125,7 +129,7 @@ def primitive(
     *different* function under an existing name raises ``ValueError``.
     """
 
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(func: F) -> F:
         if name in _REGISTRY:
             existing = _REGISTRY[name].func
             if existing is func:
@@ -208,6 +212,8 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.state.runs",
     "claude_hpc.state.runtime_prior",
     "claude_hpc.forecast.calibration",
+    "claude_hpc.forecast.best_submit_window",
+    "claude_hpc.forecast.queue_wait_baseline",
     "claude_hpc.state.discover",
     "claude_hpc.planning.resubmit_batching",
     "claude_hpc.planning.planner",
@@ -217,6 +223,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.agent_cli",
     "claude_hpc.atoms.axes_init",
     "claude_hpc.atoms.aggregation_invariants",
+    "claude_hpc.atoms.build_executor",
     "claude_hpc.atoms.build_submit_spec",
     "claude_hpc.atoms.build_tasks_py",
     "claude_hpc.atoms.canary_verify",

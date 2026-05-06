@@ -31,10 +31,10 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.agent_cli import cmd_plan_submit
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
 from claude_hpc.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
+from claude_hpc.planning.planner import plan_submit
 from claude_hpc.runner import submit_and_record
 from claude_hpc.state.discover import discover_executors
 
@@ -262,7 +262,7 @@ def _make_single_array_submission(
 @primitive(
     name="submit-flow",
     verb="workflow",
-    composes=[submit_and_record, discover_executors, cmd_plan_submit],
+    composes=[submit_and_record, discover_executors, plan_submit],
     side_effects=[
         SideEffect("rsync", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster>"),
@@ -470,7 +470,7 @@ def _submit_one_spec(
 @primitive(
     name="submit-flow-batch",
     verb="workflow",
-    composes=[submit_and_record, discover_executors, cmd_plan_submit],
+    composes=[submit_and_record, discover_executors, plan_submit],
     side_effects=[
         SideEffect("rsync", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster> (one qsub per spec)"),
