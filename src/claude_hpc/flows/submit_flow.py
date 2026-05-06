@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec
     from claude_hpc.infra.backends import HPCBackend
 
 __all__ = ["SubmitSpec", "SubmitFlowResult", "submit_flow", "submit_flow_batch"]
@@ -482,18 +483,31 @@ def _submit_one_spec(
     agent_facing=True,
 )
 def submit_flow_batch(
-    *,
     experiment_dir: Path,
-    specs: list[SubmitSpec],
+    *,
+    spec: "SubmitFlowBatchSpec | None" = None,
+    specs: list[SubmitSpec] | None = None,
     rsync_excludes: list[str] | None = None,
     skip_preflight: bool = False,
 ) -> list[SubmitFlowResult]:
     """Submit N specs that share ``(ssh_target, remote_path)`` in one shot.
 
-    The motivating problem: a campaign-time fan-out of N submissions used
-    to do N × (rsync + deploy_runtime + qsub), which sent ~13×N ssh
-    handshakes at the cluster's sshd and tripped MaxStartups (CARC,
-    typically). The bundle collapses that to:
+    Two argument shapes:
+
+    - **Wire-spec path (preferred)**: pass ``spec=SubmitFlowBatchSpec(...)``.
+      The Pydantic model is the wire-validated authoring SoT for the
+      ``submit-flow-batch --spec`` CLI surface; ``rsync_excludes`` and
+      ``skip_preflight`` are pulled from the spec when set there.
+    - **Legacy Python path**: pass ``specs=[SubmitSpec(...), ...]``
+      (frozen-dataclass list). Used by tests and pre-migration callers.
+      Empty ``specs=[]`` short-circuits to ``[]`` (the historical
+      defensive contract; the wire schema's ``minItems: 1`` rejects
+      empty before reaching this code).
+
+    The motivating problem: a campaign-time fan-out of N submissions
+    used to do N × (rsync + deploy_runtime + qsub), which sent ~13×N
+    ssh handshakes at the cluster's sshd and tripped MaxStartups
+    (CARC, typically). The bundle collapses that to:
 
     * 1 ssh probe (preflight)
     * 1 ``rsync_push`` (the codebase is identical across specs)
@@ -515,7 +529,54 @@ def submit_flow_batch(
 
     Order of returned results matches the order of *specs*.
     """
-    if not specs:
+    if spec is not None:
+        # Wire path: convert each outer-shape Pydantic spec into the
+        # internal SubmitSpec dataclass the pipeline already consumes.
+        # _SubmitFlowSpecOuter has ``extra="allow"`` so model_dump
+        # carries any forward-compatible fields the pipeline may have
+        # learned about; SubmitSpec ignores extras at construction.
+        internal_specs = [
+            SubmitSpec(
+                profile=s.profile,
+                cluster=s.cluster,
+                ssh_target=s.ssh_target,
+                remote_path=s.remote_path,
+                job_name=s.job_name,
+                run_id=s.run_id,
+                total_tasks=s.total_tasks,
+                backend=s.backend,
+                **{
+                    k: v
+                    for k, v in s.model_dump(exclude_none=False).items()
+                    if k
+                    not in {
+                        "profile",
+                        "cluster",
+                        "ssh_target",
+                        "remote_path",
+                        "job_name",
+                        "run_id",
+                        "total_tasks",
+                        "backend",
+                    }
+                    and k in SubmitSpec.__dataclass_fields__
+                },
+            )
+            for s in spec.specs
+        ]
+        if spec.rsync_excludes is not None:
+            rsync_excludes = list(spec.rsync_excludes)
+        if spec.skip_preflight is not None:
+            skip_preflight = spec.skip_preflight
+    elif specs is not None:
+        internal_specs = list(specs)
+    else:
+        raise TypeError(
+            "submit_flow_batch requires either spec=SubmitFlowBatchSpec(...) "
+            "or specs=[SubmitSpec(...), ...]"
+        )
+
+    if not internal_specs:
         return []
 
     # Per-repo advisory submit lock: serialize multiple `submit-flow` /
@@ -536,7 +597,7 @@ def submit_flow_batch(
     with lock_ctx:
         return _submit_flow_batch_locked(
             experiment_dir=experiment_dir,
-            specs=specs,
+            specs=internal_specs,
             rsync_excludes=rsync_excludes,
             skip_preflight=skip_preflight,
         )
