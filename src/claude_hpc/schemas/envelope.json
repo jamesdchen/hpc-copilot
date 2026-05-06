@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json",
   "title": "CLI envelope",
-  "description": "Universal envelope wrapping every hpc-mapreduce stdout response. The `$defs` block at the bottom holds reusable subschemas — run_id (loose + strict), combined_waves, failed_waves, lifecycle_state (terminal / observable / observable+timeout), scheduler, gpu_type, error_code. Note: at the time of writing, the agent_cli's jsonschema.validate path does not register a RefResolver, so cross-file `$ref` does not resolve; consumer schemas must therefore inline these definitions verbatim. `$defs` here is the canonical source of truth, and tests/test_schema_defs_consistency.py asserts every inline copy stays byte-equivalent.",
+  "description": "Universal envelope wrapping every hpc-mapreduce stdout response. The `$defs` block at the bottom holds reusable subschemas — run_id (loose + strict), combined_waves, failed_waves, lifecycle_state (terminal / observable / observable+timeout), scheduler, gpu_type, error_code. Consumer schemas reference these via `$ref` (e.g. `https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id`); resolution is wired through `claude_hpc._internal._schema.schema_registry` (`referencing.Registry`).",
   "$defs": {
     "run_id": {
       "type": "string",

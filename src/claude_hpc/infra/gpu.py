@@ -143,16 +143,16 @@ def _run_qstat(ssh_host: str | None = None) -> str | None:
     if ssh_host:
         # Lazy import to avoid a hard dependency for the local-qstat path.
         from claude_hpc.infra.remote import (  # noqa: PLC0415
-            split_ssh_target,
             ssh_run,
+            validate_ssh_target,
         )
 
         try:
-            user, host = split_ssh_target(ssh_host)
+            validate_ssh_target(ssh_host)
         except ValueError:
             return None
         try:
-            result = ssh_run("qstat -f -q gpu_*", host=host, user=user)
+            result = ssh_run("qstat -f -q gpu_*", ssh_target=ssh_host)
         except (TimeoutError, OSError):
             return None
         if result.returncode == 0:

@@ -183,6 +183,9 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 # slash commands that imported them by name continue to work. New code
 # should prefer ``RepoLayout(experiment_dir).hpc`` / ``.runs`` /
 # ``.tasks`` directly.
+#
+# back-compat: introduced 0.2.0 (RepoLayout split). Remove in 0.4.0 —
+# audit external callers via search; slash_commands/ is in-tree.
 # ---------------------------------------------------------------------------
 
 HPC_SUBDIR: str = ".hpc"

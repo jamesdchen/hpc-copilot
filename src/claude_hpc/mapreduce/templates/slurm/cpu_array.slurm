@@ -52,7 +52,7 @@ echo "============================================"
 # --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---
 # See claude_hpc/mapreduce/templates/common/hpc_preamble.sh — deployed alongside
 # this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.
-source "$(dirname "$0")/common/hpc_preamble.sh"
+source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"
 
 # Bind CPU threads to allocated cores ($SLURM_CPUS_PER_TASK — SLURM-specific).
 # Honors the campus user's HPC_OMP_NUM_THREADS / HPC_MKL_NUM_THREADS env

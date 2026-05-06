@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/verify_canary.output.json",
+  "title": "verify-canary output",
+  "description": "Result of the wait + grep + output-check protocol for a 1-task canary. Caller branches on `ok`: True → main array submit; False → surface stderr_tail to the user verbatim.",
+  "type": "object",
+  "required": ["ok", "failure_kind", "details", "stderr_tail"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "failure_kind": {
+      "type": ["string", "null"],
+      "enum": [
+        "dispatcher_failed",
+        "import_error",
+        "module_not_found",
+        "traceback",
+        "oom_killed",
+        "segfault",
+        "missing_output",
+        "timeout",
+        "abandoned",
+        null
+      ]
+    },
+    "details": {
+      "type": "string",
+      "description": "One-line human-readable summary the slash command surfaces above the raw stderr_tail."
+    },
+    "stderr_tail": {
+      "type": "string",
+      "description": "Last ~50 lines of the canary's stderr log (or empty string when not retrievable)."
+    }
+  }
+}

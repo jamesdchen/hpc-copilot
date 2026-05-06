@@ -31,19 +31,51 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.agent_cli import cmd_plan_submit
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
-from claude_hpc.infra.remote import deploy_runtime, rsync_push, split_ssh_target, ssh_run
+from claude_hpc.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
+from claude_hpc.planning.planner import plan_submit
 from claude_hpc.runner import submit_and_record
 from claude_hpc.state.discover import discover_executors
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
     from claude_hpc.infra.backends import HPCBackend
 
-__all__ = ["submit_flow", "SubmitFlowResult"]
+__all__ = ["SubmitSpec", "SubmitFlowResult", "submit_flow", "submit_flow_batch"]
+
+
+@dataclass(frozen=True)
+class SubmitSpec:
+    """One leaf submission inside a (possibly batched) submit pipeline.
+
+    Mirrors the kwargs that :func:`submit_flow` already accepts, just
+    bundled into a frozen record so :func:`submit_flow_batch` can fan
+    out N submissions sharing one ``(ssh_target, remote_path)`` without
+    repeating the rsync + deploy. Field-for-field equivalence with
+    :func:`submit_flow`'s signature is intentional — call sites can
+    construct a ``SubmitSpec`` from the same dict they pass today.
+    """
+
+    profile: str
+    cluster: str
+    ssh_target: str
+    remote_path: str
+    job_name: str
+    run_id: str
+    total_tasks: int
+    backend: str
+    script: str
+    job_env: dict[str, str]
+    pass_env_keys: list[str] | None = None
+    canary: bool = True
+    campaign_id: str = ""
+    runtime: str | None = None
+    slurm_account: str | None = None
+    slurm_cluster: str | None = None
+    partial_ok: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,13 +103,13 @@ class SubmitFlowResult:
         }
 
 
-def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
+def _validate_ssh_target(ssh_target: str) -> str:
+    """Wrap :func:`validate_ssh_target` to raise the surface-appropriate
     error type. The shared helper raises ``ValueError``; this flow
     surfaces ``SpecInvalid`` so callers see a typed envelope error.
     """
     try:
-        return split_ssh_target(ssh_target)
+        return validate_ssh_target(ssh_target)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
 
@@ -100,10 +132,10 @@ def _build_backend(
     are never used here. submit-flow is for laptop-driven submissions
     only.
     """
-    user, host = _split_ssh_target(ssh_target)
+    _validate_ssh_target(ssh_target)
 
     def ssh(cmd: str):
-        return ssh_run(cmd, host=host, user=user)
+        return ssh_run(cmd, ssh_target=ssh_target)
 
     if backend_name == "sge_remote":
         keys = pass_env_keys if pass_env_keys is not None else job_env_keys
@@ -122,6 +154,78 @@ def _build_backend(
             cluster=slurm_cluster,
         )
     raise errors.SpecInvalid(f"unknown backend: {backend_name!r}")
+
+
+def _preflight_probe(ssh_target: str, *, skip: bool) -> None:
+    """Single ssh probe to verify cluster reachability. Caller may skip."""
+    if skip:
+        return
+    probe = ssh_run("true", ssh_target=ssh_target)
+    if probe.returncode != 0:
+        raise errors.SshUnreachable(
+            f"pre-flight ssh probe to {ssh_target} failed (exit {probe.returncode}): "
+            f"{(probe.stderr or '').strip()[:200]}"
+        )
+
+
+def _push_and_deploy(
+    *,
+    experiment_dir: Path,
+    ssh_target: str,
+    remote_path: str,
+    rsync_excludes: list[str] | None,
+) -> None:
+    """rsync_push + deploy_runtime — the expensive ssh fan-out, done once.
+
+    Extracted so :func:`submit_flow_batch` can run it once across N
+    specs that share ``(ssh_target, remote_path)``. The previous
+    architecture re-ran both for every spec, which is what tripped
+    cluster sshd MaxStartups under campaign-time fan-out (see commit
+    0c99e1f / the SSH-backoff commit).
+    """
+    push_result = rsync_push(
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        local_path=experiment_dir,
+        exclude=rsync_excludes,
+    )
+    if push_result.returncode != 0:
+        raise errors.RemoteCommandFailed(
+            f"rsync push failed (exit {push_result.returncode}): "
+            f"{(push_result.stderr or '').strip()[:300]}"
+        )
+    deploy_runtime(ssh_target=ssh_target, remote_path=remote_path)
+
+
+def _augment_job_env(
+    *,
+    job_env: dict[str, str],
+    runtime: str | None,
+    campaign_id: str,
+    cluster: str,
+) -> dict[str, str]:
+    """Layer the framework-driven env vars on top of the caller's job_env.
+
+    Three augmentations: ``HPC_RUNTIME=uv`` when the spec asks for it,
+    ``HPC_CAMPAIGN_ID`` when the run is part of a closed-loop campaign,
+    and ``HPC_NFS_DATA_DIR`` from the cluster's ``nfs_data_dir`` setting
+    (NFS-staging survival). Caller-supplied keys win via setdefault.
+    """
+    out = dict(job_env)
+    if runtime == "uv":
+        out.setdefault("HPC_RUNTIME", "uv")
+    if campaign_id:
+        out.setdefault("HPC_CAMPAIGN_ID", campaign_id)
+    from claude_hpc.infra.clusters import get_nfs_data_dir, load_clusters_config
+
+    cluster_cfg = load_clusters_config().get(cluster, {})
+    try:
+        nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
+    except (ValueError, TypeError):
+        nfs_dir = None
+    if nfs_dir:
+        out.setdefault("HPC_NFS_DATA_DIR", nfs_dir)
+    return out
 
 
 def _make_single_array_submission(
@@ -158,7 +262,7 @@ def _make_single_array_submission(
 @primitive(
     name="submit-flow",
     verb="workflow",
-    composes=[submit_and_record, discover_executors, cmd_plan_submit],
+    composes=[submit_and_record, discover_executors, plan_submit],
     side_effects=[
         SideEffect("rsync", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster>"),
@@ -226,174 +330,281 @@ def submit_flow(
     flag mirrors the grid-sweep ``--partial-ok`` usage where one OOMing
     config shouldn't abort an N-config sweep.
     """
-    # Idempotency: short-circuit before touching the cluster.
-    existing = session.load_run(experiment_dir, run_id)
-    if existing is not None:
-        return SubmitFlowResult(
-            run_id=existing.run_id,
-            job_ids=list(existing.job_ids),
-            total_tasks=int(existing.total_tasks),
-            deduped=True,
-            canary_done=False,
-        )
-
-    user, host = _split_ssh_target(ssh_target)
-
-    # Pre-flight: a single SSH probe is the cheapest "is the cluster
-    # reachable" signal. Caller can skip if they just ran `check-preflight`.
-    if not skip_preflight:
-        probe = ssh_run("true", host=host, user=user)
-        if probe.returncode != 0:
-            raise errors.SshUnreachable(
-                f"pre-flight ssh probe to {ssh_target} failed (exit {probe.returncode}): "
-                f"{(probe.stderr or '').strip()[:200]}"
-            )
-
-    # Push code.
-    push_result = rsync_push(
-        host=host,
-        user=user,
-        remote_path=remote_path,
-        local_path=experiment_dir,
-        exclude=rsync_excludes,
-    )
-    if push_result.returncode != 0:
-        raise errors.RemoteCommandFailed(
-            f"rsync push failed (exit {push_result.returncode}): "
-            f"{(push_result.stderr or '').strip()[:300]}"
-        )
-
-    # Deploy framework files.
-    deploy_runtime(host=host, user=user, remote_path=remote_path)
-
-    # Honour the runtime tag — submit-spec docs say HPC_RUNTIME=uv makes
-    # the cluster-side template's `uv sync` preamble fire. Caller may or
-    # may not have already set this in job_env; guarantee it here when
-    # the spec carries runtime="uv".
-    job_env_full = dict(job_env)
-    if runtime == "uv":
-        job_env_full.setdefault("HPC_RUNTIME", "uv")
-
-    # If part of a campaign, ensure HPC_CAMPAIGN_ID is forwarded to the
-    # cluster — the user's tasks.py reads it at module load.
-    if campaign_id:
-        job_env_full.setdefault("HPC_CAMPAIGN_ID", campaign_id)
-
-    # NFS-staging survival: if the cluster has nfs_data_dir configured
-    # in clusters.yaml, thread it through as $HPC_NFS_DATA_DIR so the
-    # template preamble copies the dataset into node-local SSD before
-    # the executor runs. Without this, a 200-task array all open()ing
-    # the same NFS files at once is the textbook way to get throttled.
-    # Caller-supplied job_env wins (setdefault), so per-experiment
-    # overrides still work (e.g. swapping in a different dataset).
-    #
-    # B-M3: scope the try/except to JUST the get_nfs_data_dir() call.
-    # Previously it wrapped the whole block, so a malformed
-    # ``nfs_data_dir: ""`` (which raises ValueError from the validator)
-    # would silently zero out the entire cluster config — including
-    # cold_start_mem_buffer, scheduler routing, and other fields the
-    # campus user actually configured. Let load_clusters_config errors
-    # bubble up — they were never silently survivable elsewhere — and
-    # only swallow the narrow "this one optional field is malformed"
-    # case, which preserves the rest of the cluster config so the run
-    # survives the misconfig.
-    from claude_hpc.infra.clusters import get_nfs_data_dir, load_clusters_config
-
-    cluster_cfg = load_clusters_config().get(cluster, {})
-    try:
-        nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
-    except (ValueError, TypeError):
-        # nfs_data_dir is opt-in survival; a malformed value should not
-        # prevent submission. The rest of cluster_cfg is still available
-        # to the planner/backfill helpers.
-        nfs_dir = None
-    if nfs_dir:
-        job_env_full.setdefault("HPC_NFS_DATA_DIR", nfs_dir)
-
-    backend_obj = _build_backend(
-        backend_name=backend,
-        script=script,
-        ssh_target=ssh_target,
-        remote_path=remote_path,
-        pass_env_keys=tuple(pass_env_keys) if pass_env_keys is not None else None,
-        job_env_keys=tuple(job_env_full.keys()),
-        slurm_account=slurm_account,
-        slurm_cluster=slurm_cluster,
-    )
-
-    # Optional canary. Submits but does NOT wait — the slash-command
-    # surface owns the elaborate "wait for terminal + verify outputs"
-    # protocol. submit-flow's canary is a smoke test of the submission
-    # machinery itself (qsub accepts the spec, scheduler returns a job
-    # id). Higher-level callers needing full canary verification should
-    # invoke /submit-hpc the slash command.
-    canary_run_id: str | None = None
-    canary_job_ids: list[str] | None = None
-    canary_done = False
-    if canary:
-        canary_run_id = f"{run_id}-canary"
-        canary_env = dict(job_env_full)
-        canary_env["HPC_RUN_ID"] = canary_run_id
-        canary_env["HPC_TASK_COUNT"] = "1"
-        canary_job_ids = _make_single_array_submission(
-            backend_obj,
-            job_name=f"{job_name}_canary",
-            total_tasks=1,
-            job_env=canary_env,
-            cwd=experiment_dir,
-        )
-        runner.submit_and_record(
-            experiment_dir,
-            profile=profile,
-            cluster=cluster,
-            ssh_target=ssh_target,
-            remote_path=remote_path,
-            job_name=f"{job_name}_canary",
-            run_id=canary_run_id,
-            job_ids=canary_job_ids,
-            total_tasks=1,
-            campaign_id=campaign_id,
-        )
-        canary_done = True
-
-    # Main submission.
-    job_ids = _make_single_array_submission(
-        backend_obj,
-        job_name=job_name,
-        total_tasks=total_tasks,
-        job_env=job_env_full,
-        cwd=experiment_dir,
-    )
-    runner.submit_and_record(
-        experiment_dir,
+    spec = SubmitSpec(
         profile=profile,
         cluster=cluster,
         ssh_target=ssh_target,
         remote_path=remote_path,
         job_name=job_name,
         run_id=run_id,
-        job_ids=job_ids,
         total_tasks=total_tasks,
+        backend=backend,
+        script=script,
+        job_env=dict(job_env),
+        pass_env_keys=list(pass_env_keys) if pass_env_keys is not None else None,
+        canary=canary,
         campaign_id=campaign_id,
+        runtime=runtime,
+        slurm_account=slurm_account,
+        slurm_cluster=slurm_cluster,
+        partial_ok=partial_ok,
+    )
+    results: list[SubmitFlowResult] = submit_flow_batch(
+        experiment_dir=experiment_dir,
+        specs=[spec],
+        rsync_excludes=rsync_excludes,
+        skip_preflight=skip_preflight,
+    )
+    return results[0]
+
+
+def _dedup_existing(experiment_dir: Path, spec: SubmitSpec) -> SubmitFlowResult | None:
+    """Return a deduped SubmitFlowResult if a journal record already exists."""
+    existing = session.load_run(experiment_dir, spec.run_id)
+    if existing is None:
+        return None
+    return SubmitFlowResult(
+        run_id=existing.run_id,
+        job_ids=list(existing.job_ids),
+        total_tasks=int(existing.total_tasks),
+        deduped=True,
+        canary_done=False,
     )
 
-    # Partial-ok marker: a sibling file that monitor-flow + aggregate-flow
-    # consult to relax their failure semantics. Kept as a sibling of the
-    # run sidecar so the two are reconcilable but the sidecar's frozen
-    # schema doesn't need a bump for this opt-in flag.
-    if partial_ok:
+
+def _submit_one_spec(
+    *,
+    experiment_dir: Path,
+    spec: SubmitSpec,
+) -> SubmitFlowResult:
+    """Per-spec submission work — backend build + (canary?) + main qsub + record.
+
+    The expensive shared steps (preflight + rsync + deploy) MUST already
+    have run on this ``(ssh_target, remote_path)`` before reaching here;
+    :func:`submit_flow_batch` is responsible for that prelude.
+    """
+    job_env_full = _augment_job_env(
+        job_env=spec.job_env,
+        runtime=spec.runtime,
+        campaign_id=spec.campaign_id,
+        cluster=spec.cluster,
+    )
+    backend_obj = _build_backend(
+        backend_name=spec.backend,
+        script=spec.script,
+        ssh_target=spec.ssh_target,
+        remote_path=spec.remote_path,
+        pass_env_keys=tuple(spec.pass_env_keys) if spec.pass_env_keys is not None else None,
+        job_env_keys=tuple(job_env_full.keys()),
+        slurm_account=spec.slurm_account,
+        slurm_cluster=spec.slurm_cluster,
+    )
+
+    canary_run_id: str | None = None
+    canary_job_ids: list[str] | None = None
+    canary_done = False
+    if spec.canary:
+        canary_run_id = f"{spec.run_id}-canary"
+        canary_env = dict(job_env_full)
+        canary_env["HPC_RUN_ID"] = canary_run_id
+        canary_env["HPC_TASK_COUNT"] = "1"
+        canary_job_ids = _make_single_array_submission(
+            backend_obj,
+            job_name=f"{spec.job_name}_canary",
+            total_tasks=1,
+            job_env=canary_env,
+            cwd=experiment_dir,
+        )
+        runner.submit_and_record(
+            experiment_dir,
+            profile=spec.profile,
+            cluster=spec.cluster,
+            ssh_target=spec.ssh_target,
+            remote_path=spec.remote_path,
+            job_name=f"{spec.job_name}_canary",
+            run_id=canary_run_id,
+            job_ids=canary_job_ids,
+            total_tasks=1,
+            campaign_id=spec.campaign_id,
+        )
+        canary_done = True
+
+    job_ids = _make_single_array_submission(
+        backend_obj,
+        job_name=spec.job_name,
+        total_tasks=spec.total_tasks,
+        job_env=job_env_full,
+        cwd=experiment_dir,
+    )
+    runner.submit_and_record(
+        experiment_dir,
+        profile=spec.profile,
+        cluster=spec.cluster,
+        ssh_target=spec.ssh_target,
+        remote_path=spec.remote_path,
+        job_name=spec.job_name,
+        run_id=spec.run_id,
+        job_ids=job_ids,
+        total_tasks=spec.total_tasks,
+        campaign_id=spec.campaign_id,
+    )
+
+    if spec.partial_ok:
         from claude_hpc.state.runs import run_sidecar_path
 
-        marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
+        marker = run_sidecar_path(experiment_dir, spec.run_id).with_suffix(".partial_ok")
         with contextlib.suppress(OSError):
             marker.write_text("1")
 
     return SubmitFlowResult(
-        run_id=run_id,
+        run_id=spec.run_id,
         job_ids=job_ids,
-        total_tasks=total_tasks,
+        total_tasks=spec.total_tasks,
         deduped=False,
         canary_done=canary_done,
         canary_run_id=canary_run_id,
         canary_job_ids=canary_job_ids,
     )
+
+
+@primitive(
+    name="submit-flow-batch",
+    verb="workflow",
+    composes=[submit_and_record, discover_executors, plan_submit],
+    side_effects=[
+        SideEffect("rsync", "<ssh_target>:<remote_path>"),
+        SideEffect("scheduler-submit", "<cluster> (one qsub per spec)"),
+        SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per spec)"),
+    ],
+    error_codes=[
+        errors.SpecInvalid,
+        errors.SshUnreachable,
+        errors.SchedulerThrottled,
+        errors.ClusterUnknown,
+    ],
+    idempotent=True,
+    idempotency_key="specs.run_id",
+    exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+)
+def submit_flow_batch(
+    *,
+    experiment_dir: Path,
+    specs: list[SubmitSpec],
+    rsync_excludes: list[str] | None = None,
+    skip_preflight: bool = False,
+) -> list[SubmitFlowResult]:
+    """Submit N specs that share ``(ssh_target, remote_path)`` in one shot.
+
+    The motivating problem: a campaign-time fan-out of N submissions used
+    to do N × (rsync + deploy_runtime + qsub), which sent ~13×N ssh
+    handshakes at the cluster's sshd and tripped MaxStartups (CARC,
+    typically). The bundle collapses that to:
+
+    * 1 ssh probe (preflight)
+    * 1 ``rsync_push`` (the codebase is identical across specs)
+    * 1 ``deploy_runtime`` (the framework files are identical across specs)
+    * N × (qsub + ``submit_and_record``) — sequential, but reusing the
+      ssh ControlMaster socket established by the probe, so each
+      additional qsub is ~free.
+
+    Specs that already have a journal record are deduped up front and
+    contribute a ``deduped=True`` :class:`SubmitFlowResult` without any
+    cluster traffic — the same idempotency contract :func:`submit_flow`
+    has always offered, applied per-spec.
+
+    *specs* MUST share ``ssh_target`` and ``remote_path`` — different
+    targets/paths can't share an rsync. Heterogeneous batches raise
+    :class:`errors.SpecInvalid`; the caller (campaign driver / agent)
+    is responsible for grouping specs by ``(ssh_target, remote_path)``
+    before calling.
+
+    Order of returned results matches the order of *specs*.
+    """
+    if not specs:
+        return []
+
+    # Per-repo advisory submit lock: serialize multiple `submit-flow` /
+    # `submit-flow-batch` invocations against the same experiment so two
+    # shells firing simultaneously don't BOTH fan out N qsubs at the
+    # cluster's sshd. The lock is advisory (other code paths don't take
+    # it) and per-repo (`<journal_home>/.submit_lock`); cross-cluster
+    # parallelism is still allowed when each cluster has its own
+    # experiment_dir. Disable via ``HPC_SUBMIT_NO_LOCK=1`` (tests, or
+    # users who deliberately want concurrent submits).
+    import os
+
+    from claude_hpc._internal import _io, session
+
+    use_lock = os.environ.get("HPC_SUBMIT_NO_LOCK") != "1"
+    lock_path = session.journal_dir(experiment_dir) / ".submit_lock"
+    lock_ctx = _io.advisory_flock(lock_path) if use_lock else _noop_lock_ctx()
+    with lock_ctx:
+        return _submit_flow_batch_locked(
+            experiment_dir=experiment_dir,
+            specs=specs,
+            rsync_excludes=rsync_excludes,
+            skip_preflight=skip_preflight,
+        )
+
+
+@contextlib.contextmanager
+def _noop_lock_ctx() -> Iterator[bool]:
+    """Stand-in for advisory_flock when HPC_SUBMIT_NO_LOCK=1."""
+    yield True
+
+
+def _submit_flow_batch_locked(
+    *,
+    experiment_dir: Path,
+    specs: list[SubmitSpec],
+    rsync_excludes: list[str] | None,
+    skip_preflight: bool,
+) -> list[SubmitFlowResult]:
+    """Body of :func:`submit_flow_batch`, executed under the per-repo lock."""
+    # Auto-cleanup: drop sidecars from earlier failed batches before doing
+    # anything else. Without this, a half-baked sidecar from yesterday's
+    # rate-limited submit would still surface to find_run_by_cmd_sha and
+    # to the agent's resume-detection prompts. The prune is silent on
+    # success (returns []); if it deletes anything, the cluster traffic
+    # we're about to send is fresh anyway.
+    from claude_hpc.state.runs import prune_orphan_sidecars
+
+    prune_orphan_sidecars(experiment_dir)
+
+    # Single-target invariant: rsync + deploy can only target one place.
+    targets = {(s.ssh_target, s.remote_path) for s in specs}
+    if len(targets) > 1:
+        raise errors.SpecInvalid(
+            f"submit_flow_batch requires all specs to share (ssh_target, remote_path); "
+            f"got {len(targets)} distinct combinations: {sorted(targets)}"
+        )
+
+    # Per-spec idempotency: dedup against the journal up front, never
+    # touch the cluster for already-submitted run_ids.
+    results: list[SubmitFlowResult | None] = [_dedup_existing(experiment_dir, s) for s in specs]
+    fresh_indices = [i for i, r in enumerate(results) if r is None]
+    if not fresh_indices:
+        # Every spec was already on the journal — return the deduped
+        # results without firing rsync/deploy. ``# type: ignore`` would
+        # otherwise be needed because mypy can't see the None elimination.
+        return [r for r in results if r is not None]
+
+    # Shared prelude: one ssh probe, one rsync, one deploy. This is the
+    # whole point of the batch — collapse N × (probe + rsync + deploy)
+    # into 1 × (probe + rsync + deploy), then fire N qsubs reusing the
+    # ssh ControlMaster.
+    ssh_target, remote_path = next(iter(targets))
+    _validate_ssh_target(ssh_target)
+    _preflight_probe(ssh_target, skip=skip_preflight)
+    _push_and_deploy(
+        experiment_dir=experiment_dir,
+        ssh_target=ssh_target,
+        remote_path=remote_path,
+        rsync_excludes=rsync_excludes,
+    )
+
+    # Per-spec submission work.
+    for i in fresh_indices:
+        results[i] = _submit_one_spec(experiment_dir=experiment_dir, spec=specs[i])
+    # mypy: every slot is now non-None.
+    return [r for r in results if r is not None]

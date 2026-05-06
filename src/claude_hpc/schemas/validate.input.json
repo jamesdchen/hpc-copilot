@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/validate.input.json",
   "title": "validate input spec",
-  "description": "Spec for `hpc-mapreduce validate`. Probes the scheduler's --test-only mode for the resource ask and returns the predicted submission timing. No submit side effect.",
+  "description": "Kwargs contract for the Python primitive ``claude_hpc.planning.validate.validate_submission``. Probes the scheduler's --test-only mode for the resource ask and returns the predicted submission timing. No submit side effect. Not yet exposed as a CLI subcommand; consumers call the function directly. When the CLI subcommand lands, this schema will become the wire contract for ``--spec``.",
   "type": "object",
   "required": [
     "profile",

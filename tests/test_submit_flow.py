@@ -116,3 +116,206 @@ class TestLoadClustersConfigBubblesUp:
         catches that single path and falls back to None."""
         with pytest.raises(ValueError):
             get_nfs_data_dir({"nfs_data_dir": ""})
+
+
+# ---------------------------------------------------------------------------
+# submit_flow_batch — N specs sharing one (ssh_target, remote_path)
+# ---------------------------------------------------------------------------
+
+
+def _spec(run_id: str, **overrides: Any):
+    """Build a SubmitSpec with sensible defaults; overrides win."""
+    from claude_hpc.flows.submit_flow import SubmitSpec
+
+    base = dict(
+        profile="p",
+        cluster="c",
+        ssh_target="user@host",
+        remote_path="/r",
+        job_name=run_id,
+        run_id=run_id,
+        total_tasks=4,
+        backend="sge_remote",
+        script="run.sh",
+        job_env={},
+        canary=False,
+    )
+    base.update(overrides)
+    return SubmitSpec(**base)  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def _journal_home(tmp_path, monkeypatch):
+    """Redirect ~/.claude/hpc/ to tmp_path so journal writes don't pollute home."""
+    from claude_hpc._internal import session
+
+    monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "home_hpc")
+
+
+class TestSubmitFlowBatch:
+    def test_empty_specs_returns_empty(self, tmp_path: Any, _journal_home: Any) -> None:
+        from claude_hpc.flows.submit_flow import submit_flow_batch
+
+        assert submit_flow_batch(experiment_dir=tmp_path, specs=[]) == []
+
+    def test_heterogeneous_targets_raise_spec_invalid(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        from claude_hpc import errors
+        from claude_hpc.flows.submit_flow import submit_flow_batch
+
+        a = _spec("r1", ssh_target="u@a", remote_path="/p")
+        b = _spec("r2", ssh_target="u@b", remote_path="/p")
+        with pytest.raises(errors.SpecInvalid, match="distinct combinations"):
+            submit_flow_batch(experiment_dir=tmp_path, specs=[a, b])
+
+    def test_shares_one_rsync_and_one_deploy_across_n_specs(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """The whole point of the batch: rsync + deploy fire once, qsub fires N."""
+        from claude_hpc.flows import submit_flow as sf_module
+        from claude_hpc.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        specs = [_spec(f"r{i}") for i in range(5)]
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"job_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            results = submit_flow_batch(experiment_dir=tmp_path, specs=specs)
+
+        assert preflight.call_count == 1
+        assert push_deploy.call_count == 1
+        assert submit_one.call_count == 5
+        assert [r.run_id for r in results] == ["r0", "r1", "r2", "r3", "r4"]
+        assert all(not r.deduped for r in results)
+
+    def test_skips_prelude_when_every_spec_already_journaled(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """If every spec is already on the journal, NO ssh / rsync runs."""
+        from claude_hpc._internal import session
+        from claude_hpc._internal.session import RunRecord
+        from claude_hpc.flows import submit_flow as sf_module
+        from claude_hpc.flows.submit_flow import submit_flow_batch
+
+        # Seed the journal with both run_ids.
+        for rid in ("r0", "r1"):
+            rec = RunRecord(
+                run_id=rid,
+                profile="p",
+                cluster="c",
+                ssh_target="user@host",
+                remote_path="/r",
+                job_name=rid,
+                job_ids=[f"prior_{rid}"],
+                total_tasks=4,
+                submitted_at="2026-01-01T00:00:00+00:00",
+                experiment_dir=str(tmp_path.resolve()),
+            )
+            session.upsert_run(tmp_path, rec)
+
+        specs = [_spec("r0"), _spec("r1")]
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            results = submit_flow_batch(experiment_dir=tmp_path, specs=specs)
+
+        assert preflight.call_count == 0
+        assert push_deploy.call_count == 0
+        assert submit_one.call_count == 0
+        assert all(r.deduped for r in results)
+        assert [r.run_id for r in results] == ["r0", "r1"]
+
+    def test_auto_prunes_orphan_sidecars_at_start(self, tmp_path: Any, _journal_home: Any) -> None:
+        """Half-baked sidecars from a prior failed batch are silently swept
+        before the next batch starts — no manual /prune-orphan-sidecars call."""
+        from claude_hpc.flows import submit_flow as sf_module
+        from claude_hpc.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from claude_hpc.state.runs import run_sidecar_path, write_run_sidecar
+
+        # Seed a half-baked sidecar (no job_ids, no journal record).
+        orphan_id = "20260101-000000-orphan01"
+        write_run_sidecar(
+            tmp_path,
+            run_id=orphan_id,
+            cmd_sha="0" * 64,
+            claude_hpc_version="0.2.0",
+            submitted_at="2026-01-01T00:00:00Z",
+            executor="python3 src/run.py",
+            result_dir_template="results/{seed}",
+            task_count=4,
+            tasks_py_sha="1" * 64,
+        )
+        assert run_sidecar_path(tmp_path, orphan_id).is_file()
+
+        # Run the next batch with a fresh spec.
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy"),
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"job_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            submit_flow_batch(experiment_dir=tmp_path, specs=[_spec("r_new")])
+
+        # The orphan sidecar is gone.
+        assert not run_sidecar_path(tmp_path, orphan_id).is_file()
+
+    def test_partial_dedup_only_fresh_specs_run(self, tmp_path: Any, _journal_home: Any) -> None:
+        """Half the specs are already journaled — only the fresh ones get qsubbed."""
+        from claude_hpc._internal import session
+        from claude_hpc._internal.session import RunRecord
+        from claude_hpc.flows import submit_flow as sf_module
+        from claude_hpc.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        session.upsert_run(
+            tmp_path,
+            RunRecord(
+                run_id="r0",
+                profile="p",
+                cluster="c",
+                ssh_target="user@host",
+                remote_path="/r",
+                job_name="r0",
+                job_ids=["already"],
+                total_tasks=4,
+                submitted_at="2026-01-01T00:00:00+00:00",
+                experiment_dir=str(tmp_path.resolve()),
+            ),
+        )
+        specs = [_spec("r0"), _spec("r1"), _spec("r2")]
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"new_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            results = submit_flow_batch(experiment_dir=tmp_path, specs=specs)
+
+        assert push_deploy.call_count == 1  # still ONE rsync+deploy for the fresh subset
+        assert submit_one.call_count == 2  # only r1 + r2 get qsubbed
+        assert results[0].deduped is True
+        assert results[0].job_ids == ["already"]
+        assert results[1].deduped is False and results[1].job_ids == ["new_r1"]
+        assert results[2].deduped is False and results[2].job_ids == ["new_r2"]

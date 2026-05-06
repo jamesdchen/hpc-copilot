@@ -5,20 +5,67 @@
   "description": "Spec passed to `hpc-mapreduce submit --spec <file>`.",
   "type": "object",
   "required": [
-    "profile", "cluster", "ssh_target", "remote_path",
-    "job_name", "run_id", "job_ids", "total_tasks"
+    "profile",
+    "cluster",
+    "ssh_target",
+    "remote_path",
+    "job_name",
+    "run_id",
+    "job_ids",
+    "total_tasks"
   ],
   "additionalProperties": false,
   "properties": {
-    "profile":           { "type": "string", "minLength": 1 },
-    "cluster":           { "type": "string", "minLength": 1 },
-    "ssh_target":        { "type": "string", "pattern": "^[^@]+@[^@]+$" },
-    "remote_path":       { "type": "string", "minLength": 1 },
-    "job_name":          { "type": "string", "minLength": 1 },
-    "run_id":            { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
-    "job_ids":           { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-    "total_tasks":       { "type": "integer", "minimum": 1 },
-    "runtime":           { "type": ["string", "null"], "enum": ["uv", null] },
-    "campaign_id":       { "type": ["string", "null"], "pattern": "^[A-Za-z0-9._\\-]+$" }
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cluster": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ssh_target": {
+      "type": "string",
+      "pattern": "^[^@]+@[^@]+$"
+    },
+    "remote_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+    },
+    "job_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "total_tasks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "runtime": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "uv",
+        null
+      ]
+    },
+    "campaign_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[A-Za-z0-9._\\-]+$"
+    }
   }
 }

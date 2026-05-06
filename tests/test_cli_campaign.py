@@ -128,8 +128,6 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
     """Pin the public contract — `data` block matches campaign.output.json."""
     from importlib.resources import files
 
-    import jsonschema
-
     schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
 
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
@@ -138,13 +136,13 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
     )
     assert rc == 0
     env = _parse_envelope(out)
-    jsonschema.validate(env["data"], schema)
+    from claude_hpc._internal._schema import validate as _validate
+
+    _validate(env["data"], schema)
 
 
 def test_campaign_list_envelope_validates_against_schema(tmp_path: Path) -> None:
     from importlib.resources import files
-
-    import jsonschema
 
     schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
 
@@ -152,4 +150,6 @@ def test_campaign_list_envelope_validates_against_schema(tmp_path: Path) -> None
     rc, out, _ = _run_cli("campaign", "list", "--experiment-dir", str(tmp_path))
     assert rc == 0
     env = _parse_envelope(out)
-    jsonschema.validate(env["data"], schema)
+    from claude_hpc._internal._schema import validate as _validate
+
+    _validate(env["data"], schema)

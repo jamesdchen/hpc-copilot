@@ -32,16 +32,20 @@ _hpc_dispatch.json .hpc/legacy/` (or simply delete it). Don't proceed
 silently — a stale `_hpc_dispatch.json` next to a fresh `.hpc/tasks.py`
 is confusing on inspection.
 
-0. **In-flight run journal**: The per-run journal lives at `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`. Call `slash_commands.session.find_in_flight_runs(cwd)`. If any in-flight run is found, offer: "Found in-flight run [{profile} on {cluster}, jobs {job_ids}, last status {complete}/{total} @ {age}]. Resume monitoring with /monitor-hpc, or start a new submission?"
-   - This only handles the case where the user wants to switch context away from a fresh `/submit-hpc` toward picking up an existing run; otherwise fall through to priority 1.
-   - **Group by `campaign_id` when displaying multiple in-flight runs.** Each `RunRecord` carries a `campaign_id` field (empty string for open-loop submits). When the user has more than ~3 in-flight runs and at least one has a non-empty `campaign_id`, render the offer grouped: "Found 3 in-flight campaigns and 2 standalone runs: campaign `ml_ridge_q1` (4 iterations in flight, last completed iteration's loss=0.42), campaign `walk_forward_2026q1` (1 iteration in flight), …, plus 2 standalone runs (`<run_id_1>`, `<run_id_2>`). Resume one with /monitor-hpc / /campaign-hpc status, or start a new submission?" The flat list is fine for ≤3 runs.
+**Don't walk the priority list by hand. Call `suggest-setup-action`** — it runs all four checks and returns the recommended action + candidates verbatim:
 
-1. **Previous run**: If `.hpc/tasks.py` exists, the experiment has already been scaffolded. List the per-run sidecars under `.hpc/runs/` (newest-first via `find_existing_runs(experiment_dir)` from `claude_hpc`) and offer: "Previous run: [run_id, profile, tasks, cluster, age]. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?"
-   - **Resubmit same** → reuse the existing `.hpc/tasks.py`, recompute `cmd_sha` (it'll match because `tasks.py` is unchanged), skip to Step 5 (sync + submit). The new sidecar's `run_id` differs but `cmd_sha` matches the prior run.
-   - **Modify** → tell the user to edit `.hpc/tasks.py` directly (`_TASKS = [...]`), commit the change, and re-run `/submit-hpc`. The new `cmd_sha` will be different, so it's a fresh run.
-   - **Start fresh** → only reachable when the user wants a clean reset; offer to delete `.hpc/tasks.py` so the scaffolding flow at Step 6 fires again.
+```bash
+hpc-mapreduce suggest-setup-action --experiment-dir .
+```
 
-2. **No tasks.py yet**: Continue to Step 1 (full discovery).
+The envelope's `data` carries `{priority, action, run_id, candidates, reason}`. Branch on `action`:
+
+| `action` | Priority | Meaning | What to do |
+|---|---|---|---|
+| `monitor` | 0 | At least one in-flight run on the journal | Surface `candidates` to the user. Group by `campaign_id` if >3 runs. Offer "Resume monitoring with /monitor-hpc, or start a new submission?" |
+| `reuse` | 1 | Per-experiment sidecars exist | Surface the recent (profile, cluster) pairs (in `candidates`). Offer "Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?" Reuse keeps `tasks.py` byte-identical so `cmd_sha` matches; the new sidecar's `run_id` differs but the lineage is preserved. |
+| `interview` | 2 | `.hpc/tasks.py` exists, no run history | Skip the executor-discovery + axes interview (tasks.py already encodes the axis); jump to Step 4b (planner). |
+| `fresh` | 3 | Nothing exists | Full interview from Step 1. |
 
    When prompting the user about reuse vs. fresh, list the distinct `(profile, cluster)` pairs from recent run sidecars (via `find_existing_runs(experiment_dir)`) so they can pick "same as last `ml_ridge` submission" without re-answering interview questions. Each sidecar carries the full v2 config snapshot — resources, env, constraints, runtime — so reuse is a one-line copy from the matching sidecar.
 
@@ -104,6 +108,8 @@ Parse `$ARGUMENTS` or the user's natural language request:
 - `campaign_id=<slug>` (or `--campaign-id <slug>`) — tag this submission as one iteration of a closed-loop campaign. Capture the slug verbatim and pass it to `submit_and_record` in Step 10 so the per-run sidecar carries `campaign_id=<slug>`. Required when invoked as part of `/campaign-hpc`; otherwise omitted (open-loop submissions have empty `campaign_id`). The slug also gets exported to the cluster as `HPC_CAMPAIGN_ID` so the executor and any cluster-side tooling see it.
 
 For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Each gets its own `run_id` and per-run sidecar at `.hpc/runs/<run_id>.json`; the same `.hpc/tasks.py` is reused if the parallelization axis matches, otherwise the agent writes a new one (the file is the single seam between executors and the framework).
+
+**For N>1 executors sharing `(ssh_target, remote_path)`, write one batch spec file** instead of N per-executor specs. `submit-flow` auto-dispatches: pass it `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` and it routes to `submit-flow-batch` internally, doing ONE rsync_push + ONE deploy_runtime + N qsubs over the multiplexed ssh ControlMaster. Pass it a single dict and it runs the per-spec pipeline as before. Same `hpc-mapreduce submit-flow --spec X` call either way. All entries under `specs` MUST share `ssh_target` + `remote_path`; heterogeneous batches raise `spec_invalid`. The motivation: N parallel single-spec submits send ~13×N ssh handshakes at the cluster's sshd and trip `MaxStartups` — we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts.
 
 ## Step 3: Plan the parallelization axis
 
@@ -344,36 +350,13 @@ Path(f".hpc/runs/{run_id}.decision.json").write_text(json.dumps(decision, indent
 
 ## Step 5: Confirm Run Plan
 
-Present the full submission plan:
+**Don't hand-author the summary.** Once Step 6c emits the resolved spec via `build-submit-spec`, render the canonical confirmation via the **`summarize-submit-plan`** primitive — byte-stable framing, magnitude-aware confirm prompt:
 
+```bash
+hpc-mapreduce summarize-submit-plan --spec /tmp/submit_spec.json
 ```
-═══════════════════════════════════════════════
-  Submission Plan
-═══════════════════════════════════════════════
 
-  Cluster:    hoffman2 (SGE)
-  Remote:     <remote_path>
-  
-  Job 1: ml_ridge
-    Executor:    python -m cli src.ml_ridge        # new-contract; old-contract would be `python3 src/ml_ridge.py`
-    tasks.py:    .hpc/tasks.py — FLAGS["src.ml_ridge"] + kwargs={horizon, window_start, window_end} per task
-    Cardinality: 1 horizon × 10 date windows = 10 tasks
-    Resources:   1 CPU, 16G, 4:00:00
-    Env:         modules=python/3.11.9
-
-  Job 2: ml_xgboost
-    Executor:    python -m cli src.ml_xgboost
-    tasks.py:    .hpc/tasks.py — FLAGS["src.ml_xgboost"] + kwargs={horizon, window_start, window_end} per task
-    Cardinality: 1 horizon × 10 date windows = 10 tasks
-    Resources:   1 CPU, 16G, 4:00:00
-    Env:         modules=python/3.11.9
-
-  Total tasks: 20
-
-═══════════════════════════════════════════════
-
-Confirm?
-```
+The envelope's `data` carries `{headline, body, confirm_prompt}`. Print `headline` and `body` verbatim, then ask `confirm_prompt`. For multi-job submissions, call the primitive once per spec and concatenate the bodies under one combined header. The primitive flips to a magnitude-warning prompt automatically when `total_tasks > 1000`.
 
 ## Step 6: Scaffold (or reuse) `.hpc/tasks.py` and write the per-run sidecar
 
@@ -411,16 +394,34 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 
 2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and any `meta.json` at the experiment root for axis hints (parameter names, ranges, chunking intent, date windows). Recent run sidecars under `.hpc/runs/` are also a useful source — they capture the full kwargs dict from any previous `tasks.resolve(i)` materializations.
 
-3. **Walk the user through writing the file.** This is conversational, not template substitution. The agent:
-   - Re-states the axis from Step 3 in concrete terms (e.g. "We're going to materialize a list of {seed, model} dicts, one per task — 4 tasks total. Sound right?").
-   - Drafts a minimal `_TASKS` for that axis and shows it to the user.
-   - Builds the `FLAGS` dict — one entry per executor module path the user might run from this repo (at minimum, the executor picked in Step 1; can include siblings discovered in the same dir for forward-readiness). Each flag list uses `from claude_hpc.executor_cli import flag, generic_args, gpu_args` and follows the example pattern: `[*generic_args(), flag("horizon", int, default=1), ...]`.
-   - Lets the user paste a snippet, describe in prose, or point at existing code; the agent translates that into `_TASKS`, `total()`, `resolve(task_id)`, and the FLAGS dict.
-   - Iterates. The user is the source of truth on what the axis means.
+3. **Walk the user through naming the axes.** Conversational, not template-substitution: the agent re-states the axis from Step 3 ("We're going to fan out over `{model, horizon, seed}` — 12 total tasks, sound right?") and confirms the values. The user can paste a snippet, describe in prose, or point at existing code; the agent translates intent into a list of `{name, values}` dicts and a per-executor flag list.
 
-   Eager memoization is the **convention, not a choice**: `_TASKS` is materialized at module load, `total()` returns `len(_TASKS)`, `resolve(i)` returns `_TASKS[i]`. This gives free `cmd_sha`, submit-time error catching, and laptop-inspectability. Lazy variants are not encouraged.
+4. **Generate the file via the `build-tasks-py` primitive — don't hand-author it.** The primitive synthesizes the canonical Pattern 1 (cartesian product) layout from the axes + flags spec and validates the result is syntactically valid Python:
 
-   The kwargs returned by `resolve(task_id)` must use names that match the FLAGS list's `flag(name, ...)` entries (with underscores; argparse converts to `--hyphenated` automatically). A typo here surfaces as `argparse: unrecognized arguments` on the cluster — not as a friendly KeyError.
+   ```bash
+   # Spec file the agent writes from the interview answers:
+   cat > /tmp/tasks_spec.json <<EOF
+   {
+     "axes": [
+       {"name": "horizon", "values": [1, 5]},
+       {"name": "seed", "values": [42, 1337]}
+     ],
+     "flags_by_executor": {
+       "src.ml_ridge": [
+         {"name": "horizon", "type": "int", "default": 1},
+         {"name": "seed", "type": "int", "default": 42}
+       ]
+     }
+   }
+   EOF
+   hpc-mapreduce build-tasks-py --spec /tmp/tasks_spec.json --experiment-dir .
+   ```
+
+   The envelope's `data` reports `{path, wrote, n_tasks}`. **Refuses to overwrite** an existing `.hpc/tasks.py` without `--force` so a user's hand-edited Pattern 2 (chunking) or Pattern 3 (date-window) conversion survives a re-submission.
+
+   When the user wants Pattern 2/3, generate the Pattern 1 starting point first, then have them edit `.hpc/tasks.py` to switch — the contract is just `FLAGS / total() / resolve()`, so any pattern that satisfies it is fine. The framework never overwrites a hand-edited file.
+
+   The kwargs returned by `resolve(task_id)` must use names that match the FLAGS list's `flag(name, ...)` entries (with underscores; argparse converts to `--hyphenated` automatically). A typo here surfaces as `argparse: unrecognized arguments` on the cluster — not as a friendly KeyError. The primitive enforces this on generation, but a hand-edit can drift; re-running `build-tasks-py --force` is the canonical fix.
 
 4. **Copy the dispatcher.** Whether or not the experiment is using the new `compute(args)` contract, drop in the framework's static dispatcher so the cluster job script can invoke `python -m cli <executor_module> ...`:
 
@@ -435,51 +436,59 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
 
    This file is one-time scaffolding — never regenerated even when `tasks.py FLAGS` changes (the dispatcher reads FLAGS at runtime).
 
-5. **Write the tasks.py and commit both files.**
+5. **Commit the generated files.** `build-tasks-py` already wrote `.hpc/tasks.py`; the dispatcher copy in step 4 wrote `.hpc/cli.py`. Just commit:
 
-   ```python
-   tp.write_text(final_source)          # the full tasks.py text
-   import subprocess
-   subprocess.run(["git", "add", str(tp), str(experiment_dir / ".hpc" / "cli.py")], check=True)
-   subprocess.run(
-       ["git", "commit", "-m", f"Scaffold .hpc/tasks.py + cli.py for {executor_name}"],
-       check=True,
-   )
+   ```bash
+   git add .hpc/tasks.py .hpc/cli.py
+   git commit -m "Scaffold .hpc/tasks.py + cli.py for $EXECUTOR_NAME"
    ```
 
    Print the commit SHA. **No push** — the user controls when their work goes upstream. If the working tree is detached or the directory is not a git repo, warn the user and continue (the files still get written; commit is best-effort). Subsequent submits hit Step 6a and skip this entire sub-flow.
 
 ### Step 6c: Compute `cmd_sha` and check for resume
 
-The materialized task list is the source of identity for the run:
+The materialized task list is the source of identity for the run. Compute the cmd_sha, then check for a prior run via the **`find-prior-run`** primitive (don't grep the runs/ dir by hand):
 
 ```python
-from claude_hpc import (
-    compute_cmd_sha, compute_tasks_py_sha, find_run_by_cmd_sha,
-    write_run_sidecar, runs_subdir,
-)
-from datetime import datetime, timezone
-import subprocess
-
+from claude_hpc import compute_cmd_sha, compute_tasks_py_sha
 tasks = load_tasks_module(tp)
 cmd_sha = compute_cmd_sha(tasks)        # SHA-256 over normalized resolve(i) dicts
 tasks_py_sha = compute_tasks_py_sha(tp)
-prior = find_run_by_cmd_sha(experiment_dir, cmd_sha)
 ```
 
-If `prior is not None`, **stop and ask the user**:
+```bash
+hpc-mapreduce find-prior-run --experiment-dir . --cmd-sha "$CMD_SHA"
+```
 
-```
-I found a prior run with the same cmd_sha: <prior.stem>.
-Resume (re-dispatch only failed tasks) or fresh (new run_id)?
-```
+The envelope's `data` carries `{found, run_id, is_orphan, status, age_sec, profile, cluster, job_ids, campaign_id, submitted_at}`. Branch on `found` and `is_orphan`:
+
+- `found=False` → fresh submission, continue to Step 6d.
+- `found=True, is_orphan=False` → real prior run. **Stop and ask the user**: "I found a prior run with the same cmd_sha: `{run_id}` ({profile} on {cluster}, {age_sec}s ago). Resume (re-dispatch only failed tasks) or fresh (new run_id)?"
+- `found=True, is_orphan=True` → half-baked sidecar from a failed batch (no journal job_ids). Don't surface as a resume candidate; offer "Found a half-baked sidecar from a prior failed submit. Run `hpc-mapreduce prune-orphan-sidecars --experiment-dir .` to clean up, then re-submit." or proceed and let `submit_flow_batch`'s auto-prune handle it on the next call.
 
 - **Resume**: call `/monitor-hpc --run-id <prior.stem>` (or `report_status` directly) to enumerate failing task IDs, then build a `ResubmitPlan` via `resubmit_plan(task_count=tasks.total(), failed_task_ids=[...])` and submit via `backend.submit_plan(plan, ...)`. The new sidecar (written below) carries the same `cmd_sha` but a fresh `run_id` — both runs share provenance via the SHA.
 - **Fresh**: ask the user how they want the new run distinguished (e.g. a different result_dir suffix, a profile name change, or simply accept that the new sidecar is a deliberate rerun). The new `cmd_sha` will only differ if `tasks.py` itself changes.
 
-### Step 6d: Compute the throughput plan and write the sidecar
+### Step 6d: Compute the throughput plan, write the sidecar, build the submit-flow spec
 
-With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Then write the per-run sidecar — this is the audit-trail artifact `/monitor-hpc` and `/aggregate-hpc` read on the cluster:
+With `total = tasks.total()` known, run Step 4b's throughput planner (already covered above) to get `wave_map`. Two artifacts land here:
+
+1. **The per-run sidecar** at `<experiment>/.hpc/runs/<run_id>.json` — audit trail that the cluster-side dispatcher and the local-side `/monitor-hpc` / `/aggregate-hpc` read.
+2. **The submit-flow spec** — the input to `submit-flow`. Use the **`build-submit-spec`** primitive instead of hand-assembling the dict; it synthesizes the `EXECUTOR` / `HPC_RUN_ID` / `HPC_CMD_SHA` / `HPC_TASK_COUNT` / `REPO_DIR` / `MODULES` / `CONDA_SOURCE` / `CONDA_ENV` / `HPC_RUNTIME` / `HPC_CAMPAIGN_ID` keys, picks the canonical script path from `(backend, is_gpu)`, and validates against `schemas/submit_flow.input.json` before returning.
+
+```bash
+# After the interview + planner have resolved every field:
+hpc-mapreduce build-submit-spec --spec /tmp/resolved.json > /tmp/submit_spec.json
+# /tmp/resolved.json is a flat dict of the kwargs the agent collected:
+#   profile, cluster, ssh_target, remote_path, run_id, cmd_sha,
+#   total_tasks, backend, is_gpu, modules, conda_source, conda_env,
+#   runtime, campaign_id, canary, ...  (see build_submit_spec docstring
+#   for the full kwargs list).
+# The envelope's `data` field is the assembled submit-flow spec —
+# drop it into a file and feed it to submit-flow.
+```
+
+Per-run sidecar still happens here too:
 
 ```python
 run_id = f"{profile}-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{cmd_sha[:8]}"
@@ -522,6 +531,8 @@ Pass `None` (or omit) for any v2 field that doesn't apply — they're all option
 For multi-executor submissions, write one sidecar per executor — `run_id` and `executor` differ, but `tasks.py` is per-experiment and may be shared if the axes match.
 
 `write_run_sidecar` automatically prunes old sidecars past `MAX_RUNS` (default 500; override via `HPC_MAX_RUNS`). Identity is the `run_id`, addressable directly at `.hpc/runs/<run_id>.json`.
+
+**Don't pass `job_ids` here.** The sidecar at this point is a *pending* artifact: ready for the cluster-side dispatcher to read but not yet associated with any qsub'd job. Step 7b–8's `submit-flow` invokes `submit_and_record` after qsub returns, which calls `update_run_sidecar_job_ids` to stamp the freshly-allocated job ids onto this same file. A sidecar that ends the pipeline still missing `job_ids` — i.e. rsync or qsub failed before submit_and_record ran — is the half-baked-sidecar signal `prune_orphan_sidecars` and `submit_flow_batch`'s auto-cleanup key on. You don't need to handle the failure path here; the next submit will silently sweep the orphan.
 
 ## Step 6b: Pre-flight Gate
 
@@ -572,7 +583,7 @@ Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework
 
    ```python
    from claude_hpc import deploy_runtime
-   deploy_runtime(host=cluster.host, user=cluster.user, remote_path=remote_path)
+   deploy_runtime(ssh_target=cluster.ssh_target, remote_path=remote_path)
    ```
 
    Run **after** `rsync_push` (rsync's `--delete` would otherwise blow away the freshly-scp'd files; the excludes above protect them, but ordering remains important on every submit).
@@ -648,23 +659,27 @@ On error envelopes, branch by `error_code` per `submit-flow`'s contract (`ssh_un
 
 To opt out of the canary (already smoke-tested or single-task submission), set `"canary": false` in the spec — the slash command's `--no-canary` flag from Step 2 maps directly here.
 
+**Multi-executor / multi-spec submissions**: write the spec as `{"specs": [<per-spec dict>, ...], "rsync_excludes": [...], "skip_preflight": ...}` (each entry under `specs` matches the per-spec shape above). `submit-flow` detects the batch shape and auto-routes to the bundled path — same `hpc-mapreduce submit-flow --spec X --experiment-dir .` call. Entries MUST share `(ssh_target, remote_path)`; mixed-cluster batches raise `spec_invalid` (split by target and call once per group). The envelope wraps `{"results": [<per-spec submit-flow envelope>, ...], "n_results": N}`; parse each entry with the same dedup/error logic.
+
 **Note on canary semantics:** `submit-flow`'s canary is a smoke test of the submission machinery (qsub accepts the spec; scheduler returns a job ID). It does NOT wait for canary completion or verify outputs — that elaborate "wait for terminal + grep logs + check artifacts" protocol stays here in the slash command (see "Canary verification" below) for the human-interactive path. Higher-level workflows like `/campaign-hpc` rely on the lighter check.
 
-### Canary verification (slash-command-only)
+### Canary verification (route through `verify-canary`)
 
-When `data.canary_done: true`, the slash command waits for the canary's terminal state and verifies before reporting success:
+When `data.canary_done: true`, **don't hand-author the wait + grep + output-check protocol** — call the `verify-canary` workflow atom, which polls the canary to terminal, scans stderr for known failure markers, and (optionally) verifies an expected output artifact:
 
 ```bash
-ssh $SSH_TARGET 'sacct -j <canary_job_id> -n -P -o JobID,State,ExitCode'   # SLURM
-ssh $SSH_TARGET 'qacct -j <canary_job_id>'                                  # SGE
+hpc-mapreduce verify-canary \
+    --experiment-dir . \
+    --canary-run-id "$CANARY_RUN_ID" \
+    --expect-output "results/seed_42/metrics.json"   # optional
 ```
 
-Then verify:
-1. **Exit code 0** in the log tail (`[dispatch] FAILED` / `ImportError` / `Traceback` = fail).
-2. **Expected output artifacts** exist in the canary task's `result_dir`.
-3. **Output well-shaped** — compare CSV header/row count to a known-good file if prior runs exist.
+The envelope's `data` carries `{ok, failure_kind, details, stderr_tail}`. Branch:
 
-If verification fails, surface the canary's stderr tail to the user and stop — do NOT report Step 9 success. The fix cost is 1 task; skipping verification and discovering a bad pipeline after 5000 tasks wastes hours of cluster time.
+- `ok=True` → continue to the main array submit. The atom already verified exit code 0, no failure markers (`[dispatch] FAILED` / `ImportError` / `ModuleNotFoundError` / `Traceback` / `Out of memory` / `Segmentation fault`), and the expected output (if any).
+- `ok=False` → surface `stderr_tail` to the user **verbatim** (don't paraphrase — they need the raw error to fix it). `failure_kind` tags the category (`dispatcher_failed` / `import_error` / `oom_killed` / `missing_output` / `timeout` / etc.) so you can frame the user-facing message but the diagnosis came from the primitive, not the agent.
+
+If verification fails, do NOT report Step 9 success. The fix cost is 1 task; skipping verification and discovering a bad pipeline after 5000 tasks wastes hours of cluster time.
 
 ## Step 8b: Verify the array is actually queued/running
 

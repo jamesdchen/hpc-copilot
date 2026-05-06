@@ -3,10 +3,13 @@
 Provides thin wrappers around ssh/rsync so cluster commands can be
 executed from a local machine without paramiko or other dependencies.
 
-All functions require explicit ``host``, ``user``, and ``remote_path``
-parameters - there are no hardcoded defaults. Callers obtain these
-values from ``clusters.yaml`` plus the per-run sidecar at
-``.hpc/runs/<run_id>.json``.
+All functions take a single opaque ``ssh_target`` plus ``remote_path``.
+``ssh_target`` is whatever ``ssh``/``scp``/``rsync`` accept as a
+destination — either an explicit ``user@host`` (e.g.
+``jc_905@discovery2.usc.edu``) **or** an OpenSSH ``Host`` alias from
+``~/.ssh/config`` (e.g. ``usc-discovery``). The alias form is preferred
+because it lets ``IdentityFile`` / ``User`` / ``Hostname`` settings in
+the user's ssh config flow through without us having to model them.
 
 Every subprocess invocation in this module enforces a timeout so a flaky
 cluster connection or paused rsync cannot block ``/submit``, ``/status``,
@@ -15,8 +18,8 @@ for SSH/scp commands and :data:`RSYNC_TIMEOUT_SEC` for rsync transfers.
 Callers may override per-call by passing ``timeout=`` (in seconds), or
 disable enforcement entirely by passing ``timeout=None``.  When the
 underlying child exceeds the timeout, the wrapper raises
-:class:`TimeoutError` with a message that names the host and a snippet of
-the command being run.
+:class:`TimeoutError` with a message that names the target and a snippet
+of the command being run.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from __future__ import annotations
 __all__ = [
     "SSH_TIMEOUT_SEC",
     "RSYNC_TIMEOUT_SEC",
-    "split_ssh_target",
+    "validate_ssh_target",
     "ssh_run",
     "rsync_push",
     "rsync_pull",
@@ -35,9 +38,14 @@ __all__ = [
 
 import os
 import shlex
+import shutil
 import subprocess
+import time
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Default subprocess timeouts (in seconds).  ``ssh_run`` covers login-node
 # commands, including the status-reporter SSH calls that exec python and may
@@ -47,20 +55,34 @@ from typing import Any, Final
 SSH_TIMEOUT_SEC = 60
 RSYNC_TIMEOUT_SEC = 1800
 
+# Characters that should never appear in an ssh_target. We intentionally
+# do NOT require ``@`` — bare OpenSSH aliases (``usc-discovery``) are
+# first-class. We just block whitespace and shell metachars so a stray
+# value can't escape into argv as a separate token or into the shell.
+_DISALLOWED_TARGET_CHARS = " \t\n\r;|&`$<>\"'\\"
 
-def split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    """Split a ``user@host`` string into ``(user, host)``.
 
-    Raises :class:`ValueError` (caller may rewrap as
-    :class:`slash_commands.errors.SpecInvalid`) when the input does not
-    contain the ``@`` separator. Used by both ``submit_flow`` and
-    ``aggregate_flow`` (and the slash-command runner) to validate
-    cluster-spec ``ssh_target`` fields before invoking ssh/rsync.
+def validate_ssh_target(ssh_target: str) -> str:
+    """Return *ssh_target* unchanged after a permissive shape check.
+
+    Accepts both explicit ``user@host`` strings and bare OpenSSH ``Host``
+    aliases (no ``@``) — anything ``ssh`` itself would accept as a
+    destination. Rejects empty strings and values containing whitespace
+    or shell metacharacters so a typo can't shell-inject through argv.
+
+    Used by submit/aggregate flows to validate cluster-spec
+    ``ssh_target`` fields up front, then pass the same string verbatim
+    into :func:`ssh_run`, :func:`rsync_push`, etc.
+
+    Raises :class:`ValueError` (callers may rewrap as
+    :class:`slash_commands.errors.SpecInvalid`).
     """
-    if "@" not in ssh_target:
-        raise ValueError(f"ssh_target must be 'user@host', got {ssh_target!r}")
-    user, host = ssh_target.split("@", 1)
-    return user, host
+    if not isinstance(ssh_target, str) or not ssh_target:
+        raise ValueError(f"ssh_target must be a non-empty string, got {ssh_target!r}")
+    bad = [c for c in _DISALLOWED_TARGET_CHARS if c in ssh_target]
+    if bad:
+        raise ValueError(f"ssh_target contains disallowed characters {bad!r}: {ssh_target!r}")
+    return ssh_target
 
 
 def _ssh_multiplex_opts() -> list[str]:
@@ -111,11 +133,6 @@ DEFAULT_RSYNC_EXCLUDES: list[str] = [
 ]
 
 
-def _target(user: str, host: str) -> str:
-    """Return ``user@host`` connection string."""
-    return f"{user}@{host}"
-
-
 def _truncate(text: str, limit: int = 120) -> str:
     """Return *text* truncated to *limit* characters with an ellipsis suffix."""
     if len(text) <= limit:
@@ -123,11 +140,98 @@ def _truncate(text: str, limit: int = 120) -> str:
     return text[:limit] + "..."
 
 
+# Rate-limit / throttle markers in stderr that indicate the cluster's sshd
+# refused the connection (MaxStartups, fail2ban, PAM session limits) — i.e.
+# transient, retryable errors. A plain wrong-host or auth failure is NOT
+# retried. Match case-insensitively to be robust to different OpenSSH /
+# distro spellings.
+_SSH_THROTTLE_MARKERS: tuple[str, ...] = (
+    # Suffix-trimmed so we match both "Connection closed by remote host"
+    # and "Connection closed" (sshd may log either).
+    "ssh_exchange_identification: connection closed",
+    "kex_exchange_identification: connection closed",
+    "kex_exchange_identification: read: connection reset",
+    "connection reset by peer",
+    "connection refused",
+    # rsync surfaces the underlying ssh failure verbatim plus its own marker:
+    "rsync error: error in rsync protocol data stream",
+)
+
+# Backoff schedule for transient ssh/rsync failures. Caller sees up to
+# 4 retries with delays 2s/4s/8s/16s — total ~30s of waiting. Long enough
+# to ride through a sshd MaxStartups burst, short enough that a permanent
+# failure surfaces in well under a minute.
+_BACKOFF_DELAYS_SEC: tuple[float, ...] = (2.0, 4.0, 8.0, 16.0)
+
+
+def _is_throttle_failure(cp: subprocess.CompletedProcess[str]) -> bool:
+    """True if *cp* looks like an ssh rate-limit failure worth retrying.
+
+    We consider non-zero returncode + a known sshd-throttle marker in
+    stderr to be transient. A bare timeout (which raises before reaching
+    here) is also transient and handled by the caller's except clause.
+    """
+    if cp.returncode == 0:
+        return False
+    blob = ((cp.stderr or "") + "\n" + (cp.stdout or "")).lower()
+    return any(marker in blob for marker in _SSH_THROTTLE_MARKERS)
+
+
+def _with_ssh_backoff(
+    fn: Callable[[], subprocess.CompletedProcess[str]],
+    *,
+    label: str,
+) -> subprocess.CompletedProcess[str]:
+    """Call *fn* with exponential-backoff retry on transient ssh failures.
+
+    *fn* is a zero-arg thunk that performs the ssh/scp/rsync subprocess
+    and returns its CompletedProcess. We retry on:
+
+    * :class:`TimeoutError` raised by the underlying wrapper, AND
+    * non-zero returncode whose stderr matches a known sshd-throttle
+      marker (see :data:`_SSH_THROTTLE_MARKERS`).
+
+    Permanent failures (auth refused, host unreachable, command not
+    found) return immediately with the failing CompletedProcess.
+
+    *label* is interpolated into the optional log line so the caller's
+    diagnostic identifies which step is being retried (e.g. ``"rsync
+    push"``, ``"scp dispatch.py"``). Disable retries entirely by setting
+    ``HPC_SSH_NO_BACKOFF=1`` (useful in tests that mock subprocess.run).
+    """
+    if os.environ.get("HPC_SSH_NO_BACKOFF") == "1":
+        return fn()
+
+    last_cp: subprocess.CompletedProcess[str] | None = None
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((0.0, *_BACKOFF_DELAYS_SEC)):
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            cp = fn()
+        except TimeoutError as exc:
+            last_exc = exc
+            last_cp = None
+            continue
+        last_cp = cp
+        last_exc = None
+        if not _is_throttle_failure(cp):
+            return cp
+        # Throttle marker — retry unless we've exhausted the schedule.
+        if attempt == len(_BACKOFF_DELAYS_SEC):
+            return cp
+    # Exhausted retries on TimeoutError specifically.
+    if last_exc is not None and last_cp is None:
+        raise last_exc
+    # Should be unreachable; mypy needs the guarantee.
+    assert last_cp is not None, f"_with_ssh_backoff exhausted with no result for {label}"
+    return last_cp
+
+
 def ssh_run(
     cmd: str,
     *,
-    host: str,
-    user: str,
+    ssh_target: str,
     capture: bool = True,
     timeout: float | None = _DEFAULT,
 ) -> subprocess.CompletedProcess[str]:
@@ -137,10 +241,8 @@ def ssh_run(
     ----------
     cmd:
         Shell command string to execute remotely.
-    host:
-        Cluster hostname (e.g. ``hoffman2.idre.ucla.edu``).
-    user:
-        SSH username on the cluster.
+    ssh_target:
+        ssh destination — either ``user@host`` or an OpenSSH alias.
     capture:
         If True (default), capture stdout/stderr and return them.
         If False, inherit the parent process's stdout/stderr (useful for
@@ -164,24 +266,133 @@ def ssh_run(
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
-    argv = ["ssh", *_ssh_multiplex_opts(), _target(user, host), cmd]
+    argv = ["ssh", *_ssh_multiplex_opts(), ssh_target, cmd]
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                argv,
+                capture_output=capture,
+                text=True,
+                timeout=effective_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"ssh to {ssh_target} timed out after {effective_timeout}s: {_truncate(cmd)}"
+            ) from exc
+
+    return _with_ssh_backoff(_run, label=f"ssh {ssh_target}")
+
+
+def _have_rsync() -> bool:
+    """Return True if an ``rsync`` binary is on PATH.
+
+    Detection at runtime via :func:`shutil.which`. Activates the scp/tar
+    fallback when False (typically Windows hosts without WSL/MSYS rsync).
+    """
+    return shutil.which("rsync") is not None
+
+
+def _tar_ssh_push(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    local_path: str | Path,
+    exclude: list[str],
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Push *local_path* to *remote_path* via ``tar c | ssh tar x``.
+
+    Used as the rsync_push fallback when rsync is absent. Respects the
+    same *exclude* patterns as rsync (passed through to ``tar
+    --exclude``). Returns a CompletedProcess so callers can inspect the
+    same fields (returncode, stderr) they would for rsync.
+
+    Implementation: spawn ``tar c`` and ``ssh tar x`` as two Popens
+    connected by a pipe; both must exit zero for success. ``--delete``
+    semantics are not preserved — the remote dir is left as-is and tar
+    overlays files on top, so stale files persist. Callers needing a
+    clean slate should ssh-rm the remote dir first.
+    """
+    src_dir = str(local_path).rstrip("/\\")
+
+    # tar excludes mirror rsync's pattern shape (relative paths under src).
+    tar_excludes: list[str] = []
+    for pattern in exclude:
+        tar_excludes += [f"--exclude={pattern.rstrip('/')}"]
+
+    tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
+    ssh_remote_cmd = f"mkdir -p {shlex.quote(remote_path)} && tar x -C {shlex.quote(remote_path)}"
+    ssh_cmd = ["ssh", "-o", "BatchMode=yes", ssh_target, ssh_remote_cmd]
+
+    tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        return subprocess.run(
-            argv,
-            capture_output=capture,
+        assert tar_proc.stdout is not None
+        ssh_proc = subprocess.run(
+            ssh_cmd,
+            stdin=tar_proc.stdout,
+            capture_output=True,
             text=True,
-            timeout=effective_timeout,
+            timeout=timeout,
         )
+        tar_proc.stdout.close()
+        tar_proc.wait(timeout=timeout)
+        tar_stderr_bytes = tar_proc.stderr.read() if tar_proc.stderr else b""
+    except subprocess.TimeoutExpired as exc:
+        tar_proc.kill()
+        raise TimeoutError(
+            f"tar/ssh push to {ssh_target} timed out after {timeout}s: "
+            f"{_truncate(f'{src_dir} -> {ssh_target}:{remote_path}')}"
+        ) from exc
+    finally:
+        if tar_proc.stderr is not None:
+            tar_proc.stderr.close()
+
+    tar_stderr = tar_stderr_bytes.decode(errors="replace")
+    combined_stderr = "\n".join(filter(None, [tar_stderr.strip(), ssh_proc.stderr.strip()]))
+    rc = ssh_proc.returncode if ssh_proc.returncode != 0 else tar_proc.returncode
+
+    return subprocess.CompletedProcess(
+        args=tar_cmd + ["|"] + ssh_cmd,
+        returncode=rc,
+        stdout=ssh_proc.stdout,
+        stderr=combined_stderr,
+    )
+
+
+def _scp_pull(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    remote_subdir: str,
+    local_dir: str | Path,
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Pull *remote_subdir* to *local_dir* via ``scp -r``.
+
+    Used as the rsync_pull fallback when rsync is absent. The *include*
+    filter is not honored (scp has no equivalent); callers passing a
+    restrictive include will receive the entire subdirectory. For the
+    payloads claude-hpc actually pulls (``_combiner/wave_*.json`` and
+    optional per-task summaries), this is acceptable.
+    """
+    src = f"{ssh_target}:{remote_path.rstrip('/')}/{remote_subdir.strip('/')}/"
+    dst_path = Path(local_dir)
+    dst_path.mkdir(parents=True, exist_ok=True)
+    dst = str(dst_path)
+
+    scp_cmd = ["scp", "-r", "-o", "BatchMode=yes", src, dst]
+    try:
+        return subprocess.run(scp_cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(
-            f"ssh to {user}@{host} timed out after {effective_timeout}s: {_truncate(cmd)}"
+            f"scp pull from {ssh_target} timed out after {timeout}s: {_truncate(f'{src} -> {dst}')}"
         ) from exc
 
 
 def rsync_push(
     *,
-    host: str,
-    user: str,
+    ssh_target: str,
     remote_path: str,
     local_path: str | Path,
     exclude: list[str] | None = None,
@@ -190,12 +401,15 @@ def rsync_push(
 ) -> subprocess.CompletedProcess[str]:
     """Sync a local directory to a remote host using rsync.
 
+    On hosts where the ``rsync`` binary is not on PATH (typically
+    Windows without WSL / MSYS rsync), automatically falls back to a
+    ``tar c | ssh tar x`` pipeline. The fallback honors *exclude* but
+    silently drops *delete* — stale files on the remote persist.
+
     Parameters
     ----------
-    host:
-        Cluster hostname.
-    user:
-        SSH username on the cluster.
+    ssh_target:
+        ssh destination — either ``user@host`` or an OpenSSH alias.
     remote_path:
         Absolute path on the remote host (e.g. ``/u/home/user/project``).
     local_path:
@@ -205,7 +419,7 @@ def rsync_push(
         if *None*.
     delete:
         If True (default), pass ``--delete`` so removed local files are
-        also removed on the remote.
+        also removed on the remote. Ignored on the tar/ssh fallback.
     timeout:
         Per-call subprocess timeout in seconds.  When omitted, the module
         default :data:`RSYNC_TIMEOUT_SEC` is applied.  Pass ``timeout=None``
@@ -219,37 +433,48 @@ def rsync_push(
     """
     if exclude is None:
         exclude = DEFAULT_RSYNC_EXCLUDES
+    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+
+    if not _have_rsync():
+        return _tar_ssh_push(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            local_path=local_path,
+            exclude=exclude,
+            timeout=effective_timeout,
+        )
 
     exclude_flags: list[str] = []
     for pattern in exclude:
         exclude_flags += ["--exclude", pattern]
 
     src = str(local_path).rstrip("/\\") + "/"
-    dst = f"{_target(user, host)}:{remote_path.rstrip('/')}/"
+    dst = f"{ssh_target}:{remote_path.rstrip('/')}/"
 
     flags = ["rsync", "-az"]
     if delete:
         flags.append("--delete")
 
-    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
-    try:
-        return subprocess.run(
-            [*flags, *exclude_flags, src, dst],
-            capture_output=True,
-            text=True,
-            timeout=effective_timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"rsync push to {host} timed out after {effective_timeout}s: "
-            f"{_truncate(f'{src} -> {dst}')}"
-        ) from exc
+    def _run() -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                [*flags, *exclude_flags, src, dst],
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"rsync push to {ssh_target} timed out after {effective_timeout}s: "
+                f"{_truncate(f'{src} -> {dst}')}"
+            ) from exc
+
+    return _with_ssh_backoff(_run, label=f"rsync push {ssh_target}")
 
 
 def deploy_runtime(
     *,
-    host: str,
-    user: str,
+    ssh_target: str,
     remote_path: str,
 ) -> subprocess.CompletedProcess[str]:
     """Deploy framework runtime files to the cluster.
@@ -270,14 +495,13 @@ def deploy_runtime(
 
     Each underlying ssh/scp invocation is bounded by
     :data:`SSH_TIMEOUT_SEC`; if any exceeds it, :class:`TimeoutError` is
-    raised that names the host and the basename of the file being copied.
+    raised that names the target and the basename of the file being copied.
 
     Must be called **after** :func:`rsync_push` (which uses ``--delete``).
     The default rsync excludes preserve cluster-side framework files
     inside ``.hpc/``, but deploy_runtime is still safe to re-run after
     every push (it overwrites with the package-versioned bytes).
     """
-    target = _target(user, host)
     remote_path_q = shlex.quote(remote_path)
     pkg_dir = Path(__file__).parent.parent
 
@@ -287,30 +511,33 @@ def deploy_runtime(
         f" {remote_path_q}/.hpc/templates/common"
         f" && touch {remote_path_q}/claude_hpc/__init__.py"
         f" && touch {remote_path_q}/claude_hpc/mapreduce/__init__.py",
-        host=host,
-        user=user,
+        ssh_target=ssh_target,
     )
 
     def _scp(src: Path, dst_rel: str) -> subprocess.CompletedProcess[str]:
-        dst = f"{target}:{shlex.quote(remote_path)}/{dst_rel}"
-        try:
-            return subprocess.run(
-                ["scp", str(src), dst],
-                capture_output=True,
-                text=True,
-                timeout=SSH_TIMEOUT_SEC,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError(
-                f"scp to {host} timed out after {SSH_TIMEOUT_SEC}s: {src.name}"
-            ) from exc
-        except FileNotFoundError as exc:
-            # scp binary missing on the local host. Surface as
-            # FileNotFoundError so callers can distinguish "no scp on
-            # PATH" from a remote authentication failure.
-            raise FileNotFoundError(
-                f"scp binary not found while copying {src.name}: {exc}"
-            ) from exc
+        dst = f"{ssh_target}:{shlex.quote(remote_path)}/{dst_rel}"
+
+        def _run() -> subprocess.CompletedProcess[str]:
+            try:
+                return subprocess.run(
+                    ["scp", str(src), dst],
+                    capture_output=True,
+                    text=True,
+                    timeout=SSH_TIMEOUT_SEC,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise TimeoutError(
+                    f"scp to {ssh_target} timed out after {SSH_TIMEOUT_SEC}s: {src.name}"
+                ) from exc
+            except FileNotFoundError as exc:
+                # scp binary missing on the local host. Surface as
+                # FileNotFoundError so callers can distinguish "no scp on
+                # PATH" from a remote authentication failure.
+                raise FileNotFoundError(
+                    f"scp binary not found while copying {src.name}: {exc}"
+                ) from exc
+
+        return _with_ssh_backoff(_run, label=f"scp {src.name}")
 
     # Importable stubs (used inside cluster jobs by user code).
     #
@@ -362,8 +589,7 @@ def deploy_runtime(
 
 def run_combiner(
     *,
-    host: str,
-    user: str,
+    ssh_target: str,
     remote_path: str,
     wave: int,
     run_id: str,
@@ -378,7 +604,7 @@ def run_combiner(
 
     Parameters
     ----------
-    host, user, remote_path:
+    ssh_target, remote_path:
         SSH target and remote project root.
     wave:
         Wave number (0-based) to combine.
@@ -401,14 +627,13 @@ def run_combiner(
         f"python3 .hpc/_hpc_combiner.py --wave {wave} --run-id {run_id_q}{force_flag}"
     )
     if timeout is _DEFAULT:
-        return ssh_run(cmd, host=host, user=user)
-    return ssh_run(cmd, host=host, user=user, timeout=timeout)
+        return ssh_run(cmd, ssh_target=ssh_target)
+    return ssh_run(cmd, ssh_target=ssh_target, timeout=timeout)
 
 
 def run_combiner_checked(
     *,
-    host: str,
-    user: str,
+    ssh_target: str,
     remote_path: str,
     wave: int,
     run_id: str,
@@ -424,8 +649,7 @@ def run_combiner_checked(
     """
     if timeout is _DEFAULT:
         result = run_combiner(
-            host=host,
-            user=user,
+            ssh_target=ssh_target,
             remote_path=remote_path,
             wave=wave,
             run_id=run_id,
@@ -433,8 +657,7 @@ def run_combiner_checked(
         )
     else:
         result = run_combiner(
-            host=host,
-            user=user,
+            ssh_target=ssh_target,
             remote_path=remote_path,
             wave=wave,
             run_id=run_id,
@@ -450,8 +673,7 @@ def run_combiner_checked(
 
 def rsync_pull(
     *,
-    host: str,
-    user: str,
+    ssh_target: str,
     remote_path: str,
     remote_subdir: str,
     local_dir: str | Path,
@@ -466,10 +688,8 @@ def rsync_pull(
 
     Parameters
     ----------
-    host:
-        Cluster hostname.
-    user:
-        SSH username on the cluster.
+    ssh_target:
+        ssh destination — either ``user@host`` or an OpenSSH alias.
     remote_path:
         Absolute path of the project root on the remote host.
     remote_subdir:
@@ -492,7 +712,7 @@ def rsync_pull(
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
     src = (
-        f"{_target(user, host)}:"
+        f"{ssh_target}:"
         f"{shlex.quote(remote_path.rstrip('/'))}/"
         f"{shlex.quote(remote_subdir.strip('/'))}/"
     )
@@ -501,6 +721,17 @@ def rsync_pull(
     dst_path.mkdir(parents=True, exist_ok=True)
     dst = str(dst_path).rstrip("/\\") + "/"
 
+    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
+
+    if not _have_rsync():
+        return _scp_pull(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            remote_subdir=remote_subdir,
+            local_dir=local_dir,
+            timeout=effective_timeout,
+        )
+
     filter_flags: list[str] = []
     if include is not None:
         filter_flags += ["--include=*/"]
@@ -508,16 +739,18 @@ def rsync_pull(
             filter_flags += [f"--include={pattern}"]
         filter_flags += ["--exclude=*"]
 
-    effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
-    try:
-        return subprocess.run(
-            ["rsync", "-az", *filter_flags, src, dst],
-            capture_output=True,
-            text=True,
-            timeout=effective_timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(
-            f"rsync pull from {host} timed out after {effective_timeout}s: "
-            f"{_truncate(f'{src} -> {dst}')}"
-        ) from exc
+    def _run() -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["rsync", "-az", *filter_flags, src, dst],
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"rsync pull from {ssh_target} timed out after {effective_timeout}s: "
+                f"{_truncate(f'{src} -> {dst}')}"
+            ) from exc
+
+    return _with_ssh_backoff(_run, label=f"rsync pull {ssh_target}")

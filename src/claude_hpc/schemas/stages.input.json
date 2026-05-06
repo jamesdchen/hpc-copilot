@@ -4,12 +4,17 @@
   "title": "stages spec",
   "description": "Output shape of `.hpc/stages.py::stages()`. Each entry describes one stage in a multi-stage DAG. Stage names must be unique within the list. `depends_on` references must resolve to other entries in the same list.",
   "type": "array",
-  "items": { "$ref": "#/$defs/stage" },
+  "items": {
+    "$ref": "#/$defs/stage"
+  },
   "minItems": 1,
   "$defs": {
     "stage": {
       "type": "object",
-      "required": ["name", "run"],
+      "required": [
+        "name",
+        "run"
+      ],
       "additionalProperties": false,
       "properties": {
         "name": {
@@ -24,10 +29,16 @@
         },
         "depends_on": {
           "oneOf": [
-            { "type": "string", "minLength": 1 },
+            {
+              "type": "string",
+              "minLength": 1
+            },
             {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 },
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
               "uniqueItems": true
             }
           ],
@@ -37,26 +48,61 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "cpus":     { "type": "integer", "minimum": 1 },
-            "mem":      { "type": "string",  "minLength": 1 },
-            "walltime": { "type": "string",  "minLength": 1 },
-            "gpus":     { "type": "integer", "minimum": 0 },
-            "gpu_type": { "type": "string",  "minLength": 1 }
+            "cpus": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mem": {
+              "type": "string",
+              "minLength": 1
+            },
+            "walltime": {
+              "type": "string",
+              "minLength": 1
+            },
+            "gpus": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "gpu_type": {
+              "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/gpu_type"
+            }
           }
         },
         "env": {
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "modules":   { "type": "string" },
-            "conda_env": { "type": "string" }
+            "modules": {
+              "type": "string"
+            },
+            "conda_env": {
+              "type": "string"
+            }
           }
         },
-        "env_group": { "type": "string", "minLength": 1 },
-        "constraints": { "type": "object", "additionalProperties": true },
-        "results": { "type": "object", "additionalProperties": true },
-        "runtime": { "type": "string", "enum": ["uv"] },
-        "max_retries": { "type": "integer", "minimum": 0 }
+        "env_group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "results": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "runtime": {
+          "type": "string",
+          "enum": [
+            "uv"
+          ]
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     }
   }

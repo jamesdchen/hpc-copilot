@@ -18,8 +18,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.campaign.dirs import campaign_dir
 
@@ -61,7 +59,9 @@ def validate_manifest(data: dict[str, Any]) -> None:
     jsonschema.ValidationError
         On any schema violation.
     """
-    jsonschema.validate(instance=data, schema=manifest_schema())
+    from claude_hpc._internal._schema import validate as _validate
+
+    _validate(data, manifest_schema())
 
 
 def write_manifest(
