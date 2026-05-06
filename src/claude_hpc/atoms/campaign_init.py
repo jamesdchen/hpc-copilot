@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         SideEffect("writes-sidecar", "<experiment>/.hpc/campaigns/<id>/manifest.json"),
     ],
     idempotent=True,
+    idempotency_key="campaign_id",
 )
 def campaign_init(
     *,

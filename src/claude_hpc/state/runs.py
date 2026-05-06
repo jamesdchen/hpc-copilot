@@ -534,6 +534,7 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
         SideEffect("removes-files", "<experiment>/.hpc/runs/*.json (orphans only)"),
     ],
     idempotent=True,
+    idempotency_key="experiment_dir",
 )
 def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:
     """Delete every orphan sidecar under ``<exp>/.hpc/runs/``.
