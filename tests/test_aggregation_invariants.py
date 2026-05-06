@@ -46,9 +46,7 @@ def _write_wave_partial(combiner_dir: Path, wave: int, run_id: str, task_ids: li
 
 
 def test_all_invariants_pass(tmp_path: Path) -> None:
-    _seed_sidecar_with_wave_map(
-        tmp_path, "r1", {"0": [0, 1, 2], "1": [3, 4, 5]}
-    )
+    _seed_sidecar_with_wave_map(tmp_path, "r1", {"0": [0, 1, 2], "1": [3, 4, 5]})
     combiner_dir = tmp_path / "_combiner_local"
     _write_wave_partial(combiner_dir, 0, "r1", [0, 1, 2])
     _write_wave_partial(combiner_dir, 1, "r1", [3, 4, 5])

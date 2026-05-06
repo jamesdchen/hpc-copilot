@@ -150,9 +150,7 @@ def test_oom_killed(tmp_path: Path, journal_home: Path) -> None:
     assert out["failure_kind"] == "oom_killed"
 
 
-def test_missing_output_when_expect_output_not_present(
-    tmp_path: Path, journal_home: Path
-) -> None:
+def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_home: Path) -> None:
     from claude_hpc.atoms.canary_verify import verify_canary
 
     _seed_canary(tmp_path)

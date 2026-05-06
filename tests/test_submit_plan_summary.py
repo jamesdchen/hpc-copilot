@@ -44,9 +44,7 @@ def test_large_task_count_warns_in_confirm_prompt() -> None:
 
 
 def test_resources_block_renders_when_present() -> None:
-    out = summarize_submit_plan(
-        _spec(resources={"cpus": 8, "mem": "64G", "walltime": "06:00:00"})
-    )
+    out = summarize_submit_plan(_spec(resources={"cpus": 8, "mem": "64G", "walltime": "06:00:00"}))
     assert "resources:    cpus=8, mem=64G, walltime=06:00:00" in out["body"]
 
 
