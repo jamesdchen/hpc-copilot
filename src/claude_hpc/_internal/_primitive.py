@@ -29,14 +29,30 @@ auto-import-on-first-query behaviour silently swallowed
 ``ImportError`` and made hard-to-diagnose missing-decorator bugs.
 ``register_primitives`` itself is idempotent.
 
-Migration safety
-----------------
+Source-of-truth split
+---------------------
 
-Until ``operations.py`` has fully switched off frontmatter as a
-fallback source, ``docs/primitives/*.md`` and the registry are dual
-sources of truth. ``tests/test_primitive_spine.py`` cross-validates
-that decorator metadata matches frontmatter — drift is caught at CI
-time, not silently absorbed.
+The registry IS the canonical source for the structured metadata
+the decorator carries: ``name``, ``verb``, ``side_effects``,
+``idempotent``, ``idempotency_key``, ``error_codes``, and ``composes``.
+:func:`claude_hpc._internal.operations.operations_catalog` reads the
+registry directly; nothing else reads the markdown frontmatter for
+those fields.
+
+``docs/primitives/<name>.md`` carries two kinds of content:
+
+1. **Registry-derived frontmatter** — auto-rewritten by
+   ``scripts/build_primitive_frontmatter.py`` from the registry. Never
+   hand-edit; the pre-commit hook + the CI ``--check`` gate will undo
+   you.
+2. **Hand-authored prose** — everything after the closing ``---``
+   marker, plus the ``inputs:`` / ``outputs:`` / ``backed_by:`` /
+   ``exit_codes:`` frontmatter fields the registry doesn't yet model.
+   These are round-tripped untouched.
+
+Primitives missing a ``docs/primitives/<name>.md`` are auto-scaffolded
+with a one-line placeholder by the regen script, so the registry can't
+silently sprout undocumented primitives.
 """
 
 from __future__ import annotations

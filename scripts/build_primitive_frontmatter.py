@@ -125,6 +125,15 @@ def _build_frontmatter(meta, fm_existing: dict) -> dict:
     fm["error_codes"] = _render_error_codes(meta, fm_existing)
     if "backed_by" in fm_existing:
         fm["backed_by"] = fm_existing["backed_by"]
+    else:
+        # Auto-derive a minimal backed_by for newly-scaffolded docs.
+        # ``python`` is the canonical entry-point pointer; ``cli`` defaults
+        # to the conventional ``hpc-mapreduce <name>`` and the human
+        # tightens the placeholder with concrete arg syntax later.
+        fm["backed_by"] = {
+            "cli": f"hpc-mapreduce {meta.name}",
+            "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
+        }
     if "exit_codes" in fm_existing:
         fm["exit_codes"] = fm_existing["exit_codes"]
     return fm
@@ -162,10 +171,18 @@ def main() -> int:
 
     register_primitives()
     drift: list[tuple[str, str, str]] = []  # (path, old, new)
+    missing: list[str] = []  # primitive names with no docs/primitives/<name>.md
     registry = get_registry()
     for name, meta in sorted(registry.items()):
         path = PRIMITIVES_DIR / f"{name}.md"
         if not path.is_file():
+            # Scaffold a placeholder doc so the registry doesn't have
+            # silent orphans. Frontmatter is registry-owned; the body
+            # is a one-line stub the human (or the next pass) fills in.
+            missing.append(name)
+            stub_body = f"# {name}\n\n_Documentation pending._\n"
+            new = _render_doc(meta, stub_body, {})
+            drift.append((str(path), "", new))
             continue
         old = path.read_text(encoding="utf-8")
         fm_yaml, body = _split_frontmatter(old)
