@@ -14,10 +14,12 @@
     "stderr_tail"
   ],
   "properties": {
-    "ok": { "type": "boolean" },
+    "ok": {
+      "type": "boolean"
+    },
     "run_id": {
-      "type": "string",
-      "description": "Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>; loosely validated as filesystem-safe with no path separators."
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id",
+      "description": "Run identifier \u2014 typically YYYYMMDD-HHMMSS-<short_sha>; loosely validated as filesystem-safe with no path separators."
     },
     "output_path_remote": {
       "type": "string",
@@ -28,10 +30,20 @@
       "description": "Local path the reducer's output was rsync_pulled to."
     },
     "reduced": {
-      "type": ["object", "array", "string", "number", "boolean", "null"],
+      "type": [
+        "object",
+        "array",
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ],
       "description": "Parsed reducer output (whatever JSON shape the reducer wrote)."
     },
-    "exit_code": { "type": "integer", "minimum": 0 },
+    "exit_code": {
+      "type": "integer",
+      "minimum": 0
+    },
     "stderr_tail": {
       "type": "string",
       "description": "Last ~2KB of the reducer's stderr."

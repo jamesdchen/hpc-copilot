@@ -266,6 +266,10 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     picked up the runtime dep), this falls back to a no-op so the CLI
     keeps working — schema validation is defence in depth, not the only
     line of defence (``submit_and_record`` etc. still validate inputs).
+
+    Cross-file ``$ref`` (e.g. into ``envelope.json#/$defs/run_id``)
+    resolves through the shared registry in :mod:`claude_hpc._internal._schema`;
+    consumer schemas no longer inline ``$defs`` copies verbatim.
     """
     try:
         import jsonschema  # type: ignore[import-untyped]
@@ -278,8 +282,10 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
+    from claude_hpc._internal._schema import validate as _validate
+
     try:
-        jsonschema.validate(payload, schema)
+        _validate(payload, schema)
     except jsonschema.ValidationError as exc:
         path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
         raise errors.SpecInvalid(

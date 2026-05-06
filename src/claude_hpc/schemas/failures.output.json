@@ -2,12 +2,18 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/failures.output.json",
   "title": "failures output data",
-  "description": "Shape of the `data` field on a successful `failures` envelope. Source: claude_hpc.atoms.failures.fetch_failures. The `preempted_count` and `preempted_task_ids` fields are present only when at least one task was preempted by the scheduler — they let an agent harness branch on 'campus user got bumped, resubmit cleanly' without parsing per-cluster `error_class` strings.",
+  "description": "Shape of the `data` field on a successful `failures` envelope. Source: claude_hpc.atoms.failures.fetch_failures. The `preempted_count` and `preempted_task_ids` fields are present only when at least one task was preempted by the scheduler \u2014 they let an agent harness branch on 'campus user got bumped, resubmit cleanly' without parsing per-cluster `error_class` strings.",
   "type": "object",
-  "required": ["run_id", "failed_count", "clusters"],
+  "required": [
+    "run_id",
+    "failed_count",
+    "clusters"
+  ],
   "additionalProperties": true,
   "properties": {
-    "run_id": { "type": "string" },
+    "run_id": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id"
+    },
     "failed_count": {
       "type": "integer",
       "minimum": 0,
@@ -20,26 +26,36 @@
         "type": "object",
         "additionalProperties": true,
         "properties": {
-          "error_class": { "type": "string" },
-          "task_ids": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+          "error_class": {
+            "type": "string"
+          },
+          "task_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     },
     "scheduler": {
-      "type": "string",
-      "enum": ["sge", "slurm"],
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/scheduler",
       "description": "Per-cluster scheduler driver, surfaced for downstream resubmit shaping."
     },
     "preempted_count": {
       "type": "integer",
       "minimum": 1,
-      "description": "Number of task ids whose failure cluster has error_class='preempted'. Optional — present only when > 0. Helps the agent harness route bumped runs (campus user got preempted by higher-priority work) through the clean resubmit path."
+      "description": "Number of task ids whose failure cluster has error_class='preempted'. Optional \u2014 present only when > 0. Helps the agent harness route bumped runs (campus user got preempted by higher-priority work) through the clean resubmit path."
     },
     "preempted_task_ids": {
       "type": "array",
-      "items": { "type": "integer", "minimum": 0 },
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
       "uniqueItems": true,
-      "description": "Sorted, deduplicated list of preempted task ids. Optional — present only when at least one preempted task is in the cluster set."
+      "description": "Sorted, deduplicated list of preempted task ids. Optional \u2014 present only when at least one preempted task is in the cluster set."
     },
     "auto_retry_policy": {
       "type": "object",

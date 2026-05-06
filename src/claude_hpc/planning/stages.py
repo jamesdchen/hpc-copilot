@@ -67,7 +67,9 @@ def validate_stages(stages: list[dict[str, Any]]) -> None:
     ValueError
         If names collide or ``depends_on`` references an unknown stage.
     """
-    jsonschema.validate(instance=stages, schema=stages_schema())
+    from claude_hpc._internal._schema import validate as _validate
+
+    _validate(stages, stages_schema())
     names = [s["name"] for s in stages]
     seen: set[str] = set()
     duplicates: list[str] = []

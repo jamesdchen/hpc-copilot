@@ -4,38 +4,55 @@
   "title": "status output data",
   "description": "Shape of the `data` field on a successful `status` envelope.",
   "type": "object",
-  "required": ["run_id", "lifecycle_state", "last_status", "combined_waves", "failed_waves"],
+  "required": [
+    "run_id",
+    "lifecycle_state",
+    "last_status",
+    "combined_waves",
+    "failed_waves"
+  ],
   "additionalProperties": false,
   "properties": {
-    "run_id": { "type": "string" },
+    "run_id": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id"
+    },
     "lifecycle_state": {
-      "type": "string",
-      "enum": ["in_flight", "complete", "failed", "abandoned", "timeout"]
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/lifecycle_state_observable_with_timeout"
     },
     "last_status": {
       "type": "object",
       "description": "Snapshot from the on-cluster status reporter; see claude_hpc.mapreduce.reduce.status."
     },
     "last_status_age_seconds": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "description": "Age of last_status.checked_at in seconds; null when unavailable. Callers may treat any value above their threshold as stale."
     },
-    "combined_waves": { "type": "array", "items": { "type": "integer" } },
-    "failed_waves":   { "type": "array", "items": { "type": "integer" } },
-    "campaign_id":    {
+    "combined_waves": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/combined_waves"
+    },
+    "failed_waves": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/failed_waves"
+    },
+    "campaign_id": {
       "type": "string",
       "description": "Closed-loop campaign tag. Present only when this run is part of a campaign; absent for open-loop submits."
     },
     "preempted_count": {
       "type": "integer",
       "minimum": 1,
-      "description": "Number of task ids whose per-task sidecar entry carries a `preempt` block (set by dispatch.py's SIGTERM handler). Optional — present only when at least one task was preempted by the cluster scheduler. Lets the agent harness see scheduler pressure on a partially-bumped run while it's still in flight."
+      "description": "Number of task ids whose per-task sidecar entry carries a `preempt` block (set by dispatch.py's SIGTERM handler). Optional \u2014 present only when at least one task was preempted by the cluster scheduler. Lets the agent harness see scheduler pressure on a partially-bumped run while it's still in flight."
     },
     "preempted_task_ids": {
       "type": "array",
-      "items": { "type": "integer", "minimum": 0 },
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      },
       "uniqueItems": true,
-      "description": "Sorted, deduplicated list of preempted task ids. Optional — present only when preempted_count is also present."
+      "description": "Sorted, deduplicated list of preempted task ids. Optional \u2014 present only when preempted_count is also present."
     }
   }
 }

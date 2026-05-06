@@ -4,26 +4,52 @@
   "title": "decide-monitor-arm input",
   "description": "Run-state inputs to `claude_hpc.atoms.monitor_arm.decide_monitor_arm`. Drives the cron / loop / none arm decision + cadence + literal armed: line.",
   "type": "object",
-  "required": ["run_id", "summary", "total_tasks", "invocation_argv"],
+  "required": [
+    "run_id",
+    "summary",
+    "total_tasks",
+    "invocation_argv"
+  ],
   "additionalProperties": false,
   "properties": {
     "run_id": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9._\\-]+$"
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
     },
     "summary": {
       "type": "object",
-      "description": "last_status['summary'] from the run journal — {complete, running, pending, failed} integer counters. Missing keys default to 0.",
-      "additionalProperties": { "type": "integer", "minimum": 0 }
+      "description": "last_status['summary'] from the run journal \u2014 {complete, running, pending, failed} integer counters. Missing keys default to 0.",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
     },
-    "total_tasks": { "type": "integer", "minimum": 0 },
+    "total_tasks": {
+      "type": "integer",
+      "minimum": 0
+    },
     "invocation_argv": {
       "type": "string",
       "description": "Exact /monitor-hpc <args> string the next tick should re-invoke. Stamped into cron_create_args.prompt."
     },
-    "user_invoked_via_loop": { "type": "boolean" },
-    "eta_sec": { "type": ["integer", "null"], "minimum": 0 },
-    "pace_unstable": { "type": "boolean" },
-    "queue_wait_sec": { "type": ["integer", "null"], "minimum": 0 }
+    "user_invoked_via_loop": {
+      "type": "boolean"
+    },
+    "eta_sec": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "pace_unstable": {
+      "type": "boolean"
+    },
+    "queue_wait_sec": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    }
   }
 }

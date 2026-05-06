@@ -225,8 +225,10 @@ def _validate(spec: dict[str, Any]) -> None:
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
+    from claude_hpc._internal._schema import validate as _validate
+
     try:
-        jsonschema.validate(spec, schema)
+        _validate(spec, schema)
     except jsonschema.ValidationError as exc:
         path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
         raise errors.SpecInvalid(

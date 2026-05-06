@@ -14,7 +14,11 @@ dependencies = [
     # the matching JSON Schema before the subcommand runs.  Importing
     # the library lazily keeps the lock-step with older installs that
     # haven't picked it up yet, but it must be a runtime dep.
-    "jsonschema>=4.0",
+    # 4.18 vendored ``referencing`` and switched the validator API to
+    # accept a Registry; we depend on that for cross-file ``$ref``
+    # resolution (consumer schemas reference envelope.json#/$defs/*).
+    "jsonschema>=4.18",
+    "referencing>=0.30",
 ]
 
 [project.optional-dependencies]

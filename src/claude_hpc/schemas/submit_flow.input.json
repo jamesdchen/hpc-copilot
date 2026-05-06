@@ -39,8 +39,7 @@
       "minLength": 1
     },
     "run_id": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9._\\-]+$"
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
     },
     "total_tasks": {
       "type": "integer",

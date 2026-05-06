@@ -16,38 +16,120 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "profile": { "type": "string", "minLength": 1 },
-    "cluster": { "type": "string", "minLength": 1 },
-    "ssh_target": { "type": "string", "minLength": 1 },
-    "remote_path": { "type": "string", "minLength": 1 },
-    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
-    "cmd_sha": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
-    "total_tasks": { "type": "integer", "minimum": 1 },
-    "backend": { "type": "string", "enum": ["sge_remote", "slurm"] },
-    "is_gpu": { "type": "boolean" },
-    "job_name": { "type": ["string", "null"] },
-    "script": { "type": ["string", "null"] },
-    "modules": { "type": "string" },
-    "conda_source": { "type": "string" },
-    "conda_env": { "type": "string" },
-    "runtime": { "type": ["string", "null"] },
-    "campaign_id": { "type": "string" },
-    "canary": { "type": "boolean" },
-    "partial_ok": { "type": "boolean" },
-    "skip_preflight": { "type": "boolean" },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cluster": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ssh_target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "remote_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+    },
+    "cmd_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "total_tasks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "sge_remote",
+        "slurm"
+      ]
+    },
+    "is_gpu": {
+      "type": "boolean"
+    },
+    "job_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "script": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "modules": {
+      "type": "string"
+    },
+    "conda_source": {
+      "type": "string"
+    },
+    "conda_env": {
+      "type": "string"
+    },
+    "runtime": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "canary": {
+      "type": "boolean"
+    },
+    "partial_ok": {
+      "type": "boolean"
+    },
+    "skip_preflight": {
+      "type": "boolean"
+    },
     "pass_env_keys": {
-      "type": ["array", "null"],
-      "items": { "type": "string" }
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
     },
     "rsync_excludes": {
-      "type": ["array", "null"],
-      "items": { "type": "string" }
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
     },
-    "slurm_account": { "type": ["string", "null"] },
-    "slurm_cluster": { "type": ["string", "null"] },
+    "slurm_account": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slurm_cluster": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "extra_env": {
-      "type": ["object", "null"],
-      "additionalProperties": { "type": "string" }
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   }
 }

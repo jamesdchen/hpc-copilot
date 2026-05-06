@@ -25,8 +25,17 @@ SCHEMAS = REPO / "src" / "claude_hpc" / "schemas"
 
 
 def _load_lifecycle_enum(schema_name: str) -> set[str]:
+    """Resolve ``properties.lifecycle_state`` to its enum, following any
+    ``$ref`` into envelope.json:$defs."""
     schema = json.loads((SCHEMAS / schema_name).read_text())
-    return set(schema["properties"]["lifecycle_state"]["enum"])
+    node = schema["properties"]["lifecycle_state"]
+    if "$ref" in node:
+        ref = node["$ref"]
+        # Expect form ".../envelope.json#/$defs/<alias>"
+        alias = ref.rsplit("/", 1)[-1]
+        envelope = json.loads((SCHEMAS / "envelope.json").read_text())
+        node = envelope["$defs"][alias]
+    return set(node["enum"])
 
 
 def test_journal_status_str_coercion() -> None:
