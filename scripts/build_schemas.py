@@ -44,6 +44,7 @@ from claude_hpc._schema_models.aggregate_flow import (  # noqa: E402
     AggregateFlowResult,
     AggregateFlowSpec,
 )
+from claude_hpc._schema_models.axes import AxesConfig  # noqa: E402
 from claude_hpc._schema_models.best_submit_window import (  # noqa: E402
     BestSubmitWindowResult,
     BestSubmitWindowSpec,
@@ -51,10 +52,12 @@ from claude_hpc._schema_models.best_submit_window import (  # noqa: E402
 from claude_hpc._schema_models.build_executor import BuildExecutorResult  # noqa: E402
 from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput  # noqa: E402
 from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput  # noqa: E402
+from claude_hpc._schema_models.campaign import CampaignAdapter  # noqa: E402
 from claude_hpc._schema_models.campaign_health import (  # noqa: E402
     CampaignHealthResult,
     CampaignHealthSpec,
 )
+from claude_hpc._schema_models.campaign_manifest import CampaignManifest  # noqa: E402
 from claude_hpc._schema_models.capabilities import CapabilitiesResult  # noqa: E402
 from claude_hpc._schema_models.cluster_reduce import ClusterReduceResult  # noqa: E402
 from claude_hpc._schema_models.clusters import (  # noqa: E402
@@ -67,6 +70,7 @@ from claude_hpc._schema_models.decide_monitor_arm import (  # noqa: E402
     DecideMonitorArmSpec,
 )
 from claude_hpc._schema_models.discover import DiscoverResult  # noqa: E402
+from claude_hpc._schema_models.envelope import EnvelopeAdapter  # noqa: E402
 from claude_hpc._schema_models.failures import FailuresResult  # noqa: E402
 from claude_hpc._schema_models.find_prior_run import FindPriorRunResult  # noqa: E402
 from claude_hpc._schema_models.inspect_cluster import InspectClusterResult  # noqa: E402
@@ -122,6 +126,11 @@ _ID_BASE = "https://github.com/jamesdchen/claude-hpc/schemas"
 # The schema's ``$id`` is derived from the filename
 # (``<_ID_BASE>/<filename>``) — no need to repeat the URL here.
 SCHEMA_REGISTRY: list[tuple[Union[type[BaseModel], TypeAdapter[Any]], str]] = [
+    # Cross-cutting wire envelope + persisted-data shapes
+    (EnvelopeAdapter, "envelope.json"),
+    (AxesConfig, "axes.json"),
+    (CampaignManifest, "campaign_manifest.json"),
+    (CampaignAdapter, "campaign.output.json"),
     # Workflows
     (AggregateFlowSpec, "aggregate_flow.input.json"),
     (AggregateFlowResult, "aggregate_flow.output.json"),

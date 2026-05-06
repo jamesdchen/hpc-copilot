@@ -2,36 +2,74 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/axes.json",
   "title": "experiment axes config",
-  "description": "Per-experiment hints for the axis_picker. Lives at <experiment>/.hpc/axes.yaml. The framework only stores fields it can independently act on; experiment-specific reasoning about WHY an axis is homogeneous lives in the agent's chat context, not here.",
+  "description": "Schema for ``<experiment>/.hpc/axes.yaml``.",
   "type": "object",
-  "required": ["axes_schema_version"],
+  "required": [
+    "axes_schema_version"
+  ],
   "additionalProperties": false,
   "properties": {
     "axes_schema_version": {
-      "type": "integer",
-      "const": 1
+      "const": 1,
+      "title": "Axes Schema Version",
+      "type": "integer"
     },
     "axes": {
-      "type": "array",
-      "description": "Ordered list of every parallel axis in the experiment. Order is significant: it defines the cartesian-product convention by which task_id maps to axis values (last axis varies fastest, numpy/row-major). Required for submit-flow's wave_map building; the homogeneous_axes hint can stand alone for the cold-start picker without it.",
-      "items": {
-        "type": "object",
-        "required": ["name", "size"],
-        "additionalProperties": false,
-        "properties": {
-          "name": {"type": "string", "minLength": 1},
-          "size": {"type": "integer", "minimum": 1}
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_AxisEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
         }
-      }
+      ],
+      "default": null,
+      "description": "Ordered list of every parallel axis in the experiment. Order is significant: it defines the cartesian-product convention by which task_id maps to axis values (last axis varies fastest, numpy/row-major). Required for submit-flow's wave_map building; the homogeneous_axes hint can stand alone for the cold-start picker without it.",
+      "title": "Axes"
     },
     "homogeneous_axes": {
-      "type": "array",
-      "description": "Names of axes the deployer believes have low runtime-cost variance. The cold-start axis_picker promotes the first one onto the task array. Once runtime priors exist, the warm-path picker uses observed CV instead and treats this list as a fallback. Must be a subset of axes when axes is present.",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      },
+      "anyOf": [
+        {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Names of axes the deployer believes have low runtime-cost variance. The cold-start axis_picker promotes the first one onto the task array. Once runtime priors exist, the warm-path picker uses observed CV instead. Must be a subset of axes when axes is present.",
+      "title": "Homogeneous Axes",
       "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "_AxisEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "size": {
+          "minimum": 1,
+          "title": "Size",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "size"
+      ],
+      "title": "_AxisEntry",
+      "type": "object"
     }
   }
 }

@@ -2,63 +2,245 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/campaign_manifest.json",
   "title": "campaign manifest",
-  "description": "Audit record at <campaign_dir>/manifest.json. The framework only stores fields it can independently act on (budget, stop_criteria via campaign-budget / campaign-converged) plus opaque context (goal, strategy.params). Never required by primitives — purely descriptive.",
+  "description": "Schema for ``<campaign_dir>/manifest.json``.",
   "type": "object",
-  "required": ["manifest_schema_version", "campaign_id"],
+  "required": [
+    "manifest_schema_version",
+    "campaign_id"
+  ],
   "additionalProperties": false,
   "properties": {
     "manifest_schema_version": {
-      "type": "integer",
-      "const": 1
+      "const": 1,
+      "title": "Manifest Schema Version",
+      "type": "integer"
     },
     "campaign_id": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Campaign Id",
+      "type": "string"
     },
     "created_at": {
-      "type": "string",
-      "format": "date-time"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "ISO-8601 timestamp.",
+      "title": "Created At"
     },
     "goal": {
-      "type": "string",
-      "description": "Free-form prose; framework treats as opaque text (not parsed)."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Free-form prose; framework treats as opaque text (not parsed).",
+      "title": "Goal"
     },
     "budget": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "max_jobs": {"type": ["integer", "null"], "minimum": 0},
-        "max_tasks": {"type": ["integer", "null"], "minimum": 0},
-        "max_walltime_sec": {"type": ["integer", "null"], "minimum": 0}
-      }
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_CampaignBudget"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "stop_criteria": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "max_iters": {"type": ["integer", "null"], "minimum": 0},
-        "metric": {"type": ["string", "null"]},
-        "target": {"type": ["number", "null"]},
-        "direction": {"type": "string", "enum": ["minimize", "maximize"]},
-        "plateau_window": {"type": ["integer", "null"], "minimum": 1},
-        "plateau_tolerance": {"type": "number", "minimum": 0}
-      }
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_StopCriteria"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "strategy": {
-      "type": "object",
-      "required": ["name"],
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_Strategy"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "$defs": {
+    "_CampaignBudget": {
+      "additionalProperties": false,
+      "properties": {
+        "max_jobs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Jobs"
+        },
+        "max_tasks": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tasks"
+        },
+        "max_walltime_sec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Walltime Sec"
+        }
+      },
+      "title": "_CampaignBudget",
+      "type": "object"
+    },
+    "_StopCriteria": {
+      "additionalProperties": false,
+      "properties": {
+        "max_iters": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Iters"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "direction": {
+          "anyOf": [
+            {
+              "enum": [
+                "minimize",
+                "maximize"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Direction"
+        },
+        "plateau_window": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plateau Window"
+        },
+        "plateau_tolerance": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Plateau Tolerance"
+        }
+      },
+      "title": "_StopCriteria",
+      "type": "object"
+    },
+    "_Strategy": {
       "additionalProperties": false,
       "properties": {
         "name": {
-          "type": "string",
-          "description": "Free string for human/agent display only; framework never dispatches on this."
+          "description": "Free string for human/agent display only; framework never dispatches on this.",
+          "title": "Name",
+          "type": "string"
         },
         "params": {
-          "type": "object",
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
           "description": "Opaque to the framework. Round-tripped untouched.",
-          "additionalProperties": true
+          "title": "Params"
         }
-      }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "_Strategy",
+      "type": "object"
     }
   }
 }
