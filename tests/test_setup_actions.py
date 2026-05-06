@@ -127,9 +127,7 @@ def test_find_prior_run_matches_sidecar(tmp_path: Path, journal_home: Path) -> N
     assert out["cluster"] == "hoffman2"
 
 
-def test_find_prior_run_marks_orphan_when_no_journal(
-    tmp_path: Path, journal_home: Path
-) -> None:
+def test_find_prior_run_marks_orphan_when_no_journal(tmp_path: Path, journal_home: Path) -> None:
     cmd_sha = "b" * 64
     _seed_sidecar(tmp_path, "20260101-000000-orphan01", cmd_sha=cmd_sha)
     out = find_prior_run(tmp_path, cmd_sha=cmd_sha)
