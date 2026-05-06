@@ -47,6 +47,75 @@ def _format_output_rel(template: str, *, run_id: str) -> str:
     return template.format(run_id=run_id)
 
 
+def _resolve_aggregate_cmd(
+    aggregate_cmd: str | None,
+    *,
+    experiment_dir: Path,
+    run_id: str,
+) -> str:
+    """Argument > sidecar fallback, raising SpecInvalid when nothing's available."""
+    if aggregate_cmd:
+        return aggregate_cmd
+    from claude_hpc.state.runs import read_run_sidecar
+
+    try:
+        sidecar = read_run_sidecar(experiment_dir, run_id)
+    except (FileNotFoundError, OSError):
+        sidecar = {}
+    agg_defaults = sidecar.get("aggregate_defaults") or {}
+    resolved: str | None = agg_defaults.get("aggregate_cmd")
+    if not resolved:
+        raise errors.SpecInvalid(
+            f"no aggregate_cmd available for run_id={run_id!r}; pass "
+            "aggregate_cmd= or set aggregate_defaults.aggregate_cmd on "
+            "the run sidecar (write_run_sidecar's aggregate_defaults arg)."
+        )
+    return resolved
+
+
+def _build_remote_cmd(
+    *,
+    remote_path: str,
+    output_rel: str,
+    aggregate_cmd: str,
+    run_id: str,
+    extra_env: dict[str, str] | None,
+) -> str:
+    """Compose the single shell line that runs the reducer on the cluster."""
+    env_parts: list[str] = [
+        f"HPC_RUN_ID={shlex.quote(run_id)}",
+        f"HPC_AGGREGATED_OUTPUT={shlex.quote(output_rel)}",
+    ]
+    if extra_env:
+        for k, v in extra_env.items():
+            env_parts.append(f"{k}={shlex.quote(str(v))}")
+    env_setup = "export " + " ".join(env_parts)
+    output_dir_rel = os.path.dirname(output_rel) or "."
+    return (
+        f"cd {shlex.quote(remote_path)} && "
+        f"mkdir -p {shlex.quote(output_dir_rel)} && "
+        f"{env_setup} && "
+        f"{aggregate_cmd}"
+    )
+
+
+def _parse_local_output(local_output: Path, *, run_id: str) -> dict:
+    """Read + JSON-parse the pulled reducer output, mapping errors to RemoteCommandFailed."""
+    if not local_output.is_file():
+        raise errors.RemoteCommandFailed(
+            f"reducer for run_id={run_id!r} reported success but "
+            f"{local_output} is missing locally — check rsync_pull "
+            "include filter and the reducer's output path."
+        )
+    try:
+        parsed: dict = json.loads(local_output.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise errors.RemoteCommandFailed(
+            f"reducer output at {local_output} is not valid JSON: {exc}"
+        ) from exc
+    return parsed
+
+
 @primitive(
     name="cluster-reduce",
     verb="mutate",
@@ -129,61 +198,29 @@ def cluster_reduce(
 
     from claude_hpc._internal import session
     from claude_hpc.infra.remote import rsync_pull, ssh_run
-    from claude_hpc.state.runs import read_run_sidecar
 
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.SpecInvalid(f"no journal record for run_id={run_id!r}")
 
-    # Resolve aggregate_cmd: argument > sidecar's aggregate_defaults.
-    if not aggregate_cmd:
-        try:
-            sidecar = read_run_sidecar(experiment_dir, run_id)
-        except (FileNotFoundError, OSError):
-            sidecar = {}
-        agg_defaults = sidecar.get("aggregate_defaults") or {}
-        aggregate_cmd = agg_defaults.get("aggregate_cmd")
-    if not aggregate_cmd:
-        raise errors.SpecInvalid(
-            f"no aggregate_cmd available for run_id={run_id!r}; pass "
-            "aggregate_cmd= or set aggregate_defaults.aggregate_cmd on "
-            "the run sidecar (write_run_sidecar's aggregate_defaults arg)."
-        )
-
-    output_rel = _format_output_rel(
-        output_path or _DEFAULT_OUTPUT_REL,
-        run_id=run_id,
+    aggregate_cmd = _resolve_aggregate_cmd(
+        aggregate_cmd, experiment_dir=experiment_dir, run_id=run_id
     )
+    output_rel = _format_output_rel(output_path or _DEFAULT_OUTPUT_REL, run_id=run_id)
     local_dir_path = (
         _Path(local_dir)
         if local_dir is not None
         else _Path(experiment_dir) / "_aggregated" / run_id
     )
 
-    # Build the cluster-side env: $HPC_RUN_ID + $HPC_AGGREGATED_OUTPUT,
-    # plus any caller-supplied extras. We export them in the shell line
-    # that runs the reducer so contract-compliant reducers don't have
-    # to hard-code paths.
-    env_setup_parts: list[str] = [
-        f"HPC_RUN_ID={shlex.quote(run_id)}",
-        f"HPC_AGGREGATED_OUTPUT={shlex.quote(output_rel)}",
-    ]
-    if extra_env:
-        for k, v in extra_env.items():
-            env_setup_parts.append(f"{k}={shlex.quote(str(v))}")
-    env_setup = "export " + " ".join(env_setup_parts)
-
-    # Ensure the output dir exists so the reducer doesn't have to mkdir.
-    output_dir_rel = os.path.dirname(output_rel) or "."
-    full_remote_cmd = (
-        f"cd {shlex.quote(record.remote_path)} && "
-        f"mkdir -p {shlex.quote(output_dir_rel)} && "
-        f"{env_setup} && "
-        f"{aggregate_cmd}"
-    )
-
     proc = ssh_run(
-        full_remote_cmd,
+        _build_remote_cmd(
+            remote_path=record.remote_path,
+            output_rel=output_rel,
+            aggregate_cmd=aggregate_cmd,
+            run_id=run_id,
+            extra_env=extra_env,
+        ),
         ssh_target=record.ssh_target,
         timeout=float(timeout_sec),
     )
@@ -193,15 +230,12 @@ def cluster_reduce(
             f"reducer for run_id={run_id!r} exited {proc.returncode}: {stderr_tail.strip()[:500]}"
         )
 
-    # Pull just the output file. Use a tempdir + scp-style include
-    # filter via rsync_pull's include= parameter so we don't rsync the
-    # whole _aggregated/ dir.
     local_dir_path.mkdir(parents=True, exist_ok=True)
     output_basename = os.path.basename(output_rel)
     pull_proc = rsync_pull(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
-        remote_subdir=output_dir_rel,
+        remote_subdir=os.path.dirname(output_rel) or ".",
         local_dir=str(local_dir_path),
         include=[output_basename],
         timeout=float(timeout_sec),
@@ -212,21 +246,8 @@ def cluster_reduce(
             f"{pull_proc.returncode}): {(pull_proc.stderr or '').strip()[:300]}"
         )
 
-    # Parse the local copy. Reducer contract requires JSON; surface a
-    # parse error as RemoteCommandFailed so callers get a typed envelope.
     local_output = local_dir_path / output_basename
-    if not local_output.is_file():
-        raise errors.RemoteCommandFailed(
-            f"reducer for run_id={run_id!r} reported success but "
-            f"{local_output} is missing locally — check rsync_pull "
-            "include filter and the reducer's output path."
-        )
-    try:
-        reduced = json.loads(local_output.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise errors.RemoteCommandFailed(
-            f"reducer output at {local_output} is not valid JSON: {exc}"
-        ) from exc
+    reduced = _parse_local_output(local_output, run_id=run_id)
 
     return {
         "ok": True,
