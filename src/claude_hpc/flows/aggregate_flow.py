@@ -159,6 +159,9 @@ def aggregate_flow(
     pull_summaries: bool = False,
     summary_glob: str | None = None,
     results_subdir: str = "results",
+    mode: str = "auto",
+    aggregate_cmd: str | None = None,
+    aggregate_output_path: str | None = None,
 ) -> AggregateFlowResult:
     """Finalize a run's aggregation; return paths + reduced metrics.
 
@@ -202,6 +205,10 @@ def aggregate_flow(
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for {run_id!r}; submit the run first")
 
+    if mode not in {"auto", "combiner-only", "cluster-reduce"}:
+        raise errors.SpecInvalid(
+            f"mode must be 'auto'|'combiner-only'|'cluster-reduce', got {mode!r}"
+        )
     if pull_summaries and not summary_glob:
         raise errors.SpecInvalid("summary_glob is required when pull_summaries=true")
 
@@ -210,6 +217,46 @@ def aggregate_flow(
     out.mkdir(parents=True, exist_ok=True)
 
     _validate_ssh_target(record.ssh_target)
+
+    # Mode resolution + cluster-reduce short-circuit. The cluster-reduce
+    # path runs the user's reducer on the cluster and pulls only its
+    # single JSON output (KB) — bypasses the bulk per-task rsync_pull
+    # that drags GBs of raw chunks to local. Falls back to combiner-
+    # only when no aggregate_cmd is available; mode='auto' makes that
+    # decision; mode='cluster-reduce' raises if no command is found.
+    sidecar_for_cmd: dict[str, Any] = {}
+    try:
+        sidecar_for_cmd = read_run_sidecar(experiment_dir, run_id) or {}
+    except (FileNotFoundError, OSError):
+        sidecar_for_cmd = {}
+    resolved_aggregate_cmd = aggregate_cmd or (
+        (sidecar_for_cmd.get("aggregate_defaults") or {}).get("aggregate_cmd")
+    )
+    if mode == "cluster-reduce" or (mode == "auto" and resolved_aggregate_cmd):
+        if not resolved_aggregate_cmd:
+            raise errors.SpecInvalid(
+                "mode='cluster-reduce' requires aggregate_cmd= or "
+                "aggregate_defaults.aggregate_cmd on the run sidecar."
+            )
+        from claude_hpc.atoms.cluster_reduce import cluster_reduce
+
+        cr = cluster_reduce(
+            experiment_dir,
+            run_id=run_id,
+            aggregate_cmd=resolved_aggregate_cmd,
+            output_path=aggregate_output_path,
+            local_dir=out,
+        )
+        return AggregateFlowResult(
+            run_id=run_id,
+            combined_waves=list(record.combined_waves),
+            failed_waves=list(record.failed_waves),
+            waves_combined_this_call=[],
+            combiner_dir_local=str(out),
+            aggregated_metrics=(cr["reduced"] if isinstance(cr.get("reduced"), dict) else {}),
+            summaries_dir_local=str(cr["output_path_local"]),
+            escalation_reason=None,
+        )
 
     # Read the sidecar's wave_map (record carries combined_waves but not
     # wave_map — that lives in the per-run sidecar JSON, under

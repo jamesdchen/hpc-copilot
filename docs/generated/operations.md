@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**49 operations total**: 44 primitive atoms + 5 workflow atoms.
+**50 operations total**: 45 primitive atoms + 5 workflow atoms.
 
 ## How to read this page
 
@@ -60,12 +60,13 @@ Read + binary health check. Same composability as `query`.
 | [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-mapreduce preflight [--cluster <name>]` | `claude_hpc.atoms.preflight.check_preflight` | — | `claude_hpc/schemas/preflight.output.json` |
 | [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `claude_hpc.planning.validate.validate_submission` | `claude_hpc/schemas/validate.input.json` | `claude_hpc/schemas/validate.output.json` |
 
-## `mutate` (5)
+## `mutate` (6)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
+| [`cluster-reduce`](primitives/cluster-reduce.md) | ✓ | rsync-pull; ssh | `hpc-mapreduce cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` | `claude_hpc.atoms.cluster_reduce.cluster_reduce` | — | `claude_hpc/schemas/cluster_reduce.output.json` |
 | [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `claude_hpc.runner.combine.combine_wave` | — | `claude_hpc/schemas/combine_wave.output.json` |
 | [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `(none — Python-only primitive)` | `claude_hpc.runner.reconcile.mark_terminal` | — | — |
 | [`prune-orphan-sidecars`](primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `claude_hpc.state.runs.prune_orphan_sidecars` | — | — |
