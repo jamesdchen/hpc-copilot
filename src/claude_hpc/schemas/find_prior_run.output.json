@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/find_prior_run.output.json",
+  "title": "find-prior-run output",
+  "description": "Resume-detection lookup result. found=False distinguishes 'no prior run' from 'prior run is orphan' (is_orphan=True signals a half-baked sidecar). The prior_run_id field is named with a 'prior_' prefix so the schema-defs consistency check (which forbids nullable run_id) doesn't trip.",
+  "type": "object",
+  "required": [
+    "found",
+    "prior_run_id",
+    "is_orphan",
+    "status",
+    "age_sec",
+    "profile",
+    "cluster",
+    "job_ids",
+    "campaign_id",
+    "submitted_at"
+  ],
+  "properties": {
+    "found": { "type": "boolean" },
+    "prior_run_id": {
+      "type": ["string", "null"],
+      "description": "The matching prior run's run_id, or null when found=False."
+    },
+    "is_orphan": { "type": "boolean" },
+    "status": { "type": ["string", "null"] },
+    "age_sec": { "type": ["integer", "null"], "minimum": 0 },
+    "profile": { "type": ["string", "null"] },
+    "cluster": { "type": ["string", "null"] },
+    "job_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "campaign_id": { "type": ["string", "null"] },
+    "submitted_at": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/verify_aggregation_complete.output.json",
+  "title": "verify-aggregation-complete output",
+  "description": "Post-aggregate invariant report. Agent reads `ok` and surfaces violations (missing_waves / missing_tasks / unexpected_tasks / provenance_present) to the user.",
+  "type": "object",
+  "required": [
+    "ok",
+    "run_id",
+    "all_waves_combined",
+    "missing_waves",
+    "all_tasks_present",
+    "missing_tasks",
+    "unexpected_tasks",
+    "provenance_present",
+    "expected_wave_count",
+    "pulled_wave_count",
+    "expected_task_count",
+    "pulled_task_count"
+  ],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "run_id": { "type": "string" },
+    "all_waves_combined": { "type": "boolean" },
+    "missing_waves": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 }
+    },
+    "all_tasks_present": { "type": "boolean" },
+    "missing_tasks": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 }
+    },
+    "unexpected_tasks": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "description": "Cross-run contamination: task_ids in pulled partials but not in this run's wave_map."
+    },
+    "provenance_present": { "type": "boolean" },
+    "expected_wave_count": { "type": "integer", "minimum": 0 },
+    "pulled_wave_count": { "type": "integer", "minimum": 0 },
+    "expected_task_count": { "type": "integer", "minimum": 0 },
+    "pulled_task_count": { "type": "integer", "minimum": 0 }
+  }
+}

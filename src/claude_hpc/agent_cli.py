@@ -739,6 +739,7 @@ def cmd_build_submit_spec(args: argparse.Namespace) -> int:
             category="user-error",
             retry_safe=False,
         )
+    _validate_against_schema(raw, "build_submit_spec")
     try:
         spec = build_submit_spec(**raw)
     except TypeError as exc:
@@ -772,6 +773,7 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
             category="user-error",
             retry_safe=False,
         )
+    _validate_against_schema(raw, "build_tasks_py")
     try:
         out = build_tasks_py(
             experiment_dir=args.experiment_dir,
@@ -808,6 +810,7 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
             category="user-error",
             retry_safe=False,
         )
+    _validate_against_schema(raw, "decide_monitor_arm")
     try:
         out = decide_monitor_arm(**raw)
     except TypeError as exc:

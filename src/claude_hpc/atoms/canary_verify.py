@@ -119,7 +119,7 @@ def verify_canary(
     from claude_hpc._internal import session
     from claude_hpc.runner import fetch_task_logs
     from claude_hpc.runner.aggregate import verify_combiner_artifact
-    from claude_hpc.runner.status import _ssh_status_report
+    from claude_hpc.runner.status import ssh_status_report
 
     record = session.load_run(experiment_dir, canary_run_id)
     if record is None:
@@ -129,7 +129,7 @@ def verify_canary(
     last_summary: dict[str, Any] = {}
     while time.monotonic() < deadline:
         try:
-            report = _ssh_status_report(
+            report = ssh_status_report(
                 ssh_target=record.ssh_target,
                 remote_path=record.remote_path,
                 run_id=canary_run_id,

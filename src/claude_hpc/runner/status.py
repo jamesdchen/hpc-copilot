@@ -54,6 +54,14 @@ def _ssh_status_report(
     return _parse_remote_json(proc.stdout, source_label="status reporter")
 
 
+# Public alias — atoms / external orchestrators that need to invoke the
+# remote status reporter directly should reach for this name. The
+# underscore-prefixed original is kept for back-compat with the
+# package-internal callers (``reconcile``, ``failures``, ``logs``,
+# ``record_status``).
+ssh_status_report = _ssh_status_report
+
+
 @primitive(
     name="poll-run-status",
     verb="query",
