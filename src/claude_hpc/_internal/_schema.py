@@ -22,7 +22,7 @@ from typing import Any
 @functools.lru_cache(maxsize=1)
 def schema_registry() -> Any:
     """Build the shared ``referencing.Registry`` once per process."""
-    from referencing import Registry, Resource
+    from referencing import Registry
     from referencing.jsonschema import DRAFT202012
 
     registry = Registry()
@@ -34,7 +34,7 @@ def schema_registry() -> Any:
             doc = json.loads(entry.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        resource = Resource(contents=doc, specification=DRAFT202012)
+        resource = DRAFT202012.create_resource(doc)
         stable_uri = f"urn:claude-hpc:{entry.name}"
         registry = registry.with_resource(stable_uri, resource)
         doc_id = doc.get("$id") if isinstance(doc, dict) else None
