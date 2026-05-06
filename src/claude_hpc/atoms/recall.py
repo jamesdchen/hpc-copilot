@@ -59,6 +59,7 @@ _USER_CONFIG = Path("~/.claude-hpc/config.json").expanduser()
     side_effects=[],
     idempotent=True,
     cli="hpc-mapreduce recall",
+    agent_facing=True,
 )
 def recall_campaigns(
     roots: list[Path],

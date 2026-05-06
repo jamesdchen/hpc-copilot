@@ -169,6 +169,7 @@ def _from_registry() -> list[dict[str, Any]]:
                 "python": backed["python"],
                 "input_schema": schema_for(meta.name, "input", backed),
                 "output_schema": schema_for(meta.name, "output", backed),
+                "agent_facing": bool(meta.agent_facing),
             }
         )
     return sorted(out, key=lambda o: (o["verb"], o["name"]))
@@ -217,17 +218,29 @@ def _read_schema_file(name: str) -> str:
 
 
 def render_llms_full() -> str:
-    """Render the full claude-hpc API surface as one plain-text blob.
+    """Render the claude-hpc API surface as one plain-text blob.
 
-    Modeled on Modal\'s ``llms-full.txt`` pattern: one CLI invocation
-    dumps the entire API surface (catalog table + every primitive\'s doc
-    + every primitive\'s input/output schema + the envelope contract +
-    boundary-contract + cli-spec) so an agent harness can load the whole
-    context in a single read.
+    Modeled on Modal's ``llms-full.txt`` pattern: one CLI invocation
+    dumps the API surface so an agent harness can load context in a
+    single read.
 
-    Returns plain text suitable for human reading or LLM context loading
-    --- NOT the JSON envelope. ``hpc-mapreduce capabilities --full`` is
-    documented as an explicit human-mode flag analogous to ``--help``.
+    Tiered to keep agent context budget honest. ``agent_facing=True``
+    primitives — workflows, scaffolds, validators, plus the atoms
+    skills / slash commands link to — ship their full body + input /
+    output schemas. The remaining atoms are framework internals
+    composed inside workflows (e.g. ``poll-run-status`` inside
+    ``monitor-flow``); they appear in the catalog table above so
+    agents can still introspect "what exists" and shell to their CLI
+    for forensic access, but their per-primitive prose / schema block
+    is omitted. The Composite property is about runtime invocation
+    uniformity (Leaf and Composite share an envelope), not
+    documentation surface — clients only need full context for the
+    primitives they call directly.
+
+    Returns plain text suitable for human reading or LLM context
+    loading --- NOT the JSON envelope. ``hpc-mapreduce capabilities
+    --full`` is documented as an explicit human-mode flag analogous to
+    ``--help``.
     """
     catalog = operations_catalog()
     parts: list[str] = []
@@ -238,9 +251,19 @@ def render_llms_full() -> str:
     parts.append(_format_catalog_table(catalog))
     parts.append("\n")
 
+    agent_facing = [e for e in catalog if e.get("agent_facing")]
+    internal = [e for e in catalog if not e.get("agent_facing")]
+    parts.append(
+        f"\n_{len(agent_facing)} agent-facing primitives expanded below; "
+        f"{len(internal)} framework-internal primitives appear in the catalog "
+        "table only (composed transitively by workflows). Use "
+        "``hpc-mapreduce <subcommand> --help`` or read the schema file named "
+        "in the catalog row for forensic access._\n"
+    )
+
     prims_dir = _primitives_dir()
     if prims_dir is not None:
-        for entry in catalog:
+        for entry in agent_facing:
             name = entry["name"]
             parts.append(f"\n## Primitive: {name}\n\n")
             doc_path = prims_dir / f"{name}.md"

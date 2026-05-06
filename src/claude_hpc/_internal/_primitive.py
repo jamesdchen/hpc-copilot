@@ -112,6 +112,18 @@ class PrimitiveMeta:
     # through ``docs/primitives/<name>.md`` frontmatter; the registry
     # is now SoT so the regen script writes ``backed_by.cli`` from here.
     cli: str | None = None
+    # Whether the LLM/agent calls this primitive directly. Workflows,
+    # scaffolds, validators, and atoms slash-commands or skills link to
+    # are ``True``; framework internals composed inside workflows
+    # (e.g. ``poll-run-status`` inside ``monitor-flow``) default to
+    # ``False``. Read by :func:`render_llms_full` to decide which
+    # primitives ship their full body + schemas in the agent context
+    # dump vs. only appearing as a row in the catalog table. The
+    # catalog table itself is always full so an agent can still
+    # introspect "what exists" and shell to a CLI form for forensic
+    # access; tiering only applies to the per-primitive prose + schema
+    # block in the ``llms-full`` blob.
+    agent_facing: bool = False
 
 
 _REGISTRY: dict[str, PrimitiveMeta] = {}
@@ -130,6 +142,7 @@ def primitive(
     exit_codes: Iterable[tuple[int, str]] | None = None,
     description: str | None = None,
     cli: str | None = None,
+    agent_facing: bool = False,
 ) -> Callable[[F], F]:
     """Register a primitive in the runtime catalog.
 
@@ -213,6 +226,7 @@ def primitive(
             exit_codes=tuple(exit_codes or ()),
             description=(description or (func.__doc__ or "").strip().split("\n", 1)[0]),
             cli=cli,
+            agent_facing=agent_facing,
         )
         _REGISTRY[name] = meta
         func._primitive_meta = meta  # type: ignore[attr-defined]

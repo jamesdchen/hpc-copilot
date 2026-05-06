@@ -81,6 +81,7 @@ def _ssh_alive_job_ids(
     idempotent=True,
     idempotency_key="run_id",
     cli="hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]",
+    agent_facing=True,
 )
 def reconcile(
     experiment_dir: Path,

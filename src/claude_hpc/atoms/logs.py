@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     error_codes=[errors.SshUnreachable, errors.RemoteCommandFailed],
     idempotent=True,
     cli="hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]",
+    agent_facing=True,
 )
 def fetch_logs(
     *,

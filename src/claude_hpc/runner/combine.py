@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     idempotent=True,
     idempotency_key="(run_id, wave)",
     cli="hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]",
+    agent_facing=True,
 )
 def combine_wave(
     experiment_dir: Path,

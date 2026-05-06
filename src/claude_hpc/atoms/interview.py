@@ -51,6 +51,7 @@ __all__ = ["record_interview"]
     idempotent=True,
     idempotency_key="campaign_dir",
     cli="hpc-mapreduce interview",
+    agent_facing=True,
 )
 def record_interview(
     intent: Mapping[str, Any],

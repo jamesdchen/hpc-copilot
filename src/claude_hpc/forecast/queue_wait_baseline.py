@@ -235,6 +235,7 @@ def _apply_features(
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     cli="hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]",
+    agent_facing=True,
 )
 def predict_queue_wait(
     experiment_dir: Path,
