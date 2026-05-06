@@ -292,6 +292,8 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
 
 # Re-exported from claude_hpc.atoms.capabilities for back-compat with
 # tests that import the constant directly from agent_cli.
+# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 —
+# update tests to import from claude_hpc.atoms.capabilities directly.
 from claude_hpc.atoms.capabilities import _MARS_SKILL_NAMES  # noqa: E402,F401
 
 
@@ -497,6 +499,8 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
     # rather than burying them inside ``data.errors`` where machine
     # consumers tend to miss them. The legacy ``data.errors`` shape is
     # kept (snap.to_dict() includes it) for one release as back-compat.
+    # back-compat: introduced 0.2.0 (B3 partial_errors split). Remove in
+    # 0.3.0 — strip ``errors`` from snap.to_dict() and update fixtures.
     payload = snap.to_dict()
     partial = list(payload.get("errors", []))
     _ok(payload, name="inspect-cluster", partial_errors=partial or None)
@@ -1484,6 +1488,8 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
 
 # Re-exported from claude_hpc.atoms.failures for back-compat with the
 # auto-retry resolver test suite, which imports the helper directly.
+# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 — update
+# tests/test_failures*.py to import from claude_hpc.atoms.failures.
 from claude_hpc.atoms.failures import _resolve_auto_retry  # noqa: E402,F401
 
 
