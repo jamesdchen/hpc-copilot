@@ -99,12 +99,16 @@ def recommend_resubmit_window(
     )
     submit_now_wait = now_pred.predicted_wait_sec
 
+    from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
+
     candidates = best_submit_windows(
         experiment_dir,
-        profile=profile,
-        cluster=cluster,
-        within_hours=within_hours,
-        top_k=1,
+        spec=BestSubmitWindowSpec(
+            profile=profile,
+            cluster=cluster,
+            within_hours=within_hours,
+            top_k=1,
+        ),
     )
     best = candidates[0] if candidates else None
 

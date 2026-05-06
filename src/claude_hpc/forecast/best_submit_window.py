@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from claude_hpc import errors
 from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal._time import utcnow
+from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
 from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
 if TYPE_CHECKING:
@@ -67,10 +68,7 @@ class WindowCandidate:
 def best_submit_windows(
     experiment_dir: Path,
     *,
-    profile: str,
-    cluster: str,
-    within_hours: int = 24,
-    top_k: int = 5,
+    spec: BestSubmitWindowSpec,
 ) -> list[WindowCandidate]:
     """Sweep the predictor at hourly offsets and return the top_k.
 
@@ -79,11 +77,15 @@ def best_submit_windows(
     integer-hour offsets — hour-of-week buckets are 1h wide so
     sub-hour resolution wouldn't change the prediction.
 
-    Returns up to *top_k* candidates sorted ascending by
+    Returns up to ``spec.top_k`` candidates sorted ascending by
     ``predicted_wait_sec``. Ties are broken by ascending ``submit_iso``
     so an earlier window wins when the predictor returns identical
     values.
     """
+    profile = spec.profile
+    cluster = spec.cluster
+    within_hours = spec.within_hours
+    top_k = spec.top_k
     if within_hours <= 0:
         return []
     if top_k <= 0:

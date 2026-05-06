@@ -576,30 +576,24 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     consumes the result to suggest "submit now" vs. "wait until
     <hour>".
     """
+    from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
     from claude_hpc.forecast.best_submit_window import best_submit_windows
 
-    _validate_against_schema(
-        {
-            "profile": args.profile,
-            "cluster": args.cluster,
-            "within_hours": int(args.within_hours),
-            "top_k": int(args.top_k),
-        },
-        "best_submit_window",
-    )
-    candidates = best_submit_windows(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        within_hours=int(args.within_hours),
-        top_k=int(args.top_k),
-    )
+    raw = {
+        "profile": args.profile,
+        "cluster": args.cluster,
+        "within_hours": int(args.within_hours),
+        "top_k": int(args.top_k),
+    }
+    _validate_against_schema(raw, "best_submit_window")
+    spec = BestSubmitWindowSpec.model_validate(raw)
+    candidates = best_submit_windows(args.experiment_dir, spec=spec)
     _ok(
         {
-            "profile": args.profile,
-            "cluster": args.cluster,
-            "within_hours": int(args.within_hours),
-            "top_k": int(args.top_k),
+            "profile": spec.profile,
+            "cluster": spec.cluster,
+            "within_hours": spec.within_hours,
+            "top_k": spec.top_k,
             "candidates": [c.to_dict() for c in candidates],
         },
         name="best-submit-window",
@@ -1762,14 +1756,11 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     if args.cluster is not None:
         payload["cluster"] = args.cluster
     _validate_against_schema(payload, "campaign_health")
+    from claude_hpc._schema_models.campaign_health import CampaignHealthSpec
+
+    spec = CampaignHealthSpec.model_validate(payload)
     try:
-        data = campaign_health(
-            args.experiment_dir,
-            campaign_id=args.campaign_id,
-            since_iso=args.since_iso,
-            profile=args.profile,
-            cluster=args.cluster,
-        )
+        data = campaign_health(args.experiment_dir, spec=spec)
     except Exception as exc:  # noqa: BLE001 — last-resort error envelope
         return _err(
             error_code="internal",
