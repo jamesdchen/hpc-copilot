@@ -83,7 +83,21 @@ Spec shape (matches `schemas/aggregate_flow.input.json`):
 
 Parse `data.aggregated_metrics` — that's the cross-wave reduced output. `data.combiner_dir_local` and `data.summaries_dir_local` are the local paths if downstream interpretation needs them.
 
-If `data.escalation_reason` is set (e.g. `combiner_failed_max_retries:waves=3,7`), surface to the user and decide whether the partial aggregation is acceptable. The atom proceeds with whatever waves DID combine; the caller decides whether the result is usable.
+**Verify the framework-knowable invariants** via the `verify-aggregation-complete` primitive before reporting to the user:
+
+```bash
+hpc-mapreduce verify-aggregation-complete \
+    --experiment-dir . \
+    --run-id "$RUN_ID" \
+    --combiner-dir "$COMBINER_DIR_LOCAL"
+```
+
+The envelope's `data` carries `{ok, all_waves_combined, missing_waves, all_tasks_present, missing_tasks, unexpected_tasks, provenance_present, ...}`. Branch:
+
+- `ok=True` → proceed to interpretation (Step 6).
+- `ok=False` → surface the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — escalate, don't paper over.
+
+If `data.escalation_reason` from `aggregate-flow` is set (e.g. `combiner_failed_max_retries:waves=3,7`), surface to the user and decide whether the partial aggregation is acceptable. The atom proceeds with whatever waves DID combine; the caller decides whether the result is usable.
 
 **Skip to Step 4** if the profile defines an `aggregate_defaults.aggregate_cmd` (an arbitrary user-defined cluster-side command that the framework doesn't know about) — that's the only step `aggregate-flow` doesn't replace.
 

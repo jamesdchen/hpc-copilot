@@ -71,6 +71,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-mapreduce discover --experiment-dir <path>` |
 | [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-mapreduce discover-reducers --experiment-dir <path>` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-mapreduce failures --run-id <id> [--lines <n>]` |
+| [find-prior-run](find-prior-run.md) | yes | _none_ | `hpc-mapreduce find-prior-run --experiment-dir <path> --cmd-sha <hex>` |
 | [house-edge](house-edge.md) | yes | _none_ | `hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` |
 | [inspect-cluster](inspect-cluster.md) | yes | ssh: `<cluster>` | `hpc-mapreduce inspect-cluster --cluster <name> [...]` |
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` |
@@ -81,6 +82,9 @@ The verb partitions primitives into bands the reader can scan independently:
 | [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
 | [recall](recall.md) | yes | _none_ | `` |
 | [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` |
+| [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-mapreduce suggest-setup-action --experiment-dir <path>` |
+| [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-mapreduce summarize-submit-plan --spec <path>` |
+| [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-mapreduce verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` |
 | [walltime-drift](walltime-drift.md) | yes | _none_ | `hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` |
 
 ### `validate` primitives
@@ -125,6 +129,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce monitor-flow --spec <path>` |
 | [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow --spec <path>` |
 | [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow-batch --spec <path>` |
+| [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-mapreduce verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]` |
 <!-- END PRIMITIVE CATALOG -->
 
 ## How slash commands and skills consume primitives
