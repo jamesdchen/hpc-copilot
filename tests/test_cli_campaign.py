@@ -128,8 +128,6 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
     """Pin the public contract — `data` block matches campaign.output.json."""
     from importlib.resources import files
 
-    import jsonschema
-
     schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
 
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
@@ -145,8 +143,6 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
 
 def test_campaign_list_envelope_validates_against_schema(tmp_path: Path) -> None:
     from importlib.resources import files
-
-    import jsonschema
 
     schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
 
