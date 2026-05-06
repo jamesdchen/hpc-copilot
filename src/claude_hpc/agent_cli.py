@@ -270,9 +270,10 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     keeps working — schema validation is defence in depth, not the only
     line of defence (``submit_and_record`` etc. still validate inputs).
 
-    Cross-file ``$ref`` (e.g. into ``envelope.json#/$defs/run_id``)
-    resolves through the shared registry in :mod:`claude_hpc._internal._schema`;
-    consumer schemas no longer inline ``$defs`` copies verbatim.
+    Cross-file ``$ref`` (rare post-Pydantic-migration — most
+    schemas are now self-contained with constraints inlined from
+    :mod:`claude_hpc._schema_models._shared`) resolves through the
+    shared registry in :mod:`claude_hpc._internal._schema`.
     """
     try:
         import jsonschema  # type: ignore[import-untyped]

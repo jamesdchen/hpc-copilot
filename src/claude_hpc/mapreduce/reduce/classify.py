@@ -28,20 +28,16 @@ from __future__ import annotations
 __all__ = ["classify_failure", "CATEGORIES"]
 
 import re
+import typing
 
+from claude_hpc._schema_models._shared import FailureCategory
 from claude_hpc.runner.failure_signatures import classify as _classify_signature
 
-#: Valid return values, ordered roughly by specificity.
-CATEGORIES = (
-    "gpu_oom",
-    "system_oom",
-    "segv",
-    "walltime",
-    "node_failure",
-    "queue_stall",
-    "code_bug",
-    "unknown",
-)
+#: Valid return values, ordered roughly by specificity. Derived from the
+#: ``FailureCategory`` Literal in ``_schema_models/_shared.py`` so the
+#: ``resubmit.input.json`` enum and this tuple stay in lock-step
+#: automatically — adding a new category is a one-place edit.
+CATEGORIES: tuple[str, ...] = typing.get_args(FailureCategory)
 
 # Local-only patterns: categories the failure_signatures catalog does NOT
 # emit.  Kept here so classify_failure stays a complete classifier without

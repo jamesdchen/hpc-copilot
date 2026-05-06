@@ -138,7 +138,7 @@ class SubmitFlowResult(BaseModel):
     )
 
     # Output uses the loose run_id form (any string) so legacy
-    # sidecars validate. Mirrors envelope.json#/$defs/run_id.
+    # sidecars validate.
     run_id: RunIdLoose
     job_ids: list[str] = Field(min_length=1)
     total_tasks: int = Field(ge=1)

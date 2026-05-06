@@ -2,31 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import BackendName
-
-ResubmitCategory = Literal[
-    "gpu_oom",
-    "system_oom",
-    "segv",
-    "walltime",
-    "node_failure",
-    "queue_stall",
-    "code_bug",
-    "unknown",
-    "preempted",
-]
+from ._shared import BackendName, FailureCategoryResubmittable
 
 
 class ResubmitSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", title="resubmit input spec")
 
     failed_task_ids: list[int] = Field(min_length=1)
-    category: ResubmitCategory = Field(
-        description="Must match claude_hpc.mapreduce.reduce.classify.CATEGORIES exactly.",
+    category: FailureCategoryResubmittable = Field(
+        description=(
+            "Failure category that drives retry policy. Superset of "
+            "``classify_failure``'s ``CATEGORIES`` (which never emits "
+            "``preempted`` directly — that's a scheduler-level state)."
+        ),
     )
     overrides: dict[str, Any] | None = Field(
         default=None,
