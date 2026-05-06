@@ -67,6 +67,20 @@ def _ssh_alive_job_ids(
     return backend_cls.parse_alive_output(proc.stdout, job_ids)
 
 
+@primitive(
+    name="reconcile-journal",
+    verb="mutate",
+    side_effects=[
+        SideEffect(
+            "writes-journal",
+            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
+        ),
+        SideEffect("ssh", "<cluster>"),
+    ],
+    error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
+    idempotent=True,
+    idempotency_key="run_id",
+)
 def reconcile(
     experiment_dir: Path,
     run_id: str,
