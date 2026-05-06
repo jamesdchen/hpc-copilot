@@ -244,3 +244,18 @@ from hpc_mapreduce import (
 )
 from hpc_mapreduce.infra.backends import get_backend
 ```
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+pre-commit install        # auto-runs ruff, frontmatter regen, index regen
+pytest -q                 # 1400+ tests
+```
+
+The pre-commit hook regenerates `docs/primitives/*.md` frontmatter,
+`docs/primitives/README.md` catalog, and `docs/generated/operations.md`
+from the `@primitive` registry, then auto-stages the result. Without it
+you'll see CI fail on the corresponding `--check` gates and have to
+push a follow-up `chore: regenerate ...` commit.
+
