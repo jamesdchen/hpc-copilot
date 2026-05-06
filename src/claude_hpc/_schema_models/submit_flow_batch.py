@@ -1,10 +1,12 @@
 """Pydantic models for the ``submit-flow-batch`` workflow atom's wire contract.
 
-Note: per the original schema's design intent, the wrapper only
-constrains the outer shape — each inner spec is validated separately
-by the CLI loading ``submit_flow.input.json``. So the inner item
-model uses ``extra="allow"`` and lists only the required fields
-(no ``additionalProperties: false``).
+The wrapper's ``specs`` items are full :class:`SubmitFlowSpec`
+models — the same canonical type the standalone ``submit-flow``
+atom takes — so the wrapper schema strictly validates every inner
+field instead of just the required-key set. The CLI handler also
+runs ``_validate_against_schema(entry, "submit_flow")`` per entry
+for diagnostic-quality error messages, but the structural contract
+is now enforced by the wrapper alone.
 """
 
 from __future__ import annotations
@@ -12,21 +14,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from ._shared import RunIdLoose
-
-
-class _SubmitFlowSpecOuter(BaseModel):
-    """Outer-shape only validation for one submit-flow spec inside a batch."""
-
-    model_config = ConfigDict(extra="allow")
-
-    profile: str
-    cluster: str
-    ssh_target: str
-    remote_path: str
-    run_id: str
-    total_tasks: int
-    backend: str
-    job_name: str
+from .submit_flow import SubmitFlowSpec
 
 
 class SubmitFlowBatchSpec(BaseModel):
@@ -37,17 +25,14 @@ class SubmitFlowBatchSpec(BaseModel):
     the per-spec submit-flow pipeline. Use whenever a campaign
     iteration or multi-executor /submit-hpc emits >1 specs to the
     same cluster; heterogeneous (different ssh_target or remote_path)
-    batches raise spec_invalid. Each list element under ``specs``
-    MUST individually validate against submit_flow.input.json (the
-    CLI loads that schema and validates per-entry); this wrapper
-    schema only constrains the outer shape so an agent or external
-    orchestrator can sanity-check the bundle without doing the
-    per-entry validation itself.
+    batches raise spec_invalid. Each list element under ``specs`` is
+    a full :class:`SubmitFlowSpec` — same wire shape as the
+    standalone ``submit-flow`` atom takes.
     """
 
     model_config = ConfigDict(title="submit-flow-batch input spec")
 
-    specs: list[_SubmitFlowSpecOuter] = Field(min_length=1)
+    specs: list[SubmitFlowSpec] = Field(min_length=1)
     rsync_excludes: list[str] | None = Field(
         default=None,
         description="Optional rsync exclude patterns applied once across the bundle.",

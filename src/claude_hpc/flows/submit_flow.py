@@ -46,38 +46,7 @@ if TYPE_CHECKING:
     from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec
     from claude_hpc.infra.backends import HPCBackend
 
-__all__ = ["SubmitSpec", "SubmitFlowResult", "submit_flow", "submit_flow_batch"]
-
-
-@dataclass(frozen=True)
-class SubmitSpec:
-    """One leaf submission inside a (possibly batched) submit pipeline.
-
-    Mirrors the kwargs that :func:`submit_flow` already accepts, just
-    bundled into a frozen record so :func:`submit_flow_batch` can fan
-    out N submissions sharing one ``(ssh_target, remote_path)`` without
-    repeating the rsync + deploy. Field-for-field equivalence with
-    :func:`submit_flow`'s signature is intentional — call sites can
-    construct a ``SubmitSpec`` from the same dict they pass today.
-    """
-
-    profile: str
-    cluster: str
-    ssh_target: str
-    remote_path: str
-    job_name: str
-    run_id: str
-    total_tasks: int
-    backend: str
-    script: str
-    job_env: dict[str, str]
-    pass_env_keys: list[str] | None = None
-    canary: bool = True
-    campaign_id: str = ""
-    runtime: str | None = None
-    slurm_account: str | None = None
-    slurm_cluster: str | None = None
-    partial_ok: bool = False
+__all__ = ["SubmitFlowResult", "submit_flow", "submit_flow_batch"]
 
 
 @dataclass(frozen=True)
@@ -203,7 +172,7 @@ def _augment_job_env(
     *,
     job_env: dict[str, str],
     runtime: str | None,
-    campaign_id: str,
+    campaign_id: str | None,
     cluster: str,
 ) -> dict[str, str]:
     """Layer the framework-driven env vars on top of the caller's job_env.
@@ -318,41 +287,17 @@ def submit_flow(
     classified ``complete`` (not ``failed``); aggregate-flow then skips
     the failed task IDs listed under ``<run_id>.failed.json``.
     """
-    # Funnel through submit_flow_batch's existing logic by building the
-    # internal frozen-dataclass spec it consumes today. Once
-    # submit_flow_batch is itself migrated to take SubmitFlowBatchSpec,
-    # this conversion goes away.
-    internal_spec = SubmitSpec(
-        profile=spec.profile,
-        cluster=spec.cluster,
-        ssh_target=spec.ssh_target,
-        remote_path=spec.remote_path,
-        job_name=spec.job_name,
-        run_id=spec.run_id,
-        total_tasks=spec.total_tasks,
-        backend=spec.backend,
-        script=spec.script,
-        job_env=dict(spec.job_env),
-        pass_env_keys=(
-            list(spec.pass_env_keys) if spec.pass_env_keys is not None else None
-        ),
-        canary=spec.canary,
-        campaign_id=spec.campaign_id or "",
-        runtime=spec.runtime,
-        slurm_account=spec.slurm_account,
-        slurm_cluster=spec.slurm_cluster,
-        partial_ok=spec.partial_ok,
-    )
-    results: list[SubmitFlowResult] = submit_flow_batch(
-        experiment_dir=experiment_dir,
-        specs=[internal_spec],
+    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec as _BatchSpec
+
+    batch_spec = _BatchSpec(
+        specs=[spec],
         rsync_excludes=spec.rsync_excludes,
         skip_preflight=spec.skip_preflight,
     )
-    return results[0]
+    return submit_flow_batch(experiment_dir, spec=batch_spec)[0]
 
 
-def _dedup_existing(experiment_dir: Path, spec: SubmitSpec) -> SubmitFlowResult | None:
+def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowResult | None:
     """Return a deduped SubmitFlowResult if a journal record already exists."""
     existing = session.load_run(experiment_dir, spec.run_id)
     if existing is None:
@@ -369,7 +314,7 @@ def _dedup_existing(experiment_dir: Path, spec: SubmitSpec) -> SubmitFlowResult 
 def _submit_one_spec(
     *,
     experiment_dir: Path,
-    spec: SubmitSpec,
+    spec: SubmitFlowSpec,
 ) -> SubmitFlowResult:
     """Per-spec submission work — backend build + (canary?) + main qsub + record.
 
@@ -419,7 +364,7 @@ def _submit_one_spec(
             run_id=canary_run_id,
             job_ids=canary_job_ids,
             total_tasks=1,
-            campaign_id=spec.campaign_id,
+            campaign_id=spec.campaign_id or "",
         )
         canary_done = True
 
@@ -485,24 +430,15 @@ def _submit_one_spec(
 def submit_flow_batch(
     experiment_dir: Path,
     *,
-    spec: "SubmitFlowBatchSpec | None" = None,
-    specs: list[SubmitSpec] | None = None,
-    rsync_excludes: list[str] | None = None,
-    skip_preflight: bool = False,
+    spec: "SubmitFlowBatchSpec",
 ) -> list[SubmitFlowResult]:
     """Submit N specs that share ``(ssh_target, remote_path)`` in one shot.
 
-    Two argument shapes:
-
-    - **Wire-spec path (preferred)**: pass ``spec=SubmitFlowBatchSpec(...)``.
-      The Pydantic model is the wire-validated authoring SoT for the
-      ``submit-flow-batch --spec`` CLI surface; ``rsync_excludes`` and
-      ``skip_preflight`` are pulled from the spec when set there.
-    - **Legacy Python path**: pass ``specs=[SubmitSpec(...), ...]``
-      (frozen-dataclass list). Used by tests and pre-migration callers.
-      Empty ``specs=[]`` short-circuits to ``[]`` (the historical
-      defensive contract; the wire schema's ``minItems: 1`` rejects
-      empty before reaching this code).
+    The Pydantic ``SubmitFlowBatchSpec`` is the canonical wire +
+    Python authoring surface; ``spec.specs`` is a list of full
+    :class:`SubmitFlowSpec` models (the same type the standalone
+    ``submit-flow`` atom takes). ``spec.rsync_excludes`` and
+    ``spec.skip_preflight`` apply once across the bundle.
 
     The motivating problem: a campaign-time fan-out of N submissions
     used to do N × (rsync + deploy_runtime + qsub), which sent ~13×N
@@ -521,63 +457,17 @@ def submit_flow_batch(
     cluster traffic — the same idempotency contract :func:`submit_flow`
     has always offered, applied per-spec.
 
-    *specs* MUST share ``ssh_target`` and ``remote_path`` — different
-    targets/paths can't share an rsync. Heterogeneous batches raise
-    :class:`errors.SpecInvalid`; the caller (campaign driver / agent)
-    is responsible for grouping specs by ``(ssh_target, remote_path)``
-    before calling.
+    ``spec.specs`` MUST share ``ssh_target`` and ``remote_path`` —
+    different targets/paths can't share an rsync. Heterogeneous batches
+    raise :class:`errors.SpecInvalid`; the caller (campaign driver /
+    agent) is responsible for grouping specs by ``(ssh_target,
+    remote_path)`` before calling.
 
-    Order of returned results matches the order of *specs*.
+    Order of returned results matches the order of ``spec.specs``.
     """
-    if spec is not None:
-        # Wire path: convert each outer-shape Pydantic spec into the
-        # internal SubmitSpec dataclass the pipeline already consumes.
-        # _SubmitFlowSpecOuter has ``extra="allow"`` so model_dump
-        # carries any forward-compatible fields the pipeline may have
-        # learned about; SubmitSpec ignores extras at construction.
-        internal_specs = [
-            SubmitSpec(
-                profile=s.profile,
-                cluster=s.cluster,
-                ssh_target=s.ssh_target,
-                remote_path=s.remote_path,
-                job_name=s.job_name,
-                run_id=s.run_id,
-                total_tasks=s.total_tasks,
-                backend=s.backend,
-                **{
-                    k: v
-                    for k, v in s.model_dump(exclude_none=False).items()
-                    if k
-                    not in {
-                        "profile",
-                        "cluster",
-                        "ssh_target",
-                        "remote_path",
-                        "job_name",
-                        "run_id",
-                        "total_tasks",
-                        "backend",
-                    }
-                    and k in SubmitSpec.__dataclass_fields__
-                },
-            )
-            for s in spec.specs
-        ]
-        if spec.rsync_excludes is not None:
-            rsync_excludes = list(spec.rsync_excludes)
-        if spec.skip_preflight is not None:
-            skip_preflight = spec.skip_preflight
-    elif specs is not None:
-        internal_specs = list(specs)
-    else:
-        raise TypeError(
-            "submit_flow_batch requires either spec=SubmitFlowBatchSpec(...) "
-            "or specs=[SubmitSpec(...), ...]"
-        )
-
-    if not internal_specs:
-        return []
+    rsync_excludes = list(spec.rsync_excludes) if spec.rsync_excludes is not None else None
+    skip_preflight = spec.skip_preflight if spec.skip_preflight is not None else False
+    inner_specs = list(spec.specs)
 
     # Per-repo advisory submit lock: serialize multiple `submit-flow` /
     # `submit-flow-batch` invocations against the same experiment so two
@@ -597,7 +487,7 @@ def submit_flow_batch(
     with lock_ctx:
         return _submit_flow_batch_locked(
             experiment_dir=experiment_dir,
-            specs=internal_specs,
+            specs=inner_specs,
             rsync_excludes=rsync_excludes,
             skip_preflight=skip_preflight,
         )
@@ -612,7 +502,7 @@ def _noop_lock_ctx() -> Iterator[bool]:
 def _submit_flow_batch_locked(
     *,
     experiment_dir: Path,
-    specs: list[SubmitSpec],
+    specs: list[SubmitFlowSpec],
     rsync_excludes: list[str] | None,
     skip_preflight: bool,
 ) -> list[SubmitFlowResult]:
