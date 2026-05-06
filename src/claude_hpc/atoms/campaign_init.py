@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     ],
     idempotent=True,
     idempotency_key="campaign_id",
+    cli="hpc-mapreduce campaign-init",
 )
 def campaign_init(
     *,

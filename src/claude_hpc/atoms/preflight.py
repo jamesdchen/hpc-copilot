@@ -27,6 +27,7 @@ def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     verb="validate",
     side_effects=[],
     idempotent=True,
+    cli="hpc-mapreduce preflight [--cluster <name>]",
 )
 def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
     """Run all preflight checks; return a dict with ``all_ok`` and ``checks``.

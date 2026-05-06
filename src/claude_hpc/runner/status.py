@@ -74,6 +74,7 @@ ssh_status_report = _ssh_status_report
     error_codes=[errors.JournalCorrupt, errors.SshUnreachable, errors.RemoteCommandFailed],
     idempotent=True,
     idempotency_key="run_id",
+    cli="hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]",
 )
 def record_status(
     experiment_dir: Path,

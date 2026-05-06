@@ -53,6 +53,7 @@ _DEFAULT_EXECUTOR_CMD = "python3 .hpc/_hpc_dispatch.py"
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    cli="hpc-mapreduce build-submit-spec --spec <path>",
 )
 def build_submit_spec(
     *,

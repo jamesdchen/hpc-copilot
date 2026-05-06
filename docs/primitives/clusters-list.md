@@ -8,7 +8,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-mapreduce clusters list
-  python: claude_hpc.agent_cli.cmd_clusters_list
+  python: claude_hpc.atoms.clusters.list_clusters
 exit_codes:
 - 0: ok
 - 1: config_invalid

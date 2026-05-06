@@ -68,7 +68,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 |---|---|---|---|---|---|---|
 | [`cluster-reduce`](primitives/cluster-reduce.md) | ✓ | rsync-pull; ssh | `hpc-mapreduce cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` | `claude_hpc.atoms.cluster_reduce.cluster_reduce` | — | `claude_hpc/schemas/cluster_reduce.output.json` |
 | [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `claude_hpc.runner.combine.combine_wave` | — | `claude_hpc/schemas/combine_wave.output.json` |
-| [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `(none — Python-only primitive)` | `claude_hpc.runner.reconcile.mark_terminal` | — | — |
+| [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `claude_hpc.runner.reconcile.mark_terminal` | — | — |
 | [`prune-orphan-sidecars`](primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `hpc-mapreduce prune-orphan-sidecars` | `claude_hpc.state.runs.prune_orphan_sidecars` | — | — |
 | [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` | `claude_hpc.runner.reconcile.reconcile` | — | `claude_hpc/schemas/reconcile.output.json` |
 | [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` | `claude_hpc.runner.resubmit.resubmit_failed` | `claude_hpc/schemas/resubmit.input.json` | — |

@@ -148,9 +148,8 @@ def _from_registry() -> list[dict[str, Any]]:
       :func:`_summarize_side_effects` so frontmatter fallback entries
       remain shape-compatible.
     * ``cli`` and ``python`` are derived: ``python`` is
-      ``f"{func.__module__}.{func.__qualname__}"``; ``cli`` is read
-      from the existing frontmatter (the registry doesn't yet carry
-      CLI invocations — that's a follow-up).
+      ``f"{func.__module__}.{func.__qualname__}"``; ``cli`` comes
+      directly from the decorator's ``cli=`` kwarg (registry SoT).
     * ``input_schema`` / ``output_schema`` resolve via :func:`schema_for`
       using a synthetic ``backed_by`` dict.
     """
@@ -158,7 +157,7 @@ def _from_registry() -> list[dict[str, Any]]:
     for meta in get_registry().values():
         backed = {
             "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
-            "cli": _cli_for_registry_entry(meta.name),
+            "cli": meta.cli,
         }
         out.append(
             {
@@ -173,28 +172,6 @@ def _from_registry() -> list[dict[str, Any]]:
             }
         )
     return sorted(out, key=lambda o: (o["verb"], o["name"]))
-
-
-def _cli_for_registry_entry(name: str) -> str | None:
-    """Look up the ``cli:`` field from the primitive's frontmatter.
-
-    The registry decorator doesn't yet carry the CLI invocation string
-    (callers compose it themselves from argparse); we still read it
-    from the frontmatter as a presentation hint. Returns None if the
-    frontmatter is unavailable or has no cli field.
-    """
-    prims_dir = _primitives_dir()
-    if prims_dir is None:
-        return None
-    path = prims_dir / f"{name}.md"
-    if not path.is_file():
-        return None
-    fm = _parse_frontmatter(path)
-    backed = fm.get("backed_by") if isinstance(fm.get("backed_by"), dict) else None
-    if backed is None:
-        return None
-    cli = backed.get("cli")
-    return cli if isinstance(cli, str) else None
 
 
 def _format_catalog_table(catalog: list[dict[str, Any]]) -> str:

@@ -34,7 +34,8 @@ Source-of-truth split
 
 The registry IS the canonical source for the structured metadata
 the decorator carries: ``name``, ``verb``, ``side_effects``,
-``idempotent``, ``idempotency_key``, ``error_codes``, and ``composes``.
+``idempotent``, ``idempotency_key``, ``error_codes``, ``composes``,
+and ``cli`` (the shell invocation string).
 :func:`claude_hpc._internal.operations.operations_catalog` reads the
 registry directly; nothing else reads the markdown frontmatter for
 those fields.
@@ -106,6 +107,11 @@ class PrimitiveMeta:
     idempotency_key: str | None = None
     exit_codes: tuple[tuple[int, str], ...] = ()
     description: str = ""
+    # Shell invocation string (e.g. ``"hpc-mapreduce build-executor --name <stem>"``)
+    # or ``None`` for Python-only primitives. Previously round-tripped
+    # through ``docs/primitives/<name>.md`` frontmatter; the registry
+    # is now SoT so the regen script writes ``backed_by.cli`` from here.
+    cli: str | None = None
 
 
 _REGISTRY: dict[str, PrimitiveMeta] = {}
@@ -123,6 +129,7 @@ def primitive(
     idempotency_key: str | None = None,
     exit_codes: Iterable[tuple[int, str]] | None = None,
     description: str | None = None,
+    cli: str | None = None,
 ) -> Callable[[F], F]:
     """Register a primitive in the runtime catalog.
 
@@ -205,6 +212,7 @@ def primitive(
             idempotency_key=idempotency_key,
             exit_codes=tuple(exit_codes or ()),
             description=(description or (func.__doc__ or "").strip().split("\n", 1)[0]),
+            cli=cli,
         )
         _REGISTRY[name] = meta
         func._primitive_meta = meta  # type: ignore[attr-defined]

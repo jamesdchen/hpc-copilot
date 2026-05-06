@@ -159,3 +159,7 @@ def test_primitive_meta_carries_all_fields() -> None:
         assert meta.description == "explicit description"
     finally:
         _REGISTRY.pop(fname, None)
+        # atom_op is also registered; pop it too so it doesn't leak
+        # into other tests that walk the full registry (e.g.
+        # test_every_registered_primitive_has_a_doc).
+        _REGISTRY.pop(atom_name, None)

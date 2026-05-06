@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-mapreduce campaign list [--experiment-dir <dir>]
-  python: claude_hpc.mapreduce.reduce.history.find_sidecars_by_campaign
+  python: claude_hpc.atoms.campaign_list.campaign_list
 exit_codes:
 - 0: ok
 ---

@@ -148,6 +148,7 @@ def _combine_missing(
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+    cli="hpc-mapreduce aggregate-flow --spec <path>",
 )
 def aggregate_flow(
     *,

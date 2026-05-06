@@ -39,7 +39,7 @@ error_codes:
   retry_safe: true
 backed_by:
   cli: hpc-mapreduce failures --run-id <id> [--lines <n>]
-  python: claude_hpc.agent_cli.cmd_failures
+  python: claude_hpc.atoms.failures.fetch_failures
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable / remote_command_failed
