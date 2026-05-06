@@ -75,11 +75,15 @@ Spec shape (matches `schemas/aggregate_flow.input.json`):
   "run_id": "<run_id>",
   "ensure_all_combined": true,
   "combiner_max_retries": 1,
-  "pull_summaries": true,
-  "summary_glob": "<results.summary_pattern>",
-  "results_subdir": "results"
+  "mode": "auto",
+  "pull_summaries": false
 }
 ```
+
+**`mode: "auto"` is the default and the right choice 90% of the time.** It routes to `cluster-reduce` when the sidecar's `aggregate_defaults.aggregate_cmd` is set; otherwise to the combiner-only path. `pull_summaries: false` is the new default — only enable it (with an explicit `summary_glob`) when the user genuinely needs raw per-task files locally for debug or interpretation. Mode overrides:
+
+- `mode: "cluster-reduce"` — force the cluster-side reducer; raise if no `aggregate_cmd` is available.
+- `mode: "combiner-only"` — bypass the reducer; pull `_combiner/` partials and reduce locally. Useful when `metrics.json` already carries the right per-task scalar.
 
 Parse `data.aggregated_metrics` — that's the cross-wave reduced output. `data.combiner_dir_local` and `data.summaries_dir_local` are the local paths if downstream interpretation needs them.
 
@@ -175,6 +179,17 @@ Task completeness:
 
 ## Step 4: Aggregate on Cluster
 
+**Don't bulk-pull per-task outputs to reduce locally.** That's the 1200-chunk failure mode (raw CSVs / pickles dragged to Windows over rsync). Route through the **`cluster-reduce`** primitive instead — runs the user's reducer on the cluster, pulls only its single JSON output (KB, not GB):
+
+```bash
+hpc-mapreduce cluster-reduce --experiment-dir . --run-id "$RUN_ID"
+# (uses sidecar's aggregate_defaults.aggregate_cmd, OR pass --aggregate-cmd <cmd>)
+```
+
+The envelope's `data.reduced` is the parsed JSON the reducer wrote. Reducer contract documented at `docs/reference/reducer-contract.md`: any program that reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT` (default `_aggregated/<run_id>.json`).
+
+`aggregate-flow` already routes through `cluster-reduce` automatically when `mode='auto'` (the default) and an `aggregate_cmd` is on the sidecar — so a single `hpc-mapreduce aggregate-flow ...` call does the right thing without thinking. The Step 4 prose below applies only when you need to invoke the reducer ad-hoc (debug, override `aggregate_cmd`).
+
 Determine the aggregation command:
 1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it.
 2. Else invoke the **`discover-reducers`** primitive — DO NOT grep / write a fresh reducer first:
@@ -207,19 +222,27 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <aggregate_cmd> --help'
 
 Verify the command succeeds (exit code 0). If it fails, read stderr and report to user.
 
-## Step 5: Download Summaries
+## Step 5: Download Summaries (almost never; default off)
 
-After aggregation completes, pull summary files from all grid point result directories:
+**Skip this step in the normal flow.** When `aggregate-flow` runs in `mode='auto'` or `mode='cluster-reduce'`, the reducer's single JSON output is already at `data.summaries_dir_local`; no per-task pull happens. When `mode='combiner-only'` the `_combiner/` partials are already pulled and reduced; no per-task pull either.
+
+Only enter this step when the user explicitly asks for raw per-task files locally — debug ("show me task 42's stderr / output"), forensic ("which chunk produced the outlier?"), or one-off interpretation that the reducer doesn't surface. In those cases pass `pull_summaries=true` + a NARROW `summary_glob` to `aggregate-flow` (don't manually rsync; the atom centralises the include/exclude logic):
+
+```json
+{ "run_id": "<run_id>", "pull_summaries": true, "summary_glob": "task_42_*.csv" }
+```
+
+Or, ad-hoc:
 
 ```bash
 rsync -az \
     --include='*/' \
-    --include='<results.summary_pattern>' \
+    --include='<narrow_pattern>' \
     --exclude='*' \
     $SSH_TARGET:$REMOTE_PATH/<result_base_dir>/ ./<result_base_dir>/
 ```
 
-If `results.summary_pattern` is a list, include each pattern. Verify downloaded files exist locally.
+**Avoid permissive globs** like `*.csv` or `metrics.json` — those drag every per-task file across the wire and recreate the failure mode `cluster-reduce` exists to eliminate. If you find yourself reaching for a broad glob, the right answer is usually "write a reducer" (see [reducer-contract.md](../../docs/reference/reducer-contract.md)).
 
 ## Step 6: Interpret Results
 

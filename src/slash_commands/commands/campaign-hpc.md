@@ -143,7 +143,8 @@ The envelope's `data.results` is a per-spec list; treat each entry the same as a
 Two patterns work, pick whichever the user's `tasks.py` is set up for:
 
 - **Tell at module-load** (recommended; idempotent). The next iteration's `tasks.py` re-reads sidecars + per-trial outputs and pushes results into the strategy backend (e.g. `optuna.Study.tell`) before asking for the next batch. No extra orchestration needed — `submit-flow` re-imports `tasks.py` each invocation.
-- **Tell between iterations**. After an iteration lands and before the next, run a small helper (`.hpc/campaigns/<slug>/score_iter.py` or similar) that walks per-task outputs and tells the strategy. Use this when the executor doesn't write per-trial reduce JSONs in a shape your `tasks.py` can read on its own.
+- **Tell between iterations via `cluster-reduce`** (preferred when the executor writes raw chunks). After an iteration lands, run `hpc-mapreduce cluster-reduce --experiment-dir . --run-id <iter_run_id>` to invoke the user's reducer ON THE CLUSTER and pull only its single JSON output. The reducer reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT` (default `_aggregated/<run_id>.json`); see [reducer-contract.md](../../docs/reference/reducer-contract.md). The next iteration's `tasks.py` reads the pulled JSONs to tell its strategy. **Don't** rsync per-task chunks across the wire — that's the 1200-chunk failure mode (12 campaigns × 1200 chunks = 14400 raw files dragged through SSH). The reducer's output is KB; the chunks stay on the cluster.
+- **Tell between iterations via a local helper** (only when there's no cluster-side reducer yet). Run a small helper (`.hpc/campaigns/<slug>/score_iter.py` or similar) that walks per-task outputs and tells the strategy. Acceptable for prototyping but you should write a cluster-side reducer for production runs — bulk pulling raw chunks doesn't scale past one campaign.
 
 ### Headless overnight runs
 

@@ -900,6 +900,30 @@ def cmd_verify_canary(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_cluster_reduce(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.cluster_reduce."""
+    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+
+    extra_env: dict[str, str] | None = None
+    if getattr(args, "extra_env", None):
+        extra_env = {}
+        for tok in str(args.extra_env).split(","):
+            if "=" in tok:
+                k, _, v = tok.partition("=")
+                extra_env[k.strip()] = v.strip()
+    out = cluster_reduce(
+        args.experiment_dir,
+        run_id=args.run_id,
+        aggregate_cmd=args.aggregate_cmd,
+        output_path=args.output_path,
+        local_dir=args.local_dir,
+        extra_env=extra_env,
+        timeout_sec=int(args.timeout_sec),
+    )
+    _ok(out, name="cluster-reduce")
+    return EXIT_OK
+
+
 def cmd_axes_init(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.axes_init."""
     from claude_hpc.atoms.axes_init import axes_init
@@ -1963,6 +1987,64 @@ def build_parser() -> argparse.ArgumentParser:
         dry_run_help="Validate the spec but don't write tasks.py.",
     )
     p_btp.set_defaults(func=cmd_build_tasks_py)
+
+    # cluster-reduce
+    p_cr = sub.add_parser(
+        "cluster-reduce",
+        help=(
+            "Run the user's reducer on the cluster, pull only its single "
+            "output JSON. Eliminates the bulk per-task rsync_pull failure "
+            "mode at /aggregate-hpc + campaign-loop time."
+        ),
+    )
+    _add_experiment_dir(p_cr)
+    p_cr.add_argument(
+        "--run-id",
+        type=str,
+        required=True,
+        help="Run identifier (matches .hpc/runs/<run_id>.json).",
+    )
+    p_cr.add_argument(
+        "--aggregate-cmd",
+        type=str,
+        default=None,
+        help=(
+            "Shell command to run on the cluster. Defaults to the run "
+            "sidecar's aggregate_defaults.aggregate_cmd."
+        ),
+    )
+    p_cr.add_argument(
+        "--output-path",
+        type=str,
+        default=None,
+        help=(
+            "Cluster-side path the reducer writes its single JSON output. "
+            "Defaults to '_aggregated/<run_id>.json' under remote_path. "
+            "Threaded as $HPC_AGGREGATED_OUTPUT to the reducer."
+        ),
+    )
+    p_cr.add_argument(
+        "--local-dir",
+        type=str,
+        default=None,
+        help="Local destination dir; defaults to <experiment>/_aggregated/<run_id>/.",
+    )
+    p_cr.add_argument(
+        "--extra-env",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated KEY=VALUE pairs forwarded to the reducer "
+            "(in addition to HPC_RUN_ID / HPC_AGGREGATED_OUTPUT)."
+        ),
+    )
+    p_cr.add_argument(
+        "--timeout-sec",
+        type=int,
+        default=1800,
+        help="Reducer timeout in seconds (default 1800 = 30 min).",
+    )
+    p_cr.set_defaults(func=cmd_cluster_reduce)
 
     # suggest-setup-action
     p_ssa = sub.add_parser(

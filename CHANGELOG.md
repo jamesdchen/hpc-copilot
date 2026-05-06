@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added — `cluster-reduce` primitive: stop bulk-pulling raw chunks
+
+The 1200-chunk failure mode (per-task CSVs / pickles dragged across
+the wire to local before reducing) is structurally eliminated by a
+new workflow:
+
+1. **`cluster-reduce`** primitive runs the user's reducer on the
+   cluster and pulls only its single JSON output (KB, not GB).
+2. **`aggregate-flow`** gains a `mode` parameter
+   (`auto`/`combiner-only`/`cluster-reduce`); `auto` (the new
+   default) routes to cluster-reduce when the run sidecar carries
+   `aggregate_defaults.aggregate_cmd`, falls through to combiner-
+   only otherwise. `pull_summaries` defaults to `False`.
+3. **Reducer contract** documented at `docs/reference/reducer-contract.md`:
+   any program that reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT`
+   (default `_aggregated/<run_id>.json`) is a valid reducer.
+
+`/aggregate-hpc` Step 4 prose now points at `cluster-reduce` first;
+Step 5 ("Download Summaries") tightened to default-off with explicit
+"narrow glob only" guidance. `/campaign-hpc` Path B's iter-score
+section recommends `cluster-reduce` over local helpers — bulk pulling
+chunks doesn't scale past one campaign.
+
+Schema: `schemas/cluster_reduce.output.json` carries the envelope
+shape (parsed reducer JSON + cluster/local output paths + exit
+diagnostics).
+
 ### Added — atomization push: 18 new primitives close prose-driven failure modes
 
 Refactor the slash commands to route through CLI primitives instead of

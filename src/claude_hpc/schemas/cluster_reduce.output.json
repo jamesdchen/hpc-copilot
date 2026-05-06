@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/cluster_reduce.output.json",
+  "title": "cluster-reduce output",
+  "description": "Result of running the user's reducer on the cluster + pulling only its single JSON output. The `reduced` field is the parsed JSON the reducer wrote, surfaced inline so the agent doesn't need to re-read the local file.",
+  "type": "object",
+  "required": [
+    "ok",
+    "run_id",
+    "output_path_remote",
+    "output_path_local",
+    "reduced",
+    "exit_code",
+    "stderr_tail"
+  ],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "run_id": {
+      "type": "string",
+      "description": "Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>; loosely validated as filesystem-safe with no path separators."
+    },
+    "output_path_remote": {
+      "type": "string",
+      "description": "Path on the cluster where the reducer wrote its output (relative to remote_path or absolute)."
+    },
+    "output_path_local": {
+      "type": "string",
+      "description": "Local path the reducer's output was rsync_pulled to."
+    },
+    "reduced": {
+      "type": ["object", "array", "string", "number", "boolean", "null"],
+      "description": "Parsed reducer output (whatever JSON shape the reducer wrote)."
+    },
+    "exit_code": { "type": "integer", "minimum": 0 },
+    "stderr_tail": {
+      "type": "string",
+      "description": "Last ~2KB of the reducer's stderr."
+    }
+  }
+}

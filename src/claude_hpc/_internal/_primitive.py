@@ -197,6 +197,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.build_submit_spec",
     "claude_hpc.atoms.build_tasks_py",
     "claude_hpc.atoms.canary_verify",
+    "claude_hpc.atoms.cluster_reduce",
     "claude_hpc.atoms.campaign_advance",
     "claude_hpc.atoms.campaign_budget",
     "claude_hpc.atoms.campaign_converged",
