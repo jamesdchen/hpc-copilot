@@ -33,6 +33,7 @@ from typing import Any
 
 from claude_hpc import errors
 from claude_hpc._internal._primitive import primitive
+from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
 
 # Adaptive delay table — lifted from /monitor-hpc Step 5's Markdown
 # table so the primitive is the single source of truth. Each row is
@@ -139,17 +140,7 @@ def _classify_state(
     cli="hpc-mapreduce decide-monitor-arm --spec <path>",
     agent_facing=True,
 )
-def decide_monitor_arm(
-    *,
-    run_id: str,
-    summary: dict[str, int],
-    total_tasks: int,
-    invocation_argv: str,
-    user_invoked_via_loop: bool = False,
-    eta_sec: int | None = None,
-    pace_unstable: bool = False,
-    queue_wait_sec: int | None = None,
-) -> dict[str, Any]:
+def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     """Pick the arm mode + cadence + cron args + ``armed:`` line.
 
     Parameters
@@ -193,6 +184,15 @@ def decide_monitor_arm(
     :class:`errors.SpecInvalid`
         Empty run_id, total_tasks < 0, or summary is not a dict.
     """
+    run_id = spec.run_id
+    summary = spec.summary
+    total_tasks = spec.total_tasks
+    invocation_argv = spec.invocation_argv
+    user_invoked_via_loop = bool(spec.user_invoked_via_loop)
+    eta_sec = spec.eta_sec
+    pace_unstable = bool(spec.pace_unstable)
+    queue_wait_sec = spec.queue_wait_sec
+
     if not run_id:
         raise errors.SpecInvalid("run_id must be a non-empty string")
     if not isinstance(summary, dict):

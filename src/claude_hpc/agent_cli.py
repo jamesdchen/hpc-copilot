@@ -825,15 +825,18 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "decide_monitor_arm")
+    from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
+
     try:
-        out = decide_monitor_arm(**raw)
-    except TypeError as exc:
+        spec = DecideMonitorArmSpec.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
         return _err(
             error_code="spec_invalid",
             message=str(exc),
             category="user-error",
             retry_safe=False,
         )
+    out = decide_monitor_arm(spec=spec)
     _ok(out, name="decide-monitor-arm")
     return EXIT_OK
 

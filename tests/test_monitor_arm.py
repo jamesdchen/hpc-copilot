@@ -16,11 +16,22 @@ from __future__ import annotations
 import pytest
 
 from claude_hpc import errors
-from claude_hpc.atoms.monitor_arm import decide_monitor_arm
+from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
+from claude_hpc.atoms.monitor_arm import decide_monitor_arm as _real_decide_monitor_arm
 
 
 def _summary(complete: int = 0, running: int = 0, pending: int = 0, failed: int = 0) -> dict:
     return {"complete": complete, "running": running, "pending": pending, "failed": failed}
+
+
+def decide_monitor_arm(**kwargs):
+    """Test shim — wraps kwargs in :class:`DecideMonitorArmSpec`.
+
+    Tests still flow through Pydantic validation (which is the
+    point — every kwargs combo is what the wire would accept), so
+    the validation signal stays intact even with the helper.
+    """
+    return _real_decide_monitor_arm(spec=DecideMonitorArmSpec(**kwargs))
 
 
 def test_complete_terminal_arms_none() -> None:
@@ -185,8 +196,17 @@ def test_cron_create_args_carries_invocation_argv() -> None:
     assert "r1" in out["cron_create_args"]["reason"]
 
 
-def test_empty_run_id_raises() -> None:
-    with pytest.raises(errors.SpecInvalid, match="non-empty"):
+def test_empty_run_id_rejected_at_wire_validation() -> None:
+    """Empty run_id fails ``RunIdStrict`` regex at spec construction.
+
+    Pre-Pydantic the atom raised ``errors.SpecInvalid``; the wire
+    now rejects first via ``pydantic.ValidationError`` and the
+    atom's own check is dead code (kept as a second line of
+    defense for direct calls that bypass the spec).
+    """
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         decide_monitor_arm(
             run_id="",
             summary=_summary(),
@@ -195,8 +215,11 @@ def test_empty_run_id_raises() -> None:
         )
 
 
-def test_negative_total_tasks_raises() -> None:
-    with pytest.raises(errors.SpecInvalid, match=">=0"):
+def test_negative_total_tasks_rejected_at_wire_validation() -> None:
+    """Negative total_tasks fails ``Field(ge=0)`` at spec construction."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         decide_monitor_arm(
             run_id="r1",
             summary=_summary(),
@@ -205,8 +228,11 @@ def test_negative_total_tasks_raises() -> None:
         )
 
 
-def test_non_dict_summary_raises() -> None:
-    with pytest.raises(errors.SpecInvalid, match="must be a dict"):
+def test_non_dict_summary_rejected_at_wire_validation() -> None:
+    """Non-dict summary fails ``dict[str, int]`` typing at spec construction."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         decide_monitor_arm(
             run_id="r1",
             summary="not a dict",  # type: ignore[arg-type]
