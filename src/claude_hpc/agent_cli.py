@@ -1325,7 +1325,8 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     ssh_target and remote_path. The CLI emits one envelope wrapping
     a list of per-spec result records.
     """
-    from claude_hpc.flows.submit_flow import SubmitSpec, submit_flow_batch
+    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec
+    from claude_hpc.flows.submit_flow import submit_flow_batch
 
     raw = _load_spec(args.spec, schema_name=None)
     # Wrapper-shape validation (object with `specs` array, per-entry
@@ -1341,51 +1342,28 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
             category="user-error",
             retry_safe=False,
         )
-    spec_list = raw["specs"]
-    for entry in spec_list:
+    for entry in raw["specs"]:
         _validate_against_schema(entry, "submit_flow")
-    specs = [
-        SubmitSpec(
-            profile=s["profile"],
-            cluster=s["cluster"],
-            ssh_target=s["ssh_target"],
-            remote_path=s["remote_path"],
-            job_name=s["job_name"],
-            run_id=s["run_id"],
-            total_tasks=int(s["total_tasks"]),
-            backend=s["backend"],
-            script=s["script"],
-            job_env=dict(s["job_env"]),
-            pass_env_keys=s.get("pass_env_keys"),
-            canary=bool(s.get("canary", True)),
-            campaign_id=s.get("campaign_id") or "",
-            runtime=s.get("runtime"),
-            slurm_account=s.get("slurm_account"),
-            slurm_cluster=s.get("slurm_cluster"),
-            partial_ok=bool(s.get("partial_ok", False)),
-        )
-        for s in spec_list
-    ]
+    batch_spec = SubmitFlowBatchSpec.model_validate(raw)
 
     if args.dry_run:
-        targets = sorted({(s.ssh_target, s.remote_path) for s in specs})
+        targets = sorted({(s.ssh_target, s.remote_path) for s in batch_spec.specs})
         _ok(
             {
-                "would_launch": [{"run_id": s.run_id, "tasks": s.total_tasks} for s in specs],
-                "shared_targets": [{"ssh_target": t[0], "remote_path": t[1]} for t in targets],
-                "n_specs": len(specs),
+                "would_launch": [
+                    {"run_id": s.run_id, "tasks": s.total_tasks} for s in batch_spec.specs
+                ],
+                "shared_targets": [
+                    {"ssh_target": t[0], "remote_path": t[1]} for t in targets
+                ],
+                "n_specs": len(batch_spec.specs),
                 "dry_run": True,
             },
             name="submit-flow-batch",
         )
         return EXIT_OK
 
-    results = submit_flow_batch(
-        experiment_dir=args.experiment_dir,
-        specs=specs,
-        rsync_excludes=raw.get("rsync_excludes"),
-        skip_preflight=bool(raw.get("skip_preflight", False)),
-    )
+    results = submit_flow_batch(args.experiment_dir, spec=batch_spec)
     _ok(
         {"results": [r.to_envelope_data() for r in results], "n_results": len(results)},
         name="submit-flow-batch",
