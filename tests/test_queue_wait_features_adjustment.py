@@ -9,9 +9,30 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
 from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.forecast.queue_features import QueueFeatures
 from claude_hpc.state import runtime_prior as rp
+
+
+_SPEC_FIELDS = {"profile", "cluster", "at_iso", "backend", "n_replications", "seed"}
+_real_predict_queue_wait = qwb.predict_queue_wait
+
+
+def _patched_predict_queue_wait(experiment_dir, **kwargs):
+    """Test shim — pass-through when ``spec=`` is given (production
+    callers); split kwargs into spec fields + framework kwargs
+    otherwise (test callers)."""
+    if "spec" in kwargs:
+        return _real_predict_queue_wait(experiment_dir, **kwargs)
+    spec_kwargs = {k: v for k, v in kwargs.items() if k in _SPEC_FIELDS}
+    framework_kwargs = {k: v for k, v in kwargs.items() if k not in _SPEC_FIELDS}
+    return _real_predict_queue_wait(
+        experiment_dir, spec=PredictQueueWaitSpec(**spec_kwargs), **framework_kwargs
+    )
+
+
+qwb.predict_queue_wait = _patched_predict_queue_wait
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"

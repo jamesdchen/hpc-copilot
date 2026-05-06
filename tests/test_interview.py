@@ -24,10 +24,20 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc.atoms.interview import record_interview
+from claude_hpc._schema_models.interview import InterviewSpec
+from claude_hpc.atoms.interview import record_interview as _real_record_interview
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def record_interview(intent, *, campaign_dir):
+    """Test shim — wraps the intent dict in :class:`InterviewSpec`.
+
+    Tests still flow through Pydantic so the validation signal stays
+    intact even with the helper.
+    """
+    return _real_record_interview(InterviewSpec.model_validate(intent), campaign_dir=campaign_dir)
 
 # ─── helpers ───────────────────────────────────────────────────────────────
 

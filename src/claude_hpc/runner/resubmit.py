@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._schema_models.resubmit import ResubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -59,11 +60,7 @@ def resubmit_failed(
     experiment_dir: Path,
     run_id: str,
     *,
-    failed_task_ids: list[int],
-    category: str,
-    overrides: dict[str, Any] | None = None,
-    new_job_ids: list[str] | None = None,
-    request_id: str | None = None,
+    spec: ResubmitSpec,
 ) -> tuple[RunRecord, bool, str]:
     """Record a resubmission attempt in the journal.
 
@@ -82,6 +79,12 @@ def resubmit_failed(
 
     Returns ``(record, deduped, request_id)``.
     """
+    failed_task_ids = list(spec.failed_task_ids)
+    category = str(spec.category)
+    overrides = dict(spec.overrides) if spec.overrides is not None else None
+    new_job_ids = list(spec.new_job_ids) if spec.new_job_ids is not None else None
+    request_id = spec.request_id
+
     if not failed_task_ids:
         raise ValueError("resubmit_failed requires at least one failed task id")
     record = session.load_run(experiment_dir, run_id)

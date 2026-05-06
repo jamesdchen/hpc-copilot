@@ -12,10 +12,38 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from claude_hpc import runner
+from claude_hpc import register_primitives, runner
+from claude_hpc._schema_models.submit import SubmitSpec as _WireSubmitSpec
+
+# Register primitives BEFORE patching runner attrs (see test_runner.py
+# for the same reason).
+register_primitives()
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+_SUBMIT_SPEC_FIELDS = {
+    "profile", "cluster", "ssh_target", "remote_path", "job_name",
+    "run_id", "job_ids", "total_tasks", "runtime", "campaign_id",
+}
+_real_submit_and_record = runner.submit_and_record
+
+
+def _patched_submit_and_record(experiment_dir, **kwargs):
+    """Test shim — same dual-path pattern used in test_runner."""
+    if "spec" in kwargs:
+        return _real_submit_and_record(experiment_dir, **kwargs)
+    spec_kwargs = {k: v for k, v in kwargs.items() if k in _SUBMIT_SPEC_FIELDS}
+    framework_kwargs = {k: v for k, v in kwargs.items() if k not in _SUBMIT_SPEC_FIELDS}
+    if spec_kwargs.get("campaign_id") == "":
+        spec_kwargs["campaign_id"] = None
+    return _real_submit_and_record(
+        experiment_dir, spec=_WireSubmitSpec(**spec_kwargs), **framework_kwargs
+    )
+
+
+runner.submit_and_record = _patched_submit_and_record
 
 
 def _write_sidecar(experiment_dir: Path, run_id: str, **fields) -> Path:

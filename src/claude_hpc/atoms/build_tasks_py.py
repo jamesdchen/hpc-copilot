@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
 from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -141,13 +142,15 @@ def resolve(task_id: int) -> dict:
     agent_facing=True,
 )
 def build_tasks_py(
-    *,
     experiment_dir: Path,
-    axes: list[dict[str, Any]],
-    flags_by_executor: dict[str, list[dict[str, Any]]],
-    force: bool = False,
+    *,
+    spec: BuildTasksPyInput,
 ) -> dict[str, Any]:
     """Scaffold ``<experiment>/.hpc/tasks.py`` from the supplied axes + flags.
+
+    The wire-validated ``spec`` carries ``axes``, ``flags_by_executor``,
+    and ``force``; ``experiment_dir`` is the framework-context kwarg
+    (the spec's wire surface intentionally doesn't hold it).
 
     Parameters
     ----------
@@ -183,6 +186,15 @@ def build_tasks_py(
         Empty axes list, malformed flag spec, or non-empty axis with
         empty values list.
     """
+    axes = [a.model_dump() for a in spec.axes]
+    # exclude_none on the flag dump so a flag without ``default`` doesn't
+    # acquire a synthetic ``default: None`` (the renderer's ``"default"
+    # in flag`` check would then emit a spurious ``default=None`` arg).
+    flags_by_executor = {
+        k: [f.model_dump(exclude_none=True) for f in v]
+        for k, v in spec.flags_by_executor.items()
+    }
+    force = bool(spec.force)
     if not axes:
         raise errors.SpecInvalid("axes must be a non-empty list")
     for i, ax in enumerate(axes):
