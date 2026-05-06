@@ -2,49 +2,91 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/interview.output.json",
   "title": "interview output envelope",
-  "description": "Envelope returned by `hpc-mapreduce interview`. Reports the artifacts persisted (interview.json, optionally meta.json) and a dry-resolve preview so the calling agent can echo 'sweep starts here, midpoint here, ends here' back to the operator before submit — catching off-by-one and mis-ranged tasks.py at the interview stage rather than after burning compute.",
+  "description": "Envelope returned by ``hpc-mapreduce interview``.\n\nReports the artifacts persisted (interview.json, optionally\nmeta.json) and a dry-resolve preview so the calling agent can\necho 'sweep starts here, midpoint here, ends here' back to the\noperator before submit.",
   "type": "object",
-  "required": ["ok", "data"],
+  "required": [
+    "ok",
+    "data"
+  ],
   "additionalProperties": false,
   "properties": {
-    "ok":   { "type": "boolean", "const": true },
+    "ok": {
+      "const": true,
+      "title": "Ok",
+      "type": "boolean"
+    },
     "data": {
-      "type": "object",
-      "required": ["campaign_dir", "artifacts", "total_tasks", "cmd_sha", "preview"],
+      "$ref": "#/$defs/_InterviewData"
+    }
+  },
+  "$defs": {
+    "_InterviewData": {
       "additionalProperties": false,
       "properties": {
         "campaign_dir": {
-          "type": "string",
-          "description": "Absolute path to the campaign workdir (where tasks.py and the persisted interview.json live)."
+          "description": "Absolute path to the campaign workdir (where tasks.py and the persisted interview.json live).",
+          "title": "Campaign Dir",
+          "type": "string"
         },
         "artifacts": {
-          "type": "array",
-          "items": { "type": "string" },
+          "description": "Relative paths (under campaign_dir) of every file the primitive wrote or updated. Always includes interview.json; includes meta.json when intent.cluster_target or intent.budget triggered an update.",
+          "items": {
+            "type": "string"
+          },
           "minItems": 1,
-          "description": "Relative paths (under campaign_dir) of every file the primitive wrote or updated. Always includes interview.json; includes meta.json when intent.cluster_target or intent.budget triggered an update."
+          "title": "Artifacts",
+          "type": "array"
         },
         "total_tasks": {
-          "type": "integer",
+          "description": "Result of calling tasks.total() against the campaign's tasks.py. Cross-checked against intent.task_count.",
           "minimum": 1,
-          "description": "Result of calling tasks.total() against the campaign's tasks.py. Cross-checked against intent.task_count — mismatch raises spec_invalid before interview.json is written."
+          "title": "Total Tasks",
+          "type": "integer"
         },
         "cmd_sha": {
-          "type": "string",
+          "description": "compute_cmd_sha() over the campaign's tasks.py. Embedded in interview.json so future cmd_recall queries can detect drift.",
           "pattern": "^[0-9a-f]{8,64}$",
-          "description": "compute_cmd_sha() over the campaign's tasks.py. Embedded in interview.json so future cmd_recall queries can detect when an old recipe has drifted from the agent that produced it."
+          "title": "Cmd Sha",
+          "type": "string"
         },
         "preview": {
-          "type": "object",
-          "required": ["first", "mid", "last"],
-          "additionalProperties": false,
-          "properties": {
-            "first": { "description": "tasks.resolve(0) — opaque (whatever resolve returns)." },
-            "mid":   { "description": "tasks.resolve(total_tasks // 2)" },
-            "last":  { "description": "tasks.resolve(total_tasks - 1)" }
-          },
-          "description": "Three sample resolve() calls. Each is a dict per claude-hpc's pre-existing tasks.py contract (kwargs get **-unpacked into the user's task function and must be JSON-serializable for cmd_sha). The schema does not constrain the dict's keys — a hyperparameter sweep returns {'lr': 1e-3, 'wd': 1e-2}, an eval campaign returns {'model': ..., 'dataset': ...}, an RL rollout returns {'env': ..., 'seed': ...}."
+          "$ref": "#/$defs/_InterviewPreview",
+          "description": "Three sample resolve() calls. Each is a dict per claude-hpc's pre-existing tasks.py contract."
         }
-      }
+      },
+      "required": [
+        "campaign_dir",
+        "artifacts",
+        "total_tasks",
+        "cmd_sha",
+        "preview"
+      ],
+      "title": "_InterviewData",
+      "type": "object"
+    },
+    "_InterviewPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "first": {
+          "description": "tasks.resolve(0) — opaque (whatever resolve returns).",
+          "title": "First"
+        },
+        "mid": {
+          "description": "tasks.resolve(total_tasks // 2)",
+          "title": "Mid"
+        },
+        "last": {
+          "description": "tasks.resolve(total_tasks - 1)",
+          "title": "Last"
+        }
+      },
+      "required": [
+        "first",
+        "mid",
+        "last"
+      ],
+      "title": "_InterviewPreview",
+      "type": "object"
     }
   }
 }

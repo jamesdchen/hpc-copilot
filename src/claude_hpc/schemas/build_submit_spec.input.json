@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/build_submit_spec.input.json",
   "title": "build-submit-spec input",
-  "description": "Resolved interview values fed to `claude_hpc.atoms.build_submit_spec`. The primitive synthesizes the framework-required job_env keys and emits a validated submit_flow.input.json spec ready for submit-flow.",
+  "description": "Resolved interview values fed to ``claude_hpc.atoms.build_submit_spec``.\n\nThe primitive synthesizes the framework-required job_env keys\nand emits a validated submit_flow.input.json spec ready for\nsubmit-flow.",
   "type": "object",
   "required": [
     "profile",
@@ -17,119 +17,248 @@
   "additionalProperties": false,
   "properties": {
     "profile": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
     },
     "cluster": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
     },
     "ssh_target": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Ssh Target",
+      "type": "string"
     },
     "remote_path": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Remote Path",
+      "type": "string"
     },
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
     },
     "cmd_sha": {
-      "type": "string",
-      "pattern": "^[0-9a-fA-F]{64}$"
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "title": "Cmd Sha",
+      "type": "string"
     },
     "total_tasks": {
-      "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "title": "Total Tasks",
+      "type": "integer"
     },
     "backend": {
-      "type": "string",
       "enum": [
         "sge_remote",
         "slurm"
-      ]
+      ],
+      "title": "Backend",
+      "type": "string"
     },
     "is_gpu": {
-      "type": "boolean"
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Is Gpu"
     },
     "job_name": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Job Name"
     },
     "script": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Script"
     },
     "modules": {
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Modules"
     },
     "conda_source": {
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conda Source"
     },
     "conda_env": {
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conda Env"
     },
     "runtime": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime"
     },
     "campaign_id": {
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Campaign Id"
     },
     "canary": {
-      "type": "boolean"
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Canary"
     },
     "partial_ok": {
-      "type": "boolean"
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Partial Ok"
     },
     "skip_preflight": {
-      "type": "boolean"
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Skip Preflight"
     },
     "pass_env_keys": {
-      "type": [
-        "array",
-        "null"
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "items": {
-        "type": "string"
-      }
+      "default": null,
+      "title": "Pass Env Keys"
     },
     "rsync_excludes": {
-      "type": [
-        "array",
-        "null"
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "items": {
-        "type": "string"
-      }
+      "default": null,
+      "title": "Rsync Excludes"
     },
     "slurm_account": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Slurm Account"
     },
     "slurm_cluster": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Slurm Cluster"
     },
     "extra_env": {
-      "type": [
-        "object",
-        "null"
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "additionalProperties": {
-        "type": "string"
-      }
+      "default": null,
+      "title": "Extra Env"
     }
   }
 }

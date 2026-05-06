@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/predict_queue_wait.output.json",
   "title": "predict-queue-wait output data",
-  "description": "Shape of the `data` field on a successful `predict-queue-wait` envelope. Mirrors `PredictionResult.to_dict()` from claude_hpc.forecast.queue_wait_baseline.",
+  "description": "Mirrors ``PredictionResult.to_dict()``.",
   "type": "object",
   "required": [
     "predicted_wait_sec",
@@ -20,37 +20,108 @@
   "additionalProperties": false,
   "properties": {
     "predicted_wait_sec": {
-      "type": ["integer", "null"],
-      "description": "Median (p50) predicted wait in seconds. null when the prediction is cold."
-    },
-    "confidence":         { "type": "string", "enum": ["high", "medium", "low", "cold"] },
-    "method": {
-      "type": "string",
-      "enum": [
-        "diurnal_ma", "blended_ma", "global_ma", "no_data",
-        "des", "des_no_snapshot", "des_no_profiles"
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "Which backend produced the prediction. 'des*' tags indicate the DES backend ran or attempted to run; 'diurnal_ma'/'blended_ma'/'global_ma' tag the v1 baseline tiers; 'no_data' is cold start."
+      "description": "Median (p50) predicted wait in seconds. null when the prediction is cold.",
+      "title": "Predicted Wait Sec"
     },
-    "n_bucket_samples":   { "type": "integer", "minimum": 0 },
-    "n_total_samples":    { "type": "integer", "minimum": 0 },
-    "bucket_hour_of_week": { "type": "integer", "minimum": -1, "maximum": 167 },
-    "fallback_reason":    { "type": ["string", "null"] },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        "cold"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "method": {
+      "description": "Which backend produced the prediction. 'des*' tags indicate the DES backend ran or attempted to run; 'diurnal_ma'/'blended_ma'/'global_ma' tag the v1 baseline tiers; 'no_data' is cold start.",
+      "enum": [
+        "diurnal_ma",
+        "blended_ma",
+        "global_ma",
+        "no_data",
+        "des",
+        "des_no_snapshot",
+        "des_no_profiles"
+      ],
+      "title": "Method",
+      "type": "string"
+    },
+    "n_bucket_samples": {
+      "minimum": 0,
+      "title": "N Bucket Samples",
+      "type": "integer"
+    },
+    "n_total_samples": {
+      "minimum": 0,
+      "title": "N Total Samples",
+      "type": "integer"
+    },
+    "bucket_hour_of_week": {
+      "maximum": 167,
+      "minimum": -1,
+      "title": "Bucket Hour Of Week",
+      "type": "integer"
+    },
+    "fallback_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Fallback Reason"
+    },
     "features_adjustment_factor": {
-      "type": "number",
-      "description": "Order-book adjustment factor (Phase 1c). 1.0 when no current_features were supplied or on the DES path."
+      "description": "Order-book adjustment factor (Phase 1c). 1.0 when no current_features were supplied or on the DES path.",
+      "title": "Features Adjustment Factor",
+      "type": "number"
     },
-    "p10_wait_sec":  {
-      "type": ["integer", "null"],
-      "description": "DES p10 quantile in seconds. null on the diurnal_ma path."
+    "p10_wait_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "DES p10 quantile in seconds. null on the diurnal_ma path.",
+      "title": "P10 Wait Sec"
     },
-    "p90_wait_sec":  {
-      "type": ["integer", "null"],
-      "description": "DES p90 quantile in seconds. null on the diurnal_ma path."
+    "p90_wait_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "DES p90 quantile in seconds. null on the diurnal_ma path.",
+      "title": "P90 Wait Sec"
     },
     "n_replications": {
-      "type": ["integer", "null"],
-      "description": "Number of DES passes executed. null on the diurnal_ma path."
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Number of DES passes executed. null on the diurnal_ma path.",
+      "title": "N Replications"
     }
   }
 }

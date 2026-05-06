@@ -1,0 +1,87 @@
+"""Pydantic model for the ``resubmit-failed`` mutator's input."""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ._shared import BackendName
+
+ResubmitCategory = Literal[
+    "gpu_oom",
+    "system_oom",
+    "segv",
+    "walltime",
+    "node_failure",
+    "queue_stall",
+    "code_bug",
+    "unknown",
+    "preempted",
+]
+
+
+class ResubmitSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid", title="resubmit input spec")
+
+    failed_task_ids: list[int] = Field(min_length=1)
+    category: ResubmitCategory = Field(
+        description="Must match claude_hpc.mapreduce.reduce.classify.CATEGORIES exactly.",
+    )
+    overrides: dict[str, Any] | None = Field(
+        default=None,
+        description="Resource overrides for retry (mem, walltime, gpus, ...).",
+    )
+    new_job_ids: list[str] | None = None
+    request_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional dedupe key. When omitted, claude-hpc derives a "
+            "deterministic id from (sorted failed_task_ids, category, "
+            "sorted overrides). A second resubmit with the same "
+            "request_id returns the existing record without "
+            "incrementing retry counters."
+        ),
+    )
+    consult_forecast: bool = Field(
+        default=True,
+        description=(
+            "When true (the default), claude-hpc consults the "
+            "queue-wait forecaster before resubmitting and attaches a "
+            "ResubmitRecommendation envelope to the response. "
+            "Advisory only — does not block the resubmit. Set to "
+            "false to skip the forecast call (e.g. tight CI loops)."
+        ),
+    )
+    forecast_within_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="Horizon (hours) for the resubmit-window advisor. Ignored unless consult_forecast is true.",
+    )
+    submit_to_cluster: bool = Field(
+        default=False,
+        description=(
+            "When true, claude-hpc composes resubmit_plan + "
+            "backend.submit_array to actually re-issue the failed "
+            "tasks. When false (legacy default), the operation is "
+            "journal-only. Requires script, backend, and job_name "
+            "to be set when true."
+        ),
+    )
+    script: str | None = Field(
+        default=None,
+        description="Path on the cluster to the submission script. Required when submit_to_cluster is true; ignored otherwise.",
+    )
+    backend: BackendName | None = Field(
+        default=None,
+        description="Scheduler backend kind. Required when submit_to_cluster is true; ignored otherwise.",
+    )
+    job_name: str | None = Field(
+        default=None,
+        description="Job name for the resubmitted batches. Required when submit_to_cluster is true; ignored otherwise.",
+    )
+    job_env: dict[str, str] | None = Field(
+        default=None,
+        description="Environment variables to forward to each resubmitted batch. Same shape submit-flow accepts. Ignored unless submit_to_cluster is true.",
+    )

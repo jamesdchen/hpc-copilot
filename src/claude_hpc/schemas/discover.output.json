@@ -3,33 +3,130 @@
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/discover.output.json",
   "title": "discover output data",
   "type": "object",
-  "required": ["executors"],
+  "required": [
+    "executors"
+  ],
   "additionalProperties": false,
   "properties": {
     "executors": {
-      "type": "array",
       "items": {
-        "type": "object",
-        "required": ["name", "path", "cli_framework", "has_main_guard"],
-        "additionalProperties": false,
-        "properties": {
-          "name":           { "type": "string" },
-          "path":           { "type": "string" },
-          "cli_framework":  { "type": ["string", "null"] },
-          "has_main_guard": { "type": "boolean" }
-        }
-      }
+        "$ref": "#/$defs/_ExecutorEntry"
+      },
+      "title": "Executors",
+      "type": "array"
     },
     "meta": {
-      "description": "MARs experiment context, extracted from meta.json. Present only when meta.json exists at the experiment-dir root.",
-      "type": "object",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_DiscoverMeta"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "MARs experiment context, extracted from meta.json. Present only when meta.json exists at the experiment-dir root."
+    }
+  },
+  "$defs": {
+    "_DiscoverMeta": {
       "additionalProperties": true,
+      "description": "MARs experiment context, extracted from meta.json.",
       "properties": {
-        "experiment_id": { "type": "string" },
-        "seed":          { "type": ["integer", "number"] },
-        "purpose":       { "type": "string" },
-        "tier":          { "type": ["integer", "null"], "enum": [1, 2, null] }
-      }
+        "experiment_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Experiment Id"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Purpose"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "enum": [
+                1,
+                2
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tier"
+        }
+      },
+      "title": "_DiscoverMeta",
+      "type": "object"
+    },
+    "_ExecutorEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "cli_framework": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cli Framework"
+        },
+        "has_main_guard": {
+          "title": "Has Main Guard",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "path",
+        "has_main_guard"
+      ],
+      "title": "_ExecutorEntry",
+      "type": "object"
     }
   }
 }

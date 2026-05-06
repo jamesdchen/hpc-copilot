@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/decide_monitor_arm.input.json",
   "title": "decide-monitor-arm input",
-  "description": "Run-state inputs to `claude_hpc.atoms.monitor_arm.decide_monitor_arm`. Drives the cron / loop / none arm decision + cadence + literal armed: line.",
+  "description": "Run-state inputs to ``claude_hpc.atoms.monitor_arm.decide_monitor_arm``.\n\nDrives the cron / loop / none arm decision + cadence + literal\narmed: line.",
   "type": "object",
   "required": [
     "run_id",
@@ -13,43 +13,77 @@
   "additionalProperties": false,
   "properties": {
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
     },
     "summary": {
-      "type": "object",
-      "description": "last_status['summary'] from the run journal \u2014 {complete, running, pending, failed} integer counters. Missing keys default to 0.",
       "additionalProperties": {
-        "type": "integer",
-        "minimum": 0
-      }
+        "type": "integer"
+      },
+      "description": "last_status['summary'] from the run journal — {complete, running, pending, failed} integer counters. Missing keys default to 0.",
+      "title": "Summary",
+      "type": "object"
     },
     "total_tasks": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "Total Tasks",
+      "type": "integer"
     },
     "invocation_argv": {
-      "type": "string",
-      "description": "Exact /monitor-hpc <args> string the next tick should re-invoke. Stamped into cron_create_args.prompt."
+      "description": "Exact /monitor-hpc <args> string the next tick should re-invoke. Stamped into cron_create_args.prompt.",
+      "title": "Invocation Argv",
+      "type": "string"
     },
     "user_invoked_via_loop": {
-      "type": "boolean"
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "User Invoked Via Loop"
     },
     "eta_sec": {
-      "type": [
-        "integer",
-        "null"
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "minimum": 0
+      "default": null,
+      "title": "Eta Sec"
     },
     "pace_unstable": {
-      "type": "boolean"
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pace Unstable"
     },
     "queue_wait_sec": {
-      "type": [
-        "integer",
-        "null"
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "minimum": 0
+      "default": null,
+      "title": "Queue Wait Sec"
     }
   }
 }

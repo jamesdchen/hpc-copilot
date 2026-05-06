@@ -2,36 +2,146 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/runtime_prior.output.json",
   "title": "runtime-prior output data",
-  "description": "Shape of the `data` field on a successful `runtime-prior --profile <p> --cluster <c>` envelope.",
+  "description": "Shape of the ``data`` field on a successful ``runtime-prior`` envelope.",
   "type": "object",
-  "required": ["profile", "cluster", "now_iso", "needs_canary", "quantiles", "total_samples"],
+  "required": [
+    "profile",
+    "cluster",
+    "now_iso",
+    "needs_canary",
+    "quantiles",
+    "total_samples"
+  ],
   "additionalProperties": false,
   "properties": {
-    "profile":              { "type": "string" },
-    "cluster":              { "type": "string" },
-    "now_iso":              { "type": "string" },
-    "needs_canary":         {
-      "type": "boolean",
-      "description": "True when no samples exist for this (profile, cluster) pair. Caller should submit a 1-task canary, ingest its result via runtime_prior.append_sample, then re-call."
+    "profile": {
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "title": "Cluster",
+      "type": "string"
+    },
+    "now_iso": {
+      "title": "Now Iso",
+      "type": "string"
+    },
+    "needs_canary": {
+      "description": "True when no samples exist for this (profile, cluster) pair. Caller should submit a 1-task canary, ingest its result via runtime_prior.append_sample, then re-call.",
+      "title": "Needs Canary",
+      "type": "boolean"
     },
     "quantiles": {
-      "type": "object",
-      "description": "Per-gpu_type runtime quantile rollup. Empty dict when needs_canary is true.",
       "additionalProperties": {
-        "type": "object",
-        "required": ["p50", "p95", "n_samples"],
-        "properties": {
-          "p50":         { "type": "number", "minimum": 0 },
-          "p95":         { "type": "number", "minimum": 0 },
-          "p99":         { "type": "number", "minimum": 0 },
-          "mean_sec":    { "type": "number", "minimum": 0 },
-          "n_samples":   { "type": "integer", "minimum": 0 },
-          "min_sec":     { "type": "number", "minimum": 0 },
-          "max_sec":     { "type": "number", "minimum": 0 }
-        }
-      }
+        "$ref": "#/$defs/_RuntimeQuantiles"
+      },
+      "description": "Per-gpu_type runtime quantile rollup. Empty dict when needs_canary is true.",
+      "title": "Quantiles",
+      "type": "object"
     },
-    "total_samples":        { "type": "integer", "minimum": 0 },
-    "filtered_by_cmd_sha":  { "type": ["string", "null"] }
+    "total_samples": {
+      "minimum": 0,
+      "title": "Total Samples",
+      "type": "integer"
+    },
+    "filtered_by_cmd_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Filtered By Cmd Sha"
+    }
+  },
+  "$defs": {
+    "_RuntimeQuantiles": {
+      "properties": {
+        "p50": {
+          "minimum": 0,
+          "title": "P50",
+          "type": "number"
+        },
+        "p95": {
+          "minimum": 0,
+          "title": "P95",
+          "type": "number"
+        },
+        "p99": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P99"
+        },
+        "mean_sec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Sec"
+        },
+        "n_samples": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "N Samples"
+        },
+        "min_sec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Sec"
+        },
+        "max_sec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Sec"
+        }
+      },
+      "required": [
+        "p50",
+        "p95"
+      ],
+      "title": "_RuntimeQuantiles",
+      "type": "object"
+    }
   }
 }

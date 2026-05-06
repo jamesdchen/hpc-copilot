@@ -3,58 +3,156 @@
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/resubmit.input.json",
   "title": "resubmit input spec",
   "type": "object",
-  "required": ["failed_task_ids", "category"],
+  "required": [
+    "failed_task_ids",
+    "category"
+  ],
   "additionalProperties": false,
   "properties": {
-    "failed_task_ids": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 1 },
+    "failed_task_ids": {
+      "items": {
+        "type": "integer"
+      },
+      "minItems": 1,
+      "title": "Failed Task Ids",
+      "type": "array"
+    },
     "category": {
-      "type": "string",
       "description": "Must match claude_hpc.mapreduce.reduce.classify.CATEGORIES exactly.",
       "enum": [
-        "gpu_oom", "system_oom", "segv", "walltime", "node_failure",
-        "queue_stall", "code_bug", "unknown", "preempted"
-      ]
+        "gpu_oom",
+        "system_oom",
+        "segv",
+        "walltime",
+        "node_failure",
+        "queue_stall",
+        "code_bug",
+        "unknown",
+        "preempted"
+      ],
+      "title": "Category",
+      "type": "string"
     },
-    "overrides":   { "type": "object", "description": "Resource overrides for retry (mem, walltime, gpus, ...)." },
-    "new_job_ids": { "type": ["array", "null"], "items": { "type": "string" } },
+    "overrides": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Resource overrides for retry (mem, walltime, gpus, ...).",
+      "title": "Overrides"
+    },
+    "new_job_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "New Job Ids"
+    },
     "request_id": {
-      "type": ["string", "null"],
-      "description": "Optional dedupe key. When omitted, claude-hpc derives a deterministic id from (sorted failed_task_ids, category, sorted overrides). A second resubmit with the same request_id returns the existing record without incrementing retry counters."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional dedupe key. When omitted, claude-hpc derives a deterministic id from (sorted failed_task_ids, category, sorted overrides). A second resubmit with the same request_id returns the existing record without incrementing retry counters.",
+      "title": "Request Id"
     },
     "consult_forecast": {
-      "type": "boolean",
       "default": true,
-      "description": "When true (the default), claude-hpc consults the queue-wait forecaster before resubmitting and attaches a ResubmitRecommendation envelope to the response. Advisory only — does not block the resubmit. Set to false to skip the forecast call (e.g. tight CI loops)."
+      "description": "When true (the default), claude-hpc consults the queue-wait forecaster before resubmitting and attaches a ResubmitRecommendation envelope to the response. Advisory only — does not block the resubmit. Set to false to skip the forecast call (e.g. tight CI loops).",
+      "title": "Consult Forecast",
+      "type": "boolean"
     },
     "forecast_within_hours": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 168,
       "default": 24,
-      "description": "Horizon (hours) for the resubmit-window advisor. Ignored unless consult_forecast is true."
+      "description": "Horizon (hours) for the resubmit-window advisor. Ignored unless consult_forecast is true.",
+      "maximum": 168,
+      "minimum": 1,
+      "title": "Forecast Within Hours",
+      "type": "integer"
     },
     "submit_to_cluster": {
-      "type": "boolean",
       "default": false,
-      "description": "When true, claude-hpc composes resubmit_plan + backend.submit_array to actually re-issue the failed tasks to the scheduler with the planner-adjusted overrides applied as extra_flags. When false (the legacy default), the operation is journal-only and the caller is responsible for the qsub. Requires script, backend, and job_name to be set when true."
+      "description": "When true, claude-hpc composes resubmit_plan + backend.submit_array to actually re-issue the failed tasks. When false (legacy default), the operation is journal-only. Requires script, backend, and job_name to be set when true.",
+      "title": "Submit To Cluster",
+      "type": "boolean"
     },
     "script": {
-      "type": "string",
-      "description": "Path on the cluster to the submission script (#SBATCH/#$ template). Required when submit_to_cluster is true; ignored otherwise."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path on the cluster to the submission script. Required when submit_to_cluster is true; ignored otherwise.",
+      "title": "Script"
     },
     "backend": {
-      "type": "string",
-      "enum": ["slurm", "sge_remote"],
-      "description": "Scheduler backend kind. Required when submit_to_cluster is true; ignored otherwise."
+      "anyOf": [
+        {
+          "enum": [
+            "sge_remote",
+            "slurm"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Scheduler backend kind. Required when submit_to_cluster is true; ignored otherwise.",
+      "title": "Backend"
     },
     "job_name": {
-      "type": "string",
-      "description": "Job name for the resubmitted batches. Required when submit_to_cluster is true; ignored otherwise."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Job name for the resubmitted batches. Required when submit_to_cluster is true; ignored otherwise.",
+      "title": "Job Name"
     },
     "job_env": {
-      "type": "object",
-      "additionalProperties": { "type": "string" },
-      "description": "Environment variables to forward to each resubmitted batch. Same shape submit-flow accepts. Ignored unless submit_to_cluster is true."
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Environment variables to forward to each resubmitted batch. Same shape submit-flow accepts. Ignored unless submit_to_cluster is true.",
+      "title": "Job Env"
     }
   }
 }

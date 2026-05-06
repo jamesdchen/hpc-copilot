@@ -2,43 +2,98 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/build_tasks_py.input.json",
   "title": "build-tasks-py input",
-  "description": "Cartesian-product axes spec + per-executor flag declarations. Drives `claude_hpc.atoms.build_tasks_py` to scaffold <experiment>/.hpc/tasks.py.",
+  "description": "Cartesian-product axes spec + per-executor flag declarations.\n\nDrives ``claude_hpc.atoms.build_tasks_py`` to scaffold\n``<experiment>/.hpc/tasks.py``.",
   "type": "object",
-  "required": ["axes", "flags_by_executor"],
+  "required": [
+    "axes",
+    "flags_by_executor"
+  ],
   "additionalProperties": false,
   "properties": {
     "axes": {
-      "type": "array",
-      "minItems": 1,
       "items": {
-        "type": "object",
-        "required": ["name", "values"],
-        "additionalProperties": false,
-        "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "values": { "type": "array", "minItems": 1 }
-        }
-      }
+        "$ref": "#/$defs/_AxisSpec"
+      },
+      "minItems": 1,
+      "title": "Axes",
+      "type": "array"
     },
     "flags_by_executor": {
-      "type": "object",
-      "minProperties": 1,
       "additionalProperties": {
-        "type": "array",
         "items": {
-          "type": "object",
-          "required": ["name", "type"],
-          "properties": {
-            "name": { "type": "string", "minLength": 1 },
-            "type": {
-              "type": "string",
-              "description": "Type token: int|float|str|bool, or any string the generated `flag(...)` call accepts as the type ctor."
-            },
-            "default": {}
-          }
-        }
-      }
+          "$ref": "#/$defs/_FlagSpec"
+        },
+        "type": "array"
+      },
+      "minProperties": 1,
+      "title": "Flags By Executor",
+      "type": "object"
     },
-    "force": { "type": "boolean" }
+    "force": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Force"
+    }
+  },
+  "$defs": {
+    "_AxisSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "values": {
+          "items": {},
+          "minItems": 1,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "values"
+      ],
+      "title": "_AxisSpec",
+      "type": "object"
+    },
+    "_FlagSpec": {
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "description": "Type token: int|float|str|bool, or any string the generated `flag(...)` call accepts as the type ctor.",
+          "title": "Type",
+          "type": "string"
+        },
+        "default": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "title": "_FlagSpec",
+      "type": "object"
+    }
   }
 }

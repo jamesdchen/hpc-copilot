@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/validate.input.json",
   "title": "validate input spec",
-  "description": "Kwargs contract for the Python primitive ``claude_hpc.planning.validate.validate_submission``. Probes the scheduler's --test-only mode for the resource ask and returns the predicted submission timing. No submit side effect. Not yet exposed as a CLI subcommand; consumers call the function directly. When the CLI subcommand lands, this schema will become the wire contract for ``--spec``.",
+  "description": "Kwargs contract for ``claude_hpc.planning.validate.validate_submission``.\n\nProbes the scheduler's --test-only mode for the resource ask and\nreturns the predicted submission timing. No submit side effect.\nNot yet exposed as a CLI subcommand; consumers call the function\ndirectly. When the CLI subcommand lands, this schema will become\nthe wire contract for ``--spec``.",
   "type": "object",
   "required": [
     "profile",
@@ -14,42 +14,55 @@
   "additionalProperties": false,
   "properties": {
     "profile": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
     },
     "cluster": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
     },
     "walltime_sec": {
-      "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "title": "Walltime Sec",
+      "type": "integer"
     },
     "mem_mb": {
-      "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "title": "Mem Mb",
+      "type": "integer"
     },
     "cpus": {
-      "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "title": "Cpus",
+      "type": "integer"
     },
     "constraint": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "GPU type or feature constraint passed to --constraint. Null or '<cpu-only>' selects the CPU-only branch."
+      "default": null,
+      "description": "GPU type or feature constraint passed to --constraint. Null or '<cpu-only>' selects the CPU-only branch.",
+      "title": "Constraint"
     },
     "gpus": {
-      "type": "integer",
+      "default": 0,
       "minimum": 0,
-      "default": 0
+      "title": "Gpus",
+      "type": "integer"
     },
     "backfill_window_sec": {
-      "type": "integer",
-      "minimum": 1,
       "default": 600,
-      "description": "ETA threshold for the fits_backfill flag."
+      "description": "ETA threshold for the fits_backfill flag.",
+      "minimum": 1,
+      "title": "Backfill Window Sec",
+      "type": "integer"
     }
   }
 }

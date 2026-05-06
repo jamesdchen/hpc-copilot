@@ -2,23 +2,57 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/preflight.output.json",
   "title": "preflight output data",
+  "description": "Shape of the ``data`` field on a successful ``preflight`` envelope.",
   "type": "object",
-  "required": ["all_ok", "checks"],
+  "required": [
+    "all_ok",
+    "checks"
+  ],
   "additionalProperties": false,
   "properties": {
-    "all_ok": { "type": "boolean" },
+    "all_ok": {
+      "title": "All Ok",
+      "type": "boolean"
+    },
     "checks": {
-      "type": "array",
       "items": {
-        "type": "object",
-        "required": ["name", "ok"],
-        "additionalProperties": false,
-        "properties": {
-          "name":   { "type": "string" },
-          "ok":     { "type": "boolean" },
-          "detail": { "type": "string" }
+        "$ref": "#/$defs/_PreflightCheck"
+      },
+      "title": "Checks",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "_PreflightCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "detail": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Detail"
         }
-      }
+      },
+      "required": [
+        "name",
+        "ok"
+      ],
+      "title": "_PreflightCheck",
+      "type": "object"
     }
   }
 }

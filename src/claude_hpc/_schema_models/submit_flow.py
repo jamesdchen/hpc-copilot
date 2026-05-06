@@ -10,11 +10,9 @@ follow-up to this canary.
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import CampaignId, RunIdStrict, SshTarget
+from ._shared import BackendName, CampaignId, RunIdLoose, RunIdStrict, Runtime, SshTarget
 
 
 class SubmitFlowSpec(BaseModel):
@@ -42,7 +40,7 @@ class SubmitFlowSpec(BaseModel):
     job_name: str = Field(min_length=1)
     run_id: RunIdStrict
     total_tasks: int = Field(ge=1)
-    backend: str = Field(pattern="^(sge_remote|slurm)$")
+    backend: BackendName
     script: str = Field(
         description=(
             "Path to the job script ON THE CLUSTER (e.g. .hpc/templates/"
@@ -104,7 +102,7 @@ class SubmitFlowSpec(BaseModel):
         ),
     )
     campaign_id: CampaignId | None = Field(default=None)
-    runtime: str | None = Field(default=None, pattern="^uv$")
+    runtime: Runtime | None = Field(default=None)
     rsync_excludes: list[str] | None = Field(
         default=None,
         description="Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
@@ -141,7 +139,7 @@ class SubmitFlowResult(BaseModel):
 
     # Output uses the loose run_id form (any string) so legacy
     # sidecars validate. Mirrors envelope.json#/$defs/run_id.
-    run_id: str
+    run_id: RunIdLoose
     job_ids: list[str] = Field(min_length=1)
     total_tasks: int = Field(ge=1)
     deduped: bool = Field(

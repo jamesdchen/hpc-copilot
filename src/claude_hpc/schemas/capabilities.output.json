@@ -4,61 +4,239 @@
   "title": "capabilities output data",
   "type": "object",
   "required": [
-    "version", "subcommands", "supported_schedulers",
-    "schemas_dir", "journal_dir", "ssh_multiplexing",
-    "mars_skill_paths", "required_env"
+    "version",
+    "subcommands",
+    "supported_schedulers",
+    "schemas_dir",
+    "journal_dir",
+    "ssh_multiplexing",
+    "mars_skill_paths",
+    "required_env"
   ],
   "additionalProperties": false,
   "properties": {
-    "version":             { "type": "string" },
-    "subcommands":         { "type": "array", "items": { "type": "string" } },
-    "supported_schedulers":{ "type": "array", "items": { "type": "string", "enum": ["sge", "slurm"] } },
-    "schemas_dir":         { "type": "string" },
-    "journal_dir":         { "type": "string" },
-    "ssh_multiplexing":    { "type": "boolean" },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "subcommands": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Subcommands",
+      "type": "array"
+    },
+    "supported_schedulers": {
+      "items": {
+        "enum": [
+          "sge",
+          "slurm"
+        ],
+        "type": "string"
+      },
+      "title": "Supported Schedulers",
+      "type": "array"
+    },
+    "schemas_dir": {
+      "title": "Schemas Dir",
+      "type": "string"
+    },
+    "journal_dir": {
+      "title": "Journal Dir",
+      "type": "string"
+    },
+    "ssh_multiplexing": {
+      "title": "Ssh Multiplexing",
+      "type": "boolean"
+    },
     "mars_skill_paths": {
-      "type": "object",
-      "additionalProperties": { "type": "string" }
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Mars Skill Paths",
+      "type": "object"
     },
     "required_env": {
-      "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Env",
+      "type": "array"
     },
     "cluster_yaml_keys": {
-      "type": "array",
-      "description": "Declarative manifest of per-cluster fields recognized in clusters.yaml. Lets a campus user discover the schema by inspection without reading claude_hpc/infra/clusters.py source. Each item describes one validated field.",
-      "items": {
-        "type": "object",
-        "required": ["key", "type", "required", "description"],
-        "additionalProperties": true,
-        "properties": {
-          "key":         { "type": "string" },
-          "type":        { "type": "string" },
-          "required":    { "type": "boolean" },
-          "default":     {},
-          "description": { "type": "string" }
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_ClusterYamlKey"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
         }
-      }
+      ],
+      "default": null,
+      "description": "Declarative manifest of per-cluster fields recognized in clusters.yaml. Lets a campus user discover the schema by inspection without reading claude_hpc/infra/clusters.py source. Each item describes one validated field.",
+      "title": "Cluster Yaml Keys"
     },
     "operations": {
-      "type": "array",
-      "description": "Per-operation catalog. The CLI subcommands listed in `subcommands` are the invocable surface; this `operations` block carries machine-readable metadata about each one (verb tier, idempotency, side-effect class, schema files). Source-tree installs read from docs/primitives/ frontmatter; future wheel installs will read a baked operations.json shipped in the package.",
-      "items": {
-        "type": "object",
-        "required": ["name", "verb", "idempotent", "side_effects"],
-        "additionalProperties": false,
-        "properties": {
-          "name":          { "type": "string" },
-          "verb":          { "type": "string", "enum": ["query", "validate", "mutate", "submit", "scaffold", "workflow"] },
-          "idempotent":    { "type": "boolean" },
-          "side_effects":  { "type": "array", "items": { "type": "string" } },
-          "cli":           { "type": ["string", "null"] },
-          "python":        { "type": ["string", "null"] },
-          "input_schema":  { "type": ["string", "null"] },
-          "output_schema": { "type": ["string", "null"] },
-          "agent_facing":  { "type": "boolean", "description": "Whether the LLM/agent calls this primitive directly. Workflows, scaffolds, validators, and atoms slash-commands or skills link to are true; framework internals composed inside workflows (e.g. poll-run-status inside monitor-flow) are false. Consumers (e.g. render_llms_full) tier their output by this flag so the agent context budget only pays for primitives the agent calls directly." }
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_OperationCatalogEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
         }
-      }
+      ],
+      "default": null,
+      "description": "Per-operation catalog. The CLI subcommands listed in `subcommands` are the invocable surface; this `operations` block carries machine-readable metadata about each one (verb tier, idempotency, side-effect class, schema files). Source-tree installs read from docs/primitives/ frontmatter; future wheel installs will read a baked operations.json shipped in the package.",
+      "title": "Operations"
+    }
+  },
+  "$defs": {
+    "_ClusterYamlKey": {
+      "additionalProperties": true,
+      "description": "One declared field in clusters.yaml. Loose shape — extra info allowed.",
+      "properties": {
+        "key": {
+          "title": "Key",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "required": {
+          "title": "Required",
+          "type": "boolean"
+        },
+        "description": {
+          "title": "Description",
+          "type": "string"
+        },
+        "default": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "key",
+        "type",
+        "required",
+        "description"
+      ],
+      "title": "_ClusterYamlKey",
+      "type": "object"
+    },
+    "_OperationCatalogEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "verb": {
+          "enum": [
+            "query",
+            "validate",
+            "mutate",
+            "submit",
+            "scaffold",
+            "workflow"
+          ],
+          "title": "Verb",
+          "type": "string"
+        },
+        "idempotent": {
+          "title": "Idempotent",
+          "type": "boolean"
+        },
+        "side_effects": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Side Effects",
+          "type": "array"
+        },
+        "cli": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cli"
+        },
+        "python": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Python"
+        },
+        "input_schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Schema"
+        },
+        "output_schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Schema"
+        },
+        "agent_facing": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the LLM/agent calls this primitive directly. Workflows, scaffolds, validators, and atoms slash-commands or skills link to are true; framework internals composed inside workflows (e.g. poll-run-status inside monitor-flow) are false. Consumers (e.g. render_llms_full) tier their output by this flag so the agent context budget only pays for primitives the agent calls directly.",
+          "title": "Agent Facing"
+        }
+      },
+      "required": [
+        "name",
+        "verb",
+        "idempotent",
+        "side_effects"
+      ],
+      "title": "_OperationCatalogEntry",
+      "type": "object"
     }
   }
 }

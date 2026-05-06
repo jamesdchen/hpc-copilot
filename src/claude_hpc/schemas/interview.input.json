@@ -2,203 +2,549 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/interview.input.json",
   "title": "interview intent",
-  "description": "Structured campaign intent produced by an interview between the hpc agent and either MARs or a human. Deliberately bare-bones: the schema captures *why* a campaign was created (goal, transcript, provenance), *how big* it is (task_count), *what tags* identify it for future recall (task_kind), and *what limits* apply (budget, abort_if). It does NOT typed-encode the search space — that would narrow the existing experiment-agnostic tasks.py contract (total() + resolve(i) -> dict[str, Any]; the dict shape is enforced by compute_cmd_sha because kwargs get **-unpacked into the user's task function). The interview agent is responsible for writing the tasks.py itself; this primitive validates that the produced tasks.py matches the recorded intent (task_count cross-check, cmd_sha fingerprint) and persists the intent alongside it. The reserved `task_generator` field is a placeholder for an optional future opt-in: when present, a typed materializer regenerates tasks.py from the recipe; when absent, the interview agent's hand-written tasks.py is the source of truth.",
+  "description": "Structured campaign intent produced by an interview between the hpc agent and either MARs or a human.\n\nDeliberately bare-bones: captures *why* (goal, transcript,\nprovenance), *how big* (task_count), *what tags* (task_kind),\nand *what limits* (budget, abort_if). Does NOT typed-encode the\nsearch space — that would narrow the existing\nexperiment-agnostic tasks.py contract.",
   "type": "object",
-  "required": ["goal", "task_count", "produced_by"],
+  "required": [
+    "goal",
+    "task_count",
+    "produced_by"
+  ],
   "additionalProperties": false,
   "properties": {
     "goal": {
-      "type": "string",
+      "description": "Free-text campaign goal, ~one sentence.",
       "minLength": 1,
-      "description": "Free-text campaign goal, ~one sentence. Captures intent that structured fields can't ('find LR for vit-b on imagenet-1k @ 8 GPUs', 'eval opus-4.7 vs sonnet-4.6 on MMLU-pro', 'rollout PPO on cartpole over 10 seeds')."
+      "title": "Goal",
+      "type": "string"
     },
     "task_count": {
-      "type": "integer",
+      "description": "Expected number of tasks. The materializer asserts tasks.total() == task_count and refuses to write interview.json on mismatch — catches off-by-one bugs in the agent-written tasks.py at the interview stage.",
       "minimum": 1,
-      "description": "Expected number of tasks. The materializer asserts tasks.total() == task_count and refuses to write interview.json on mismatch — catches off-by-one bugs in the agent-written tasks.py at the interview stage."
+      "title": "Task Count",
+      "type": "integer"
     },
     "task_kind": {
-      "type": "string",
-      "description": "Free-text tag identifying the campaign family for recall queries ('ml-hparam-sweep', 'rl-rollout', 'llm-prompt-eval', 'benchmark-perf', 'data-shard'). No enum — new families are encouraged. cmd_recall groups by this tag."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Free-text tag identifying the campaign family for recall queries ('ml-hparam-sweep', 'rl-rollout', 'llm-prompt-eval', 'benchmark-perf', 'data-shard'). No enum — new families are encouraged. cmd_recall groups by this tag.",
+      "title": "Task Kind"
     },
     "budget": {
-      "type": "object",
-      "description": "Soft caps. Opaque dict — the interview agent picks the units that match the campaign (gpu_hours for ML, cpu_hours for HPC, task_count for cheap evals, credits for hosted-model spend). campaign-flow surfaces these in its progress envelope; it does not enforce them by killing jobs.",
-      "properties": {
-        "wall_clock_max_h": { "type": "number", "exclusiveMinimum": 0 }
-      },
-      "additionalProperties": true
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_BudgetSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Soft caps. Opaque dict — units chosen by interview agent."
     },
     "abort_if": {
-      "type": "object",
-      "description": "Optional early-stop criterion. Loose shape — the only required field is `metric` (the key the aggregator emits) and `after_tasks` (how many tasks must complete before the check is meaningful). campaign-flow consumes this; interview just records it.",
-      "required": ["metric", "after_tasks"],
-      "additionalProperties": true,
-      "properties": {
-        "metric":      { "type": "string", "minLength": 1 },
-        "after_tasks": { "type": "integer", "minimum": 1 }
-      }
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_AbortIfSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional early-stop criterion. Loose shape."
     },
     "cluster_target": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["cluster", "profile"],
-      "properties": {
-        "cluster":  { "type": "string", "minLength": 1 },
-        "profile":  { "type": "string", "minLength": 1 },
-        "constraint": { "type": ["string", "null"] }
-      },
-      "description": "Optional. When present, submit_flow uses these directly and meta.json is updated to match. When omitted, the planner is invoked to choose."
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_ClusterTargetSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional. When present, submit_flow uses these directly. When omitted, the planner is invoked."
     },
     "produced_by": {
-      "$ref": "#/$defs/provenance",
-      "description": "Who/what produced this intent. Indexed by cmd_recall so future interviews can surface 'last time you ran this kind of campaign…' summaries."
+      "$ref": "#/$defs/_Provenance",
+      "description": "Who/what produced this intent. Indexed by cmd_recall."
     },
     "transcript": {
-      "type": "array",
-      "description": "Interview Q/A turns. Optional but strongly recommended for human interviews — the value of being able to explain 'why did this campaign target cluster X with this LR range' three months later vastly outweighs the few KB of storage. For MARs interviews this is typically the agent's tool-call trace.",
-      "items": {
-        "type": "object",
-        "required": ["role", "text"],
-        "additionalProperties": false,
-        "properties": {
-          "role": { "type": "string", "enum": ["agent", "operator", "system"] },
-          "text": { "type": "string" },
-          "at":   { "type": "string", "format": "date-time" }
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/_TranscriptTurn"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
         }
-      }
+      ],
+      "default": null,
+      "description": "Interview Q/A turns. Optional but strongly recommended for human interviews — the value of being able to explain 'why did this campaign target cluster X' three months later vastly outweighs the few KB of storage. For MARs interviews this is typically the agent's tool-call trace.",
+      "title": "Transcript"
     },
     "notes": {
-      "type": "string",
-      "description": "Free-form supplementary notes from the interview (caveats, deferred decisions, things the operator said 'maybe' about). Distinct from `transcript` in that notes are the agent's summary, not the literal turns."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Free-form supplementary notes from the interview.",
+      "title": "Notes"
     },
     "task_generator": {
-      "description": "Optional opt-in: when present, the materializer regenerates tasks.py from a typed recipe instead of consuming the agent-written one. The five shapes below cover the common ground without locking out exotic campaigns — anything that doesn't fit drops `task_generator` from intent and the interview agent writes tasks.py by hand. The materializer cross-checks the produced task count against `intent.task_count` before any disk writes, so an off-by-one in the recipe surfaces as spec_invalid rather than as a clobbered tasks.py.",
-      "oneOf": [
+      "anyOf": [
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "params"],
-          "properties": {
-            "kind": { "const": "enumerated" },
-            "params": {
-              "type": "object",
-              "required": ["items"],
-              "additionalProperties": false,
-              "properties": {
-                "items": {
-                  "type": "array",
-                  "minItems": 1,
-                  "items": { "type": "object" },
-                  "description": "List of task-kwargs dicts. Most agnostic shape — just stores the list verbatim and resolve(i) returns items[i]."
-                }
-              }
+          "discriminator": {
+            "mapping": {
+              "cartesian_product": "#/$defs/_CartesianProduct",
+              "enumerated": "#/$defs/_Enumerated",
+              "items_x_seeds": "#/$defs/_ItemsXSeeds",
+              "numeric_linspace": "#/$defs/_NumericLinspace",
+              "numeric_logspace": "#/$defs/_NumericLogspace"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/_Enumerated"
+            },
+            {
+              "$ref": "#/$defs/_CartesianProduct"
+            },
+            {
+              "$ref": "#/$defs/_ItemsXSeeds"
+            },
+            {
+              "$ref": "#/$defs/_NumericLogspace"
+            },
+            {
+              "$ref": "#/$defs/_NumericLinspace"
             }
-          }
+          ]
         },
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "params"],
-          "properties": {
-            "kind": { "const": "cartesian_product" },
-            "params": {
-              "type": "object",
-              "required": ["axes"],
-              "additionalProperties": false,
-              "properties": {
-                "axes": {
-                  "type": "object",
-                  "minProperties": 1,
-                  "additionalProperties": {
-                    "type": "array",
-                    "minItems": 1
-                  },
-                  "description": "Named axes; tasks = full Cartesian product. resolve(i) returns a dict with one key per axis."
-                }
-              }
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "params"],
-          "properties": {
-            "kind": { "const": "items_x_seeds" },
-            "params": {
-              "type": "object",
-              "required": ["items", "seeds"],
-              "additionalProperties": false,
-              "properties": {
-                "items": {
-                  "type": "array",
-                  "minItems": 1,
-                  "items": { "type": "object" }
-                },
-                "seeds": {
-                  "type": "array",
-                  "minItems": 1,
-                  "items": { "type": "integer" }
-                }
-              },
-              "description": "Cross every item with every seed. resolve(i) returns {**items[i // len(seeds)], 'seed': seeds[i % len(seeds)]}. The 'seed' key in items is overwritten."
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "params"],
-          "properties": {
-            "kind": { "const": "numeric_logspace" },
-            "params": {
-              "type": "object",
-              "required": ["param", "low", "high", "n"],
-              "additionalProperties": false,
-              "properties": {
-                "param": { "type": "string", "minLength": 1 },
-                "low":   { "type": "number", "exclusiveMinimum": 0 },
-                "high":  { "type": "number", "exclusiveMinimum": 0 },
-                "n":     { "type": "integer", "minimum": 2 },
-                "base":  { "type": "number", "exclusiveMinimum": 1, "default": 10 }
-              }
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "params"],
-          "properties": {
-            "kind": { "const": "numeric_linspace" },
-            "params": {
-              "type": "object",
-              "required": ["param", "low", "high", "n"],
-              "additionalProperties": false,
-              "properties": {
-                "param": { "type": "string", "minLength": 1 },
-                "low":   { "type": "number" },
-                "high":  { "type": "number" },
-                "n":     { "type": "integer", "minimum": 2 }
-              }
-            }
-          }
+          "type": "null"
         }
-      ]
+      ],
+      "default": null,
+      "description": "Optional opt-in: when present, the materializer regenerates tasks.py from a typed recipe instead of consuming the agent-written one. The five shapes cover common ground without locking out exotic campaigns. Materializer cross-checks the produced task count against intent.task_count before any disk writes.",
+      "title": "Task Generator"
     }
   },
   "$defs": {
-    "provenance": {
-      "type": "object",
-      "required": ["kind"],
+    "_AbortIfSpec": {
+      "additionalProperties": true,
+      "properties": {
+        "metric": {
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "after_tasks": {
+          "minimum": 1,
+          "title": "After Tasks",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "metric",
+        "after_tasks"
+      ],
+      "title": "_AbortIfSpec",
+      "type": "object"
+    },
+    "_BudgetSpec": {
+      "additionalProperties": true,
+      "properties": {
+        "wall_clock_max_h": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wall Clock Max H"
+        }
+      },
+      "title": "_BudgetSpec",
+      "type": "object"
+    },
+    "_CartesianProduct": {
       "additionalProperties": false,
       "properties": {
-        "kind":         { "type": "string", "enum": ["mars", "human"] },
-        "session_sha":  { "type": ["string", "null"], "description": "MARs session identifier. Required when kind=mars; null otherwise." },
-        "at":           { "type": "string", "format": "date-time" },
-        "operator":     { "type": ["string", "null"], "description": "Human operator name/handle when kind=human; null for MARs." }
-      }
+        "kind": {
+          "const": "cartesian_product",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_CartesianProductParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_CartesianProduct",
+      "type": "object"
+    },
+    "_CartesianProductParams": {
+      "additionalProperties": false,
+      "properties": {
+        "axes": {
+          "additionalProperties": {
+            "items": {},
+            "type": "array"
+          },
+          "description": "Named axes; tasks = full Cartesian product. resolve(i) returns a dict with one key per axis.",
+          "minProperties": 1,
+          "title": "Axes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "axes"
+      ],
+      "title": "_CartesianProductParams",
+      "type": "object"
+    },
+    "_ClusterTargetSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "cluster": {
+          "minLength": 1,
+          "title": "Cluster",
+          "type": "string"
+        },
+        "profile": {
+          "minLength": 1,
+          "title": "Profile",
+          "type": "string"
+        },
+        "constraint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Constraint"
+        }
+      },
+      "required": [
+        "cluster",
+        "profile"
+      ],
+      "title": "_ClusterTargetSpec",
+      "type": "object"
+    },
+    "_Enumerated": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "enumerated",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_EnumeratedParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_Enumerated",
+      "type": "object"
+    },
+    "_EnumeratedParams": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "description": "List of task-kwargs dicts. Most agnostic shape — just stores the list verbatim and resolve(i) returns items[i].",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "title": "_EnumeratedParams",
+      "type": "object"
+    },
+    "_ItemsXSeeds": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "items_x_seeds",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_ItemsXSeedsParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_ItemsXSeeds",
+      "type": "object"
+    },
+    "_ItemsXSeedsParams": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "seeds": {
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 1,
+          "title": "Seeds",
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "seeds"
+      ],
+      "title": "_ItemsXSeedsParams",
+      "type": "object"
+    },
+    "_NumericLinspace": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "numeric_linspace",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_NumericLinspaceParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_NumericLinspace",
+      "type": "object"
+    },
+    "_NumericLinspaceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "param": {
+          "minLength": 1,
+          "title": "Param",
+          "type": "string"
+        },
+        "low": {
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "title": "High",
+          "type": "number"
+        },
+        "n": {
+          "minimum": 2,
+          "title": "N",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "param",
+        "low",
+        "high",
+        "n"
+      ],
+      "title": "_NumericLinspaceParams",
+      "type": "object"
+    },
+    "_NumericLogspace": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "numeric_logspace",
+          "title": "Kind",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/$defs/_NumericLogspaceParams"
+        }
+      },
+      "required": [
+        "kind",
+        "params"
+      ],
+      "title": "_NumericLogspace",
+      "type": "object"
+    },
+    "_NumericLogspaceParams": {
+      "additionalProperties": false,
+      "properties": {
+        "param": {
+          "minLength": 1,
+          "title": "Param",
+          "type": "string"
+        },
+        "low": {
+          "exclusiveMinimum": 0,
+          "title": "Low",
+          "type": "number"
+        },
+        "high": {
+          "exclusiveMinimum": 0,
+          "title": "High",
+          "type": "number"
+        },
+        "n": {
+          "minimum": 2,
+          "title": "N",
+          "type": "integer"
+        },
+        "base": {
+          "default": 10,
+          "exclusiveMinimum": 1,
+          "title": "Base",
+          "type": "number"
+        }
+      },
+      "required": [
+        "param",
+        "low",
+        "high",
+        "n"
+      ],
+      "title": "_NumericLogspaceParams",
+      "type": "object"
+    },
+    "_Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "mars",
+            "human"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "session_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "MARs session identifier. Required when kind=mars; null otherwise.",
+          "title": "Session Sha"
+        },
+        "at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO-8601 timestamp.",
+          "title": "At"
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human operator name/handle when kind=human; null for MARs.",
+          "title": "Operator"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_Provenance",
+      "type": "object"
+    },
+    "_TranscriptTurn": {
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "agent",
+            "operator",
+            "system"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "At"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "title": "_TranscriptTurn",
+      "type": "object"
     }
   }
 }
