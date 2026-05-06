@@ -320,3 +320,171 @@ class TestMainWritesOutputAtomically:
         assert out.exists()
         data = json.loads(out.read_text())
         assert data["wave"] == 0
+
+
+# ─── Runtime-sample aggregation (warm-axis-picker pipeline) ─────────────────
+
+
+class TestRuntimeAggregation:
+    """The combiner walks each task's ``_runtime.json`` (best-effort,
+    written by dispatch) and emits ``_combiner/wave_<N>.runtime.json``
+    so the local-side ingest path can feed the warm picker. These tests
+    exercise the full per-wave aggregation contract.
+    """
+
+    def test_writes_runtime_sidecar_when_per_task_files_present(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        # Seed metrics + _runtime.json for two tasks.
+        for tid, (model, elapsed) in enumerate([("ridge", 100), ("ridge", 110)]):
+            r = result_root / f"task_{tid}"
+            r.mkdir(parents=True)
+            (r / "metrics.json").write_text(json.dumps({"mse": 0.1, "n_samples": 50}))
+            (r / "_runtime.json").write_text(
+                json.dumps(
+                    {
+                        "task_id": tid,
+                        "run_id": "test_run",
+                        "started_at": f"2026-05-01T0{tid}:00:00+00:00",
+                        "ended_at": f"2026-05-01T0{tid}:30:00+00:00",
+                        "elapsed_sec": elapsed,
+                        "exit_code": 0,
+                        "node": "d11-07",
+                        "gpu_type": "a100",
+                        "axis_bindings": {"model": model, "seed": tid},
+                    }
+                )
+            )
+
+        hpc = _scaffold(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge", "seed": 0}, {"model": "ridge", "seed": 1}],
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        runtime_out = tmp_path / "_combiner" / "wave_0.runtime.json"
+        assert runtime_out.is_file()
+        doc = json.loads(runtime_out.read_text())
+        assert doc["wave"] == 0
+        assert doc["run_id"] == "test_run"
+        assert len(doc["samples"]) == 2
+        # axis_bindings round-trip — what the warm picker groups on.
+        elapsed_by_seed = {s["axis_bindings"]["seed"]: s["elapsed_sec"] for s in doc["samples"]}
+        assert elapsed_by_seed == {0: 100, 1: 110}
+
+    def test_skips_runtime_sidecar_emit_when_no_runtime_files(self, tmp_path, monkeypatch):
+        """Pre-runtime-pipeline experiments have no _runtime.json files;
+        the combiner must NOT emit an empty runtime sidecar (that would
+        pollute aggregate-flow's rsync_pull with a meaningless artifact)."""
+        result_root = tmp_path / "results"
+        for tid in range(2):
+            r = result_root / f"task_{tid}"
+            r.mkdir(parents=True)
+            (r / "metrics.json").write_text(json.dumps({"mse": 0.1, "n_samples": 50}))
+            # NO _runtime.json
+
+        hpc = _scaffold(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge"}, {"model": "ridge"}],
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        # Main wave file always lands.
+        assert (tmp_path / "_combiner" / "wave_0.json").is_file()
+        # Runtime sidecar must NOT exist.
+        assert not (tmp_path / "_combiner" / "wave_0.runtime.json").exists()
+
+    def test_partial_runtime_files_only_emit_those_present(self, tmp_path, monkeypatch):
+        """If only some tasks have _runtime.json (best-effort dispatch
+        write), the runtime sidecar carries those rows and skips the
+        missing ones — never blocks on the ones that didn't write."""
+        result_root = tmp_path / "results"
+        for tid in range(3):
+            r = result_root / f"task_{tid}"
+            r.mkdir(parents=True)
+            (r / "metrics.json").write_text(json.dumps({"mse": 0.1, "n_samples": 50}))
+        # Only task 1 has _runtime.json.
+        (result_root / "task_1" / "_runtime.json").write_text(
+            json.dumps(
+                {
+                    "task_id": 1,
+                    "run_id": "test_run",
+                    "elapsed_sec": 200,
+                    "exit_code": 0,
+                    "node": "d11-08",
+                    "gpu_type": "a100",
+                    "axis_bindings": {"model": "ridge"},
+                }
+            )
+        )
+
+        hpc = _scaffold(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge"}] * 3,
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        runtime_out = tmp_path / "_combiner" / "wave_0.runtime.json"
+        assert runtime_out.is_file()
+        doc = json.loads(runtime_out.read_text())
+        assert len(doc["samples"]) == 1
+        assert doc["samples"][0]["task_id"] == 1
+
+    def test_malformed_runtime_json_logged_as_error_not_aborted(self, tmp_path, monkeypatch):
+        """A corrupt _runtime.json gets recorded into wave_<N>.json's
+        errors[] (so the user sees it) but does NOT abort the wave.
+        Aggregation primary output (wave_<N>.json) must always land."""
+        result_root = tmp_path / "results"
+        for tid in range(2):
+            r = result_root / f"task_{tid}"
+            r.mkdir(parents=True)
+            (r / "metrics.json").write_text(json.dumps({"mse": 0.1, "n_samples": 50}))
+        (result_root / "task_0" / "_runtime.json").write_text("not valid json")
+        (result_root / "task_1" / "_runtime.json").write_text(
+            json.dumps(
+                {
+                    "task_id": 1,
+                    "run_id": "test_run",
+                    "elapsed_sec": 50,
+                    "exit_code": 0,
+                    "node": "x",
+                    "gpu_type": "a100",
+                    "axis_bindings": {"model": "ridge"},
+                }
+            )
+        )
+
+        hpc = _scaffold(
+            tmp_path,
+            kwargs_per_task=[{"model": "ridge"}, {"model": "ridge"}],
+        )
+        _patch_sibling_lookup(monkeypatch, hpc)
+        monkeypatch.setenv("HPC_WAVE", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.chdir(tmp_path)
+
+        main()
+
+        wave = json.loads((tmp_path / "_combiner" / "wave_0.json").read_text())
+        # The bad _runtime.json got logged into errors[].
+        assert any("_runtime.json" in e for e in wave["errors"])
+        # The runtime sidecar still has the valid row.
+        runtime_out = tmp_path / "_combiner" / "wave_0.runtime.json"
+        assert runtime_out.is_file()
+        doc = json.loads(runtime_out.read_text())
+        assert len(doc["samples"]) == 1
+        assert doc["samples"][0]["task_id"] == 1

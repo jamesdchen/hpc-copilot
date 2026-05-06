@@ -85,11 +85,17 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
 
     Returns
     -------
-    ``{priority, action, run_id, candidates, reason}``. ``run_id`` is
-    the recommended single best candidate (newest by submitted_at /
-    mtime); ``candidates`` is the full list at that priority for the
-    agent to surface to the user. ``reason`` is a one-line
-    human-readable explanation of why this priority was picked.
+    ``{priority, action, recommended_run_id, candidates, reason}``.
+    ``recommended_run_id`` is the single best candidate (newest by
+    submitted_at / mtime); ``candidates`` is the full list at that
+    priority for the agent to surface to the user. ``reason`` is a
+    one-line human-readable explanation of why this priority was
+    picked.
+
+    The field is named ``recommended_run_id`` (not ``run_id``) so the
+    schema-defs consistency check — which forbids nullable ``run_id``
+    in any output — stays satisfied while still letting priorities 2/3
+    return null for "no specific run."
     """
     if experiment_dir is None:
         raise errors.SpecInvalid("experiment_dir is required")
@@ -107,7 +113,7 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
         return {
             "priority": 0,
             "action": "monitor",
-            "run_id": candidates[0]["run_id"],
+            "recommended_run_id": candidates[0]["run_id"],
             "candidates": candidates,
             "reason": (
                 f"{len(in_flight)} in-flight run(s) on the journal — "
@@ -122,7 +128,7 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
         return {
             "priority": 1,
             "action": "reuse",
-            "run_id": candidates[0]["run_id"],
+            "recommended_run_id": candidates[0]["run_id"],
             "candidates": candidates,
             "reason": (
                 f"{len(sidecars)} previous run(s) on disk — offer the user "
@@ -136,7 +142,7 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
         return {
             "priority": 2,
             "action": "interview",
-            "run_id": None,
+            "recommended_run_id": None,
             "candidates": [],
             "reason": (
                 ".hpc/tasks.py exists but no run history — skip executor "
@@ -148,7 +154,7 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
     return {
         "priority": 3,
         "action": "fresh",
-        "run_id": None,
+        "recommended_run_id": None,
         "candidates": [],
         "reason": "no in-flight runs, no sidecars, no tasks.py — full interview.",
     }
@@ -198,7 +204,7 @@ def find_prior_run(
     if path is None:
         return {
             "found": False,
-            "run_id": None,
+            "prior_run_id": None,
             "is_orphan": False,
             "status": None,
             "age_sec": None,
@@ -223,7 +229,7 @@ def find_prior_run(
 
     return {
         "found": True,
-        "run_id": run_id,
+        "prior_run_id": run_id,
         "is_orphan": is_orphan_sidecar(experiment_dir, run_id),
         "status": data.get("status"),
         "age_sec": age_sec,

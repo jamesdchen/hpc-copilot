@@ -81,7 +81,7 @@ def test_priority_1_reuse_when_sidecars_exist(tmp_path: Path, journal_home: Path
     out = suggest_setup_action(tmp_path)
     assert out["priority"] == 1
     assert out["action"] == "reuse"
-    assert out["run_id"] == "20260101-000000-deadbee"
+    assert out["recommended_run_id"] == "20260101-000000-deadbee"
     assert out["candidates"][0]["profile"] == "ml_ridge"
 
 
@@ -91,7 +91,7 @@ def test_priority_0_monitor_when_in_flight(tmp_path: Path, journal_home: Path) -
     out = suggest_setup_action(tmp_path)
     assert out["priority"] == 0
     assert out["action"] == "monitor"
-    assert out["run_id"] == "running_run"
+    assert out["recommended_run_id"] == "running_run"
     assert out["candidates"][0]["job_ids"] == ["job_42"]
 
 
@@ -104,7 +104,7 @@ def test_priority_0_picks_newest_when_multiple_in_flight(
     assert out["priority"] == 0
     assert len(out["candidates"]) == 2
     # find_in_flight_runs returns newest-first; first candidate is the recommendation.
-    assert out["run_id"] == out["candidates"][0]["run_id"]
+    assert out["recommended_run_id"] == out["candidates"][0]["run_id"]
 
 
 # ─── find-prior-run ────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ def test_priority_0_picks_newest_when_multiple_in_flight(
 def test_find_prior_run_no_match(tmp_path: Path, journal_home: Path) -> None:
     out = find_prior_run(tmp_path, cmd_sha="f" * 64)
     assert out["found"] is False
-    assert out["run_id"] is None
+    assert out["prior_run_id"] is None
     assert out["job_ids"] == []
 
 
@@ -122,7 +122,7 @@ def test_find_prior_run_matches_sidecar(tmp_path: Path, journal_home: Path) -> N
     _seed_sidecar(tmp_path, "20260101-000000-deadbee", cmd_sha=cmd_sha)
     out = find_prior_run(tmp_path, cmd_sha=cmd_sha)
     assert out["found"] is True
-    assert out["run_id"] == "20260101-000000-deadbee"
+    assert out["prior_run_id"] == "20260101-000000-deadbee"
     assert out["profile"] == "ml_ridge"
     assert out["cluster"] == "hoffman2"
 

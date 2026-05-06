@@ -147,6 +147,30 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 | `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate-hpc` | Validate completeness, run aggregation on cluster, download summaries |
 | `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. See [`docs/workflows/campaign.md`](docs/workflows/campaign.md). |
+| `/hpc-axes-init` | Write `<experiment>/.hpc/axes.yaml` with the parallel-axis enumeration + homogeneity hint that drives the cold-start (and warm-path) array-axis picker. |
+
+### Primitives
+
+The slash commands above compose ~50 primitives exposed as `hpc-mapreduce <name>`. Full machine-readable catalog at `docs/generated/operations.md` (auto-regenerated). High-traffic ones for agent orchestration:
+
+| Primitive | Replaces |
+|---|---|
+| `submit-flow` / `submit-flow-batch` | rsync + deploy + qsub + record (single or N-spec batch with shared rsync). Auto-dispatches when the spec is `{specs: [...]}`. |
+| `monitor-flow` | Poll-and-combine loop the slash command's tick body wraps. |
+| `aggregate-flow` | rsync_pull `_combiner/` + `reduce_partials` + optional summary pull + ingest runtime samples. |
+| `build-submit-spec` | Resolved-interview-values → validated `submit_flow.input.json` spec. |
+| `build-tasks-py` | Cartesian-product axes → `.hpc/tasks.py` from the canonical Pattern 1 template. |
+| `discover-executors` / `discover-reducers` | Scan repo for executor scripts / aggregator scripts (find existing reducer instead of writing a fresh one). |
+| `decide-monitor-arm` | Pick cron/loop/none + cadence + cron schedule + literal `armed:` line. |
+| `monitor-summary` | Canonical user-facing tick summary (byte-stable framing). |
+| `summarize-submit-plan` | Canonical pre-submit confirmation summary. |
+| `verify-canary` | Wait + grep + output-check protocol for 1-task canary submissions. |
+| `verify-aggregation-complete` | All-waves-combined / all-tasks-present / no-cross-run-contamination invariant report. |
+| `suggest-setup-action` / `find-prior-run` | `/submit-hpc` Setup priority cascade + `cmd_sha` resume detection. |
+| `prune-orphan-sidecars` | Clean half-baked sidecars from failed batches. |
+
+`hpc-mapreduce <name> --help` shows the per-primitive args; many take `--spec <path>` for a JSON input. See `docs/primitives/<name>.md` for the per-primitive contract (idempotency, side effects, error codes, schemas).
+
 ## Configuration
 
 ### `clusters.yaml` (required)

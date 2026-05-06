@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+### Added — atomization push: 18 new primitives close prose-driven failure modes
+
+Refactor the slash commands to route through CLI primitives instead of
+agent-prose for everything that's not actual judgment. The agent's job
+collapses to "call atom X, copy data verbatim"; primitives own the
+*behavior*, prose owns only the *judgment* (interview, frame opaque
+metrics, decide multi-candidate ties).
+
+**New primitives** (49 total, was 31):
+
+| Primitive | Replaces |
+|---|---|
+| `submit-flow-batch` | N×submit-flow loops; auto-dispatched when spec is `{specs: [...]}` |
+| `build-submit-spec` | `/submit-hpc` Step 6d's 200-line "set this field" prose |
+| `build-tasks-py` | Step 6b's "walk the user through writing tasks.py" |
+| `discover-reducers` | "Look for aggregation scripts in the repo" prose at `/aggregate-hpc` Step 4 |
+| `decide-monitor-arm` | `/monitor-hpc` Step 5: arm choice + cadence + cron schedule + `armed:` line (4 failure modes in one) |
+| `monitor-summary` | Step 7 tick-summary framing drift |
+| `summarize-submit-plan` | Step 5 plan confirmation framing |
+| `verify-canary` | Step 7b/8 wait + grep + output-check protocol (most fragile multi-step in the slash command) |
+| `verify-aggregation-complete` | Post-aggregate invariant gate (cross-run contamination, missing waves/tasks, provenance) |
+| `suggest-setup-action` | Step 0 priority cascade (in-flight / reuse / interview / fresh) |
+| `find-prior-run` | Step 6c `cmd_sha` resume detection |
+| `prune-orphan-sidecars` | Half-baked sidecars from rate-limited submit batches |
+| `axes-init` | Per-experiment `axes.yaml` for the warm-axis-picker |
+
+**Behavior changes** in existing primitives:
+
+- `submit-flow` auto-detects a `{specs: [...]}` wrapper and routes to
+  `submit-flow-batch` internally. Single-spec callers see no change;
+  multi-spec callers stop having to know about a separate CLI.
+- `submit-flow-batch` does ONE rsync_push + ONE deploy_runtime + N
+  qsubs (multiplexed via ssh ControlMaster), eliminating the
+  `MaxStartups` rate-limit failure mode at campaign-time fan-out.
+  Auto-prunes orphan sidecars before doing anything else; takes a
+  per-repo advisory flock to serialize parallel shells.
+- SSH primitives (`ssh_run`, `rsync_push`, `rsync_pull`,
+  `deploy_runtime`) accept either `user@host` OR an OpenSSH `Host`
+  alias as `ssh_target`. The alias form lets `IdentityFile` / `User`
+  / `Hostname` from `~/.ssh/config` flow through. They also retry
+  with exponential backoff (2s/4s/8s/16s) on `TimeoutError` and
+  known sshd-throttle markers; permanent failures (auth, missing
+  binary) surface immediately.
+- `submit_and_record` finalizes the per-experiment sidecar's
+  `job_ids` field after qsub returns. `is_orphan_sidecar` keys on
+  this so half-baked sidecars (Step 6d wrote the file but qsub never
+  ran) are distinguishable from journal-wipe-recovery sidecars.
+
+**Runtime-prior pipeline** (formerly aspirational, now end-to-end):
+
+Cluster-side dispatcher writes `<result_dir>/_runtime.json` per task
+(timing + axis_bindings); combiner aggregates them into
+`_combiner/wave_<N>.runtime.json`; `aggregate_flow` and `monitor_flow`
+ingest into `<experiment>/.hpc/runtimes/<profile>.<cluster>.json`;
+`pick_array_axis_warm` reads them back and picks the lowest-CV axis
+for the next submit.
+
+**Stop hook** (`monitor_armed_check`) backstops `/monitor-hpc`'s
+`armed:` exit contract. Block message points at `decide-monitor-arm`
+so the agent copies primitive output instead of hand-authoring.
+
+**Schemas**: input/output JSON schemas for every new primitive
+(`schemas/build_submit_spec.input.json`,
+`schemas/decide_monitor_arm.{input,output}.json`, etc.). Symmetry
+with `submit_flow.{input,output}.json`; downstream orchestrators can
+sanity-check shapes without the CLI.
+
 ### Changed — `docs/` reorganized; new top-level `README.md` and workflow doc
 
 The `docs/` tree moves from a flat 11-file bag into four purpose-specific

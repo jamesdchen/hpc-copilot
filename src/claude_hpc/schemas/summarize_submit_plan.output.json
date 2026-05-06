@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/summarize_submit_plan.output.json",
+  "title": "summarize-submit-plan output",
+  "description": "Canonical pre-submit confirmation summary. Slash-command Step 5 prints headline + body verbatim and asks confirm_prompt. Byte-stable for the same input.",
+  "type": "object",
+  "required": ["headline", "body", "confirm_prompt"],
+  "additionalProperties": false,
+  "properties": {
+    "headline": { "type": "string" },
+    "body": { "type": "string" },
+    "confirm_prompt": {
+      "type": "string",
+      "description": "Literal 'Confirm? [y/N]' or magnitude-warning variant when total_tasks > 1000."
+    }
+  }
+}

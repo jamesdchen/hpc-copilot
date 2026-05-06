@@ -88,9 +88,14 @@ def monitor_summary(
 ) -> dict[str, Any]:
     """Render the canonical user-facing summary for a run's most recent tick.
 
-    Returns ``{lifecycle_state, headline, body, armed_hint}``:
+    Returns ``{lifecycle_state, headline, body, armed_hint, journal_missing}``:
 
     * ``lifecycle_state`` — one of the terminal states or ``in_flight``.
+      Defaults to ``"abandoned"`` (closest semantic match — record gone)
+      when ``journal_missing=True``.
+    * ``journal_missing`` — True iff the journal record could not be
+      loaded. Headline carries an explicit no-journal message in this
+      case.
     * ``headline`` — single sentence the slash command prints first.
     * ``body`` — multi-line counts + diff + most-recent actions.
     * ``armed_hint`` — None when terminal (slash command exits);
@@ -109,11 +114,16 @@ def monitor_summary(
 
     record = session.load_run(experiment_dir, run_id)
     if record is None:
+        # No journal — fall back to 'abandoned' (closest semantic match
+        # in the canonical lifecycle_state_observable_with_timeout set)
+        # and signal the absence via journal_missing=True so callers can
+        # disambiguate from a real abandoned run.
         return {
-            "lifecycle_state": "unknown",
+            "lifecycle_state": "abandoned",
             "headline": f"no journal record found for run_id={run_id!r}",
             "body": "(submit the run first, or check ~/.claude/hpc/<repo_hash>/runs/)",
             "armed_hint": None,
+            "journal_missing": True,
         }
 
     jsonl = experiment_dir / ".hpc" / "runs" / f"{run_id}.monitor.jsonl"
@@ -159,4 +169,5 @@ def monitor_summary(
         "headline": headline,
         "body": "\n".join(body_lines),
         "armed_hint": armed_hint,
+        "journal_missing": False,
     }

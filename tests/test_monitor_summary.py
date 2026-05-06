@@ -59,9 +59,13 @@ def _write_ticks(experiment: Path, run_id: str, *records: dict) -> None:
     path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
 
 
-def test_no_journal_record_returns_unknown(tmp_path: Path, journal_home: Path) -> None:
+def test_no_journal_record_signals_journal_missing(tmp_path: Path, journal_home: Path) -> None:
     out = monitor_summary(tmp_path, run_id="missing")
-    assert out["lifecycle_state"] == "unknown"
+    # lifecycle_state must be one of the canonical observable_with_timeout
+    # states (no 'unknown' alias in envelope.json $defs); journal_missing
+    # carries the actual signal.
+    assert out["lifecycle_state"] == "abandoned"
+    assert out["journal_missing"] is True
     assert "missing" in out["headline"]
     assert out["armed_hint"] is None
 
