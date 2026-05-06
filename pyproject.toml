@@ -19,6 +19,13 @@ dependencies = [
     # resolution (consumer schemas reference envelope.json#/$defs/*).
     "jsonschema>=4.18",
     "referencing>=0.30",
+    # Pydantic v2 for Spec / Result models. The hand-authored JSON
+    # schemas under ``claude_hpc/schemas/`` are still the wire SoT;
+    # Pydantic models are the *authoring* surface and their
+    # ``model_json_schema()`` output is regenerated into the JSON
+    # files by ``scripts/build_schemas.py``. Switched on for the
+    # submit-flow canary; rolling out per-atom incrementally.
+    "pydantic>=2.6",
 ]
 
 [project.optional-dependencies]
