@@ -1,107 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json",
-  "title": "CLI envelope",
-  "description": "Universal envelope wrapping every hpc-mapreduce stdout response. The `$defs` block at the bottom holds reusable subschemas — run_id (loose + strict), combined_waves, failed_waves, lifecycle_state (terminal / observable / observable+timeout), scheduler, gpu_type, error_code. Consumer schemas reference these via `$ref` (e.g. `https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id`); resolution is wired through `claude_hpc._internal._schema.schema_registry` (`referencing.Registry`).",
   "$defs": {
-    "run_id": {
-      "type": "string",
-      "description": "Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>; loosely validated as filesystem-safe with no path separators."
-    },
-    "run_id_strict": {
-      "type": "string",
-      "pattern": "^[A-Za-z0-9._\\-]+$",
-      "description": "Strict run-identifier shape used on input — must be filesystem-safe (alphanumerics, dot, underscore, hyphen). Output schemas use the looser `run_id` ({type: string}) so legacy sidecars validate."
-    },
-    "combined_waves": {
-      "type": "array",
-      "items": { "type": "integer" },
-      "description": "Wave numbers whose partial-aggregate file has been combined into the run's _combiner/ directory."
-    },
-    "failed_waves": {
-      "type": "array",
-      "items": { "type": "integer" },
-      "description": "Wave numbers whose combine attempt exhausted retries; the run may still be partially aggregated."
-    },
-    "lifecycle_state_terminal": {
-      "type": "string",
-      "enum": ["complete", "failed", "abandoned", "timeout"],
-      "description": "Lifecycle state set used by monitor-flow output. 'complete' = every task reported complete. 'failed' = at least one failure with no running/pending tasks left. 'abandoned' = recorded job_ids are no longer known to the scheduler. 'timeout' = wall_clock_budget_seconds exceeded; cluster jobs may still be running."
-    },
-    "lifecycle_state_observable": {
-      "type": "string",
-      "enum": ["in_flight", "complete", "failed", "abandoned"],
-      "description": "Lifecycle state set used by status / reconcile (point-in-time observation, no 'timeout' bucket)."
-    },
-    "lifecycle_state_observable_with_timeout": {
-      "type": "string",
-      "enum": ["in_flight", "complete", "failed", "abandoned", "timeout"],
-      "description": "Lifecycle state set used when an observer also surfaces 'timeout' (e.g. status / reconcile reading sidecars previously marked timeout by monitor-flow). Superset of lifecycle_state_observable."
-    },
-    "scheduler": {
-      "type": "string",
-      "enum": ["sge", "slurm"],
-      "description": "Scheduler driver. 'sge' covers Sun/Univa/Open Grid Engine variants; 'slurm' covers Slurm-Workload-Manager clusters."
-    },
-    "gpu_type": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Cluster-specific GPU label (e.g. 'A100', 'H100', 'L40S'). Validated as a non-empty string; semantic checks (does this cluster expose this GPU?) live in inspect-cluster, not the schema."
-    },
-    "error_code": {
-      "type": "string",
-      "enum": [
-        "ssh_unreachable",
-        "scheduler_throttled",
-        "spec_invalid",
-        "executor_not_found",
-        "cluster_unknown",
-        "journal_corrupt",
-        "remote_command_failed",
-        "config_invalid",
-        "combiner_failed",
-        "cluster_timeout",
-        "cluster_partially_degraded",
-        "outputs_missing",
-        "schema_incompat",
-        "preempted",
-        "internal"
-      ],
-      "description": "Canonical envelope error_code enum. Output schemas that surface error codes inside `data` (e.g. failures, status, validate) must keep their enum byte-equivalent to this list."
-    }
-  },
-  "oneOf": [
-    {
-      "type": "object",
-      "required": ["ok", "idempotent", "data"],
+    "ErrorEnvelope": {
       "additionalProperties": false,
+      "description": "The ``ok=false`` shape of every hpc-mapreduce stdout response.",
       "properties": {
-        "ok": { "const": true },
-        "idempotent": { "type": "boolean" },
-        "data": { "type": "object" },
-        "partial_errors": {
-          "type": "array",
-          "description": "Optional top-level array surfacing soft per-source failures while the operation as a whole succeeded. Distinct from `data.errors`: this key documents *cluster-side* degradations (qhost timed out, one of N nodes unreachable, sacct unavailable) that the planner considered and chose to tolerate. Operations that genuinely failed should set ok:false instead.",
-          "items": {
-            "type": "object",
-            "required": ["code", "detail"],
-            "additionalProperties": false,
-            "properties": {
-              "code": { "type": "string", "description": "Machine-readable category, e.g. 'qhost_failed', 'scontrol_failed', 'qstat_unavailable', 'qacct_unavailable', 'malformed_row'." },
-              "detail": { "type": "string" }
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": ["ok", "error_code", "message", "category", "retry_safe"],
-      "additionalProperties": false,
-      "properties": {
-        "ok": { "const": false },
+        "ok": {
+          "const": false,
+          "title": "Ok",
+          "type": "boolean"
+        },
         "error_code": {
-          "type": "string",
           "enum": [
             "ssh_unreachable",
             "scheduler_throttled",
@@ -118,16 +28,129 @@
             "schema_incompat",
             "preempted",
             "internal"
-          ]
+          ],
+          "title": "Error Code",
+          "type": "string"
         },
-        "message": { "type": "string" },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
         "category": {
-          "type": "string",
-          "enum": ["user", "cluster", "network", "internal"]
+          "enum": [
+            "user",
+            "cluster",
+            "network",
+            "internal"
+          ],
+          "title": "Category",
+          "type": "string"
         },
-        "retry_safe": { "type": "boolean" },
-        "remediation": { "type": "string" }
-      }
+        "retry_safe": {
+          "title": "Retry Safe",
+          "type": "boolean"
+        },
+        "remediation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remediation"
+        }
+      },
+      "required": [
+        "ok",
+        "error_code",
+        "message",
+        "category",
+        "retry_safe"
+      ],
+      "title": "ErrorEnvelope",
+      "type": "object"
+    },
+    "SuccessEnvelope": {
+      "additionalProperties": false,
+      "description": "The ``ok=true`` shape of every hpc-mapreduce stdout response.",
+      "properties": {
+        "ok": {
+          "const": true,
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "idempotent": {
+          "title": "Idempotent",
+          "type": "boolean"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        },
+        "partial_errors": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/_PartialError"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional top-level array surfacing soft per-source failures while the operation as a whole succeeded.",
+          "title": "Partial Errors"
+        }
+      },
+      "required": [
+        "ok",
+        "idempotent",
+        "data"
+      ],
+      "title": "SuccessEnvelope",
+      "type": "object"
+    },
+    "_PartialError": {
+      "additionalProperties": false,
+      "description": "One soft per-source failure surfaced on a successful envelope.\n\nDistinct from ``data.errors``: this key documents *cluster-side*\ndegradations (qhost timed out, one of N nodes unreachable, sacct\nunavailable) that the planner considered and chose to tolerate.\nOperations that genuinely failed should set ``ok: false`` instead.",
+      "properties": {
+        "code": {
+          "description": "Machine-readable category, e.g. 'qhost_failed', 'scontrol_failed', 'qstat_unavailable', 'qacct_unavailable', 'malformed_row'.",
+          "title": "Code",
+          "type": "string"
+        },
+        "detail": {
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "detail"
+      ],
+      "title": "_PartialError",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "False": "#/$defs/ErrorEnvelope",
+      "True": "#/$defs/SuccessEnvelope"
+    },
+    "propertyName": "ok"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/SuccessEnvelope"
+    },
+    {
+      "$ref": "#/$defs/ErrorEnvelope"
     }
   ]
 }

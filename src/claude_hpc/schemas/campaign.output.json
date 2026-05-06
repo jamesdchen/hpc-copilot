@@ -1,51 +1,113 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/campaign.output.json",
-  "title": "campaign envelope data shape",
-  "description": "Schema for the `data` block of `campaign status` / `campaign list` envelopes (the outer envelope follows envelope.json).",
-  "oneOf": [
-    { "$ref": "#/$defs/status_data" },
-    { "$ref": "#/$defs/list_data" }
-  ],
   "$defs": {
-    "status_data": {
-      "type": "object",
-      "required": ["campaign_id", "iterations", "history"],
+    "CampaignListData": {
       "additionalProperties": false,
-      "properties": {
-        "campaign_id":    { "type": "string", "minLength": 1 },
-        "iterations":     { "type": "integer", "minimum": 0 },
-        "in_flight":      { "type": "integer", "minimum": 0 },
-        "history":        {
-          "type": "array",
-          "items": { "type": "object", "additionalProperties": true },
-          "description": "Per-iteration reduced metrics dicts, oldest-first."
-        },
-        "run_ids":        {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Sidecars matching this campaign, oldest-first."
-        }
-      }
-    },
-    "list_data": {
-      "type": "object",
-      "required": ["campaigns"],
-      "additionalProperties": false,
+      "description": "Returned by ``hpc-mapreduce campaign list``.",
       "properties": {
         "campaigns": {
-          "type": "array",
           "items": {
-            "type": "object",
-            "required": ["campaign_id", "iterations"],
-            "additionalProperties": false,
-            "properties": {
-              "campaign_id": { "type": "string" },
-              "iterations":  { "type": "integer", "minimum": 1 }
-            }
-          }
+            "$ref": "#/$defs/_CampaignListEntry"
+          },
+          "title": "Campaigns",
+          "type": "array"
         }
-      }
+      },
+      "required": [
+        "campaigns"
+      ],
+      "title": "CampaignListData",
+      "type": "object"
+    },
+    "CampaignStatusData": {
+      "additionalProperties": false,
+      "description": "Returned by ``hpc-mapreduce campaign status --campaign-id <id>``.",
+      "properties": {
+        "campaign_id": {
+          "minLength": 1,
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "iterations": {
+          "minimum": 0,
+          "title": "Iterations",
+          "type": "integer"
+        },
+        "in_flight": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "In Flight"
+        },
+        "history": {
+          "description": "Per-iteration reduced metrics dicts, oldest-first.",
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "History",
+          "type": "array"
+        },
+        "run_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sidecars matching this campaign, oldest-first.",
+          "title": "Run Ids"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "iterations",
+        "history"
+      ],
+      "title": "CampaignStatusData",
+      "type": "object"
+    },
+    "_CampaignListEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": {
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "iterations": {
+          "minimum": 1,
+          "title": "Iterations",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "iterations"
+      ],
+      "title": "_CampaignListEntry",
+      "type": "object"
     }
-  }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/CampaignStatusData"
+    },
+    {
+      "$ref": "#/$defs/CampaignListData"
+    }
+  ]
 }
