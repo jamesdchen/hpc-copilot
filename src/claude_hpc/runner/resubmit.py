@@ -52,6 +52,7 @@ def derive_resubmit_request_id(
     error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
     idempotent=True,
     idempotency_key="request_id",
+    cli="hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]",
 )
 def resubmit_failed(
     experiment_dir: Path,

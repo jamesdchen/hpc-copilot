@@ -26,7 +26,7 @@ error_codes:
     protects against double-submit).
 backed_by:
   cli: hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]
-  python: claude_hpc.runner.submit_and_record
+  python: claude_hpc.runner.submit.submit_and_record
 exit_codes:
 - 0: ok
 - 1: user error (spec_invalid / cluster_unknown)

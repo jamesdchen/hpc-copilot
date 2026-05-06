@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     side_effects=[SideEffect("ssh", "<cluster>")],
     error_codes=[errors.SshUnreachable, errors.RemoteCommandFailed],
     idempotent=True,
+    cli="hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]",
 )
 def fetch_logs(
     *,

@@ -61,6 +61,7 @@ class WindowCandidate:
     side_effects=[],
     error_codes=[errors.HpcError],
     idempotent=True,
+    cli="hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]",
 )
 def best_submit_windows(
     experiment_dir: Path,

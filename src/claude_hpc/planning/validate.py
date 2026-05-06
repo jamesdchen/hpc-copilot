@@ -36,6 +36,7 @@ DEFAULT_BACKFILL_WINDOW_SEC = 600
     verb="validate",
     side_effects=[SideEffect("ssh", "<cluster> (scheduler --test-only probe)")],
     idempotent=True,
+    cli="hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>",
 )
 def validate_submission(
     experiment_dir: Path,

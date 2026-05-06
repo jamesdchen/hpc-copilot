@@ -137,6 +137,7 @@ def resolve(task_id: int) -> dict:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="experiment_dir",
+    cli="hpc-mapreduce build-tasks-py --spec <path>",
 )
 def build_tasks_py(
     *,

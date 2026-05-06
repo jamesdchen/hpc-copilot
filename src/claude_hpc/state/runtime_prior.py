@@ -365,6 +365,7 @@ def _quantile(values: list[int], q: float) -> int:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    cli="hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]",
 )
 def roll_up_quantiles(
     experiment_dir: Path,

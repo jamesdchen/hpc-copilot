@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     error_codes=[errors.SshUnreachable, errors.CombinerFailed, errors.JournalCorrupt],
     idempotent=True,
     idempotency_key="(run_id, wave)",
+    cli="hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]",
 )
 def combine_wave(
     experiment_dir: Path,

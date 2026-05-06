@@ -95,6 +95,7 @@ __all__ = [
     error_codes=[errors.ClusterUnknown, errors.SshUnreachable],
     idempotent=True,
     idempotency_key="cluster",
+    cli="hpc-mapreduce inspect-cluster --cluster <name> [...]",
 )
 def inspect_cluster(
     cluster_name: str,

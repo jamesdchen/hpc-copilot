@@ -136,6 +136,7 @@ def _classify_state(
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    cli="hpc-mapreduce decide-monitor-arm --spec <path>",
 )
 def decide_monitor_arm(
     *,

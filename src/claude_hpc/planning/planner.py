@@ -79,6 +79,7 @@ from claude_hpc.state.runtime_prior import read_samples, roll_up_quantiles
     side_effects=[SideEffect("ssh", "<cluster> (delegates to inspect-cluster)")],
     error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.ClusterUnknown],
     idempotent=True,
+    cli="hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]",
 )
 def plan_submit(
     experiment_dir: Path,

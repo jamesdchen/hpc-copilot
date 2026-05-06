@@ -25,7 +25,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.runner.mark_terminal
+  python: claude_hpc.runner.reconcile.mark_terminal
 exit_codes:
 - n/a (Python-only)
 ---

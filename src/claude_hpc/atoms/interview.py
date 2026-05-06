@@ -50,6 +50,7 @@ __all__ = ["record_interview"]
     side_effects=[SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json}")],
     idempotent=True,
     idempotency_key="campaign_dir",
+    cli="hpc-mapreduce interview",
 )
 def record_interview(
     intent: Mapping[str, Any],
