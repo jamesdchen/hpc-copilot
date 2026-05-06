@@ -138,28 +138,7 @@ def record_interview(
     interview_path.write_text(json.dumps(interview_doc, indent=2, sort_keys=True) + "\n")
     artifacts.append("interview.json")
 
-    # meta.json — only updated when intent supplied cluster_target or budget,
-    # and only fields the interview owns. Existing keys win on conflict so an
-    # operator who hand-edited meta.json doesn't get clobbered, except for
-    # total_tasks which is always authoritative (must match tasks.total()).
-    meta_updates: dict[str, Any] = {}
-    if "cluster_target" in intent:
-        ct = intent["cluster_target"]
-        meta_updates["cluster"] = ct["cluster"]
-        meta_updates["profile"] = ct["profile"]
-        if ct.get("constraint") is not None:
-            meta_updates["constraint"] = ct["constraint"]
-    if "budget" in intent:
-        meta_updates["budget"] = dict(intent["budget"])
-
-    if meta_updates:
-        meta_path = campaign_dir / "meta.json"
-        existing: dict[str, Any] = {}
-        if meta_path.exists():
-            existing = json.loads(meta_path.read_text())
-        merged = {**meta_updates, **existing}
-        merged["total_tasks"] = total_tasks
-        meta_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    if _maybe_update_meta(intent=intent, campaign_dir=campaign_dir, total_tasks=total_tasks):
         artifacts.append("meta.json")
 
     return {
@@ -169,6 +148,34 @@ def record_interview(
         "cmd_sha": cmd_sha,
         "preview": preview,
     }
+
+
+def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_tasks: int) -> bool:
+    """Side-write ``meta.json`` only for keys the interview owns; return True iff written.
+
+    Keys: cluster / profile / constraint (from cluster_target) and budget.
+    Existing meta.json keys win on conflict EXCEPT total_tasks, which is
+    always authoritative (must match tasks.total()).
+    """
+    meta_updates: dict[str, Any] = {}
+    if "cluster_target" in intent:
+        ct = intent["cluster_target"]
+        meta_updates["cluster"] = ct["cluster"]
+        meta_updates["profile"] = ct["profile"]
+        if ct.get("constraint") is not None:
+            meta_updates["constraint"] = ct["constraint"]
+    if "budget" in intent:
+        meta_updates["budget"] = dict(intent["budget"])
+    if not meta_updates:
+        return False
+    meta_path = campaign_dir / "meta.json"
+    existing: dict[str, Any] = {}
+    if meta_path.exists():
+        existing = json.loads(meta_path.read_text())
+    merged = {**meta_updates, **existing}
+    merged["total_tasks"] = total_tasks
+    meta_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    return True
 
 
 # ─── task_generator: typed recipes that materialize tasks.py ───────────────
