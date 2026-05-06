@@ -18,8 +18,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import jsonschema
-
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc.campaign.dirs import campaign_dir
 

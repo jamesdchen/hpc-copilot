@@ -34,8 +34,7 @@ _FORWARDERS: list[tuple[str, str, str, str]] = [
         "HPC_SUBDIR",
         "__init__.py",
         "0.4.0",
-        "drop the back-compat forwarder; callers should use "
-        "RepoLayout(experiment_dir).hpc",
+        "drop the back-compat forwarder; callers should use RepoLayout(experiment_dir).hpc",
     ),
     (
         "data.errors",  # B3 legacy partial-errors shape

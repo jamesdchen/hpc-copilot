@@ -21,8 +21,6 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import jsonschema
-
 if TYPE_CHECKING:
     from types import ModuleType
 
