@@ -385,7 +385,7 @@ def _submit_one_spec(
         run_id=spec.run_id,
         job_ids=job_ids,
         total_tasks=spec.total_tasks,
-        campaign_id=spec.campaign_id,
+        campaign_id=spec.campaign_id or "",
     )
 
     if spec.partial_ok:

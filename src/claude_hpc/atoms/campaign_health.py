@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import primitive
+from claude_hpc._schema_models.campaign_health import CampaignHealthSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -120,22 +121,23 @@ def _build_prompt(payload: dict[str, Any]) -> str:
 def campaign_health(
     experiment_dir: Path,
     *,
-    campaign_id: str | None = None,
-    since_iso: str | None = None,
-    profile: str | None = None,
-    cluster: str | None = None,
+    spec: CampaignHealthSpec,
 ) -> dict[str, Any]:
     """Aggregate run-history signals into a structured health payload.
 
     *experiment_dir*: where the run sidecars and runtime_prior live.
-    *campaign_id*: filter to a single campaign tag, or None for all runs.
-    *since_iso*: filter samples submitted after this UTC ISO timestamp.
-    *profile* + *cluster*: required when reading runtime_prior samples
-    (which are bucketed per ``(profile, cluster)`` pair). When omitted,
-    the function falls back to per-run sidecars only.
+    *spec.campaign_id*: filter to a single campaign tag, or None for all runs.
+    *spec.since_iso*: filter samples submitted after this UTC ISO timestamp.
+    *spec.profile* + *spec.cluster*: required when reading runtime_prior
+    samples (which are bucketed per ``(profile, cluster)`` pair). When
+    omitted, the function falls back to per-run sidecars only.
 
     Returns the payload pinned by ``schemas/campaign_health.output.json``.
     """
+    campaign_id = spec.campaign_id
+    since_iso = spec.since_iso
+    profile = spec.profile
+    cluster = spec.cluster
     from claude_hpc.state.runs import find_existing_runs, read_run_sidecar
 
     samples: list[dict[str, Any]] = []
