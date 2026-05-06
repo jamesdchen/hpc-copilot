@@ -4,22 +4,34 @@
   "title": "monitor-summary output",
   "description": "Canonical user-facing tick summary. Slash-command Step 7 prints headline + body verbatim. lifecycle_state matches the canonical 'observable_with_timeout' set; the no-journal case is signaled via journal_missing rather than a distinct lifecycle value.",
   "type": "object",
-  "required": ["lifecycle_state", "headline", "body", "armed_hint", "journal_missing"],
+  "required": [
+    "lifecycle_state",
+    "headline",
+    "body",
+    "armed_hint",
+    "journal_missing"
+  ],
   "properties": {
     "lifecycle_state": {
-      "type": "string",
-      "enum": ["in_flight", "complete", "failed", "abandoned", "timeout"],
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/lifecycle_state_observable_with_timeout",
       "description": "Lifecycle state set used when an observer also surfaces 'timeout' (e.g. status / reconcile reading sidecars previously marked timeout by monitor-flow). Superset of lifecycle_state_observable."
     },
-    "headline": { "type": "string" },
-    "body": { "type": "string" },
+    "headline": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
     "armed_hint": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "One-line note pointing the slash command at decide-monitor-arm; null when terminal."
     },
     "journal_missing": {
       "type": "boolean",
-      "description": "True iff the journal record could not be loaded (e.g. ~/.claude/hpc/<repo_hash>/runs/<run_id>.json absent). When True, headline carries an explicit no-journal message and lifecycle_state defaults to 'abandoned' (the closest semantic match — record gone)."
+      "description": "True iff the journal record could not be loaded (e.g. ~/.claude/hpc/<repo_hash>/runs/<run_id>.json absent). When True, headline carries an explicit no-journal message and lifecycle_state defaults to 'abandoned' (the closest semantic match \u2014 record gone)."
     }
   }
 }

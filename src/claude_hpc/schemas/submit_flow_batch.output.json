@@ -4,7 +4,10 @@
   "title": "submit-flow-batch output data",
   "description": "Shape of the `data` field on a successful `submit-flow-batch` envelope. Wraps a list of per-spec result records (each matching submit_flow.output.json) plus a count for cheap iteration. Order of `results` matches the order of input `specs`.",
   "type": "object",
-  "required": ["results", "n_results"],
+  "required": [
+    "results",
+    "n_results"
+  ],
   "additionalProperties": false,
   "properties": {
     "results": {
@@ -13,17 +16,47 @@
       "description": "Per-spec submit-flow result, in input order. Each entry has the shape of submit_flow.output.json (run_id, job_ids, total_tasks, deduped, canary_done, canary_run_id, canary_job_ids).",
       "items": {
         "type": "object",
-        "required": ["run_id", "job_ids", "total_tasks", "deduped", "canary_done"],
+        "required": [
+          "run_id",
+          "job_ids",
+          "total_tasks",
+          "deduped",
+          "canary_done"
+        ],
         "properties": {
-          "run_id":      { "type": "string" },
-          "job_ids":     { "type": "array", "items": { "type": "string" } },
-          "total_tasks": { "type": "integer", "minimum": 1 },
-          "deduped":     { "type": "boolean" },
-          "canary_done": { "type": "boolean" },
-          "canary_run_id": { "type": ["string", "null"] },
+          "run_id": {
+            "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id"
+          },
+          "job_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "total_tasks": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "deduped": {
+            "type": "boolean"
+          },
+          "canary_done": {
+            "type": "boolean"
+          },
+          "canary_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "canary_job_ids": {
-            "type": ["array", "null"],
-            "items": { "type": "string" }
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

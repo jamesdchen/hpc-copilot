@@ -4,18 +4,30 @@
   "title": "clusters list output data",
   "description": "Shape of the `data` field on a successful `clusters list` envelope.",
   "type": "object",
-  "required": ["clusters"],
+  "required": [
+    "clusters"
+  ],
   "additionalProperties": false,
   "properties": {
     "clusters": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["name", "host", "scheduler"],
+        "required": [
+          "name",
+          "host",
+          "scheduler"
+        ],
         "properties": {
-          "name":      { "type": "string" },
-          "host":      { "type": "string" },
-          "scheduler": { "type": "string", "enum": ["sge", "slurm"] }
+          "name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "scheduler": {
+            "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/scheduler"
+          }
         }
       }
     }

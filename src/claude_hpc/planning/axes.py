@@ -68,7 +68,9 @@ def validate_axes(data: dict[str, Any]) -> None:
 
     Raises :class:`jsonschema.ValidationError` on any schema violation.
     """
-    jsonschema.validate(instance=data, schema=axes_schema())
+    from claude_hpc._internal._schema import validate as _validate
+
+    _validate(data, axes_schema())
 
 
 def write_axes(
