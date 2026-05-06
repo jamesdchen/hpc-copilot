@@ -112,6 +112,10 @@ def _ok(
     """
     if idempotent is None:
         idempotent = _meta_idempotent(name) if name else True
+    if name:
+        from claude_hpc._internal._schema import validate_output
+
+        validate_output(data, name)
     env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
     if partial_errors:
         env["partial_errors"] = list(partial_errors)
