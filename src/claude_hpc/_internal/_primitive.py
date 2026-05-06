@@ -131,6 +131,29 @@ def primitive(
             if existing is func:
                 return func
             raise ValueError(f"Primitive {name!r} already registered (by {existing!r})")
+        # Idempotency-key gate: a state-mutating primitive that claims
+        # idempotent=True owes the caller an equivalence rule. Without
+        # one, the registry says "safe to retry" but doesn't say what
+        # makes two calls equivalent — which is exactly what idempotent
+        # means. Enforce on verbs that touch state (mutate, submit,
+        # workflow, scaffold). Pure-query/validate primitives are
+        # observation-only; their idempotency comes for free.
+        _STATEFUL_VERBS = ("mutate", "submit", "workflow", "scaffold")
+        if (
+            idempotent
+            and idempotency_key is None
+            and verb in _STATEFUL_VERBS
+            and (side_effects or ())
+        ):
+            raise ValueError(
+                f"Primitive {name!r} (verb={verb!r}, has side_effects) "
+                f"declares idempotent=True but no idempotency_key. "
+                "State-mutating primitives must declare what makes two "
+                "calls equivalent — typically the natural identifier "
+                "argument (e.g. 'run_id', 'experiment_dir', 'campaign_id'). "
+                "Either pass idempotency_key=, or set idempotent=False if "
+                "retries genuinely aren't safe."
+            )
         resolved_composes: list[PrimitiveMeta] = []
         for c in composes or ():
             if callable(c):

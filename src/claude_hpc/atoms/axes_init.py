@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     ],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    idempotency_key="experiment_dir",
 )
 def axes_init(
     *,

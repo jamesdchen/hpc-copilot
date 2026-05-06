@@ -136,6 +136,7 @@ def resolve(task_id: int) -> dict:
     ],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    idempotency_key="experiment_dir",
 )
 def build_tasks_py(
     *,

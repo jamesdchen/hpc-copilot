@@ -49,6 +49,7 @@ __all__ = ["record_interview"]
     verb="scaffold",
     side_effects=[SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json}")],
     idempotent=True,
+    idempotency_key="campaign_dir",
 )
 def record_interview(
     intent: Mapping[str, Any],
