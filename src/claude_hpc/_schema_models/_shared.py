@@ -1,14 +1,12 @@
 """Shared Pydantic types reused across multiple wire schemas.
 
-These mirror the named ``$defs`` inside ``schemas/envelope.json``.
-Each consumer schema previously referenced those defs via cross-file
-``$ref``; with Pydantic as the authoring SoT the SoT moves up one
-level — a single Python alias here is imported by every model that
-needs the constraint, and the emitted JSON inlines the pattern.
-
-Tightening one alias here regenerates every consumer schema in
-exactly the same way ``$ref`` resolution did before, just at build
-time instead of validation time.
+These are the canonical Python definitions of every wire-shared
+constraint (run_id format, scheduler enum, lifecycle states, error
+codes, etc.). Each consumer model imports and uses these aliases;
+``model_json_schema()`` inlines the constraints into the emitted
+JSON. Tightening one alias here regenerates every consumer schema
+in lock-step, replacing the cross-file ``$ref`` graph that used to
+hold these together.
 
 Aliases are deliberately ``Annotated`` rather than custom
 ``BaseModel`` subclasses so they inline as ``{type: ..., ...}`` in
@@ -24,11 +22,11 @@ from pydantic import Field, StringConstraints
 # ── identifiers ──────────────────────────────────────────────────────────────
 
 # Strict run-identifier shape used on INPUT schemas. Filesystem-safe:
-# alphanumerics, dot, underscore, hyphen. Mirrors envelope.json#/$defs/run_id_strict.
+# alphanumerics, dot, underscore, hyphen.
 RunIdStrict = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._\-]+$")]
 
 # Loose run-identifier used on OUTPUT schemas — any string. Output schemas
-# use this so legacy sidecars validate. Mirrors envelope.json#/$defs/run_id.
+# use this so legacy sidecars validate.
 RunIdLoose = str
 
 # SSH target: ``user@host`` (or OpenSSH alias resolving to the same).
@@ -81,7 +79,7 @@ GpuType = Annotated[str, Field(min_length=1)]
 
 # Canonical envelope error_code enum. Output schemas that surface error
 # codes inside ``data`` (e.g. failures, status, validate) must use this
-# alias so the enum stays byte-equivalent to envelope.json.
+# alias so every consumer's enum stays byte-equivalent.
 ErrorCode = Literal[
     "ssh_unreachable",
     "scheduler_throttled",
@@ -98,6 +96,40 @@ ErrorCode = Literal[
     "schema_incompat",
     "preempted",
     "internal",
+]
+
+# ── failure categories ───────────────────────────────────────────────────────
+
+# Values returned by ``claude_hpc.mapreduce.reduce.classify.classify_failure``.
+# Order mirrors the classifier's specificity ranking (first-match-wins).
+# Re-exported from ``classify.py`` so that module's public ``CATEGORIES``
+# tuple stays in sync with this Literal automatically.
+FailureCategory = Literal[
+    "gpu_oom",
+    "system_oom",
+    "segv",
+    "walltime",
+    "node_failure",
+    "queue_stall",
+    "code_bug",
+    "unknown",
+]
+
+# Values accepted by the ``resubmit`` primitive's ``--spec.category``.
+# Superset of ``FailureCategory`` plus ``"preempted"`` — the classifier
+# never emits "preempted" directly (it's a scheduler-level state, not a
+# stderr-fingerprint match), but the agent may call resubmit with
+# category="preempted" when the cluster bumped a campus user.
+FailureCategoryResubmittable = Literal[
+    "gpu_oom",
+    "system_oom",
+    "segv",
+    "walltime",
+    "node_failure",
+    "queue_stall",
+    "code_bug",
+    "unknown",
+    "preempted",
 ]
 
 # ── runtime ──────────────────────────────────────────────────────────────────

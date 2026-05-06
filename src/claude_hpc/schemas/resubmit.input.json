@@ -18,7 +18,7 @@
       "type": "array"
     },
     "category": {
-      "description": "Must match claude_hpc.mapreduce.reduce.classify.CATEGORIES exactly.",
+      "description": "Failure category that drives retry policy. Superset of ``classify_failure``'s ``CATEGORIES`` (which never emits ``preempted`` directly — that's a scheduler-level state).",
       "enum": [
         "gpu_oom",
         "system_oom",
