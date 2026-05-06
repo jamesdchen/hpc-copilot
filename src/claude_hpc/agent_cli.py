@@ -387,6 +387,20 @@ def cmd_recall(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.recall."""
     from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
 
+    payload: dict[str, Any] = {
+        "limit": int(getattr(args, "limit", 20)),
+        "include_runtime": bool(getattr(args, "include_runtime", False)),
+        "include_generator_stats": bool(getattr(args, "include_generator_stats", False)),
+    }
+    if getattr(args, "root", None):
+        payload["root"] = args.root
+    if getattr(args, "task_kind", None):
+        payload["task_kind"] = args.task_kind
+    if getattr(args, "operator", None):
+        payload["operator"] = args.operator
+    if getattr(args, "since", None):
+        payload["since"] = args.since
+    _validate_against_schema(payload, "recall")
     roots = resolve_roots(getattr(args, "root", None))
     try:
         data = recall_campaigns(
@@ -574,6 +588,15 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     """
     from claude_hpc.forecast.best_submit_window import best_submit_windows
 
+    _validate_against_schema(
+        {
+            "profile": args.profile,
+            "cluster": args.cluster,
+            "within_hours": int(args.within_hours),
+            "top_k": int(args.top_k),
+        },
+        "best_submit_window",
+    )
     candidates = best_submit_windows(
         args.experiment_dir,
         profile=args.profile,
@@ -611,6 +634,17 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     """
     from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
+    payload: dict[str, Any] = {
+        "profile": args.profile,
+        "cluster": args.cluster,
+        "backend": args.backend,
+        "n_replications": int(args.n_replications),
+    }
+    if args.at_iso is not None:
+        payload["at_iso"] = args.at_iso
+    if args.seed is not None:
+        payload["seed"] = int(args.seed)
+    _validate_against_schema(payload, "predict_queue_wait")
     out = predict_queue_wait(
         args.experiment_dir,
         profile=args.profile,
@@ -1807,6 +1841,16 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     """
     from claude_hpc.atoms.campaign_health import campaign_health
 
+    payload: dict[str, Any] = {}
+    if args.campaign_id is not None:
+        payload["campaign_id"] = args.campaign_id
+    if args.since_iso is not None:
+        payload["since_iso"] = args.since_iso
+    if args.profile is not None:
+        payload["profile"] = args.profile
+    if args.cluster is not None:
+        payload["cluster"] = args.cluster
+    _validate_against_schema(payload, "campaign_health")
     try:
         data = campaign_health(
             args.experiment_dir,
