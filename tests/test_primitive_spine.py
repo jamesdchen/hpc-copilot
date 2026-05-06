@@ -241,18 +241,31 @@ def test_workflow_primitives_compose_at_least_one_atom(
 def test_idempotency_key_names_input_schema_property(
     registry: dict[str, PrimitiveMeta],
 ) -> None:
-    """If ``idempotency_key`` is set, it must be a property on the input schema.
+    """If ``idempotency_key`` is set, it must name something the caller
+    can actually pass — either a property of the primitive's input schema
+    OR a parameter of the underlying Python function.
 
     Catches drift between the decorator's claim ("dedup on field X")
     and the wire contract ("input schema doesn't have field X"), which
     would otherwise show up as a runtime KeyError on the first replay.
 
+    Two acceptance buckets:
+
+    - **Spec property:** the key names a property of the
+      ``<name>.input.json`` schema. Most ``--spec``-driven primitives
+      live here.
+    - **Function parameter:** the key names a parameter of the decorated
+      Python function. CLI-flag-driven primitives (where ``experiment_dir``
+      / ``campaign_dir`` etc. arrive as argparse flags rather than
+      spec properties) live here.
+
     Compound keys like ``"(cluster, node)"`` are tolerated: their
-    constituent token list is checked against the input schema's
-    ``properties``. Dotted keys like ``"spec.run_id"`` are split on
-    the dot — the head must be a top-level property; we don't recurse
-    further (input schemas often don't model nested specs in detail).
+    constituent token list is checked against the union of the two
+    buckets. Dotted keys like ``"spec.run_id"`` are split on the dot —
+    the head must be a top-level property; we don't recurse further
+    (input schemas often don't model nested specs in detail).
     """
+    import inspect
     import json
     import re
 
@@ -281,9 +294,14 @@ def test_idempotency_key_names_input_schema_property(
             # idempotency_key invariant only applies to wire contracts,
             # so skip when there's nothing to check.
             continue
-        properties = schema.get("properties", {})
-        if not isinstance(properties, dict):
-            continue
+        properties: dict = {}
+        props = schema.get("properties", {})
+        if isinstance(props, dict):
+            properties = props
+        try:
+            sig_params = set(inspect.signature(meta.func).parameters)
+        except (TypeError, ValueError):
+            sig_params = set()
         # Tokenize the key. Tuple-style "(cluster, node)" -> ["cluster", "node"].
         # Dotted "spec.run_id" -> ["spec"]. Plain "run_id" -> ["run_id"].
         raw = meta.idempotency_key
@@ -295,10 +313,12 @@ def test_idempotency_key_names_input_schema_property(
         else:
             tokens = [raw]
         for tok in tokens:
-            if tok not in properties:
-                failures.append(
-                    f"{name}: idempotency_key={meta.idempotency_key!r} "
-                    f"references {tok!r} which is not a property of the input schema "
-                    f"(properties: {sorted(properties)})"
-                )
+            if tok in properties or tok in sig_params:
+                continue
+            failures.append(
+                f"{name}: idempotency_key={meta.idempotency_key!r} "
+                f"references {tok!r} which is neither a property of the input schema "
+                f"(properties: {sorted(properties)}) nor a parameter of "
+                f"{meta.func.__qualname__} (params: {sorted(sig_params)})"
+            )
     assert not failures, "\n".join(failures)

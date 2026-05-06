@@ -75,15 +75,33 @@ Spec shape (matches `schemas/aggregate_flow.input.json`):
   "run_id": "<run_id>",
   "ensure_all_combined": true,
   "combiner_max_retries": 1,
-  "pull_summaries": true,
-  "summary_glob": "<results.summary_pattern>",
-  "results_subdir": "results"
+  "mode": "auto",
+  "pull_summaries": false
 }
 ```
 
+**`mode: "auto"` is the default and the right choice 90% of the time.** It routes to `cluster-reduce` when the sidecar's `aggregate_defaults.aggregate_cmd` is set; otherwise to the combiner-only path. `pull_summaries: false` is the new default — only enable it (with an explicit `summary_glob`) when the user genuinely needs raw per-task files locally for debug or interpretation. Mode overrides:
+
+- `mode: "cluster-reduce"` — force the cluster-side reducer; raise if no `aggregate_cmd` is available.
+- `mode: "combiner-only"` — bypass the reducer; pull `_combiner/` partials and reduce locally. Useful when `metrics.json` already carries the right per-task scalar.
+
 Parse `data.aggregated_metrics` — that's the cross-wave reduced output. `data.combiner_dir_local` and `data.summaries_dir_local` are the local paths if downstream interpretation needs them.
 
-If `data.escalation_reason` is set (e.g. `combiner_failed_max_retries:waves=3,7`), surface to the user and decide whether the partial aggregation is acceptable. The atom proceeds with whatever waves DID combine; the caller decides whether the result is usable.
+**Verify the framework-knowable invariants** via the `verify-aggregation-complete` primitive before reporting to the user:
+
+```bash
+hpc-mapreduce verify-aggregation-complete \
+    --experiment-dir . \
+    --run-id "$RUN_ID" \
+    --combiner-dir "$COMBINER_DIR_LOCAL"
+```
+
+The envelope's `data` carries `{ok, all_waves_combined, missing_waves, all_tasks_present, missing_tasks, unexpected_tasks, provenance_present, ...}`. Branch:
+
+- `ok=True` → proceed to interpretation (Step 6).
+- `ok=False` → surface the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — escalate, don't paper over.
+
+If `data.escalation_reason` from `aggregate-flow` is set (e.g. `combiner_failed_max_retries:waves=3,7`), surface to the user and decide whether the partial aggregation is acceptable. The atom proceeds with whatever waves DID combine; the caller decides whether the result is usable.
 
 **Skip to Step 4** if the profile defines an `aggregate_defaults.aggregate_cmd` (an arbitrary user-defined cluster-side command that the framework doesn't know about) — that's the only step `aggregate-flow` doesn't replace.
 
@@ -161,10 +179,30 @@ Task completeness:
 
 ## Step 4: Aggregate on Cluster
 
+**Don't bulk-pull per-task outputs to reduce locally.** That's the 1200-chunk failure mode (raw CSVs / pickles dragged to Windows over rsync). Route through the **`cluster-reduce`** primitive instead — runs the user's reducer on the cluster, pulls only its single JSON output (KB, not GB):
+
+```bash
+hpc-mapreduce cluster-reduce --experiment-dir . --run-id "$RUN_ID"
+# (uses sidecar's aggregate_defaults.aggregate_cmd, OR pass --aggregate-cmd <cmd>)
+```
+
+The envelope's `data.reduced` is the parsed JSON the reducer wrote. Reducer contract documented at `docs/reference/reducer-contract.md`: any program that reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT` (default `_aggregated/<run_id>.json`).
+
+`aggregate-flow` already routes through `cluster-reduce` automatically when `mode='auto'` (the default) and an `aggregate_cmd` is on the sidecar — so a single `hpc-mapreduce aggregate-flow ...` call does the right thing without thinking. The Step 4 prose below applies only when you need to invoke the reducer ad-hoc (debug, override `aggregate_cmd`).
+
 Determine the aggregation command:
-1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it
-2. Else look for aggregation scripts in the repo (e.g., `scripts/aggregate.py`, `src/evaluation.py`)
-3. Else ask the user: "What command should I run to aggregate results?"
+1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it.
+2. Else invoke the **`discover-reducers`** primitive — DO NOT grep / write a fresh reducer first:
+   ```bash
+   hpc-mapreduce discover-reducers --experiment-dir .
+   ```
+   The envelope's `data.reducers` is a list of candidate `.py` files matched by filename stem (`aggregate.py`, `qlike.py`, `score.py`, etc.) or top-level function names (`def aggregate(...)`, `def reduce(...)`, `def score(...)`). Each entry carries `path`, `matches` (the signals that hit, e.g. `["name:qlike", "function:aggregate"]`), and the first line of the module docstring. Multi-signal hits sort first.
+   - **One candidate** that obviously matches the loss the user asked for → use it as `aggregate_cmd` and confirm with one short sentence.
+   - **Multiple candidates** → list them (path + docstring + matches) and ask the user which one. Don't pick silently.
+   - **Zero candidates** → fall through to step 3.
+3. Else ask the user: "I didn't find an existing reducer matching `<loss>` in `<repo>` (`hpc-mapreduce discover-reducers` returned nothing). Should I write one, or do you have an aggregation command I should use?" Surface that you searched explicitly so they don't assume you skipped the step.
+
+Writing a fresh reducer when one already exists is a common failure mode — the user has historically committed loss functions like QLIKE / RMSE / MAE under `scripts/`, `aggregators/`, `src/eval/`, etc., and a fresh one duplicates code AND drifts from the canonical implementation. The `discover-reducers` primitive exists specifically to bridge that gap; route through it.
 
 Run the aggregation command on the cluster. The command may operate per grid point (with `RESULT_DIR` set to each grid point's result directory) or globally if the command handles discovery itself.
 
@@ -184,19 +222,27 @@ ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <aggregate_cmd> --help'
 
 Verify the command succeeds (exit code 0). If it fails, read stderr and report to user.
 
-## Step 5: Download Summaries
+## Step 5: Download Summaries (almost never; default off)
 
-After aggregation completes, pull summary files from all grid point result directories:
+**Skip this step in the normal flow.** When `aggregate-flow` runs in `mode='auto'` or `mode='cluster-reduce'`, the reducer's single JSON output is already at `data.summaries_dir_local`; no per-task pull happens. When `mode='combiner-only'` the `_combiner/` partials are already pulled and reduced; no per-task pull either.
+
+Only enter this step when the user explicitly asks for raw per-task files locally — debug ("show me task 42's stderr / output"), forensic ("which chunk produced the outlier?"), or one-off interpretation that the reducer doesn't surface. In those cases pass `pull_summaries=true` + a NARROW `summary_glob` to `aggregate-flow` (don't manually rsync; the atom centralises the include/exclude logic):
+
+```json
+{ "run_id": "<run_id>", "pull_summaries": true, "summary_glob": "task_42_*.csv" }
+```
+
+Or, ad-hoc:
 
 ```bash
 rsync -az \
     --include='*/' \
-    --include='<results.summary_pattern>' \
+    --include='<narrow_pattern>' \
     --exclude='*' \
     $SSH_TARGET:$REMOTE_PATH/<result_base_dir>/ ./<result_base_dir>/
 ```
 
-If `results.summary_pattern` is a list, include each pattern. Verify downloaded files exist locally.
+**Avoid permissive globs** like `*.csv` or `metrics.json` — those drag every per-task file across the wire and recreate the failure mode `cluster-reduce` exists to eliminate. If you find yourself reaching for a broad glob, the right answer is usually "write a reducer" (see [reducer-contract.md](../../docs/reference/reducer-contract.md)).
 
 ## Step 6: Interpret Results
 

@@ -41,6 +41,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "runtime_path",
     "append_sample",
+    "ingest_runtime_samples_from_combiner_dir",
     "read_samples",
     "roll_up_quantiles",
 ]
@@ -50,13 +51,15 @@ import os
 import statistics
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc import errors
 from claude_hpc._internal._io import atomic_locked_update
+from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 
 # Per-(profile, cluster) sample-count cap. Override via HPC_MAX_RUNTIME_SAMPLES.
 # A long campaign easily produces hundreds of thousands of tasks; the prior is
@@ -184,6 +187,7 @@ def append_sample(
     predicted_eta_sec: int | None = None,
     submitted_at_iso: str | None = None,
     queue_wait_sec: int | None = None,
+    axis_bindings: dict[str, Any] | None = None,
 ) -> Path:
     """Append a single runtime sample. Returns the file path written.
 
@@ -235,6 +239,10 @@ def append_sample(
         # negative delta (clock skew) records None rather than a
         # nonsense negative.
         "queue_wait_sec": _resolve_queue_wait_sec(queue_wait_sec, started_at, submitted_at_iso),
+        # v2 axis_bindings — dict of {axis_name: value} from tasks.py.resolve(task_id).
+        # Empty dict for samples appended without bindings (e.g. legacy callers); the
+        # warm-path picker filters those out via len-check.
+        "axis_bindings": dict(axis_bindings) if axis_bindings else {},
     }
 
     def _mutate(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -252,6 +260,71 @@ def append_sample(
 
     atomic_locked_update(path, _mutate)
     return path
+
+
+def ingest_runtime_samples_from_combiner_dir(
+    combiner_dir: Path,
+    *,
+    experiment_dir: Path,
+    profile: str,
+    cluster: str,
+    cmd_sha: str | None = None,
+) -> int:
+    """Walk ``wave_*.runtime.json`` under *combiner_dir* and append samples.
+
+    The cluster-side combiner emits one ``wave_<N>.runtime.json`` per wave
+    alongside ``wave_<N>.json``; aggregate-flow rsync_pulls the whole
+    ``_combiner/`` directory locally. This helper walks the pulled files
+    and calls :func:`append_sample` for each row, so the warm-axis-picker
+    (and other prior consumers) see the latest task durations + axis
+    bindings without any separate ingest pass.
+
+    Returns the number of samples successfully appended. Idempotent:
+    :func:`append_sample` dedups on ``(run_id, task_id)``, so re-running
+    on the same combiner dir is safe — duplicate calls overwrite rather
+    than double-count.
+    """
+    if not combiner_dir.is_dir():
+        return 0
+    appended = 0
+    for path in sorted(combiner_dir.glob("wave_*.runtime.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        run_id = str(doc.get("run_id") or "")
+        for sample in doc.get("samples") or []:
+            if not isinstance(sample, dict):
+                continue
+            task_id = sample.get("task_id")
+            if task_id is None:
+                continue
+            try:
+                append_sample(
+                    experiment_dir,
+                    profile=profile,
+                    cluster=cluster,
+                    run_id=str(sample.get("run_id") or run_id),
+                    task_id=int(task_id),
+                    gpu_type=str(sample.get("gpu_type") or ""),
+                    node=str(sample.get("node") or ""),
+                    elapsed_sec=int(sample.get("elapsed_sec") or 0),
+                    exit_code=int(sample.get("exit_code") or 0),
+                    cmd_sha=cmd_sha,
+                    started_at=sample.get("started_at"),
+                    ended_at=sample.get("ended_at"),
+                    axis_bindings=(
+                        sample.get("axis_bindings")
+                        if isinstance(sample.get("axis_bindings"), dict)
+                        else None
+                    ),
+                )
+                appended += 1
+            except (TypeError, ValueError, OSError):
+                continue
+    return appended
 
 
 def read_samples(
@@ -286,6 +359,13 @@ def _quantile(values: list[int], q: float) -> int:
     return int(round(s[lo] * (1 - frac) + s[hi] * frac))
 
 
+@primitive(
+    name="read-runtime-prior",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def roll_up_quantiles(
     experiment_dir: Path,
     *,

@@ -37,7 +37,7 @@ from typing import Any
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc.infra.remote import rsync_pull, split_ssh_target
+from claude_hpc.infra.remote import rsync_pull, validate_ssh_target
 from claude_hpc.mapreduce.reduce.metrics import reduce_partials
 from claude_hpc.runner import combine_wave, record_status
 from claude_hpc.state.runs import read_run_sidecar
@@ -71,12 +71,12 @@ class AggregateFlowResult:
         }
 
 
-def _split_ssh_target(ssh_target: str) -> tuple[str, str]:
-    """Wrap :func:`split_ssh_target` to raise the surface-appropriate
-    error type. See :mod:`claude_hpc.infra.remote.split_ssh_target`.
+def _validate_ssh_target(ssh_target: str) -> str:
+    """Wrap :func:`validate_ssh_target` to raise the surface-appropriate
+    error type. See :mod:`claude_hpc.infra.remote.validate_ssh_target`.
     """
     try:
-        return split_ssh_target(ssh_target)
+        return validate_ssh_target(ssh_target)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
 
@@ -159,6 +159,9 @@ def aggregate_flow(
     pull_summaries: bool = False,
     summary_glob: str | None = None,
     results_subdir: str = "results",
+    mode: str = "auto",
+    aggregate_cmd: str | None = None,
+    aggregate_output_path: str | None = None,
 ) -> AggregateFlowResult:
     """Finalize a run's aggregation; return paths + reduced metrics.
 
@@ -202,6 +205,10 @@ def aggregate_flow(
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for {run_id!r}; submit the run first")
 
+    if mode not in {"auto", "combiner-only", "cluster-reduce"}:
+        raise errors.SpecInvalid(
+            f"mode must be 'auto'|'combiner-only'|'cluster-reduce', got {mode!r}"
+        )
     if pull_summaries and not summary_glob:
         raise errors.SpecInvalid("summary_glob is required when pull_summaries=true")
 
@@ -209,7 +216,47 @@ def aggregate_flow(
     out = experiment_dir / "_aggregated" / run_id if output_dir is None else Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    user, host = _split_ssh_target(record.ssh_target)
+    _validate_ssh_target(record.ssh_target)
+
+    # Mode resolution + cluster-reduce short-circuit. The cluster-reduce
+    # path runs the user's reducer on the cluster and pulls only its
+    # single JSON output (KB) — bypasses the bulk per-task rsync_pull
+    # that drags GBs of raw chunks to local. Falls back to combiner-
+    # only when no aggregate_cmd is available; mode='auto' makes that
+    # decision; mode='cluster-reduce' raises if no command is found.
+    sidecar_for_cmd: dict[str, Any] = {}
+    try:
+        sidecar_for_cmd = read_run_sidecar(experiment_dir, run_id) or {}
+    except (FileNotFoundError, OSError):
+        sidecar_for_cmd = {}
+    resolved_aggregate_cmd = aggregate_cmd or (
+        (sidecar_for_cmd.get("aggregate_defaults") or {}).get("aggregate_cmd")
+    )
+    if mode == "cluster-reduce" or (mode == "auto" and resolved_aggregate_cmd):
+        if not resolved_aggregate_cmd:
+            raise errors.SpecInvalid(
+                "mode='cluster-reduce' requires aggregate_cmd= or "
+                "aggregate_defaults.aggregate_cmd on the run sidecar."
+            )
+        from claude_hpc.atoms.cluster_reduce import cluster_reduce
+
+        cr = cluster_reduce(
+            experiment_dir,
+            run_id=run_id,
+            aggregate_cmd=resolved_aggregate_cmd,
+            output_path=aggregate_output_path,
+            local_dir=out,
+        )
+        return AggregateFlowResult(
+            run_id=run_id,
+            combined_waves=list(record.combined_waves),
+            failed_waves=list(record.failed_waves),
+            waves_combined_this_call=[],
+            combiner_dir_local=str(out),
+            aggregated_metrics=(cr["reduced"] if isinstance(cr.get("reduced"), dict) else {}),
+            summaries_dir_local=str(cr["output_path_local"]),
+            escalation_reason=None,
+        )
 
     # Read the sidecar's wave_map (record carries combined_waves but not
     # wave_map — that lives in the per-run sidecar JSON, under
@@ -245,8 +292,7 @@ def aggregate_flow(
     # Pull the combined partials.
     combiner_local = out / "_combiner"
     pull = rsync_pull(
-        host=host,
-        user=user,
+        ssh_target=record.ssh_target,
         remote_path=record.remote_path,
         remote_subdir="_combiner",
         local_dir=str(combiner_local),
@@ -262,13 +308,40 @@ def aggregate_flow(
     # Reduce locally.
     aggregated = reduce_partials(combiner_local)
 
+    # Ingest runtime samples (timing + axis_bindings) from the pulled
+    # ``wave_*.runtime.json`` files into <experiment>/.hpc/runtimes/.
+    # Best-effort: a missing or malformed runtime sidecar must NOT abort
+    # the aggregate (the user wants their metrics, not a prior
+    # bookkeeping failure). The warm-axis-picker on the next submit
+    # picks up whatever landed.
+    try:
+        from claude_hpc.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
+
+        ingested = ingest_runtime_samples_from_combiner_dir(
+            combiner_local,
+            experiment_dir=experiment_dir,
+            profile=record.profile,
+            cluster=record.cluster,
+            cmd_sha=(
+                read_run_sidecar(experiment_dir, run_id).get("cmd_sha")
+                if combiner_local.is_dir()
+                else None
+            ),
+        )
+        if ingested:
+            print(
+                f"[aggregate-flow] ingested {ingested} runtime samples "
+                f"into .hpc/runtimes/{record.profile}.{record.cluster}.json"
+            )
+    except (FileNotFoundError, OSError):
+        pass
+
     # Optionally pull summaries.
     summaries_local: str | None = None
     if pull_summaries:
         sl = out / "summaries"
         sp = rsync_pull(
-            host=host,
-            user=user,
+            ssh_target=record.ssh_target,
             remote_path=record.remote_path,
             remote_subdir=results_subdir,
             local_dir=str(sl),

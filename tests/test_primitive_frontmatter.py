@@ -51,3 +51,22 @@ def test_at_least_one_primitive_per_verb_band() -> None:
     # Workflow + at least one of (query / mutate / submit / scaffold) must exist.
     assert "workflow" in verbs, "no workflow-tier primitives — composite layer empty?"
     assert verbs & {"query", "mutate", "submit", "scaffold"}, "no leaf primitives at all"
+
+
+def test_every_registered_primitive_has_a_doc() -> None:
+    """Every name in the @primitive registry must have a docs/primitives/<name>.md.
+
+    Catches the silent-orphan case where someone adds @primitive(...) but
+    forgets to create the doc file. ``scripts/build_primitive_frontmatter.py
+    --write`` auto-scaffolds missing docs; this test fails CI when the
+    scaffold step was skipped.
+    """
+    from claude_hpc._internal._primitive import get_registry, register_primitives
+
+    register_primitives()
+    docs = {p.stem for p in _primitive_files()}
+    missing = sorted(name for name in get_registry() if name not in docs)
+    assert not missing, (
+        "primitives in the @primitive registry have no docs/primitives/<name>.md: "
+        f"{missing}. Run scripts/build_primitive_frontmatter.py --write to scaffold."
+    )

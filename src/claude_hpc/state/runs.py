@@ -23,6 +23,8 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+from claude_hpc._internal._primitive import SideEffect, primitive
+
 __all__ = [
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
@@ -30,9 +32,12 @@ __all__ = [
     "compute_tasks_py_sha",
     "find_existing_runs",
     "find_run_by_cmd_sha",
+    "is_orphan_sidecar",
     "prune_old_runs",
+    "prune_orphan_sidecars",
     "read_run_sidecar",
     "run_sidecar_path",
+    "update_run_sidecar_job_ids",
     "write_run_sidecar",
 ]
 
@@ -155,6 +160,12 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "runtime": None,
     "auto_retry": None,
     "aggregate_defaults": None,
+    # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
+    # sidecar without job_ids (and without a journal record) is the half-
+    # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
+    # `[]`) so the backfill stays distinguishable from a deliberate
+    # "no job ids yet" empty list at write time.
+    "job_ids": None,
 }
 
 # Hardened return-shape defaults. ``read_run_sidecar`` always fills these
@@ -170,6 +181,57 @@ _HARDENED_DEFAULTS: dict[str, Any] = {
 # (run_id, sidecar_version) so a long-running monitor that re-reads the
 # same sidecar 1000 times only emits one warning per (run, version).
 _warned_version_mismatch: set[tuple[str, str]] = set()
+
+
+def _maybe_derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str, list[int]] | None:
+    """Best-effort axes-driven wave_map derivation. Returns None on any miss.
+
+    Silent on the happy path; emits a :class:`UserWarning` only when
+    ``axes.yaml`` is present with a full enumeration but the cartesian
+    product of axis sizes disagrees with *task_count* — that's a sign
+    of a misconfigured deploy and the user wants to hear about it.
+    """
+    import jsonschema
+    import yaml
+
+    try:
+        from claude_hpc.planning.axes import (
+            compute_wave_map,
+            pick_array_axis,
+            read_axes,
+        )
+    except ImportError:
+        return None
+
+    try:
+        config = read_axes(experiment_dir)
+    except (jsonschema.ValidationError, yaml.YAMLError, ValueError, OSError):
+        return None
+    if config is None or not config.get("axes"):
+        return None
+
+    sizes = [int(a["size"]) for a in config["axes"]]
+    product = 1
+    for s in sizes:
+        product *= s
+    if product != task_count:
+        warnings.warn(
+            f"axes.yaml product ({product}) != task_count ({task_count}); "
+            "skipping auto-derived wave_map. Re-run /hpc-axes-init or pass "
+            "wave_map explicitly.",
+            UserWarning,
+            stacklevel=3,
+        )
+        return None
+
+    picked_name, _ = pick_array_axis(experiment_dir)
+    if picked_name is None:
+        return None
+    try:
+        derived = compute_wave_map(experiment_dir, picked_axis=picked_name)
+    except (ValueError, jsonschema.ValidationError):
+        return None
+    return {str(k): list(v) for k, v in derived.items()}
 
 
 def write_run_sidecar(
@@ -200,6 +262,7 @@ def write_run_sidecar(
     runtime: str | None = None,
     auto_retry: dict[str, Any] | None = None,
     aggregate_defaults: dict[str, Any] | None = None,
+    job_ids: list[str] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
 
@@ -213,6 +276,15 @@ def write_run_sidecar(
     every successful ``/submit`` should populate the ones that apply, so
     subsequent commands (``/aggregate``, ``/status``, ``/resubmit``) can
     rebuild full context without consulting any external config file.
+
+    Auto-derived ``wave_map``: when *wave_map* is None and
+    ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,
+    the picker (warm-then-cold) selects an array axis and
+    :func:`compute_wave_map` derives the assignment. The cartesian
+    product of axis sizes must equal *task_count*; on mismatch we emit
+    a :class:`UserWarning` and fall through (sidecar is still written
+    without ``wave_map``). This integration is silent on the happy
+    path — callers that already pass *wave_map* are unaffected.
     """
     sidecar: dict[str, Any] = {
         "sidecar_schema_version": SIDECAR_SCHEMA_VERSION,
@@ -225,6 +297,8 @@ def write_run_sidecar(
         "task_count": int(task_count),
         "tasks_py_sha": tasks_py_sha,
     }
+    if wave_map is None:
+        wave_map = _maybe_derive_wave_map(experiment_dir, task_count=int(task_count))
     if wave_map is not None:
         sidecar["wave_map"] = {str(k): list(v) for k, v in wave_map.items()}
     if extra:
@@ -245,6 +319,7 @@ def write_run_sidecar(
         "runtime": runtime,
         "auto_retry": auto_retry,
         "aggregate_defaults": aggregate_defaults,
+        "job_ids": list(job_ids) if job_ids is not None else None,
     }
     for k, v in v2_values.items():
         if v is not None:
@@ -348,11 +423,22 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     return hits
 
 
-def find_run_by_cmd_sha(experiment_dir: Path, cmd_sha: str) -> Path | None:
+def find_run_by_cmd_sha(
+    experiment_dir: Path, cmd_sha: str, *, skip_orphans: bool = False
+) -> Path | None:
     """Return the newest sidecar matching *cmd_sha*, or ``None`` if absent.
 
     Compares the full cmd_sha string. Iterates newest-first so a fresh
     resume detection picks the most recent matching run.
+
+    *skip_orphans* (default False) preserves the journal-wipe recovery
+    contract: a sidecar with no journal record is the canonical signal
+    that the journal at ``~/.claude/hpc/<repo_hash>/`` was wiped (machine
+    swap, rm -rf) and ``submit_and_record`` should reconstruct from the
+    sidecar instead of re-qsub'ing a job the cluster already has running.
+    Pass ``skip_orphans=True`` only after a known-failed batch where the
+    sidecars without journal records are guaranteed to be half-baked
+    (e.g. inside the prune primitive) — see :func:`prune_orphan_sidecars`.
     """
     if not cmd_sha:
         return None
@@ -361,9 +447,120 @@ def find_run_by_cmd_sha(experiment_dir: Path, cmd_sha: str) -> Path | None:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("cmd_sha") == cmd_sha:
-            return path
+        if data.get("cmd_sha") != cmd_sha:
+            continue
+        if skip_orphans and is_orphan_sidecar(experiment_dir, path.stem):
+            continue
+        return path
     return None
+
+
+def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
+    """Return True if the sidecar for *run_id* never landed a cluster job.
+
+    A sidecar is orphan when BOTH:
+
+    * Its ``job_ids`` field is empty/missing (set by
+      :func:`update_run_sidecar_job_ids` after a successful qsub).
+    * No live journal record exists for the same ``run_id`` (or the
+      journal record's ``job_ids`` is empty).
+
+    Either signal alone is not enough:
+
+    * Sidecar with ``job_ids`` and no journal — that's the journal-wipe
+      recovery contract (machine swap / ``rm -rf ~/.claude/hpc/``);
+      :func:`runner.submit_and_record` will reconstruct the journal from
+      the sidecar's ``job_ids``.
+    * Empty sidecar ``job_ids`` but a live journal with ``job_ids`` —
+      pre-existing v2 sidecars that predate the post-qsub finalize hook;
+      we trust the journal and treat the sidecar as committed.
+
+    Used by :func:`find_run_by_cmd_sha` (opt-in skip during resume
+    detection) and :func:`prune_orphan_sidecars` (delete them).
+    """
+    from claude_hpc._internal import session
+
+    # Sidecar-side signal: was finalize_run_sidecar_job_ids ever called?
+    sidecar_path = run_sidecar_path(experiment_dir, run_id)
+    sidecar_job_ids: list[str] | None = None
+    try:
+        sidecar_data = json.loads(sidecar_path.read_text())
+        raw = sidecar_data.get("job_ids")
+        if isinstance(raw, list):
+            sidecar_job_ids = [str(j) for j in raw]
+    except (OSError, json.JSONDecodeError):
+        sidecar_job_ids = None
+
+    # Journal-side signal: did submit_and_record run to completion?
+    try:
+        record = session.load_run(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — journal corruption == treat as orphan
+        record = None
+
+    sidecar_committed = bool(sidecar_job_ids)
+    journal_committed = record is not None and bool(record.job_ids)
+    return not (sidecar_committed or journal_committed)
+
+
+def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[str]) -> Path:
+    """Rewrite an existing sidecar with *job_ids* set; return its path.
+
+    Called from :func:`runner.submit_and_record` immediately after qsub
+    returns. Loads the sidecar in place, sets ``job_ids``, and atomically
+    rewrites — preserving all other v2 config fields (resources, env,
+    constraints, …) untouched. This is the post-qsub finalize that
+    distinguishes a real run from the half-baked sidecar Step 6d wrote
+    before rsync.
+
+    Idempotent: re-running with the same *job_ids* is a no-op rewrite.
+    Raises :class:`FileNotFoundError` if no sidecar exists for *run_id*
+    (the caller should have written one earlier in the pipeline).
+    """
+    target = run_sidecar_path(experiment_dir, run_id)
+    if not target.is_file():
+        raise FileNotFoundError(f"run sidecar not found: {target}")
+    data: dict[str, Any] = json.loads(target.read_text())
+    data["job_ids"] = [str(j) for j in job_ids]
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    tmp.replace(target)
+    return target
+
+
+@primitive(
+    name="prune-orphan-sidecars",
+    verb="mutate",
+    side_effects=[
+        SideEffect("removes-files", "<experiment>/.hpc/runs/*.json (orphans only)"),
+    ],
+    idempotent=True,
+    idempotency_key="experiment_dir",
+)
+def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:
+    """Delete every orphan sidecar under ``<exp>/.hpc/runs/``.
+
+    Returns the list of run_ids whose sidecars were removed (for a
+    diagnostic banner in the slash-command flow). Idempotent —
+    re-invocations after the first pass are no-ops.
+
+    Use case: a campaign batch hit cluster-side ssh rate limits, leaving
+    half-baked sidecars from the failed submissions. Those sidecars
+    would otherwise show up to :func:`find_run_by_cmd_sha` and the
+    runtime-prior aggregator without a corresponding cluster job. Run
+    this primitive after the batch finishes (or as part of `/resume-hpc`
+    or `/setup_hpc`) to clean them up.
+    """
+    deleted: list[str] = []
+    for path in find_existing_runs(experiment_dir):
+        run_id = path.stem
+        if not is_orphan_sidecar(experiment_dir, run_id):
+            continue
+        try:
+            path.unlink()
+            deleted.append(run_id)
+        except OSError:
+            continue
+    return deleted
 
 
 def prune_old_runs(experiment_dir: Path, keep: int = MAX_RUNS) -> list[Path]:

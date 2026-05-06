@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/build_submit_spec.input.json",
+  "title": "build-submit-spec input",
+  "description": "Resolved interview values fed to `claude_hpc.atoms.build_submit_spec`. The primitive synthesizes the framework-required job_env keys and emits a validated submit_flow.input.json spec ready for submit-flow.",
+  "type": "object",
+  "required": [
+    "profile",
+    "cluster",
+    "ssh_target",
+    "remote_path",
+    "run_id",
+    "cmd_sha",
+    "total_tasks",
+    "backend"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cluster": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ssh_target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "remote_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+    },
+    "cmd_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "total_tasks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "backend": {
+      "type": "string",
+      "enum": [
+        "sge_remote",
+        "slurm"
+      ]
+    },
+    "is_gpu": {
+      "type": "boolean"
+    },
+    "job_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "script": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "modules": {
+      "type": "string"
+    },
+    "conda_source": {
+      "type": "string"
+    },
+    "conda_env": {
+      "type": "string"
+    },
+    "runtime": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "canary": {
+      "type": "boolean"
+    },
+    "partial_ok": {
+      "type": "boolean"
+    },
+    "skip_preflight": {
+      "type": "boolean"
+    },
+    "pass_env_keys": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "rsync_excludes": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "slurm_account": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "slurm_cluster": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "extra_env": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

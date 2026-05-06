@@ -13,7 +13,7 @@ from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.session import RunRecord, _atomic_write_json
 from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra import remote
-from claude_hpc.runner._ssh import _parse_remote_json, _split_ssh_target
+from claude_hpc.runner._ssh import _parse_remote_json
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,7 +36,6 @@ def _ssh_status_report(
     pinned by ``docs/reference/cli-contract.md`` (summary / tasks / rollup /
     errors).
     """
-    user, host = _split_ssh_target(ssh_target)
     job_ids_csv = ",".join(job_ids)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
@@ -47,12 +46,20 @@ def _ssh_status_report(
         f"--log-dir {shlex.quote(log_dir)} "
         f"--file-glob {shlex.quote(file_glob)}"
     )
-    proc = remote.ssh_run(cmd, host=host, user=user)
+    proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
         raise RemoteCommandFailed(
             f"status reporter failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
     return _parse_remote_json(proc.stdout, source_label="status reporter")
+
+
+# Public alias — atoms / external orchestrators that need to invoke the
+# remote status reporter directly should reach for this name. The
+# underscore-prefixed original is kept for back-compat with the
+# package-internal callers (``reconcile``, ``failures``, ``logs``,
+# ``record_status``).
+ssh_status_report = _ssh_status_report
 
 
 @primitive(

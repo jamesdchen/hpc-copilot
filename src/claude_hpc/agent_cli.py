@@ -33,7 +33,6 @@ from typing import Any
 import claude_hpc
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc.state.discover import (
     detect_mars_tier,
     discover_executors,
@@ -112,6 +111,10 @@ def _ok(
     """
     if idempotent is None:
         idempotent = _meta_idempotent(name) if name else True
+    if name:
+        from claude_hpc._internal._schema import validate_output
+
+        validate_output(data, name)
     env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
     if partial_errors:
         env["partial_errors"] = list(partial_errors)
@@ -258,7 +261,7 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
     return loaded
 
 
-def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
+def _validate_against_schema(payload: Any, schema_name: str) -> None:
     """Validate *payload* against ``claude_hpc/schemas/<schema_name>.input.json``.
 
     Raises :class:`errors.SpecInvalid` on schema mismatch.  When the
@@ -266,6 +269,10 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
     picked up the runtime dep), this falls back to a no-op so the CLI
     keeps working — schema validation is defence in depth, not the only
     line of defence (``submit_and_record`` etc. still validate inputs).
+
+    Cross-file ``$ref`` (e.g. into ``envelope.json#/$defs/run_id``)
+    resolves through the shared registry in :mod:`claude_hpc._internal._schema`;
+    consumer schemas no longer inline ``$defs`` copies verbatim.
     """
     try:
         import jsonschema  # type: ignore[import-untyped]
@@ -278,8 +285,10 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
+    from claude_hpc._internal._schema import validate as _validate
+
     try:
-        jsonschema.validate(payload, schema)
+        _validate(payload, schema)
     except jsonschema.ValidationError as exc:
         path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
         raise errors.SpecInvalid(
@@ -292,6 +301,8 @@ def _validate_against_schema(payload: dict[str, Any], schema_name: str) -> None:
 
 # Re-exported from claude_hpc.atoms.capabilities for back-compat with
 # tests that import the constant directly from agent_cli.
+# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 —
+# update tests to import from claude_hpc.atoms.capabilities directly.
 from claude_hpc.atoms.capabilities import _MARS_SKILL_NAMES  # noqa: E402,F401
 
 
@@ -308,6 +319,20 @@ def _live_subcommands() -> list[str]:
         if isinstance(action, argparse._SubParsersAction):
             return sorted(action.choices)
     return []
+
+
+def cmd_hook_install(args: argparse.Namespace) -> int:
+    """Install claude-hpc's bundled Stop hooks into ~/.claude/settings.json.
+
+    Idempotent: re-running with already-installed hooks is a no-op. Use
+    ``--dry-run`` to preview the merge without writing.
+    """
+    from claude_hpc.hooks.install import install_hooks
+
+    settings_path = Path(args.settings).expanduser() if args.settings else None
+    summary = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
+    _ok(summary, name="hook-install")
+    return EXIT_OK
 
 
 def cmd_capabilities(args: argparse.Namespace) -> int:
@@ -365,6 +390,20 @@ def cmd_recall(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.recall."""
     from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
 
+    payload: dict[str, Any] = {
+        "limit": int(getattr(args, "limit", 20)),
+        "include_runtime": bool(getattr(args, "include_runtime", False)),
+        "include_generator_stats": bool(getattr(args, "include_generator_stats", False)),
+    }
+    if getattr(args, "root", None):
+        payload["root"] = args.root
+    if getattr(args, "task_kind", None):
+        payload["task_kind"] = args.task_kind
+    if getattr(args, "operator", None):
+        payload["operator"] = args.operator
+    if getattr(args, "since", None):
+        payload["since"] = args.since
+    _validate_against_schema(payload, "recall")
     roots = resolve_roots(getattr(args, "root", None))
     try:
         data = recall_campaigns(
@@ -402,6 +441,37 @@ def cmd_discover(args: argparse.Namespace) -> int:
     if meta is not None:
         data["meta"] = meta
     _ok(data, name="discover-executors")
+    return EXIT_OK
+
+
+# ─── subcommand: discover-reducers ─────────────────────────────────────────
+
+
+def cmd_discover_reducers(args: argparse.Namespace) -> int:
+    """Surface candidate reducer / aggregator scripts in the experiment repo.
+
+    The motivating failure mode: at /aggregate-hpc time the agent writes
+    a fresh QLIKE / RMSE / etc. aggregator instead of finding the one
+    the user already committed. This subcommand calls
+    :func:`claude_hpc.state.discover.discover_reducers` so the slash
+    command can route through a CLI primitive instead of grep'ing the
+    repo by hand.
+    """
+    from claude_hpc.state.discover import discover_reducers
+
+    infos = discover_reducers(args.experiment_dir)
+    data = {
+        "reducers": [
+            {
+                "name": i.name,
+                "path": str(i.path),
+                "matches": list(i.matches),
+                "docstring": i.docstring,
+            }
+            for i in infos
+        ]
+    }
+    _ok(data, name="discover-reducers")
     return EXIT_OK
 
 
@@ -452,6 +522,8 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
     # rather than burying them inside ``data.errors`` where machine
     # consumers tend to miss them. The legacy ``data.errors`` shape is
     # kept (snap.to_dict() includes it) for one release as back-compat.
+    # back-compat: introduced 0.2.0 (B3 partial_errors split). Remove in
+    # 0.3.0 — strip ``errors`` from snap.to_dict() and update fixtures.
     payload = snap.to_dict()
     partial = list(payload.get("errors", []))
     _ok(payload, name="inspect-cluster", partial_errors=partial or None)
@@ -461,13 +533,6 @@ def cmd_inspect_cluster(args: argparse.Namespace) -> int:
 # ─── subcommand: runtime-prior ─────────────────────────────────────────────
 
 
-@primitive(
-    name="read-runtime-prior",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_runtime_prior(args: argparse.Namespace) -> int:
     from claude_hpc.state.runtime_prior import roll_up_quantiles
 
@@ -501,13 +566,6 @@ def cmd_walltime_drift(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-@primitive(
-    name="best-submit-window",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.HpcError],
-    idempotent=True,
-)
 def cmd_best_submit_window(args: argparse.Namespace) -> int:
     """Surface the top_k lowest-wait submit windows in the next horizon.
 
@@ -519,6 +577,15 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     """
     from claude_hpc.forecast.best_submit_window import best_submit_windows
 
+    _validate_against_schema(
+        {
+            "profile": args.profile,
+            "cluster": args.cluster,
+            "within_hours": int(args.within_hours),
+            "top_k": int(args.top_k),
+        },
+        "best_submit_window",
+    )
     candidates = best_submit_windows(
         args.experiment_dir,
         profile=args.profile,
@@ -539,13 +606,6 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-@primitive(
-    name="predict-queue-wait",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-)
 def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     """Forecast queue-wait seconds for a hypothetical submit.
 
@@ -556,6 +616,17 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     """
     from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
+    payload: dict[str, Any] = {
+        "profile": args.profile,
+        "cluster": args.cluster,
+        "backend": args.backend,
+        "n_replications": int(args.n_replications),
+    }
+    if args.at_iso is not None:
+        payload["at_iso"] = args.at_iso
+    if args.seed is not None:
+        payload["seed"] = int(args.seed)
+    _validate_against_schema(payload, "predict_queue_wait")
     out = predict_queue_wait(
         args.experiment_dir,
         profile=args.profile,
@@ -588,13 +659,6 @@ def cmd_house_edge(args: argparse.Namespace) -> int:
 # ─── subcommand: plan-submit ───────────────────────────────────────────────
 
 
-@primitive(
-    name="score-submit-plan",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster> (delegates to inspect-cluster)")],
-    error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.ClusterUnknown],
-    idempotent=True,
-)
 def cmd_plan_submit(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -672,6 +736,245 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
     from claude_hpc.atoms.campaign_list import campaign_list
 
     _ok(campaign_list(experiment_dir=args.experiment_dir), name="campaign-list")
+    return EXIT_OK
+
+
+def cmd_build_submit_spec(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.build_submit_spec.
+
+    Accepts a JSON ``--spec <file>`` of resolved interview values
+    (profile/cluster/ssh_target/.../cmd_sha/total_tasks/...) and emits
+    the assembled + schema-validated ``submit_flow.input.json`` dict
+    on stdout's ``data`` field. Pipe it straight into
+    ``submit-flow --spec``.
+    """
+    from claude_hpc.atoms.build_submit_spec import build_submit_spec
+
+    raw = _load_spec(args.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="build-submit-spec input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    _validate_against_schema(raw, "build_submit_spec")
+    try:
+        spec = build_submit_spec(**raw)
+    except TypeError as exc:
+        # Caller passed an unknown / missing kwarg.
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(spec, name="build-submit-spec")
+    return EXIT_OK
+
+
+def cmd_build_tasks_py(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.build_tasks_py.
+
+    Accepts a JSON ``--spec <file>`` of ``{axes, flags_by_executor,
+    force?}`` and scaffolds ``<experiment>/.hpc/tasks.py`` from the
+    canonical Pattern 1 (cartesian product) template. Refuses to
+    overwrite without ``force=true`` so hand-edited Pattern 2/3
+    conversions survive across re-runs.
+    """
+    from claude_hpc.atoms.build_tasks_py import build_tasks_py
+
+    raw = _load_spec(args.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="build-tasks-py input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    _validate_against_schema(raw, "build_tasks_py")
+    try:
+        out = build_tasks_py(
+            experiment_dir=args.experiment_dir,
+            axes=raw.get("axes") or [],
+            flags_by_executor=raw.get("flags_by_executor") or {},
+            force=bool(raw.get("force", False) or args.force),
+        )
+    except TypeError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(out, name="build-tasks-py")
+    return EXIT_OK
+
+
+def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.monitor_arm.
+
+    Reads a JSON ``--spec`` describing the current run state and emits
+    the cron/loop/none decision + ``armed:`` line + cron_create_args.
+    The slash-command epilogue copies ``armed_line`` verbatim and (when
+    ``arm == "cron"``) passes ``cron_create_args`` to ``CronCreate``.
+    """
+    from claude_hpc.atoms.monitor_arm import decide_monitor_arm
+
+    raw = _load_spec(args.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="decide-monitor-arm input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    _validate_against_schema(raw, "decide_monitor_arm")
+    try:
+        out = decide_monitor_arm(**raw)
+    except TypeError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(out, name="decide-monitor-arm")
+    return EXIT_OK
+
+
+def cmd_monitor_summary(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.monitor_summary."""
+    from claude_hpc.atoms.monitor_summary import monitor_summary
+
+    out = monitor_summary(args.experiment_dir, run_id=args.run_id)
+    _ok(out, name="monitor-summary")
+    return EXIT_OK
+
+
+def cmd_suggest_setup_action(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.setup_actions."""
+    from claude_hpc.atoms.setup_actions import suggest_setup_action
+
+    _ok(suggest_setup_action(args.experiment_dir), name="suggest-setup-action")
+    return EXIT_OK
+
+
+def cmd_find_prior_run(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.setup_actions."""
+    from claude_hpc.atoms.setup_actions import find_prior_run
+
+    _ok(
+        find_prior_run(args.experiment_dir, cmd_sha=args.cmd_sha),
+        name="find-prior-run",
+    )
+    return EXIT_OK
+
+
+def cmd_summarize_submit_plan(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.submit_plan_summary."""
+    from claude_hpc.atoms.submit_plan_summary import summarize_submit_plan
+
+    spec = _load_spec(args.spec, schema_name=None)
+    if not isinstance(spec, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="summarize-submit-plan input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(summarize_submit_plan(spec), name="summarize-submit-plan")
+    return EXIT_OK
+
+
+def cmd_verify_aggregation_complete(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.aggregation_invariants."""
+    from claude_hpc.atoms.aggregation_invariants import verify_aggregation_complete
+
+    _ok(
+        verify_aggregation_complete(
+            args.experiment_dir,
+            run_id=args.run_id,
+            combiner_dir_local=args.combiner_dir,
+        ),
+        name="verify-aggregation-complete",
+    )
+    return EXIT_OK
+
+
+def cmd_verify_canary(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.canary_verify."""
+    from claude_hpc.atoms.canary_verify import verify_canary
+
+    _ok(
+        verify_canary(
+            args.experiment_dir,
+            canary_run_id=args.canary_run_id,
+            expect_output=args.expect_output,
+            poll_interval_sec=int(args.poll_interval_sec),
+            wait_budget_sec=int(args.wait_budget_sec),
+        ),
+        name="verify-canary",
+    )
+    return EXIT_OK
+
+
+def cmd_cluster_reduce(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.cluster_reduce."""
+    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+
+    extra_env: dict[str, str] | None = None
+    if getattr(args, "extra_env", None):
+        extra_env = {}
+        for tok in str(args.extra_env).split(","):
+            if "=" in tok:
+                k, _, v = tok.partition("=")
+                extra_env[k.strip()] = v.strip()
+    out = cluster_reduce(
+        args.experiment_dir,
+        run_id=args.run_id,
+        aggregate_cmd=args.aggregate_cmd,
+        output_path=args.output_path,
+        local_dir=args.local_dir,
+        extra_env=extra_env,
+        timeout_sec=int(args.timeout_sec),
+    )
+    _ok(out, name="cluster-reduce")
+    return EXIT_OK
+
+
+def cmd_axes_init(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.axes_init."""
+    from claude_hpc.atoms.axes_init import axes_init
+
+    homogeneous = (
+        [s.strip() for s in args.homogeneous_axes.split(",") if s.strip()]
+        if args.homogeneous_axes
+        else []
+    )
+    axes_list: list[dict[str, object]] = []
+    if args.axes:
+        for tok in args.axes.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            if ":" not in tok:
+                raise SystemExit(f"--axes entry {tok!r} must be NAME:SIZE")
+            name, _, size_s = tok.partition(":")
+            try:
+                size = int(size_s)
+            except ValueError as exc:
+                raise SystemExit(f"--axes entry {tok!r} has non-integer size") from exc
+            axes_list.append({"name": name.strip(), "size": size})
+    _ok(
+        axes_init(
+            experiment_dir=args.experiment_dir,
+            axes=axes_list or None,
+            homogeneous_axes=homogeneous,
+            force=args.force,
+        ),
+        name="axes-init",
+    )
     return EXIT_OK
 
 
@@ -957,10 +1260,23 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     and ``schemas/submit_flow.{input,output}.json`` for the envelope
     shapes. Idempotent on ``run_id`` via the same dedup mechanism as
     ``submit``.
+
+    **Auto-dispatch**: if the loaded spec is a batch shape (an object
+    with a ``specs`` list, matching ``submit_flow_batch.input.json``)
+    this subcommand transparently routes to
+    :func:`cmd_submit_flow_batch`. Single-spec callers see no change;
+    multi-spec callers don't have to know about a separate CLI.
     """
+    spec = _load_spec(args.spec, schema_name=None)
+    # Auto-dispatch: any shape that the batch CLI accepts (an object
+    # with a `specs` list) routes there, bypassing the per-spec path.
+    # Lets the slash command always say "call submit-flow" and stay
+    # right whether the iteration emits 1 spec or N.
+    if isinstance(spec, dict) and isinstance(spec.get("specs"), list):
+        return cmd_submit_flow_batch(args)
+
     from claude_hpc.flows.submit_flow import submit_flow
 
-    spec = _load_spec(args.spec, schema_name=None)
     # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
     # caller can opt in via either path. Flag wins over spec when both
     # are set (CLI is the more explicit override).
@@ -1006,6 +1322,91 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         partial_ok=bool(spec.get("partial_ok", False)),
     )
     _ok(result.to_envelope_data(), name="submit-flow")
+    return EXIT_OK
+
+
+# ─── subcommand: submit-flow-batch ─────────────────────────────────────────
+
+
+def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
+    """Workflow atom — submit N specs sharing one (ssh_target, remote_path).
+
+    The bundle does ONE rsync_push + ONE deploy_runtime + N × (qsub +
+    record), reusing the ssh ControlMaster across qsubs. This is the
+    correct shape for campaign-time fan-out (e.g. 5 lgbm-tune
+    submissions sharing one cluster) — the per-spec submit_flow path
+    fired N × 13 ssh handshakes which tripped MaxStartups on CARC.
+
+    Spec file is a JSON list of submit-flow specs (each matching
+    ``schemas/submit_flow.input.json``); all entries MUST share
+    ssh_target and remote_path. The CLI emits one envelope wrapping
+    a list of per-spec result records.
+    """
+    from claude_hpc.flows.submit_flow import SubmitSpec, submit_flow_batch
+
+    raw = _load_spec(args.spec, schema_name=None)
+    # Wrapper-shape validation (object with `specs` array, per-entry
+    # required keys via submit_flow_batch.input.json), then full per-entry
+    # validation against submit_flow.input.json. The two schemas overlap
+    # on the required-keys check; the wrapper exists so an agent / external
+    # orchestrator can sanity-check the bundle in one call.
+    _validate_against_schema(raw, "submit_flow_batch")
+    if not isinstance(raw, dict) or "specs" not in raw:
+        return _err(
+            error_code="spec_invalid",
+            message="submit-flow-batch spec must be an object with a 'specs' list",
+            category="user-error",
+            retry_safe=False,
+        )
+    spec_list = raw["specs"]
+    for entry in spec_list:
+        _validate_against_schema(entry, "submit_flow")
+    specs = [
+        SubmitSpec(
+            profile=s["profile"],
+            cluster=s["cluster"],
+            ssh_target=s["ssh_target"],
+            remote_path=s["remote_path"],
+            job_name=s["job_name"],
+            run_id=s["run_id"],
+            total_tasks=int(s["total_tasks"]),
+            backend=s["backend"],
+            script=s["script"],
+            job_env=dict(s["job_env"]),
+            pass_env_keys=s.get("pass_env_keys"),
+            canary=bool(s.get("canary", True)),
+            campaign_id=s.get("campaign_id") or "",
+            runtime=s.get("runtime"),
+            slurm_account=s.get("slurm_account"),
+            slurm_cluster=s.get("slurm_cluster"),
+            partial_ok=bool(s.get("partial_ok", False)),
+        )
+        for s in spec_list
+    ]
+
+    if args.dry_run:
+        targets = sorted({(s.ssh_target, s.remote_path) for s in specs})
+        _ok(
+            {
+                "would_launch": [{"run_id": s.run_id, "tasks": s.total_tasks} for s in specs],
+                "shared_targets": [{"ssh_target": t[0], "remote_path": t[1]} for t in targets],
+                "n_specs": len(specs),
+                "dry_run": True,
+            },
+            name="submit-flow-batch",
+        )
+        return EXIT_OK
+
+    results = submit_flow_batch(
+        experiment_dir=args.experiment_dir,
+        specs=specs,
+        rsync_excludes=raw.get("rsync_excludes"),
+        skip_preflight=bool(raw.get("skip_preflight", False)),
+    )
+    _ok(
+        {"results": [r.to_envelope_data() for r in results], "n_results": len(results)},
+        name="submit-flow-batch",
+    )
     return EXIT_OK
 
 
@@ -1102,6 +1503,8 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
 
 # Re-exported from claude_hpc.atoms.failures for back-compat with the
 # auto-retry resolver test suite, which imports the helper directly.
+# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 — update
+# tests/test_failures*.py to import from claude_hpc.atoms.failures.
 from claude_hpc.atoms.failures import _resolve_auto_retry  # noqa: E402,F401
 
 
@@ -1302,20 +1705,6 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
 # ─── subcommand: reconcile ─────────────────────────────────────────────────
 
 
-@primitive(
-    name="reconcile-journal",
-    verb="mutate",
-    side_effects=[
-        SideEffect(
-            "writes-journal",
-            "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
-        ),
-        SideEffect("ssh", "<cluster>"),
-    ],
-    error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
-    idempotent=True,
-    idempotency_key="run_id",
-)
 def cmd_reconcile(args: argparse.Namespace) -> int:
     if (rc := _require_ssh_agent()) is not None:
         return rc
@@ -1413,6 +1802,16 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     """
     from claude_hpc.atoms.campaign_health import campaign_health
 
+    payload: dict[str, Any] = {}
+    if args.campaign_id is not None:
+        payload["campaign_id"] = args.campaign_id
+    if args.since_iso is not None:
+        payload["since_iso"] = args.since_iso
+    if args.profile is not None:
+        payload["profile"] = args.profile
+    if args.cluster is not None:
+        payload["cluster"] = args.cluster
+    _validate_against_schema(payload, "campaign_health")
     try:
         data = campaign_health(
             args.experiment_dir,
@@ -1435,38 +1834,16 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
 # ─── subcommand: build-executor ────────────────────────────────────────────
 
 
-@primitive(
-    name="build-executor",
-    verb="scaffold",
-    side_effects=[
-        SideEffect(
-            "writes-file",
-            "<output_dir>/<name>.py (refuses to overwrite without --force)",
-        ),
-    ],
-    idempotent=False,
-)
 def cmd_build_executor(args: argparse.Namespace) -> int:
-    starters = claude_hpc._PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
-    template_map = {
-        "plain": starters / "executor_template.py",
-    }
-    if args.type not in template_map:
-        raise errors.SpecInvalid(
-            f"unknown --type {args.type!r}; choose from {sorted(template_map)}"
-        )
-    src = template_map[args.type]
-    if not src.exists():
-        raise errors.ConfigInvalid(f"template missing on disk: {src}")
-    dest = (args.output_dir / args.name).with_suffix(".py")
-    if dest.exists() and not args.force:
-        raise errors.SpecInvalid(f"refusing to overwrite {dest}; pass --force to overwrite")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_text(src.read_text())
-    _ok(
-        {"path": str(dest.resolve()), "type": args.type, "source": str(src)},
-        name="build-executor",
+    from claude_hpc.atoms.build_executor import build_executor
+
+    data = build_executor(
+        output_dir=args.output_dir,
+        name=args.name,
+        type=args.type,
+        force=args.force,
     )
+    _ok(data, name="build-executor")
     return EXIT_OK
 
 
@@ -1504,6 +1881,314 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_cap.set_defaults(func=cmd_capabilities)
+
+    # hook-install
+    p_hook = sub.add_parser(
+        "hook-install",
+        help=(
+            "Install claude-hpc Stop hooks into ~/.claude/settings.json so "
+            "the agent is held to slash-command exit contracts (e.g. "
+            "/monitor-hpc must emit an `armed:` line)."
+        ),
+    )
+    p_hook.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview the merge without writing to settings.json.",
+    )
+    p_hook.add_argument(
+        "--settings",
+        type=str,
+        default=None,
+        help="Override the target settings path (default: ~/.claude/settings.json).",
+    )
+    p_hook.set_defaults(func=cmd_hook_install)
+
+    # axes-init
+    p_axes = sub.add_parser(
+        "axes-init",
+        help=(
+            "Write <experiment>/.hpc/axes.yaml with per-axis homogeneity "
+            "hints used by the cold-start axis_picker. The agent typically "
+            "calls this once per repo at deploy time after introspecting "
+            "tasks.py."
+        ),
+    )
+    _add_experiment_dir(p_axes)
+    p_axes.add_argument(
+        "--axes",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated NAME:SIZE pairs for every parallel axis "
+            "(e.g. 'model:4,data:3,window:20'). Order defines the "
+            "cartesian-product convention; required for submit-flow's "
+            "wave_map building."
+        ),
+    )
+    p_axes.add_argument(
+        "--homogeneous-axes",
+        type=str,
+        default="",
+        help="Comma-separated axis names to mark homogeneous (e.g. 'window,fold').",
+    )
+    p_axes.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing axes.yaml. Default is refuse-without-force.",
+    )
+    p_axes.set_defaults(func=cmd_axes_init)
+
+    # build-submit-spec
+    p_bss = sub.add_parser(
+        "build-submit-spec",
+        help=(
+            "Assemble + validate a submit_flow.input.json spec from "
+            "resolved interview values (profile/cluster/ssh_target/.../"
+            "cmd_sha/total_tasks). Emits the spec on stdout. Slash "
+            "commands pipe the output straight into 'submit-flow --spec'."
+        ),
+    )
+    _add_spec_and_dry_run(
+        p_bss,
+        schema_hint="JSON object of resolved interview kwargs (see build_submit_spec docstring)",
+        dry_run_help="Build + validate the spec but don't emit (smoke check).",
+    )
+    p_bss.set_defaults(func=cmd_build_submit_spec)
+
+    # build-tasks-py
+    p_btp = sub.add_parser(
+        "build-tasks-py",
+        help=(
+            "Scaffold <experiment>/.hpc/tasks.py from the canonical "
+            "cartesian-product template (Pattern 1 of tasks_example.py). "
+            "Spec file is {axes: [{name, values}], flags_by_executor: "
+            "{module_path: [{name, type, default?}]}}. Refuses to "
+            "overwrite an existing tasks.py without --force so "
+            "hand-edited Pattern 2/3 conversions survive."
+        ),
+    )
+    _add_experiment_dir(p_btp)
+    p_btp.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing .hpc/tasks.py.",
+    )
+    _add_spec_and_dry_run(
+        p_btp,
+        schema_hint=(
+            "{axes: [{name, values}], flags_by_executor: {module: [{name, type, default?}]}}"
+        ),
+        dry_run_help="Validate the spec but don't write tasks.py.",
+    )
+    p_btp.set_defaults(func=cmd_build_tasks_py)
+
+    # cluster-reduce
+    p_cr = sub.add_parser(
+        "cluster-reduce",
+        help=(
+            "Run the user's reducer on the cluster, pull only its single "
+            "output JSON. Eliminates the bulk per-task rsync_pull failure "
+            "mode at /aggregate-hpc + campaign-loop time."
+        ),
+    )
+    _add_experiment_dir(p_cr)
+    p_cr.add_argument(
+        "--run-id",
+        type=str,
+        required=True,
+        help="Run identifier (matches .hpc/runs/<run_id>.json).",
+    )
+    p_cr.add_argument(
+        "--aggregate-cmd",
+        type=str,
+        default=None,
+        help=(
+            "Shell command to run on the cluster. Defaults to the run "
+            "sidecar's aggregate_defaults.aggregate_cmd."
+        ),
+    )
+    p_cr.add_argument(
+        "--output-path",
+        type=str,
+        default=None,
+        help=(
+            "Cluster-side path the reducer writes its single JSON output. "
+            "Defaults to '_aggregated/<run_id>.json' under remote_path. "
+            "Threaded as $HPC_AGGREGATED_OUTPUT to the reducer."
+        ),
+    )
+    p_cr.add_argument(
+        "--local-dir",
+        type=str,
+        default=None,
+        help="Local destination dir; defaults to <experiment>/_aggregated/<run_id>/.",
+    )
+    p_cr.add_argument(
+        "--extra-env",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated KEY=VALUE pairs forwarded to the reducer "
+            "(in addition to HPC_RUN_ID / HPC_AGGREGATED_OUTPUT)."
+        ),
+    )
+    p_cr.add_argument(
+        "--timeout-sec",
+        type=int,
+        default=1800,
+        help="Reducer timeout in seconds (default 1800 = 30 min).",
+    )
+    p_cr.set_defaults(func=cmd_cluster_reduce)
+
+    # suggest-setup-action
+    p_ssa = sub.add_parser(
+        "suggest-setup-action",
+        help=(
+            "Run the /submit-hpc Setup priority cascade and recommend "
+            "{action: monitor|reuse|interview|fresh, run_id, candidates}. "
+            "Replaces the priority-list-walking prose at Step 0."
+        ),
+    )
+    _add_experiment_dir(p_ssa)
+    p_ssa.set_defaults(func=cmd_suggest_setup_action)
+
+    # find-prior-run
+    p_fpr = sub.add_parser(
+        "find-prior-run",
+        help=(
+            "Look up a prior run by cmd_sha for /submit-hpc Step 6c "
+            "resume detection. Returns {found, run_id, is_orphan, "
+            "status, age_sec, ...}."
+        ),
+    )
+    _add_experiment_dir(p_fpr)
+    p_fpr.add_argument(
+        "--cmd-sha",
+        type=str,
+        required=True,
+        help="The cmd_sha (SHA-256 hex) to match against existing sidecars.",
+    )
+    p_fpr.set_defaults(func=cmd_find_prior_run)
+
+    # summarize-submit-plan
+    p_ssp = sub.add_parser(
+        "summarize-submit-plan",
+        help=(
+            "Render the canonical pre-submit confirmation summary for a "
+            "submit_flow.input.json spec. Returns {headline, body, "
+            "confirm_prompt} the slash command prints verbatim. "
+            "Eliminates per-submit wording drift."
+        ),
+    )
+    _add_spec_and_dry_run(
+        p_ssp,
+        schema_hint="schemas/submit_flow.input.json",
+        dry_run_help="Validate but don't emit (the primitive has no side effects).",
+    )
+    p_ssp.set_defaults(func=cmd_summarize_submit_plan)
+
+    # verify-aggregation-complete
+    p_vac = sub.add_parser(
+        "verify-aggregation-complete",
+        help=(
+            "Walk the run sidecar's wave_map + the locally-pulled "
+            "_combiner/ dir; report all_waves_combined / all_tasks_present "
+            "/ provenance_present invariants. Returns ok plus the missing "
+            "/ unexpected lists."
+        ),
+    )
+    _add_experiment_dir(p_vac)
+    p_vac.add_argument(
+        "--run-id",
+        type=str,
+        required=True,
+        help="Run identifier (matches .hpc/runs/<run_id>.json sidecar stem).",
+    )
+    p_vac.add_argument(
+        "--combiner-dir",
+        type=Path,
+        required=True,
+        help="Local path the cluster's _combiner/ was rsync_pull'd to.",
+    )
+    p_vac.set_defaults(func=cmd_verify_aggregation_complete)
+
+    # verify-canary
+    p_vc = sub.add_parser(
+        "verify-canary",
+        help=(
+            "Wait + grep + output-check for a 1-task canary submission. "
+            "Polls until terminal, scans stderr for known failure markers, "
+            "optionally checks expect_output exists. Returns "
+            "{ok, failure_kind, details, stderr_tail}."
+        ),
+    )
+    _add_experiment_dir(p_vc)
+    p_vc.add_argument(
+        "--canary-run-id",
+        type=str,
+        required=True,
+        help="Run ID of the canary (typically <main_run_id>-canary).",
+    )
+    p_vc.add_argument(
+        "--expect-output",
+        type=str,
+        default=None,
+        help="Optional path (relative to remote_path) the canary should have written.",
+    )
+    p_vc.add_argument(
+        "--poll-interval-sec",
+        type=int,
+        default=30,
+        help="Seconds between status polls (default 30).",
+    )
+    p_vc.add_argument(
+        "--wait-budget-sec",
+        type=int,
+        default=1800,
+        help="Total seconds to wait for terminal before giving up (default 1800).",
+    )
+    p_vc.set_defaults(func=cmd_verify_canary)
+
+    # decide-monitor-arm
+    p_dma = sub.add_parser(
+        "decide-monitor-arm",
+        help=(
+            "Pick cron/loop/none + cadence + cron schedule string from "
+            "the run's current summary. Returns the literal armed: line "
+            "the slash command must emit (Stop hook checks for it) and "
+            "ready-to-pass CronCreate args. Replaces /monitor-hpc Step 5 "
+            "agent judgment."
+        ),
+    )
+    _add_spec_and_dry_run(
+        p_dma,
+        schema_hint=(
+            "{run_id, summary, total_tasks, invocation_argv, "
+            "user_invoked_via_loop?, eta_sec?, pace_unstable?, queue_wait_sec?}"
+        ),
+        dry_run_help="Validate but don't emit (the primitive has no side effects anyway).",
+    )
+    p_dma.set_defaults(func=cmd_decide_monitor_arm)
+
+    # monitor-summary
+    p_ms = sub.add_parser(
+        "monitor-summary",
+        help=(
+            "Render the canonical user-facing tick summary for a run. "
+            "Reads .hpc/runs/<run_id>.monitor.jsonl + the run journal "
+            "and returns {lifecycle_state, headline, body, armed_hint}. "
+            "Slash command prints these verbatim."
+        ),
+    )
+    _add_experiment_dir(p_ms)
+    p_ms.add_argument(
+        "--run-id",
+        type=str,
+        required=True,
+        help="Run identifier (matches the .hpc/runs/<run_id>.json sidecar stem).",
+    )
+    p_ms.set_defaults(func=cmd_monitor_summary)
 
     # preflight
     p_pre = sub.add_parser(
@@ -1600,6 +2285,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_disc)
     p_disc.set_defaults(func=cmd_discover)
+
+    # discover-reducers
+    p_dr = sub.add_parser(
+        "discover-reducers",
+        help=(
+            "List candidate reducer / aggregator scripts in --experiment-dir "
+            "(matches by filename stem and top-level function names like "
+            "aggregate / reduce / score). Use at /aggregate-hpc time to find "
+            "an existing reducer instead of writing a fresh one."
+        ),
+    )
+    _add_experiment_dir(p_dr)
+    p_dr.set_defaults(func=cmd_discover_reducers)
 
     # inspect-cluster
     p_ic = sub.add_parser(
@@ -1953,9 +2651,10 @@ def build_parser() -> argparse.ArgumentParser:
         "submit-flow",
         help=(
             "Workflow atom: pre-flight + rsync + deploy + qsub + record in "
-            "one shot. Lets higher-level workflows (campaigns, sweeps) "
-            "compose the submit pipeline as a single CLI call instead of "
-            "agent-driving /submit-hpc. Idempotent on run_id."
+            "one shot. Auto-dispatches to submit-flow-batch when the spec "
+            "is a {specs: [...]} object — callers always invoke this one "
+            "subcommand whether the iteration emits 1 spec or N. Idempotent "
+            "on run_id (or per-spec run_id when batched)."
         ),
     )
     p_sf.add_argument(
@@ -1976,6 +2675,25 @@ def build_parser() -> argparse.ArgumentParser:
         dry_run_help="Validate the spec and report what would be launched; no SSH/rsync/qsub.",
     )
     p_sf.set_defaults(func=cmd_submit_flow)
+
+    # submit-flow-batch
+    p_sfb = sub.add_parser(
+        "submit-flow-batch",
+        help=(
+            "Workflow atom: rsync + deploy ONCE, then qsub N specs sharing "
+            "the same (ssh_target, remote_path). Use whenever a campaign or "
+            "sweep submits >1 specs to the same cluster — bundles 13×N ssh "
+            "handshakes into ~3 (rsync + deploy + multiplexed qsubs). Spec "
+            "file is a JSON list."
+        ),
+    )
+    _add_experiment_dir(p_sfb)
+    _add_spec_and_dry_run(
+        p_sfb,
+        schema_hint="schemas/submit_flow_batch.input.json (array of submit_flow.input.json items)",
+        dry_run_help="Validate the batch + report shared targets; no SSH/rsync/qsub.",
+    )
+    p_sfb.set_defaults(func=cmd_submit_flow_batch)
 
     # monitor-flow
     p_mf = sub.add_parser(

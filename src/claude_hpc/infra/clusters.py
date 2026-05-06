@@ -36,7 +36,14 @@ CLUSTER_YAML_KEYS: list[dict[str, Any]] = [
         "key": "ssh_target",
         "type": "string",
         "required": False,
-        "description": "Default user@host for ssh; overridable per-spec.",
+        "description": (
+            "ssh destination — either explicit 'user@host' (e.g. "
+            "'jc_905@discovery2.usc.edu') or an OpenSSH 'Host' alias from "
+            "~/.ssh/config (e.g. 'usc-discovery'). Aliases let IdentityFile / "
+            "User / Hostname settings flow through to ssh/scp/rsync; prefer "
+            "them when a cluster needs a non-default identity. Overridable "
+            "per-spec."
+        ),
     },
     {
         "key": "constraints",

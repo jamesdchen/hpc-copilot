@@ -56,10 +56,10 @@ echo "Run ID:       ${HPC_RUN_ID:-<unset>}"
 echo "============================================"
 
 # --- Shared preamble (modules + conda + PYTHONPATH + uv sync) ---
-source "$(dirname "$0")/common/hpc_preamble.sh"
+source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"
 
 # --- Shared GPU preamble (CUDA_VISIBLE_DEVICES warn + PYTORCH_CUDA_ALLOC_CONF) ---
-source "$(dirname "$0")/common/gpu_preamble.sh"
+source "$REPO_DIR/.hpc/templates/common/gpu_preamble.sh"
 
 # Bind CPU threads to allocated cores ($SLURM_CPUS_PER_TASK — SLURM-specific).
 # Honors the campus user's HPC_OMP_NUM_THREADS / HPC_MKL_NUM_THREADS env
@@ -83,7 +83,7 @@ echo "============================================"
 # HPC_CAMPAIGN_ID is optional — present when the run is part of a
 # closed-loop campaign — and lets the user's tasks.py call
 # claude_hpc.mapreduce.reduce.history.prior() for the campaign's history.
-export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR GPU_COUNT
+export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR GPU_COUNT HPC_GPU_TYPE
 time $EXECUTOR ${EXTRA_ARGS:-}
 
 echo "Job finished."

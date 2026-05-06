@@ -444,9 +444,13 @@ def main() -> None:
     # executor orphaned (inherited by init, eventually cleaned up by
     # cgroup teardown but possibly still writing output in the
     # meantime, surprising the next user of the same node).
+    started_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    started_at_mono = time.monotonic()
     child = subprocess.Popen(executor, shell=True, env=env, preexec_fn=os.setpgrp)
     child_holder[0] = child
     returncode = child.wait()
+    elapsed_sec = max(0, int(round(time.monotonic() - started_at_mono)))
+    ended_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     if returncode == 0:
         # Promote: atomically move each output file to the final directory.
@@ -456,6 +460,60 @@ def main() -> None:
     else:
         print(
             f"[dispatch] FAILED (exit {returncode}), partial output preserved in {wip_dir}",
+            file=sys.stderr,
+        )
+
+    # Write per-task runtime sidecar — feeds the warm-axis-picker via
+    # the local-side ingest pipeline (combiner aggregates these per
+    # wave; aggregate_flow rsync_pulls and ingests them into
+    # ``runtimes/<profile>.<cluster>.json`` via append_sample).
+    # Best-effort: a write failure here MUST NOT change the dispatcher's
+    # exit code (the task itself succeeded or failed on its own merits).
+    try:
+        runtime_payload = {
+            "task_id": int(task_id),
+            "run_id": run_id,
+            "started_at": started_at_iso,
+            "ended_at": ended_at_iso,
+            "elapsed_sec": int(elapsed_sec),
+            "exit_code": int(returncode),
+            "node": (
+                os.environ.get("SLURMD_NODENAME")
+                or os.environ.get("HOSTNAME")
+                or os.environ.get("HOST")
+                or ""
+            ),
+            "gpu_type": (
+                os.environ.get("HPC_GPU_TYPE") or os.environ.get("SLURM_JOB_PARTITION") or ""
+            ),
+            # axis_bindings = the dict the warm picker groups by. ``kwargs``
+            # is whatever ``tasks.resolve(task_id)`` returned — exactly the
+            # axis values the user's tasks.py exposed.
+            "axis_bindings": {str(k): v for k, v in kwargs.items()},
+        }
+        runtime_path = os.path.join(result_dir, "_runtime.json")
+        # Atomic-ish write: tempfile + replace. Worst case (crash mid-write)
+        # leaves no _runtime.json — the ingest path treats that as "no
+        # sample for this task", which is the right fallback.
+        fd, tmp = tempfile.mkstemp(prefix="_runtime.", suffix=".tmp", dir=result_dir)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                # default=str so numpy ints / datetimes / Path objects /
+                # any other non-JSON-native value coming back from
+                # ``tasks.resolve(task_id)`` falls back to repr instead of
+                # silently nuking the runtime sample. The warm picker
+                # treats axis_bindings as opaque keys for grouping —
+                # consistent string repr is enough; native typing isn't
+                # required.
+                json.dump(runtime_payload, fh, sort_keys=True, default=str)
+            os.replace(tmp, runtime_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+    except Exception as exc:  # noqa: BLE001 — sidecar is best-effort
+        print(
+            f"[dispatch] WARN: failed to write _runtime.json for task {task_id}: {exc}",
             file=sys.stderr,
         )
 

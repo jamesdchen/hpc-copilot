@@ -16,6 +16,30 @@ import pytest
 from claude_hpc.infra import remote
 
 
+@pytest.fixture(autouse=True)
+def _force_rsync_present():
+    """Pin _have_rsync to True so existing tests exercise the rsync branch.
+
+    Tests for the scp/tar fallback live in test_remote_rsync_fallback.py
+    and explicitly patch ``shutil.which`` themselves; this fixture only
+    affects the rsync-branch tests in this file.
+    """
+    with patch("claude_hpc.infra.remote._have_rsync", return_value=True):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _disable_ssh_backoff(monkeypatch):
+    """Skip backoff retries + sleep entirely so single-call argv tests stay fast.
+
+    The backoff helper's retry loop would otherwise repeat each subprocess
+    mock 5 times for genuine throttle markers, breaking ``call_args``
+    assertions. Tests that *want* to exercise the backoff path live in
+    :class:`TestSshBackoff` below and clear this env var locally.
+    """
+    monkeypatch.setenv("HPC_SSH_NO_BACKOFF", "1")
+
+
 def _cp(stdout="", stderr="", returncode=0):
     """Mimic subprocess.CompletedProcess enough for the remote module."""
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=returncode)
@@ -31,8 +55,7 @@ class TestRsyncPush:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
-                host="cluster.example",
-                user="alice",
+                ssh_target="alice@cluster.example",
                 remote_path="/u/home/alice/proj",
                 local_path="/tmp/local_src",
             )
@@ -57,8 +80,7 @@ class TestRsyncPush:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 local_path="/tmp/x",
                 delete=False,
@@ -70,8 +92,7 @@ class TestRsyncPush:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 local_path="/tmp/x",
                 exclude=["a/", "b/", "c/"],
@@ -91,8 +112,7 @@ class TestRsyncPull:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 remote_subdir="results",
                 local_dir=tmp_path / "out",
@@ -118,8 +138,7 @@ class TestRsyncPull:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 remote_subdir="results",
                 local_dir=tmp_path / "out",
@@ -148,7 +167,7 @@ class TestDeployRuntime:
         # subprocess.run is used both inside ssh_run (mkdir) and for each scp.
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.deploy_runtime(host="c", user="u", remote_path="/p")
+            remote.deploy_runtime(ssh_target="u@c", remote_path="/p")
 
         all_calls = mock_run.call_args_list
         # Expect 11 subprocess.run invocations:
@@ -214,14 +233,14 @@ class TestSshRunCapture:
     def test_capture_true_by_default(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.ssh_run("ls", host="c", user="u")
+            remote.ssh_run("ls", ssh_target="u@c")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("capture_output") is True
 
     def test_capture_false_toggles_capture_output(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.ssh_run("ls", host="c", user="u", capture=False)
+            remote.ssh_run("ls", ssh_target="u@c", capture=False)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("capture_output") is False
 
@@ -235,7 +254,7 @@ class TestRunCombiner:
     def test_run_combiner_default_no_force(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=3, run_id="r1")
+            remote.run_combiner(ssh_target="u@c", remote_path="/p", wave=3, run_id="r1")
         argv = mock_run.call_args[0][0]
         cmd_str = argv[-1]
         assert "--wave 3" in cmd_str
@@ -246,9 +265,7 @@ class TestRunCombiner:
     def test_run_combiner_force_appends_flag(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(
-                host="c", user="u", remote_path="/p", wave=3, run_id="r1", force=True
-            )
+            remote.run_combiner(ssh_target="u@c", remote_path="/p", wave=3, run_id="r1", force=True)
         cmd_str = mock_run.call_args[0][0][-1]
         assert "--force" in cmd_str
 
@@ -258,7 +275,7 @@ class TestRunCombinerChecked:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="ok\n", stderr="", returncode=0)
             ok, out, err = remote.run_combiner_checked(
-                host="c", user="u", remote_path="/p", wave=0, run_id="r1"
+                ssh_target="u@c", remote_path="/p", wave=0, run_id="r1"
             )
         assert ok is True
         assert out == "ok\n"
@@ -268,7 +285,7 @@ class TestRunCombinerChecked:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp(stdout="", stderr="boom", returncode=1)
             ok, out, err = remote.run_combiner_checked(
-                host="c", user="u", remote_path="/p", wave=0, run_id="r1"
+                ssh_target="u@c", remote_path="/p", wave=0, run_id="r1"
             )
         assert ok is False
         assert out == ""
@@ -278,7 +295,7 @@ class TestRunCombinerChecked:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner_checked(
-                host="c", user="u", remote_path="/p", wave=0, run_id="r1", force=True
+                ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", force=True
             )
         cmd_str = mock_run.call_args[0][0][-1]
         assert "--force" in cmd_str
@@ -289,8 +306,7 @@ class TestRunCombinerShellQuoting:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/path with space",
                 wave=1,
                 run_id="my run id",
@@ -329,14 +345,14 @@ class TestSshRunTimeout:
     def test_default_timeout_applied_when_omitted(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.ssh_run("ls", host="c", user="u")
+            remote.ssh_run("ls", ssh_target="u@c")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_overrides_default(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.ssh_run("ls", host="c", user="u", timeout=7.5)
+            remote.ssh_run("ls", ssh_target="u@c", timeout=7.5)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 7.5
 
@@ -346,7 +362,7 @@ class TestSshRunTimeout:
         """
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.ssh_run("ls", host="c", user="u", timeout=None)
+            remote.ssh_run("ls", ssh_target="u@c", timeout=None)
         kwargs = mock_run.call_args.kwargs
         assert "timeout" in kwargs
         assert kwargs["timeout"] is None
@@ -356,7 +372,7 @@ class TestSshRunTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd=cmd, timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
-                remote.ssh_run(cmd, host="cluster.example", user="alice")
+                remote.ssh_run(cmd, ssh_target="alice@cluster.example")
         msg = str(exc_info.value)
         # Host (user@host) and a snippet of the command must appear.
         assert "alice@cluster.example" in msg
@@ -367,7 +383,7 @@ class TestSshRunTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd=long_cmd, timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
-                remote.ssh_run(long_cmd, host="c", user="u")
+                remote.ssh_run(long_cmd, ssh_target="u@c")
         msg = str(exc_info.value)
         # The message must not embed the entire 500+ char command verbatim.
         assert long_cmd not in msg
@@ -380,7 +396,7 @@ class TestSshRunTimeout:
         """
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.ssh_run("tail -f log", host="c", user="u", capture=False)
+            remote.ssh_run("tail -f log", ssh_target="u@c", capture=False)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("capture_output") is False
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
@@ -391,8 +407,7 @@ class TestRsyncPushTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 local_path="/tmp/x",
             )
@@ -403,8 +418,7 @@ class TestRsyncPushTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 local_path="/tmp/x",
                 timeout=42,
@@ -416,8 +430,7 @@ class TestRsyncPushTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_push(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 local_path="/tmp/x",
                 timeout=None,
@@ -431,8 +444,7 @@ class TestRsyncPushTimeout:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="rsync ...", timeout=1.0)
             with pytest.raises(TimeoutError) as exc_info:
                 remote.rsync_push(
-                    host="cluster.example",
-                    user="alice",
+                    ssh_target="alice@cluster.example",
                     remote_path="/u/home/alice/proj",
                     local_path="/tmp/local_src",
                 )
@@ -449,8 +461,7 @@ class TestRsyncPullTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 remote_subdir="results",
                 local_dir=tmp_path / "out",
@@ -462,8 +473,7 @@ class TestRsyncPullTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.rsync_pull(
-                host="c",
-                user="u",
+                ssh_target="u@c",
                 remote_path="/p",
                 remote_subdir="results",
                 local_dir=tmp_path / "out",
@@ -482,7 +492,7 @@ class TestDeployRuntimeTimeout:
     def test_each_subprocess_call_has_ssh_timeout(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.deploy_runtime(host="c", user="u", remote_path="/p")
+            remote.deploy_runtime(ssh_target="u@c", remote_path="/p")
         for call in mock_run.call_args_list:
             assert call.kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
@@ -491,16 +501,14 @@ class TestRunCombinerTimeout:
     def test_default_timeout_threaded_through_to_ssh_run(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
+            remote.run_combiner(ssh_target="u@c", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
     def test_explicit_timeout_threaded_through_to_ssh_run(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner(
-                host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=15
-            )
+            remote.run_combiner(ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", timeout=15)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 15
 
@@ -508,7 +516,7 @@ class TestRunCombinerTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner(
-                host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=None
+                ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", timeout=None
             )
         kwargs = mock_run.call_args.kwargs
         assert "timeout" in kwargs
@@ -519,7 +527,7 @@ class TestRunCombinerCheckedTimeout:
     def test_default_timeout_threaded_through(self):
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
-            remote.run_combiner_checked(host="c", user="u", remote_path="/p", wave=0, run_id="r1")
+            remote.run_combiner_checked(ssh_target="u@c", remote_path="/p", wave=0, run_id="r1")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == remote.SSH_TIMEOUT_SEC
 
@@ -527,7 +535,7 @@ class TestRunCombinerCheckedTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.return_value = _cp()
             remote.run_combiner_checked(
-                host="c", user="u", remote_path="/p", wave=0, run_id="r1", timeout=21
+                ssh_target="u@c", remote_path="/p", wave=0, run_id="r1", timeout=21
             )
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("timeout") == 21
@@ -540,6 +548,72 @@ class TestRunCombinerCheckedTimeout:
         with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
             with pytest.raises(TimeoutError):
-                remote.run_combiner_checked(
-                    host="c", user="u", remote_path="/p", wave=0, run_id="r1"
-                )
+                remote.run_combiner_checked(ssh_target="u@c", remote_path="/p", wave=0, run_id="r1")
+
+
+# ---------------------------------------------------------------------------
+# SSH rate-limit backoff
+# ---------------------------------------------------------------------------
+
+
+class TestSshBackoff:
+    @pytest.fixture(autouse=True)
+    def _enable_backoff(self, monkeypatch):
+        """Local override: enable backoff and pin delays to zero for speed."""
+        monkeypatch.delenv("HPC_SSH_NO_BACKOFF", raising=False)
+        monkeypatch.setattr("claude_hpc.infra.remote._BACKOFF_DELAYS_SEC", (0.0,) * 4)
+        # Ensure no actual sleeping in the very-rare-edge case the schedule
+        # is consulted directly.
+        monkeypatch.setattr("claude_hpc.infra.remote.time.sleep", lambda _: None)
+
+    def test_ssh_run_retries_on_throttle_marker_then_succeeds(self):
+        throttle_cp = _cp(
+            stderr="kex_exchange_identification: Connection closed by remote host",
+            returncode=255,
+        )
+        ok_cp = _cp(stdout="hi\n", returncode=0)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = [throttle_cp, throttle_cp, ok_cp]
+            result = remote.ssh_run("ls", ssh_target="u@c")
+        assert result.returncode == 0
+        assert mock_run.call_count == 3  # two throttles + one success
+
+    def test_ssh_run_does_not_retry_on_normal_failure(self):
+        """Auth failures, command-not-found etc must surface immediately."""
+        bad_cp = _cp(stderr="Permission denied (publickey).", returncode=255)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = bad_cp
+            result = remote.ssh_run("ls", ssh_target="u@c")
+        assert result.returncode == 255
+        assert mock_run.call_count == 1
+
+    def test_ssh_run_retries_then_gives_up_after_schedule(self):
+        throttle_cp = _cp(stderr="ssh_exchange_identification: Connection closed", returncode=255)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.return_value = throttle_cp
+            result = remote.ssh_run("ls", ssh_target="u@c")
+        # 1 initial + 4 retries = 5 attempts total when all return throttle.
+        assert mock_run.call_count == 5
+        assert result.returncode == 255
+
+    def test_rsync_push_retries_on_protocol_marker(self):
+        throttle_cp = _cp(
+            stderr=(
+                "ssh_exchange_identification: Connection closed by remote host\n"
+                "rsync error: error in rsync protocol data stream (code 12)"
+            ),
+            returncode=12,
+        )
+        ok_cp = _cp(returncode=0)
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = [throttle_cp, ok_cp]
+            result = remote.rsync_push(ssh_target="u@c", remote_path="/p", local_path="/tmp/x")
+        assert result.returncode == 0
+        assert mock_run.call_count == 2
+
+    def test_timeout_error_retries_then_raises(self):
+        with patch("claude_hpc.infra.remote.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh ...", timeout=1.0)
+            with pytest.raises(TimeoutError):
+                remote.ssh_run("ls", ssh_target="u@c")
+        assert mock_run.call_count == 5  # 1 initial + 4 retries

@@ -238,7 +238,7 @@ def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
     cluster_waves = "_combiner/wave_0.json\n_combiner/wave_2.json\n"
     alive_squeue = "12345678\n"
 
-    def fake_ssh(cmd, *, host, user):
+    def fake_ssh(cmd, *, ssh_target):
         if "python -m claude_hpc.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
@@ -257,7 +257,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
     _seed_run(experiment)
     status_payload = json.dumps({"summary": {"complete": 0, "running": 0, "failed": 0}})
 
-    def fake_ssh(cmd, *, host, user):
+    def fake_ssh(cmd, *, ssh_target):
         if "python -m claude_hpc.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
@@ -276,7 +276,7 @@ def test_reconcile_idempotent(journal_home, experiment):
     cluster_waves = "_combiner/wave_0.json\n_combiner/wave_1.json\n"
     alive = "12345678\n"
 
-    def fake_ssh(cmd, *, host, user):
+    def fake_ssh(cmd, *, ssh_target):
         if "python -m claude_hpc.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
@@ -309,9 +309,21 @@ def test_resubmit_failed_rejects_empty_list(journal_home, experiment):
         )
 
 
-def test_split_ssh_target_validates():
-    with pytest.raises(ValueError, match="user@host"):
-        runner._split_ssh_target("just-a-host")
+def test_validate_ssh_target_accepts_alias_and_userhost():
+    from claude_hpc.infra.remote import validate_ssh_target
+
+    # Both forms are accepted: an OpenSSH config alias and explicit user@host.
+    assert validate_ssh_target("usc-discovery") == "usc-discovery"
+    assert validate_ssh_target("alice@cluster.example") == "alice@cluster.example"
+
+
+def test_validate_ssh_target_rejects_empty_and_shell_chars():
+    from claude_hpc.infra.remote import validate_ssh_target
+
+    with pytest.raises(ValueError, match="non-empty"):
+        validate_ssh_target("")
+    with pytest.raises(ValueError, match="disallowed"):
+        validate_ssh_target("alice@host; rm -rf /")
 
 
 # ─── Bug 4: SGE alive-check actually checks qstat exit codes ───────────────
@@ -411,7 +423,7 @@ def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experime
     status_payload = json.dumps({"summary": {"complete": 1}})
     alive_squeue = "12345678\n"
 
-    def fake_ssh(cmd, *, host, user):
+    def fake_ssh(cmd, *, ssh_target):
         if "python -m claude_hpc.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
@@ -435,7 +447,7 @@ def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(journal_ho
     _seed_run(experiment)
     status_payload = json.dumps({"summary": {"complete": 0}})
 
-    def fake_ssh(cmd, *, host, user):
+    def fake_ssh(cmd, *, ssh_target):
         if "python -m claude_hpc.mapreduce.reduce.status" in cmd:
             return _completed(stdout=status_payload)
         if "_combiner/wave_*.json" in cmd:
@@ -493,7 +505,7 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
         }
     )
 
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
         # Existence check: pretend task 1's output is missing.
@@ -515,7 +527,7 @@ def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, ex
         {"sidecar_schema_version": 1, "task_count": 2, "wave_map": {"0": [0, 1]}}
     )
 
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
         return _completed(stdout="", returncode=0)  # nothing missing
@@ -538,7 +550,7 @@ def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(journa
 
     captured: list[str] = []
 
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         captured.append(cmd)
         if cmd.startswith("cat "):
             return _completed(stdout=sidecar_json)
@@ -558,7 +570,7 @@ def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(journa
 
 
 def test_verify_combiner_artifact_ok_for_valid_json():
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         # python3 -c json.load returns 0; script echoes OK.
         return _completed(stdout="OK\n", returncode=0)
 
@@ -573,7 +585,7 @@ def test_verify_combiner_artifact_ok_for_valid_json():
 
 
 def test_verify_combiner_artifact_missing():
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         return _completed(stdout="MISSING\n", returncode=0)
 
     with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
@@ -587,7 +599,7 @@ def test_verify_combiner_artifact_missing():
 
 
 def test_verify_combiner_artifact_invalid_json():
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         return _completed(stdout="INVALID_JSON\n", returncode=0)
 
     with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
@@ -841,7 +853,7 @@ def test_fetch_task_logs_returns_content_for_slurm():
     """SLURM log path: <remote_path>/_hpc_logs/<job>_<jid>_<tid>.err."""
     captured: list[str] = []
 
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         captured.append(cmd)
         # First job_id attempt found.
         return _completed(stdout="FOUND\nline1\nline2\nline3\n", returncode=0)
@@ -866,7 +878,7 @@ def test_fetch_task_logs_returns_content_for_slurm():
 
 
 def test_fetch_task_logs_marks_missing_when_all_job_ids_have_no_log():
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         return _completed(stdout="MISSING\n", returncode=0)
 
     with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
@@ -889,7 +901,7 @@ def test_fetch_task_logs_falls_back_to_earlier_job_id():
         _completed(stdout="FOUND\nold log\n", returncode=0),  # job 111
     ]
 
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         return sequence.pop(0)
 
     with patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh_run):
@@ -909,7 +921,7 @@ def test_fetch_task_logs_falls_back_to_earlier_job_id():
 def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
     captured: list[str] = []
 
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         captured.append(cmd)
         return _completed(stdout="FOUND\nbody\n", returncode=0)
 
@@ -929,7 +941,7 @@ def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
 def test_write_remote_provenance_writes_sidecar_path():
     captured: list[str] = []
 
-    def fake_ssh_run(cmd, *, host, user, **_kw):
+    def fake_ssh_run(cmd, *, ssh_target, **_kw):
         captured.append(cmd)
         return _completed(returncode=0)
 

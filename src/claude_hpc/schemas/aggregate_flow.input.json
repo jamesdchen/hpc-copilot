@@ -4,12 +4,19 @@
   "title": "aggregate-flow input spec",
   "description": "Spec passed to `hpc-mapreduce aggregate-flow --spec <file>`. Workflow atom that ensures every wave is combined on the cluster, pulls the per-wave partials locally, and merges them into a single aggregated-metrics dict via reduce_partials. Pairs with submit-flow + monitor-flow as the third workflow atom in the campaign composition pattern.",
   "type": "object",
-  "required": ["run_id"],
+  "required": [
+    "run_id"
+  ],
   "additionalProperties": false,
   "properties": {
-    "run_id":              { "type": "string", "pattern": "^[A-Za-z0-9._\\-]+$" },
-    "output_dir":          {
-      "type": ["string", "null"],
+    "run_id": {
+      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+    },
+    "output_dir": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Local destination for pulled artifacts. Null defaults to `<experiment_dir>/_aggregated/<run_id>/`. The combiner partials land under `<output_dir>/_combiner/`."
     },
     "ensure_all_combined": {
@@ -23,16 +30,19 @@
       "default": 1,
       "description": "Times to retry combine-wave with force=true after first failure. Beyond this, the wave is escalated and surfaces in failed_waves; aggregate-flow continues with whichever waves DID combine."
     },
-    "pull_summaries":      {
+    "pull_summaries": {
       "type": "boolean",
       "default": false,
       "description": "After pulling _combiner/, also rsync result summary files matching summary_glob from the cluster's results/ directory."
     },
-    "summary_glob":        {
-      "type": ["string", "null"],
+    "summary_glob": {
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Required when pull_summaries=true. Rsync include pattern (e.g. 'metrics.json', 'qlike.json'). Ignored when pull_summaries=false."
     },
-    "results_subdir":      {
+    "results_subdir": {
       "type": "string",
       "default": "results",
       "description": "Cluster-side subdir under remote_path that holds the per-task result trees. Defaults to 'results' to match the framework convention."

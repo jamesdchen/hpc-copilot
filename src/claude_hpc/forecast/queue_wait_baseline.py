@@ -53,6 +53,8 @@ import math
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from claude_hpc import errors
+from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
 from claude_hpc.state.runtime_prior import read_samples
 
@@ -226,6 +228,13 @@ def _apply_features(
     )
 
 
+@primitive(
+    name="predict-queue-wait",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+)
 def predict_queue_wait(
     experiment_dir: Path,
     *,

@@ -29,21 +29,37 @@ auto-import-on-first-query behaviour silently swallowed
 ``ImportError`` and made hard-to-diagnose missing-decorator bugs.
 ``register_primitives`` itself is idempotent.
 
-Migration safety
-----------------
+Source-of-truth split
+---------------------
 
-Until ``operations.py`` has fully switched off frontmatter as a
-fallback source, ``docs/primitives/*.md`` and the registry are dual
-sources of truth. ``tests/test_primitive_spine.py`` cross-validates
-that decorator metadata matches frontmatter — drift is caught at CI
-time, not silently absorbed.
+The registry IS the canonical source for the structured metadata
+the decorator carries: ``name``, ``verb``, ``side_effects``,
+``idempotent``, ``idempotency_key``, ``error_codes``, and ``composes``.
+:func:`claude_hpc._internal.operations.operations_catalog` reads the
+registry directly; nothing else reads the markdown frontmatter for
+those fields.
+
+``docs/primitives/<name>.md`` carries two kinds of content:
+
+1. **Registry-derived frontmatter** — auto-rewritten by
+   ``scripts/build_primitive_frontmatter.py`` from the registry. Never
+   hand-edit; the pre-commit hook + the CI ``--check`` gate will undo
+   you.
+2. **Hand-authored prose** — everything after the closing ``---``
+   marker, plus the ``inputs:`` / ``outputs:`` / ``backed_by:`` /
+   ``exit_codes:`` frontmatter fields the registry doesn't yet model.
+   These are round-tripped untouched.
+
+Primitives missing a ``docs/primitives/<name>.md`` are auto-scaffolded
+with a one-line placeholder by the regen script, so the registry can't
+silently sprout undocumented primitives.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import importlib
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -52,6 +68,10 @@ if TYPE_CHECKING:
 
 
 VerbKind = Literal["query", "validate", "mutate", "submit", "scaffold", "workflow"]
+
+# Preserve the decorated function's signature so mypy sees the original
+# return type at call sites (the decorator returns the func unchanged).
+F = TypeVar("F", bound="Callable[..., Any]")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -103,7 +123,7 @@ def primitive(
     idempotency_key: str | None = None,
     exit_codes: Iterable[tuple[int, str]] | None = None,
     description: str | None = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+) -> Callable[[F], F]:
     """Register a primitive in the runtime catalog.
 
     The decorated function IS the primitive's behavior. Decorator
@@ -125,12 +145,35 @@ def primitive(
     *different* function under an existing name raises ``ValueError``.
     """
 
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+    def decorator(func: F) -> F:
         if name in _REGISTRY:
             existing = _REGISTRY[name].func
             if existing is func:
                 return func
             raise ValueError(f"Primitive {name!r} already registered (by {existing!r})")
+        # Idempotency-key gate: a state-mutating primitive that claims
+        # idempotent=True owes the caller an equivalence rule. Without
+        # one, the registry says "safe to retry" but doesn't say what
+        # makes two calls equivalent — which is exactly what idempotent
+        # means. Enforce on verbs that touch state (mutate, submit,
+        # workflow, scaffold). Pure-query/validate primitives are
+        # observation-only; their idempotency comes for free.
+        _STATEFUL_VERBS = ("mutate", "submit", "workflow", "scaffold")
+        if (
+            idempotent
+            and idempotency_key is None
+            and verb in _STATEFUL_VERBS
+            and (side_effects or ())
+        ):
+            raise ValueError(
+                f"Primitive {name!r} (verb={verb!r}, has side_effects) "
+                f"declares idempotent=True but no idempotency_key. "
+                "State-mutating primitives must declare what makes two "
+                "calls equivalent — typically the natural identifier "
+                "argument (e.g. 'run_id', 'experiment_dir', 'campaign_id'). "
+                "Either pass idempotency_key=, or set idempotent=False if "
+                "retries genuinely aren't safe."
+            )
         resolved_composes: list[PrimitiveMeta] = []
         for c in composes or ():
             if callable(c):
@@ -185,6 +228,8 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.state.runs",
     "claude_hpc.state.runtime_prior",
     "claude_hpc.forecast.calibration",
+    "claude_hpc.forecast.best_submit_window",
+    "claude_hpc.forecast.queue_wait_baseline",
     "claude_hpc.state.discover",
     "claude_hpc.planning.resubmit_batching",
     "claude_hpc.planning.planner",
@@ -192,6 +237,13 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.infra.inspect",
     "claude_hpc.infra.clusters",
     "claude_hpc.agent_cli",
+    "claude_hpc.atoms.axes_init",
+    "claude_hpc.atoms.aggregation_invariants",
+    "claude_hpc.atoms.build_executor",
+    "claude_hpc.atoms.build_submit_spec",
+    "claude_hpc.atoms.build_tasks_py",
+    "claude_hpc.atoms.canary_verify",
+    "claude_hpc.atoms.cluster_reduce",
     "claude_hpc.atoms.campaign_advance",
     "claude_hpc.atoms.campaign_budget",
     "claude_hpc.atoms.campaign_converged",
@@ -206,8 +258,12 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.interview",
     "claude_hpc.atoms.list_in_flight",
     "claude_hpc.atoms.logs",
+    "claude_hpc.atoms.monitor_arm",
+    "claude_hpc.atoms.monitor_summary",
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.recall",
+    "claude_hpc.atoms.setup_actions",
+    "claude_hpc.atoms.submit_plan_summary",
     "claude_hpc.atoms.walltime_drift",
     "claude_hpc.runner.submit",
     "claude_hpc.runner.status",
