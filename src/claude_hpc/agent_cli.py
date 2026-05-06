@@ -830,6 +830,73 @@ def cmd_monitor_summary(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_suggest_setup_action(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.setup_actions."""
+    from claude_hpc.atoms.setup_actions import suggest_setup_action
+
+    _ok(suggest_setup_action(args.experiment_dir), name="suggest-setup-action")
+    return EXIT_OK
+
+
+def cmd_find_prior_run(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.setup_actions."""
+    from claude_hpc.atoms.setup_actions import find_prior_run
+
+    _ok(
+        find_prior_run(args.experiment_dir, cmd_sha=args.cmd_sha),
+        name="find-prior-run",
+    )
+    return EXIT_OK
+
+
+def cmd_summarize_submit_plan(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.submit_plan_summary."""
+    from claude_hpc.atoms.submit_plan_summary import summarize_submit_plan
+
+    spec = _load_spec(args.spec, schema_name=None)
+    if not isinstance(spec, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="summarize-submit-plan input must be a JSON object",
+            category="user-error",
+            retry_safe=False,
+        )
+    _ok(summarize_submit_plan(spec), name="summarize-submit-plan")
+    return EXIT_OK
+
+
+def cmd_verify_aggregation_complete(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.aggregation_invariants."""
+    from claude_hpc.atoms.aggregation_invariants import verify_aggregation_complete
+
+    _ok(
+        verify_aggregation_complete(
+            args.experiment_dir,
+            run_id=args.run_id,
+            combiner_dir_local=args.combiner_dir,
+        ),
+        name="verify-aggregation-complete",
+    )
+    return EXIT_OK
+
+
+def cmd_verify_canary(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at claude_hpc.atoms.canary_verify."""
+    from claude_hpc.atoms.canary_verify import verify_canary
+
+    _ok(
+        verify_canary(
+            args.experiment_dir,
+            canary_run_id=args.canary_run_id,
+            expect_output=args.expect_output,
+            poll_interval_sec=int(args.poll_interval_sec),
+            wait_budget_sec=int(args.wait_budget_sec),
+        ),
+        name="verify-canary",
+    )
+    return EXIT_OK
+
+
 def cmd_axes_init(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.axes_init."""
     from claude_hpc.atoms.axes_init import axes_init
@@ -1893,6 +1960,115 @@ def build_parser() -> argparse.ArgumentParser:
         dry_run_help="Validate the spec but don't write tasks.py.",
     )
     p_btp.set_defaults(func=cmd_build_tasks_py)
+
+    # suggest-setup-action
+    p_ssa = sub.add_parser(
+        "suggest-setup-action",
+        help=(
+            "Run the /submit-hpc Setup priority cascade and recommend "
+            "{action: monitor|reuse|interview|fresh, run_id, candidates}. "
+            "Replaces the priority-list-walking prose at Step 0."
+        ),
+    )
+    _add_experiment_dir(p_ssa)
+    p_ssa.set_defaults(func=cmd_suggest_setup_action)
+
+    # find-prior-run
+    p_fpr = sub.add_parser(
+        "find-prior-run",
+        help=(
+            "Look up a prior run by cmd_sha for /submit-hpc Step 6c "
+            "resume detection. Returns {found, run_id, is_orphan, "
+            "status, age_sec, ...}."
+        ),
+    )
+    _add_experiment_dir(p_fpr)
+    p_fpr.add_argument(
+        "--cmd-sha",
+        type=str,
+        required=True,
+        help="The cmd_sha (SHA-256 hex) to match against existing sidecars.",
+    )
+    p_fpr.set_defaults(func=cmd_find_prior_run)
+
+    # summarize-submit-plan
+    p_ssp = sub.add_parser(
+        "summarize-submit-plan",
+        help=(
+            "Render the canonical pre-submit confirmation summary for a "
+            "submit_flow.input.json spec. Returns {headline, body, "
+            "confirm_prompt} the slash command prints verbatim. "
+            "Eliminates per-submit wording drift."
+        ),
+    )
+    _add_spec_and_dry_run(
+        p_ssp,
+        schema_hint="schemas/submit_flow.input.json",
+        dry_run_help="Validate but don't emit (the primitive has no side effects).",
+    )
+    p_ssp.set_defaults(func=cmd_summarize_submit_plan)
+
+    # verify-aggregation-complete
+    p_vac = sub.add_parser(
+        "verify-aggregation-complete",
+        help=(
+            "Walk the run sidecar's wave_map + the locally-pulled "
+            "_combiner/ dir; report all_waves_combined / all_tasks_present "
+            "/ provenance_present invariants. Returns ok plus the missing "
+            "/ unexpected lists."
+        ),
+    )
+    _add_experiment_dir(p_vac)
+    p_vac.add_argument(
+        "--run-id",
+        type=str,
+        required=True,
+        help="Run identifier (matches .hpc/runs/<run_id>.json sidecar stem).",
+    )
+    p_vac.add_argument(
+        "--combiner-dir",
+        type=Path,
+        required=True,
+        help="Local path the cluster's _combiner/ was rsync_pull'd to.",
+    )
+    p_vac.set_defaults(func=cmd_verify_aggregation_complete)
+
+    # verify-canary
+    p_vc = sub.add_parser(
+        "verify-canary",
+        help=(
+            "Wait + grep + output-check for a 1-task canary submission. "
+            "Polls until terminal, scans stderr for known failure markers, "
+            "optionally checks expect_output exists. Returns "
+            "{ok, failure_kind, details, stderr_tail}."
+        ),
+    )
+    _add_experiment_dir(p_vc)
+    p_vc.add_argument(
+        "--canary-run-id",
+        type=str,
+        required=True,
+        help="Run ID of the canary (typically <main_run_id>-canary).",
+    )
+    p_vc.add_argument(
+        "--expect-output",
+        type=str,
+        default=None,
+        help="Optional path (relative to remote_path) the canary should have written.",
+    )
+    p_vc.add_argument(
+        "--poll-interval-sec",
+        type=int,
+        default=30,
+        help="Seconds between status polls (default 30).",
+    )
+    p_vc.add_argument(
+        "--wait-budget-sec",
+        type=int,
+        default=1800,
+        help="Total seconds to wait for terminal before giving up (default 1800).",
+    )
+    p_vc.set_defaults(func=cmd_verify_canary)
 
     # decide-monitor-arm
     p_dma = sub.add_parser(
