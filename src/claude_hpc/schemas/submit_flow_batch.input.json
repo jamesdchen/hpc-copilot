@@ -2,36 +2,100 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/submit_flow_batch.input.json",
   "title": "submit-flow-batch input spec",
-  "description": "Wraps a JSON list of submit-flow specs that share `(ssh_target, remote_path)`. The batch atom does ONE rsync_push + ONE deploy_runtime + N qsubs (multiplexed via the ssh ControlMaster) instead of N times the per-spec submit-flow pipeline. Use whenever a campaign iteration or multi-executor /submit-hpc emits >1 specs to the same cluster; heterogeneous (different ssh_target or remote_path) batches raise spec_invalid. Each list element under `specs` MUST individually validate against submit_flow.input.json (the CLI loads that schema and validates per-entry); this wrapper schema only constrains the outer shape so an agent or external orchestrator can sanity-check the bundle without doing the per-entry validation itself.",
+  "description": "Wraps a JSON list of submit-flow specs that share ``(ssh_target, remote_path)``.\n\nThe batch atom does ONE rsync_push + ONE deploy_runtime + N\nqsubs (multiplexed via the ssh ControlMaster) instead of N times\nthe per-spec submit-flow pipeline. Use whenever a campaign\niteration or multi-executor /submit-hpc emits >1 specs to the\nsame cluster; heterogeneous (different ssh_target or remote_path)\nbatches raise spec_invalid. Each list element under ``specs``\nMUST individually validate against submit_flow.input.json (the\nCLI loads that schema and validates per-entry); this wrapper\nschema only constrains the outer shape so an agent or external\norchestrator can sanity-check the bundle without doing the\nper-entry validation itself.",
   "type": "object",
-  "required": ["specs"],
+  "required": [
+    "specs"
+  ],
   "properties": {
     "specs": {
-      "type": "array",
-      "minItems": 1,
       "items": {
-        "type": "object",
-        "description": "A submit-flow spec; full field-level contract lives in submit_flow.input.json.",
-        "required": [
-          "profile",
-          "cluster",
-          "ssh_target",
-          "remote_path",
-          "run_id",
-          "total_tasks",
-          "backend",
-          "job_name"
-        ]
-      }
+        "$ref": "#/$defs/_SubmitFlowSpecOuter"
+      },
+      "minItems": 1,
+      "title": "Specs",
+      "type": "array"
     },
     "rsync_excludes": {
-      "type": "array",
-      "items": {"type": "string"},
-      "description": "Optional rsync exclude patterns applied once across the bundle."
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional rsync exclude patterns applied once across the bundle.",
+      "title": "Rsync Excludes"
     },
     "skip_preflight": {
-      "type": "boolean",
-      "description": "Skip the single ssh probe; default false."
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Skip the single ssh probe; default false.",
+      "title": "Skip Preflight"
+    }
+  },
+  "$defs": {
+    "_SubmitFlowSpecOuter": {
+      "additionalProperties": true,
+      "description": "Outer-shape only validation for one submit-flow spec inside a batch.",
+      "properties": {
+        "profile": {
+          "title": "Profile",
+          "type": "string"
+        },
+        "cluster": {
+          "title": "Cluster",
+          "type": "string"
+        },
+        "ssh_target": {
+          "title": "Ssh Target",
+          "type": "string"
+        },
+        "remote_path": {
+          "title": "Remote Path",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "total_tasks": {
+          "title": "Total Tasks",
+          "type": "integer"
+        },
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "job_name": {
+          "title": "Job Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "cluster",
+        "ssh_target",
+        "remote_path",
+        "run_id",
+        "total_tasks",
+        "backend",
+        "job_name"
+      ],
+      "title": "_SubmitFlowSpecOuter",
+      "type": "object"
     }
   }
 }

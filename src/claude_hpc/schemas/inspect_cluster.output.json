@@ -2,41 +2,169 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/inspect_cluster.output.json",
   "title": "inspect-cluster output data",
-  "description": "Shape of the `data` field on a successful `inspect-cluster --cluster <name>` envelope.",
   "type": "object",
-  "required": ["cluster", "scheduler_kind", "now_iso", "nodes", "errors"],
+  "required": [
+    "cluster",
+    "scheduler_kind",
+    "now_iso",
+    "nodes",
+    "errors"
+  ],
   "additionalProperties": false,
   "properties": {
-    "cluster":        { "type": "string" },
-    "scheduler_kind": { "type": "string", "enum": ["sge", "slurm"] },
-    "now_iso":        { "type": "string", "description": "UTC ISO-8601 timestamp of the snapshot." },
+    "cluster": {
+      "title": "Cluster",
+      "type": "string"
+    },
+    "scheduler_kind": {
+      "enum": [
+        "sge",
+        "slurm"
+      ],
+      "title": "Scheduler Kind",
+      "type": "string"
+    },
+    "now_iso": {
+      "description": "UTC ISO-8601 timestamp of the snapshot.",
+      "title": "Now Iso",
+      "type": "string"
+    },
     "nodes": {
-      "type": "array",
       "items": {
-        "type": "object",
-        "required": ["name"],
-        "additionalProperties": true,
-        "properties": {
-          "name":             { "type": "string" },
-          "alloc_mem_pct":    { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-          "cpu_load_frac":    { "type": ["number", "null"], "minimum": 0 },
-          "gres":             { "type": ["string", "null"] },
-          "gres_used":        { "type": ["string", "null"] },
-          "active_features":  { "type": "array", "items": { "type": "string" } },
-          "co_tenants":       {
-            "type": "array",
-            "items": { "type": "object", "additionalProperties": true },
-            "description": "Other jobs sharing the node. Shape varies per scheduler."
-          },
-          "is_stressed":      { "type": "boolean" },
-          "is_drained":       { "type": "boolean" }
-        }
-      }
+        "$ref": "#/$defs/_NodeSnapshot"
+      },
+      "title": "Nodes",
+      "type": "array"
     },
     "errors": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "Non-fatal per-node errors (e.g. one node failed to report). Fatal cases raise ssh_unreachable instead."
+      "description": "Non-fatal per-node errors (e.g. one node failed to report). Fatal cases raise ssh_unreachable instead.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Errors",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "_NodeSnapshot": {
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "alloc_mem_pct": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alloc Mem Pct"
+        },
+        "cpu_load_frac": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Load Frac"
+        },
+        "gres": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gres"
+        },
+        "gres_used": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gres Used"
+        },
+        "active_features": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Features"
+        },
+        "co_tenants": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Co Tenants"
+        },
+        "is_stressed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Stressed"
+        },
+        "is_drained": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Drained"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "_NodeSnapshot",
+      "type": "object"
     }
   }
 }

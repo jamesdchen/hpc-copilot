@@ -2,27 +2,60 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/suggest_setup_action.output.json",
   "title": "suggest-setup-action output",
-  "description": "Recommended /submit-hpc Setup branch. Agent branches on `action`; `candidates` carries the relevant runs/sidecars to surface to the user. The recommended_run_id field is named with a 'recommended_' prefix so the schema-defs consistency check (which forbids nullable run_id) doesn't trip.",
+  "description": "Recommended /submit-hpc Setup branch.\n\nAgent branches on ``action``; ``candidates`` carries the\nrelevant runs/sidecars to surface to the user. The\n``recommended_run_id`` field is named with a 'recommended_'\nprefix so the schema-defs consistency check (which forbids\nnullable run_id) doesn't trip.",
   "type": "object",
-  "required": ["priority", "action", "recommended_run_id", "candidates", "reason"],
+  "required": [
+    "priority",
+    "action",
+    "recommended_run_id",
+    "candidates",
+    "reason"
+  ],
   "properties": {
     "priority": {
-      "type": "integer",
-      "enum": [0, 1, 2, 3]
+      "enum": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "title": "Priority",
+      "type": "integer"
     },
     "action": {
-      "type": "string",
-      "enum": ["monitor", "reuse", "interview", "fresh"]
+      "enum": [
+        "monitor",
+        "reuse",
+        "interview",
+        "fresh"
+      ],
+      "title": "Action",
+      "type": "string"
     },
     "recommended_run_id": {
-      "type": ["string", "null"],
-      "description": "Recommended single best candidate (newest by submitted_at / mtime); null at priority 2/3."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Recommended single best candidate (newest by submitted_at / mtime); null at priority 2/3.",
+      "title": "Recommended Run Id"
     },
     "candidates": {
-      "type": "array",
       "description": "Full candidate list at this priority. Shape varies: priority 0 carries journal RunRecord summaries; priority 1 carries sidecar dicts.",
-      "items": { "type": "object" }
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Candidates",
+      "type": "array"
     },
-    "reason": { "type": "string" }
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    }
   }
 }

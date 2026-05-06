@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/monitor_flow.input.json",
   "title": "monitor-flow input spec",
-  "description": "Spec passed to `hpc-mapreduce monitor-flow --spec <file>`. Workflow atom that polls a run to terminal state, auto-combines waves as they finish, and writes the same .monitor.jsonl tick log that /monitor-hpc writes \u2014 so summary mode works regardless of which surface drove monitoring. MVP does NOT auto-resubmit failed tasks (caller decides \u2014 escalation surfaces in the envelope's lifecycle_state and escalation_reason).",
+  "description": "Spec passed to ``hpc-mapreduce monitor-flow --spec <file>``.\n\nWorkflow atom that polls a run to terminal state, auto-combines\nwaves as they finish, and writes the same .monitor.jsonl tick log\nthat /monitor-hpc writes — so summary mode works regardless of\nwhich surface drove monitoring. MVP does NOT auto-resubmit failed\ntasks (caller decides — escalation surfaces in the envelope's\nlifecycle_state and escalation_reason).",
   "type": "object",
   "required": [
     "run_id"
@@ -10,35 +10,42 @@
   "additionalProperties": false,
   "properties": {
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
     },
     "poll_interval_seconds": {
-      "type": "number",
-      "minimum": 5,
       "default": 60,
-      "description": "Seconds to sleep between status polls. Match to expected per-task runtime \u2014 60s is fine for 10-min tasks; 300s for hour-scale tasks."
+      "description": "Seconds to sleep between status polls. Match to expected per-task runtime — 60s is fine for 10-min tasks; 300s for hour-scale tasks.",
+      "minimum": 5,
+      "title": "Poll Interval Seconds",
+      "type": "number"
     },
     "wall_clock_budget_seconds": {
-      "type": "number",
-      "minimum": 0,
       "default": 86400,
-      "description": "Hard cap on total monitoring time. When exceeded, monitor-flow returns with lifecycle_state='timeout' and the cluster jobs continue running. Caller may re-invoke to keep watching."
+      "description": "Hard cap on total monitoring time. When exceeded, monitor-flow returns with lifecycle_state='timeout' and the cluster jobs continue running. Caller may re-invoke to keep watching.",
+      "minimum": 0,
+      "title": "Wall Clock Budget Seconds",
+      "type": "number"
     },
     "auto_combine_waves": {
-      "type": "boolean",
       "default": true,
-      "description": "Invoke combine-wave for each newly-complete wave during the poll loop. Disable when the caller wants to defer aggregation (e.g. campaign sweep that combines all waves once at the end)."
+      "description": "Invoke combine-wave for each newly-complete wave during the poll loop. Disable when the caller wants to defer aggregation (e.g. campaign sweep that combines all waves once at the end).",
+      "title": "Auto Combine Waves",
+      "type": "boolean"
     },
     "combiner_max_retries": {
-      "type": "integer",
-      "minimum": 0,
       "default": 1,
-      "description": "Times to retry combine-wave with force=true after first failure. Beyond this, the wave is escalated and stays in failed_waves; monitor-flow continues watching the rest of the run."
+      "description": "Times to retry combine-wave with force=true after first failure. Beyond this, the wave is escalated and stays in failed_waves; monitor-flow continues watching the rest of the run.",
+      "minimum": 0,
+      "title": "Combiner Max Retries",
+      "type": "integer"
     },
     "file_glob": {
-      "type": "string",
       "default": "*",
-      "description": "File pattern passed to the cluster-side reporter for per-task result-file presence checks. Override to e.g. 'metrics_chunk_*.json' for stricter completion detection."
+      "description": "File pattern passed to the cluster-side reporter for per-task result-file presence checks. Override to e.g. 'metrics_chunk_*.json' for stricter completion detection.",
+      "title": "File Glob",
+      "type": "string"
     }
   }
 }

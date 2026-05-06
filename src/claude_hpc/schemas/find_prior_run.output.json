@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/find_prior_run.output.json",
   "title": "find-prior-run output",
-  "description": "Resume-detection lookup result. found=False distinguishes 'no prior run' from 'prior run is orphan' (is_orphan=True signals a half-baked sidecar). The prior_run_id field is named with a 'prior_' prefix so the schema-defs consistency check (which forbids nullable run_id) doesn't trip.",
+  "description": "Resume-detection lookup result.\n\nfound=False distinguishes 'no prior run' from 'prior run is\norphan' (is_orphan=True signals a half-baked sidecar). The\nprior_run_id field is named with a 'prior_' prefix so the\nschema-defs consistency check (which forbids nullable run_id)\ndoesn't trip.",
   "type": "object",
   "required": [
     "found",
@@ -17,21 +17,99 @@
     "submitted_at"
   ],
   "properties": {
-    "found": { "type": "boolean" },
+    "found": {
+      "title": "Found",
+      "type": "boolean"
+    },
     "prior_run_id": {
-      "type": ["string", "null"],
-      "description": "The matching prior run's run_id, or null when found=False."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The matching prior run's run_id, or null when found=False.",
+      "title": "Prior Run Id"
     },
-    "is_orphan": { "type": "boolean" },
-    "status": { "type": ["string", "null"] },
-    "age_sec": { "type": ["integer", "null"], "minimum": 0 },
-    "profile": { "type": ["string", "null"] },
-    "cluster": { "type": ["string", "null"] },
+    "is_orphan": {
+      "title": "Is Orphan",
+      "type": "boolean"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Status"
+    },
+    "age_sec": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Age Sec"
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Profile"
+    },
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Cluster"
+    },
     "job_ids": {
-      "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      },
+      "title": "Job Ids",
+      "type": "array"
     },
-    "campaign_id": { "type": ["string", "null"] },
-    "submitted_at": { "type": ["string", "null"] }
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Campaign Id"
+    },
+    "submitted_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Submitted At"
+    }
   }
 }

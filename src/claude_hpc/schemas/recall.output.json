@@ -2,74 +2,377 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/recall.output.json",
   "title": "recall output envelope",
-  "description": "Envelope returned by `hpc-mapreduce recall`. Each campaign summary projects the prior-decision fields the next interviewer would compare against (budget, abort_if, task_generator, cluster_target) — not just file-listing metadata. The rollup block pre-computes aggregations across all matched campaigns: Tier 1 always-on (free, computed from interview.json fields alone), Tier 2 opt-in via include_runtime (walks .hpc/runtimes/*.json), Tier 3 opt-in via include_generator_stats (per-generator-kind parameter envelopes).",
+  "description": "Envelope returned by ``hpc-mapreduce recall``.\n\nEach campaign summary projects the prior-decision fields the\nnext interviewer would compare against. The rollup block\npre-computes cross-campaign aggregations.",
   "type": "object",
-  "required": ["ok", "data"],
+  "required": [
+    "ok",
+    "data"
+  ],
   "additionalProperties": false,
   "properties": {
-    "ok":   { "type": "boolean", "const": true },
+    "ok": {
+      "const": true,
+      "title": "Ok",
+      "type": "boolean"
+    },
     "data": {
-      "type": "object",
-      "required": ["campaigns", "total_matching", "showing", "rollup"],
-      "additionalProperties": false,
-      "properties": {
-        "campaigns": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/campaign_summary" }
-        },
-        "total_matching": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of interview.json files that passed every filter, BEFORE truncation by limit. Lets the caller detect 'there are 200 matching campaigns; I should narrow my filter'."
-        },
-        "showing": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Number of summaries actually included in `campaigns` (== min(total_matching, limit))."
-        },
-        "rollup": {
-          "$ref": "#/$defs/rollup",
-          "description": "Cross-campaign aggregations. Tier 1 fields always present; runtime_rollup present iff include_runtime; generator_rollup present iff include_generator_stats."
-        }
-      }
+      "$ref": "#/$defs/_RecallData"
     }
   },
   "$defs": {
-    "campaign_summary": {
-      "type": "object",
-      "required": ["campaign_dir", "materialized_at"],
+    "_CampaignSummary": {
       "additionalProperties": false,
       "properties": {
-        "campaign_dir":     { "type": "string" },
-        "goal":             { "type": ["string", "null"] },
-        "task_kind":        { "type": ["string", "null"] },
-        "task_count":       { "type": ["integer", "null"], "minimum": 0 },
-        "operator":         { "type": ["string", "null"] },
-        "produced_by_kind": { "type": ["string", "null"], "enum": ["mars", "human", null] },
-        "materialized_at":  { "type": ["string", "null"], "description": "ISO-8601 timestamp from interview.json._materialized.at." },
-        "cmd_sha":          { "type": ["string", "null"], "pattern": "^[0-9a-f]{8,64}$" },
-        "budget":           { "type": ["object", "null"], "description": "Echo of intent.budget — opaque dict, units chosen by the interview agent." },
-        "abort_if":         { "type": ["object", "null"], "description": "Echo of intent.abort_if — early-stop criterion." },
-        "cluster_target":   { "type": ["object", "null"], "description": "Echo of intent.cluster_target — {cluster, profile, constraint?}." },
-        "task_generator":   {
+        "campaign_dir": {
+          "title": "Campaign Dir",
+          "type": "string"
+        },
+        "materialized_at": {
           "anyOf": [
-            { "type": "null" },
             {
-              "type": "object",
-              "required": ["kind"],
-              "additionalProperties": false,
-              "properties": {
-                "kind":   { "type": "string" },
-                "params": { "type": ["object", "null"] }
-              }
+              "type": "string"
+            },
+            {
+              "type": "null"
             }
           ],
-          "description": "Echo of intent.task_generator — {kind, params}. Null when the interview agent hand-wrote tasks.py."
+          "description": "ISO-8601 timestamp from interview.json._materialized.at.",
+          "title": "Materialized At"
+        },
+        "goal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Goal"
+        },
+        "task_kind": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Kind"
+        },
+        "task_count": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Count"
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operator"
+        },
+        "produced_by_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "mars",
+                "human"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Produced By Kind"
+        },
+        "cmd_sha": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{8,64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cmd Sha"
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Budget"
+        },
+        "abort_if": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Abort If"
+        },
+        "cluster_target": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cluster Target"
+        },
+        "task_generator": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Generator"
         }
-      }
+      },
+      "required": [
+        "campaign_dir",
+        "materialized_at"
+      ],
+      "title": "_CampaignSummary",
+      "type": "object"
     },
-    "rollup": {
-      "type": "object",
+    "_GeneratorByKindEntry": {
+      "additionalProperties": true,
+      "properties": {
+        "count": {
+          "minimum": 1,
+          "title": "Count",
+          "type": "integer"
+        },
+        "param_envelopes": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Param Envelopes"
+        },
+        "axis_value_unions": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Axis Value Unions"
+        }
+      },
+      "required": [
+        "count"
+      ],
+      "title": "_GeneratorByKindEntry",
+      "type": "object"
+    },
+    "_GeneratorRollup": {
+      "additionalProperties": false,
+      "properties": {
+        "by_kind": {
+          "additionalProperties": {
+            "$ref": "#/$defs/_GeneratorByKindEntry"
+          },
+          "title": "By Kind",
+          "type": "object"
+        }
+      },
+      "required": [
+        "by_kind"
+      ],
+      "title": "_GeneratorRollup",
+      "type": "object"
+    },
+    "_MaterializedAtStats": {
+      "additionalProperties": false,
+      "properties": {
+        "earliest": {
+          "title": "Earliest",
+          "type": "string"
+        },
+        "latest": {
+          "title": "Latest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "earliest",
+        "latest"
+      ],
+      "title": "_MaterializedAtStats",
+      "type": "object"
+    },
+    "_RecallData": {
+      "additionalProperties": false,
+      "properties": {
+        "campaigns": {
+          "items": {
+            "$ref": "#/$defs/_CampaignSummary"
+          },
+          "title": "Campaigns",
+          "type": "array"
+        },
+        "total_matching": {
+          "minimum": 0,
+          "title": "Total Matching",
+          "type": "integer"
+        },
+        "showing": {
+          "minimum": 0,
+          "title": "Showing",
+          "type": "integer"
+        },
+        "rollup": {
+          "$ref": "#/$defs/_RecallRollup"
+        }
+      },
+      "required": [
+        "campaigns",
+        "total_matching",
+        "showing",
+        "rollup"
+      ],
+      "title": "_RecallData",
+      "type": "object"
+    },
+    "_RecallRollup": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "task_kind_distribution": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Task Kind Distribution",
+          "type": "object"
+        },
+        "operators": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Operators",
+          "type": "object"
+        },
+        "produced_by_kinds": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Produced By Kinds",
+          "type": "object"
+        },
+        "task_generator_kinds": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Task Generator Kinds",
+          "type": "object"
+        },
+        "clusters": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Clusters",
+          "type": "object"
+        },
+        "task_count": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_TaskCountStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "materialized_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_MaterializedAtStats"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtime_rollup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_RuntimeRollup"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "generator_rollup": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_GeneratorRollup"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
       "required": [
         "count",
         "task_kind_distribution",
@@ -80,94 +383,120 @@
         "task_count",
         "materialized_at"
       ],
+      "title": "_RecallRollup",
+      "type": "object"
+    },
+    "_RuntimeRollup": {
       "additionalProperties": false,
       "properties": {
-        "count":                   { "type": "integer", "minimum": 0 },
-        "task_kind_distribution":  { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
-        "operators":               { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
-        "produced_by_kinds":       { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
-        "task_generator_kinds":    { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
-        "clusters":                { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
-        "task_count": {
+        "walltime_per_task_sec": {
           "anyOf": [
-            { "type": "null" },
             {
-              "type": "object",
-              "required": ["p50", "p95", "min", "max"],
-              "additionalProperties": false,
-              "properties": {
-                "p50": { "type": "number" },
-                "p95": { "type": "number" },
-                "min": { "type": "integer", "minimum": 0 },
-                "max": { "type": "integer", "minimum": 0 }
-              }
-            }
-          ]
-        },
-        "materialized_at": {
-          "anyOf": [
-            { "type": "null" },
-            {
-              "type": "object",
-              "required": ["earliest", "latest"],
-              "additionalProperties": false,
-              "properties": {
-                "earliest": { "type": "string" },
-                "latest":   { "type": "string" }
-              }
-            }
-          ]
-        },
-        "runtime_rollup": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["walltime_per_task_sec", "failure_rate", "total_task_samples", "campaigns_with_no_runtime"],
-          "properties": {
-            "walltime_per_task_sec": {
-              "anyOf": [
-                { "type": "null" },
-                {
-                  "type": "object",
-                  "required": ["p50", "p95", "min", "max", "n_samples"],
-                  "additionalProperties": false,
-                  "properties": {
-                    "p50":       { "type": "number" },
-                    "p95":       { "type": "number" },
-                    "min":       { "type": "integer" },
-                    "max":       { "type": "integer" },
-                    "n_samples": { "type": "integer", "minimum": 0 }
-                  }
-                }
-              ]
+              "$ref": "#/$defs/_WalltimeStats"
             },
-            "failure_rate":              { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-            "total_task_samples":        { "type": "integer", "minimum": 0 },
-            "campaigns_with_no_runtime": { "type": "integer", "minimum": 0 }
-          },
-          "description": "Tier 2: aggregated per-task runtime stats from .hpc/runtimes/*.json across every matched campaign."
-        },
-        "generator_rollup": {
-          "type": "object",
-          "required": ["by_kind"],
-          "additionalProperties": false,
-          "properties": {
-            "by_kind": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "object",
-                "required": ["count"],
-                "additionalProperties": true,
-                "properties": {
-                  "count":             { "type": "integer", "minimum": 1 },
-                  "param_envelopes":   { "type": "object", "description": "numeric_logspace / numeric_linspace: {param: {low: [min, max], high: [min, max], n: [min, max]}}." },
-                  "axis_value_unions": { "type": "object", "description": "cartesian_product: {axis_name: [unique values seen across campaigns]}." }
-                }
-              }
+            {
+              "type": "null"
             }
-          },
-          "description": "Tier 3: bucket-by-kind observed parameter envelopes."
+          ]
+        },
+        "failure_rate": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Rate"
+        },
+        "total_task_samples": {
+          "minimum": 0,
+          "title": "Total Task Samples",
+          "type": "integer"
+        },
+        "campaigns_with_no_runtime": {
+          "minimum": 0,
+          "title": "Campaigns With No Runtime",
+          "type": "integer"
         }
-      }
+      },
+      "required": [
+        "walltime_per_task_sec",
+        "total_task_samples",
+        "campaigns_with_no_runtime"
+      ],
+      "title": "_RuntimeRollup",
+      "type": "object"
+    },
+    "_TaskCountStats": {
+      "additionalProperties": false,
+      "properties": {
+        "p50": {
+          "title": "P50",
+          "type": "number"
+        },
+        "p95": {
+          "title": "P95",
+          "type": "number"
+        },
+        "min": {
+          "minimum": 0,
+          "title": "Min",
+          "type": "integer"
+        },
+        "max": {
+          "minimum": 0,
+          "title": "Max",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "p50",
+        "p95",
+        "min",
+        "max"
+      ],
+      "title": "_TaskCountStats",
+      "type": "object"
+    },
+    "_WalltimeStats": {
+      "additionalProperties": false,
+      "properties": {
+        "p50": {
+          "title": "P50",
+          "type": "number"
+        },
+        "p95": {
+          "title": "P95",
+          "type": "number"
+        },
+        "min": {
+          "title": "Min",
+          "type": "integer"
+        },
+        "max": {
+          "title": "Max",
+          "type": "integer"
+        },
+        "n_samples": {
+          "minimum": 0,
+          "title": "N Samples",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "p50",
+        "p95",
+        "min",
+        "max",
+        "n_samples"
+      ],
+      "title": "_WalltimeStats",
+      "type": "object"
     }
   }
 }
