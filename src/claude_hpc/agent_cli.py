@@ -1300,28 +1300,10 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
-    result = submit_flow(
-        experiment_dir=args.experiment_dir,
-        profile=spec["profile"],
-        cluster=spec["cluster"],
-        ssh_target=spec["ssh_target"],
-        remote_path=spec["remote_path"],
-        job_name=spec["job_name"],
-        run_id=spec["run_id"],
-        total_tasks=int(spec["total_tasks"]),
-        backend=spec["backend"],
-        script=spec["script"],
-        job_env=dict(spec["job_env"]),
-        pass_env_keys=spec.get("pass_env_keys"),
-        canary=bool(spec.get("canary", True)),
-        campaign_id=spec.get("campaign_id") or "",
-        runtime=spec.get("runtime"),
-        rsync_excludes=spec.get("rsync_excludes"),
-        skip_preflight=bool(spec.get("skip_preflight", False)),
-        slurm_account=spec.get("slurm_account"),
-        slurm_cluster=spec.get("slurm_cluster"),
-        partial_ok=bool(spec.get("partial_ok", False)),
-    )
+    from claude_hpc._schema_models.submit_flow import SubmitFlowSpec
+
+    submit_spec = SubmitFlowSpec.model_validate(spec)
+    result = submit_flow(args.experiment_dir, spec=submit_spec)
     _ok(result.to_envelope_data(), name="submit-flow")
     return EXIT_OK
 
@@ -1424,33 +1406,29 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
     ``submit-flow`` for the campaign composition pattern
     ``submit-flow → monitor-flow → next iteration``.
     """
+    from claude_hpc._schema_models.monitor_flow import MonitorFlowSpec
     from claude_hpc.flows.monitor_flow import monitor_flow
 
-    spec = _load_spec(args.spec, schema_name=None)
-    _validate_against_schema(spec, "monitor_flow")
+    raw = _load_spec(args.spec, schema_name=None)
+    _validate_against_schema(raw, "monitor_flow")
+    # The Pydantic model is the authoring SoT for the wire shape; the
+    # jsonschema check above is a belt-and-suspenders fail-fast.
+    monitor_spec = MonitorFlowSpec.model_validate(raw)
 
     if args.dry_run:
         _ok(
             {
-                "run_id": spec["run_id"],
-                "poll_interval_seconds": spec.get("poll_interval_seconds", 60),
-                "wall_clock_budget_seconds": spec.get("wall_clock_budget_seconds", 86400),
-                "auto_combine_waves": spec.get("auto_combine_waves", True),
+                "run_id": monitor_spec.run_id,
+                "poll_interval_seconds": monitor_spec.poll_interval_seconds,
+                "wall_clock_budget_seconds": monitor_spec.wall_clock_budget_seconds,
+                "auto_combine_waves": monitor_spec.auto_combine_waves,
                 "dry_run": True,
             },
             name="monitor-flow",
         )
         return EXIT_OK
 
-    result = monitor_flow(
-        experiment_dir=args.experiment_dir,
-        run_id=spec["run_id"],
-        poll_interval_seconds=float(spec.get("poll_interval_seconds", 60.0)),
-        wall_clock_budget_seconds=float(spec.get("wall_clock_budget_seconds", 86400.0)),
-        auto_combine_waves=bool(spec.get("auto_combine_waves", True)),
-        combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
-        file_glob=spec.get("file_glob", "*"),
-    )
+    result = monitor_flow(args.experiment_dir, spec=monitor_spec)
     _ok(result.to_envelope_data(), name="monitor-flow")
     return EXIT_OK
 
@@ -1467,34 +1445,27 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
     atom — the campaign loop's per-iteration tail is
     ``submit-flow → monitor-flow → aggregate-flow → next iter``.
     """
+    from claude_hpc._schema_models.aggregate_flow import AggregateFlowSpec
     from claude_hpc.flows.aggregate_flow import aggregate_flow
 
-    spec = _load_spec(args.spec, schema_name=None)
-    _validate_against_schema(spec, "aggregate_flow")
+    raw = _load_spec(args.spec, schema_name=None)
+    _validate_against_schema(raw, "aggregate_flow")
+    aggregate_spec = AggregateFlowSpec.model_validate(raw)
 
     if args.dry_run:
         _ok(
             {
-                "run_id": spec["run_id"],
-                "ensure_all_combined": spec.get("ensure_all_combined", True),
-                "pull_summaries": spec.get("pull_summaries", False),
-                "output_dir": spec.get("output_dir"),
+                "run_id": aggregate_spec.run_id,
+                "ensure_all_combined": aggregate_spec.ensure_all_combined,
+                "pull_summaries": aggregate_spec.pull_summaries,
+                "output_dir": aggregate_spec.output_dir,
                 "dry_run": True,
             },
             name="aggregate-flow",
         )
         return EXIT_OK
 
-    result = aggregate_flow(
-        experiment_dir=args.experiment_dir,
-        run_id=spec["run_id"],
-        output_dir=spec.get("output_dir"),
-        ensure_all_combined=bool(spec.get("ensure_all_combined", True)),
-        combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
-        pull_summaries=bool(spec.get("pull_summaries", False)),
-        summary_glob=spec.get("summary_glob"),
-        results_subdir=spec.get("results_subdir", "results"),
-    )
+    result = aggregate_flow(args.experiment_dir, spec=aggregate_spec)
     _ok(result.to_envelope_data(), name="aggregate-flow")
     return EXIT_OK
 

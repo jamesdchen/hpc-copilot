@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._schema_models.submit_flow import SubmitFlowSpec
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
 from claude_hpc.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
@@ -281,81 +282,71 @@ def _make_single_array_submission(
     agent_facing=True,
 )
 def submit_flow(
-    *,
     experiment_dir: Path,
-    profile: str,
-    cluster: str,
-    ssh_target: str,
-    remote_path: str,
-    job_name: str,
-    run_id: str,
-    total_tasks: int,
-    backend: str,
-    script: str,
-    job_env: dict[str, str],
-    pass_env_keys: list[str] | None = None,
-    canary: bool = True,
-    campaign_id: str = "",
-    runtime: str | None = None,
-    rsync_excludes: list[str] | None = None,
-    skip_preflight: bool = False,
-    slurm_account: str | None = None,
-    slurm_cluster: str | None = None,
-    partial_ok: bool = False,
+    *,
+    spec: "SubmitFlowSpec",
 ) -> SubmitFlowResult:
     """Execute the full submit pipeline and emit a single result.
 
     Pipeline:
 
-    1. **Idempotency check** — if a journal record for ``run_id`` exists,
-       return ``deduped=True`` immediately. No SSH, no scheduler calls.
-    2. **Pre-flight gate** (skippable via ``skip_preflight``) — verifies
-       SSH agent forwarding + cluster reachability. Aborts on failure.
-    3. **rsync_push** — sync ``experiment_dir`` to ``remote_path``.
-    4. **deploy_runtime** — scp framework files into ``remote_path/.hpc/``.
-    5. **Optional canary** — submit a 1-task array (``job_name + "_canary"``,
-       ``total_tasks=1``) and record it as a separate sidecar tagged with
-       the same campaign. Caller is responsible for waiting and verifying
-       — this atom only checks that qsub accepted the submission. Set
-       ``canary=False`` to skip when the caller has just smoke-tested.
+    1. **Idempotency check** — if a journal record for ``spec.run_id``
+       exists, return ``deduped=True`` immediately. No SSH, no scheduler
+       calls.
+    2. **Pre-flight gate** (skippable via ``spec.skip_preflight``) —
+       verifies SSH agent forwarding + cluster reachability. Aborts on
+       failure.
+    3. **rsync_push** — sync ``experiment_dir`` to ``spec.remote_path``.
+    4. **deploy_runtime** — scp framework files into
+       ``<remote_path>/.hpc/``.
+    5. **Optional canary** — submit a 1-task array (``job_name +
+       "_canary"``, ``total_tasks=1``) and record it as a separate sidecar
+       tagged with the same campaign. Caller waits and verifies — this
+       atom only checks that qsub accepted the submission. Set
+       ``spec.canary=False`` to skip when the caller has just
+       smoke-tested.
     6. **Main submit** — qsub/sbatch the full ``1-total_tasks`` array.
     7. **Record** — :func:`runner.submit_and_record` writes the per-run
-       sidecar + journal entry tagged with ``campaign_id``.
+       sidecar + journal entry tagged with ``spec.campaign_id``.
 
     Errors raise the existing :class:`errors.HpcError` hierarchy so the
     CLI subcommand layer can convert them to error envelopes uniformly.
 
-    *partial_ok* (default False) records ``extra.partial_ok=True`` on the
-    sidecar so a downstream monitor-flow wave with at least one success
-    is classified ``complete`` (not ``failed``); aggregate-flow then
-    skips the failed task IDs listed under ``<run_id>.failed.json``. The
-    flag mirrors the grid-sweep ``--partial-ok`` usage where one OOMing
-    config shouldn't abort an N-config sweep.
+    ``spec.partial_ok`` records ``extra.partial_ok=True`` on the sidecar
+    so a downstream monitor-flow wave with at least one success is
+    classified ``complete`` (not ``failed``); aggregate-flow then skips
+    the failed task IDs listed under ``<run_id>.failed.json``.
     """
-    spec = SubmitSpec(
-        profile=profile,
-        cluster=cluster,
-        ssh_target=ssh_target,
-        remote_path=remote_path,
-        job_name=job_name,
-        run_id=run_id,
-        total_tasks=total_tasks,
-        backend=backend,
-        script=script,
-        job_env=dict(job_env),
-        pass_env_keys=list(pass_env_keys) if pass_env_keys is not None else None,
-        canary=canary,
-        campaign_id=campaign_id,
-        runtime=runtime,
-        slurm_account=slurm_account,
-        slurm_cluster=slurm_cluster,
-        partial_ok=partial_ok,
+    # Funnel through submit_flow_batch's existing logic by building the
+    # internal frozen-dataclass spec it consumes today. Once
+    # submit_flow_batch is itself migrated to take SubmitFlowBatchSpec,
+    # this conversion goes away.
+    internal_spec = SubmitSpec(
+        profile=spec.profile,
+        cluster=spec.cluster,
+        ssh_target=spec.ssh_target,
+        remote_path=spec.remote_path,
+        job_name=spec.job_name,
+        run_id=spec.run_id,
+        total_tasks=spec.total_tasks,
+        backend=spec.backend,
+        script=spec.script,
+        job_env=dict(spec.job_env),
+        pass_env_keys=(
+            list(spec.pass_env_keys) if spec.pass_env_keys is not None else None
+        ),
+        canary=spec.canary,
+        campaign_id=spec.campaign_id or "",
+        runtime=spec.runtime,
+        slurm_account=spec.slurm_account,
+        slurm_cluster=spec.slurm_cluster,
+        partial_ok=spec.partial_ok,
     )
     results: list[SubmitFlowResult] = submit_flow_batch(
         experiment_dir=experiment_dir,
-        specs=[spec],
-        rsync_excludes=rsync_excludes,
-        skip_preflight=skip_preflight,
+        specs=[internal_spec],
+        rsync_excludes=spec.rsync_excludes,
+        skip_preflight=spec.skip_preflight,
     )
     return results[0]
 
