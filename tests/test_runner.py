@@ -13,12 +13,72 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_hpc import errors, runner
+from claude_hpc import errors, register_primitives, runner
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
+from claude_hpc._schema_models.resubmit import ResubmitSpec
+from claude_hpc._schema_models.submit import SubmitSpec as _WireSubmitSpec
+
+# Register primitives BEFORE patching runner attrs so the @primitive
+# decorators that reference them (e.g. composes=[submit_and_record])
+# resolve to the real function rather than the shim.
+register_primitives()
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+_SUBMIT_SPEC_FIELDS = {
+    "profile", "cluster", "ssh_target", "remote_path", "job_name",
+    "run_id", "job_ids", "total_tasks", "runtime", "campaign_id",
+}
+_real_submit_and_record = runner.submit_and_record
+
+
+def _patched_submit_and_record(experiment_dir, **kwargs):
+    """Test shim — wraps legacy kwargs in :class:`SubmitSpec`; passes
+    through ``spec=`` calls unchanged. ``cmd_sha`` is framework
+    context, kept as a separate kwarg.
+    """
+    if "spec" in kwargs:
+        return _real_submit_and_record(experiment_dir, **kwargs)
+    spec_kwargs = {k: v for k, v in kwargs.items() if k in _SUBMIT_SPEC_FIELDS}
+    framework_kwargs = {k: v for k, v in kwargs.items() if k not in _SUBMIT_SPEC_FIELDS}
+    # Empty-string campaign_id fails Pydantic's CampaignId pattern; coerce to None.
+    if spec_kwargs.get("campaign_id") == "":
+        spec_kwargs["campaign_id"] = None
+    return _real_submit_and_record(
+        experiment_dir, spec=_WireSubmitSpec(**spec_kwargs), **framework_kwargs
+    )
+
+
+runner.submit_and_record = _patched_submit_and_record
+
+
+_RESUBMIT_SPEC_FIELDS = {
+    "failed_task_ids", "category", "overrides", "new_job_ids", "request_id",
+    "consult_forecast", "forecast_within_hours", "submit_to_cluster",
+    "script", "backend", "job_name", "job_env",
+}
+_real_resubmit_failed = runner.resubmit_failed
+
+
+def _patched_resubmit_failed(experiment_dir, run_id, **kwargs):
+    """Test shim for ``runner.resubmit_failed`` — handles both call styles.
+
+    Production callers pass ``spec=ResubmitSpec(...)``; legacy test
+    callers pass flat kwargs. The shim wraps in a ResubmitSpec so
+    both paths flow through Pydantic validation.
+    """
+    if "spec" in kwargs:
+        return _real_resubmit_failed(experiment_dir, run_id, **kwargs)
+    spec_kwargs = {k: v for k, v in kwargs.items() if k in _RESUBMIT_SPEC_FIELDS}
+    return _real_resubmit_failed(
+        experiment_dir, run_id, spec=ResubmitSpec(**spec_kwargs)
+    )
+
+
+runner.resubmit_failed = _patched_resubmit_failed
 
 
 @pytest.fixture
@@ -107,7 +167,13 @@ def test_submit_and_record_dedups_replay(journal_home, experiment):
 
 def test_submit_and_record_rejects_empty_run_id(journal_home, experiment):
     """An empty run_id is a programmer error and must surface immediately."""
-    with pytest.raises(errors.SpecInvalid, match="non-empty run_id"):
+    """Pre-Pydantic the atom raised ``errors.SpecInvalid``; the wire's
+    ``RunIdStrict`` regex now rejects empty string at spec construction.
+    Either ValueError subclass surfaces the same intent — programmer
+    error caught early."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         runner.submit_and_record(
             experiment,
             profile="ml_ridge",

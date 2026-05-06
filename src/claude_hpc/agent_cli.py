@@ -370,6 +370,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
 def cmd_interview(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.interview."""
+    from claude_hpc._schema_models.interview import InterviewSpec
     from claude_hpc.atoms.interview import record_interview
 
     intent = _load_spec(args.spec, schema_name="interview")
@@ -377,7 +378,11 @@ def cmd_interview(args: argparse.Namespace) -> int:
         raise errors.SpecInvalid("--spec is required for `interview`")
     campaign_dir = Path(args.campaign_dir).resolve()
     try:
-        data = record_interview(intent, campaign_dir=campaign_dir)
+        spec = InterviewSpec.model_validate(intent)
+    except Exception as exc:  # pydantic.ValidationError
+        raise errors.SpecInvalid(str(exc)) from exc
+    try:
+        data = record_interview(spec, campaign_dir=campaign_dir)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
     _ok(data, name="interview")
@@ -405,17 +410,12 @@ def cmd_recall(args: argparse.Namespace) -> int:
     if getattr(args, "since", None):
         payload["since"] = args.since
     _validate_against_schema(payload, "recall")
+    from claude_hpc._schema_models.recall import RecallSpec
+
     roots = resolve_roots(getattr(args, "root", None))
+    spec = RecallSpec.model_validate(payload)
     try:
-        data = recall_campaigns(
-            roots,
-            task_kind=getattr(args, "task_kind", None),
-            operator=getattr(args, "operator", None),
-            since=getattr(args, "since", None),
-            limit=int(getattr(args, "limit", 20)),
-            include_runtime=bool(getattr(args, "include_runtime", False)),
-            include_generator_stats=bool(getattr(args, "include_generator_stats", False)),
-        )
+        data = recall_campaigns(roots, spec=spec)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
     _ok(data, name="recall")
@@ -622,15 +622,10 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     if args.seed is not None:
         payload["seed"] = int(args.seed)
     _validate_against_schema(payload, "predict_queue_wait")
-    out = predict_queue_wait(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        at_iso=args.at_iso,
-        backend=args.backend,
-        n_replications=int(args.n_replications),
-        seed=args.seed,
-    )
+    from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+
+    spec = PredictQueueWaitSpec.model_validate(payload)
+    out = predict_queue_wait(args.experiment_dir, spec=spec)
     _ok(out.to_dict(), name="predict-queue-wait")
     return EXIT_OK
 
@@ -754,16 +749,18 @@ def cmd_build_submit_spec(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_submit_spec")
+    from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
+
     try:
-        spec = build_submit_spec(**raw)
-    except TypeError as exc:
-        # Caller passed an unknown / missing kwarg.
+        bss_spec = BuildSubmitSpecInput.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
         return _err(
             error_code="spec_invalid",
             message=str(exc),
             category="user-error",
             retry_safe=False,
         )
+    spec = build_submit_spec(spec=bss_spec)
     _ok(spec, name="build-submit-spec")
     return EXIT_OK
 
@@ -788,13 +785,21 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_tasks_py")
+    from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
+
+    if args.force:
+        raw["force"] = True
     try:
-        out = build_tasks_py(
-            experiment_dir=args.experiment_dir,
-            axes=raw.get("axes") or [],
-            flags_by_executor=raw.get("flags_by_executor") or {},
-            force=bool(raw.get("force", False) or args.force),
+        spec = BuildTasksPyInput.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
         )
+    try:
+        out = build_tasks_py(args.experiment_dir, spec=spec)
     except TypeError as exc:
         return _err(
             error_code="spec_invalid",
@@ -1224,17 +1229,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
+    from claude_hpc._schema_models.submit import SubmitSpec as _SubmitSpec
+
     record, deduped = runner.submit_and_record(
         args.experiment_dir,
-        profile=spec["profile"],
-        cluster=spec["cluster"],
-        ssh_target=spec["ssh_target"],
-        remote_path=spec["remote_path"],
-        job_name=spec["job_name"],
-        job_ids=list(spec["job_ids"]),
-        total_tasks=int(spec["total_tasks"]),
-        run_id=spec["run_id"],
-        campaign_id=spec.get("campaign_id") or "",
+        spec=_SubmitSpec.model_validate(spec),
     )
     _ok(
         {

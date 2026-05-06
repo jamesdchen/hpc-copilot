@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow
+from claude_hpc._schema_models.interview import InterviewSpec
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -54,14 +55,17 @@ __all__ = ["record_interview"]
     agent_facing=True,
 )
 def record_interview(
-    intent: Mapping[str, Any],
+    spec: InterviewSpec,
     *,
     campaign_dir: Path,
 ) -> dict[str, Any]:
-    """Validate or materialize a tasks.py against *intent* and persist interview.json.
+    """Validate or materialize a tasks.py against *spec* and persist interview.json.
 
-    *intent* must conform to ``schemas/interview.input.json``. *campaign_dir*
-    is created if needed.
+    *spec* is an :class:`InterviewSpec` Pydantic model (the wire-validated
+    authoring SoT for ``schemas/interview.input.json``). The body
+    operates on a ``model_dump`` view (``intent``) so the existing dict
+    access pattern ``intent["task_count"]`` etc. survives unchanged.
+    *campaign_dir* is created if needed.
 
     Two modes, picked by whether ``intent.task_generator`` is present:
 
@@ -85,6 +89,7 @@ def record_interview(
     """
     campaign_dir.mkdir(parents=True, exist_ok=True)
 
+    intent: dict[str, Any] = spec.model_dump(exclude_none=True, mode="json")
     tasks_py = campaign_dir / "tasks.py"
     declared = int(intent["task_count"])
     artifacts: list[str] = []

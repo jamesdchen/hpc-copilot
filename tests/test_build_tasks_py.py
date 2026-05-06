@@ -21,10 +21,43 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from claude_hpc import errors
-from claude_hpc.atoms.build_tasks_py import build_tasks_py
+from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
+from claude_hpc.atoms.build_tasks_py import build_tasks_py as _real_build_tasks_py
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def build_tasks_py(*, experiment_dir, axes, flags_by_executor, force=False):
+    """Test shim — wraps kwargs in :class:`BuildTasksPyInput`.
+
+    Pre-Pydantic the atom took the kwargs directly; the wire path
+    now goes through a spec, but tests still flow through Pydantic
+    so the validation signal stays intact.
+
+    Tests pass actual Python type objects (``int``, ``float``, etc.)
+    for ``flag.type``; the wire schema is string-only, so the shim
+    coerces type objects to their ``__name__`` token before Pydantic
+    sees them. The atom's ``_flag_type_repr`` accepts strings
+    unchanged so the downstream rendering is identical either way.
+    """
+    coerced_flags = {
+        executor: [
+            {**f, "type": f["type"].__name__}
+            if isinstance(f.get("type"), type)
+            else f
+            for f in flag_list
+        ]
+        for executor, flag_list in flags_by_executor.items()
+    }
+    return _real_build_tasks_py(
+        experiment_dir,
+        spec=BuildTasksPyInput(
+            axes=axes,
+            flags_by_executor=coerced_flags,
+            force=force,
+        ),
+    )
 
 
 def _load(path: Path, name: str = "_test_tasks") -> Any:
@@ -161,8 +194,13 @@ def test_force_overwrites(tmp_path: Path) -> None:
     assert "stale" not in target.read_text()
 
 
-def test_empty_axes_raises(tmp_path: Path) -> None:
-    with pytest.raises(errors.SpecInvalid, match="non-empty"):
+def test_empty_axes_rejected_at_wire_validation(tmp_path: Path) -> None:
+    """``Field(min_length=1)`` on ``axes`` rejects empty list at spec
+    construction. Pre-Pydantic the atom raised ``errors.SpecInvalid``;
+    the wire now rejects first via ``pydantic.ValidationError``."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         build_tasks_py(
             experiment_dir=tmp_path,
             axes=[],
@@ -170,8 +208,12 @@ def test_empty_axes_raises(tmp_path: Path) -> None:
         )
 
 
-def test_axis_with_empty_values_raises(tmp_path: Path) -> None:
-    with pytest.raises(errors.SpecInvalid, match="empty 'values'"):
+def test_axis_with_empty_values_rejected_at_wire_validation(tmp_path: Path) -> None:
+    """``_AxisSpec.values`` has ``Field(min_length=1)``; empty values
+    list fails Pydantic validation."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         build_tasks_py(
             experiment_dir=tmp_path,
             axes=[{"name": "x", "values": []}],
@@ -179,8 +221,12 @@ def test_axis_with_empty_values_raises(tmp_path: Path) -> None:
         )
 
 
-def test_axis_missing_keys_raises(tmp_path: Path) -> None:
-    with pytest.raises(errors.SpecInvalid, match="must have 'name' and 'values'"):
+def test_axis_missing_keys_rejected_at_wire_validation(tmp_path: Path) -> None:
+    """``_AxisSpec`` declares ``values`` as required; an axis missing
+    ``values`` fails Pydantic validation."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         build_tasks_py(
             experiment_dir=tmp_path,
             axes=[{"name": "x"}],  # missing values
@@ -188,8 +234,12 @@ def test_axis_missing_keys_raises(tmp_path: Path) -> None:
         )
 
 
-def test_flag_missing_keys_raises(tmp_path: Path) -> None:
-    with pytest.raises(errors.SpecInvalid, match="missing 'name' or 'type'"):
+def test_flag_missing_keys_rejected_at_wire_validation(tmp_path: Path) -> None:
+    """``_FlagSpec`` declares ``type`` as required; a flag dict missing
+    ``type`` fails Pydantic validation."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         build_tasks_py(
             experiment_dir=tmp_path,
             axes=[{"name": "x", "values": [1]}],

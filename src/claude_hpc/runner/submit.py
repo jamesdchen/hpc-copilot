@@ -11,6 +11,7 @@ from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.session import RunRecord
+from claude_hpc._schema_models.submit import SubmitSpec
 from claude_hpc.state.runs import find_run_by_cmd_sha, read_run_sidecar
 
 
@@ -35,15 +36,7 @@ from claude_hpc.state.runs import find_run_by_cmd_sha, read_run_sidecar
 def submit_and_record(
     experiment_dir: Path,
     *,
-    profile: str,
-    cluster: str,
-    ssh_target: str,
-    remote_path: str,
-    job_name: str,
-    run_id: str,
-    job_ids: list[str],
-    total_tasks: int,
-    campaign_id: str = "",
+    spec: SubmitSpec,
     cmd_sha: str | None = None,
 ) -> tuple[RunRecord, bool]:
     """Build a fresh ``RunRecord`` and upsert it to the journal.
@@ -65,6 +58,16 @@ def submit_and_record(
     duplicate ``qsub``/``sbatch`` calls because the caller checks the
     returned ``deduped`` flag before issuing them.
     """
+    profile = spec.profile
+    cluster = spec.cluster
+    ssh_target = spec.ssh_target
+    remote_path = spec.remote_path
+    job_name = spec.job_name
+    run_id = spec.run_id
+    job_ids = list(spec.job_ids)
+    total_tasks = spec.total_tasks
+    campaign_id = spec.campaign_id or ""
+
     if not run_id:
         raise errors.SpecInvalid("submit_and_record requires a non-empty run_id")
 

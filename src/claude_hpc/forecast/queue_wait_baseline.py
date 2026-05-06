@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from claude_hpc import errors
 from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
+from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
 from claude_hpc.state.runtime_prior import read_samples
 
 if TYPE_CHECKING:
@@ -240,18 +241,13 @@ def _apply_features(
 def predict_queue_wait(
     experiment_dir: Path,
     *,
-    profile: str,
-    cluster: str,
-    at_iso: str | None = None,
+    spec: PredictQueueWaitSpec,
     half_life_days: float = _DEFAULT_HALF_LIFE_DAYS,
     min_bucket_samples: int = _DEFAULT_MIN_BUCKET_SAMPLES,
     min_global_samples: int = _DEFAULT_MIN_GLOBAL_SAMPLES,
     bucket_radius: int = _DEFAULT_BUCKET_RADIUS,
     current_features: QueueFeatures | None = None,
-    backend: Backend = "auto",
-    n_replications: int = 64,
     candidate: Any | None = None,
-    seed: int | None = None,
 ) -> PredictionResult:
     """Forecast queue-wait seconds.
 
@@ -290,6 +286,12 @@ def predict_queue_wait(
     seed:
         Forwarded to the DES samplers; deterministic when not None.
     """
+    profile = spec.profile
+    cluster = spec.cluster
+    at_iso = spec.at_iso
+    backend = spec.backend
+    n_replications = spec.n_replications
+    seed = spec.seed
     if backend == "des":
         return _predict_des(
             experiment_dir,

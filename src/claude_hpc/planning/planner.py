@@ -438,15 +438,18 @@ def _eta_via_des(
     not yet bootstrapped.
     """
     try:
+        from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
         from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
         out = predict_queue_wait(
             experiment_dir,
-            profile=profile,
-            cluster=cluster,
-            backend="auto",
-            n_replications=16,
-            seed=0,
+            spec=PredictQueueWaitSpec(
+                profile=profile,
+                cluster=cluster,
+                backend="auto",
+                n_replications=16,
+                seed=0,
+            ),
         )
     except Exception:  # noqa: BLE001 — defensive
         return None

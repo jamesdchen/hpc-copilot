@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
 from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.infra.inspect import (
     ClusterSnapshot,
@@ -11,6 +12,39 @@ from claude_hpc.infra.inspect import (
     persist_snapshot,
 )
 from claude_hpc.state import runtime_prior as rp
+
+
+_SPEC_FIELDS = {"profile", "cluster", "at_iso", "backend", "n_replications", "seed"}
+_real_predict_queue_wait = qwb.predict_queue_wait
+
+
+def _patched_predict_queue_wait(experiment_dir, **kwargs):
+    """Test shim — handles both call styles.
+
+    1. Production path: caller passes ``spec=PredictQueueWaitSpec(...)``.
+       Pass through unchanged. Internal callers (best_submit_window,
+       resubmit_advisor, planner) use this path since they were
+       updated alongside the atom signature switch.
+    2. Test path: caller passes flat kwargs like ``profile=...,
+       cluster=...``. Split into spec fields vs framework-tuning
+       kwargs and construct the spec.
+
+    Module-level monkey-patching of ``qwb.predict_queue_wait``
+    persists across xdist tests on the same worker, so the shim has
+    to handle both call styles when test_queue_wait_baseline runs in
+    the same process as test_best_submit_window."""
+    if "spec" in kwargs:
+        return _real_predict_queue_wait(experiment_dir, **kwargs)
+    spec_kwargs = {k: v for k, v in kwargs.items() if k in _SPEC_FIELDS}
+    framework_kwargs = {k: v for k, v in kwargs.items() if k not in _SPEC_FIELDS}
+    return _real_predict_queue_wait(
+        experiment_dir, spec=PredictQueueWaitSpec(**spec_kwargs), **framework_kwargs
+    )
+
+
+# Patch the module attr so existing test calls (qwb.predict_queue_wait(...))
+# route through the shim.
+qwb.predict_queue_wait = _patched_predict_queue_wait
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"

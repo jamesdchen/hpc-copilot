@@ -92,15 +92,15 @@ def best_submit_windows(
         return []
 
     now = utcnow().replace(minute=0, second=0, microsecond=0)
+    from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+
     candidates: list[WindowCandidate] = []
     for h in range(1, int(within_hours) + 1):
         ts = now + timedelta(hours=h)
         iso = ts.isoformat(timespec="seconds")
         result = predict_queue_wait(
             experiment_dir,
-            profile=profile,
-            cluster=cluster,
-            at_iso=iso,
+            spec=PredictQueueWaitSpec(profile=profile, cluster=cluster, at_iso=iso),
         )
         if result.predicted_wait_sec is None:
             continue

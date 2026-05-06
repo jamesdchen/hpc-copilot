@@ -26,7 +26,18 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from claude_hpc.atoms import recall as recall_mod
-from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
+from claude_hpc._schema_models.recall import RecallSpec
+from claude_hpc.atoms.recall import recall_campaigns as _real_recall_campaigns
+from claude_hpc.atoms.recall import resolve_roots
+
+
+def recall_campaigns(roots, **kwargs):
+    """Test shim — wraps kwargs in :class:`RecallSpec`.
+
+    Tests still flow through Pydantic so the validation signal stays
+    intact even with the helper.
+    """
+    return _real_recall_campaigns(roots, spec=RecallSpec(**kwargs))
 
 if TYPE_CHECKING:
     from pathlib import Path

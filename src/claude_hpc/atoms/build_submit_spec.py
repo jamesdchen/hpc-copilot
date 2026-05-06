@@ -26,6 +26,7 @@ from typing import Any
 
 from claude_hpc import errors
 from claude_hpc._internal._primitive import primitive
+from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
 from claude_hpc.infra.remote import validate_ssh_target
 
 # Canonical cluster-side template paths. The local-side rsync ships the
@@ -56,34 +57,12 @@ _DEFAULT_EXECUTOR_CMD = "python3 .hpc/_hpc_dispatch.py"
     cli="hpc-mapreduce build-submit-spec --spec <path>",
     agent_facing=True,
 )
-def build_submit_spec(
-    *,
-    profile: str,
-    cluster: str,
-    ssh_target: str,
-    remote_path: str,
-    run_id: str,
-    cmd_sha: str,
-    total_tasks: int,
-    backend: str,
-    is_gpu: bool = False,
-    job_name: str | None = None,
-    script: str | None = None,
-    modules: str = "",
-    conda_source: str = "",
-    conda_env: str = "",
-    runtime: str | None = None,
-    campaign_id: str = "",
-    canary: bool = True,
-    partial_ok: bool = False,
-    skip_preflight: bool = True,
-    pass_env_keys: list[str] | None = None,
-    rsync_excludes: list[str] | None = None,
-    slurm_account: str | None = None,
-    slurm_cluster: str | None = None,
-    extra_env: dict[str, str] | None = None,
-) -> dict[str, Any]:
+def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     """Build + validate a ``submit_flow.input.json`` spec dict.
+
+    The wire-validated ``spec`` (a :class:`BuildSubmitSpecInput`)
+    carries every field this atom needs; the body destructures it
+    into typed locals at the top so the rest reads unchanged.
 
     Parameters
     ----------
@@ -147,6 +126,31 @@ def build_submit_spec(
         unknown backend, total_tasks < 1) OR the assembled spec fails
         schema validation.
     """
+    profile = spec.profile
+    cluster = spec.cluster
+    ssh_target = spec.ssh_target
+    remote_path = spec.remote_path
+    run_id = spec.run_id
+    cmd_sha = spec.cmd_sha
+    total_tasks = spec.total_tasks
+    backend = spec.backend
+    is_gpu = bool(spec.is_gpu)
+    job_name = spec.job_name
+    script = spec.script
+    modules = spec.modules or ""
+    conda_source = spec.conda_source or ""
+    conda_env = spec.conda_env or ""
+    runtime = spec.runtime
+    campaign_id = spec.campaign_id or ""
+    canary = bool(spec.canary) if spec.canary is not None else True
+    partial_ok = bool(spec.partial_ok) if spec.partial_ok is not None else False
+    skip_preflight = bool(spec.skip_preflight) if spec.skip_preflight is not None else True
+    pass_env_keys = list(spec.pass_env_keys) if spec.pass_env_keys is not None else None
+    rsync_excludes = list(spec.rsync_excludes) if spec.rsync_excludes is not None else None
+    slurm_account = spec.slurm_account
+    slurm_cluster = spec.slurm_cluster
+    extra_env = dict(spec.extra_env) if spec.extra_env is not None else None
+
     if backend not in {"sge_remote", "slurm"}:
         raise errors.SpecInvalid(f"backend must be 'sge_remote' or 'slurm', got {backend!r}")
     try:
@@ -179,7 +183,7 @@ def build_submit_spec(
     if extra_env:
         job_env.update({str(k): str(v) for k, v in extra_env.items()})
 
-    spec: dict[str, Any] = {
+    out: dict[str, Any] = {
         "profile": profile,
         "cluster": cluster,
         "ssh_target": ssh_target,
@@ -195,20 +199,20 @@ def build_submit_spec(
         "skip_preflight": bool(skip_preflight),
     }
     if pass_env_keys is not None:
-        spec["pass_env_keys"] = list(pass_env_keys)
+        out["pass_env_keys"] = list(pass_env_keys)
     if rsync_excludes is not None:
-        spec["rsync_excludes"] = list(rsync_excludes)
+        out["rsync_excludes"] = list(rsync_excludes)
     if slurm_account is not None:
-        spec["slurm_account"] = slurm_account
+        out["slurm_account"] = slurm_account
     if slurm_cluster is not None:
-        spec["slurm_cluster"] = slurm_cluster
+        out["slurm_cluster"] = slurm_cluster
     if campaign_id:
-        spec["campaign_id"] = campaign_id
+        out["campaign_id"] = campaign_id
     if runtime is not None:
-        spec["runtime"] = runtime
+        out["runtime"] = runtime
 
-    _validate(spec)
-    return spec
+    _validate(out)
+    return out
 
 
 def _validate(spec: dict[str, Any]) -> None:

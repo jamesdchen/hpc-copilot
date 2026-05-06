@@ -354,17 +354,21 @@ def _submit_one_spec(
             job_env=canary_env,
             cwd=experiment_dir,
         )
+        from claude_hpc._schema_models.submit import SubmitSpec as _SubmitSpec
+
         runner.submit_and_record(
             experiment_dir,
-            profile=spec.profile,
-            cluster=spec.cluster,
-            ssh_target=spec.ssh_target,
-            remote_path=spec.remote_path,
-            job_name=f"{spec.job_name}_canary",
-            run_id=canary_run_id,
-            job_ids=canary_job_ids,
-            total_tasks=1,
-            campaign_id=spec.campaign_id or "",
+            spec=_SubmitSpec(
+                profile=spec.profile,
+                cluster=spec.cluster,
+                ssh_target=spec.ssh_target,
+                remote_path=spec.remote_path,
+                job_name=f"{spec.job_name}_canary",
+                run_id=canary_run_id,
+                job_ids=canary_job_ids,
+                total_tasks=1,
+                campaign_id=spec.campaign_id or None,
+            ),
         )
         canary_done = True
 
@@ -375,17 +379,21 @@ def _submit_one_spec(
         job_env=job_env_full,
         cwd=experiment_dir,
     )
+    from claude_hpc._schema_models.submit import SubmitSpec as _SubmitSpec
+
     runner.submit_and_record(
         experiment_dir,
-        profile=spec.profile,
-        cluster=spec.cluster,
-        ssh_target=spec.ssh_target,
-        remote_path=spec.remote_path,
-        job_name=spec.job_name,
-        run_id=spec.run_id,
-        job_ids=job_ids,
-        total_tasks=spec.total_tasks,
-        campaign_id=spec.campaign_id or "",
+        spec=_SubmitSpec(
+            profile=spec.profile,
+            cluster=spec.cluster,
+            ssh_target=spec.ssh_target,
+            remote_path=spec.remote_path,
+            job_name=spec.job_name,
+            run_id=spec.run_id,
+            job_ids=job_ids,
+            total_tasks=spec.total_tasks,
+            campaign_id=spec.campaign_id or None,
+        ),
     )
 
     if spec.partial_ok:

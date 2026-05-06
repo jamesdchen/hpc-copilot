@@ -6,7 +6,17 @@ from __future__ import annotations
 import pytest
 
 from claude_hpc import errors
-from claude_hpc.atoms.build_submit_spec import build_submit_spec
+from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
+from claude_hpc.atoms.build_submit_spec import build_submit_spec as _real_build_submit_spec
+
+
+def build_submit_spec(**kwargs):
+    """Test shim — wraps kwargs in :class:`BuildSubmitSpecInput`.
+
+    Tests still flow through Pydantic so the validation signal stays
+    intact even with the helper.
+    """
+    return _real_build_submit_spec(spec=BuildSubmitSpecInput(**kwargs))
 
 
 def _required() -> dict:
@@ -110,8 +120,13 @@ def test_omitted_optional_fields_not_in_output() -> None:
         assert k not in spec, f"{k!r} should be omitted when not supplied"
 
 
-def test_invalid_backend_raises_spec_invalid() -> None:
-    with pytest.raises(errors.SpecInvalid, match="backend must be"):
+def test_invalid_backend_rejected_at_wire_validation() -> None:
+    """``BackendName`` Literal rejects values outside ``{sge_remote,
+    slurm}`` at spec construction. Pre-Pydantic the atom raised
+    ``errors.SpecInvalid``; the wire now rejects first."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         build_submit_spec(**{**_required(), "backend": "pbs"})
 
 
@@ -120,8 +135,11 @@ def test_invalid_ssh_target_raises_spec_invalid() -> None:
         build_submit_spec(**{**_required(), "ssh_target": "alice; rm -rf /"})
 
 
-def test_zero_total_tasks_raises_spec_invalid() -> None:
-    with pytest.raises(errors.SpecInvalid, match="total_tasks must be"):
+def test_zero_total_tasks_rejected_at_wire_validation() -> None:
+    """``Field(ge=1)`` on ``total_tasks`` rejects 0 at spec construction."""
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
         build_submit_spec(**{**_required(), "total_tasks": 0})
 
 
