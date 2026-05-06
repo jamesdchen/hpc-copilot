@@ -278,6 +278,7 @@ def _make_single_array_submission(
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
     cli="hpc-mapreduce submit-flow --spec <path>",
+    agent_facing=True,
 )
 def submit_flow(
     *,
@@ -487,6 +488,7 @@ def _submit_one_spec(
     idempotency_key="specs.run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
     cli="hpc-mapreduce submit-flow-batch --spec <path>",
+    agent_facing=True,
 )
 def submit_flow_batch(
     *,

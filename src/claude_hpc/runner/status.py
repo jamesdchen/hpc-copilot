@@ -75,6 +75,7 @@ ssh_status_report = _ssh_status_report
     idempotent=True,
     idempotency_key="run_id",
     cli="hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]",
+    agent_facing=True,
 )
 def record_status(
     experiment_dir: Path,

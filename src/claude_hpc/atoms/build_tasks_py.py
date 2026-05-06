@@ -138,6 +138,7 @@ def resolve(task_id: int) -> dict:
     idempotent=True,
     idempotency_key="experiment_dir",
     cli="hpc-mapreduce build-tasks-py --spec <path>",
+    agent_facing=True,
 )
 def build_tasks_py(
     *,

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     idempotent=True,
     idempotency_key="campaign_id",
     cli="hpc-mapreduce campaign-init",
+    agent_facing=True,
 )
 def campaign_init(
     *,

@@ -186,6 +186,7 @@ def is_executor_source(source: str) -> bool:
     side_effects=[],
     idempotent=True,
     cli="hpc-mapreduce discover --experiment-dir <path>",
+    agent_facing=True,
 )
 def discover_executors(
     root: Path | str,

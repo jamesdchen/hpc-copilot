@@ -81,6 +81,7 @@ def _format_diff(diff: dict[str, Any]) -> str | None:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     cli="hpc-mapreduce monitor-summary --experiment-dir <path> --run-id <id>",
+    agent_facing=True,
 )
 def monitor_summary(
     experiment_dir: Path,

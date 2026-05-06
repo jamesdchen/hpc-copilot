@@ -49,6 +49,7 @@ def _mars_skill_paths() -> dict[str, str]:
     side_effects=[],
     idempotent=True,
     cli="hpc-mapreduce capabilities",
+    agent_facing=True,
 )
 def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     """Return the capabilities-envelope data payload.

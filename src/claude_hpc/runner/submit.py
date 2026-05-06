@@ -30,6 +30,7 @@ from claude_hpc.state.runs import find_run_by_cmd_sha, read_run_sidecar
     idempotent=True,
     idempotency_key="spec.run_id",
     cli="hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]",
+    agent_facing=True,
 )
 def submit_and_record(
     experiment_dir: Path,

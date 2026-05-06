@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     side_effects=[],
     idempotent=True,
     cli="hpc-mapreduce campaign list [--experiment-dir <dir>]",
+    agent_facing=True,
 )
 def campaign_list(*, experiment_dir: Path) -> dict[str, Any]:
     """List every campaign with at least one sidecar in this experiment.

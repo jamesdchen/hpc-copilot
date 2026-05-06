@@ -55,7 +55,8 @@
           "cli":           { "type": ["string", "null"] },
           "python":        { "type": ["string", "null"] },
           "input_schema":  { "type": ["string", "null"] },
-          "output_schema": { "type": ["string", "null"] }
+          "output_schema": { "type": ["string", "null"] },
+          "agent_facing":  { "type": "boolean", "description": "Whether the LLM/agent calls this primitive directly. Workflows, scaffolds, validators, and atoms slash-commands or skills link to are true; framework internals composed inside workflows (e.g. poll-run-status inside monitor-flow) are false. Consumers (e.g. render_llms_full) tier their output by this flag so the agent context budget only pays for primitives the agent calls directly." }
         }
       }
     }
