@@ -9,7 +9,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>
+  cli: hpc-mapreduce verify-aggregation-complete --experiment-dir <path> --run-id
+    <id> --combiner-dir <path>
   python: claude_hpc.atoms.aggregation_invariants.verify_aggregation_complete
 exit_codes:
 - 0: ok

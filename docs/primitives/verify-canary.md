@@ -13,7 +13,8 @@ error_codes:
   category: network
   retry_safe: true
 backed_by:
-  cli: hpc-mapreduce verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]
+  cli: hpc-mapreduce verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output
+    <path>]
   python: claude_hpc.atoms.canary_verify.verify_canary
 exit_codes:
 - 0: ok
