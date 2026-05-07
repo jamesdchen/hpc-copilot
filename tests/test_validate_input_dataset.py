@@ -102,9 +102,7 @@ def test_jsonl_row_index_out_of_bounds_emits_error(tmp_path: Path) -> None:
     _write_jsonl(p, [{"x": 1}])
     out = validate_input_dataset(
         tmp_path,
-        spec=ValidateInputDatasetSpec(
-            dataset_path=str(p), loader="jsonl", row_indices=[5]
-        ),
+        spec=ValidateInputDatasetSpec(dataset_path=str(p), loader="jsonl", row_indices=[5]),
     )
     assert any(f.code == "row_index_oob" for f in out.findings)
 
@@ -151,8 +149,7 @@ def test_jsonl_explicit_null_in_required_col_emits_error(tmp_path: Path) -> None
         ),
     )
     assert any(
-        f.code == "required_column_null" and f.evidence["row_index"] == 1
-        for f in out.findings
+        f.code == "required_column_null" and f.evidence["row_index"] == 1 for f in out.findings
     )
 
 
@@ -171,8 +168,7 @@ def test_jsonl_missing_required_col_emits_error(tmp_path: Path) -> None:
         ),
     )
     assert any(
-        f.code == "required_column_null" and f.evidence["row_index"] == 1
-        for f in out.findings
+        f.code == "required_column_null" and f.evidence["row_index"] == 1 for f in out.findings
     )
 
 
@@ -198,9 +194,7 @@ def test_relative_path_resolves_against_experiment_dir(tmp_path: Path) -> None:
     _write_csv(p, [{"x": "1"}])
     out = validate_input_dataset(
         tmp_path,
-        spec=ValidateInputDatasetSpec(
-            dataset_path="data.csv", loader="csv", row_indices=[0]
-        ),
+        spec=ValidateInputDatasetSpec(dataset_path="data.csv", loader="csv", row_indices=[0]),
     )
     assert out.findings == []
 
@@ -228,9 +222,7 @@ def test_parquet_loader_unavailable_emits_info_when_pyarrow_missing(
     p.write_bytes(b"\x00\x00")  # sentinel, never read because we monkeypatched the import
     out = validate_input_dataset(
         tmp_path,
-        spec=ValidateInputDatasetSpec(
-            dataset_path=str(p), loader="parquet", row_indices=[0]
-        ),
+        spec=ValidateInputDatasetSpec(dataset_path=str(p), loader="parquet", row_indices=[0]),
     )
     finding = next(f for f in out.findings if f.code == "parquet_loader_unavailable")
     assert finding.severity == "info"

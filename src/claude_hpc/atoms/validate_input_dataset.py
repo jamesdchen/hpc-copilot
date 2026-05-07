@@ -57,8 +57,7 @@ def _check_indices(
                         f"{n_rows} rows (valid range: [0, {n_rows - 1}])"
                     ),
                     suggested_fix=(
-                        f"Either remove row {idx} from tasks.py or extend the "
-                        "input dataset."
+                        f"Either remove row {idx} from tasks.py or extend the input dataset."
                     ),
                     evidence={"row_index": idx, "n_rows": n_rows},
                 )
@@ -149,8 +148,7 @@ def _check_non_null_csv(
                             f"which the campaign declared as required-non-null"
                         ),
                         suggested_fix=(
-                            f"Either skip row {idx} in tasks.py or backfill "
-                            f"column {col!r}."
+                            f"Either skip row {idx} in tasks.py or backfill column {col!r}."
                         ),
                         evidence={"row_index": idx, "column": col},
                     )
@@ -194,8 +192,7 @@ def _check_non_null_jsonl(
                             f"which the campaign declared as required-non-null"
                         ),
                         suggested_fix=(
-                            f"Either skip row {idx} in tasks.py or backfill "
-                            f"field {col!r}."
+                            f"Either skip row {idx} in tasks.py or backfill field {col!r}."
                         ),
                         evidence={"row_index": idx, "column": col},
                     )
@@ -256,17 +253,11 @@ def validate_input_dataset(
 
     try:
         if spec.loader == "parquet":
-            findings = _check_non_null_parquet(
-                path, spec.row_indices, spec.required_non_null_cols
-            )
+            findings = _check_non_null_parquet(path, spec.row_indices, spec.required_non_null_cols)
         elif spec.loader == "csv":
-            findings = _check_non_null_csv(
-                path, spec.row_indices, spec.required_non_null_cols
-            )
+            findings = _check_non_null_csv(path, spec.row_indices, spec.required_non_null_cols)
         elif spec.loader == "jsonl":
-            findings = _check_non_null_jsonl(
-                path, spec.row_indices, spec.required_non_null_cols
-            )
+            findings = _check_non_null_jsonl(path, spec.row_indices, spec.required_non_null_cols)
         else:  # pragma: no cover — Pydantic Literal already gates this.
             findings = [
                 ValidatorFinding(

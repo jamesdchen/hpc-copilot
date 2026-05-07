@@ -34,7 +34,7 @@ import difflib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -153,7 +153,7 @@ _ID_BASE = "https://github.com/jamesdchen/claude-hpc/schemas"
 # Each entry: (Pydantic model OR TypeAdapter, schema filename).
 # The schema's ``$id`` is derived from the filename
 # (``<_ID_BASE>/<filename>``) — no need to repeat the URL here.
-SCHEMA_REGISTRY: list[tuple[Union[type[BaseModel], TypeAdapter[Any]], str]] = [
+SCHEMA_REGISTRY: list[tuple[type[BaseModel] | TypeAdapter[Any], str]] = [
     # Cross-cutting wire envelope + persisted-data shapes
     (EnvelopeAdapter, "envelope.json"),
     (AxesConfig, "axes.json"),

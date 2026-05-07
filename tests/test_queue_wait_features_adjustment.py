@@ -14,7 +14,6 @@ from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.forecast.queue_features import QueueFeatures
 from claude_hpc.state import runtime_prior as rp
 
-
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"
 

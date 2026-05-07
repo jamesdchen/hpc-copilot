@@ -139,9 +139,7 @@ def primitives_from_registry() -> list[dict]:
                 # derived from the func's qualified name. We still pass
                 # the dict shape downstream consumers expect.
                 "backed_by": {
-                    "cli": meta.cli
-                    if meta.cli is not None
-                    else "(none — Python-only primitive)",
+                    "cli": meta.cli if meta.cli is not None else "(none — Python-only primitive)",
                     "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
                 },
             }

@@ -10,7 +10,7 @@ rather than a tag field).
 
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -51,5 +51,5 @@ class CampaignListData(BaseModel):
 # subcommands and the framework picks the correct shape based on which
 # one was invoked.
 CampaignAdapter: TypeAdapter[CampaignStatusData | CampaignListData] = TypeAdapter(
-    Union[CampaignStatusData, CampaignListData]
+    CampaignStatusData | CampaignListData
 )

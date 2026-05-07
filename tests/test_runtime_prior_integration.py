@@ -235,9 +235,7 @@ def test_roll_up_quantiles_filters_by_cmd_sha(tmp_path: Path) -> None:
     _append(tmp_path, run_id="r1", task_id=0, cmd_sha="a" * 64, elapsed_sec=4000)
     _append(tmp_path, run_id="r2", task_id=0, cmd_sha="b" * 64, elapsed_sec=8000)
 
-    out = rp.roll_up_quantiles(
-        tmp_path, profile=_PROFILE, cluster=_CLUSTER, cmd_sha="a" * 64
-    )
+    out = rp.roll_up_quantiles(tmp_path, profile=_PROFILE, cluster=_CLUSTER, cmd_sha="a" * 64)
     assert out["filtered_by_cmd_sha"] == "a" * 64
     a100 = out["quantiles"]["a100"]
     assert a100["n_samples"] == 1

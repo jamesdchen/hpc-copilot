@@ -104,8 +104,7 @@ class AggregateFlowResult(BaseModel):
     summaries_dir_local: str | None = Field(
         default=None,
         description=(
-            "Local path where per-task summary files were pulled. "
-            "Null when pull_summaries=false."
+            "Local path where per-task summary files were pulled. Null when pull_summaries=false."
         ),
     )
     escalation_reason: str | None = Field(

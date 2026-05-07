@@ -183,8 +183,7 @@ def build_tasks_py(
     # acquire a synthetic ``default: None`` (the renderer's ``"default"
     # in flag`` check would then emit a spurious ``default=None`` arg).
     flags_by_executor = {
-        k: [f.model_dump(exclude_none=True) for f in v]
-        for k, v in spec.flags_by_executor.items()
+        k: [f.model_dump(exclude_none=True) for f in v] for k, v in spec.flags_by_executor.items()
     }
     force = bool(spec.force)
 

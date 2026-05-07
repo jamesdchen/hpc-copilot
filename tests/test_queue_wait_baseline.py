@@ -13,7 +13,6 @@ from claude_hpc.infra.inspect import (
 )
 from claude_hpc.state import runtime_prior as rp
 
-
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"
 
@@ -80,9 +79,7 @@ class TestColdStart:
     def test_unparseable_at_iso_is_cold(self, tmp_path):
         out = qwb.predict_queue_wait(
             tmp_path,
-            spec=PredictQueueWaitSpec(
-                profile=PROFILE, cluster=CLUSTER, at_iso="not-a-date"
-            ),
+            spec=PredictQueueWaitSpec(profile=PROFILE, cluster=CLUSTER, at_iso="not-a-date"),
         )
         assert out.predicted_wait_sec is None
         assert out.confidence == "cold"

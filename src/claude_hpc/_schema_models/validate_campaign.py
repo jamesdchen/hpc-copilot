@@ -97,8 +97,7 @@ class ValidateCampaignSpec(BaseModel):
     dataset_row_indices: list[int] | None = Field(
         default=None,
         description=(
-            "Indices that ``tasks.py`` references; validated against "
-            "actual length + non-null cols."
+            "Indices that ``tasks.py`` references; validated against actual length + non-null cols."
         ),
     )
     dataset_required_non_null_cols: list[str] = Field(default_factory=list)

@@ -100,11 +100,7 @@ def validate_campaign(
         findings.extend(result.findings)
         validators_run.append("validate-executor-signatures")
 
-    if (
-        spec.dataset_path
-        and spec.dataset_loader
-        and spec.dataset_row_indices
-    ):
+    if spec.dataset_path and spec.dataset_loader and spec.dataset_row_indices:
         result_d = validate_input_dataset(
             experiment_dir,
             spec=ValidateInputDatasetSpec(

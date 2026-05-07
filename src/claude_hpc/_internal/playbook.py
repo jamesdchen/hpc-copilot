@@ -108,9 +108,7 @@ def _parse_walltime_rules(raw: Any) -> tuple[WalltimeRule, ...]:
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"walltime_rules[{i}].below_quantile must be a float") from exc
         if not 0.0 < q < 1.0:
-            raise ValueError(
-                f"walltime_rules[{i}].below_quantile must be in (0, 1); got {q}"
-            )
+            raise ValueError(f"walltime_rules[{i}].below_quantile must be in (0, 1); got {q}")
         out.append(
             WalltimeRule(
                 below_quantile=q,
@@ -139,9 +137,7 @@ def load_playbook(experiment_dir: Path) -> Playbook:
     if raw is None:
         return _DEFAULT_PLAYBOOK
     if not isinstance(raw, dict):
-        raise ValueError(
-            f"playbook.yaml top-level must be a mapping, got {type(raw).__name__}"
-        )
+        raise ValueError(f"playbook.yaml top-level must be a mapping, got {type(raw).__name__}")
     return Playbook(
         known_bad_combinations=_parse_known_bad_combinations(raw.get("known_bad_combinations")),
         walltime_rules=_parse_walltime_rules(raw.get("walltime_rules")),
