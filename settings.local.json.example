@@ -1,0 +1,46 @@
+{
+  "_comment": "Per-developer ergonomics + sandbox networking. Copy to settings.local.json (gitignored) and edit. The deny-list lives in the committed settings.json so destructive-op policy is traceable; everything below is preference / environment.",
+  "autoDreamEnabled": true,
+  "skipDangerousModePermissionPrompt": true,
+  "voiceEnabled": false,
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "enabledPlugins": {
+    "code-simplifier@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
+    }
+  },
+  "autoUpdatesChannel": "latest",
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org",
+        "raw.githubusercontent.com",
+        "hoffman2.idre.ucla.edu",
+        "discovery2.usc.edu"
+      ],
+      "allowLocalBinding": false
+    },
+    "excludedCommands": [
+      "git",
+      "pip",
+      "python",
+      "ssh",
+      "rsync",
+      "scp"
+    ]
+  }
+}

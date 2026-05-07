@@ -14,7 +14,7 @@ share submit's atoms" critique.
 :func:`plan_resubmit_overrides` closes the gap by composing the
 existing pure atoms:
 
-* :func:`~claude_hpc.forecast.walltime_arbitrage.arbitrage_walltime`
+* :func:`~claude_hpc.atoms.walltime_arbitrage.arbitrage_walltime`
   — trim the walltime ask to fit backfill shadows when no prior exists.
 * ``cold_start_mem_buffer`` from :mod:`claude_hpc.infra.clusters` — grow
   the memory ask by N% when no prior exists, clamped by the cluster's
@@ -40,7 +40,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc.forecast.walltime_arbitrage import arbitrage_walltime
+from claude_hpc.atoms.walltime_arbitrage import arbitrage_walltime
 from claude_hpc.infra.clusters import (
     get_auto_daisy_chain,
     get_cold_start_mem_buffer,

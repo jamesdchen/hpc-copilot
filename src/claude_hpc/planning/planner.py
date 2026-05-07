@@ -298,7 +298,7 @@ def plan_submit(
         for c in candidate_reports
     )
     if walltime_user_ask_sec is not None and not has_lattice_pick and get_walltime_arbitrage(cfg):
-        from claude_hpc.forecast.walltime_arbitrage import arbitrage_walltime
+        from claude_hpc.atoms.walltime_arbitrage import arbitrage_walltime
 
         trimmed = arbitrage_walltime(int(walltime_user_ask_sec))
         if trimmed != walltime_user_ask_sec:
