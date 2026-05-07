@@ -131,7 +131,7 @@ class SGEBackend(HPCBackend):
         co-tenant view from ``qstat`` snapshots, which are wall-clock
         snapshots rather than a historical window.
         """
-        from claude_hpc.infra.inspect import _sge_inspect
+        from claude_hpc.infra.inspect.sge import _sge_inspect
 
         return _sge_inspect(
             cluster_name,

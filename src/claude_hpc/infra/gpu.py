@@ -23,11 +23,26 @@ Return shape (uniform)::
 The first entry of ``gpus`` is the top pick; the remainder gives the
 LLM-orchestrator visibility into alternatives.  When no GPU qualifies,
 ``gpus`` is ``[]`` and ``errors`` describes why.
+
+GPU queue config
+----------------
+
+The mapping from SGE queue prefix (``gpu_a100``) to canonical GPU name
++ performance weight is configurable per cluster via the ``gpu_queues``
+key in ``clusters.yaml``. When unset, the loader falls back to the
+Hoffman2-shaped defaults baked here. Pass ``cluster_name=`` (or supply
+a fully-formed ``gpu_config=`` dict) when picking a GPU on a cluster
+that needs a different queue map.
 """
 
 from __future__ import annotations
 
-__all__ = ["pick_gpu", "parse_qstat_f", "score_gpus"]
+__all__ = [
+    "pick_gpu",
+    "parse_qstat_f",
+    "score_gpus",
+    "load_gpu_config_for_cluster",
+]
 
 import re
 import subprocess
@@ -43,6 +58,7 @@ def pick_gpu(
     slots_needed: int = 4,
     exclude: set[str] | None = None,
     gpu_config: dict[str, dict] | None = None,
+    cluster_name: str | None = None,
 ) -> dict:
     """Pick the best available GPU type.
 
@@ -54,10 +70,14 @@ def pick_gpu(
     ssh_host : if set, run qstat over SSH (e.g. ``user@cluster``).
     slots_needed : minimum free slots required per GPU type (live mode).
     exclude : GPU type names to skip.
-    gpu_config : optional override for GPU queue configs. Keys are SGE queue
-        prefixes (e.g. ``"gpu_a100"``), values are dicts with at least
+    gpu_config : explicit GPU queue config. Keys are SGE queue prefixes
+        (e.g. ``"gpu_a100"``), values are dicts with at least
         ``{"name": "A100", "perf": 1.0}`` plus any extra fields you want
-        propagated to the result.
+        propagated to the result. Takes precedence over *cluster_name*.
+    cluster_name : load the GPU config from ``clusters.yaml`` for this
+        cluster (key ``gpu_queues`` on the cluster entry). When neither
+        ``gpu_config`` nor ``cluster_name`` is set, falls back to the
+        Hoffman2-shaped default.
 
     Returns
     -------
@@ -90,7 +110,11 @@ def pick_gpu(
             "errors": [{"code": "qstat_unavailable", "detail": "qstat could not be run"}],
         }
 
-    cfg = gpu_config or _DEFAULT_GPU_CONFIG
+    cfg = gpu_config
+    if cfg is None and cluster_name is not None:
+        cfg = load_gpu_config_for_cluster(cluster_name)
+    if cfg is None:
+        cfg = _DEFAULT_GPU_CONFIG
     agg = parse_qstat_f(qstat_text, gpu_config=cfg)
     return score_gpus(
         agg,
@@ -101,8 +125,69 @@ def pick_gpu(
     )
 
 
+def load_gpu_config_for_cluster(cluster_name: str) -> dict[str, dict] | None:
+    """Load the ``gpu_queues`` map for *cluster_name* from ``clusters.yaml``.
+
+    Returns ``None`` if the cluster entry has no ``gpu_queues`` key or the
+    cluster is unknown — callers should fall back to
+    :data:`_DEFAULT_GPU_CONFIG`. Rejects malformed shapes (non-dict
+    values, missing ``name`` / ``perf`` keys) with ``ValueError`` so a
+    typo fails loudly rather than silently swapping in the default.
+    """
+    from claude_hpc.infra.clusters import load_clusters_config
+
+    clusters = load_clusters_config()
+    cluster_cfg = clusters.get(cluster_name)
+    if not isinstance(cluster_cfg, dict):
+        return None
+    raw = cluster_cfg.get("gpu_queues")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"clusters.yaml: {cluster_name!r}.gpu_queues must be a mapping, "
+            f"got {type(raw).__name__}"
+        )
+    out: dict[str, dict] = {}
+    for queue_prefix, entry in raw.items():
+        if not isinstance(entry, dict) or "name" not in entry or "perf" not in entry:
+            raise ValueError(
+                f"clusters.yaml: {cluster_name!r}.gpu_queues.{queue_prefix} "
+                "must be a mapping with 'name' and 'perf' keys"
+            )
+        out[queue_prefix] = entry
+    return out
+
+
+def _excluded_prefixes_for_cluster(cluster_name: str | None) -> set[str]:
+    """Resolve the queue-prefix exclusion set for *cluster_name*.
+
+    YAML key: ``excluded_gpu_queue_prefixes`` (list of strings). Falls
+    back to :data:`_DEFAULT_EXCLUDED_PREFIXES` if unset or the cluster is
+    unknown.
+    """
+    if cluster_name is None:
+        return _DEFAULT_EXCLUDED_PREFIXES
+    from claude_hpc.infra.clusters import load_clusters_config
+
+    clusters = load_clusters_config()
+    cluster_cfg = clusters.get(cluster_name)
+    if not isinstance(cluster_cfg, dict):
+        return _DEFAULT_EXCLUDED_PREFIXES
+    raw = cluster_cfg.get("excluded_gpu_queue_prefixes")
+    if raw is None:
+        return _DEFAULT_EXCLUDED_PREFIXES
+    if not isinstance(raw, list) or not all(isinstance(p, str) for p in raw):
+        raise ValueError(
+            f"clusters.yaml: {cluster_name!r}.excluded_gpu_queue_prefixes must be a list of strings"
+        )
+    return set(raw)
+
+
 # ---------------------------------------------------------------------------
-# Default GPU config (Hoffman2-style)
+# Default GPU config (Hoffman2-shaped fallback used when clusters.yaml has
+# no ``gpu_queues`` / ``excluded_gpu_queue_prefixes`` entries for the
+# target cluster). Override per-cluster via the YAML keys above.
 # ---------------------------------------------------------------------------
 
 _DEFAULT_GPU_CONFIG: dict[str, dict] = {
@@ -115,8 +200,8 @@ _DEFAULT_GPU_CONFIG: dict[str, dict] = {
     "gpu_RTX2080Ti": {"name": "RTX2080Ti", "perf": 0.5},
 }
 
-# Queue prefixes to always ignore
-_EXCLUDED_PREFIXES: set[str] = {
+# Queue prefixes to always ignore (default fallback).
+_DEFAULT_EXCLUDED_PREFIXES: set[str] = {
     "gpu_P4",
     "gpu_k40",
     "gpu_smp",
@@ -125,6 +210,8 @@ _EXCLUDED_PREFIXES: set[str] = {
     "gpu_a100_test",
     "gpu_l40s_multi",
 }
+# Back-compat alias — older callers may import _EXCLUDED_PREFIXES directly.
+_EXCLUDED_PREFIXES: set[str] = _DEFAULT_EXCLUDED_PREFIXES
 
 
 # ---------------------------------------------------------------------------

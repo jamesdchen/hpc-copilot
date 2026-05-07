@@ -33,11 +33,6 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-try:
-    import fcntl  # POSIX
-except ImportError:  # pragma: no cover - non-POSIX fallback
-    fcntl = None  # type: ignore[assignment]
-
 __all__ = [
     "SCHEMA_VERSION",
     "HPC_HOMEDIR",
@@ -175,22 +170,14 @@ def _lock_path(target: Path) -> Path:
 def _locked(target: Path) -> Iterator[None]:
     """Acquire an exclusive flock on a sibling ``.lock`` file for *target*.
 
+    Convenience wrapper around :func:`claude_hpc._internal._io.advisory_flock`.
     No-op on platforms without ``fcntl`` (e.g. Windows). The lock file is
     created on demand and never deleted — flock semantics handle reuse.
     """
-    if fcntl is None:
+    from claude_hpc._internal._io import advisory_flock
+
+    with advisory_flock(_lock_path(target)):
         yield
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    lock = _lock_path(target)
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:

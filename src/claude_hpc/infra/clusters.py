@@ -121,6 +121,31 @@ CLUSTER_YAML_KEYS: list[dict[str, Any]] = [
             "/ 96000 depending on partition; CARC similar)."
         ),
     },
+    {
+        "key": "gpu_queues",
+        "type": "object",
+        "required": False,
+        "description": (
+            "Per-cluster GPU queue map for live scoring. Keys are SGE "
+            "queue prefixes (e.g. 'gpu_a100'); values are objects with "
+            "'name' (canonical GPU type, e.g. 'A100') and 'perf' (relative "
+            "performance weight used by score_gpus). When unset, "
+            "infra/gpu.py falls back to a Hoffman2-shaped default — "
+            "configure this for any non-Hoffman2 SGE cluster with GPU "
+            "queues."
+        ),
+    },
+    {
+        "key": "excluded_gpu_queue_prefixes",
+        "type": "array",
+        "required": False,
+        "description": (
+            "Queue prefixes to skip during live GPU scoring (e.g. test / "
+            "deprecated queues). When unset, defaults to a Hoffman2-shaped "
+            "exclusion list. Items are matched as exact prefixes against "
+            "the queue name returned by qstat -f."
+        ),
+    },
 ]
 
 

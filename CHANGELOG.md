@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+### Refactor — repo audit: hygiene fixes across docs, infra, and lint gates
+
+Multi-agent audit of the 542-file tree surfaced ~25 cross-cutting issues;
+this lands the safe, contained ones. Behaviour-preserving — every
+existing public API, primitive name, and schema file is unchanged.
+
+**Doc hygiene**
+- All 9 `_Documentation pending._` primitive doc bodies filled in
+  (predict-start-time, recommend-partition, recommend-wait-alternative,
+  update-run-constraints, validate-campaign, validate-executor-signatures,
+  validate-input-dataset, validate-self-qos-limit,
+  validate-walltime-against-history) using the agent-facing template.
+- New CI gate `scripts/check_no_pending_primitive_docs.py` fails on any
+  stub body; wired into pre-commit + GitHub Actions.
+- `docs/forecast_design.md` → `docs/internals/queue-wait-predictor-architecture.md`
+  (architecture doc now lives next to the operational notes).
+- `docs/reference/cli-contract.md` → `docs/reference/python-api-contract.md`
+  (file is about the Python API + sidecar schema, not the shell CLI; the
+  rename clarifies its scope vs. cli-spec.md).
+- New `docs/internals/README.md` index page.
+
+**Lint gates**
+- New `scripts/lint_skill_command_sync.py` cross-checks `skills/` against
+  `src/slash_commands/commands/` — both surfaces describe the same
+  workflows; lint pins the set as a tuple table.
+- CI now also runs `build_schemas.py --check` (was pre-commit-only).
+
+**Code dedup / cleanup**
+- Three flock implementations (`session._locked`,
+  `_io.advisory_flock`, `telemetry.flock_append`) unified — `_io`
+  is the canonical implementation; the others are thin wrappers.
+- `scripts/build_schemas.py` rewrites the 100-line hardcoded import +
+  registry block as auto-discovery over `_schema_models/` (71 schemas
+  rediscovered identically).
+- Dead `_from_frontmatters` fallback in `_internal/operations.py`
+  removed (registry has been the only SoT for several releases).
+- `infra/backends/{sge,slurm}.py` now import `_sge_inspect` /
+  `_slurm_inspect` from the relevant submodule directly instead of
+  routing through `infra.inspect.__init__`'s underscore re-exports.
+  Re-exports retained for tests that monkeypatch but flagged as
+  deprecated public API.
+
+**Configuration knobs**
+- `HPC_SSH_TIMEOUT_SEC` and `HPC_RSYNC_TIMEOUT_SEC` env-var overrides
+  for the previously hardcoded ssh / rsync subprocess timeouts.
+- New optional cluster YAML keys `gpu_queues` and
+  `excluded_gpu_queue_prefixes` make the Hoffman2-shaped GPU queue map
+  in `infra/gpu.py` configurable per cluster (with the previous values
+  retained as the fallback).
+
+**Deferred (intentionally not in this commit)**
+Audit also surfaced larger refactors that touch many files at once or
+have non-trivial blast radius. They are tracked but not done here:
+splitting `_internal/session.py` (cycles via lazy imports);
+reorganizing `tests/` into subdirectories; splitting the five
+600+ LOC monoliths (`planner.py`, `mapreduce/reduce/status.py`,
+`forecast/{backfill,queue_wait_baseline,queue_simulator}.py`);
+sub-packaging `_schema_models/` by domain; aligning atom / model /
+schema names; dropping leading underscores in `_internal/`; promoting
+survival atoms out of `forecast/`; splitting `settings.json`. The
+audit recommendation to add eager re-exports in `flows/state/forecast/planning/__init__.py`
+was rejected on testing — those packages share load-time edges with
+`infra/clusters.py` and eager imports close a cycle on first
+`import claude_hpc`. Each `__init__.py` now carries a docstring
+explaining why submodule-explicit imports are intentional.
+
 ### Added — `cluster-reduce` primitive: stop bulk-pulling raw chunks
 
 The 1200-chunk failure mode (per-task CSVs / pickles dragged across

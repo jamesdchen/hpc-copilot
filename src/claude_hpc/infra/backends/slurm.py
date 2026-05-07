@@ -129,7 +129,7 @@ class SlurmBackend(HPCBackend):
         consumes ``sacct_window_hours`` (used to scope the failure-rate
         sacct query) while SGE ignores it.
         """
-        from claude_hpc.infra.inspect import _slurm_inspect
+        from claude_hpc.infra.inspect.slurm import _slurm_inspect
 
         return _slurm_inspect(
             cluster_name,
