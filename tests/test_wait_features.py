@@ -197,6 +197,70 @@ def test_floor_gap_computed_when_both_supplied() -> None:
     assert f["floor_gap_sec"] == 3000
 
 
+def test_your_fairshare_value_pulled_from_table() -> None:
+    """``your_user`` + ``fairshare_by_user`` → numeric fairshare. When
+    user not in table, sentinel -1.0."""
+    f = extract_features(
+        now=_NOW,
+        queue=[],
+        your_priority=100,
+        your_partition="gpu",
+        your_user="alice",
+        fairshare_by_user={"alice": 0.7, "bob": 0.3},
+    )
+    assert f["your_fairshare_value"] == 0.7
+
+    f_unknown = extract_features(
+        now=_NOW,
+        queue=[],
+        your_priority=100,
+        your_partition="gpu",
+        your_user="visitor",
+        fairshare_by_user={"alice": 0.7},
+    )
+    assert f_unknown["your_fairshare_value"] == -1.0
+
+
+def test_your_fairshare_value_sentinel_when_user_unspecified() -> None:
+    f = extract_features(now=_NOW, queue=[], your_priority=100, your_partition="gpu")
+    assert f["your_fairshare_value"] == -1.0
+
+
+def test_partition_load_pct_running_over_capacity() -> None:
+    """3 running on a partition with 4 slots → 0.75 load."""
+    queue = [
+        _q("r1", 999, state="RUNNING", time_left=3600),
+        _q("r2", 999, state="RUNNING", time_left=3600),
+        _q("r3", 999, state="RUNNING", time_left=3600),
+    ]
+    f = extract_features(
+        now=_NOW,
+        queue=queue,
+        your_priority=100,
+        your_partition="gpu",
+        partition_slot_count=4,
+    )
+    assert f["partition_load_pct"] == 0.75
+
+
+def test_partition_load_pct_sentinel_when_capacity_unknown() -> None:
+    f = extract_features(now=_NOW, queue=[], your_priority=100, your_partition="gpu")
+    assert f["partition_load_pct"] == -1.0
+
+
+def test_partition_load_pct_sentinel_when_capacity_zero() -> None:
+    """A partition with 0 slots is degenerate; surface sentinel rather
+    than divide by zero."""
+    f = extract_features(
+        now=_NOW,
+        queue=[],
+        your_priority=100,
+        your_partition="gpu",
+        partition_slot_count=0,
+    )
+    assert f["partition_load_pct"] == -1.0
+
+
 # ─── Tier C — academic features ───────────────────────────────────────
 
 
