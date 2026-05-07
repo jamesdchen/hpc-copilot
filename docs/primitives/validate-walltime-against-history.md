@@ -52,3 +52,5 @@ The validator reads runtime priors and the playbook; calling twice with the same
 - **Configurable per-project**: Edit `.hpc/playbook.yaml` to adjust quantile thresholds, add/remove known-bad combos, and inherit changes across all campaigns without code changes.
 - **Cold-start handling**: On the first submission for a (profile, cluster, gpu) tuple, the validator emits an info-level finding so the agent is aware data is sparse. The submission proceeds; subsequent runs populate the prior.
 - **Known-bad combos**: Entries in playbook.yaml can carry severity `"error"` or `"warning"` per-rule; the finding inherits that severity.
+
+**Schemas:** [`validate_walltime_against_history.input.json`](../../src/claude_hpc/schemas/validate_walltime_against_history.input.json), [`validate_walltime_against_history.output.json`](../../src/claude_hpc/schemas/validate_walltime_against_history.output.json).

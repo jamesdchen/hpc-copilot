@@ -53,3 +53,5 @@ The validator reads the dataset file; calling twice with the same file and spec 
 - Pyarrow is an optional dependency; when absent for a parquet path, the validator emits an info-level finding and skips validation rather than failing hard. CSV and JSONL use stdlib modules (csv, json) and always work.
 - The validator uses `pyarrow.parquet.take()` for efficient row extraction, so it scales well even for large datasets with many columns.
 - `wc -l` is never used — it counts newlines, not records, and lies on multi-line CSV cells or JSONL with embedded newlines. The validator uses proper parsers.
+
+**Schemas:** [`validate_input_dataset.input.json`](../../src/claude_hpc/schemas/validate_input_dataset.input.json), [`validate_input_dataset.output.json`](../../src/claude_hpc/schemas/validate_input_dataset.output.json).

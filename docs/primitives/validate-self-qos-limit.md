@@ -20,7 +20,7 @@ Pre-submission self-DOS check: compare predicted total pending jobs (existing + 
 - `current_user_pending_count` (integer) — Number of existing pending jobs the user has on this cluster/QOS.
 - `new_array_size` (integer) — Number of tasks the new submission would add.
 - `qos_max_jobs_per_user` (integer) — The QOS's `MaxJobsPerUser` cap (from `sacctmgr show qos`).
-- `warn_at_pct` (float, default 0.7, range 0.0–1.0) — Warning threshold as a fraction of the cap. Default 70%: warn when (existing + new) >= 0.7 * cap, because the next normal-sized array will likely hit the limit.
+- `warn_at_pct` (float, default 0.7, exclusive bounds 0.0 < x < 1.0) — Warning threshold as a fraction of the cap. Default 70%: warn when (existing + new) >= 0.7 * cap, because the next normal-sized array will likely hit the limit.
 
 ## Outputs
 
@@ -51,3 +51,5 @@ Pure local arithmetic — calling twice with the same inputs produces the same r
 - **Warning regime**: When `cap * warn_at_pct <= predicted_total < cap`, a single warning finding is returned. Submission proceeds but the agent is alerted; the message suggests considering a split if other campaigns might submit before these clear.
 - **Safe regime**: When `predicted_total < cap * warn_at_pct`, no findings are returned (pass).
 - The suggested fix for errors recommends splitting into arrays of size `<= (cap - current_pending - 1)`, ensuring at least one slot remains for the new submission.
+
+**Schemas:** [`validate_self_qos_limit.input.json`](../../src/claude_hpc/schemas/validate_self_qos_limit.input.json), [`validate_self_qos_limit.output.json`](../../src/claude_hpc/schemas/validate_self_qos_limit.output.json).

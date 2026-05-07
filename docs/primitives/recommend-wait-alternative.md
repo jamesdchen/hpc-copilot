@@ -47,3 +47,5 @@ Pure local fitting — calling twice with the same samples produces the same res
 - `method=reset_observed` flags a priority reset (e.g., job resubmitted, fairshare reservation reset). The fitted rate is clamped to zero; the agent should not rely on the forecast.
 - The forecasts are linear: `forecast_priority(h) = current_priority + rate_priority_per_hour * h`. Non-linear effects (e.g., fairshare decay) are not modeled.
 - For large samples (3+ observations), OLS regression is used; for exactly 2, a single segment is fitted; for <2, the rate is zero and method signals the limitation.
+
+**Schemas:** [`recommend_wait_alternative.input.json`](../../src/claude_hpc/schemas/recommend_wait_alternative.input.json), [`recommend_wait_alternative.output.json`](../../src/claude_hpc/schemas/recommend_wait_alternative.output.json).
