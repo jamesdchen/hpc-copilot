@@ -56,7 +56,7 @@ class SshUnreachable(HpcError):
     category = "network"
     remediation = (
         "Verify SSH_AUTH_SOCK is forwarded and ssh-agent has a key for the host. "
-        "Run `hpc-mapreduce preflight` to diagnose."
+        "Run `hpc-agent preflight` to diagnose."
     )
 
 
@@ -82,7 +82,7 @@ class SpecInvalid(HpcError):
     category = "user"
     remediation = (
         "Inspect .hpc/tasks.py and .hpc/runs/<run_id>.json; rebuild via "
-        "/submit or `hpc-mapreduce submit`."
+        "/submit or `hpc-agent submit`."
     )
 
 
@@ -101,7 +101,7 @@ class ClusterUnknown(HpcError):
     error_code = "cluster_unknown"
     retry_safe = False
     category = "user"
-    remediation = "Run `hpc-mapreduce clusters list` to see configured clusters."
+    remediation = "Run `hpc-agent clusters list` to see configured clusters."
 
 
 class JournalCorrupt(HpcError):

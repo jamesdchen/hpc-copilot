@@ -49,7 +49,7 @@
   "$defs": {
     "SubmitFlowSpec": {
       "additionalProperties": false,
-      "description": "Spec passed to ``hpc-mapreduce submit-flow --spec <file>``.\n\nWorkflow atom that does pre-flight + rsync + deploy + optional\ncanary + qsub + record in one shot. All judgment (which\nconstraint, which walltime, which executor, scaffold tasks.py)\nis the caller's responsibility — this atom takes resolved values\nand executes.",
+      "description": "Spec passed to ``hpc-agent submit-flow --spec <file>``.\n\nWorkflow atom that does pre-flight + rsync + deploy + optional\ncanary + qsub + record in one shot. All judgment (which\nconstraint, which walltime, which executor, scaffold tasks.py)\nis the caller's responsibility — this atom takes resolved values\nand executes.",
       "properties": {
         "profile": {
           "minLength": 1,

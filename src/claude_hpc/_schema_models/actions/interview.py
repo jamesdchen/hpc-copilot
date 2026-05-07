@@ -257,7 +257,7 @@ class _InterviewData(BaseModel):
 
 
 class InterviewEnvelope(BaseModel):
-    """Envelope returned by ``hpc-mapreduce interview``.
+    """Envelope returned by ``hpc-agent interview``.
 
     Reports the artifacts persisted (interview.json, optionally
     meta.json) and a dry-resolve preview so the calling agent can

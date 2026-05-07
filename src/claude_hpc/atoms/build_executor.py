@@ -28,7 +28,7 @@ if TYPE_CHECKING:
         ),
     ],
     idempotent=False,
-    cli="hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]",
+    cli="hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]",
     agent_facing=True,
 )
 def build_executor(

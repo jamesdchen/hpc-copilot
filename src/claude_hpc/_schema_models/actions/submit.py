@@ -8,7 +8,7 @@ from claude_hpc._schema_models._shared import CampaignId, RunIdStrict, Runtime, 
 
 
 class SubmitSpec(BaseModel):
-    """Spec passed to ``hpc-mapreduce submit --spec <file>``."""
+    """Spec passed to ``hpc-agent submit --spec <file>``."""
 
     model_config = ConfigDict(extra="forbid", title="submit input spec")
 

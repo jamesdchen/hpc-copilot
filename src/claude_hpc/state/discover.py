@@ -1,7 +1,7 @@
 """Experiment-executor discovery.
 
 Shared helpers used by ``/submit-hpc`` Step 1 (scanning the repo for
-runnable executors) and the ``hpc-mapreduce build-executor`` CLI
+runnable executors) and the ``hpc-agent build-executor`` CLI
 subcommand (used by MARs orchestrators that scaffold experiments
 programmatically). The contract is intentionally minimal — an
 **executor** is a ``.py`` file matching either of two patterns:
@@ -185,7 +185,7 @@ def is_executor_source(source: str) -> bool:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce discover --experiment-dir <path>",
+    cli="hpc-agent discover --experiment-dir <path>",
     agent_facing=True,
 )
 def discover_executors(
@@ -472,7 +472,7 @@ def _classify_reducer(source: str, *, path: Path) -> ReducerInfo | None:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce discover-reducers --experiment-dir <path>",
+    cli="hpc-agent discover-reducers --experiment-dir <path>",
 )
 def discover_reducers(
     root: Path | str,

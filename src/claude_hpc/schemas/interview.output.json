@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/interview.output.json",
   "title": "interview output envelope",
-  "description": "Envelope returned by ``hpc-mapreduce interview``.\n\nReports the artifacts persisted (interview.json, optionally\nmeta.json) and a dry-resolve preview so the calling agent can\necho 'sweep starts here, midpoint here, ends here' back to the\noperator before submit.",
+  "description": "Envelope returned by ``hpc-agent interview``.\n\nReports the artifacts persisted (interview.json, optionally\nmeta.json) and a dry-resolve preview so the calling agent can\necho 'sweep starts here, midpoint here, ends here' back to the\noperator before submit.",
   "type": "object",
   "required": [
     "ok",

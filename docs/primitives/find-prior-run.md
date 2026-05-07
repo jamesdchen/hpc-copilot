@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce find-prior-run --experiment-dir <path> --cmd-sha <hex>
+  cli: hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>
   python: claude_hpc.atoms.setup_actions.find_prior_run
 exit_codes:
 - 0: ok

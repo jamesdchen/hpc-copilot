@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/recall.output.json",
   "title": "recall output envelope",
-  "description": "Envelope returned by ``hpc-mapreduce recall``.\n\nEach campaign summary projects the prior-decision fields the\nnext interviewer would compare against. The rollup block\npre-computes cross-campaign aggregations.",
+  "description": "Envelope returned by ``hpc-agent recall``.\n\nEach campaign summary projects the prior-decision fields the\nnext interviewer would compare against. The rollup block\npre-computes cross-campaign aggregations.",
   "type": "object",
   "required": [
     "ok",

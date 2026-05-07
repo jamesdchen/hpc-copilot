@@ -1,6 +1,6 @@
 Initialize the per-experiment axes config so the framework can pick a parallelism axis automatically at submit time.
 
-This skill composes the [axes-init](../../docs/primitives/axes-init.md) primitive — see that file for full input/output contract. The slash command is the **interactive** wrapper; the same primitive is callable headlessly via `hpc-mapreduce axes-init` for non-Claude-Code agents (e.g. MARs).
+This skill composes the [axes-init](../../docs/primitives/axes-init.md) primitive — see that file for full input/output contract. The slash command is the **interactive** wrapper; the same primitive is callable headlessly via `hpc-agent axes-init` for non-Claude-Code agents (e.g. MARs).
 
 ## Why this exists
 
@@ -37,7 +37,7 @@ When runtime priors exist, the picker uses observed coefficient-of-variation (wa
 
 5. **On Y**, invoke [axes-init](../../docs/primitives/axes-init.md):
    ```
-   hpc-mapreduce axes-init --homogeneous-axes <comma-separated-names>
+   hpc-agent axes-init --homogeneous-axes <comma-separated-names>
    ```
    If `axes.yaml` already exists, the primitive returns `wrote: false` with a reason. **Re-prompt the user** asking whether to pass `--force` (they may have hand-edited the file). Don't auto-force.
 

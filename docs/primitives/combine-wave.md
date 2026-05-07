@@ -37,7 +37,7 @@ error_codes:
   category: internal
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]
+  cli: hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]
   python: claude_hpc.runner.combine.combine_wave
 exit_codes:
 - 0: combined successfully

@@ -205,7 +205,7 @@ def _check_non_null_jsonl(
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce validate-input-dataset --spec <path>",
+    cli="hpc-agent validate-input-dataset --spec <path>",
     agent_facing=True,
 )
 def validate_input_dataset(

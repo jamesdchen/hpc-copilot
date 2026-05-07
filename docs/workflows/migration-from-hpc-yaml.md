@@ -81,7 +81,7 @@ Two additions arrived in the same release as the `hpc.yaml` removal:
    see a uniform shape.
 2. **Closed-loop campaigns.** A new `campaign_id` field on the v2
    sidecar tags submits as part of an iterative campaign;
-   `hpc-mapreduce campaign status` / `campaign list` and `/campaign`
+   `hpc-agent campaign status` / `campaign list` and `/campaign`
    make the closed-loop pattern first-class. See `docs/workflows/campaign.md` for
    the full feature.
 

@@ -4,7 +4,7 @@ Pairs with :func:`claude_hpc.flows.submit_flow.submit_flow` to give
 higher-level workflows (campaigns, sweeps) a clean composition path:
 ``submit-flow → monitor-flow → next iteration``. Both atoms expose the
 same envelope shape, so the campaign loop's per-iteration code is just
-two ``hpc-mapreduce <verb> --spec foo.json`` invocations.
+two ``hpc-agent <verb> --spec foo.json`` invocations.
 
 What it does
 ------------
@@ -354,7 +354,7 @@ def _is_terminal(
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
-    cli="hpc-mapreduce monitor-flow --spec <path>",
+    cli="hpc-agent monitor-flow --spec <path>",
     agent_facing=True,
 )
 def monitor_flow(

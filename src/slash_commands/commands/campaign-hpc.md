@@ -19,7 +19,7 @@ Read cluster definitions:
 
 Pick a campaign:
 
-0. **Existing campaign**: Run `hpc-mapreduce campaign list --experiment-dir <cwd>` and read the envelope. If the user references one of the listed `campaign_id`s, jump to Step 4 (resume / status).
+0. **Existing campaign**: Run `hpc-agent campaign list --experiment-dir <cwd>` and read the envelope. If the user references one of the listed `campaign_id`s, jump to Step 4 (resume / status).
 
 1. **New campaign**: Continue to Step 1 below.
 
@@ -63,7 +63,7 @@ When the user wants to be in the loop — review each iteration's plan, see resu
 
 1. **Submit**: invoke `/submit-hpc campaign_id=<slug>`. The slash command's interview + scaffold + smart-planner steps run; ultimately it invokes `submit-flow` (Step 7b–8 of `/submit-hpc`) tagged with `campaign_id`.
 2. **Monitor**: `/monitor-hpc <run_id>` until terminal.
-3. **Inspect**: `hpc-mapreduce campaign status --campaign-id <slug>` shows per-iteration reduced metrics + in-flight count.
+3. **Inspect**: `hpc-agent campaign status --campaign-id <slug>` shows per-iteration reduced metrics + in-flight count.
 4. **Decide**: re-import `tasks.py`; if `tasks.total() > 0`, go to Step 1. Else done.
 
 ### Path B: Programmatic iterations (compose `submit-flow` + `monitor-flow`)
@@ -72,8 +72,8 @@ When the user wants the campaign to drive itself — no per-iteration interview,
 
 Per iteration:
 
-1. **`hpc-mapreduce submit-flow --spec .hpc/campaigns/<slug>/iter-<N>.submit.json`** — pre-flight + rsync + deploy + qsub + record. Envelope's `data.run_id` and `data.job_ids` flow into the next step.
-2. **`hpc-mapreduce monitor-flow --spec .hpc/campaigns/<slug>/iter-<N>.monitor.json`** — internal poll loop until `lifecycle_state` is `complete` / `failed` / `abandoned` / `timeout`. Auto-combines waves as they finish.
+1. **`hpc-agent submit-flow --spec .hpc/campaigns/<slug>/iter-<N>.submit.json`** — pre-flight + rsync + deploy + qsub + record. Envelope's `data.run_id` and `data.job_ids` flow into the next step.
+2. **`hpc-agent monitor-flow --spec .hpc/campaigns/<slug>/iter-<N>.monitor.json`** — internal poll loop until `lifecycle_state` is `complete` / `failed` / `abandoned` / `timeout`. Auto-combines waves as they finish.
 3. Strategy reads results — `tasks.py`'s `_PRIOR = prior(...)` picks up the new sidecar at module-load.
 
 ```python
@@ -84,7 +84,7 @@ from claude_hpc import load_tasks_module, tasks_path
 def run_one(spec_path, *, verb):
     """Invoke one workflow atom; return parsed envelope or raise."""
     out = subprocess.run(
-        ["hpc-mapreduce", verb, "--spec", str(spec_path), "--experiment-dir", "."],
+        ["hpc-agent", verb, "--spec", str(spec_path), "--experiment-dir", "."],
         capture_output=True, text=True, check=False,
     )
     envelope = json.loads(out.stdout.strip().splitlines()[-1])
@@ -129,7 +129,7 @@ In either path: invoke another iteration's `submit-flow` before the previous one
 **For iterations producing N>1 specs to one cluster**, write the spec as `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` (each entry under `specs` matches `schemas/submit_flow.input.json`; all entries MUST share `ssh_target` + `remote_path`). `submit-flow` auto-dispatches to the bundled path — ONE rsync + ONE deploy across all specs, then qsubs each in turn over the multiplexed ssh ControlMaster:
 
 ```bash
-hpc-mapreduce submit-flow \
+hpc-agent submit-flow \
     --experiment-dir <exp> \
     --spec .hpc/campaigns/<slug>/iter-<N>.specs.json
 ```
@@ -143,7 +143,7 @@ The envelope's `data.results` is a per-spec list; treat each entry the same as a
 Two patterns work, pick whichever the user's `tasks.py` is set up for:
 
 - **Tell at module-load** (recommended; idempotent). The next iteration's `tasks.py` re-reads sidecars + per-trial outputs and pushes results into the strategy backend (e.g. `optuna.Study.tell`) before asking for the next batch. No extra orchestration needed — `submit-flow` re-imports `tasks.py` each invocation.
-- **Tell between iterations via `cluster-reduce`** (preferred when the executor writes raw chunks). After an iteration lands, run `hpc-mapreduce cluster-reduce --experiment-dir . --run-id <iter_run_id>` to invoke the user's reducer ON THE CLUSTER and pull only its single JSON output. The reducer reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT` (default `_aggregated/<run_id>.json`); see [reducer-contract.md](../../docs/reference/reducer-contract.md). The next iteration's `tasks.py` reads the pulled JSONs to tell its strategy. **Don't** rsync per-task chunks across the wire — that's the 1200-chunk failure mode (12 campaigns × 1200 chunks = 14400 raw files dragged through SSH). The reducer's output is KB; the chunks stay on the cluster.
+- **Tell between iterations via `cluster-reduce`** (preferred when the executor writes raw chunks). After an iteration lands, run `hpc-agent cluster-reduce --experiment-dir . --run-id <iter_run_id>` to invoke the user's reducer ON THE CLUSTER and pull only its single JSON output. The reducer reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT` (default `_aggregated/<run_id>.json`); see [reducer-contract.md](../../docs/reference/reducer-contract.md). The next iteration's `tasks.py` reads the pulled JSONs to tell its strategy. **Don't** rsync per-task chunks across the wire — that's the 1200-chunk failure mode (12 campaigns × 1200 chunks = 14400 raw files dragged through SSH). The reducer's output is KB; the chunks stay on the cluster.
 - **Tell between iterations via a local helper** (only when there's no cluster-side reducer yet). Run a small helper (`.hpc/campaigns/<slug>/score_iter.py` or similar) that walks per-task outputs and tells the strategy. Acceptable for prototyping but you should write a cluster-side reducer for production runs — bulk pulling raw chunks doesn't scale past one campaign.
 
 ### Headless overnight runs
@@ -153,7 +153,7 @@ Wrap Path B in `/loop` (or a real cron / systemd timer if the user wants to walk
 ## Step 4: Status / resume
 
 ```bash
-hpc-mapreduce campaign status --campaign-id <id>
+hpc-agent campaign status --campaign-id <id>
 ```
 
 Reports per-iteration reduced metrics (oldest-first), in-flight count, and the list of run_ids tagged with this campaign. Use this to:
@@ -162,7 +162,7 @@ Reports per-iteration reduced metrics (oldest-first), in-flight count, and the l
 - Decide whether to extend the campaign by re-running Step 3 (the loop will pick up where it left off — `prior()` reads sidecars on disk, no separate state file).
 - Investigate failures by feeding individual `run_id`s into `/monitor-hpc` or `/aggregate-hpc`.
 
-Resume after a network drop / laptop sleep: there is nothing to "resume" — the loop is just `/submit-hpc` invocations. Run `hpc-mapreduce campaign status --campaign-id <id>` to see what's complete and what's still in-flight, then invoke `/submit-hpc campaign_id=<id>` again to launch the next iteration. `tasks.py`'s `_PRIOR` reflects whatever sidecars are on disk, so the strategy picks up where it left off. Sidecars on disk are the only durable state.
+Resume after a network drop / laptop sleep: there is nothing to "resume" — the loop is just `/submit-hpc` invocations. Run `hpc-agent campaign status --campaign-id <id>` to see what's complete and what's still in-flight, then invoke `/submit-hpc campaign_id=<id>` again to launch the next iteration. `tasks.py`'s `_PRIOR` reflects whatever sidecars are on disk, so the strategy picks up where it left off. Sidecars on disk are the only durable state.
 
 ## Step 5: Cleanup
 

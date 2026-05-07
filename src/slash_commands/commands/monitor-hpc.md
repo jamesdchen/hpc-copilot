@@ -16,7 +16,7 @@ Per-operation contracts live in `docs/primitives/` — this skill composes the [
 >
 > `none` is only valid when terminal-state cleanup ran. Anything else (including silent exit) is a spec violation. If you are about to exit without this line, you have not completed the tick — restart Step 5.
 >
-> A Stop hook in `~/.claude/settings.json` (installed via `hpc-mapreduce hook-install`) verifies this line and blocks termination if missing.
+> A Stop hook in `~/.claude/settings.json` (installed via `hpc-agent hook-install`) verifies this line and blocks termination if missing.
 
 ## Setup
 
@@ -265,7 +265,7 @@ Anything other than `OK` → abort.
 The slash command's tick body is **one `monitor-flow` invocation**. The atom does the poll (Step 1's old job), the wave combination (the old Step 1c), the tick log write (the old Step 6), and returns when terminal OR when its budget elapses. The slash command branches on the returned `lifecycle_state`.
 
 ```bash
-hpc-mapreduce monitor-flow --spec .hpc/runs/<run_id>.monitor.spec.json --experiment-dir .
+hpc-agent monitor-flow --spec .hpc/runs/<run_id>.monitor.spec.json --experiment-dir .
 ```
 
 Spec shape (matches `schemas/monitor_flow.input.json`):
@@ -449,14 +449,14 @@ cat > /tmp/arm_spec.json <<EOF
   "queue_wait_sec": null                   # optional; from queue-wait predictor
 }
 EOF
-hpc-mapreduce decide-monitor-arm --spec /tmp/arm_spec.json
+hpc-agent decide-monitor-arm --spec /tmp/arm_spec.json
 ```
 
 The envelope's `data` carries:
 
 * `arm` — `cron` / `loop` / `none`
 * `cadence_sec`, `schedule`, `reason`
-* **`armed_line`** — copy this VERBATIM as the very last line of your response. The Stop hook (installed via `hpc-mapreduce hook-install`) blocks the turn if it's missing or doesn't match the regex. The primitive guarantees a matching line; hand-authoring is the failure mode this fix exists to eliminate.
+* **`armed_line`** — copy this VERBATIM as the very last line of your response. The Stop hook (installed via `hpc-agent hook-install`) blocks the turn if it's missing or doesn't match the regex. The primitive guarantees a matching line; hand-authoring is the failure mode this fix exists to eliminate.
 * **`cron_create_args`** — when `arm == "cron"`, pass these three keys (`schedule`, `prompt`, `reason`) directly into `CronCreate`. No string formatting on your end.
 
 **Two valid arm mechanisms** (the only ones backed by documented public Claude Code tools):
@@ -523,7 +523,7 @@ Triggered by either:
 In this mode, do **not** run Step 0.5 / Step 1 / SSH polling. Do NOT contact the cluster. **Don't hand-author the summary** — call the `monitor-summary` primitive, which reads `.hpc/runs/<run_id>.monitor.jsonl` + the run journal and returns the canonical user-facing digest:
 
 ```bash
-hpc-mapreduce monitor-summary --experiment-dir . --run-id <run_id>
+hpc-agent monitor-summary --experiment-dir . --run-id <run_id>
 ```
 
 The envelope's `data` carries `{lifecycle_state, headline, body, armed_hint}`. Print `headline` then `body` verbatim — that's the entire summary the user sees. The framing is byte-stable across ticks for the same input state, so consecutive summary requests don't drift in wording.

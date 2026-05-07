@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce campaign-budget
+  cli: hpc-agent campaign-budget
   python: claude_hpc.atoms.campaign_budget.campaign_budget
 ---
 # campaign-budget

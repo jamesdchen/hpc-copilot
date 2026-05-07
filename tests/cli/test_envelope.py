@@ -17,7 +17,7 @@ from ._helpers import SUBMIT_SPEC
 from ._helpers import parse_envelope as _parse_envelope
 from ._helpers import run_cli as _run_cli
 
-"""Smoke tests for the hpc-mapreduce CLI.
+"""Smoke tests for the hpc-agent CLI.
 
 The CLI is a public surface MARs depends on — these tests pin the JSON
 envelope shape, exit codes, and the error-classification path. They do NOT
@@ -55,7 +55,7 @@ def test_help_lists_every_subcommand() -> None:
 def test_version_flag() -> None:
     rc, out, _ = _run_cli("--version")
     assert rc == 0
-    assert "hpc-mapreduce" in out
+    assert "hpc-agent" in out
 
 
 def test_capabilities_envelope_shape() -> None:

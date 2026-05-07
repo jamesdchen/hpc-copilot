@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]",
+    cli="hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]",
     agent_facing=True,
 )
 def campaign_status(*, experiment_dir: Path, campaign_id: str) -> dict[str, Any]:

@@ -10,7 +10,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce axes-init
+  cli: hpc-agent axes-init
   python: claude_hpc.atoms.axes_init.axes_init
 ---
 # axes-init

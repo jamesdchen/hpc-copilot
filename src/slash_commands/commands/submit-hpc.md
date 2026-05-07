@@ -35,7 +35,7 @@ is confusing on inspection.
 **Don't walk the priority list by hand. Call `suggest-setup-action`** — it runs all four checks and returns the recommended action + candidates verbatim:
 
 ```bash
-hpc-mapreduce suggest-setup-action --experiment-dir .
+hpc-agent suggest-setup-action --experiment-dir .
 ```
 
 The envelope's `data` carries `{priority, action, run_id, candidates, reason}`. Branch on `action`:
@@ -109,7 +109,7 @@ Parse `$ARGUMENTS` or the user's natural language request:
 
 For multi-executor submissions: submit as **separate array jobs** (independent monitoring and failure handling). Each gets its own `run_id` and per-run sidecar at `.hpc/runs/<run_id>.json`; the same `.hpc/tasks.py` is reused if the parallelization axis matches, otherwise the agent writes a new one (the file is the single seam between executors and the framework).
 
-**For N>1 executors sharing `(ssh_target, remote_path)`, write one batch spec file** instead of N per-executor specs. `submit-flow` auto-dispatches: pass it `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` and it routes to `submit-flow-batch` internally, doing ONE rsync_push + ONE deploy_runtime + N qsubs over the multiplexed ssh ControlMaster. Pass it a single dict and it runs the per-spec pipeline as before. Same `hpc-mapreduce submit-flow --spec X` call either way. All entries under `specs` MUST share `ssh_target` + `remote_path`; heterogeneous batches raise `spec_invalid`. The motivation: N parallel single-spec submits send ~13×N ssh handshakes at the cluster's sshd and trip `MaxStartups` — we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts.
+**For N>1 executors sharing `(ssh_target, remote_path)`, write one batch spec file** instead of N per-executor specs. `submit-flow` auto-dispatches: pass it `{"specs": [...], "rsync_excludes": [...], "skip_preflight": ...}` and it routes to `submit-flow-batch` internally, doing ONE rsync_push + ONE deploy_runtime + N qsubs over the multiplexed ssh ControlMaster. Pass it a single dict and it runs the per-spec pipeline as before. Same `hpc-agent submit-flow --spec X` call either way. All entries under `specs` MUST share `ssh_target` + `remote_path`; heterogeneous batches raise `spec_invalid`. The motivation: N parallel single-spec submits send ~13×N ssh handshakes at the cluster's sshd and trip `MaxStartups` — we've seen 11 parallel campaign submits land 2 successes + 9 SSH timeouts.
 
 ## Step 3: Plan the parallelization axis
 
@@ -212,11 +212,11 @@ If constraints are not configured for the cluster or profile, skip this step and
 
 ## Step 4c: Smart constraint planner (resource-quality aware)
 
-The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, invoke the [score-submit-plan](../../docs/primitives/score-submit-plan.md) primitive (`hpc-mapreduce plan-submit --profile <profile> --cluster <cluster>`); it combines a live snapshot of the cluster and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric below and picks one.
+The throughput plan from Step 4b decides *batching*; this step decides *which nodes to land on*. Skip for CPU-only profiles (no GPU constraint to choose). For GPU profiles, invoke the [score-submit-plan](../../docs/primitives/score-submit-plan.md) primitive (`hpc-agent plan-submit --profile <profile> --cluster <cluster>`); it combines a live snapshot of the cluster and runtime priors from past runs to score every candidate constraint. Claude then applies the cost rubric below and picks one.
 
 ### Optional pre-check: best submit window
 
-Before scoring constraints you can consult [best-submit-window](../../docs/primitives/best-submit-window.md) (`hpc-mapreduce best-submit-window --profile <p> --cluster <c> --within-hours 24 --top-k 5`) to surface low-traffic submit windows in the next 24 hours. This is purely advisory — the primitive sweeps the diurnal queue-wait predictor at hourly offsets and returns the `top_k` lowest-wait candidates. Useful when the user explicitly asks "is now a good time?" or when the current `score-submit-plan` envelope's candidates all carry long predicted waits. The slash command can offer "I see your predicted wait now is 4h; the queue is significantly emptier in 6h. Wait, or submit now?" — but the actual UX is up to the slash command; the primitive just exposes the data. Cold-start clusters return an empty `candidates` array; in that case fall through to the normal submit-now path.
+Before scoring constraints you can consult [best-submit-window](../../docs/primitives/best-submit-window.md) (`hpc-agent best-submit-window --profile <p> --cluster <c> --within-hours 24 --top-k 5`) to surface low-traffic submit windows in the next 24 hours. This is purely advisory — the primitive sweeps the diurnal queue-wait predictor at hourly offsets and returns the `top_k` lowest-wait candidates. Useful when the user explicitly asks "is now a good time?" or when the current `score-submit-plan` envelope's candidates all carry long predicted waits. The slash command can offer "I see your predicted wait now is 4h; the queue is significantly emptier in 6h. Wait, or submit now?" — but the actual UX is up to the slash command; the primitive just exposes the data. Cold-start clusters return an empty `candidates` array; in that case fall through to the normal submit-now path.
 
 The envelope's `data` carries the candidate scorecards. Three branches:
 
@@ -298,7 +298,7 @@ Pass `--no-adversarial` to `plan-submit` only for debugging or on clusters that 
 
   The monitor reads the sidecar back and includes `predicted_eta_sec` + `submitted_at_iso` when calling `runtime_prior.append_sample`. The `house-edge` subcommand then aggregates predicted-vs-actual queue time so you can see whether `--test-only` is finding real backfill windows.
 
-- Standalone diagnostics: `hpc-mapreduce walltime-drift --profile X --cluster Y` and `hpc-mapreduce house-edge --profile X --cluster Y` surface the per-cluster signals without re-running the full planner.
+- Standalone diagnostics: `hpc-agent walltime-drift --profile X --cluster Y` and `hpc-agent house-edge --profile X --cluster Y` surface the per-cluster signals without re-running the full planner.
 
 For each chosen candidate's `stressed_nodes`, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly, so it stays here in the slash command:
 
@@ -353,7 +353,7 @@ Path(f".hpc/runs/{run_id}.decision.json").write_text(json.dumps(decision, indent
 **Don't hand-author the summary.** Once Step 6c emits the resolved spec via `build-submit-spec`, render the canonical confirmation via the **`summarize-submit-plan`** primitive — byte-stable framing, magnitude-aware confirm prompt:
 
 ```bash
-hpc-mapreduce summarize-submit-plan --spec /tmp/submit_spec.json
+hpc-agent summarize-submit-plan --spec /tmp/submit_spec.json
 ```
 
 The envelope's `data` carries `{headline, body, confirm_prompt}`. Print `headline` and `body` verbatim, then ask `confirm_prompt`. For multi-job submissions, call the primitive once per spec and concatenate the bodies under one combined header. The primitive flips to a magnitude-warning prompt automatically when `total_tasks > 1000`.
@@ -414,7 +414,7 @@ If `tp.exists()` is False, enter the scaffolding sub-flow:
      }
    }
    EOF
-   hpc-mapreduce build-tasks-py --spec /tmp/tasks_spec.json --experiment-dir .
+   hpc-agent build-tasks-py --spec /tmp/tasks_spec.json --experiment-dir .
    ```
 
    The envelope's `data` reports `{path, wrote, n_tasks}`. **Refuses to overwrite** an existing `.hpc/tasks.py` without `--force` so a user's hand-edited Pattern 2 (chunking) or Pattern 3 (date-window) conversion survives a re-submission.
@@ -457,14 +457,14 @@ tasks_py_sha = compute_tasks_py_sha(tp)
 ```
 
 ```bash
-hpc-mapreduce find-prior-run --experiment-dir . --cmd-sha "$CMD_SHA"
+hpc-agent find-prior-run --experiment-dir . --cmd-sha "$CMD_SHA"
 ```
 
 The envelope's `data` carries `{found, run_id, is_orphan, status, age_sec, profile, cluster, job_ids, campaign_id, submitted_at}`. Branch on `found` and `is_orphan`:
 
 - `found=False` → fresh submission, continue to Step 6d.
 - `found=True, is_orphan=False` → real prior run. **Stop and ask the user**: "I found a prior run with the same cmd_sha: `{run_id}` ({profile} on {cluster}, {age_sec}s ago). Resume (re-dispatch only failed tasks) or fresh (new run_id)?"
-- `found=True, is_orphan=True` → half-baked sidecar from a failed batch (no journal job_ids). Don't surface as a resume candidate; offer "Found a half-baked sidecar from a prior failed submit. Run `hpc-mapreduce prune-orphan-sidecars --experiment-dir .` to clean up, then re-submit." or proceed and let `submit_flow_batch`'s auto-prune handle it on the next call.
+- `found=True, is_orphan=True` → half-baked sidecar from a failed batch (no journal job_ids). Don't surface as a resume candidate; offer "Found a half-baked sidecar from a prior failed submit. Run `hpc-agent prune-orphan-sidecars --experiment-dir .` to clean up, then re-submit." or proceed and let `submit_flow_batch`'s auto-prune handle it on the next call.
 
 - **Resume**: call `/monitor-hpc --run-id <prior.stem>` (or `report_status` directly) to enumerate failing task IDs, then build a `ResubmitPlan` via `resubmit_plan(task_count=tasks.total(), failed_task_ids=[...])` and submit via `backend.submit_plan(plan, ...)`. The new sidecar (written below) carries the same `cmd_sha` but a fresh `run_id` — both runs share provenance via the SHA.
 - **Fresh**: ask the user how they want the new run distinguished (e.g. a different result_dir suffix, a profile name change, or simply accept that the new sidecar is a deliberate rerun). The new `cmd_sha` will only differ if `tasks.py` itself changes.
@@ -478,7 +478,7 @@ With `total = tasks.total()` known, run Step 4b's throughput planner (already co
 
 ```bash
 # After the interview + planner have resolved every field:
-hpc-mapreduce build-submit-spec --spec /tmp/resolved.json > /tmp/submit_spec.json
+hpc-agent build-submit-spec --spec /tmp/resolved.json > /tmp/submit_spec.json
 # /tmp/resolved.json is a flat dict of the kwargs the agent collected:
 #   profile, cluster, ssh_target, remote_path, run_id, cmd_sha,
 #   total_tasks, backend, is_gpu, modules, conda_source, conda_env,
@@ -696,7 +696,7 @@ If any hash differs, STOP — re-run rsync with verbose flags (`-avz`) and inves
 
 ## Step 7b–8: Invoke `submit-flow` (workflow atom)
 
-Steps 7 (rsync), 7b (canary), 8 (qsub), and 10 (record) are **one CLI call** to the workflow atom `hpc-mapreduce submit-flow`. The slash command's job is to assemble the spec from the inputs collected in Steps 1–6 and invoke. The atom does pre-flight + rsync + deploy + optional canary + qsub + sidecar/journal write, returning a single JSON envelope.
+Steps 7 (rsync), 7b (canary), 8 (qsub), and 10 (record) are **one CLI call** to the workflow atom `hpc-agent submit-flow`. The slash command's job is to assemble the spec from the inputs collected in Steps 1–6 and invoke. The atom does pre-flight + rsync + deploy + optional canary + qsub + sidecar/journal write, returning a single JSON envelope.
 
 Spec shape (matches `schemas/submit_flow.input.json`):
 
@@ -738,7 +738,7 @@ For GPU jobs: pick `script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.s
 Invoke:
 
 ```bash
-hpc-mapreduce submit-flow --spec spec.json --experiment-dir .
+hpc-agent submit-flow --spec spec.json --experiment-dir .
 ```
 
 Parse the envelope:
@@ -749,7 +749,7 @@ On error envelopes, branch by `error_code` per `submit-flow`'s contract (`ssh_un
 
 To opt out of the canary (already smoke-tested or single-task submission), set `"canary": false` in the spec — the slash command's `--no-canary` flag from Step 2 maps directly here.
 
-**Multi-executor / multi-spec submissions**: write the spec as `{"specs": [<per-spec dict>, ...], "rsync_excludes": [...], "skip_preflight": ...}` (each entry under `specs` matches the per-spec shape above). `submit-flow` detects the batch shape and auto-routes to the bundled path — same `hpc-mapreduce submit-flow --spec X --experiment-dir .` call. Entries MUST share `(ssh_target, remote_path)`; mixed-cluster batches raise `spec_invalid` (split by target and call once per group). The envelope wraps `{"results": [<per-spec submit-flow envelope>, ...], "n_results": N}`; parse each entry with the same dedup/error logic.
+**Multi-executor / multi-spec submissions**: write the spec as `{"specs": [<per-spec dict>, ...], "rsync_excludes": [...], "skip_preflight": ...}` (each entry under `specs` matches the per-spec shape above). `submit-flow` detects the batch shape and auto-routes to the bundled path — same `hpc-agent submit-flow --spec X --experiment-dir .` call. Entries MUST share `(ssh_target, remote_path)`; mixed-cluster batches raise `spec_invalid` (split by target and call once per group). The envelope wraps `{"results": [<per-spec submit-flow envelope>, ...], "n_results": N}`; parse each entry with the same dedup/error logic.
 
 **Note on canary semantics:** `submit-flow`'s canary is a smoke test of the submission machinery (qsub accepts the spec; scheduler returns a job ID). It does NOT wait for canary completion or verify outputs — that elaborate "wait for terminal + grep logs + check artifacts" protocol stays here in the slash command (see "Canary verification" below) for the human-interactive path. Higher-level workflows like `/campaign-hpc` rely on the lighter check.
 
@@ -758,7 +758,7 @@ To opt out of the canary (already smoke-tested or single-task submission), set `
 When `data.canary_done: true`, **don't hand-author the wait + grep + output-check protocol** — call the `verify-canary` workflow atom, which polls the canary to terminal, scans stderr for known failure markers, and (optionally) verifies an expected output artifact:
 
 ```bash
-hpc-mapreduce verify-canary \
+hpc-agent verify-canary \
     --experiment-dir . \
     --canary-run-id "$CANARY_RUN_ID" \
     --expect-output "results/seed_42/metrics.json"   # optional

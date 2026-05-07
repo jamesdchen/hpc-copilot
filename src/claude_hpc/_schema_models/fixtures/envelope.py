@@ -27,7 +27,7 @@ class _PartialError(BaseModel):
 
 
 class SuccessEnvelope(BaseModel):
-    """The ``ok=true`` shape of every hpc-mapreduce stdout response."""
+    """The ``ok=true`` shape of every hpc-agent stdout response."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -44,7 +44,7 @@ class SuccessEnvelope(BaseModel):
 
 
 class ErrorEnvelope(BaseModel):
-    """The ``ok=false`` shape of every hpc-mapreduce stdout response."""
+    """The ``ok=false`` shape of every hpc-agent stdout response."""
 
     model_config = ConfigDict(extra="forbid")
 

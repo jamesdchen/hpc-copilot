@@ -17,7 +17,7 @@ error_codes:
   category: cluster
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce monitor-flow --spec <path>
+  cli: hpc-agent monitor-flow --spec <path>
   python: claude_hpc.flows.monitor_flow.monitor_flow
 ---
 

@@ -65,7 +65,7 @@ def _aggregate_overall(findings: list[ValidatorFinding]) -> str:
     side_effects=[],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-mapreduce validate-campaign --spec <path>",
+    cli="hpc-agent validate-campaign --spec <path>",
     agent_facing=True,
     exit_codes=[(0, "pass-or-warn"), (1, "fail")],
 )

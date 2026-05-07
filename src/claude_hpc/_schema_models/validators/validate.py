@@ -35,7 +35,7 @@ class ValidateSpec(BaseModel):
 
 
 class ValidateResult(BaseModel):
-    """Data block from ``hpc-mapreduce validate``.
+    """Data block from ``hpc-agent validate``.
 
     Wraps the scheduler's --test-only response into a structured
     timing prediction.
