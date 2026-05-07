@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord
+from claude_hpc._internal.session import RunRecord, index as session_index, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -20,8 +20,14 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Redirect HPC_HOMEDIR into a per-test tmp directory."""
+    """Redirect HPC_HOMEDIR into a per-test tmp directory.
+
+    HPC_HOMEDIR lives in :mod:`claude_hpc._internal.session.run_record`
+    after the session.py split; patching the module attribute is what
+    every reader sees because callers look the name up at call time.
+    """
     home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
     monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 
@@ -248,7 +254,11 @@ def test_prune_terminal_runs_writes_index_once(journal_home, experiment):
             calls.append(path)
         return real_atomic(path, payload)
 
-    with patch.object(session, "_atomic_write_json", side_effect=tracking):
+    # ``_atomic_write_json`` lives in run_record but ``prune_terminal_runs``
+    # is in :mod:`session.index`; patching at the call-site module is what
+    # the resolver actually sees (the import at module load time bound the
+    # name into ``index``'s namespace).
+    with patch.object(session_index, "_atomic_write_json", side_effect=tracking):
         removed = session.prune_terminal_runs(experiment, keep=1)
 
     assert removed == 4

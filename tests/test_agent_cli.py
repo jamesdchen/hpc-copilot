@@ -296,14 +296,21 @@ def test_submit_persists_campaign_id_to_journal(tmp_path: Path) -> None:
 
     # Confirm the journal carries the tag and the campaign filter sees it.
     from claude_hpc._internal import session
+    from claude_hpc._internal.session import run_record
 
-    # Redirect HPC_HOMEDIR for this in-process check the same way the CLI did.
-    saved = session.HPC_HOMEDIR
+    # Redirect HPC_HOMEDIR for this in-process check the same way the CLI
+    # did. After the session.py split the canonical module attribute lives
+    # in :mod:`session.run_record`; patch both for back-compat with any
+    # caller that reads through the package re-export.
+    saved_pkg = session.HPC_HOMEDIR
+    saved_rr = run_record.HPC_HOMEDIR
     try:
         session.HPC_HOMEDIR = journal  # type: ignore[misc]
+        run_record.HPC_HOMEDIR = journal
         matched = session.find_runs_by_campaign(tmp_path, "ml_ridge_q1")
     finally:
-        session.HPC_HOMEDIR = saved  # type: ignore[misc]
+        session.HPC_HOMEDIR = saved_pkg  # type: ignore[misc]
+        run_record.HPC_HOMEDIR = saved_rr
     assert len(matched) == 1
     assert matched[0].campaign_id == "ml_ridge_q1"
 
@@ -1288,6 +1295,7 @@ class TestSubmitFromMeta:
         from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        monkeypatch.setattr("claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
         assert record.profile == "run-001-foo"
@@ -1312,6 +1320,7 @@ class TestSubmitFromMeta:
         from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        monkeypatch.setattr("claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
         assert record.profile == "explicit"
@@ -1336,6 +1345,7 @@ class TestSubmitFromMeta:
         from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
+        monkeypatch.setattr("claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal")
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
         assert record.profile == "p"
