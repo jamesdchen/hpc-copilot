@@ -287,7 +287,9 @@ def submit_flow(
     classified ``complete`` (not ``failed``); aggregate-flow then skips
     the failed task IDs listed under ``<run_id>.failed.json``.
     """
-    from claude_hpc._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec as _BatchSpec
+    from claude_hpc._schema_models.workflows.submit_flow_batch import (
+        SubmitFlowBatchSpec as _BatchSpec,
+    )
 
     batch_spec = _BatchSpec(
         specs=[spec],

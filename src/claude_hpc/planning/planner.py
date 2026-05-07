@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
 from claude_hpc._internal.primitive import SideEffect, primitive
-from claude_hpc._internal.time import parse_iso_utc, utcnow, utcnow_iso
+from claude_hpc._internal.time import utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -683,12 +683,11 @@ def _adversarial_report(
     }
 
 
-
 # Helpers moved to planner_helpers.py for navigability; re-export with
 # the old underscore-private names so internal callers keep working.
-from claude_hpc.planning.planner_helpers import (  # noqa: E402
-    build_canary_plan as _build_canary_plan,
-    format_walltime_for_sbatch as _format_walltime_for_sbatch,
-    p_fail_by_gpu_type as _p_fail_by_gpu_type,
-    parse_test_only_eta as _parse_test_only_eta,
-)
+from claude_hpc.planning import planner_helpers as _planner_helpers  # noqa: E402
+
+_build_canary_plan = _planner_helpers.build_canary_plan
+_format_walltime_for_sbatch = _planner_helpers.format_walltime_for_sbatch
+_p_fail_by_gpu_type = _planner_helpers.p_fail_by_gpu_type
+_parse_test_only_eta = _planner_helpers.parse_test_only_eta

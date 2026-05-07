@@ -31,14 +31,15 @@ from claude_hpc._internal.session.index import (
     find_runs_by_campaign,
     prune_terminal_runs,
 )
-from claude_hpc._internal.session.journal import _refresh_index_entry
 from claude_hpc._internal.session.journal import (
+    _refresh_index_entry,
     load_run,
     mark_run,
     update_run_status,
     upsert_run,
 )
 from claude_hpc._internal.session.run_record import (
+    _UPDATABLE_FIELDS,
     HPC_HOMEDIR,
     SCHEMA_VERSION,
     TERMINAL_STATUSES,
@@ -48,17 +49,27 @@ from claude_hpc._internal.session.run_record import (
     _locked,
     _read_json,
     _run_path,
-    _UPDATABLE_FIELDS,
     journal_dir,
     repo_hash,
     runs_dir,
 )
 
 __all__ = [
-    "SCHEMA_VERSION",
     "HPC_HOMEDIR",
+    "SCHEMA_VERSION",
     "TERMINAL_STATUSES",
     "RunRecord",
+    "_UPDATABLE_FIELDS",
+    "_all_run_files",
+    "_atomic_write_json",
+    "_index_is_stale",
+    "_lock_path",
+    "_locked",
+    "_read_index",
+    "_read_json",
+    "_rebuild_index",
+    "_refresh_index_entry",
+    "_run_path",
     "find_in_flight_runs",
     "find_runs_by_campaign",
     "journal_dir",

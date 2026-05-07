@@ -88,9 +88,7 @@ class TestExecutorTemplateEmitsMetrics:
         monkeypatch.setenv("RESULT_DIR", str(rdir))
 
         template_path = (
-            os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            )
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             + "/src/claude_hpc/mapreduce/templates/starters/executor_template.py"
         )
         spec = importlib.util.spec_from_file_location("executor_template_under_test", template_path)

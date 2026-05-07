@@ -143,7 +143,8 @@ def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], s
     # non-private submodule and subpackage in one pass.
     discovered: dict[str, tuple[Any, str]] = {}
     for _finder, modname, _ispkg in pkgutil.walk_packages(
-        pkg.__path__, prefix=f"{pkg.__name__}.",
+        pkg.__path__,
+        prefix=f"{pkg.__name__}.",
     ):
         leaf = modname.rsplit(".", 1)[-1]
         if leaf.startswith("_"):

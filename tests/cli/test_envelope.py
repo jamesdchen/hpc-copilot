@@ -7,15 +7,15 @@ Shared subprocess + envelope helpers live in :mod:`._helpers`.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
 from claude_hpc import agent_cli as cli
 
-from ._helpers import SUBMIT_SPEC, parse_envelope as _parse_envelope, run_cli as _run_cli
+from ._helpers import SUBMIT_SPEC
+from ._helpers import parse_envelope as _parse_envelope
+from ._helpers import run_cli as _run_cli
 
 """Smoke tests for the hpc-mapreduce CLI.
 
@@ -24,20 +24,6 @@ envelope shape, exit codes, and the error-classification path. They do NOT
 exercise actual SSH/cluster operations; the atomic-ops tests in
 test_runner.py cover that.
 """
-
-
-import json
-import subprocess
-import sys
-from pathlib import Path
-
-import pytest
-
-from claude_hpc import agent_cli as cli
-
-
-
-
 
 
 # ─── envelope shape ────────────────────────────────────────────────────────
@@ -199,7 +185,6 @@ def test_missing_spec_required_field_returns_user_error(tmp_path: Path) -> None:
     assert env["error_code"] == "spec_invalid"
 
 
-
 # ─── envelope schema validation (structural) ───────────────────────────────
 
 
@@ -230,7 +215,6 @@ def test_subcommand_help_is_non_empty(subcommand: str) -> None:
     rc, out, _ = _run_cli(subcommand, "--help")
     assert rc == 0
     assert len(out.strip()) > 50, f"{subcommand} --help is too sparse"
-
 
 
 # ─── Bug 16: spec validation surfaces a schema-pointed message ────────────
@@ -295,5 +279,3 @@ def test_resubmit_rejects_off_enum_category(tmp_path: Path) -> None:
     assert rc != 0
     payload = _parse_envelope(out)
     assert payload["error_code"] == "spec_invalid"
-
-

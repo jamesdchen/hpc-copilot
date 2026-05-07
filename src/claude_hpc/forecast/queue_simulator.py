@@ -57,17 +57,16 @@ import random
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 __all__ = [
     "SimJob",
     "SimResult",
-    "extract_running_jobs",
     "available_resources",
+    "extract_running_jobs",
     "simulate_one_pass",
-    "simulate_distribution",
+    # ``simulate_distribution`` is lazy-loaded from queue_simulator_distribution
+    # via ``__getattr__`` (see bottom of file).
 ]
 
 
@@ -407,8 +406,6 @@ def _placement_for_running(
     return _try_place(j, free_by_node)
 
 
-
-
 def simulate_one_pass(
     snapshot: ClusterSnapshot,
     *,
@@ -592,7 +589,6 @@ def simulate_one_pass(
         p50_wait_sec=wait,
         p90_wait_sec=wait,
     )
-
 
 
 # Distribution simulation moved to queue_simulator_distribution.py;
