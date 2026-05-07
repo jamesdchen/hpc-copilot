@@ -9,8 +9,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce verify-aggregation-complete --experiment-dir <path> --run-id
-    <id> --combiner-dir <path>
+  cli: hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id>
+    --combiner-dir <path>
   python: claude_hpc.atoms.aggregation_invariants.verify_aggregation_complete
 exit_codes:
 - 0: ok
@@ -35,7 +35,7 @@ framework-knowable.
   rsync_pull pulls `_combiner/` locally, before the workflow
   emits the result envelope.
 - Operator debugging when an aggregation result smells wrong
-  (`hpc-mapreduce verify-aggregation-complete --run-id <id>
+  (`hpc-agent verify-aggregation-complete --run-id <id>
   --combiner-dir <path>`).
 
 ## Invariants

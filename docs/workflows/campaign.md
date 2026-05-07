@@ -10,7 +10,7 @@ A campaign is a sequence of `/submit` invocations sharing a `campaign_id` tag. T
 | `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` | Walks matching sidecars, runs `reduce_metrics` on each iteration's result_dirs, returns the per-iteration reduced-metric dicts oldest-first. Pure local read; no SSH. |
 | `claude_hpc.campaign.campaign_dir(experiment_dir, campaign_id)` | Returns `.hpc/campaigns/<cid>/`, creating it idempotently. Reserved for strategy libraries to put their state files (Optuna SQLite, PBT checkpoints, walk-forward cursor, etc.). The framework writes nothing inside. |
 | `claude_hpc.mapreduce.metrics_io.read_kw_env()` | Executor-side helper that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env var the dispatcher exported. Stdlib-only; deployed alongside the executor. |
-| `hpc-mapreduce campaign status / list` | Read-only CLI inspection. |
+| `hpc-agent campaign status / list` | Read-only CLI inspection. |
 | `slash_commands/commands/campaign-hpc.md` | Conversational interview that scaffolds a campaign-aware `tasks.py`. The "loop" is the assistant repeatedly invoking `/submit-hpc campaign_id=<slug>` — there is no asyncio driver, no `run_campaign` callable, no Python orchestration to wire. Concurrency is opt-in by firing more submits before earlier ones finish. |
 
 Strategies (Optuna, RandomSearch, walk-forward, PBT, …) are **not** framework citizens. The user picks one by `import`-ing it inside their `tasks.py`. The framework ships zero strategy code — not even Optuna.
@@ -182,10 +182,10 @@ This is a doc convention, not a framework change — there's nothing strategy-sp
 
 ```bash
 # List every known campaign and its iteration count.
-hpc-mapreduce campaign list --experiment-dir .
+hpc-agent campaign list --experiment-dir .
 
 # Per-iteration reduced metrics for one campaign (oldest-first).
-hpc-mapreduce campaign status --campaign-id ml_ridge_optuna_q1 --experiment-dir .
+hpc-agent campaign status --campaign-id ml_ridge_optuna_q1 --experiment-dir .
 ```
 
 Both subcommands emit JSON envelopes following `docs/reference/cli-spec.md`; the data block is pinned by `claude_hpc/schemas/campaign.output.json`.
@@ -196,7 +196,7 @@ There is no driver state to recover — sidecars on disk are the only durable st
 
 1. Cluster jobs already submitted continue running on the cluster.
 2. Sidecars on disk (`.hpc/runs/<run_id>.json`) and the journal (`~/.claude/hpc/<repo_hash>/runs/<run_id>.json`) keep their `campaign_id` tag.
-3. To resume: run `hpc-mapreduce campaign status --campaign-id <id>` to see what's complete and what's still in-flight, then invoke `/submit-hpc campaign_id=<id>` again. `tasks.py`'s `_PRIOR = prior(".", HPC_CAMPAIGN_ID)` reflects whatever sidecars are on disk, so the strategy picks up where it left off.
+3. To resume: run `hpc-agent campaign status --campaign-id <id>` to see what's complete and what's still in-flight, then invoke `/submit-hpc campaign_id=<id>` again. `tasks.py`'s `_PRIOR = prior(".", HPC_CAMPAIGN_ID)` reflects whatever sidecars are on disk, so the strategy picks up where it left off.
 
 Strategy libraries that need richer state (Optuna's `JournalFileStorage`, PBT's population checkpoints) keep that state wherever they like — typically `.hpc/campaigns/<cid>/` (see `campaign_dir`).
 

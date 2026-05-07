@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce decide-monitor-arm --spec <path>
+  cli: hpc-agent decide-monitor-arm --spec <path>
   python: claude_hpc.atoms.monitor_arm.decide_monitor_arm
 exit_codes:
 - 0: ok

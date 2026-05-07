@@ -30,7 +30,7 @@ __all__ = ["validate_submission"]
     verb="validate",
     side_effects=[SideEffect("ssh", "<cluster> (scheduler --test-only probe)")],
     idempotent=True,
-    cli="hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>",  # noqa: E501
+    cli="hpc-agent validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>",  # noqa: E501
     agent_facing=True,
 )
 def validate_submission(experiment_dir: Path, *, spec: ValidateSpec) -> ValidateResult:

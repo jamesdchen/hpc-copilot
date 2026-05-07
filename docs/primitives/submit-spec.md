@@ -25,7 +25,7 @@ error_codes:
   description: Scheduler rate limit hit. Wait ≥1s, retry the same spec (idempotency
     protects against double-submit).
 backed_by:
-  cli: hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]
+  cli: hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]
   python: claude_hpc.runner.submit.submit_and_record
 exit_codes:
 - 0: ok
@@ -55,13 +55,13 @@ Replays with the same `run_id` are no-ops: the call returns `deduped=true` and d
 Common predecessors:
 
 - `check-preflight` — verifies SSH agent, ssh/rsync on PATH, clusters.yaml parses. Run before constructing any spec.
-- `score-submit-plan` (`hpc-mapreduce plan-submit`) — produces the constraint / walltime / exclude-list inputs that go into the spec.
+- `score-submit-plan` (`hpc-agent plan-submit`) — produces the constraint / walltime / exclude-list inputs that go into the spec.
 - `discover-executors` — confirms `spec.profile` matches a real executor.
 
 Common successors:
 
-- `poll-run-status` (`hpc-mapreduce status --run-id <id>`) — wait for terminal state.
-- `aggregate-results` (`hpc-mapreduce aggregate ...`) — once `lifecycle_state == complete`.
+- `poll-run-status` (`hpc-agent status --run-id <id>`) — wait for terminal state.
+- `aggregate-results` (`hpc-agent aggregate ...`) — once `lifecycle_state == complete`.
 - `resubmit-failed` — if some tasks failed and the failure category is auto-recoverable.
 
 ## Surface composition

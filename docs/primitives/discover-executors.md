@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce discover --experiment-dir <path>
+  cli: hpc-agent discover --experiment-dir <path>
   python: claude_hpc.state.discover.discover_executors
 exit_codes:
 - 0: ok

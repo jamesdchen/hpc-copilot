@@ -1,4 +1,4 @@
-"""Primitive registry — runtime catalog of all hpc-mapreduce primitives.
+"""Primitive registry — runtime catalog of all hpc-agent primitives.
 
 Implementation is SoT for behavior (the decorated function). JSON
 schemas under ``claude_hpc/schemas/`` are SoT for the wire contract.
@@ -107,7 +107,7 @@ class PrimitiveMeta:
     idempotency_key: str | None = None
     exit_codes: tuple[tuple[int, str], ...] = ()
     description: str = ""
-    # Shell invocation string (e.g. ``"hpc-mapreduce build-executor --name <stem>"``)
+    # Shell invocation string (e.g. ``"hpc-agent build-executor --name <stem>"``)
     # or ``None`` for Python-only primitives. Previously round-tripped
     # through ``docs/primitives/<name>.md`` frontmatter; the registry
     # is now SoT so the regen script writes ``backed_by.cli`` from here.
@@ -292,6 +292,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.validate_executor_signatures",
     "claude_hpc.atoms.validate_input_dataset",
     "claude_hpc.atoms.validate_self_qos_limit",
+    "claude_hpc.atoms.validate_stochastic_marker",
     "claude_hpc.atoms.validate_walltime_against_history",
     "claude_hpc.atoms.walltime_drift",
     "claude_hpc.runner.submit",
@@ -339,7 +340,7 @@ def get_registry() -> dict[str, PrimitiveMeta]:
 
     Raises ``RuntimeError`` if :func:`register_primitives` has not yet
     been called. Tests configure an autouse session fixture; the
-    ``hpc-mapreduce`` CLI invokes it from ``main()`` before subcommand
+    ``hpc-agent`` CLI invokes it from ``main()`` before subcommand
     dispatch.
     """
     if not _REGISTRATION_DONE:

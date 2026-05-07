@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce campaign-replay",
+    cli="hpc-agent campaign-replay",
 )
 def campaign_replay(
     *,

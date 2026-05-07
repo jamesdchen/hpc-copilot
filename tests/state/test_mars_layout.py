@@ -9,7 +9,7 @@ Covers:
 * Default behavior is unchanged when no ``meta.json`` is present.
 * ``detect_mars_tier`` infers Tier-1 / Tier-2 from path layout + markers.
 * ``read_meta_json`` is tolerant of missing/malformed files.
-* The ``hpc-mapreduce discover`` envelope surfaces a ``meta`` block when
+* The ``hpc-agent discover`` envelope surfaces a ``meta`` block when
   meta.json is present at the experiment-dir root.
 """
 

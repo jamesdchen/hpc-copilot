@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce capabilities
+  cli: hpc-agent capabilities
   python: claude_hpc.atoms.capabilities.capabilities
 exit_codes:
 - 0: ok
@@ -14,11 +14,11 @@ exit_codes:
 
 ## Purpose
 
-Machine-readable feature flags. Lets MARs orchestrators or other agents discover what subcommands this `hpc-mapreduce` install supports, where its schemas live, which env vars it needs, and where its skill files are on disk. Pure introspection; no side effects.
+Machine-readable feature flags. Lets MARs orchestrators or other agents discover what subcommands this `hpc-agent` install supports, where its schemas live, which env vars it needs, and where its skill files are on disk. Pure introspection; no side effects.
 
 ## Compose with
 
-- **No predecessors.** Run this first when an agent encounters an unfamiliar `hpc-mapreduce` install.
+- **No predecessors.** Run this first when an agent encounters an unfamiliar `hpc-agent` install.
 - Common successors: any other primitive — `capabilities` is the bootstrap primitive.
 
 ## Notes

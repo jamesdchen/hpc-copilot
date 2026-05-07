@@ -37,7 +37,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]
+  cli: hpc-agent house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]
   python: claude_hpc.atoms.house_edge.house_edge
 exit_codes:
 - 0: ok
@@ -58,7 +58,7 @@ lattice is consistently optimistic / pessimistic.
 ## Composers
 
 - Operator-driven calibration dashboards
-  (`hpc-mapreduce house-edge --profile <p> --cluster <c>`).
+  (`hpc-agent house-edge --profile <p> --cluster <c>`).
 - `score-submit-plan`'s lattice-width tuner can read the
   `calibration_ratio` to decide whether to widen or narrow its
   search.

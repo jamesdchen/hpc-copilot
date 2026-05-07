@@ -266,7 +266,7 @@ multiple campaign trees and they're walked together.
 
 ### Added — `recall` primitive: query past interview.json files
 
-`hpc-mapreduce recall --root <experiments-dir>` walks the tree for
+`hpc-agent recall --root <experiments-dir>` walks the tree for
 `interview.json` files (produced by the interview primitive), filters
 by `--task-kind` / `--operator` / `--since` (ISO-8601), and returns
 recency-sorted summaries (goal, task_kind, task_count, operator,
@@ -305,7 +305,7 @@ The interview between hpc-agent and either MARs or a human now produces
 a structured artifact (`<campaign-dir>/interview.json`) instead of only
 chat-context that's gone the moment the campaign starts.
 
-- `hpc-mapreduce interview --spec <intent.json> --campaign-dir <dir>`
+- `hpc-agent interview --spec <intent.json> --campaign-dir <dir>`
   validates an agent-written tasks.py against the recorded intent
   (asserts `tasks.total() == intent.task_count`, fingerprints with
   `cmd_sha`, samples `resolve(0)`/`resolve(n//2)`/`resolve(n-1)` as a
@@ -380,7 +380,7 @@ The `hpc_mapreduce` shim package, added when the package was renamed
 to `claude_hpc` in the previous release, has been removed. Any code
 still importing `hpc_mapreduce.X` must update to `claude_hpc.X`.
 
-The CLI binary `hpc-mapreduce <subcommand>` is unchanged — it was
+The CLI binary `hpc-agent <subcommand>` is unchanged — it was
 always provided via `[project.scripts]` pointing at
 `claude_hpc.agent_cli:main`, not via the shim. MARs and any other
 agent harness that shells out to the binary needs no changes.
@@ -568,7 +568,7 @@ also split into 4 sub-packages reflecting their domains:
 `claude_hpc`. Update your imports to `claude_hpc` directly; the shim
 will be removed in a future release.
 
-The user-facing CLI binary `hpc-mapreduce` is unchanged. Slash commands,
+The user-facing CLI binary `hpc-agent` is unchanged. Slash commands,
 JSON envelope contracts, the `.hpc/tasks.py` user contract, JSON Schema
 shapes (now under `claude_hpc/schemas/`), and the cluster-side
 stdlib-only constraint on `dispatch.py` and `combiner.py` are all
@@ -711,7 +711,7 @@ Kept (the small surface that actually mattered):
   reduced metrics back inside `tasks.py`.
 - `claude_hpc.campaign.campaign_dir(...)` for strategy-state
   placement (Optuna SQLite, PBT checkpoints).
-- `hpc-mapreduce campaign list / status` CLI inspection.
+- `hpc-agent campaign list / status` CLI inspection.
 
 For the migration story (every capability the asyncio loop offered has
 an equivalent in the slash-command pattern, including K-in-flight,
@@ -767,7 +767,7 @@ into a single `plan-submit` CLI subcommand:
   --cluster <c>` combines all three into the scorecard JSON the slash
   command hands to Claude. When no priors exist, `needs_canary: true`
   and `canary_plan` describes the 1-task probe to seed the priors.
-- **CLI**: three new subcommands on `hpc-mapreduce`: `inspect-cluster`,
+- **CLI**: three new subcommands on `hpc-agent`: `inspect-cluster`,
   `runtime-prior`, `plan-submit`.
 - **Slash commands**: `submit-hpc.md` gains a Step 4c describing the
   canary path and the cost rubric Claude applies. `monitor-hpc.md`
@@ -786,7 +786,7 @@ The interactive Claude Code slash command at
 `slash_commands/commands/status.md` is renamed to
 `slash_commands/commands/monitor-hpc.md`. Users invoke it as
 `/monitor-hpc` instead of `/status`. The CLI subcommand
-(`hpc-mapreduce status`) is unchanged — only the human-facing slash
+(`hpc-agent status`) is unchanged — only the human-facing slash
 command was renamed; programmatic callers (MARs, scripts, and the rest
 of the slash-command pipeline) continue to use the same JSON envelope
 and exit-code contract.
@@ -814,11 +814,11 @@ shape made every user write themselves.
   - `tasks_py_total_predicate(experiment_dir)` — re-imports `tasks.py`
     each call and returns `total() > 0`.
   - `poll_until_terminal(experiment_dir, poll_interval_seconds=30)` —
-    awaits one run via subprocess `hpc-mapreduce status` until the
+    awaits one run via subprocess `hpc-agent status` until the
     lifecycle state is terminal.
   - `submit_via_cli(spec_builder, experiment_dir)` — builds a spec via
     user callback, writes it to the campaign dir, shells out to
-    `hpc-mapreduce submit`. Returns the new run_id.
+    `hpc-agent submit`. Returns the new run_id.
   Together they collapse a typical campaign driver from ~80 lines to ~5.
 - **`on_iteration_done` callback on `run_campaign`** — fires once per
   iteration with `(run_id, status, raw_metrics)` so strategy libraries
@@ -867,7 +867,7 @@ Surface area:
   flips to False or a wall-clock budget elapses. Fully IO-injected
   (`submit_one`, `await_completion`, `should_submit`); no fixed
   Strategy/Context Protocol.
-- **`hpc-mapreduce campaign status` / `hpc-mapreduce campaign list`** —
+- **`hpc-agent campaign status` / `hpc-agent campaign list`** —
   read-only CLI subcommands, JSON envelopes pinned by
   `schemas/campaign.output.json`.
 - **`/campaign`** — slash command with the conversational interview;
@@ -948,11 +948,11 @@ All future work.
   failed, unknown, total}` buckets. `record_status` and `reconcile`
   carry it into the persisted `last_status`. New `rollup_by_wave`
   helper in `claude_hpc.mapreduce.reduce.status`.
-- **`hpc-mapreduce logs` subcommand.** Fetches per-task stderr from the
+- **`hpc-agent logs` subcommand.** Fetches per-task stderr from the
   cluster: `--task-id 7,12,42` for explicit ids or `--all-failed` for
   every failed task. Falls back through earlier `job_ids` when the
   latest has no log. Removes a daily friction point.
-- **`hpc-mapreduce failures` subcommand.** Triage tool: re-polls
+- **`hpc-agent failures` subcommand.** Triage tool: re-polls
   status, fetches stderr for failed tasks, strips volatile noise
   (timestamps, abs paths, pids, hex pointers), fingerprints the last
   non-empty line, and groups tasks sharing a fingerprint into clusters
@@ -967,7 +967,7 @@ All future work.
   back-compat-default field `last_resubmit_request_id` was added to
   `RunRecord`.
 - **`auto_retry` policy in hpc.yaml.** Per-category retry caps with
-  optional resource multipliers (advisory). `hpc-mapreduce failures`
+  optional resource multipliers (advisory). `hpc-agent failures`
   annotates each cluster with `retry_advice = {policy,
   eligible_task_ids, blocked_task_ids}`. The framework never resubmits
   on its own — it surfaces eligibility; the caller decides. See
@@ -1083,14 +1083,14 @@ commands. Both surfaces share the same atomic-ops layer at
 
 ### Added
 
-- **`hpc-mapreduce` CLI** (the agent surface). Subcommands: `submit`, `status`,
+- **`hpc-agent` CLI** (the agent surface). Subcommands: `submit`, `status`,
   `aggregate`, `reconcile`, `resubmit`, `preflight`, `discover`, `expand-grid`,
   `list-in-flight`, `clusters list|describe`, `capabilities`, `build-executor`.
   Stdout is a single-line JSON envelope; stderr is JSON-per-line log records.
   Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema
   in `docs/reference/cli-spec.md`; runtime-validatable JSON Schemas under
   `hpc_mapreduce/schemas/`. Both `python -m hpc_mapreduce <cmd>` and
-  `hpc-mapreduce <cmd>` work.
+  `hpc-agent <cmd>` work.
 - **`/preflight` slash command** — health check matching the CLI subcommand,
   for Claude Code parity.
 - **MARs SKILL.md files** under `skills/hpc-*/SKILL.md`. Drop-in workflow
@@ -1130,7 +1130,7 @@ commands. Both surfaces share the same atomic-ops layer at
 - **Renamed `/monitor` slash command → `/status`.** Verb collision with the
   built-in Claude Code `Monitor` tool that MARs orchestrators have available;
   the new name is also more accurate (one-shot snapshot, not a streaming
-  watcher). CLI matches: `hpc-mapreduce status`. Existing in-flight runs and
+  watcher). CLI matches: `hpc-agent status`. Existing in-flight runs and
   journal records pick up the rename without migration. Existing standalone
   Claude Code users will need to retrain on `/status`.
 - **Relocated `config/clusters.yaml` → `hpc_mapreduce/config/clusters.yaml`**
@@ -1148,7 +1148,7 @@ commands. Both surfaces share the same atomic-ops layer at
   `tuple[RunRecord, bool]`. Callers must unpack: `record, deduped = ...`.
 - **`pyproject.toml` packages discovery** changed from `["hpc_mapreduce*",
   "agent*"]` to `["hpc_mapreduce*", "slash_commands*"]`. Added
-  `[project.scripts]` for the `hpc-mapreduce` console entry, and
+  `[project.scripts]` for the `hpc-agent` console entry, and
   `[tool.setuptools.package-data]` so wheels bundle config + templates +
   schemas.
 

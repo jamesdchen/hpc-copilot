@@ -139,7 +139,7 @@ def test_primitive_meta_carries_all_fields() -> None:
         idempotency_key="run_id",
         exit_codes=[(0, "ok"), (1, "user-error")],
         description="explicit description",
-        cli="hpc-mapreduce test-carries-fields --spec <path>",
+        cli="hpc-agent test-carries-fields --spec <path>",
         agent_facing=True,
     )
     def my_op() -> None:
@@ -159,7 +159,7 @@ def test_primitive_meta_carries_all_fields() -> None:
         assert meta.idempotency_key == "run_id"
         assert meta.exit_codes == ((0, "ok"), (1, "user-error"))
         assert meta.description == "explicit description"
-        assert meta.cli == "hpc-mapreduce test-carries-fields --spec <path>"
+        assert meta.cli == "hpc-agent test-carries-fields --spec <path>"
         assert meta.agent_facing is True
         # And atom_op defaults to agent_facing=False
         assert get_meta(atom_name).agent_facing is False

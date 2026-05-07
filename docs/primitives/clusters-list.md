@@ -7,7 +7,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce clusters list
+  cli: hpc-agent clusters list
   python: claude_hpc.atoms.clusters.list_clusters
 exit_codes:
 - 0: ok

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/submit.input.json",
   "title": "submit input spec",
-  "description": "Spec passed to ``hpc-mapreduce submit --spec <file>``.",
+  "description": "Spec passed to ``hpc-agent submit --spec <file>``.",
   "type": "object",
   "required": [
     "profile",

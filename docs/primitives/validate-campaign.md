@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: experiment_dir
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce validate-campaign --spec <path>
+  cli: hpc-agent validate-campaign --spec <path>
   python: claude_hpc.flows.validate_campaign.validate_campaign
 ---
 # validate-campaign

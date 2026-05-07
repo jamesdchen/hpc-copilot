@@ -35,7 +35,7 @@ _VALIDATOR = "validate-self-qos-limit"
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce validate-self-qos-limit --spec <path>",
+    cli="hpc-agent validate-self-qos-limit --spec <path>",
     agent_facing=True,
 )
 def validate_self_qos_limit(

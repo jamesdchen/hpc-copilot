@@ -17,7 +17,7 @@ error_codes:
   category: cluster
   retry_safe: true
 backed_by:
-  cli: hpc-mapreduce cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd
+  cli: hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd
     <cmd>]
   python: claude_hpc.atoms.cluster_reduce.cluster_reduce
 exit_codes:

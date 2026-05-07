@@ -19,7 +19,7 @@ package. Groupings mirror those in
 [`claude_hpc/__init__.py`](../src/claude_hpc/__init__.py).
 
 The public boundary also now includes the **shell CLI** at
-`claude_hpc/agent_cli.py` (entry point `hpc-mapreduce`). Its envelope
+`claude_hpc/agent_cli.py` (entry point `hpc-agent`). Its envelope
 shape, subcommand list, and exit-code contract are documented in
 [`docs/reference/cli-spec.md`](cli-spec.md) and the JSON Schemas under
 `claude_hpc/schemas/`. The JSON Schemas are themselves a build
@@ -175,7 +175,7 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 ### Smart-submit data layer
 
 Resource-quality-aware constraint planning. These functions back the
-`hpc-mapreduce inspect-cluster` / `runtime-prior` / `plan-submit` CLI
+`hpc-agent inspect-cluster` / `runtime-prior` / `plan-submit` CLI
 subcommands and the `/hpc-submit` Step 4c smart-planning flow. State
 lives under the experiment's `.hpc/`:
 `runtimes/<profile>.<cluster>.json` (runtime samples).

@@ -22,7 +22,7 @@ idempotent: false
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain]
+  cli: hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain]
     [--force]
   python: claude_hpc.atoms.build_executor.build_executor
 exit_codes:

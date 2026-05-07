@@ -67,7 +67,7 @@ policy. The complete list (`CATEGORIES` constant in
 
 Order is significant in the classifier (first-match-wins, specific
 patterns before generic traceback). The `--spec.category` field of
-`hpc-mapreduce resubmit` is documented to accept these values; see the
+`hpc-agent resubmit` is documented to accept these values; see the
 discrepancy note below.
 
 ### `lifecycle_state` enum

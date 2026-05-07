@@ -41,6 +41,8 @@ jobs:
         run: python scripts/lint_skill_command_sync.py
       - name: Check JSON schemas regenerated from Pydantic
         run: python scripts/build_schemas.py --check
+      - name: Check baked operations.json is up to date
+        run: python scripts/bake_operations_json.py --check
       - name: Pytest (default)
         run: pytest -q
       - name: Pytest (slow tier)

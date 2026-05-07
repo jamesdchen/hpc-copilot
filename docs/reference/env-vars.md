@@ -33,7 +33,7 @@ There are no env-var knobs for validators; per-rule overrides live in
 
 ## Discovery
 
-Run `hpc-mapreduce capabilities --full` to see the full operations
+Run `hpc-agent capabilities --full` to see the full operations
 catalog plus all supported `clusters.yaml` keys (the latter come from
 `claude_hpc.infra.clusters.CLUSTER_YAML_KEYS`). Env vars don't appear
 there — this doc is the canonical list.

@@ -1,10 +1,8 @@
-Help me aggregate, validate, and analyze experiment results using the project configuration.
+Invoke the `hpc-aggregate` skill via the Skill tool (`skills/hpc-aggregate/SKILL.md`) for the workflow: which mode to pick (auto / cluster-reduce / combiner-only), how to handle partial aggregation, the `verify-aggregation-complete` invariant check, error envelope branching. The skill is the canonical SoT.
 
-Per-operation contracts live in `docs/primitives/` — this skill composes [combine-wave](../../docs/primitives/combine-wave.md) (per-wave aggregation) plus the surface-specific multi-wave orchestration, partial-pull, and final-aggregate flow. For envelope/exit-code shapes see `docs/reference/cli-spec.md`.
+This slash command is the human-facing entry point. It exists for two reasons the skill alone doesn't cover.
 
-Aggregation runs on the cluster to avoid transferring many result files. Only summary files are downloaded locally.
-
-## Core Principle: Reduce Where the Data Lives
+## Core principle (human advice): Reduce Where the Data Lives
 
 **Never move bulk result files to reach a Python env.** If the reduction is trivial (pandas concat, `optuna.tell()`, JSON dump) but the host with the data lacks the deps, install the deps on that host — a 30s `pip install` beats minutes of small-file scp/rsync.
 
@@ -18,307 +16,37 @@ Anti-pattern: `scp -r results/tune/*_chunk_*.csv cluster-B:...` because cluster-
 
 Small-file scp/rsync over SSH is especially slow (per-file TCP/SSH handshake). If bulk movement is truly unavoidable, `tar` first.
 
-## Setup
+The skill's `mode: "auto"` default is what routes around this — it picks `cluster-reduce` when the sidecar declares an `aggregate_cmd` (small JSON output) and only pulls summaries when explicitly asked. Stay on the default unless a specific debug case requires the raw files locally.
 
-Read cluster definitions:
-- `clusters.yaml`: resolve path via `python -c 'from claude_hpc import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+## Post-flight spot-checks (human-driven)
 
-Determine cluster and connection:
-- If `$ARGUMENTS` contains `--cluster <name>`, use that cluster
-- Else read `cluster` from the most recent matching `.hpc/runs/<run_id>.json` sidecar
-- Else check Claude Code memory for cached cluster preference
-- Else ask the user
+`aggregate-flow` returning `ok=true` is necessary but not sufficient. The "file count lies" failure mode: `summary.complete == total_tasks` says every task wrote SOMETHING, but doesn't verify the file is non-trivial. Three checks the human should run after the skill returns:
 
-Construct `SSH_TARGET` (`user@host`) and `REMOTE_PATH` from cluster config + cached/configured remote path.
+### 4a.1 — Non-empty rows
 
-Load the run's identity and task definition. Two files together describe the run:
+Re-invoke the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive's underlying cluster-side reporter with `--min-rows N` (a flag of the on-cluster `python -m claude_hpc.mapreduce.reduce.status` script that the primitive wraps; see `docs/reference/python-api-contract.md` for the cluster-side script's args). `N` is a profile-appropriate floor (1 minimum, more if the profile knows the expected row count). Any task that previously read `complete` but flips to `failed` here had an empty/short result file. Report which task IDs failed.
 
-- `.hpc/runs/<run_id>.json` — the per-run sidecar: cmd_sha, executor, `result_dir_template`, task_count, wave_map.
-- `.hpc/tasks.py` — the user's `total()` / `resolve(task_id)` module. Per-task kwargs (the "grid point") come from `tasks.resolve(i)`; per-task `result_dir` is the sidecar's template formatted against `task_id` + `run_id` + kwargs.
+### 4a.2 — Spot-check 3 tasks
 
-Pull the sidecar locally if missing:
+Pick the first, middle, and last task IDs (`0`, `task_count // 2`, `task_count - 1`). For each, read the head of its result file and verify:
 
-```bash
-mkdir -p .hpc/runs
-rsync -az $SSH_TARGET:$REMOTE_PATH/.hpc/runs/<run_id>.json ./.hpc/runs/<run_id>.json
-```
+- The file exists and is non-empty.
+- Expected columns are present (use `results.summary_pattern` and the executor's known schema).
+- Key metric column has at least one non-NaN value.
 
-`.hpc/tasks.py` is git-tracked; it should already be in your local repo.
+### 4a.3 — Sanity-check the aggregated metrics
 
-## SSH Quoting
+`aggregated_metrics` is a dict keyed by run_id or grid-point. Confirm the keys match what the user submitted (no missing grid points; no unexpected ones). Keys present in the dict but absent from `tasks.resolve(i)` for any `i ∈ [0, total_tasks)` are a contamination red flag — escalate.
 
-Single-quote the remote command so variables expand on the cluster, not locally:
+If any of 4a.1 / 4a.2 / 4a.3 fail, do NOT report success. The fix cost is tractable; reporting bad numbers is not.
 
-```bash
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && echo $SGE_TASK_ID'
-```
+## Args
 
-## Arguments
-
-$ARGUMENTS formats:
+`$ARGUMENTS` formats:
 
 1. **Profile + stage**: `<profile_name>` or `<profile_name>/<stage_name>`
 2. **Empty**: auto-discover which profiles/stages have completed results ready for aggregation
 
-## Step 0: Run `aggregate-flow` (combiner partials path)
+## Notes
 
-The `/monitor-hpc` loop may have already combined some waves during execution; whatever's missing, the `aggregate-flow` workflow atom finishes. **One CLI call** does: ensure every wave is combined (via `combine-wave` for any missing) → rsync `_combiner/` partials locally → `reduce_partials` to produce aggregated metrics → optionally pull per-task summaries.
-
-```bash
-hpc-mapreduce aggregate-flow --spec .hpc/runs/<run_id>.aggregate.spec.json --experiment-dir .
-```
-
-Spec shape (matches `schemas/aggregate_flow.input.json`):
-
-```json
-{
-  "run_id": "<run_id>",
-  "ensure_all_combined": true,
-  "combiner_max_retries": 1,
-  "mode": "auto",
-  "pull_summaries": false
-}
-```
-
-**`mode: "auto"` is the default and the right choice 90% of the time.** It routes to `cluster-reduce` when the sidecar's `aggregate_defaults.aggregate_cmd` is set; otherwise to the combiner-only path. `pull_summaries: false` is the new default — only enable it (with an explicit `summary_glob`) when the user genuinely needs raw per-task files locally for debug or interpretation. Mode overrides:
-
-- `mode: "cluster-reduce"` — force the cluster-side reducer; raise if no `aggregate_cmd` is available.
-- `mode: "combiner-only"` — bypass the reducer; pull `_combiner/` partials and reduce locally. Useful when `metrics.json` already carries the right per-task scalar.
-
-Parse `data.aggregated_metrics` — that's the cross-wave reduced output. `data.combiner_dir_local` and `data.summaries_dir_local` are the local paths if downstream interpretation needs them.
-
-**Verify the framework-knowable invariants** via the `verify-aggregation-complete` primitive before reporting to the user:
-
-```bash
-hpc-mapreduce verify-aggregation-complete \
-    --experiment-dir . \
-    --run-id "$RUN_ID" \
-    --combiner-dir "$COMBINER_DIR_LOCAL"
-```
-
-The envelope's `data` carries `{ok, all_waves_combined, missing_waves, all_tasks_present, missing_tasks, unexpected_tasks, provenance_present, ...}`. Branch:
-
-- `ok=True` → proceed to interpretation (Step 6).
-- `ok=False` → surface the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — escalate, don't paper over.
-
-If `data.escalation_reason` from `aggregate-flow` is set (e.g. `combiner_failed_max_retries:waves=3,7`), surface to the user and decide whether the partial aggregation is acceptable. The atom proceeds with whatever waves DID combine; the caller decides whether the result is usable.
-
-**Skip to Step 4** if the profile defines an `aggregate_defaults.aggregate_cmd` (an arbitrary user-defined cluster-side command that the framework doesn't know about) — that's the only step `aggregate-flow` doesn't replace.
-
-## Step 1: Identify What to Aggregate
-
-Load `.hpc/runs/<run_id>.json` and `.hpc/tasks.py` to understand the submission structure:
-
-```python
-from claude_hpc import load_tasks_module, read_run_sidecar, tasks_path
-sidecar = read_run_sidecar(experiment_dir, run_id)
-tasks = load_tasks_module(tasks_path(experiment_dir))
-n = tasks.total()
-```
-
-Each task's grid point is `tasks.resolve(i)` (a kwargs dict); each task's `result_dir` is `sidecar["result_dir_template"].format(task_id=i, run_id=run_id, **tasks.resolve(i))`.
-
-```
-Submission summary (from sidecar + tasks.py):
-  Run ID:        ml_ridge-20260429-153012-abc12345
-  Executor:      python3 src/ml_ridge.py
-  Tasks:         60
-  Grid kwargs:   {executor, horizon, window_start, window_end}
-  Sample dir:    results/ml_ridge_h1_2020-01/
-```
-
-If `$ARGUMENTS` specifies an executor or result directory, use it. Otherwise, present the kwargs structure from `tasks.py` and ask what to aggregate.
-
-If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for a matching profile, use it. Otherwise, discover aggregation scripts in the repo or ask the user what aggregation command to run.
-
-## Step 2: Check Job Status
-
-Before aggregating, confirm all jobs have finished by checking the queue (qstat for SGE, squeue for SLURM).
-
-If jobs are still running for the selected profile/stage, report which ones and wait. Do NOT aggregate partial results unless explicitly asked.
-
-## Step 3: Validate Task Completeness
-
-**Preferred path: let `hpc-mapreduce aggregate` enforce this for you.**
-The CLI accepts `--require-outputs <template>` (with `{task_id}` placeholder)
-which resolves the template against the run sidecar's `wave_map`,
-SSH-checks every per-task output, and refuses to combine if any are
-missing. The error envelope reports `error_code: outputs_missing` with the
-list of absent paths. Set the default per-run via `write_run_sidecar(...,
-aggregate_defaults={"require_outputs": "...", "expect_output": "..."})`
-at /submit-hpc time so every aggregate is guarded automatically.
-
-When you must validate manually (e.g., older repos without sidecar defaults):
-
-```bash
-# For each task, check if result files exist
-ssh $SSH_TARGET 'ls '"$REMOTE_PATH"'/<task_result_dir>/<result_pattern> 2>/dev/null | wc -l'
-```
-
-Report per-grid-point completeness:
-
-```
-Task completeness:
-  ridge_h1:       10/10 tasks complete
-  ridge_h5:       10/10 tasks complete
-  xgboost_h1:     8/10 tasks complete — MISSING tasks: 3, 7
-  xgboost_h5:     10/10 tasks complete
-```
-
-**If tasks are missing results:**
-
-1. Identify which task IDs are missing by cross-referencing `tasks.total()` with existing result directories (one per `tasks.resolve(i)` formatted through the sidecar's `result_dir_template`).
-2. Check job accounting for failure reasons (qacct for SGE, sacct for SLURM).
-3. Check error logs (tail -50).
-4. Report findings and suggest resubmitting via `/submit-hpc` or monitoring via `/monitor-hpc` for gaps.
-5. Wait for resubmitted jobs, then re-validate before aggregating.
-
-**Partial aggregation:** Only proceed when all expected task results are present, unless the user explicitly asks to aggregate partial results. If partial, note the missing count and percentage per grid point.
-
-**No partial-bucket leaderboards.** For tuning/sweep workflows (e.g., optuna studies, trial-id grids), **do not** compute or report a "best QLIKE / best score / ranking" until every trial in the bucket is 100% complete. A "best so far" reorders as more trials land — showing it invites premature conclusions and contaminates downstream analysis. If the user explicitly asks for a partial leaderboard, label every number as provisional and list the trials still outstanding.
-
-## Step 4: Aggregate on Cluster
-
-**Don't bulk-pull per-task outputs to reduce locally.** That's the 1200-chunk failure mode (raw CSVs / pickles dragged to Windows over rsync). Route through the **`cluster-reduce`** primitive instead — runs the user's reducer on the cluster, pulls only its single JSON output (KB, not GB):
-
-```bash
-hpc-mapreduce cluster-reduce --experiment-dir . --run-id "$RUN_ID"
-# (uses sidecar's aggregate_defaults.aggregate_cmd, OR pass --aggregate-cmd <cmd>)
-```
-
-The envelope's `data.reduced` is the parsed JSON the reducer wrote. Reducer contract documented at `docs/reference/reducer-contract.md`: any program that reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT` (default `_aggregated/<run_id>.json`).
-
-`aggregate-flow` already routes through `cluster-reduce` automatically when `mode='auto'` (the default) and an `aggregate_cmd` is on the sidecar — so a single `hpc-mapreduce aggregate-flow ...` call does the right thing without thinking. The Step 4 prose below applies only when you need to invoke the reducer ad-hoc (debug, override `aggregate_cmd`).
-
-Determine the aggregation command:
-1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it.
-2. Else invoke the **`discover-reducers`** primitive — DO NOT grep / write a fresh reducer first:
-   ```bash
-   hpc-mapreduce discover-reducers --experiment-dir .
-   ```
-   The envelope's `data.reducers` is a list of candidate `.py` files matched by filename stem (`aggregate.py`, `qlike.py`, `score.py`, etc.) or top-level function names (`def aggregate(...)`, `def reduce(...)`, `def score(...)`). Each entry carries `path`, `matches` (the signals that hit, e.g. `["name:qlike", "function:aggregate"]`), and the first line of the module docstring. Multi-signal hits sort first.
-   - **One candidate** that obviously matches the loss the user asked for → use it as `aggregate_cmd` and confirm with one short sentence.
-   - **Multiple candidates** → list them (path + docstring + matches) and ask the user which one. Don't pick silently.
-   - **Zero candidates** → fall through to step 3.
-3. Else ask the user: "I didn't find an existing reducer matching `<loss>` in `<repo>` (`hpc-mapreduce discover-reducers` returned nothing). Should I write one, or do you have an aggregation command I should use?" Surface that you searched explicitly so they don't assume you skipped the step.
-
-Writing a fresh reducer when one already exists is a common failure mode — the user has historically committed loss functions like QLIKE / RMSE / MAE under `scripts/`, `aggregators/`, `src/eval/`, etc., and a fresh one duplicates code AND drifts from the canonical implementation. The `discover-reducers` primitive exists specifically to bridge that gap; route through it.
-
-Run the aggregation command on the cluster. The command may operate per grid point (with `RESULT_DIR` set to each grid point's result directory) or globally if the command handles discovery itself.
-
-```bash
-# Per grid point:
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && RESULT_DIR=<grid_point_result_dir> <aggregate_cmd>'
-
-# Or globally:
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <aggregate_cmd>'
-```
-
-If the aggregate command's options are unclear, invoke it with `--help` to discover available flags:
-
-```bash
-ssh $SSH_TARGET 'cd '"$REMOTE_PATH"' && <aggregate_cmd> --help'
-```
-
-Verify the command succeeds (exit code 0). If it fails, read stderr and report to user.
-
-## Step 5: Download Summaries (almost never; default off)
-
-**Skip this step in the normal flow.** When `aggregate-flow` runs in `mode='auto'` or `mode='cluster-reduce'`, the reducer's single JSON output is already at `data.summaries_dir_local`; no per-task pull happens. When `mode='combiner-only'` the `_combiner/` partials are already pulled and reduced; no per-task pull either.
-
-Only enter this step when the user explicitly asks for raw per-task files locally — debug ("show me task 42's stderr / output"), forensic ("which chunk produced the outlier?"), or one-off interpretation that the reducer doesn't surface. In those cases pass `pull_summaries=true` + a NARROW `summary_glob` to `aggregate-flow` (don't manually rsync; the atom centralises the include/exclude logic):
-
-```json
-{ "run_id": "<run_id>", "pull_summaries": true, "summary_glob": "task_42_*.csv" }
-```
-
-Or, ad-hoc:
-
-```bash
-rsync -az \
-    --include='*/' \
-    --include='<narrow_pattern>' \
-    --exclude='*' \
-    $SSH_TARGET:$REMOTE_PATH/<result_base_dir>/ ./<result_base_dir>/
-```
-
-**Avoid permissive globs** like `*.csv` or `metrics.json` — those drag every per-task file across the wire and recreate the failure mode `cluster-reduce` exists to eliminate. If you find yourself reaching for a broad glob, the right answer is usually "write a reducer" (see [reducer-contract.md](../../docs/reference/reducer-contract.md)).
-
-## Step 6: Interpret Results
-
-After downloading, read the local summary files and report per-grid-point results.
-
-```
-Aggregation results:
-  ridge_har:      complete — QLIKE: 0.342, MSE: 0.0012
-  ridge_pca:      complete — QLIKE: 0.298, MSE: 0.0010
-  xgboost_har:    incomplete (8/10 tasks)
-  xgboost_pca:    complete — QLIKE: 0.310, MSE: 0.0011
-
-Cluster cost: 47.2 CPU-hours, 3.1 GPU-hours (60 tasks counted)
-```
-
-### Cluster cost rollup
-
-`/monitor-hpc`'s status report exposes a top-level `resource_usage` key:
-
-```json
-{"cpu_hours": 47.2, "gpu_hours": 3.1, "elapsed_hours": 12.4, "tasks_counted": 60}
-```
-
-Values are derived from `sacct` (`ElapsedRaw * ReqCPUS`, `gres/gpu` in
-`AllocTRES`) or `qacct` (`ru_wallclock * slots`, `gpu=N` in the hard
-resource list).  Surface these numbers after the per-grid-point metrics
-so the user knows what a given sweep cost in cluster time — no dollar
-conversion, just hours.
-
-When interpreting:
-- Lead with the most important metric or finding
-- Flag anomalies (empty results, unexpected values, low sample counts)
-- Sort metrics alphabetically by default; CLI flags or memory may override the order
-- Compare against any baseline results if available
-- Group results by grid dimensions for readability (e.g., by model, by feature set)
-
-## Step 7: Mark the run complete in the journal
-
-After aggregation succeeds and summaries are downloaded, finalize the run
-journal so `find_in_flight_runs` no longer surfaces this run on the next
-`/monitor-hpc` invocation:
-
-````python
-from pathlib import Path
-from slash_commands import session, runner
-
-# Hydrate run_id from the active context, or pick from the in-flight set.
-in_flight = session.find_in_flight_runs(Path.cwd())
-if len(in_flight) == 1:
-    run_id = in_flight[0].run_id
-elif len(in_flight) == 0:
-    # Nothing to mark — likely the run was already finalized or never recorded.
-    run_id = None
-else:
-    # Multiple in-flight runs share this cwd. Prompt the user to pick the
-    # one that this aggregate call corresponds to (match by profile, run_id,
-    # or job_name).
-    run_id = <user's choice>
-
-if run_id is not None:
-    runner.mark_terminal(Path.cwd(), run_id, status='complete', stage='done')
-````
-
-If aggregation FAILS (e.g., cluster aggregate command exits non-zero, summary
-files are missing, key metrics fail validation), do NOT call `mark_terminal`.
-Leave the journal entry as `in_flight` so the user can re-run `/aggregate-hpc`
-once the issue is fixed, or transition to manual triage.
-
-For multi-executor submissions (one journal entry per submitted job), call
-`mark_terminal` once per `run_id` whose aggregation succeeded.
-
-## Multi-Stage Aggregation
-
-If the profile has multiple stages and `$ARGUMENTS` does not specify a stage:
-
-1. Check all stages for completeness
-2. Aggregate stages in dependency order — stages with `depends_on` must wait until their dependencies are aggregated first
-3. Report results for each stage separately
-4. If a dependency stage is incomplete, skip downstream stages and report the blockage
+- The skill handles the orchestration; this slash command's value is the **human advice** above. If the chat session is short and the user trusts the framework, "use the hpc-aggregate skill" alone is sufficient. The anti-pattern + post-flight sections are for the cases where the user needs to understand *why* the default flow is shaped the way it is.

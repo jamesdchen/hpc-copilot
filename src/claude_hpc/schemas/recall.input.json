@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/recall.input.json",
   "title": "recall query spec",
-  "description": "Optional spec file for ``hpc-mapreduce recall``.\n\nThe same arguments are exposed as CLI flags and the operator\npicks one path. When ``root`` is omitted, recall falls back to\n``~/.claude-hpc/config.json:experiment_roots`` — both empty\nraises spec_invalid.",
+  "description": "Optional spec file for ``hpc-agent recall``.\n\nThe same arguments are exposed as CLI flags and the operator\npicks one path. When ``root`` is omitted, recall falls back to\n``~/.claude-hpc/config.json:experiment_roots`` — both empty\nraises spec_invalid.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

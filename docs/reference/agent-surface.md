@@ -17,7 +17,7 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
 
 ## What that means
 
-- **One binary**: `hpc-mapreduce <subcommand>`. Standard Unix CLI.
+- **One binary**: `hpc-agent <subcommand>`. Standard Unix CLI.
 - **One stdout shape**: a single-line JSON envelope.
   - Success: `{"ok": true, "idempotent": <bool>, "data": {...}}`
   - Failure: `{"ok": false, "error_code": "...", "category": "...", "retry_safe": <bool>, "remediation": "..."}`
@@ -50,7 +50,7 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
   fields are removed, the breaking change is visible in the schema diff. We
   don't break the wire contract silently.
 - **Observability**: every primitive is also a documented operation in
-  [`docs/primitives/`](primitives/). The catalog (`hpc-mapreduce capabilities`)
+  [`docs/primitives/`](primitives/). The catalog (`hpc-agent capabilities`)
   enumerates every tool the agent has, with idempotency, side-effects, and
   error codes inline.
 
