@@ -11,7 +11,7 @@ backed_by:
 ---
 # validate-campaign
 
-Run every applicable atomic validator (executor signatures, input dataset, walltime vs. history) and aggregate findings into a single `overall` verdict. Each atom is independently skippable: when its required spec field is None, the workflow skips it and notes that in `validators_run` so the agent can distinguish "no findings because nothing checked" from "no findings because everything passed." This is the hook point the submit-flow invokes before any SSH/qsub side effect; an `overall == "fail"` blocks submission.
+Compose the three atomic validators that run pre-submit — `validate-executor-signatures`, `validate-input-dataset`, `validate-walltime-against-history` — and aggregate their findings into a single `overall` verdict. (The `validate-self-qos-limit` atom is a sibling, not part of this composition: it needs SSH-fetched data the slash command supplies on its own path.) Each composed atom is independently skippable: when its required spec field is `None`, the workflow skips it and notes that in `validators_run` so the agent can distinguish "no findings because nothing checked" from "no findings because everything passed." This is the hook point the submit-flow invokes before any SSH/qsub side effect; an `overall == "fail"` blocks submission.
 
 ## Inputs
 
@@ -37,7 +37,7 @@ A `ValidateCampaignReport` object with:
 
 ## Errors
 
-No error codes defined. The workflow returns a report with `overall == "fail"` when findings are present; it does not raise exceptions.
+None declared on the workflow. The workflow always returns a report; severity propagation is encoded in `overall`. Composed-atom-level error codes (e.g. `tasks_py_import_error`) appear inside `findings[].code` for the agent loop to dispatch on.
 
 ## Idempotency
 

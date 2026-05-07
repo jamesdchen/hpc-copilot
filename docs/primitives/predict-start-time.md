@@ -39,7 +39,7 @@ A `PredictStartTimeResult` object with:
 
 ## Errors
 
-No error codes are defined in the primitive's decorator. The primitive internally raises on invalid squeue/sshare text or model-load failures, but these surface as exceptions rather than structured error codes.
+None declared on the primitive. Spec validation errors raise `pydantic.ValidationError`; malformed `squeue_text` / `sshare_text` and missing `model_path` propagate as Python exceptions through the CLI envelope's `internal` category.
 
 ## Idempotency
 

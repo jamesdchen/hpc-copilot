@@ -34,7 +34,7 @@ A `RecommendPartitionResult` object with:
 
 ## Errors
 
-No error codes are defined. The primitive validates inputs and always returns a result.
+None declared. Spec validation errors raise `pydantic.ValidationError`; with a valid spec the primitive always returns a `RecommendPartitionResult` (the four routing rules are exhaustive, with rule 4 as the default fallback).
 
 ## Idempotency
 

@@ -33,6 +33,8 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc._internal._io import advisory_flock
+
 __all__ = [
     "SCHEMA_VERSION",
     "HPC_HOMEDIR",
@@ -170,12 +172,11 @@ def _lock_path(target: Path) -> Path:
 def _locked(target: Path) -> Iterator[None]:
     """Acquire an exclusive flock on a sibling ``.lock`` file for *target*.
 
-    Convenience wrapper around :func:`claude_hpc._internal._io.advisory_flock`.
-    No-op on platforms without ``fcntl`` (e.g. Windows). The lock file is
-    created on demand and never deleted — flock semantics handle reuse.
+    Thin wrapper around :func:`claude_hpc._internal._io.advisory_flock`
+    that derives the lock path via :func:`_lock_path`. No-op on platforms
+    without ``fcntl`` (e.g. Windows). The lock file is created on demand
+    and never deleted — flock semantics handle reuse.
     """
-    from claude_hpc._internal._io import advisory_flock
-
     with advisory_flock(_lock_path(target)):
         yield
 

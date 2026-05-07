@@ -36,7 +36,10 @@ A `ValidateSelfQosLimitResult` object with:
 
 ## Errors
 
-No structured error codes are defined in the primitive's decorator. Findings are emitted instead; see above for `code` values.
+None declared on the primitive. Findings carry the diagnostic code instead:
+
+- `qos_max_jobs_exceeded` (error) — predicted total at or above the cap; submission would self-DOS and drag fair-share.
+- `qos_max_jobs_near_limit` (warning) — predicted total between `cap * warn_at_pct` and the cap; surfaced for operator awareness.
 
 ## Idempotency
 

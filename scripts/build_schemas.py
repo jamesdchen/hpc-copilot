@@ -4,8 +4,8 @@ The wire SoT is the JSON file (every external consumer reads it).
 The *authoring* SoT is the Pydantic model under
 ``claude_hpc/_schema_models/``. This script bridges the two: it
 calls ``model.model_json_schema()`` (or ``adapter.json_schema()``
-for root-array schemas) for every entry in ``SCHEMA_REGISTRY`` and
-writes / diffs the matching JSON file.
+for root-array schemas) for every model auto-discovered under
+``_schema_models/`` and writes / diffs the matching JSON file.
 
 Same generator pattern as ``build_primitive_frontmatter.py``,
 ``build_primitive_index.py``, and ``build_operations_index.py``:
@@ -18,14 +18,30 @@ Usage::
     uv run python scripts/build_schemas.py --check    # CI gate
     uv run python scripts/build_schemas.py --write    # apply
 
+Discovery rules
+---------------
+
+For each non-private submodule of ``claude_hpc._schema_models``:
+
+1. Hardcoded mapping (``_NON_SUFFIX_MAPPING``) handles cross-cutting
+   shapes whose names don't fit the suffix convention — the three
+   ``TypeAdapter`` instances (``EnvelopeAdapter``, ``CampaignAdapter``,
+   ``StagesAdapter``) and two persisted-data ``BaseModel`` shapes
+   (``AxesConfig``, ``CampaignManifest``).
+2. Every other public ``BaseModel`` subclass *defined in that module*
+   (re-imports from sibling modules are skipped via ``__module__``
+   check) is discovered by name suffix:
+
+   * ``*Spec`` / ``*Input``    → ``<snake>.input.json``
+   * ``*Result`` / ``*Report`` / ``*Envelope`` → ``<snake>.output.json``
+   * Any other suffix          → skipped (treat as helper).
+
 Style policy: emit whatever Pydantic v2 produces (``anyOf`` for
 nullables, auto-titles per field, etc.). The wire validators and
 LLM consumers don't care about cosmetic differences; chasing
 byte-equality with hand-authored schemas isn't worth a custom
-``GenerateJsonSchema`` subclass. The script does inject
-``$schema``, ``$id``, and (when the model docstring or
-``model_config['title']`` is present) reorder the top-level keys
-into the conventional layout.
+``GenerateJsonSchema`` subclass. The script does inject ``$schema``,
+``$id``, and reorder the top-level keys into the conventional layout.
 """
 
 from __future__ import annotations
@@ -50,102 +66,94 @@ SCHEMAS_DIR = REPO_ROOT / "src" / "claude_hpc" / "schemas"
 
 _ID_BASE = "https://github.com/jamesdchen/claude-hpc/schemas"
 
+# Cross-cutting shapes whose names don't fit the *Spec/*Result suffix
+# convention. Anything in this map is discovered verbatim regardless
+# of type — this is also how TypeAdapter instances get registered (they
+# have no class-name suffix to dispatch on).
+_NON_SUFFIX_MAPPING: dict[str, str] = {
+    "EnvelopeAdapter": "envelope.json",
+    "CampaignAdapter": "campaign.output.json",
+    "StagesAdapter": "stages.input.json",
+    "AxesConfig": "axes.json",
+    "CampaignManifest": "campaign_manifest.json",
+}
+
+# (suffix, output-side) pairs applied in order. The first match wins.
+_SUFFIX_RULES: tuple[tuple[str, str], ...] = (
+    ("Spec", "input"),
+    ("Input", "input"),
+    ("Result", "output"),
+    ("Report", "output"),
+    ("Envelope", "output"),
+)
+
+# Pydantic helpers we never want as standalone schemas.
+_HELPER_NAMES: frozenset[str] = frozenset({"SuccessEnvelope", "ErrorEnvelope"})
+
+
+_PASCAL_RE_1 = re.compile(r"(.)([A-Z][a-z]+)")
+_PASCAL_RE_2 = re.compile(r"([a-z0-9])([A-Z])")
+
 
 def _pascal_to_snake(name: str) -> str:
-    """Convert PascalCase to snake_case."""
-    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
-    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+    """Convert PascalCase to snake_case (e.g. BestSubmitWindow -> best_submit_window)."""
+    return _PASCAL_RE_2.sub(r"\1_\2", _PASCAL_RE_1.sub(r"\1_\2", name)).lower()
+
+
+def _filename_for(obj: Any, attr_name: str, owning_module: str) -> str | None:
+    """Return the schema filename for *obj*, or ``None`` to skip it.
+
+    Discovery order:
+
+    1. Cross-cutting names (``_NON_SUFFIX_MAPPING``) — verbatim, regardless
+       of object type. This is how TypeAdapters get into the registry.
+    2. ``BaseModel`` subclass defined in this module (skip re-imports)
+       with a recognised suffix → ``<snake>.<side>.json``.
+    3. Anything else → ``None`` (helper / unrelated import).
+    """
+    if attr_name in _NON_SUFFIX_MAPPING:
+        return _NON_SUFFIX_MAPPING[attr_name]
+    if not (isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel):
+        return None
+    if obj.__name__ in _HELPER_NAMES:
+        return None
+    # Ignore re-imports (only the module that *defines* the class wins).
+    if getattr(obj, "__module__", None) != owning_module:
+        return None
+    for suffix, side in _SUFFIX_RULES:
+        if obj.__name__.endswith(suffix):
+            base = obj.__name__[: -len(suffix)]
+            return f"{_pascal_to_snake(base)}.{side}.json"
+    return None
 
 
 def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], str]]:
-    """Auto-discover Pydantic models and TypeAdapters in _schema_models.
+    """Discover every (model, filename) pair in ``_schema_models/``.
 
-    Rules:
-    1. Walk all submodules, import them.
-    2. Collect every public BaseModel subclass and TypeAdapter instance.
-    3. Skip helpers from _shared.py and anything starting with underscore.
-    4. Derive filename from class/adapter name:
-       - *Spec or *Input → <snake>.input.json
-       - *Result or *Report → <snake>.output.json
-       - Exception list (Adapters, special shapes) → hardcoded mappings
-    5. Convert PascalCase → snake_case, stripping suffix before conversion.
+    Walks non-private submodules with :func:`pkgutil.iter_modules`; for
+    each, inspects only the symbols *defined in that module* and
+    applies :func:`_filename_for`. Returned list is sorted by filename
+    so callers see a stable order.
     """
-    # Exception mappings: class name to filename
-    exception_map: dict[str, str] = {
-        "EnvelopeAdapter": "envelope.json",
-        "AxesConfig": "axes.json",
-        "CampaignManifest": "campaign_manifest.json",
-        "CampaignAdapter": "campaign.output.json",
-        "StagesAdapter": "stages.input.json",
-    }
+    pkg = claude_hpc._schema_models
+    pkg_path = Path(pkg.__file__).parent
 
-    # Import all submodules
-    pkg_path = Path(claude_hpc._schema_models.__file__).parent
-    for _importer, modname, _ispkg in pkgutil.iter_modules([str(pkg_path)]):
+    # Keyed by attribute name to dedupe (a cross-cutting Adapter may be
+    # re-exported but should only register once).
+    discovered: dict[str, tuple[Any, str]] = {}
+    for _finder, modname, _ispkg in pkgutil.iter_modules([str(pkg_path)]):
         if modname.startswith("_"):
             continue
-        importlib.import_module(f"claude_hpc._schema_models.{modname}")
-
-    discovered: dict[str, tuple[Any, str]] = {}
-
-    # Inspect all submodules and extract classes/adapters
-    for name, mod in vars(claude_hpc._schema_models).items():
-        if name.startswith("_") or not hasattr(mod, "__dict__"):
-            continue
-
-        # mod is actually a module
-        for attr_name, obj in vars(mod).items():
-            if attr_name.startswith("_"):
+        mod = importlib.import_module(f"{pkg.__name__}.{modname}")
+        for attr_name in dir(mod):
+            if attr_name.startswith("_") or attr_name in discovered:
                 continue
+            obj = getattr(mod, attr_name)
+            fname = _filename_for(obj, attr_name, owning_module=mod.__name__)
+            if fname is not None:
+                discovered[attr_name] = (obj, fname)
 
-            # Check exception list first
-            if attr_name in exception_map:
-                discovered[attr_name] = (obj, exception_map[attr_name])
-                continue
-
-            # Check if it's a TypeAdapter instance (must come before BaseModel check)
-            if isinstance(obj, TypeAdapter):
-                # Only include if in exception map (already handled above)
-                continue
-
-            # Check if it's a BaseModel subclass
-            if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel:
-                # Skip internal helper models (those starting with underscore or
-                # internal envelope models that aren't top-level exports)
-                if attr_name.startswith("_") or obj.__name__ in (
-                    "SuccessEnvelope",
-                    "ErrorEnvelope",
-                ):
-                    continue
-
-                # Strip suffix and derive filename
-                # Only include if it matches recognized suffixes
-                suffix = None
-                base_name = obj.__name__
-
-                if obj.__name__.endswith("Spec"):
-                    suffix = "input.json"
-                    base_name = obj.__name__[:-4]
-                elif obj.__name__.endswith("Input"):
-                    suffix = "input.json"
-                    base_name = obj.__name__[:-5]
-                elif obj.__name__.endswith(("Result", "Report")):
-                    suffix = "output.json"
-                    base_name = obj.__name__[:-6]
-                elif obj.__name__.endswith("Envelope"):
-                    suffix = "output.json"
-                    base_name = obj.__name__[:-8]
-                else:
-                    # No recognized suffix, skip (e.g., internal helper models)
-                    continue
-
-                snake_name = _pascal_to_snake(base_name)
-                filename = f"{snake_name}.{suffix}"
-                discovered[obj.__name__] = (obj, filename)
-
-    # Build the registry, sorted by filename for stability
-    registry: list[tuple[Any, str]] = list(discovered.values())
-    return sorted(registry, key=lambda x: x[1])
+    return sorted(discovered.values(), key=lambda pair: pair[1])
 
 
 SCHEMA_REGISTRY = _build_schema_registry()

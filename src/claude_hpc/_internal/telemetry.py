@@ -53,6 +53,8 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc._internal._io import advisory_flock
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -65,19 +67,16 @@ _ENV_VAR = "HPC_TELEMETRY_SINK"
 
 @contextlib.contextmanager
 def flock_append(target: Path):
-    """Yield with an exclusive flock on a sibling ``.lock`` file.
+    """Yield with an exclusive flock on a sibling ``.lock`` file for *target*.
 
-    Convenience wrapper around :func:`claude_hpc._internal._io.advisory_flock`.
-    Ensures that all writers to ``<run_id>.monitor.jsonl`` serialize their
-    appends. Without flock, a concurrent monitor_flow tick and slash-command
-    poll can produce a torn JSON line.
-
-    On Windows / no-fcntl platforms degrades to a no-op so the module
-    stays importable; the torn-line risk is documented and acceptable
+    Thin wrapper around :func:`claude_hpc._internal._io.advisory_flock`
+    that derives the lock path (``<target>.lock``). Ensures all writers
+    to ``<run_id>.monitor.jsonl`` serialise their appends — without the
+    flock, a concurrent monitor_flow tick and slash-command poll can
+    produce a torn JSON line. On non-POSIX platforms ``advisory_flock``
+    degrades to a no-op; the torn-line risk is documented as acceptable
     for non-production environments.
     """
-    from claude_hpc._internal._io import advisory_flock
-
     with advisory_flock(target.with_suffix(target.suffix + ".lock")):
         yield
 

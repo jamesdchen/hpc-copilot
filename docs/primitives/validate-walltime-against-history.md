@@ -35,12 +35,12 @@ A `ValidateWalltimeAgainstHistoryResult` object with:
 
 ## Errors
 
-Common `code` values in findings:
+None declared on the primitive. Findings carry the diagnostic code instead; common `code` values:
 
-- `playbook_parse_error` — `.hpc/playbook.yaml` is malformed; configuration error.
-- `cold_start_no_history` — No runtime samples for (profile, cluster, gpu_type); info-level. Walltime quantile check skipped but submission can proceed; the first run will produce baseline samples.
-- `walltime_below_quantile` — Requested walltime is below the configured quantile threshold (default: p95). Severity inherited from the rule in playbook.yaml.
-- `known_bad_combination` — (gpu_type, workload_tag) pair matches a recorded "do not use" rule in playbook.yaml; severity inherited from the rule.
+- `playbook_parse_error` (error) — `.hpc/playbook.yaml` is malformed.
+- `cold_start_no_history` (info) — no runtime samples for (profile, cluster, gpu_type); the walltime-quantile check is skipped and submission proceeds. The first run produces baseline samples.
+- `walltime_below_quantile` — requested walltime below the configured quantile threshold (default rule: warn below p95). Severity inherited from the playbook rule.
+- `known_bad_combination` — (gpu_type, workload_tag) pair matches a recorded "do not use" entry in the playbook. Severity inherited from the rule.
 
 ## Idempotency
 

@@ -34,14 +34,14 @@ A `ValidateInputDatasetResult` object with:
 
 ## Errors
 
-Common `code` values in findings:
+None declared on the primitive. Findings carry the diagnostic code instead; common `code` values:
 
-- `dataset_missing` — File not on disk.
-- `dataset_unsupported_loader` — Loader name not in {parquet, csv, jsonl}.
-- `dataset_load_error` — Loader raised an exception (parse error, corrupt file, etc.).
-- `parquet_loader_unavailable` — Pyarrow optional dependency missing (info-level; validation skipped but campaign can proceed).
-- `row_index_oob` — Index out of bounds (valid range: [0, n_rows - 1]).
-- `required_column_null` — The NaN-trap bug class; a required column is null/NaN/empty-string at the row.
+- `dataset_missing` (error) — file not on disk.
+- `dataset_unsupported_loader` (error) — loader name not in {parquet, csv, jsonl}.
+- `dataset_load_error` (error) — loader raised an exception (parse error, corrupt file, etc.).
+- `parquet_loader_unavailable` (info) — pyarrow optional dependency missing; parquet validation skipped, campaign can proceed.
+- `row_index_oob` (error) — index out of bounds (valid range: `[0, n_rows - 1]`).
+- `required_column_null` (error) — the NaN-trap bug class; a required column is null / NaN / empty-string at the row.
 
 ## Idempotency
 
