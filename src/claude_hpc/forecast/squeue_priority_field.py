@@ -79,6 +79,7 @@ def parse_squeue_priority_field(text: str) -> list[QueuedJob]:
     required = {"JOBID", "PRIORITY", "PARTITION", "USER", "STATE"}
     if not required <= set(name_to_idx):
         return []
+
     def _cell(cells: list[str], col: str) -> str:
         i = name_to_idx.get(col)
         return cells[i].strip() if i is not None and i < len(cells) else ""
@@ -130,11 +131,7 @@ def estimate_rank(
     pending = [j for j in queue if j.state == "PENDING"]
     pending_overall = sum(1 for j in pending if j.priority > new_priority)
     pending_in_partition = (
-        sum(
-            1
-            for j in pending
-            if j.priority > new_priority and j.partition == partition
-        )
+        sum(1 for j in pending if j.priority > new_priority and j.partition == partition)
         if partition is not None
         else pending_overall
     )

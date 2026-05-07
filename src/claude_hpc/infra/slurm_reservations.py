@@ -179,6 +179,7 @@ def parse_sacctmgr_qos(text: str) -> dict[str, QosLimit]:
     if "Name" not in name_to_idx:
         # Without a name column we can't key the result.
         return {}
+
     def _cell(cells: list[str], col: str) -> str:
         i = name_to_idx.get(col)
         return cells[i].strip() if i is not None and i < len(cells) else ""

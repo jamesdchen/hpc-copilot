@@ -23,6 +23,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from statistics import mean
+from typing import Literal
+
+ClimbMethod = Literal[
+    "linear_regression",
+    "two_point",
+    "insufficient_data",
+    "reset_observed",
+]
 
 
 @dataclass(frozen=True)
@@ -39,7 +47,7 @@ class ClimbEstimate:
 
     rate_priority_per_hour: float
     n_samples: int
-    method: str  # "linear_regression" | "two_point" | "insufficient_data"
+    method: ClimbMethod
 
 
 def _to_dt(iso: str) -> datetime | None:
@@ -132,8 +140,9 @@ def hours_to_climb(
 
 
 __all__ = [
-    "PrioritySample",
     "ClimbEstimate",
+    "ClimbMethod",
+    "PrioritySample",
     "estimate_climb_rate",
     "forecast_priority_after",
     "hours_to_climb",
