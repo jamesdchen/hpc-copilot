@@ -23,6 +23,7 @@ def _spec(**overrides):
     return BestSubmitWindowSpec(profile=PROFILE, cluster=CLUSTER, **overrides)
 
 
+@pytest.mark.slow
 class TestSweep:
     def test_low_traffic_window_surfaces_in_top_k(self, tmp_path, monkeypatch):
         _seed_with_dip(tmp_path)
