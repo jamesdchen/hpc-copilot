@@ -120,9 +120,7 @@ def validate_executor_signatures(
                 validator=_VALIDATOR,
                 severity="error",
                 code="executor_function_not_found",
-                message=(
-                    f"{spec.executor_module}.{spec.executor_function} is not callable"
-                ),
+                message=(f"{spec.executor_module}.{spec.executor_function} is not callable"),
                 suggested_fix=(
                     f"Verify {spec.executor_function} is a top-level function on "
                     f"{spec.executor_module}."
@@ -136,9 +134,7 @@ def validate_executor_signatures(
         return ValidateExecutorSignaturesResult(findings=findings)
 
     parameters = inspect.signature(fn).parameters
-    accepts_kwargs = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
-    )
+    accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
 
     n = int(tasks_module.total())
     for i in range(min(n, spec.sample_n_tasks)):
@@ -198,8 +194,7 @@ def validate_executor_signatures(
                                 f"is annotated Literal{list(allowed)}"
                             ),
                             suggested_fix=(
-                                f"Change tasks.resolve({i})[{key!r}] to one of "
-                                f"{list(allowed)}."
+                                f"Change tasks.resolve({i})[{key!r}] to one of {list(allowed)}."
                             ),
                             evidence={
                                 "task_id": i,

@@ -75,12 +75,8 @@ def test_walltime_below_p95_emits_warning(tmp_path: Path) -> None:
     """Default rule: warn when requested < historical p95. Five evenly-
     spaced samples make p95 predictable."""
     _seed(tmp_path, durations=[3000, 4000, 5000, 6000, 7000])
-    out = validate_walltime_against_history(
-        tmp_path, spec=_spec(requested_walltime_sec=3500)
-    )
-    finding = next(
-        f for f in out.findings if f.code == "walltime_below_quantile"
-    )
+    out = validate_walltime_against_history(tmp_path, spec=_spec(requested_walltime_sec=3500))
+    finding = next(f for f in out.findings if f.code == "walltime_below_quantile")
     assert finding.severity == "warning"
     assert finding.evidence["requested_walltime_sec"] == 3500
     assert finding.evidence["quantile_label"] == "p95"
@@ -90,9 +86,7 @@ def test_walltime_below_p95_emits_warning(tmp_path: Path) -> None:
 
 def test_walltime_at_or_above_p95_emits_no_quantile_finding(tmp_path: Path) -> None:
     _seed(tmp_path, durations=[3000, 4000, 5000])
-    out = validate_walltime_against_history(
-        tmp_path, spec=_spec(requested_walltime_sec=10000)
-    )
+    out = validate_walltime_against_history(tmp_path, spec=_spec(requested_walltime_sec=10000))
     assert all(f.code != "walltime_below_quantile" for f in out.findings)
 
 
@@ -120,9 +114,7 @@ def test_playbook_walltime_rules_override_default(tmp_path: Path) -> None:
             message: requested below p50 — definitely too short
         """,
     )
-    out = validate_walltime_against_history(
-        tmp_path, spec=_spec(requested_walltime_sec=4500)
-    )
+    out = validate_walltime_against_history(tmp_path, spec=_spec(requested_walltime_sec=4500))
     findings = [f for f in out.findings if f.code == "walltime_below_quantile"]
     assert len(findings) == 1
     assert findings[0].severity == "error"
@@ -147,9 +139,7 @@ def test_known_bad_combination_fires_when_match(tmp_path: Path) -> None:
         tmp_path,
         spec=_spec(gpu_type="v100", workload_tags=["attn-fp32"]),
     )
-    finding = next(
-        f for f in out.findings if f.code == "known_bad_combination"
-    )
+    finding = next(f for f in out.findings if f.code == "known_bad_combination")
     assert finding.severity == "error"
     assert "V100 fp32 attention" in finding.message
     assert finding.evidence == {"gpu_type": "v100", "workload_tag": "attn-fp32"}
@@ -192,9 +182,7 @@ def test_known_bad_silent_when_workload_tags_empty(tmp_path: Path) -> None:
             reason: x
         """,
     )
-    out = validate_walltime_against_history(
-        tmp_path, spec=_spec(gpu_type="v100", workload_tags=[])
-    )
+    out = validate_walltime_against_history(tmp_path, spec=_spec(gpu_type="v100", workload_tags=[]))
     assert all(f.code != "known_bad_combination" for f in out.findings)
 
 

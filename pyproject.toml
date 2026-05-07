@@ -42,6 +42,13 @@ dev = [
 tui = [
     "rich>=13.0",
 ]
+forecasting = [
+    # Used by ``scripts/train_wait_predictor.py`` to fit the queue-wait
+    # residual regression. Inference (``forecast/predict_start.py``)
+    # also imports it lazily; without lightgbm installed the predictor
+    # falls back to the deterministic floor only.
+    "lightgbm>=4.0",
+]
 
 [project.scripts]
 hpc-mapreduce = "claude_hpc.agent_cli:main"
@@ -77,7 +84,20 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP", "B", "SIM", "TCH"]
+# TCH (move-imports-into-TYPE_CHECKING) is dropped: this codebase
+# routes Pydantic specs through atom signatures (``def atom(spec:
+# FooSpec)``), and our ``_schema_models/*.py`` re-export shared types
+# whose runtime presence is required even though the static analyzer
+# can't see it. The rule generates false positives on every wire-input
+# atom + every shared-type re-export, drowning out the rare real hit.
+select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+
+# ``_schema_models/`` Field(description=...) and module docstrings
+# routinely exceed the 100-char line limit because the descriptions
+# ARE the wire-schema text — keeping them on one line preserves the
+# diff readability that matters when the schema actually changes.
+[tool.ruff.lint.per-file-ignores]
+"src/claude_hpc/_schema_models/*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"

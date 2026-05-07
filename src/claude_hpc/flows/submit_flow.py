@@ -254,7 +254,7 @@ def _make_single_array_submission(
 def submit_flow(
     experiment_dir: Path,
     *,
-    spec: "SubmitFlowSpec",
+    spec: SubmitFlowSpec,
 ) -> SubmitFlowResult:
     """Execute the full submit pipeline and emit a single result.
 
@@ -438,7 +438,7 @@ def _submit_one_spec(
 def submit_flow_batch(
     experiment_dir: Path,
     *,
-    spec: "SubmitFlowBatchSpec",
+    spec: SubmitFlowBatchSpec,
 ) -> list[SubmitFlowResult]:
     """Submit N specs that share ``(ssh_target, remote_path)`` in one shot.
 

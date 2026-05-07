@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from claude_hpc.atoms import recall as recall_mod
 from claude_hpc._schema_models.recall import RecallSpec
+from claude_hpc.atoms import recall as recall_mod
 from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
 
 if TYPE_CHECKING:
@@ -282,7 +282,9 @@ def test_tier2_counts_campaigns_without_runtime_files(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a")  # no .hpc/runtimes/
     _write_interview(tmp_path / "b")
     _write_runtime_samples(tmp_path / "b", samples=[{"elapsed_sec": 50, "exit_code": 0}])
-    rt = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"]["runtime_rollup"]
+    rt = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"][
+        "runtime_rollup"
+    ]  # noqa: E501
     assert rt["campaigns_with_no_runtime"] == 1
     assert rt["total_task_samples"] == 1
 
@@ -296,7 +298,9 @@ def test_tier2_absent_when_not_requested(tmp_path: Path) -> None:
 
 def test_tier2_handles_no_samples_at_all(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a")
-    rt = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"]["runtime_rollup"]
+    rt = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"][
+        "runtime_rollup"
+    ]  # noqa: E501
     assert rt["walltime_per_task_sec"] is None
     assert rt["failure_rate"] is None
     assert rt["campaigns_with_no_runtime"] == 1

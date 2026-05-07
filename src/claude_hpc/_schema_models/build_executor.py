@@ -14,4 +14,6 @@ class BuildExecutorResult(BaseModel):
 
     path: str = Field(description="Absolute path of the new file.")
     type: Literal["plain"]
-    source: str = Field(description="Absolute path of the starter template the new file was copied from.")
+    source: str = Field(
+        description="Absolute path of the starter template the new file was copied from."
+    )

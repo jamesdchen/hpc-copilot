@@ -43,9 +43,7 @@ def test_gpu_picks_gpu_template() -> None:
 
 
 def test_slurm_backend_picks_slurm_template() -> None:
-    spec = build_submit_spec(
-        spec=BuildSubmitSpecInput(**{**_required(), "backend": "slurm"})
-    )
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**{**_required(), "backend": "slurm"}))
     assert spec["script"] == ".hpc/templates/cpu_array.slurm"
     spec_gpu = build_submit_spec(
         spec=BuildSubmitSpecInput(**{**_required(), "backend": "slurm"}, is_gpu=True)
@@ -60,9 +58,7 @@ def test_uv_runtime_sets_hpc_runtime_env() -> None:
 
 
 def test_campaign_id_threaded_to_env_and_top_level() -> None:
-    spec = build_submit_spec(
-        spec=BuildSubmitSpecInput(**_required(), campaign_id="ml_ridge_q1")
-    )
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required(), campaign_id="ml_ridge_q1"))
     assert spec["campaign_id"] == "ml_ridge_q1"
     assert spec["job_env"]["HPC_CAMPAIGN_ID"] == "ml_ridge_q1"
 
@@ -126,9 +122,7 @@ def test_omitted_optional_fields_not_in_output() -> None:
 def test_invalid_ssh_target_raises_spec_invalid() -> None:
     with pytest.raises(errors.SpecInvalid):
         build_submit_spec(
-            spec=BuildSubmitSpecInput(
-                **{**_required(), "ssh_target": "alice; rm -rf /"}
-            )
+            spec=BuildSubmitSpecInput(**{**_required(), "ssh_target": "alice; rm -rf /"})
         )
 
 

@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_hpc import errors, runner
+from claude_hpc import runner
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
 from claude_hpc._schema_models.resubmit import ResubmitSpec

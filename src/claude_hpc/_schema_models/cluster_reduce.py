@@ -26,7 +26,11 @@ class ClusterReduceResult(BaseModel):
     output_path_remote: str = Field(
         description="Path on the cluster where the reducer wrote its output (relative to remote_path or absolute).",
     )
-    output_path_local: str = Field(description="Local path the reducer's output was rsync_pulled to.")
-    reduced: Any = Field(description="Parsed reducer output (whatever JSON shape the reducer wrote).")
+    output_path_local: str = Field(
+        description="Local path the reducer's output was rsync_pulled to."
+    )
+    reduced: Any = Field(
+        description="Parsed reducer output (whatever JSON shape the reducer wrote)."
+    )
     exit_code: int = Field(ge=0)
     stderr_tail: str = Field(description="Last ~2KB of the reducer's stderr.")
