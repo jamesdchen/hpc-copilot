@@ -91,6 +91,10 @@ from claude_hpc._schema_models.predict_queue_wait import (  # noqa: E402
 )
 from claude_hpc._schema_models.preflight import PreflightResult  # noqa: E402
 from claude_hpc._schema_models.recall import RecallEnvelope, RecallSpec  # noqa: E402
+from claude_hpc._schema_models.recommend_partition import (  # noqa: E402
+    RecommendPartitionResult,
+    RecommendPartitionSpec,
+)
 from claude_hpc._schema_models.reconcile import ReconcileResult  # noqa: E402
 from claude_hpc._schema_models.resubmit import ResubmitSpec  # noqa: E402
 from claude_hpc._schema_models.runtime_prior import RuntimePriorResult  # noqa: E402
@@ -111,6 +115,10 @@ from claude_hpc._schema_models.suggest_setup_action import (  # noqa: E402
 from claude_hpc._schema_models.summarize_submit_plan import (  # noqa: E402
     SummarizeSubmitPlanResult,
 )
+from claude_hpc._schema_models.update_run_constraints import (  # noqa: E402
+    UpdateRunConstraintsResult,
+    UpdateRunConstraintsSpec,
+)
 from claude_hpc._schema_models.validate import ValidateResult, ValidateSpec  # noqa: E402
 from claude_hpc._schema_models.validate_campaign import (  # noqa: E402
     ValidateCampaignReport,
@@ -123,6 +131,10 @@ from claude_hpc._schema_models.validate_executor_signatures import (  # noqa: E4
 from claude_hpc._schema_models.validate_input_dataset import (  # noqa: E402
     ValidateInputDatasetResult,
     ValidateInputDatasetSpec,
+)
+from claude_hpc._schema_models.validate_self_qos_limit import (  # noqa: E402
+    ValidateSelfQosLimitResult,
+    ValidateSelfQosLimitSpec,
 )
 from claude_hpc._schema_models.validate_walltime_against_history import (  # noqa: E402
     ValidateWalltimeAgainstHistoryResult,
@@ -173,6 +185,8 @@ SCHEMA_REGISTRY: list[tuple[Union[type[BaseModel], TypeAdapter[Any]], str]] = [
     (ValidateExecutorSignaturesResult, "validate_executor_signatures.output.json"),
     (ValidateInputDatasetSpec, "validate_input_dataset.input.json"),
     (ValidateInputDatasetResult, "validate_input_dataset.output.json"),
+    (ValidateSelfQosLimitSpec, "validate_self_qos_limit.input.json"),
+    (ValidateSelfQosLimitResult, "validate_self_qos_limit.output.json"),
     (ValidateWalltimeAgainstHistorySpec, "validate_walltime_against_history.input.json"),
     (ValidateWalltimeAgainstHistoryResult, "validate_walltime_against_history.output.json"),
     # Mutate / submit
@@ -203,11 +217,15 @@ SCHEMA_REGISTRY: list[tuple[Union[type[BaseModel], TypeAdapter[Any]], str]] = [
     (PredictQueueWaitResult, "predict_queue_wait.output.json"),
     (RecallSpec, "recall.input.json"),
     (RecallEnvelope, "recall.output.json"),
+    (RecommendPartitionSpec, "recommend_partition.input.json"),
+    (RecommendPartitionResult, "recommend_partition.output.json"),
     (RuntimePriorResult, "runtime_prior.output.json"),
     (StagesAdapter, "stages.input.json"),
     (StatusResult, "status.output.json"),
     (SuggestSetupActionResult, "suggest_setup_action.output.json"),
     (SummarizeSubmitPlanResult, "summarize_submit_plan.output.json"),
+    (UpdateRunConstraintsSpec, "update_run_constraints.input.json"),
+    (UpdateRunConstraintsResult, "update_run_constraints.output.json"),
     (VerifyAggregationCompleteResult, "verify_aggregation_complete.output.json"),
 ]
 

@@ -1,0 +1,43 @@
+"""Wire model for the ``update-run-constraints`` mutate primitive.
+
+Lesson 9: ``scontrol update jobid=N Features=X`` works post-submit
+without losing age priority. The framework should expose this as a
+first-class primitive so the agent loop can adjust constraints
+mid-flight (e.g. add ``l40s`` to a job's Features when ``a100`` is
+exhausted) without re-submitting and losing rank.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from claude_hpc._schema_models._shared import (
+    RunIdStrict,  # noqa: TC001 — Pydantic resolves the annotation at runtime
+)
+
+
+class UpdateRunConstraintsSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: RunIdStrict
+    add_features: list[str] = Field(
+        default_factory=list,
+        description="Features to add to each job (joined with the existing set).",
+    )
+    set_features: list[str] | None = Field(
+        default=None,
+        description=(
+            "Replace the entire Features expression with this set (joined "
+            "with the cluster's separator). Mutually exclusive with "
+            "``add_features``."
+        ),
+    )
+
+
+class UpdateRunConstraintsResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: RunIdStrict
+    job_ids_updated: list[str] = Field(default_factory=list)
+    job_ids_failed: list[str] = Field(default_factory=list)
+    new_features: list[str] = Field(default_factory=list)
