@@ -1,4 +1,4 @@
-Use the **hpc-submit** skill (`skills/hpc-submit/SKILL.md`) for the workflow: discover executors → plan axis → auto-configure env → throughput plan → smart constraint planner → write tasks.py + sidecar → preflight → validate-campaign → predict-start-time → submit-flow → verify scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
+Invoke the `hpc-submit` skill via the Skill tool (`skills/hpc-submit/SKILL.md`) for the workflow: discover executors → plan axis → auto-configure env → throughput plan → smart constraint planner → write tasks.py + sidecar → preflight → validate-campaign → predict-start-time → submit-flow → verify scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
 
 This slash command is the human-facing entry point. It carries four pieces of content the skill cannot:
 

@@ -57,6 +57,14 @@
       "title": "Unexpected Tasks",
       "type": "array"
     },
+    "unexpected_aggregated_keys": {
+      "description": "Post-reduce contamination: keys in the supplied ``aggregated_metrics`` dict that don't match any grid-point produced by ``tasks.resolve(i)`` for i in [0, total_tasks). Only populated when the caller supplied ``aggregated_metrics`` + ``aggregated_keying='grid_point'``; empty list otherwise.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Unexpected Aggregated Keys",
+      "type": "array"
+    },
     "provenance_present": {
       "title": "Provenance Present",
       "type": "boolean"

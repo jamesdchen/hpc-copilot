@@ -131,6 +131,33 @@
       },
       "title": "Workload Tags",
       "type": "array"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Closed-loop campaign slug. When set together with ``expected_cmd_sha``, the workflow invokes validate-stochastic-marker to detect cmd_sha collisions against prior iterations of this campaign — catches the Optuna / random-search / PBT silent-dedup bug class.",
+      "title": "Campaign Id"
+    },
+    "expected_cmd_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The cmd_sha the about-to-submit run will have. Required alongside ``campaign_id`` to enable the stochastic-marker check; ignored otherwise.",
+      "title": "Expected Cmd Sha"
     }
   }
 }

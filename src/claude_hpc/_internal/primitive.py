@@ -292,6 +292,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.validate_executor_signatures",
     "claude_hpc.atoms.validate_input_dataset",
     "claude_hpc.atoms.validate_self_qos_limit",
+    "claude_hpc.atoms.validate_stochastic_marker",
     "claude_hpc.atoms.validate_walltime_against_history",
     "claude_hpc.atoms.walltime_drift",
     "claude_hpc.runner.submit",
