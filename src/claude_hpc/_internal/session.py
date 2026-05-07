@@ -33,7 +33,7 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._io import advisory_flock
+from claude_hpc._internal.io import advisory_flock
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -112,7 +112,7 @@ class RunRecord:
         return cls(**{k: v for k, v in payload.items() if k in known})
 
 
-from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: E402
+from claude_hpc._internal.time import utcnow_iso as _utcnow_iso  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -172,7 +172,7 @@ def _lock_path(target: Path) -> Path:
 def _locked(target: Path) -> Iterator[None]:
     """Acquire an exclusive flock on a sibling ``.lock`` file for *target*.
 
-    Thin wrapper around :func:`claude_hpc._internal._io.advisory_flock`
+    Thin wrapper around :func:`claude_hpc._internal.io.advisory_flock`
     that derives the lock path via :func:`_lock_path`. No-op on platforms
     without ``fcntl`` (e.g. Windows). The lock file is created on demand
     and never deleted — flock semantics handle reuse.
@@ -215,10 +215,10 @@ def load_run(experiment_dir: Path, run_id: str) -> RunRecord | None:
     if payload is None:
         return None
     # B8: route reader-side check through the cross-domain manifest
-    # in claude_hpc._internal._version. Writer still emits SCHEMA_VERSION;
+    # in claude_hpc._internal.version. Writer still emits SCHEMA_VERSION;
     # the manifest declares the *supported* range so back-compat is one
     # one-line edit if/when v2 ships.
-    from claude_hpc._internal._version import is_compatible as _is_compat
+    from claude_hpc._internal.version import is_compatible as _is_compat
 
     found = payload.get("schema_version")
     if not isinstance(found, int) or not _is_compat("session", found):
@@ -320,7 +320,7 @@ def _rebuild_index(experiment_dir: Path) -> dict:
         if payload is None:
             continue
         # B8: route reader-side check through the cross-domain manifest.
-        from claude_hpc._internal._version import is_compatible as _is_compat
+        from claude_hpc._internal.version import is_compatible as _is_compat
 
         sv = payload.get("schema_version")
         if not isinstance(sv, int) or not _is_compat("session", sv):

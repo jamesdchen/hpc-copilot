@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 from claude_hpc._schema_models.validate_campaign import (
     ValidateCampaignReport,
     ValidateCampaignSpec,

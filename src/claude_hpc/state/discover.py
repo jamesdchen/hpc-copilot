@@ -21,7 +21,7 @@ source parse. Any Python file with the right shape qualifies.
 
 from __future__ import annotations
 
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 
 __all__ = [
     "ExecutorInfo",

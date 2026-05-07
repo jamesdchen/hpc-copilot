@@ -23,7 +23,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import claude_hpc
-from claude_hpc._internal._primitive import get_registry
+from claude_hpc._internal.primitive import get_registry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -88,7 +88,7 @@ def operations_catalog() -> list[dict[str, Any]]:
 
     Source-of-truth chain:
 
-    1. The ``@primitive`` registry (``claude_hpc._internal._primitive.get_registry``).
+    1. The ``@primitive`` registry (``claude_hpc._internal.primitive.get_registry``).
        Decorator metadata is the canonical SoT.
     2. Baked ``operations.json`` for wheel installs that ship without
        ``docs/`` on the file system. (Not yet implemented — tracked as

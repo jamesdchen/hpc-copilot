@@ -11,7 +11,7 @@ One file per cluster, dict keyed by username::
 
     <experiment_dir>/.hpc/user_profiles/<cluster>.json
 
-Atomic write through :func:`claude_hpc._internal._io.atomic_locked_update` so
+Atomic write through :func:`claude_hpc._internal.io.atomic_locked_update` so
 concurrent updates from multiple agent sessions are serialised.
 
 Profile fields
@@ -39,8 +39,8 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._io import atomic_locked_update
-from claude_hpc._internal._time import parse_iso_utc_or_none
+from claude_hpc._internal.io import atomic_locked_update
+from claude_hpc._internal.time import parse_iso_utc_or_none
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

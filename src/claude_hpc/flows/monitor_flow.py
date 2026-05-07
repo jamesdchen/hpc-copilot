@@ -50,8 +50,8 @@ from typing import Any
 
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.primitive import SideEffect, primitive
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc._internal.lifecycle import LifecycleState
 from claude_hpc._schema_models.monitor_flow import MonitorFlowSpec
 from claude_hpc.runner import mark_terminal, record_status

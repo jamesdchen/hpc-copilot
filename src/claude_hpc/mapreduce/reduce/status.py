@@ -51,7 +51,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc._internal.lifecycle import TaskStatus
 
 # ---------------------------------------------------------------------------

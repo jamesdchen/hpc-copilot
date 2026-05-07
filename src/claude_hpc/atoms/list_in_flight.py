@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,7 +31,7 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     iso = last_status.get("checked_at")
     if not isinstance(iso, str):
         return None
-    from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
+    from claude_hpc._internal.time import parse_iso_utc_or_none, utcnow
 
     ts = parse_iso_utc_or_none(iso)
     if ts is None:

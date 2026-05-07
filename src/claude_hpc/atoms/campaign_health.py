@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 from claude_hpc._schema_models.campaign_health import CampaignHealthSpec
 
 if TYPE_CHECKING:

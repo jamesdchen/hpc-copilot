@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 from claude_hpc._schema_models.predict_start import (
     PredictStartTimeResult,
     PredictStartTimeSpec,

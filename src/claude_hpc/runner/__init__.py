@@ -13,7 +13,7 @@ from __future__ import annotations
 # Private symbols (leading underscore) are intentional re-exports for
 # back-compat with external callers and tests that imported them from the
 # pre-split flat module. Keep the noqa.
-from claude_hpc._internal._time import utcnow_iso as _utcnow_iso  # noqa: F401
+from claude_hpc._internal.time import utcnow_iso as _utcnow_iso  # noqa: F401
 from claude_hpc.runner._ssh import (
     _parse_remote_json,  # noqa: F401
 )

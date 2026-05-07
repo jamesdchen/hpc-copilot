@@ -112,7 +112,7 @@ def _ok(
     if idempotent is None:
         idempotent = _meta_idempotent(name) if name else True
     if name:
-        from claude_hpc._internal._schema import validate_output
+        from claude_hpc._internal.schema import validate_output
 
         validate_output(data, name)
     env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
@@ -273,7 +273,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     Cross-file ``$ref`` (rare post-Pydantic-migration — most
     schemas are now self-contained with constraints inlined from
     :mod:`claude_hpc._schema_models._shared`) resolves through the
-    shared registry in :mod:`claude_hpc._internal._schema`.
+    shared registry in :mod:`claude_hpc._internal.schema`.
     """
     try:
         import jsonschema  # type: ignore[import-untyped]
@@ -286,7 +286,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
-    from claude_hpc._internal._schema import validate as _validate
+    from claude_hpc._internal.schema import validate as _validate
 
     try:
         _validate(payload, schema)
@@ -2924,7 +2924,7 @@ def main(argv: list[str] | None = None) -> int:
     # dispatch — without this, get_registry() raises RuntimeError
     # (the previous auto-import path silently swallowed ImportError
     # and made missing-decorator bugs hard to diagnose).
-    from claude_hpc._internal._primitive import register_primitives
+    from claude_hpc._internal.primitive import register_primitives
 
     register_primitives()
     parser = build_parser()

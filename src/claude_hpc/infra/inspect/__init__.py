@@ -45,7 +45,7 @@ import contextlib
 from pathlib import Path
 
 from claude_hpc import errors
-from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._internal.primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
 
 from ._common import (

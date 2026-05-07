@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._internal.primitive import SideEffect, primitive
 from claude_hpc._schema_models.submit_flow import SubmitFlowSpec
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
@@ -487,11 +487,11 @@ def submit_flow_batch(
     # users who deliberately want concurrent submits).
     import os
 
-    from claude_hpc._internal import _io, session
+    from claude_hpc._internal import io, session
 
     use_lock = os.environ.get("HPC_SUBMIT_NO_LOCK") != "1"
     lock_path = session.journal_dir(experiment_dir) / ".submit_lock"
-    lock_ctx = _io.advisory_flock(lock_path) if use_lock else _noop_lock_ctx()
+    lock_ctx = io.advisory_flock(lock_path) if use_lock else _noop_lock_ctx()
     with lock_ctx:
         return _submit_flow_batch_locked(
             experiment_dir=experiment_dir,
