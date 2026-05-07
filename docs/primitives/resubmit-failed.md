@@ -15,7 +15,7 @@ error_codes:
   category: internal
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]
+  cli: hpc-agent resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]
   python: claude_hpc.runner.resubmit.resubmit_failed
 exit_codes:
 - 0: ok

@@ -176,7 +176,7 @@ class TestDeployRuntime:
         #   1 scp into claude_hpc/ (executor_cli.py — for tasks.py imports),
         #   1 scp into .hpc/_hpc_dispatch.py,
         #   4 scp into .hpc/templates/ (sge cpu/gpu, slurm cpu/gpu),
-        #   2 scp into .hpc/templates/common/ (hpc_preamble.sh, gpu_preamble.sh),
+        #   2 scp into .hpc/templates/runtime/common/ (hpc_preamble.sh, gpu_preamble.sh),
         #   1 scp into .hpc/_hpc_combiner.py.
         assert len(all_calls) == 11, [c[0][0][:3] for c in all_calls]
 
@@ -212,11 +212,15 @@ class TestDeployRuntime:
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
 
-        # Two shared preambles into .hpc/templates/common/
+        # Two shared preambles into .hpc/templates/runtime/common/
         common_dsts = {argv[2] for argv in argvs[8:10]}
         assert all(argv[0] == "scp" for argv in argvs[8:10])
-        assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts)
-        assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts)
+        assert any(
+            d.endswith(":/p/.hpc/templates/runtime/common/hpc_preamble.sh") for d in common_dsts
+        )
+        assert any(
+            d.endswith(":/p/.hpc/templates/runtime/common/gpu_preamble.sh") for d in common_dsts
+        )
 
         # Combiner is last
         assert argvs[10][0] == "scp"

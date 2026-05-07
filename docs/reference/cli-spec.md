@@ -1,6 +1,6 @@
-# `hpc-mapreduce` CLI Specification
+# `hpc-agent` CLI Specification
 
-Cross-cutting contract for the shell CLI shipped at `claude_hpc/agent_cli.py` (entry point `hpc-mapreduce`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
+Cross-cutting contract for the shell CLI shipped at `claude_hpc/agent_cli.py` (entry point `hpc-agent`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
 
 The slash-command surface in `slash_commands/commands/` is documented elsewhere; both surfaces compose from the primitive layer.
 
@@ -45,7 +45,7 @@ every consumer schema updates in lock-step.
 - Every subcommand accepts `--experiment-dir` (defaults to CWD) unless the operation is global (e.g. `clusters list`, `capabilities`).
 - Subcommands with non-trivial inputs accept `--spec path/to/spec.json`.
 - Idempotent subcommands set `"idempotent": true` on the success envelope.
-- `hpc-mapreduce --version` prints the package version and exits 0.
+- `hpc-agent --version` prints the package version and exits 0.
 
 ## Universal envelope
 
@@ -106,22 +106,22 @@ CLI ↔ primitive mapping:
 
 | CLI | Primitive |
 |---|---|
-| `hpc-mapreduce capabilities` | [capabilities](primitives/capabilities.md) |
-| `hpc-mapreduce preflight` | [check-preflight](primitives/check-preflight.md) |
-| `hpc-mapreduce clusters list` | [clusters-list](primitives/clusters-list.md) |
-| `hpc-mapreduce clusters describe <name>` | [clusters-describe](primitives/clusters-describe.md) |
-| `hpc-mapreduce discover` | [discover-executors](primitives/discover-executors.md) |
-| `hpc-mapreduce list-in-flight` | [list-in-flight](primitives/list-in-flight.md) |
-| `hpc-mapreduce campaign status` | [campaign-status](primitives/campaign-status.md) |
-| `hpc-mapreduce campaign list` | [campaign-list](primitives/campaign-list.md) |
-| `hpc-mapreduce status --run-id <id>` | [poll-run-status](primitives/poll-run-status.md) |
-| `hpc-mapreduce submit --spec <path>` | [submit-spec](primitives/submit-spec.md) |
-| `hpc-mapreduce aggregate --run-id <id> --wave <N>` | [combine-wave](primitives/combine-wave.md) |
-| `hpc-mapreduce resubmit --run-id <id> --spec <path>` | [resubmit-failed](primitives/resubmit-failed.md) |
-| `hpc-mapreduce reconcile --run-id <id>` | [reconcile-journal](primitives/reconcile-journal.md) |
-| `hpc-mapreduce build-executor --name <stem>` | [build-executor](primitives/build-executor.md) |
-| `hpc-mapreduce inspect-cluster --cluster <name>` | [inspect-cluster](primitives/inspect-cluster.md) |
-| `hpc-mapreduce runtime-prior --profile <p> --cluster <c>` | [read-runtime-prior](primitives/read-runtime-prior.md) |
-| `hpc-mapreduce plan-submit --profile <p> --cluster <c>` | [score-submit-plan](primitives/score-submit-plan.md) |
+| `hpc-agent capabilities` | [capabilities](primitives/capabilities.md) |
+| `hpc-agent preflight` | [check-preflight](primitives/check-preflight.md) |
+| `hpc-agent clusters list` | [clusters-list](primitives/clusters-list.md) |
+| `hpc-agent clusters describe <name>` | [clusters-describe](primitives/clusters-describe.md) |
+| `hpc-agent discover` | [discover-executors](primitives/discover-executors.md) |
+| `hpc-agent list-in-flight` | [list-in-flight](primitives/list-in-flight.md) |
+| `hpc-agent campaign status` | [campaign-status](primitives/campaign-status.md) |
+| `hpc-agent campaign list` | [campaign-list](primitives/campaign-list.md) |
+| `hpc-agent status --run-id <id>` | [poll-run-status](primitives/poll-run-status.md) |
+| `hpc-agent submit --spec <path>` | [submit-spec](primitives/submit-spec.md) |
+| `hpc-agent aggregate --run-id <id> --wave <N>` | [combine-wave](primitives/combine-wave.md) |
+| `hpc-agent resubmit --run-id <id> --spec <path>` | [resubmit-failed](primitives/resubmit-failed.md) |
+| `hpc-agent reconcile --run-id <id>` | [reconcile-journal](primitives/reconcile-journal.md) |
+| `hpc-agent build-executor --name <stem>` | [build-executor](primitives/build-executor.md) |
+| `hpc-agent inspect-cluster --cluster <name>` | [inspect-cluster](primitives/inspect-cluster.md) |
+| `hpc-agent runtime-prior --profile <p> --cluster <c>` | [read-runtime-prior](primitives/read-runtime-prior.md) |
+| `hpc-agent plan-submit --profile <p> --cluster <c>` | [score-submit-plan](primitives/score-submit-plan.md) |
 
 This table is hand-maintained until `scripts/build_primitive_index.py` learns to render it; the catalog at `docs/primitives/README.md` is auto-generated and is the canonical view.

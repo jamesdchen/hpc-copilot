@@ -24,7 +24,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir
+  cli: hpc-agent reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir
     <dir>]
   python: claude_hpc.runner.reconcile.reconcile
 exit_codes:

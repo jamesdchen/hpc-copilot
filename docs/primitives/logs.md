@@ -46,8 +46,7 @@ error_codes:
   category: cluster
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines
-    <n>]
+  cli: hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]
   python: claude_hpc.atoms.logs.fetch_logs
 exit_codes:
 - 0: ok

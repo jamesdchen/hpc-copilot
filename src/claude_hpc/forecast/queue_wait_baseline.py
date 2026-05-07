@@ -235,7 +235,7 @@ def _apply_features(
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]",  # noqa: E501
+    cli="hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]",  # noqa: E501
     agent_facing=True,
 )
 def predict_queue_wait(

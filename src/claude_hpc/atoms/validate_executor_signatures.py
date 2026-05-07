@@ -39,7 +39,7 @@ _VALIDATOR = "validate-executor-signatures"
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce validate-executor-signatures --spec <path>",
+    cli="hpc-agent validate-executor-signatures --spec <path>",
     agent_facing=True,
 )
 def validate_executor_signatures(

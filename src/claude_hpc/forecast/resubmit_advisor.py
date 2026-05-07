@@ -1,6 +1,6 @@
 """Advisory wire from resubmit into the queue-wait forecaster.
 
-Today the resubmit path (``hpc-mapreduce resubmit``) is purely
+Today the resubmit path (``hpc-agent resubmit``) is purely
 mechanical: the caller decides *when* to re-queue and the resubmitter
 just rewrites the sidecar + reissues the array.  When the failure was
 ``preempted`` we already advise the caller to throttle, but for every

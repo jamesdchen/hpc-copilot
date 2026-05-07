@@ -68,7 +68,7 @@ In the appropriate module (`atoms/`, `runner/`, `flows/`, etc.):
     error_codes=[errors.SpecInvalid],  # HpcError subclasses
     idempotent=True,
     idempotency_key="run_id",  # or None for non-stateful
-    cli="hpc-mapreduce <name> --spec <path>",  # the shell invocation
+    cli="hpc-agent <name> --spec <path>",  # the shell invocation
     agent_facing=True,
 )
 def <name>(experiment_dir: Path, *, spec: <Name>Spec) -> <Name>Result:

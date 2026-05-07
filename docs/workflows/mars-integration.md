@@ -9,18 +9,18 @@ land but never with breaking changes to the existing fields.
 ## What this is
 
 claude-hpc is a parameter-grid HPC orchestrator with a JSON-in/JSON-out
-CLI (`hpc-mapreduce`). It plugs into MARs's `experiment-runner` agent
+CLI (`hpc-agent`). It plugs into MARs's `experiment-runner` agent
 via the existing `Bash` tool — no new agent type, no plugin API. The
 adoption split:
 
 - **Tier-1 probes stay local.** `uv run python probe.py` is unchanged.
 - **Tier-2 runs that exceed local capacity** (large grid, GPU, walltime > N min)
-  delegate to `hpc-mapreduce`. Otherwise Tier-2 also stays local.
+  delegate to `hpc-agent`. Otherwise Tier-2 also stays local.
 - The agent decides per-run whether to delegate. claude-hpc is opt-in.
 
 ## Adoption cost (what the MARs maintainer changes)
 
-1. Add `claude-hpc` to MARs's `pyproject.toml` so `uv run hpc-mapreduce …`
+1. Add `claude-hpc` to MARs's `pyproject.toml` so `uv run hpc-agent …`
    works inside the experiment venv:
 
    ```bash
@@ -48,7 +48,7 @@ delegating to claude-hpc.
 import { spawn } from "bun";
 
 const proc = spawn({
-  cmd: ["uv", "run", "hpc-mapreduce", "preflight", "--cluster", "hoffman2"],
+  cmd: ["uv", "run", "hpc-agent", "preflight", "--cluster", "hoffman2"],
   cwd: experimentDir,                  // e.g. experiments/runs/run-042-…
   env: {
     ...process.env,                    // critical: forward parent env
@@ -68,9 +68,9 @@ const envelope = JSON.parse(stdout);
 //           { ok: false, error_code, category, retry_safe, remediation, message }
 ```
 
-`hpc-mapreduce capabilities` returns `data.required_env` so MARs can
+`hpc-agent capabilities` returns `data.required_env` so MARs can
 introspect the required forwards without parsing this doc. For the
-full API surface in one tool call, use `hpc-mapreduce capabilities --full`
+full API surface in one tool call, use `hpc-agent capabilities --full`
 (returns a single text blob with the catalog plus every primitive doc,
 schemas, envelope shape, and error remediation strings).
 
@@ -147,7 +147,7 @@ def resolve(i: int) -> dict:
     return _TASKS[i]
 ```
 
-Then submits via `hpc-mapreduce submit`. The cluster-side dispatcher
+Then submits via `hpc-agent submit`. The cluster-side dispatcher
 imports this `tasks.py` at task time, calls `resolve(task_id)` to get
 the kwargs, exports them as env vars (uppercased + `HPC_KW_*`), and
 runs the executor command from the per-run sidecar.
@@ -155,7 +155,7 @@ runs the executor command from the per-run sidecar.
 ### Where to teach MARs about this
 
 The MARs agent doc (`agents/experiment-runner.md`) should include —
-just above the `hpc-mapreduce submit` invocation — a step that:
+just above the `hpc-agent submit` invocation — a step that:
 
 1. Reads the canonical example via
    `python -c 'from claude_hpc import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "mapreduce" / "templates" / "tasks_example.py")'`.
@@ -191,9 +191,9 @@ both git-tracked and diffable.
 
 | MARs rule | claude-hpc behavior |
 |---|---|
-| `uv run` for all Python | The integration runs `uv run hpc-mapreduce …` inside MARs's venv. Cluster-side dispatch honors the invariant when callers set `runtime: "uv"` on the submit spec — the agent then writes the per-run sidecar's `executor` field as `uv run python ...`, and the four shipped templates run a `uv sync` preamble gated on `HPC_RUNTIME=uv`. See `docs/reference/cli-spec.md` § submit. |
+| `uv run` for all Python | The integration runs `uv run hpc-agent …` inside MARs's venv. Cluster-side dispatch honors the invariant when callers set `runtime: "uv"` on the submit spec — the agent then writes the per-run sidecar's `executor` field as `uv run python ...`, and the four shipped templates run a `uv sync` preamble gated on `HPC_RUNTIME=uv`. See `docs/reference/cli-spec.md` § submit. |
 | Tier-1 = `probe.py` only | The agent snippet routes Tier-1 to `uv run python probe.py` directly; claude-hpc is never invoked for probes. |
-| Tier-2 entrypoints under `scripts/` | `hpc-mapreduce discover --experiment-dir <run-NNN>` finds `scripts/*.py` (it scans `executors/`, `scripts/`, `src/` today; a `meta.json`-aware filter to skip `src/` is a follow-up). |
+| Tier-2 entrypoints under `scripts/` | `hpc-agent discover --experiment-dir <run-NNN>` finds `scripts/*.py` (it scans `executors/`, `scripts/`, `src/` today; a `meta.json`-aware filter to skip `src/` is a follow-up). |
 | `meta.json` is authoritative for `experiment_id` and `seed=42` | The agent reads `meta.json` first and threads `--seed 42` (and any experiment params) through the grid spec. claude-hpc treats them as ordinary CLI flags. |
 | Output to `results/metrics.json` with the canonical schema | Per-task outputs go to `results/metrics.<task_id>.json` (or whatever the executor writes). After `aggregate`, the agent reads `<experiment-dir>/_aggregated/<run_id>/` and assembles `results/metrics.json` in MARs's schema. |
 | Deterministic seed, single-output convention | Untouched — claude-hpc has no opinion on these. |
@@ -228,37 +228,37 @@ Exit codes: `0` ok, `1` user error, `2` cluster/network error, `3` internal.
 These primitives may be useful from the agent loop beyond the basic
 submit/status/aggregate cycle:
 
-- **`hpc-mapreduce capabilities --full`** — single-call dump of the
+- **`hpc-agent capabilities --full`** — single-call dump of the
   whole API surface (catalog, every primitive doc, schemas, envelope,
   error codes). Use to load full context without piecemeal discovery.
-- **`hpc-mapreduce validate --profile <p> --cluster <c>`** — promotes
+- **`hpc-agent validate --profile <p> --cluster <c>`** — promotes
   the internal `sbatch --test-only` lattice probe to a top-level
   primitive. Returns `{estimated_start_iso, fits_backfill,
   predicted_eta_sec, scheduler_response}` so the agent can branch on
   timing instead of submitting blind.
-- **`hpc-mapreduce predict-queue-wait --profile <p> --cluster <c>`** —
+- **`hpc-agent predict-queue-wait --profile <p> --cluster <c>`** —
   diurnal moving-average + DES-backed predictor for queue wait
   (cold-start aware; returns `confidence: "cold"` when there isn't
   enough data yet).
-- **`hpc-mapreduce best-submit-window --profile <p> --cluster <c>`** —
+- **`hpc-agent best-submit-window --profile <p> --cluster <c>`** —
   sweeps the predictor over the next N hours, returns the top-K
   windows by predicted wait.
-- **`hpc-mapreduce campaign-health [--campaign-id <id>]`** — structured
+- **`hpc-agent campaign-health [--campaign-id <id>]`** — structured
   campaign-health summary including `walltime_cliff_rate`,
   `failure_breakdown`, `gpu_utilization` plus a `suggested_prompt`
   string ready to feed to MARs's own LLM for narrative analysis.
-- **`hpc-mapreduce failures --run-id <id>`** — surfaces
+- **`hpc-agent failures --run-id <id>`** — surfaces
   `preempted_count` and `preempted_task_ids` at the data top level so
   MARs can selectively resubmit preempted tasks without re-doing the
   ones that completed.
 
 ## Troubleshooting: silent hangs on the first cluster call
 
-This is the single most common failure when MARs spawns `hpc-mapreduce`.
+This is the single most common failure when MARs spawns `hpc-agent`.
 
 1. From the same env MARs spawns with, run:
    ```bash
-   uv run hpc-mapreduce preflight --cluster <your_cluster>
+   uv run hpc-agent preflight --cluster <your_cluster>
    ```
    Inspect `data.checks[]` for `ssh_auth_sock`, `cluster_tcp_22`.
 
@@ -304,7 +304,7 @@ For maintainers who reviewed the earlier proposal in April 2026, here's
 what's changed that touches a Bun.spawn-style consumer:
 
 - **Package import path**: `hpc_mapreduce` was renamed to `claude_hpc`.
-  The CLI binary `hpc-mapreduce` is unchanged, so this only affects
+  The CLI binary `hpc-agent` is unchanged, so this only affects
   Python imports inside `.hpc/tasks.py` (the framework helpers
   `load_tasks_module`, `tasks_path`, `_PACKAGE_ROOT`, etc. are now
   imported from `claude_hpc`).

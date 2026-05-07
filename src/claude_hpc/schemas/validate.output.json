@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/validate.output.json",
   "title": "validate output (data block)",
-  "description": "Data block from ``hpc-mapreduce validate``.\n\nWraps the scheduler's --test-only response into a structured\ntiming prediction.",
+  "description": "Data block from ``hpc-agent validate``.\n\nWraps the scheduler's --test-only response into a structured\ntiming prediction.",
   "type": "object",
   "required": [
     "profile",

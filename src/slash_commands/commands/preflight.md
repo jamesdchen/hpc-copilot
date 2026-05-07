@@ -1,62 +1,19 @@
 # /preflight — Verify the local environment can submit HPC jobs
 
-`/submit-hpc` Step 6b auto-runs this same gate (cached per cluster for 24 h via `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json`), so you usually don't need to invoke `/preflight` directly. Reasons to invoke it standalone:
+Invoke the `hpc-preflight` skill via the Skill tool (`skills/hpc-preflight/SKILL.md`) for the workflow: which checks run, how to remediate each failure, when to write the per-cluster cache marker. The skill is the canonical SoT.
 
-- Cluster diagnostics without a pending submission ("is Hoffman2 up?")
-- Force-refresh the cache after fixing your SSH agent (this command writes the same marker `/submit-hpc` reads)
-- First-time-user smoke test on a new machine before any executor or `tasks.py` exists
+This slash command is the human-facing entry point. Reasons to invoke standalone (rather than letting `/submit-hpc` Step 6b auto-invoke):
 
-Catches the most common first-time-user failure mode: SSH credentials not forwarded into the current shell.
+- **Cluster diagnostics** without a pending submission ("is Hoffman2 up right now?").
+- **Force-refresh** the per-cluster cache after fixing your SSH agent — running this command writes the same `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` marker that `/submit-hpc` reads, so a green standalone run tells `/submit-hpc` to skip its check for the next 24h.
+- **First-time-user smoke test** on a new machine before any executor or `tasks.py` exists.
 
-## Steps
+## Args
 
-1. Ask the user (or accept a `--cluster <name>` argument) which cluster to
-   target. If they don't know, run `python -m claude_hpc clusters list`
-   first and present the names.
+`--cluster <name>` (optional) — target cluster. When omitted, only local-machine checks run (useful as a `pip install`-time smoke test). When provided, the cluster-specific TCP probe also fires.
 
-2. Invoke the CLI:
-   ```bash
-   python -m claude_hpc preflight --cluster <name>
-   ```
-   Output is a single-line JSON envelope on stdout. Parse it.
+## Output
 
-3. For each `data.checks` entry:
-   - `ssh_auth_sock` — `SSH_AUTH_SOCK` is set and `ssh-add -l` returns at
-     least one key. If false, tell the user to run `ssh-add ~/.ssh/<key>`
-     and ensure their terminal forwards SSH_AUTH_SOCK (tmux/screen quirks).
-   - `ssh_on_path`, `rsync_on_path` — binaries are present. If missing,
-     install them via the system package manager.
-   - `clusters_yaml_parses` — the active clusters.yaml is valid yaml. If
-     false, surface the parse error and stop — nothing else will work.
-   - `cluster_known` (only if `--cluster` was passed) — the named cluster
-     exists in clusters.yaml.
-   - `cluster_tcp_22` (only if `--cluster` was passed) — TCP probe to the
-     cluster's port 22 succeeded. If false, the cluster is offline or the
-     hostname is wrong; do NOT try to submit.
+Single-line JSON envelope on stdout. `data.checks[]` carries one entry per check with `name`, `ok`, and `detail`. `data.all_ok` is true iff every check passed. Surface failing checks with their `detail` fields **verbatim** — don't paraphrase; the user needs the raw error to fix it.
 
-4. If `data.all_ok` is true, summarise the green checks for the user and
-   write the shared marker so `/submit-hpc`'s Step 6b gate skips the
-   re-check for the next 24 h:
-
-   ```python
-   from datetime import datetime, timezone
-   from pathlib import Path
-   import json
-   marker = Path.home() / ".claude/hpc" / repo_hash / f"preflight-{cluster}.json"
-   marker.parent.mkdir(parents=True, exist_ok=True)
-   marker.write_text(json.dumps({
-       "checked_at": datetime.now(timezone.utc).isoformat(),
-       "all_ok": True,
-       "cluster": cluster,
-   }))
-   ```
-
-   If false, list the failing checks with their `detail` fields and stop.
-   Do not write the marker. Do not advance to `/submit-hpc`.
-
-## Notes
-
-- Idempotent. Safe to call as many times as you want.
-- Read-only. Touches no files on the cluster.
-- If `--cluster` is omitted, the cluster-specific checks are skipped; only
-  the local-machine checks run. Useful as a `pip install`-time smoke test.
+Idempotent and read-only. Safe to run as many times as you want.

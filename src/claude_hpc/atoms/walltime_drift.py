@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]",  # noqa: E501
+    cli="hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]",  # noqa: E501
 )
 def walltime_drift(
     *,

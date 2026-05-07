@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce campaign list [--experiment-dir <dir>]
+  cli: hpc-agent campaign list [--experiment-dir <dir>]
   python: claude_hpc.atoms.campaign_list.campaign_list
 exit_codes:
 - 0: ok

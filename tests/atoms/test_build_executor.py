@@ -5,11 +5,11 @@ The standalone ``/build-executor`` slash command was retired once
 underlying primitives this file tests are still load-bearing:
 
 * ``discover_executors`` — used by ``/submit-hpc`` Step 1 and the
-  ``hpc-mapreduce build-executor`` CLI subcommand (still exposed for
+  ``hpc-agent build-executor`` CLI subcommand (still exposed for
   MARs orchestrators) to enumerate runnable executors in an experiment
   repo. Recognizes both contracts: new (``compute(args)`` exported)
   and old (``__main__`` + argparse).
-* Template parseability — ``templates/starters/executor_template.py``
+* Template parseability — ``templates/scaffolds/executor_template.py``
   must remain importable Python so the post-copy smoke test can
   succeed.
 * Dry-run scaffold — simulates the new-executor flow by copying
@@ -43,7 +43,7 @@ def _load_template_module(path: Path):
 
 
 FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "mock_experiment"
-TEMPLATES_DIR = _PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
+TEMPLATES_DIR = _PACKAGE_ROOT / "mapreduce" / "templates" / "scaffolds"
 
 
 # ─── discover_executors ───────────────────────────────────────────────────
@@ -175,7 +175,7 @@ def test_tasks_example_is_valid_python_and_exposes_total_resolve() -> None:
     """
     import importlib.util
 
-    path = TEMPLATES_DIR.parent / "tasks_example.py"
+    path = TEMPLATES_DIR / "tasks_example.py"
     assert path.is_file(), f"missing canonical example: {path}"
     source = path.read_text(encoding="utf-8")
     ast.parse(source)

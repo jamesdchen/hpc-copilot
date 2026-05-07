@@ -7,7 +7,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb
+  cli: hpc-agent validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb
     <m> --cpus <c>
   python: claude_hpc.planning.validate.validate_submission
 ---

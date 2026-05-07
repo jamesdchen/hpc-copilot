@@ -39,9 +39,11 @@ _FORWARDERS: list[tuple[str, str, str, str]] = [
     (
         "data.errors",  # B3 legacy partial-errors shape
         "agent_cli.py",
-        "0.3.0",
+        "0.4.0",
         "strip the legacy ``errors`` key from snap.to_dict() now that "
-        "B3 partial_errors is the wire contract",
+        "B3 partial_errors is the wire contract — pushed from 0.3.0 to "
+        "0.4.0 because removing the field is itself a wire-shape "
+        "breaking change and warrants its own tagged release",
     ),
 ]
 

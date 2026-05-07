@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce recommend-wait-alternative --spec <path>",
+    cli="hpc-agent recommend-wait-alternative --spec <path>",
     agent_facing=True,
 )
 def recommend_wait_alternative(

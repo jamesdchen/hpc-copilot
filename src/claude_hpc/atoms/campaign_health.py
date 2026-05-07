@@ -116,7 +116,7 @@ def _build_prompt(payload: dict[str, Any]) -> str:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]",
+    cli="hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]",
 )
 def campaign_health(
     experiment_dir: Path,

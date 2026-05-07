@@ -13,7 +13,7 @@ the ingredients for resource-quality-aware submission decisions:
 The resulting JSON is fed into :mod:`claude_hpc.planning.planner` (Phase 4)
 which combines it with runtime priors to score candidate constraints.
 It is also useful standalone for ad-hoc cluster
-debugging via ``hpc-mapreduce inspect-cluster --cluster <c>``.
+debugging via ``hpc-agent inspect-cluster --cluster <c>``.
 
 This module is intentionally permissive: scheduler outputs vary between
 versions and configurations. Parsing failures degrade to "unknown" /
@@ -95,7 +95,7 @@ __all__ = [
     error_codes=[errors.ClusterUnknown, errors.SshUnreachable],
     idempotent=True,
     idempotency_key="cluster",
-    cli="hpc-mapreduce inspect-cluster --cluster <name> [...]",
+    cli="hpc-agent inspect-cluster --cluster <name> [...]",
 )
 def inspect_cluster(
     cluster_name: str,

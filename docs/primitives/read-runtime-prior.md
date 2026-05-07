@@ -21,7 +21,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]
+  cli: hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]
   python: claude_hpc.state.runtime_prior.roll_up_quantiles
 exit_codes:
 - 0: ok

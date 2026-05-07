@@ -113,6 +113,30 @@ class ValidateCampaignSpec(BaseModel):
         ),
     )
 
+    # Closed-loop campaign integration — when both fields are set, the
+    # workflow invokes validate-stochastic-marker to catch the silent-
+    # dedup bug class (stochastic strategies re-picking the same params
+    # across iterations, making cmd_sha collide and submit-flow dedupe).
+    campaign_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9._\-]+$",
+        description=(
+            "Closed-loop campaign slug. When set together with "
+            "``expected_cmd_sha``, the workflow invokes "
+            "validate-stochastic-marker to detect cmd_sha collisions "
+            "against prior iterations of this campaign — catches the "
+            "Optuna / random-search / PBT silent-dedup bug class."
+        ),
+    )
+    expected_cmd_sha: str | None = Field(
+        default=None,
+        description=(
+            "The cmd_sha the about-to-submit run will have. Required "
+            "alongside ``campaign_id`` to enable the stochastic-marker "
+            "check; ignored otherwise."
+        ),
+    )
+
 
 class ValidateCampaignReport(BaseModel):
     """Workflow output: aggregated findings + per-validator raw output.

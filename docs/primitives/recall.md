@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce recall
+  cli: hpc-agent recall
   python: claude_hpc.atoms.recall.recall_campaigns
 ---
 # recall

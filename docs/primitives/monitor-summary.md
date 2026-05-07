@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce monitor-summary --experiment-dir <path> --run-id <id>
+  cli: hpc-agent monitor-summary --experiment-dir <path> --run-id <id>
   python: claude_hpc.atoms.monitor_summary.monitor_summary
 exit_codes:
 - 0: ok

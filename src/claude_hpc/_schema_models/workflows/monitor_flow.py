@@ -16,7 +16,7 @@ from claude_hpc._schema_models._shared import (
 
 
 class MonitorFlowSpec(BaseModel):
-    """Spec passed to ``hpc-mapreduce monitor-flow --spec <file>``.
+    """Spec passed to ``hpc-agent monitor-flow --spec <file>``.
 
     Workflow atom that polls a run to terminal state, auto-combines
     waves as they finish, and writes the same .monitor.jsonl tick log

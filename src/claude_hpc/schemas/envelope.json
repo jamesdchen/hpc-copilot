@@ -4,7 +4,7 @@
   "$defs": {
     "ErrorEnvelope": {
       "additionalProperties": false,
-      "description": "The ``ok=false`` shape of every hpc-mapreduce stdout response.",
+      "description": "The ``ok=false`` shape of every hpc-agent stdout response.",
       "properties": {
         "ok": {
           "const": false,
@@ -75,7 +75,7 @@
     },
     "SuccessEnvelope": {
       "additionalProperties": false,
-      "description": "The ``ok=true`` shape of every hpc-mapreduce stdout response.",
+      "description": "The ``ok=true`` shape of every hpc-agent stdout response.",
       "properties": {
         "ok": {
           "const": true,

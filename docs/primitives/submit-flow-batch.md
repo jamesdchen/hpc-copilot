@@ -21,7 +21,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce submit-flow-batch --spec <path>
+  cli: hpc-agent submit-flow-batch --spec <path>
   python: claude_hpc.flows.submit_flow.submit_flow_batch
 ---
 

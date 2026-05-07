@@ -4,7 +4,7 @@
   "$defs": {
     "CampaignListData": {
       "additionalProperties": false,
-      "description": "Returned by ``hpc-mapreduce campaign list``.",
+      "description": "Returned by ``hpc-agent campaign list``.",
       "properties": {
         "campaigns": {
           "items": {
@@ -22,7 +22,7 @@
     },
     "CampaignStatusData": {
       "additionalProperties": false,
-      "description": "Returned by ``hpc-mapreduce campaign status --campaign-id <id>``.",
+      "description": "Returned by ``hpc-agent campaign status --campaign-id <id>``.",
       "properties": {
         "campaign_id": {
           "minLength": 1,

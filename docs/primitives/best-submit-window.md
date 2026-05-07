@@ -25,8 +25,8 @@ error_codes:
   category: internal
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours
-    N] [--top-k K]
+  cli: hpc-agent best-submit-window --profile <p> --cluster <c> [--within-hours N]
+    [--top-k K]
   python: claude_hpc.forecast.best_submit_window.best_submit_windows
 exit_codes:
 - 0: ok

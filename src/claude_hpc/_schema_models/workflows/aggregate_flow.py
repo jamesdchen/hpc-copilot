@@ -10,7 +10,7 @@ from claude_hpc._schema_models._shared import CombinedWaves, FailedWaves, RunIdL
 
 
 class AggregateFlowSpec(BaseModel):
-    """Spec passed to ``hpc-mapreduce aggregate-flow --spec <file>``.
+    """Spec passed to ``hpc-agent aggregate-flow --spec <file>``.
 
     Workflow atom that ensures every wave is combined on the cluster,
     pulls the per-wave partials locally, and merges them into a

@@ -595,13 +595,13 @@ def deploy_runtime(
             )
 
     # Shared preambles sourced by the templates above
-    # (templates/common/hpc_preamble.sh + templates/common/gpu_preamble.sh).
+    # (templates/runtime/common/hpc_preamble.sh + templates/runtime/common/gpu_preamble.sh).
     # The per-template ``source "$(dirname "$0")/common/<name>.sh"`` calls
-    # resolve to .hpc/templates/common/<name>.sh on the cluster.
+    # resolve to .hpc/templates/runtime/common/<name>.sh on the cluster.
     for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
         _scp(
-            pkg_dir / "mapreduce" / "templates" / "common" / common_name,
-            f".hpc/templates/common/{common_name}",
+            pkg_dir / "mapreduce" / "templates" / "runtime" / "common" / common_name,
+            f".hpc/templates/runtime/common/{common_name}",
         )
 
     # Combiner is the last scp; return its CompletedProcess so callers

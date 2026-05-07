@@ -23,7 +23,7 @@ from claude_hpc._schema_models._shared import (
 
 
 class SubmitFlowSpec(BaseModel):
-    """Spec passed to ``hpc-mapreduce submit-flow --spec <file>``.
+    """Spec passed to ``hpc-agent submit-flow --spec <file>``.
 
     Workflow atom that does pre-flight + rsync + deploy + optional
     canary + qsub + record in one shot. All judgment (which

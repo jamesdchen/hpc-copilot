@@ -28,7 +28,7 @@ if TYPE_CHECKING:
         ),
     ],
     idempotent=False,
-    cli="hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]",
+    cli="hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]",
     agent_facing=True,
 )
 def build_executor(
@@ -45,7 +45,7 @@ def build_executor(
     copied from. Raises :class:`errors.SpecInvalid` for an unknown
     ``type`` or when the destination exists and ``force`` is False.
     """
-    starters = claude_hpc._PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
+    starters = claude_hpc._PACKAGE_ROOT / "mapreduce" / "templates" / "scaffolds"
     template_map = {
         "plain": starters / "executor_template.py",
     }

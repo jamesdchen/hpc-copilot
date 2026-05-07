@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]
+  cli: hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]
   python: claude_hpc.atoms.campaign_health.campaign_health
 ---
 # campaign-health
@@ -26,7 +26,7 @@ verbatim to its model — claude-hpc itself never calls an LLM.
 - `/campaign-hpc` slash command's "is this campaign healthy?"
   diagnostic step.
 - Ad-hoc operator invocation
-  (`hpc-mapreduce campaign-health --campaign-id <id>`) when a
+  (`hpc-agent campaign-health --campaign-id <id>`) when a
   human is debugging a stuck or anomalously-failing campaign.
 
 No registered Python `composes=` references — this is a

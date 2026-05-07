@@ -13,7 +13,7 @@ class SGEBackend(HPCBackend):
     # falls back to the runtime prior alone.
     scheduler_name = "sge"
     # On-disk SGE template extension is ``.sh`` (see
-    # claude_hpc/templates/sge/*.sh). Keep this in sync with what
+    # claude_hpc/templates/runtime/sge/*.sh). Keep this in sync with what
     # ``get_template_path`` would return for the SGE branch — the
     # historical ``__init__.py:get_template_path`` value was ``.sh``,
     # not ``.sge``.

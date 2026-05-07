@@ -16,22 +16,46 @@ Both write the same journal `last_status` and the same `.monitor.jsonl` tick log
 1. **If `run_id` is unknown**, invoke [list-in-flight](../../docs/primitives/list-in-flight.md) first; pick the matching `data.runs[].run_id` (filter by `profile`, `cluster`, or `submitted_at`).
 
 2. **Pick the surface** based on the caller's need:
-   - Snapshot: `hpc-mapreduce status --run-id <id>`. Returns immediately.
-   - Wait-until-terminal: `hpc-mapreduce monitor-flow --spec foo.json` (with `run_id` + `wall_clock_budget_seconds`). Blocks until terminal/budget.
+   - Snapshot: `hpc-agent status --run-id <id>`. Returns immediately.
+   - Wait-until-terminal: `hpc-agent monitor-flow --spec foo.json` (with `run_id` + `wall_clock_budget_seconds`). Blocks until terminal/budget.
 
 3. **Parse the envelope** per the chosen primitive's `outputs:` contract: both expose `lifecycle_state`, `last_status`, `combined_waves`, `failed_waves`. `monitor-flow` adds `ticks`, `elapsed_seconds`, `escalation_reason`.
 
-4. **Decide next action** (this is the agent-specific layer):
-   - `lifecycle_state == "complete"` — terminal; proceed to final aggregation via `hpc-aggregate`.
-   - `lifecycle_state == "failed"` — surface to caller; consider [resubmit-failed](../../docs/primitives/resubmit-failed.md) (if recoverable) or [reconcile-journal](../../docs/primitives/reconcile-journal.md).
-   - `lifecycle_state == "abandoned"` — recorded jobs no longer exist on the scheduler. Invoke [reconcile-journal](../../docs/primitives/reconcile-journal.md) to confirm.
-   - `lifecycle_state == "in_flight"` (poll-run-status only) — caller waits and re-polls later.
-   - `lifecycle_state == "timeout"` (monitor-flow only) — budget elapsed; cluster jobs continue; caller can re-invoke `monitor-flow` to keep watching.
+4. **Decide next action** based on `lifecycle_state`:
+   - `complete` — terminal; proceed to final aggregation via `hpc-aggregate`.
+   - `failed` — surface to caller; consider [resubmit-failed](../../docs/primitives/resubmit-failed.md) (if recoverable) or [reconcile-journal](../../docs/primitives/reconcile-journal.md).
+   - `abandoned` — recorded jobs no longer exist on the scheduler. Invoke [reconcile-journal](../../docs/primitives/reconcile-journal.md) to confirm.
+   - `in_flight` (poll-run-status only) — caller waits and re-polls later.
+   - `timeout` (monitor-flow only) — budget elapsed; cluster jobs continue; caller can re-invoke `monitor-flow` to keep watching.
 
 5. **On error envelopes**, branch by `error_code` per the chosen primitive's frontmatter table.
+
+## Cadence + escalation rules (monitor-flow)
+
+`monitor-flow` adapts cadence internally based on the run's age and recent state changes:
+
+- Fresh runs (< 10 min since submit): poll every 30s.
+- Mid-life runs (< 1h): poll every 60s.
+- Long-running (> 1h): poll every 5 min, escalating to 15 min after 4h.
+- After any wave completes: re-poll within 30s to start the combiner promptly.
+- After 3 consecutive `unknown` task states: escalate via `escalation_reason: "n_unknown_runs_high"`.
+
+The cadence parameters live on the spec's `wall_clock_budget_seconds` + the per-tier defaults in `monitor-flow`'s `outputs:` documentation. Override with `tick_interval_sec` if the caller has specific cadence requirements (rare).
+
+## Resubmit decision flow
+
+When `lifecycle_state == "failed"` with `failed_task_ids` non-empty:
+
+1. Read the failed tasks' stderr tails via `poll-run-status` (the cluster-side reporter surfaces them in `data.tasks[<id>].err_log_path` for any task in `failed`/`unknown`).
+2. Classify the failure via [classify-failure](../../docs/primitives/classify-failure.md). Recoverable categories (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the matching category. Non-recoverable (`spec_invalid`, `executor_crash`) → surface to caller.
+3. The auto-retry resolver in [resubmit-failed](../../docs/primitives/resubmit-failed.md) reads the run sidecar's `auto_retry` block to decide whether the resubmit is allowed (per-category `max_attempts`).
+
+## Polling cadence (poll-run-status, manual loops)
+
+If the agent is driving its own polling loop instead of using `monitor-flow`, do NOT loop in tight cadence — sleep at least 60s between polls (300s for runs >30 min ETA). Schedulers and SSH multiplexers throttle aggressive polling. If you want a loop, use `monitor-flow` instead — it adapts cadence internally and writes one tick log entry per poll.
 
 ## Notes
 
 - **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
-- **Polling cadence for `poll-run-status`**: do NOT loop in tight cadence — sleep at least 60s between polls (300s for runs >30 min ETA). Schedulers and SSH multiplexers throttle aggressive polling. If you want a loop, use `monitor-flow` instead — it adapts cadence internally and writes one tick log entry per poll.
 - **No cancel/abort**: claude-hpc has no kill primitive. Receiving `lifecycle_state == "in_flight"` for a bad experiment means the cluster jobs continue to walltime; the caller can stop monitoring but cannot terminate.
+- The journal `last_status` and the per-run `<run_id>.last_status.json` cache file both update on each `poll-run-status` call; the cache file's mtime tells the caller how stale the snapshot is.

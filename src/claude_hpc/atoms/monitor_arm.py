@@ -137,7 +137,7 @@ def _classify_state(
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-mapreduce decide-monitor-arm --spec <path>",
+    cli="hpc-agent decide-monitor-arm --spec <path>",
     agent_facing=True,
 )
 def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
@@ -157,7 +157,7 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
         regime where one super-cache wait is the right call.
     invocation_argv:
         The exact ``/monitor-hpc <args>`` string (or
-        ``hpc-mapreduce monitor-flow ...``) that should fire next
+        ``hpc-agent monitor-flow ...``) that should fire next
         tick. Stamped into ``cron_create_args.prompt`` so CronCreate
         re-invokes with the same flags.
     user_invoked_via_loop:

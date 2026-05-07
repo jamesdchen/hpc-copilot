@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce campaign-converged
+  cli: hpc-agent campaign-converged
   python: claude_hpc.atoms.campaign_converged.campaign_converged
 ---
 # campaign-converged

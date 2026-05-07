@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce campaign list [--experiment-dir <dir>]",
+    cli="hpc-agent campaign list [--experiment-dir <dir>]",
     agent_facing=True,
 )
 def campaign_list(*, experiment_dir: Path) -> dict[str, Any]:
