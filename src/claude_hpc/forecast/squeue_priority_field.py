@@ -30,14 +30,22 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class QueuedJob:
-    """One row of squeue output."""
+    """One row of squeue output.
+
+    * ``time_left_sec`` — remaining walltime for RUNNING jobs;
+      ``None`` for PENDING (the scheduler hasn't started timing them).
+    * ``time_limit_sec`` — what the user *requested*. Set on every
+      job, RUNNING or PENDING. The drain simulator uses this for
+      pending jobs to decide whether they fit in backfill shadows.
+    """
 
     job_id: str
     priority: int
     partition: str
     user: str
     state: str  # PENDING / RUNNING / etc.
-    time_left_sec: int | None  # None when squeue couldn't compute (e.g. PENDING)
+    time_left_sec: int | None
+    time_limit_sec: int | None = None
 
 
 def _parse_time_left(token: str) -> int | None:
@@ -99,6 +107,10 @@ def parse_squeue_priority_field(text: str) -> list[QueuedJob]:
                 user=_cell(cells, "USER"),
                 state=_cell(cells, "STATE"),
                 time_left_sec=_parse_time_left(_cell(cells, "TIME_LEFT")),
+                # TIME_LIMIT is the user-requested walltime; required
+                # for backfill simulation. Same compact format as
+                # TIME_LEFT (D-HH:MM:SS / HH:MM:SS / MM:SS / N).
+                time_limit_sec=_parse_time_left(_cell(cells, "TIME_LIMIT")),
             )
         )
     return out

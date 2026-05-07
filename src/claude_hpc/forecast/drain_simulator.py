@@ -82,26 +82,29 @@ def simulate_drain(
     hypothetical_walltime_sec: int,
     pending_walltime_default_sec: int,
     pending_walltime_overrides: dict[str, int] | None = None,
+    enable_backfill: bool = False,
 ) -> DrainResult:
     """Simulate the drain of *partition* and predict the hypothetical
     job's start time.
 
-    Algorithm:
+    Two modes:
 
-    1. Filter queue to *partition* only.
-    2. Seed in-flight slots with running jobs' end times
-       (``now + time_left_sec``). Running jobs without a usable
-       ``time_left_sec`` are skipped (we have no idea when they end).
-    3. Insert the hypothetical job into the pending list at its
-       priority position; sort pending desc by priority.
-    4. Loop: while pending non-hypo jobs exist and the front of the
-       pending list isn't the hypothetical:
-       - if a slot is free → pop the front, start it, schedule its
-         end time;
-       - else → advance ``now`` to the earliest scheduled end, free
-         that slot.
-    5. When the hypothetical reaches the front of the pending list,
-       the next free slot is its start time.
+    * **FIFO-by-priority** (default, ``enable_backfill=False``).
+      Pending jobs claim slots strictly in priority order; when the
+      front of the pending queue can't start (no slot free), the
+      simulation waits for a running job to end. Predicted start is
+      an UPPER BOUND for SLURM clusters where the backfill scheduler
+      would land lower-priority jobs in walltime shadows.
+    * **SLURM backfill** (``enable_backfill=True``). When a
+      higher-priority pending job can't start now, the simulator
+      computes its earliest possible start (the next-running-end) and
+      checks lower-priority pendings for backfill candidates whose
+      walltime fits in the shadow ``[now, earliest_start)``. By
+      definition, backfill never delays a higher-priority job. This
+      models SLURM's ``BackfillScheduler``; SGE / PBS schedule
+      differently and the FIFO mode is the right approximation there.
+      Per-job walltime estimates (via ``pending_walltime_overrides``
+      or ``pending_walltime_default_sec``) drive the shadow-fit check.
     """
     if partition_slot_count < 1:
         return DrainResult(
@@ -151,45 +154,48 @@ def simulate_drain(
     events: list[DrainEvent] = []
 
     def _walltime_for(job: QueuedJob) -> int:
+        """Resolve a pending job's expected walltime via fallback chain:
+        hypothetical → caller override → squeue TimeLimit → partition default.
+        """
         if job.job_id == _HYPO_JOB_ID:
             return hypothetical_walltime_sec
         if job.job_id in overrides:
             return overrides[job.job_id]
+        if job.time_limit_sec is not None and job.time_limit_sec > 0:
+            return job.time_limit_sec
         return pending_walltime_default_sec
+
+    def _start_job(job: QueuedJob) -> None:
+        """Move *job* out of ``pending`` into a running slot at the current ``now``."""
+        pending.remove(job)
+        walltime = _walltime_for(job)
+        running_slots.append((now + timedelta(seconds=walltime), job.job_id))
+        events.append(
+            DrainEvent(
+                at_iso=now.isoformat(timespec="seconds"),
+                job_id=job.job_id,
+                kind="job_started",
+            )
+        )
 
     while pending:
         front = pending[0]
         if len(running_slots) < partition_slot_count:
             # A slot is free; the front of the pending queue takes it.
-            pending.pop(0)
-            walltime = _walltime_for(front)
-            end_dt = now + timedelta(seconds=walltime)
-            running_slots.append((end_dt, front.job_id))
+            _start_job(front)
             if front.job_id == _HYPO_JOB_ID:
-                events.append(
-                    DrainEvent(
-                        at_iso=now.isoformat(timespec="seconds"),
-                        job_id=front.job_id,
-                        kind="job_started",
-                    )
-                )
                 return DrainResult(
                     hypothetical_starts_at_iso=now.isoformat(timespec="seconds"),
                     slots_pending_ahead=slots_pending_ahead,
                     events=tuple(events),
                 )
-            events.append(
-                DrainEvent(
-                    at_iso=now.isoformat(timespec="seconds"),
-                    job_id=front.job_id,
-                    kind="job_started",
-                )
-            )
             continue
 
-        # No slot free; advance to the next end.
+        # No slot free. Compute the front-of-queue's earliest start
+        # (when the next running slot frees) — this is the shadow
+        # boundary for backfill candidates.
         running_slots.sort(key=lambda s: s[0])
-        next_end_dt, next_end_id = running_slots.pop(0)
+        next_end_dt, next_end_id = running_slots[0]
         if next_end_dt == datetime.max:
             # All running slots are indefinite — the hypothetical
             # never starts in this simulation horizon.
@@ -198,6 +204,45 @@ def simulate_drain(
                 slots_pending_ahead=slots_pending_ahead,
                 events=tuple(events),
             )
+
+        if enable_backfill:
+            # Walk lower-priority pendings (skip ``front``) for
+            # candidates whose walltime fits in the shadow window
+            # ``[now, next_end_dt)``. By definition, a backfill
+            # candidate finishes before ``next_end_dt`` and therefore
+            # does not delay ``front``.
+            #
+            # Simplification vs. real SLURM: backfilled jobs run in a
+            # "phantom slot" that does NOT compete with
+            # ``running_slots`` for capacity. Real SLURM backfill
+            # depends on multi-resource accounting (cpus, nodes,
+            # GRES) per-job that this simulator does not model. The
+            # phantom-slot approximation is safe for the headline
+            # forecast question ("when does the hypothetical start?")
+            # because the front-of-queue's start time is unchanged.
+            # It WILL over-predict throughput for clusters where
+            # backfill is genuinely capacity-limited.
+            shadow_sec = max(int((next_end_dt - now).total_seconds()), 0)
+            for j in list(pending[1:]):
+                if _walltime_for(j) > shadow_sec:
+                    continue
+                pending.remove(j)
+                events.append(
+                    DrainEvent(
+                        at_iso=now.isoformat(timespec="seconds"),
+                        job_id=j.job_id,
+                        kind="job_started",
+                    )
+                )
+                if j.job_id == _HYPO_JOB_ID:
+                    return DrainResult(
+                        hypothetical_starts_at_iso=now.isoformat(timespec="seconds"),
+                        slots_pending_ahead=slots_pending_ahead,
+                        events=tuple(events),
+                    )
+
+        # Advance to the next running-end.
+        running_slots.pop(0)
         now = next_end_dt
         events.append(
             DrainEvent(

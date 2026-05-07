@@ -91,6 +91,34 @@ def test_parse_time_left_handles_various_formats() -> None:
     assert parsed["f"] is None
 
 
+def test_parse_time_limit_column_when_present() -> None:
+    """The TIME_LIMIT column carries the user's requested walltime —
+    needed by the drain simulator's backfill mode to decide if a
+    pending job fits in a shadow window."""
+    text = textwrap.dedent("""
+        JOBID|PRIORITY|PARTITION|USER|STATE|TIME_LEFT|TIME_LIMIT
+        a|1|gpu|u|PENDING|N/A|01:30:00
+        b|1|gpu|u|RUNNING|00:30:00|01:00:00
+        c|1|gpu|u|PENDING|N/A|UNLIMITED
+    """).strip()
+    parsed = {j.job_id: j.time_limit_sec for j in parse_squeue_priority_field(text)}
+    assert parsed["a"] == 90 * 60  # 01:30:00
+    assert parsed["b"] == 3600
+    assert parsed["c"] is None  # UNLIMITED parses to None
+
+
+def test_time_limit_field_defaults_to_none_when_column_absent() -> None:
+    """Older squeue invocations that don't include TIME_LIMIT still
+    parse — the field surfaces as None, the simulator falls back to
+    its partition default."""
+    text = textwrap.dedent("""
+        JOBID|PRIORITY|PARTITION|USER|STATE|TIME_LEFT
+        a|1|gpu|u|PENDING|N/A
+    """).strip()
+    parsed = parse_squeue_priority_field(text)
+    assert parsed[0].time_limit_sec is None
+
+
 # ─── rank estimator ────────────────────────────────────────────────────
 
 
