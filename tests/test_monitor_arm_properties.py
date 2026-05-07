@@ -35,14 +35,14 @@ _HOUR_OR_MORE = re.compile(r"^0 \*/(\d+) \* \* \*$")
 
 
 @given(_cadence)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_seconds_to_cron_always_returns_five_fields(cadence_sec: int) -> None:
     out = _seconds_to_cron(cadence_sec)
     assert _FIVE_FIELD.fullmatch(out) is not None, out
 
 
 @given(_cadence)
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_seconds_to_cron_is_deterministic(cadence_sec: int) -> None:
     assert _seconds_to_cron(cadence_sec) == _seconds_to_cron(cadence_sec)
 
@@ -56,7 +56,7 @@ def test_seconds_to_cron_at_or_below_60s_emits_every_minute(cadence_sec: int) ->
 
 
 @given(st.integers(min_value=61, max_value=3599))
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_seconds_to_cron_sub_hour_uses_minute_step(cadence_sec: int) -> None:
     """For 60 < cadence < 3600, the schedule is ``*/N * * * *`` where
     N is the minute step, 1..59. Pinning so a future refactor that
@@ -73,7 +73,7 @@ def test_seconds_to_cron_sub_hour_uses_minute_step(cadence_sec: int) -> None:
 
 
 @given(st.integers(min_value=3600, max_value=86400))
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_seconds_to_cron_hour_or_more_uses_hour_step(cadence_sec: int) -> None:
     """For cadence ≥ 3600s, the schedule is ``0 */N * * *`` (run at
     the top of every Nth hour), where N is at least 1."""

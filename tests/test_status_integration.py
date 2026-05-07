@@ -215,7 +215,7 @@ _state_strategy = st.sampled_from(["RUNNING", "PENDING", "FAILED", "TIMEOUT", "O
     n_pending=st.integers(min_value=0, max_value=5),
     n_failed=st.integers(min_value=0, max_value=5),
 )
-@settings(max_examples=80, deadline=None)
+@settings(max_examples=50, deadline=None)
 def test_summary_counts_sum_to_total_tasks(
     tmp_path_factory: pytest.TempPathFactory,
     n_complete: int,

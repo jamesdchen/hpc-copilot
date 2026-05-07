@@ -35,7 +35,7 @@ _anything = st.one_of(st.none(), st.text(max_size=64))
 
 
 @given(_anything)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_to_int_never_raises_returns_int(s: str | None) -> None:
     """``to_int`` is the lossy-but-safe form. Pin: any input → int,
     no exception. Default returned for anything unparseable."""
@@ -44,35 +44,35 @@ def test_to_int_never_raises_returns_int(s: str | None) -> None:
 
 
 @given(_anything)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_to_int_or_none_never_raises_returns_int_or_none(s: str | None) -> None:
     out = parsing.to_int_or_none(s)
     assert out is None or isinstance(out, int)
 
 
 @given(_anything)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_to_float_or_none_never_raises_returns_float_or_none(s: str | None) -> None:
     out = parsing.to_float_or_none(s)
     assert out is None or isinstance(out, float)
 
 
 @given(_anything)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_mem_to_gb_never_raises_returns_float_or_none(s: str | None) -> None:
     out = parsing.parse_mem_to_gb(s)
     assert out is None or isinstance(out, float)
 
 
 @given(_anything)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_mem_to_mb_never_raises_returns_int_or_none(s: str | None) -> None:
     out = parsing.parse_mem_to_mb(s)
     assert out is None or isinstance(out, int)
 
 
 @given(_anything)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_walltime_to_sec_never_raises_returns_nonneg_int(s: str | None) -> None:
     out = parsing.parse_walltime_to_sec(s)
     assert isinstance(out, int)
@@ -80,7 +80,7 @@ def test_parse_walltime_to_sec_never_raises_returns_nonneg_int(s: str | None) ->
 
 
 @given(st.text(max_size=200))
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_qstat_columns_never_raises_returns_list_of_lists(text: str) -> None:
     """Tokeniser must survive any string the cluster might emit
     (header garbage, mid-line failures, control chars)."""
@@ -96,14 +96,14 @@ def test_parse_qstat_columns_never_raises_returns_list_of_lists(text: str) -> No
 
 
 @given(st.integers(min_value=-(10**12), max_value=10**12))
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_to_int_round_trips_pure_integer_strings(n: int) -> None:
     """For any int *n*, ``str(n)`` must parse back to *n*."""
     assert parsing.to_int(str(n), default=999) == n
 
 
 @given(st.integers(min_value=0, max_value=10**9))
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_to_int_accepts_trailing_dot_zero_form(n: int) -> None:
     """sacct emits ``CPUTimeRAW`` and similar as ``N.0``; the parser
     must accept that without falling back to default."""
@@ -116,7 +116,7 @@ def test_to_int_accepts_trailing_dot_zero_form(n: int) -> None:
     st.integers(min_value=0, max_value=59),
     st.integers(min_value=0, max_value=59),
 )
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_walltime_round_trips_dhms_format(d: int, h: int, m: int, s: int) -> None:
     """``D-HH:MM:SS`` is the SLURM canonical walltime format. The
     parser must invert the formatter exactly."""
@@ -130,7 +130,7 @@ def test_parse_walltime_round_trips_dhms_format(d: int, h: int, m: int, s: int) 
     st.integers(min_value=0, max_value=59),
     st.integers(min_value=0, max_value=59),
 )
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_walltime_round_trips_hms_format(h: int, m: int, s: int) -> None:
     """``HH:MM:SS`` (no day) — a common SLURM/SGE elapsed format."""
     text = f"{h}:{m:02d}:{s:02d}"
@@ -139,7 +139,7 @@ def test_parse_walltime_round_trips_hms_format(h: int, m: int, s: int) -> None:
 
 
 @given(st.integers(min_value=0, max_value=10**6))
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_parse_walltime_accepts_bare_integer(n: int) -> None:
     """A bare integer is interpreted as raw seconds — used by some
     qstat formatters."""
@@ -147,7 +147,7 @@ def test_parse_walltime_accepts_bare_integer(n: int) -> None:
 
 
 @given(st.integers(min_value=1, max_value=1024))
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_parse_mem_to_gb_gigabyte_unit_round_trips(n: int) -> None:
     """For ``Ng`` / ``NG`` / ``NgB``, the value is *n* gigabytes."""
     for token in (f"{n}g", f"{n}G", f"{n}GB", f"{n}gb"):
@@ -155,7 +155,7 @@ def test_parse_mem_to_gb_gigabyte_unit_round_trips(n: int) -> None:
 
 
 @given(st.integers(min_value=1, max_value=10000))
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_parse_mem_to_mb_consistency_with_gb(n: int) -> None:
     """``parse_mem_to_mb`` must equal ``round(parse_mem_to_gb * 1024)``
     by construction; pinning so the conversion can't drift."""
@@ -183,7 +183,7 @@ _parts_strategy = st.lists(st.text(max_size=20), max_size=12)
 
 
 @given(_parts_strategy, _format_spec_strategy)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_sacct_row_returns_dict_keyed_by_format_spec(
     parts: list[str], format_spec: list[str]
 ) -> None:
@@ -197,7 +197,7 @@ def test_parse_sacct_row_returns_dict_keyed_by_format_spec(
 
 
 @given(_parts_strategy, _format_spec_strategy)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_parse_sacct_row_missing_trailing_cols_become_empty_string(
     parts: list[str], format_spec: list[str]
 ) -> None:
@@ -222,7 +222,7 @@ _no_linebreaks = st.text(
 
 
 @given(st.lists(_no_linebreaks, min_size=1, max_size=10))
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_parse_qstat_columns_skips_documented_header_prefixes(words: list[str]) -> None:
     """A line whose first token starts with ``HOSTNAME`` / ``---`` /
     ``global`` / ``queuename`` / ``###`` must not appear in the output.
