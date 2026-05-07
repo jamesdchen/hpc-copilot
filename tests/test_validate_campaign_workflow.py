@@ -48,9 +48,7 @@ def _write_tasks_py(tmp_path: Path, tasks: list[dict]) -> None:
     target = tmp_path / ".hpc" / "tasks.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
-        f"_TASKS = {tasks!r}\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+        f"_TASKS = {tasks!r}\ndef total(): return len(_TASKS)\ndef resolve(i): return _TASKS[i]\n"
     )
 
 

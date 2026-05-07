@@ -113,9 +113,7 @@ def test_non_dict_tasks_py_fails_with_existing_contract_error(tmp_path: Path) ->
         "def resolve(i): return _TASKS[i]\n"
     )
     with pytest.raises(TypeError, match="must return a dict"):
-        record_interview(
-            InterviewSpec.model_validate(_minimal_intent(2)), campaign_dir=tmp_path
-        )
+        record_interview(InterviewSpec.model_validate(_minimal_intent(2)), campaign_dir=tmp_path)
 
 
 # ─── persistence shape ────────────────────────────────────────────────────
@@ -145,9 +143,7 @@ def test_interview_json_round_trips_intent_verbatim(tmp_path: Path) -> None:
 def test_meta_json_only_written_when_intent_supplies_relevant_fields(tmp_path: Path) -> None:
     """No cluster_target and no budget → no meta.json update."""
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
-    data = record_interview(
-        InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path
-    )
+    data = record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
     assert data["artifacts"] == ["interview.json"]
     assert not (tmp_path / "meta.json").exists()
 
@@ -193,9 +189,7 @@ def test_task_count_mismatch_raises(tmp_path: Path) -> None:
 
 def test_missing_tasks_py_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="missing tasks.py"):
-        record_interview(
-            InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path
-        )
+        record_interview(InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path)
 
 
 def test_empty_tasks_py_raises(tmp_path: Path) -> None:
@@ -203,9 +197,7 @@ def test_empty_tasks_py_raises(tmp_path: Path) -> None:
     than slipping through to a divide-by-zero downstream."""
     (tmp_path / "tasks.py").write_text("def total(): return 0\ndef resolve(i): raise IndexError\n")
     with pytest.raises(ValueError, match="no tasks to dispatch"):
-        record_interview(
-            InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path
-        )
+        record_interview(InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path)
 
 
 # ─── task_generator: typed materializer ────────────────────────────────────

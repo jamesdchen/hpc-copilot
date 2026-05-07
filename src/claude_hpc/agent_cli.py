@@ -1378,9 +1378,7 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
                 "would_launch": [
                     {"run_id": s.run_id, "tasks": s.total_tasks} for s in batch_spec.specs
                 ],
-                "shared_targets": [
-                    {"ssh_target": t[0], "remote_path": t[1]} for t in targets
-                ],
+                "shared_targets": [{"ssh_target": t[0], "remote_path": t[1]} for t in targets],
                 "n_specs": len(batch_spec.specs),
                 "dry_run": True,
             },

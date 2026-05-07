@@ -134,9 +134,7 @@ def test_partial_failure_reports_per_job(tmp_path: Path) -> None:
 
 def test_ssh_unreachable_marks_job_failed(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path, job_ids=["1"])
-    with patch(
-        "claude_hpc.infra.remote.ssh_run", side_effect=errors.SshUnreachable("nope")
-    ):
+    with patch("claude_hpc.infra.remote.ssh_run", side_effect=errors.SshUnreachable("nope")):
         out = update_run_constraints(
             tmp_path,
             spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a100"]),
@@ -153,18 +151,14 @@ def test_both_set_and_add_features_rejected(tmp_path: Path) -> None:
     with pytest.raises(errors.SpecInvalid, match="Pass exactly one"):
         update_run_constraints(
             tmp_path,
-            spec=UpdateRunConstraintsSpec(
-                run_id=_RUN_ID, set_features=["a"], add_features=["b"]
-            ),
+            spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a"], add_features=["b"]),
         )
 
 
 def test_neither_set_nor_add_features_rejected(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path, job_ids=["1"])
     with pytest.raises(errors.SpecInvalid, match="at least one"):
-        update_run_constraints(
-            tmp_path, spec=UpdateRunConstraintsSpec(run_id=_RUN_ID)
-        )
+        update_run_constraints(tmp_path, spec=UpdateRunConstraintsSpec(run_id=_RUN_ID))
 
 
 def test_no_job_ids_in_sidecar_rejected(tmp_path: Path) -> None:

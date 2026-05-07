@@ -16,9 +16,9 @@ from __future__ import annotations
 import typing
 
 from claude_hpc._internal.lifecycle import (
+    TERMINAL_STATUSES,
     JournalStatus,
     LifecycleState,
-    TERMINAL_STATUSES,
 )
 from claude_hpc._schema_models._shared import (
     LifecycleStateObservable,

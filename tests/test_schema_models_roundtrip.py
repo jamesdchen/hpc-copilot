@@ -348,9 +348,7 @@ def _strategy_for(annotation: Any, metadata: list[Any]) -> st.SearchStrategy:
         if annotation is float:
             lo = float(_extract_min_int(metadata))
             hi = float(_extract_max_int(metadata, default=int(lo) + 100))
-            return st.floats(
-                min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False
-            )
+            return st.floats(min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False)
         if annotation is str:
             pattern = None
             for m in metadata:

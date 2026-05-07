@@ -88,10 +88,7 @@ class SubmitFlowSpec(BaseModel):
     tasks_per_array: int | None = Field(
         default=None,
         ge=1,
-        description=(
-            "Batch tasks into arrays of this size. Null = single "
-            "array of total_tasks."
-        ),
+        description=("Batch tasks into arrays of this size. Null = single array of total_tasks."),
     )
     canary: bool = Field(
         default=True,
@@ -160,8 +157,7 @@ class SubmitFlowResult(BaseModel):
     canary_run_id: str | None = Field(
         default=None,
         description=(
-            "Run ID of the canary submission (a sibling sidecar). "
-            "Null when canary skipped."
+            "Run ID of the canary submission (a sibling sidecar). Null when canary skipped."
         ),
     )
     canary_job_ids: list[str] | None = Field(

@@ -30,7 +30,7 @@ __all__ = ["validate_submission"]
     verb="validate",
     side_effects=[SideEffect("ssh", "<cluster> (scheduler --test-only probe)")],
     idempotent=True,
-    cli="hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>",
+    cli="hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>",  # noqa: E501
     agent_facing=True,
 )
 def validate_submission(experiment_dir: Path, *, spec: ValidateSpec) -> ValidateResult:
@@ -94,8 +94,7 @@ def validate_submission(experiment_dir: Path, *, spec: ValidateSpec) -> Validate
         fits = int(eta_sec) <= spec.backfill_window_sec
         verdict = "fits" if fits else "exceeds"
         reason = (
-            f"predicted start in {int(eta_sec)}s "
-            f"({verdict} {spec.backfill_window_sec}s window)"
+            f"predicted start in {int(eta_sec)}s ({verdict} {spec.backfill_window_sec}s window)"
         )
 
     return ValidateResult(

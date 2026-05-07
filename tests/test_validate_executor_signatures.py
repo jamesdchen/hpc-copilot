@@ -41,9 +41,7 @@ def _write_tasks_py(tmp_path: Path, tasks: list[dict]) -> None:
     target = tmp_path / ".hpc" / "tasks.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
-        f"_TASKS = {tasks!r}\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+        f"_TASKS = {tasks!r}\ndef total(): return len(_TASKS)\ndef resolve(i): return _TASKS[i]\n"
     )
 
 
@@ -159,9 +157,7 @@ def test_missing_executor_module_emits_info_finding(tmp_path: Path) -> None:
 def test_missing_function_on_executor_emits_error(tmp_path: Path) -> None:
     modname = _write_executor(tmp_path, "x = 1\n")
     _write_tasks_py(tmp_path, [{"x": 1}])
-    out = validate_executor_signatures(
-        tmp_path, spec=_spec(modname, fn="not_a_real_function")
-    )
+    out = validate_executor_signatures(tmp_path, spec=_spec(modname, fn="not_a_real_function"))
     finding = next(f for f in out.findings if f.code == "executor_function_not_found")
     assert finding.severity == "error"
 
@@ -179,9 +175,7 @@ def test_resolve_returning_non_dict_emits_error(tmp_path: Path) -> None:
     target = tmp_path / ".hpc" / "tasks.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
-        "_TASKS = [('a', 1)]\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+        "_TASKS = [('a', 1)]\ndef total(): return len(_TASKS)\ndef resolve(i): return _TASKS[i]\n"
     )
     modname = _write_executor(tmp_path, "def main(): pass\n")
     out = validate_executor_signatures(tmp_path, spec=_spec(modname))

@@ -289,8 +289,7 @@ def test_summary_counts_sum_to_total_tasks(
         report = report_status_from_tasks(tasks_data, ["1"], scheduler="slurm")
 
     counted = sum(
-        report["summary"][k]
-        for k in ("complete", "running", "pending", "failed", "unknown")
+        report["summary"][k] for k in ("complete", "running", "pending", "failed", "unknown")
     )
     assert counted == total, (counted, total, report["summary"])
 
