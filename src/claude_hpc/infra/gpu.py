@@ -115,7 +115,8 @@ def pick_gpu(
         cfg = load_gpu_config_for_cluster(cluster_name)
     if cfg is None:
         cfg = _DEFAULT_GPU_CONFIG
-    agg = parse_qstat_f(qstat_text, gpu_config=cfg)
+    excluded = _excluded_prefixes_for_cluster(cluster_name)
+    agg = parse_qstat_f(qstat_text, gpu_config=cfg, excluded_prefixes=excluded)
     return score_gpus(
         agg,
         gpu_config=cfg,
@@ -260,12 +261,19 @@ def _run_qstat(ssh_host: str | None = None) -> str | None:
 def parse_qstat_f(
     text: str,
     gpu_config: dict[str, dict] | None = None,
+    excluded_prefixes: set[str] | None = None,
 ) -> dict[str, dict]:
     """Parse ``qstat -f`` output into per-GPU-type aggregates.
 
     Returns ``{queue_prefix: {"used": int, "total": int, "active_nodes": int}}``.
+
+    *excluded_prefixes* defaults to :data:`_DEFAULT_EXCLUDED_PREFIXES`
+    (Hoffman2-shaped). Pass an explicit set (typically resolved via
+    :func:`_excluded_prefixes_for_cluster`) to honour a cluster's
+    ``excluded_gpu_queue_prefixes`` YAML override.
     """
     cfg = gpu_config or _DEFAULT_GPU_CONFIG
+    excluded = excluded_prefixes if excluded_prefixes is not None else _DEFAULT_EXCLUDED_PREFIXES
     agg: dict[str, dict] = {}
 
     # ``parse_qstat_columns`` strips blanks and discards header/separator
@@ -285,7 +293,7 @@ def parse_qstat_f(
         is_disabled = len(parts) >= 6 and "d" in parts[-1]
 
         queue_name = queue_host.split(".q")[0]
-        if queue_name in _EXCLUDED_PREFIXES:
+        if queue_name in excluded:
             continue
 
         config_key = None
