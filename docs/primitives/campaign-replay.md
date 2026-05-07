@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce campaign-replay
+  cli: hpc-agent campaign-replay
   python: claude_hpc.atoms.campaign_replay.campaign_replay
 ---
 # campaign-replay
@@ -25,7 +25,7 @@ metrics dict.
 
 - `campaign-converged` (reads the history to evaluate stop
   criteria — see `docs/primitives/campaign-converged.md`).
-- Bespoke debug tooling — `hpc-mapreduce campaign-replay
+- Bespoke debug tooling — `hpc-agent campaign-replay
   --campaign-id <id> --last-n 10` is useful for inspecting what a
   strategy actually did across recent steps.
 

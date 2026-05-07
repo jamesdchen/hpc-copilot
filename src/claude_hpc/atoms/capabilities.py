@@ -48,7 +48,7 @@ def _mars_skill_paths() -> dict[str, str]:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce capabilities",
+    cli="hpc-agent capabilities",
     agent_facing=True,
 )
 def capabilities(*, subcommands: list[str]) -> dict[str, Any]:

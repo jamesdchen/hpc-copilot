@@ -22,7 +22,7 @@ Every campaign now ends with a structured intent file persisted next to the task
                                      │ + intent.json
                                      ▼
             ┌─────────────────────────────────────────┐
-            │  hpc-mapreduce interview                │
+            │  hpc-agent interview                │
             │  - validates tasks.total() == intent.n  │
             │  - dry-resolve preview (first/mid/last) │
             │  - persists intent verbatim +           │
@@ -36,7 +36,7 @@ Every campaign now ends with a structured intent file persisted next to the task
                              │
                              ▼
             ┌─────────────────────────────────────────┐
-            │  hpc-mapreduce recall                   │
+            │  hpc-agent recall                   │
             │  - walks experiment_roots               │
             │  - filters (task_kind / operator /      │
             │    since)                               │
@@ -52,7 +52,7 @@ Every campaign now ends with a structured intent file persisted next to the task
 
 ## Anatomy of `interview.json`
 
-Persisted by `hpc-mapreduce interview`:
+Persisted by `hpc-agent interview`:
 
 ```json
 {
@@ -98,7 +98,7 @@ Generator mode is byte-equivalently idempotent on re-run. To diverge from the re
 ## Querying with `recall`
 
 ```bash
-hpc-mapreduce recall \
+hpc-agent recall \
     --root ~/experiments \
     --task-kind ml-hparam-sweep \
     --include-runtime \

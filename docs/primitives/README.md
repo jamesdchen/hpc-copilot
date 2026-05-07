@@ -29,7 +29,7 @@ error_codes:                              # what callers should handle
     category: network
     retry_safe: true
 backed_by:                                # implementation + field-level contract source
-  cli: hpc-mapreduce submit --spec <path>
+  cli: hpc-agent submit --spec <path>
   python: claude_hpc.runner.submit_and_record
 ---
 ```
@@ -85,90 +85,90 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [best-submit-window](best-submit-window.md) | yes | _none_ | `hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` |
-| [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-mapreduce campaign-advance` |
-| [campaign-budget](campaign-budget.md) | yes | _none_ | `hpc-mapreduce campaign-budget` |
-| [campaign-converged](campaign-converged.md) | yes | _none_ | `hpc-mapreduce campaign-converged` |
-| [campaign-health](campaign-health.md) | yes | _none_ | `hpc-mapreduce campaign-health [--campaign-id <id>] [--since-iso <ts>]` |
-| [campaign-list](campaign-list.md) | yes | _none_ | `hpc-mapreduce campaign list [--experiment-dir <dir>]` |
-| [campaign-replay](campaign-replay.md) | yes | _none_ | `hpc-mapreduce campaign-replay` |
-| [campaign-status](campaign-status.md) | yes | _none_ | `hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]` |
-| [capabilities](capabilities.md) | yes | _none_ | `hpc-mapreduce capabilities` |
-| [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-mapreduce clusters describe <name>` |
-| [clusters-list](clusters-list.md) | yes | _none_ | `hpc-mapreduce clusters list` |
-| [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-mapreduce decide-monitor-arm --spec <path>` |
-| [discover-executors](discover-executors.md) | yes | _none_ | `hpc-mapreduce discover --experiment-dir <path>` |
-| [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-mapreduce discover-reducers --experiment-dir <path>` |
-| [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-mapreduce failures --run-id <id> [--lines <n>]` |
-| [find-prior-run](find-prior-run.md) | yes | _none_ | `hpc-mapreduce find-prior-run --experiment-dir <path> --cmd-sha <hex>` |
-| [house-edge](house-edge.md) | yes | _none_ | `hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` |
-| [inspect-cluster](inspect-cluster.md) | yes | ssh: `<cluster>` | `hpc-mapreduce inspect-cluster --cluster <name> [...]` |
-| [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-mapreduce list-in-flight --experiment-dir <path>` |
-| [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-mapreduce logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
-| [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-mapreduce monitor-summary --experiment-dir <path> --run-id <id>` |
-| [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` |
-| [predict-queue-wait](predict-queue-wait.md) | yes | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` |
-| [predict-start-time](predict-start-time.md) | yes | _none_ | `hpc-mapreduce predict-start-time --spec <path>` |
-| [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
-| [recall](recall.md) | yes | _none_ | `hpc-mapreduce recall` |
-| [recommend-partition](recommend-partition.md) | yes | _none_ | `hpc-mapreduce recommend-partition --spec <path>` |
-| [recommend-wait-alternative](recommend-wait-alternative.md) | yes | _none_ | `hpc-mapreduce recommend-wait-alternative --spec <path>` |
-| [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` |
-| [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-mapreduce suggest-setup-action --experiment-dir <path>` |
-| [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-mapreduce summarize-submit-plan --spec <path>` |
-| [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-mapreduce verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` |
-| [walltime-drift](walltime-drift.md) | yes | _none_ | `hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` |
+| [best-submit-window](best-submit-window.md) | yes | _none_ | `hpc-agent best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` |
+| [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-agent campaign-advance` |
+| [campaign-budget](campaign-budget.md) | yes | _none_ | `hpc-agent campaign-budget` |
+| [campaign-converged](campaign-converged.md) | yes | _none_ | `hpc-agent campaign-converged` |
+| [campaign-health](campaign-health.md) | yes | _none_ | `hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]` |
+| [campaign-list](campaign-list.md) | yes | _none_ | `hpc-agent campaign list [--experiment-dir <dir>]` |
+| [campaign-replay](campaign-replay.md) | yes | _none_ | `hpc-agent campaign-replay` |
+| [campaign-status](campaign-status.md) | yes | _none_ | `hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]` |
+| [capabilities](capabilities.md) | yes | _none_ | `hpc-agent capabilities` |
+| [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name>` |
+| [clusters-list](clusters-list.md) | yes | _none_ | `hpc-agent clusters list` |
+| [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
+| [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover --experiment-dir <path>` |
+| [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-agent discover-reducers --experiment-dir <path>` |
+| [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-agent failures --run-id <id> [--lines <n>]` |
+| [find-prior-run](find-prior-run.md) | yes | _none_ | `hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>` |
+| [house-edge](house-edge.md) | yes | _none_ | `hpc-agent house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` |
+| [inspect-cluster](inspect-cluster.md) | yes | ssh: `<cluster>` | `hpc-agent inspect-cluster --cluster <name> [...]` |
+| [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` |
+| [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
+| [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` |
+| [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status --run-id <id> [--experiment-dir <dir>]` |
+| [predict-queue-wait](predict-queue-wait.md) | yes | _none_ | `hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` |
+| [predict-start-time](predict-start-time.md) | yes | _none_ | `hpc-agent predict-start-time --spec <path>` |
+| [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
+| [recall](recall.md) | yes | _none_ | `hpc-agent recall` |
+| [recommend-partition](recommend-partition.md) | yes | _none_ | `hpc-agent recommend-partition --spec <path>` |
+| [recommend-wait-alternative](recommend-wait-alternative.md) | yes | _none_ | `hpc-agent recommend-wait-alternative --spec <path>` |
+| [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-agent plan-submit --profile <name> --cluster <name> [...]` |
+| [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action --experiment-dir <path>` |
+| [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
+| [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` |
+| [walltime-drift](walltime-drift.md) | yes | _none_ | `hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` |
 
 ### `validate` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [check-preflight](check-preflight.md) | yes | _none_ | `hpc-mapreduce preflight [--cluster <name>]` |
-| [validate](validate.md) | yes | ssh: `<cluster>` | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` |
-| [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `hpc-mapreduce validate-executor-signatures --spec <path>` |
-| [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `hpc-mapreduce validate-input-dataset --spec <path>` |
-| [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `hpc-mapreduce validate-self-qos-limit --spec <path>` |
-| [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `hpc-mapreduce validate-walltime-against-history --spec <path>` |
+| [check-preflight](check-preflight.md) | yes | _none_ | `hpc-agent preflight [--cluster <name>]` |
+| [validate](validate.md) | yes | ssh: `<cluster>` | `hpc-agent validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` |
+| [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `hpc-agent validate-executor-signatures --spec <path>` |
+| [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `hpc-agent validate-input-dataset --spec <path>` |
+| [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `hpc-agent validate-self-qos-limit --spec <path>` |
+| [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `hpc-agent validate-walltime-against-history --spec <path>` |
 
 ### `mutate` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; rsync-pull: `<remote_path>/<output_rel>` | `hpc-mapreduce cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` |
-| [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
+| [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; rsync-pull: `<remote_path>/<output_rel>` | `hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` |
+| [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
-| [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `hpc-mapreduce prune-orphan-sidecars` |
-| [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
-| [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
-| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `hpc-mapreduce update-run-constraints --spec <path>` |
+| [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `hpc-agent prune-orphan-sidecars` |
+| [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
+| [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
+| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `hpc-agent update-run-constraints --spec <path>` |
 
 ### `submit` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [submit-spec](submit-spec.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; scheduler-submit: `<cluster>` | `hpc-mapreduce submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
+| [submit-spec](submit-spec.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; scheduler-submit: `<cluster>` | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
 
 ### `scaffold` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [axes-init](axes-init.md) | yes | writes-sidecar: `<experiment>/.hpc/axes.yaml` | `hpc-mapreduce axes-init` |
-| [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
-| [build-submit-spec](build-submit-spec.md) | yes | _none_ | `hpc-mapreduce build-submit-spec --spec <path>` |
-| [build-tasks-py](build-tasks-py.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py` | `hpc-mapreduce build-tasks-py --spec <path>` |
-| [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `hpc-mapreduce campaign-init` |
-| [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `hpc-mapreduce interview` |
+| [axes-init](axes-init.md) | yes | writes-sidecar: `<experiment>/.hpc/axes.yaml` | `hpc-agent axes-init` |
+| [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
+| [build-submit-spec](build-submit-spec.md) | yes | _none_ | `hpc-agent build-submit-spec --spec <path>` |
+| [build-tasks-py](build-tasks-py.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py` | `hpc-agent build-tasks-py --spec <path>` |
+| [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `hpc-agent campaign-init` |
+| [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `hpc-agent interview` |
 
 ### `workflow` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; rsync: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce aggregate-flow --spec <path>` |
-| [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce monitor-flow --spec <path>` |
-| [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow --spec <path>` |
-| [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow-batch --spec <path>` |
-| [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-mapreduce validate-campaign --spec <path>` |
-| [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-mapreduce verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]` |
+| [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; rsync: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate-flow --spec <path>` |
+| [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path>` |
+| [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow --spec <path>` |
+| [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow-batch --spec <path>` |
+| [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-agent validate-campaign --spec <path>` |
+| [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]` |
 <!-- END PRIMITIVE CATALOG -->
 
 ## How slash commands and skills consume primitives

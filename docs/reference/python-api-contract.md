@@ -2,7 +2,7 @@
 
 Cross-cutting reference for the Python helpers, on-cluster CLIs, and process-level entry points that slash commands and library callers invoke from inside the `claude-hpc` checkout. Per-operation contracts (input/output/error/idempotency) live in **[`docs/primitives/`](primitives/)** — this file documents only what's shared across operations: the per-run sidecar schema and the conventions the Python surface follows.
 
-> **Looking for the shell `hpc-mapreduce` CLI?** That is the agent-facing surface — see [`docs/reference/cli-spec.md`](cli-spec.md) and the per-subcommand primitives under `docs/primitives/`. This document covers the Python/library and on-cluster paths that `slash_commands/*.py` and the CLI both reach into.
+> **Looking for the shell `hpc-agent` CLI?** That is the agent-facing surface — see [`docs/reference/cli-spec.md`](cli-spec.md) and the per-subcommand primitives under `docs/primitives/`. This document covers the Python/library and on-cluster paths that `slash_commands/*.py` and the CLI both reach into.
 
 ## Conventions
 

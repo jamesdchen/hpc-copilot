@@ -61,7 +61,7 @@ def _summarize_sidecar(path: Any) -> dict[str, Any]:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-mapreduce suggest-setup-action --experiment-dir <path>",
+    cli="hpc-agent suggest-setup-action --experiment-dir <path>",
     agent_facing=True,
 )
 def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
@@ -169,7 +169,7 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="cmd_sha",
-    cli="hpc-mapreduce find-prior-run --experiment-dir <path> --cmd-sha <hex>",
+    cli="hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>",
     agent_facing=True,
 )
 def find_prior_run(

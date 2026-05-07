@@ -5,7 +5,7 @@ LOC mixing per-task status checking, scheduler dispatch, and these
 post-processing rollups. The two ``rollup_by_*`` helpers run after
 :func:`status.report_status_from_tasks` produces the per-task report;
 they fold the report by grid point or by wave for downstream consumers
-(``hpc-mapreduce status`` envelope, the campaign loop's ``prior(...)``
+(``hpc-agent status`` envelope, the campaign loop's ``prior(...)``
 view, the rich TUI).
 """
 

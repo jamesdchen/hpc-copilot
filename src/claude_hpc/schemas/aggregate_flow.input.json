@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/aggregate_flow.input.json",
   "title": "aggregate-flow input spec",
-  "description": "Spec passed to ``hpc-mapreduce aggregate-flow --spec <file>``.\n\nWorkflow atom that ensures every wave is combined on the cluster,\npulls the per-wave partials locally, and merges them into a\nsingle aggregated-metrics dict via reduce_partials. Pairs with\nsubmit-flow + monitor-flow as the third workflow atom in the\ncampaign composition pattern.",
+  "description": "Spec passed to ``hpc-agent aggregate-flow --spec <file>``.\n\nWorkflow atom that ensures every wave is combined on the cluster,\npulls the per-wave partials locally, and merges them into a\nsingle aggregated-metrics dict via reduce_partials. Pairs with\nsubmit-flow + monitor-flow as the third workflow atom in the\ncampaign composition pattern.",
   "type": "object",
   "required": [
     "run_id"

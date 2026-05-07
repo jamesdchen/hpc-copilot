@@ -39,7 +39,7 @@ docs/
 │   ├── README.md              indexed catalog (table is auto-regenerated)
 │   └── *.md                   one per primitive
 └── generated/                 whole-file auto-generated; do not edit by hand
-    └── operations.md          `hpc-mapreduce capabilities` rendered as markdown
+    └── operations.md          `hpc-agent capabilities` rendered as markdown
 ```
 
 ## What's auto-generated vs hand-written

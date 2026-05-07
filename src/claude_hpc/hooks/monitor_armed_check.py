@@ -29,7 +29,7 @@ Output:
     {"decision": "block", "reason": "..."}   -> block stop with reason
 
 Wire-up: see :func:`claude_hpc.hooks.monitor_armed_check.settings_entry`
-or run ``hpc-mapreduce hook-install`` to add it to ~/.claude/settings.json.
+or run ``hpc-agent hook-install`` to add it to ~/.claude/settings.json.
 """
 
 from __future__ import annotations
@@ -153,7 +153,7 @@ def main() -> int:
             "/monitor-hpc spec violation: every invocation must emit a final "
             "line of the form `armed: <cron|loop|none> run_id=<X> cadence=<Y>s "
             'reason="<short>"`. Don\'t hand-author this line — call '
-            "`hpc-mapreduce decide-monitor-arm --spec <state>` and copy the "
+            "`hpc-agent decide-monitor-arm --spec <state>` and copy the "
             "envelope's `data.armed_line` verbatim as the very last line of "
             "your response (the primitive also emits `data.cron_create_args` "
             'ready to pass to CronCreate when arm == "cron").'

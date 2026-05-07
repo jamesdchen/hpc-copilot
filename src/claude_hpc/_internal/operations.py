@@ -53,9 +53,9 @@ def _baked_path() -> Path:
 
 def _cli_subcommand(backed_by: dict) -> str | None:
     cli = backed_by.get("cli", "") if isinstance(backed_by, dict) else ""
-    if not cli or not cli.startswith("hpc-mapreduce "):
+    if not cli or not cli.startswith("hpc-agent "):
         return None
-    rest = cli[len("hpc-mapreduce ") :].strip()
+    rest = cli[len("hpc-agent ") :].strip()
     tokens = rest.split(" ")
     if len(tokens) >= 2 and tokens[1] in {"list", "describe", "status"}:
         return f"{tokens[0]}_{tokens[1]}"
@@ -207,7 +207,7 @@ def render_llms_full() -> str:
     primitives they call directly.
 
     Returns plain text suitable for human reading or LLM context
-    loading --- NOT the JSON envelope. ``hpc-mapreduce capabilities
+    loading --- NOT the JSON envelope. ``hpc-agent capabilities
     --full`` is documented as an explicit human-mode flag analogous to
     ``--help``.
     """
@@ -226,7 +226,7 @@ def render_llms_full() -> str:
         f"\n_{len(agent_facing)} agent-facing primitives expanded below; "
         f"{len(internal)} framework-internal primitives appear in the catalog "
         "table only (composed transitively by workflows). Use "
-        "``hpc-mapreduce <subcommand> --help`` or read the schema file named "
+        "``hpc-agent <subcommand> --help`` or read the schema file named "
         "in the catalog row for forensic access._\n"
     )
 

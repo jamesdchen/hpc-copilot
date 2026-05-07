@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce campaign-advance",
+    cli="hpc-agent campaign-advance",
 )
 def campaign_advance(
     *,

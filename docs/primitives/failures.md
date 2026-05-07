@@ -38,7 +38,7 @@ error_codes:
   category: network
   retry_safe: true
 backed_by:
-  cli: hpc-mapreduce failures --run-id <id> [--lines <n>]
+  cli: hpc-agent failures --run-id <id> [--lines <n>]
   python: claude_hpc.atoms.failures.fetch_failures
 exit_codes:
 - 0: ok

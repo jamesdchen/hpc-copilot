@@ -29,14 +29,14 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install package
         # PyYAML for the generators; pytest for the frontmatter smoke
-        # test. The package itself for the `hpc-mapreduce capabilities`
+        # test. The package itself for the `hpc-agent capabilities`
         # subprocess call that build_operations_index.py depends on.
         run: pip install -e '.[dev]' pyyaml
       - name: Primitive catalog up to date
         # docs/primitives/README.md auto-generated from frontmatter.
         run: python scripts/build_primitive_index.py --check
       - name: Operations index up to date
-        # docs/generated/operations.md auto-generated from `hpc-mapreduce capabilities`.
+        # docs/generated/operations.md auto-generated from `hpc-agent capabilities`.
         # If this fails after a frontmatter edit, regenerate with:
         #   uv run python scripts/build_operations_index.py
         run: python scripts/build_operations_index.py --check

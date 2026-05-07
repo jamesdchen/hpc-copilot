@@ -5,7 +5,7 @@ The standalone ``/build-executor`` slash command was retired once
 underlying primitives this file tests are still load-bearing:
 
 * ``discover_executors`` — used by ``/submit-hpc`` Step 1 and the
-  ``hpc-mapreduce build-executor`` CLI subcommand (still exposed for
+  ``hpc-agent build-executor`` CLI subcommand (still exposed for
   MARs orchestrators) to enumerate runnable executors in an experiment
   repo. Recognizes both contracts: new (``compute(args)`` exported)
   and old (``__main__`` + argparse).

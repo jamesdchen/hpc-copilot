@@ -7,7 +7,7 @@ idempotent: true
 idempotency_key: campaign_dir
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce interview
+  cli: hpc-agent interview
   python: claude_hpc.atoms.interview.record_interview
 ---
 # interview

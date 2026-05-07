@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/monitor_flow.input.json",
   "title": "monitor-flow input spec",
-  "description": "Spec passed to ``hpc-mapreduce monitor-flow --spec <file>``.\n\nWorkflow atom that polls a run to terminal state, auto-combines\nwaves as they finish, and writes the same .monitor.jsonl tick log\nthat /monitor-hpc writes — so summary mode works regardless of\nwhich surface drove monitoring. MVP does NOT auto-resubmit failed\ntasks (caller decides — escalation surfaces in the envelope's\nlifecycle_state and escalation_reason).",
+  "description": "Spec passed to ``hpc-agent monitor-flow --spec <file>``.\n\nWorkflow atom that polls a run to terminal state, auto-combines\nwaves as they finish, and writes the same .monitor.jsonl tick log\nthat /monitor-hpc writes — so summary mode works regardless of\nwhich surface drove monitoring. MVP does NOT auto-resubmit failed\ntasks (caller decides — escalation surfaces in the envelope's\nlifecycle_state and escalation_reason).",
   "type": "object",
   "required": [
     "run_id"

@@ -130,7 +130,7 @@ def _parse_local_output(local_output: Path, *, run_id: str) -> dict:
     ],
     idempotent=True,
     idempotency_key="run_id",
-    cli="hpc-mapreduce cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]",  # noqa: E501
+    cli="hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]",  # noqa: E501
     agent_facing=True,
 )
 def cluster_reduce(

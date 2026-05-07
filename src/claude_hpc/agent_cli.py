@@ -163,7 +163,7 @@ def _require_ssh_agent() -> int | None:
             "SSH_AUTH_SOCK is not set; cannot reach the cluster.",
             remediation=(
                 "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
-                "environment, then run `hpc-mapreduce preflight` to verify. "
+                "environment, then run `hpc-agent preflight` to verify. "
                 "See docs/workflows/mars-integration.md for the Bun.spawn env block."
             ),
         )
@@ -1845,7 +1845,7 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="hpc-mapreduce",
+        prog="hpc-agent",
         description=(
             "Submit, track status of, and aggregate parameter-grid HPC experiments. "
             "Stdout is a single-line JSON envelope; stderr is JSON-per-line "

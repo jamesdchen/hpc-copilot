@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce suggest-setup-action --experiment-dir <path>
+  cli: hpc-agent suggest-setup-action --experiment-dir <path>
   python: claude_hpc.atoms.setup_actions.suggest_setup_action
 exit_codes:
 - 0: ok

@@ -65,7 +65,7 @@ $ARGUMENTS formats:
 The `/monitor-hpc` loop may have already combined some waves during execution; whatever's missing, the `aggregate-flow` workflow atom finishes. **One CLI call** does: ensure every wave is combined (via `combine-wave` for any missing) → rsync `_combiner/` partials locally → `reduce_partials` to produce aggregated metrics → optionally pull per-task summaries.
 
 ```bash
-hpc-mapreduce aggregate-flow --spec .hpc/runs/<run_id>.aggregate.spec.json --experiment-dir .
+hpc-agent aggregate-flow --spec .hpc/runs/<run_id>.aggregate.spec.json --experiment-dir .
 ```
 
 Spec shape (matches `schemas/aggregate_flow.input.json`):
@@ -90,7 +90,7 @@ Parse `data.aggregated_metrics` — that's the cross-wave reduced output. `data.
 **Verify the framework-knowable invariants** via the `verify-aggregation-complete` primitive before reporting to the user:
 
 ```bash
-hpc-mapreduce verify-aggregation-complete \
+hpc-agent verify-aggregation-complete \
     --experiment-dir . \
     --run-id "$RUN_ID" \
     --combiner-dir "$COMBINER_DIR_LOCAL"
@@ -139,7 +139,7 @@ If jobs are still running for the selected profile/stage, report which ones and 
 
 ## Step 3: Validate Task Completeness
 
-**Preferred path: let `hpc-mapreduce aggregate` enforce this for you.**
+**Preferred path: let `hpc-agent aggregate` enforce this for you.**
 The CLI accepts `--require-outputs <template>` (with `{task_id}` placeholder)
 which resolves the template against the run sidecar's `wave_map`,
 SSH-checks every per-task output, and refuses to combine if any are
@@ -182,25 +182,25 @@ Task completeness:
 **Don't bulk-pull per-task outputs to reduce locally.** That's the 1200-chunk failure mode (raw CSVs / pickles dragged to Windows over rsync). Route through the **`cluster-reduce`** primitive instead — runs the user's reducer on the cluster, pulls only its single JSON output (KB, not GB):
 
 ```bash
-hpc-mapreduce cluster-reduce --experiment-dir . --run-id "$RUN_ID"
+hpc-agent cluster-reduce --experiment-dir . --run-id "$RUN_ID"
 # (uses sidecar's aggregate_defaults.aggregate_cmd, OR pass --aggregate-cmd <cmd>)
 ```
 
 The envelope's `data.reduced` is the parsed JSON the reducer wrote. Reducer contract documented at `docs/reference/reducer-contract.md`: any program that reads `$HPC_RUN_ID` + writes `$HPC_AGGREGATED_OUTPUT` (default `_aggregated/<run_id>.json`).
 
-`aggregate-flow` already routes through `cluster-reduce` automatically when `mode='auto'` (the default) and an `aggregate_cmd` is on the sidecar — so a single `hpc-mapreduce aggregate-flow ...` call does the right thing without thinking. The Step 4 prose below applies only when you need to invoke the reducer ad-hoc (debug, override `aggregate_cmd`).
+`aggregate-flow` already routes through `cluster-reduce` automatically when `mode='auto'` (the default) and an `aggregate_cmd` is on the sidecar — so a single `hpc-agent aggregate-flow ...` call does the right thing without thinking. The Step 4 prose below applies only when you need to invoke the reducer ad-hoc (debug, override `aggregate_cmd`).
 
 Determine the aggregation command:
 1. If a recent run sidecar's `aggregate_defaults.aggregate_cmd` is set for the relevant profile → use it.
 2. Else invoke the **`discover-reducers`** primitive — DO NOT grep / write a fresh reducer first:
    ```bash
-   hpc-mapreduce discover-reducers --experiment-dir .
+   hpc-agent discover-reducers --experiment-dir .
    ```
    The envelope's `data.reducers` is a list of candidate `.py` files matched by filename stem (`aggregate.py`, `qlike.py`, `score.py`, etc.) or top-level function names (`def aggregate(...)`, `def reduce(...)`, `def score(...)`). Each entry carries `path`, `matches` (the signals that hit, e.g. `["name:qlike", "function:aggregate"]`), and the first line of the module docstring. Multi-signal hits sort first.
    - **One candidate** that obviously matches the loss the user asked for → use it as `aggregate_cmd` and confirm with one short sentence.
    - **Multiple candidates** → list them (path + docstring + matches) and ask the user which one. Don't pick silently.
    - **Zero candidates** → fall through to step 3.
-3. Else ask the user: "I didn't find an existing reducer matching `<loss>` in `<repo>` (`hpc-mapreduce discover-reducers` returned nothing). Should I write one, or do you have an aggregation command I should use?" Surface that you searched explicitly so they don't assume you skipped the step.
+3. Else ask the user: "I didn't find an existing reducer matching `<loss>` in `<repo>` (`hpc-agent discover-reducers` returned nothing). Should I write one, or do you have an aggregation command I should use?" Surface that you searched explicitly so they don't assume you skipped the step.
 
 Writing a fresh reducer when one already exists is a common failure mode — the user has historically committed loss functions like QLIKE / RMSE / MAE under `scripts/`, `aggregators/`, `src/eval/`, etc., and a fresh one duplicates code AND drifts from the canonical implementation. The `discover-reducers` primitive exists specifically to bridge that gap; route through it.
 

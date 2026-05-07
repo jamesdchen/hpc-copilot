@@ -51,7 +51,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>]
+  cli: hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>]
     [--base-safety-mult <f>]
   python: claude_hpc.atoms.walltime_drift.walltime_drift
 exit_codes:

@@ -51,7 +51,7 @@ forecasting = [
 ]
 
 [project.scripts]
-hpc-mapreduce = "claude_hpc.agent_cli:main"
+hpc-agent = "claude_hpc.agent_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

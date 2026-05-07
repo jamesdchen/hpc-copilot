@@ -54,7 +54,7 @@ _DEFAULT_EXECUTOR_CMD = "python3 .hpc/_hpc_dispatch.py"
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-mapreduce build-submit-spec --spec <path>",
+    cli="hpc-agent build-submit-spec --spec <path>",
     agent_facing=True,
 )
 def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
@@ -117,7 +117,7 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     A dict matching ``schemas/submit_flow.input.json``, validated
     before return. Pass it straight to
     :func:`claude_hpc.flows.submit_flow.submit_flow` or write it to a
-    JSON file and call ``hpc-mapreduce submit-flow --spec <file>``.
+    JSON file and call ``hpc-agent submit-flow --spec <file>``.
 
     Raises
     ------

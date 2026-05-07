@@ -1,4 +1,4 @@
-"""hpc-mapreduce: MapReduce-style HPC orchestrator for Claude Code.
+"""hpc-agent: MapReduce-style HPC orchestrator for Claude Code.
 
 Provides pluggable HPC backends (SGE, SLURM), remote execution utilities,
 GPU selection, and array-batch dispatch driven by a user-written

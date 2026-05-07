@@ -21,7 +21,7 @@ from claude_hpc.infra.clusters import load_clusters_config
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce clusters list",
+    cli="hpc-agent clusters list",
     agent_facing=True,
 )
 def list_clusters() -> dict[str, Any]:
@@ -46,7 +46,7 @@ def list_clusters() -> dict[str, Any]:
     side_effects=[],
     error_codes=[errors.ClusterUnknown],
     idempotent=True,
-    cli="hpc-mapreduce clusters describe <name>",
+    cli="hpc-agent clusters describe <name>",
     agent_facing=True,
 )
 def describe_cluster(*, name: str) -> dict[str, Any]:
@@ -57,5 +57,5 @@ def describe_cluster(*, name: str) -> dict[str, Any]:
     """
     clusters = load_clusters_config()
     if name not in clusters:
-        raise errors.ClusterUnknown(f"unknown cluster {name!r}; run `hpc-mapreduce clusters list`")
+        raise errors.ClusterUnknown(f"unknown cluster {name!r}; run `hpc-agent clusters list`")
     return {"name": name, "config": clusters[name]}

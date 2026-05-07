@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 class CampaignStatusData(BaseModel):
-    """Returned by ``hpc-mapreduce campaign status --campaign-id <id>``."""
+    """Returned by ``hpc-agent campaign status --campaign-id <id>``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -40,7 +40,7 @@ class _CampaignListEntry(BaseModel):
 
 
 class CampaignListData(BaseModel):
-    """Returned by ``hpc-mapreduce campaign list``."""
+    """Returned by ``hpc-agent campaign list``."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -3,9 +3,9 @@
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
 - **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/preflight`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1; preflight is folded into `/submit-hpc` Step 6b as an idempotent gate (with `/preflight` still available as a standalone diagnostic).
-- **CLI for agents and automation** (`hpc-mapreduce <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs). This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md).
+- **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via the Bash tool by orchestrators like [MARs](https://github.com/FredFang1216/MARs). This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md).
 
-Both surfaces invoke `hpc-mapreduce <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (`claude_hpc.runner`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
+Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (`claude_hpc.runner`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
 
 ## Quick Start
 
@@ -23,15 +23,15 @@ Open the repo in Claude Code, then:
 
 ```bash
 pip install claude-hpc
-hpc-mapreduce preflight --cluster hoffman2                    # health check
-hpc-mapreduce interview --spec intent.json --campaign-dir <d> # persist campaign intent next to tasks.py
-hpc-mapreduce recall --root ~/experiments --task-kind <kind>  # query past interviews for next-interview grounding
-hpc-mapreduce submit --spec spec.json                          # JSON envelope on stdout
-hpc-mapreduce status --run-id <id>                             # one-shot snapshot; poll as needed
-hpc-mapreduce aggregate --run-id <id> --wave 1                 # combiner + result pull
-hpc-mapreduce inspect-cluster --cluster <c>                    # per-node alloc/load/co-tenant snapshot
-hpc-mapreduce runtime-prior --profile <p> --cluster <c>        # quantile rollup of past task runtimes
-hpc-mapreduce plan-submit --profile <p> --cluster <c>          # constraint scorecard for /submit-hpc
+hpc-agent preflight --cluster hoffman2                    # health check
+hpc-agent interview --spec intent.json --campaign-dir <d> # persist campaign intent next to tasks.py
+hpc-agent recall --root ~/experiments --task-kind <kind>  # query past interviews for next-interview grounding
+hpc-agent submit --spec spec.json                          # JSON envelope on stdout
+hpc-agent status --run-id <id>                             # one-shot snapshot; poll as needed
+hpc-agent aggregate --run-id <id> --wave 1                 # combiner + result pull
+hpc-agent inspect-cluster --cluster <c>                    # per-node alloc/load/co-tenant snapshot
+hpc-agent runtime-prior --profile <p> --cluster <c>        # quantile rollup of past task runtimes
+hpc-agent plan-submit --profile <p> --cluster <c>          # constraint scorecard for /submit-hpc
 ```
 Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/reference/cli-spec.md`](docs/reference/cli-spec.md); JSON Schema files for runtime validation under `hpc_mapreduce/schemas/`.
 
@@ -45,9 +45,9 @@ policy table, troubleshooting, and the paste-ready
 for `agents/experiment-runner.md`.
 
 The most common first-time failure is `Bun.spawn`'s empty default env
-dropping `SSH_AUTH_SOCK`. `hpc-mapreduce status`/`aggregate`/`reconcile`
+dropping `SSH_AUTH_SOCK`. `hpc-agent status`/`aggregate`/`reconcile`
 now fail fast with `error_code: "ssh_unreachable"` (exit 2) instead of
-hanging on auth — run `hpc-mapreduce preflight` first to verify the spawn
+hanging on auth — run `hpc-agent preflight` first to verify the spawn
 env. claude-hpc does not kill cluster jobs by design (`settings.json`
 denies `scancel`/`qdel`); if MARs decides a run is bad, stop polling and
 let it expire.
@@ -151,7 +151,7 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 
 ### Primitives
 
-The slash commands above compose ~50 primitives exposed as `hpc-mapreduce <name>`. Full machine-readable catalog at `docs/generated/operations.md` (auto-regenerated). High-traffic ones for agent orchestration:
+The slash commands above compose ~50 primitives exposed as `hpc-agent <name>`. Full machine-readable catalog at `docs/generated/operations.md` (auto-regenerated). High-traffic ones for agent orchestration:
 
 | Primitive | Replaces |
 |---|---|
@@ -169,7 +169,7 @@ The slash commands above compose ~50 primitives exposed as `hpc-mapreduce <name>
 | `suggest-setup-action` / `find-prior-run` | `/submit-hpc` Setup priority cascade + `cmd_sha` resume detection. |
 | `prune-orphan-sidecars` | Clean half-baked sidecars from failed batches. |
 
-`hpc-mapreduce <name> --help` shows the per-primitive args; many take `--spec <path>` for a JSON input. See `docs/primitives/<name>.md` for the per-primitive contract (idempotency, side effects, error codes, schemas).
+`hpc-agent <name> --help` shows the per-primitive args; many take `--spec <path>` for a JSON input. See `docs/primitives/<name>.md` for the per-primitive contract (idempotency, side effects, error codes, schemas).
 
 ## Configuration
 

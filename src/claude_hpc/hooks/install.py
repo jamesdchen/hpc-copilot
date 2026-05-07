@@ -1,6 +1,6 @@
 """Install / preview claude-hpc Stop hooks in ~/.claude/settings.json.
 
-The CLI surface is ``hpc-mapreduce hook-install`` and lives in
+The CLI surface is ``hpc-agent hook-install`` and lives in
 ``agent_cli.py``; this module provides the merge logic so it can also
 be invoked programmatically (from setup_hpc skill, tests, etc.).
 """

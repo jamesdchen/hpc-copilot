@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class RecallSpec(BaseModel):
-    """Optional spec file for ``hpc-mapreduce recall``.
+    """Optional spec file for ``hpc-agent recall``.
 
     The same arguments are exposed as CLI flags and the operator
     picks one path. When ``root`` is omitted, recall falls back to
@@ -143,7 +143,7 @@ class _RecallData(BaseModel):
 
 
 class RecallEnvelope(BaseModel):
-    """Envelope returned by ``hpc-mapreduce recall``.
+    """Envelope returned by ``hpc-agent recall``.
 
     Each campaign summary projects the prior-decision fields the
     next interviewer would compare against. The rollup block

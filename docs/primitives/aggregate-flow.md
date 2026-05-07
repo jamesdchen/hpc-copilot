@@ -21,7 +21,7 @@ error_codes:
   category: internal
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce aggregate-flow --spec <path>
+  cli: hpc-agent aggregate-flow --spec <path>
   python: claude_hpc.flows.aggregate_flow.aggregate_flow
 ---
 

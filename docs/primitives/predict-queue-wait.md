@@ -34,7 +34,7 @@ error_codes:
   category: spec
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma]
+  cli: hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma]
     [--n-replications N] [--at-iso <iso>] [--seed N]
   python: claude_hpc.forecast.queue_wait_baseline.predict_queue_wait
 exit_codes:

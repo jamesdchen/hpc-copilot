@@ -4,7 +4,7 @@ These helpers are framework-agnostic guarantees around the user-supplied
 combiner.  They check plumbing (every task produced output, the combiner
 wrote what it claimed to write, the aggregated artifact carries provenance
 tied to the run) without learning anything about experiment semantics.
-Both /aggregate and ``hpc-mapreduce aggregate`` use them.
+Both /aggregate and ``hpc-agent aggregate`` use them.
 """
 
 from __future__ import annotations

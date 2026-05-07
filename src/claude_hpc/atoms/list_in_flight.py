@@ -45,7 +45,7 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce list-in-flight --experiment-dir <path>",
+    cli="hpc-agent list-in-flight --experiment-dir <path>",
     agent_facing=True,
 )
 def list_in_flight(*, experiment_dir: Path) -> dict[str, Any]:

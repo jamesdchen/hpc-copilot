@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-mapreduce build-submit-spec --spec <path>
+  cli: hpc-agent build-submit-spec --spec <path>
   python: claude_hpc.atoms.build_submit_spec.build_submit_spec
 exit_codes:
 - 0: ok

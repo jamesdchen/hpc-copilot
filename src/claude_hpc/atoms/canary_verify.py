@@ -59,7 +59,7 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
     error_codes=[errors.SpecInvalid, errors.SshUnreachable],
     idempotent=True,
     idempotency_key="canary_run_id",
-    cli="hpc-mapreduce verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]",  # noqa: E501
+    cli="hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]",  # noqa: E501
     agent_facing=True,
 )
 def verify_canary(

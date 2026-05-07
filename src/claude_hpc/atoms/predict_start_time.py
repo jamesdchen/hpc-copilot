@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce predict-start-time --spec <path>",
+    cli="hpc-agent predict-start-time --spec <path>",
     agent_facing=True,
 )
 def predict_start_time_primitive(

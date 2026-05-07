@@ -33,7 +33,7 @@ error_codes:
   category: network
   retry_safe: true
 backed_by:
-  cli: hpc-mapreduce inspect-cluster --cluster <name> [...]
+  cli: hpc-agent inspect-cluster --cluster <name> [...]
   python: claude_hpc.infra.inspect.inspect_cluster
 exit_codes:
 - 0: ok

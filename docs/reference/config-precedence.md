@@ -1,6 +1,6 @@
 # Configuration Precedence
 
-Both surfaces (slash commands and the `hpc-mapreduce` CLI) resolve
+Both surfaces (slash commands and the `hpc-agent` CLI) resolve
 configuration through the same precedence order. Anywhere a value can
 be sourced from more than one place, the highest-priority source wins
 and lower-priority values are ignored — never merged field-wise unless
@@ -69,7 +69,7 @@ Notes:
   `_SKIP_BASENAMES`).
 - **Override path**: there is no config file for this; experiment
   authors influence discovery by where they put their `.py` files. The
-  `hpc-mapreduce discover` subcommand exposes the result for inspection.
+  `hpc-agent discover` subcommand exposes the result for inspection.
 
 ### Parallelization axis (`.hpc/tasks.py`)
 
@@ -85,7 +85,7 @@ Notes:
 
 ### Resource overrides (mem, walltime, gpus, gpu_type)
 
-- **Layer 1**: `--spec.overrides` on `hpc-mapreduce resubmit`, or an
+- **Layer 1**: `--spec.overrides` on `hpc-agent resubmit`, or an
   interactive answer in `/submit`.
 - **Layer 3**: most recent matching run sidecar's `resources` block —
   the resolved values from a prior submit, available for reuse.

@@ -19,7 +19,7 @@ error_codes:
   retry_safe: false
   description: The on-cluster reporter exited non-zero; surface stderr.
 backed_by:
-  cli: hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]
+  cli: hpc-agent status --run-id <id> [--experiment-dir <dir>]
   python: claude_hpc.runner.status.record_status
 exit_codes:
 - 0: ok

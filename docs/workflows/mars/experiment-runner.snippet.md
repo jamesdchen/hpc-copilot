@@ -18,8 +18,8 @@ is **opt-in per run** and never used for Tier-1 probes.
 
 When a Tier-2 run requires HPC scale (grid > 32 tasks, per-task
 walltime > 30 minutes, GPU contention on local hardware), delegate
-cluster submission to `hpc-mapreduce`. **Tier-1 probes always run
-locally** with `uv run python probe.py`; never invoke `hpc-mapreduce`
+cluster submission to `hpc-agent`. **Tier-1 probes always run
+locally** with `uv run python probe.py`; never invoke `hpc-agent`
 for a probe.
 
 Decision rule: estimate the grid before submitting. If
@@ -29,7 +29,7 @@ GPU/CPU, run locally. Else delegate.
 ### Pre-flight (run once per session)
 
 ```bash
-uv run hpc-mapreduce preflight --cluster <name>
+uv run hpc-agent preflight --cluster <name>
 ```
 
 Parse the JSON envelope. If `data.all_ok` is false, surface
@@ -101,7 +101,7 @@ If you want to choose a low-latency window for a long-running submit,
 ask the predictor:
 
 ```bash
-uv run hpc-mapreduce best-submit-window --profile <experiment_id> --cluster <name> --within-hours 6
+uv run hpc-agent best-submit-window --profile <experiment_id> --cluster <name> --within-hours 6
 ```
 
 Returns the top-K windows by predicted wait time. With cold-start
@@ -110,7 +110,7 @@ window and wait. This is opt-in — never required.
 
 ### Build the run spec
 
-The submit-spec is the JSON envelope passed to `hpc-mapreduce submit`.
+The submit-spec is the JSON envelope passed to `hpc-agent submit`.
 It carries the run's identity (`run_id`), cluster routing, and task
 count derived from `tasks.total()`:
 
@@ -136,13 +136,13 @@ the same `cmd_sha` (and `submit` will dedup on it).
 Validate before submitting:
 
 ```bash
-uv run hpc-mapreduce submit --spec spec.json --dry-run
+uv run hpc-agent submit --spec spec.json --dry-run
 ```
 
 ### Submit
 
 ```bash
-uv run hpc-mapreduce submit --spec spec.json
+uv run hpc-agent submit --spec spec.json
 ```
 
 Parse the envelope:
@@ -156,7 +156,7 @@ Parse the envelope:
 ### Status polling
 
 ```bash
-uv run hpc-mapreduce status --run-id <run_id>
+uv run hpc-agent status --run-id <run_id>
 ```
 
 Read `data.lifecycle_state`:
@@ -177,13 +177,13 @@ preemption signal (exit 130). These are NOT failures; the cluster
 bumped them. Selectively resubmit just those task_ids via:
 
 ```bash
-uv run hpc-mapreduce resubmit --run-id <run_id> --task-ids <comma-list> --category preempted
+uv run hpc-agent resubmit --run-id <run_id> --task-ids <comma-list> --category preempted
 ```
 
 ### Aggregate per wave
 
 ```bash
-uv run hpc-mapreduce aggregate --run-id <run_id> --wave <int>
+uv run hpc-agent aggregate --run-id <run_id> --wave <int>
 ```
 
 After all waves are combined, read the per-task outputs from

@@ -40,7 +40,7 @@ def _spent_walltime_sec(sidecar: dict[str, Any]) -> float:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-mapreduce campaign-budget",
+    cli="hpc-agent campaign-budget",
 )
 def campaign_budget(
     *,

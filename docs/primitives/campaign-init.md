@@ -7,7 +7,7 @@ idempotent: true
 idempotency_key: campaign_id
 error_codes: []
 backed_by:
-  cli: hpc-mapreduce campaign-init
+  cli: hpc-agent campaign-init
   python: claude_hpc.atoms.campaign_init.campaign_init
 ---
 # campaign-init
