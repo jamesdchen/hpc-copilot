@@ -238,7 +238,7 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
     if not hasattr(module, "total") or not hasattr(module, "resolve"):
         raise AttributeError(
             f"{path} must define both total() and resolve(task_id) — "
-            "see claude_hpc/mapreduce/templates/tasks_example.py"
+            "see claude_hpc/mapreduce/templates/scaffolds/tasks_example.py"
         )
     return module
 
