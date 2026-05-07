@@ -1,4 +1,4 @@
-Use the **hpc-campaign** skill (`skills/hpc-campaign/SKILL.md`) for the workflow: campaign tagging, the per-iteration `submit-flow → monitor-flow → aggregate-flow` triplet, the stochastic-marker requirement for Path B (strategy-driven) campaigns, the resume-after-drop semantics. The skill is the canonical SoT.
+Invoke the `hpc-campaign` skill via the Skill tool (`skills/hpc-campaign/SKILL.md`) for the workflow: campaign tagging, the per-iteration `submit-flow → monitor-flow → aggregate-flow` triplet, the stochastic-marker requirement for Path B (strategy-driven) campaigns, the resume-after-drop semantics. The skill is the canonical SoT.
 
 This slash command is the human-facing entry point. It exists for two reasons the skill alone doesn't cover:
 

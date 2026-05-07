@@ -128,6 +128,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `hpc-agent validate-executor-signatures --spec <path>` |
 | [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `hpc-agent validate-input-dataset --spec <path>` |
 | [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `hpc-agent validate-self-qos-limit --spec <path>` |
+| [validate-stochastic-marker](validate-stochastic-marker.md) | yes | _none_ | `hpc-agent validate-stochastic-marker --spec <path>` |
 | [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `hpc-agent validate-walltime-against-history --spec <path>` |
 
 ### `mutate` primitives

@@ -23,6 +23,9 @@ from claude_hpc._schema_models.validators.validate_executor_signatures import (
 from claude_hpc._schema_models.validators.validate_input_dataset import (
     ValidateInputDatasetSpec,
 )
+from claude_hpc._schema_models.validators.validate_stochastic_marker import (
+    ValidateStochasticMarkerSpec,
+)
 from claude_hpc._schema_models.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistorySpec,
 )
@@ -33,6 +36,7 @@ from claude_hpc._schema_models.workflows.validate_campaign import (
 )
 from claude_hpc.atoms.validate_executor_signatures import validate_executor_signatures
 from claude_hpc.atoms.validate_input_dataset import validate_input_dataset
+from claude_hpc.atoms.validate_stochastic_marker import validate_stochastic_marker
 from claude_hpc.atoms.validate_walltime_against_history import (
     validate_walltime_against_history,
 )
@@ -60,6 +64,7 @@ def _aggregate_overall(findings: list[ValidatorFinding]) -> str:
     composes=[
         validate_executor_signatures,
         validate_input_dataset,
+        validate_stochastic_marker,
         validate_walltime_against_history,
     ],
     side_effects=[],
@@ -126,6 +131,20 @@ def validate_campaign(
         )
         findings.extend(result_w.findings)
         validators_run.append("validate-walltime-against-history")
+
+    # Closed-loop campaign check: only fires when both campaign_id and
+    # expected_cmd_sha are supplied. Catches the silent-dedup bug for
+    # stochastic strategies that re-pick the same params.
+    if spec.campaign_id and spec.expected_cmd_sha:
+        result_sm = validate_stochastic_marker(
+            experiment_dir,
+            spec=ValidateStochasticMarkerSpec(
+                campaign_id=spec.campaign_id,
+                expected_cmd_sha=spec.expected_cmd_sha,
+            ),
+        )
+        findings.extend(result_sm.findings)
+        validators_run.append("validate-stochastic-marker")
 
     return ValidateCampaignReport(
         overall=_aggregate_overall(findings),  # type: ignore[arg-type]

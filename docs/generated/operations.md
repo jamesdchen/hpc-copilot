@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**59 operations total**: 53 primitive atoms + 6 workflow atoms.
+**60 operations total**: 54 primitive atoms + 6 workflow atoms.
 
 ## How to read this page
 
@@ -54,7 +54,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`verify-aggregation-complete`](primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` | `claude_hpc.atoms.aggregation_invariants.verify_aggregation_complete` | — | `claude_hpc/schemas/verify_aggregation_complete.output.json` |
 | [`walltime-drift`](primitives/walltime-drift.md) | ✓ | _none_ | `hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` | `claude_hpc.atoms.walltime_drift.walltime_drift` | — | — |
 
-## `validate` (6)
+## `validate` (7)
 
 Read + binary health check. Same composability as `query`.
 
@@ -65,6 +65,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-executor-signatures`](primitives/validate-executor-signatures.md) | ✓ | _none_ | `hpc-agent validate-executor-signatures --spec <path>` | `claude_hpc.atoms.validate_executor_signatures.validate_executor_signatures` | `claude_hpc/schemas/validate_executor_signatures.input.json` | `claude_hpc/schemas/validate_executor_signatures.output.json` |
 | [`validate-input-dataset`](primitives/validate-input-dataset.md) | ✓ | _none_ | `hpc-agent validate-input-dataset --spec <path>` | `claude_hpc.atoms.validate_input_dataset.validate_input_dataset` | `claude_hpc/schemas/validate_input_dataset.input.json` | `claude_hpc/schemas/validate_input_dataset.output.json` |
 | [`validate-self-qos-limit`](primitives/validate-self-qos-limit.md) | ✓ | _none_ | `hpc-agent validate-self-qos-limit --spec <path>` | `claude_hpc.atoms.validate_self_qos_limit.validate_self_qos_limit` | `claude_hpc/schemas/validate_self_qos_limit.input.json` | `claude_hpc/schemas/validate_self_qos_limit.output.json` |
+| [`validate-stochastic-marker`](primitives/validate-stochastic-marker.md) | ✓ | _none_ | `hpc-agent validate-stochastic-marker --spec <path>` | `claude_hpc.atoms.validate_stochastic_marker.validate_stochastic_marker` | `claude_hpc/schemas/validate_stochastic_marker.input.json` | `claude_hpc/schemas/validate_stochastic_marker.output.json` |
 | [`validate-walltime-against-history`](primitives/validate-walltime-against-history.md) | ✓ | _none_ | `hpc-agent validate-walltime-against-history --spec <path>` | `claude_hpc.atoms.validate_walltime_against_history.validate_walltime_against_history` | `claude_hpc/schemas/validate_walltime_against_history.input.json` | `claude_hpc/schemas/validate_walltime_against_history.output.json` |
 
 ## `mutate` (7)

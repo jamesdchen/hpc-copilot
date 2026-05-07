@@ -1,4 +1,4 @@
-Use the **hpc-aggregate** skill (`skills/hpc-aggregate/SKILL.md`) for the workflow: which mode to pick (auto / cluster-reduce / combiner-only), how to handle partial aggregation, the `verify-aggregation-complete` invariant check, error envelope branching. The skill is the canonical SoT.
+Invoke the `hpc-aggregate` skill via the Skill tool (`skills/hpc-aggregate/SKILL.md`) for the workflow: which mode to pick (auto / cluster-reduce / combiner-only), how to handle partial aggregation, the `verify-aggregation-complete` invariant check, error envelope branching. The skill is the canonical SoT.
 
 This slash command is the human-facing entry point. It exists for two reasons the skill alone doesn't cover.
 

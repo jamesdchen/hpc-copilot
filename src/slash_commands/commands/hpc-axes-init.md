@@ -1,4 +1,4 @@
-Use the **hpc-build-executor** skill (`skills/hpc-build-executor/SKILL.md`) for the workflow: scaffold the executor, smoke-test it, classify axes, invoke `axes-init`. The skill is the canonical SoT.
+Invoke the `hpc-build-executor` skill via the Skill tool (`skills/hpc-build-executor/SKILL.md`) for the workflow: scaffold the executor, smoke-test it, classify axes, invoke `axes-init`. The skill is the canonical SoT.
 
 This slash command is the human-facing entry point for the **axes-init** half — initializing `.hpc/axes.yaml` so the framework can pick a parallelism axis automatically at submit time. Reasons to invoke standalone (rather than letting `/submit-hpc` walk through it):
 

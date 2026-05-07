@@ -1,6 +1,6 @@
 # /preflight — Verify the local environment can submit HPC jobs
 
-Use the **hpc-preflight** skill (`skills/hpc-preflight/SKILL.md`) for the workflow: which checks run, how to remediate each failure, when to write the per-cluster cache marker. The skill is the canonical SoT.
+Invoke the `hpc-preflight` skill via the Skill tool (`skills/hpc-preflight/SKILL.md`) for the workflow: which checks run, how to remediate each failure, when to write the per-cluster cache marker. The skill is the canonical SoT.
 
 This slash command is the human-facing entry point. Reasons to invoke standalone (rather than letting `/submit-hpc` Step 6b auto-invoke):
 

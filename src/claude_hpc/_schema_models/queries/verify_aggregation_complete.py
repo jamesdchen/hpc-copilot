@@ -26,6 +26,17 @@ class VerifyAggregationCompleteResult(BaseModel):
     unexpected_tasks: list[int] = Field(
         description="Cross-run contamination: task_ids in pulled partials but not in this run's wave_map.",
     )
+    unexpected_aggregated_keys: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Post-reduce contamination: keys in the supplied "
+            "``aggregated_metrics`` dict that don't match any grid-point "
+            "produced by ``tasks.resolve(i)`` for i in [0, total_tasks). "
+            "Only populated when the caller supplied "
+            "``aggregated_metrics`` + ``aggregated_keying='grid_point'``; "
+            "empty list otherwise."
+        ),
+    )
     provenance_present: bool
     expected_wave_count: int = Field(ge=0)
     pulled_wave_count: int = Field(ge=0)

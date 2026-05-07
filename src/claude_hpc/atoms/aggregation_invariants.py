@@ -38,6 +38,8 @@ def verify_aggregation_complete(
     *,
     run_id: str,
     combiner_dir_local: Path | str,
+    aggregated_metrics: dict[str, Any] | None = None,
+    aggregated_keying: str | None = None,
 ) -> dict[str, Any]:
     """Verify the post-aggregate invariants for *run_id* against *combiner_dir_local*.
 
@@ -57,10 +59,25 @@ def verify_aggregation_complete(
       wave_map (a sign of cross-run contamination).
     * ``provenance_present`` — every wave partial has the expected
       ``run_id`` + ``wave`` provenance fields.
+    * ``unexpected_aggregated_keys`` — when *aggregated_metrics* is
+      supplied with *aggregated_keying = "grid_point"*, keys present
+      in the dict but absent from the set of grid-point keys produced
+      by ``tasks.resolve(i)`` for ``i ∈ [0, total_tasks)``. A non-
+      empty list is a contamination red flag (the same bug class as
+      ``unexpected_tasks`` but at the post-reduce layer). Empty list
+      when the check was not run (no aggregated_metrics or wrong
+      keying).
     * ``ok`` — True iff every invariant passes.
 
     The agent reads ``ok`` and surfaces any violations to the user.
     Pure read-only function — no SSH, no filesystem writes.
+
+    *aggregated_metrics* + *aggregated_keying* are an opt-in extension
+    that absorbs the prose 4a.3 spot-check from /aggregate-hpc.
+    Supply both together; ``aggregated_keying="grid_point"`` triggers
+    the keys-vs-tasks-resolve check, ``"run_id"`` skips it (the keys
+    are then expected to be a single run_id string), ``None``
+    disables.
 
     Raises
     ------
@@ -127,7 +144,38 @@ def verify_aggregation_complete(
     unexpected_tasks = sorted(pulled_tasks - expected_tasks)
     all_tasks_present = not missing_tasks
 
-    ok = all_waves_combined and all_tasks_present and provenance_present and not unexpected_tasks
+    # Aggregate-keys invariant: when the caller supplied the reduced
+    # metrics dict + declared its keying as grid-point, check that
+    # every key matches a grid-point produced by tasks.resolve(i) for
+    # i in [0, total_tasks). Mirrors the prose 4a.3 spot-check from
+    # /aggregate-hpc — same bug class as unexpected_tasks, but at the
+    # post-reduce layer.
+    unexpected_aggregated_keys: list[str] = []
+    if aggregated_metrics is not None and aggregated_keying == "grid_point":
+        from claude_hpc import load_tasks_module, tasks_path
+        from claude_hpc.mapreduce.reduce.rollup import _grid_point_key
+
+        try:
+            tasks = load_tasks_module(tasks_path(experiment_dir))
+            total = int(tasks.total())
+            expected_grid_points = {_grid_point_key(tasks.resolve(i) or {}) for i in range(total)}
+            keys = set(aggregated_metrics.keys())
+            unexpected_aggregated_keys = sorted(keys - expected_grid_points)
+        except (FileNotFoundError, AttributeError, TypeError, ValueError):
+            # tasks.py may not be importable in the local checkout
+            # (e.g. cluster-side aggregate replayed locally). Skip
+            # silently — the check is opt-in and shouldn't fail the
+            # parent invariant when its own dependencies aren't
+            # available.
+            unexpected_aggregated_keys = []
+
+    ok = (
+        all_waves_combined
+        and all_tasks_present
+        and provenance_present
+        and not unexpected_tasks
+        and not unexpected_aggregated_keys
+    )
 
     return {
         "ok": ok,
@@ -137,6 +185,7 @@ def verify_aggregation_complete(
         "all_tasks_present": all_tasks_present,
         "missing_tasks": missing_tasks,
         "unexpected_tasks": unexpected_tasks,
+        "unexpected_aggregated_keys": unexpected_aggregated_keys,
         "provenance_present": provenance_present,
         "expected_wave_count": len(expected_waves),
         "pulled_wave_count": len(pulled_waves),

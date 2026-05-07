@@ -1,4 +1,4 @@
-Use the **hpc-status** skill (`skills/hpc-status/SKILL.md`) for the workflow: poll-run-status vs monitor-flow choice, lifecycle dispatch, polling cadence, resubmit decision flow. The skill is the canonical SoT.
+Invoke the `hpc-status` skill via the Skill tool (`skills/hpc-status/SKILL.md`) for the workflow: poll-run-status vs monitor-flow choice, lifecycle dispatch, polling cadence, resubmit decision flow. The skill is the canonical SoT.
 
 This slash command is the human-facing entry point. It carries two pieces of content the skill cannot: the **EXIT CONTRACT** (which is slash-specific because a Stop hook validates this command's stdout), and the resume-offer dialog for cold-session recovery.
 
