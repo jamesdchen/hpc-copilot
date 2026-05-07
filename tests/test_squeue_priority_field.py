@@ -96,7 +96,12 @@ def test_parse_time_left_handles_various_formats() -> None:
 
 def _q(job_id: str, priority: int, partition: str = "gpu", state: str = "PENDING") -> QueuedJob:
     return QueuedJob(
-        job_id=job_id, priority=priority, partition=partition, user="x", state=state, time_left_sec=None
+        job_id=job_id,
+        priority=priority,
+        partition=partition,
+        user="x",
+        state=state,
+        time_left_sec=None,
     )
 
 
@@ -119,7 +124,11 @@ def test_estimate_rank_ignores_running_jobs() -> None:
 def test_estimate_rank_partition_scoped_count() -> None:
     """When a partition is given, only competitors in that partition
     count toward in-partition rank."""
-    queue = [_q("1", 200, partition="gpu"), _q("2", 200, partition="cpu"), _q("3", 100, partition="gpu")]
+    queue = [
+        _q("1", 200, partition="gpu"),
+        _q("2", 200, partition="cpu"),
+        _q("3", 100, partition="gpu"),
+    ]
     out = estimate_rank(queue, new_priority=150, partition="gpu")
     assert out.pending_ahead_overall == 2  # both 200-priority jobs
     assert out.pending_ahead_in_partition == 1  # only the gpu one

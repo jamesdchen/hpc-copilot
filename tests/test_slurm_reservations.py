@@ -77,9 +77,7 @@ def test_parse_unknown_endtime_surfaces_as_none() -> None:
     """SLURM emits ``EndTime=Unknown`` for unbounded reservations.
     Parser maps to None; the planner's window check then treats it
     as "indefinite hold"."""
-    text = (
-        "ReservationName=indef StartTime=2026-04-15T03:00:00 EndTime=Unknown Nodes=cn001"
-    )
+    text = "ReservationName=indef StartTime=2026-04-15T03:00:00 EndTime=Unknown Nodes=cn001"
     parsed = parse_slurm_reservations(text)
     assert parsed[0].end_iso is None
 

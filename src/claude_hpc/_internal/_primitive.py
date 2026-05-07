@@ -285,6 +285,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.recall",
     "claude_hpc.atoms.recommend_partition",
+    "claude_hpc.atoms.recommend_wait_alternative",
     "claude_hpc.atoms.setup_actions",
     "claude_hpc.atoms.submit_plan_summary",
     "claude_hpc.atoms.validate_executor_signatures",

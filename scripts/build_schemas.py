@@ -95,6 +95,10 @@ from claude_hpc._schema_models.recommend_partition import (  # noqa: E402
     RecommendPartitionResult,
     RecommendPartitionSpec,
 )
+from claude_hpc._schema_models.recommend_wait_alternative import (  # noqa: E402
+    RecommendWaitAlternativeResult,
+    RecommendWaitAlternativeSpec,
+)
 from claude_hpc._schema_models.reconcile import ReconcileResult  # noqa: E402
 from claude_hpc._schema_models.resubmit import ResubmitSpec  # noqa: E402
 from claude_hpc._schema_models.runtime_prior import RuntimePriorResult  # noqa: E402
@@ -219,6 +223,8 @@ SCHEMA_REGISTRY: list[tuple[type[BaseModel] | TypeAdapter[Any], str]] = [
     (RecallEnvelope, "recall.output.json"),
     (RecommendPartitionSpec, "recommend_partition.input.json"),
     (RecommendPartitionResult, "recommend_partition.output.json"),
+    (RecommendWaitAlternativeSpec, "recommend_wait_alternative.input.json"),
+    (RecommendWaitAlternativeResult, "recommend_wait_alternative.output.json"),
     (RuntimePriorResult, "runtime_prior.output.json"),
     (StagesAdapter, "stages.input.json"),
     (StatusResult, "status.output.json"),
