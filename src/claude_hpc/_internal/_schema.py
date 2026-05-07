@@ -1,8 +1,14 @@
 """Centralized JSON-Schema validation with cross-file ``$ref`` resolution.
 
 Every consumer that used to call :func:`jsonschema.validate` directly
-must use :func:`validate` here so cross-file refs into
-``envelope.json#/$defs/*`` resolve through the shared registry.
+must use :func:`validate` here so any future cross-file refs resolve
+through the shared registry.
+
+Post-Pydantic-migration the per-primitive schemas are self-contained
+(each model inlines what it needs from ``_schema_models/_shared.py``),
+so cross-file refs are rare — but the registry stays so that
+hand-authored payloads referencing ``envelope.json#/$defs/*`` from
+older agents still resolve.
 
 The registry is cached at module load and seeded with every
 ``claude_hpc/schemas/*.json`` file under both its ``$id`` (when

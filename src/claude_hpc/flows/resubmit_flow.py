@@ -291,14 +291,18 @@ def resubmit_flow(
             )
             cluster_submitted = True
 
+    from claude_hpc._schema_models.resubmit import ResubmitSpec
+
     record, deduped, rid = runner.resubmit_failed(
         experiment_dir,
         run_id,
-        failed_task_ids=failed_task_ids,
-        category=category,
-        overrides=effective_overrides,
-        new_job_ids=cluster_job_ids if cluster_submitted else new_job_ids,
-        request_id=request_id,
+        spec=ResubmitSpec(
+            failed_task_ids=failed_task_ids,
+            category=category,  # type: ignore[arg-type]  # str → FailureCategoryResubmittable Literal validated at construction
+            overrides=effective_overrides,
+            new_job_ids=cluster_job_ids if cluster_submitted else new_job_ids,
+            request_id=request_id,
+        ),
     )
 
     return ResubmitFlowResult(

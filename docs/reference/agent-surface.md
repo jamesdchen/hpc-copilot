@@ -29,6 +29,13 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
   `<name>.output.json`. Each carries `$id` + `$schema` so harnesses can validate.
 - **JSON Schema 2020-12** for input/output validation. Standards-track; not a
   custom format.
+- **Schemas are regenerated from Pydantic models** under
+  `src/claude_hpc/_schema_models/`. External consumers still read
+  the JSON files — that's the wire contract. The Python models are
+  the framework's *authoring* surface; touching them and not
+  regenerating is a CI failure
+  (`scripts/build_schemas.py --check`). Same arrow direction as the
+  `@primitive` registry → `docs/primitives/<name>.md` frontmatter.
 
 ## What this enables
 

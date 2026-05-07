@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal._primitive import primitive
+from claude_hpc._schema_models.recall import RecallSpec
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -58,19 +59,26 @@ _USER_CONFIG = Path("~/.claude-hpc/config.json").expanduser()
     verb="query",
     side_effects=[],
     idempotent=True,
+    cli="hpc-mapreduce recall",
+    agent_facing=True,
 )
 def recall_campaigns(
     roots: list[Path],
     *,
-    task_kind: str | None = None,
-    operator: str | None = None,
-    since: str | None = None,
-    limit: int = 20,
-    include_runtime: bool = False,
-    include_generator_stats: bool = False,
+    spec: RecallSpec | None = None,
 ) -> dict[str, Any]:
     """Walk every path in *roots* for ``interview.json`` files; return
     filtered summaries plus a tiered rollup.
+
+    *spec* is a wire-validated :class:`RecallSpec` (None defaults to
+    a fresh ``RecallSpec()`` — every filter kwarg has a default so
+    no-argument recall is a valid wire payload). The body
+    destructures into typed locals so the rest reads naturally.
+
+    *roots* is a framework-context kwarg: the wire surface carries
+    only ``spec.root`` (a single path) but the Python entry point
+    accepts a list so callers iterating ``experiment_roots`` from
+    config don't need a wrapper loop.
 
     Returns ``{campaigns, total_matching, showing, rollup}``. The
     ``rollup`` block always contains Tier 1; Tier 2 keys are present
@@ -79,6 +87,15 @@ def recall_campaigns(
 
     Raises ``ValueError`` if any root is not an existing directory.
     """
+    if spec is None:
+        spec = RecallSpec()
+    task_kind = spec.task_kind
+    operator = spec.operator
+    since = spec.since
+    limit = int(spec.limit)
+    include_runtime = bool(spec.include_runtime)
+    include_generator_stats = bool(spec.include_generator_stats)
+
     if not roots:
         raise ValueError(
             f"no roots to walk — pass --root or set experiment_roots in {_USER_CONFIG}"

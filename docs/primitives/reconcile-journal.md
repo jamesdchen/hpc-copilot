@@ -26,7 +26,7 @@ error_codes:
 backed_by:
   cli: hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir
     <dir>]
-  python: claude_hpc.runner.reconcile
+  python: claude_hpc.runner.reconcile.reconcile
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable / remote_command_failed

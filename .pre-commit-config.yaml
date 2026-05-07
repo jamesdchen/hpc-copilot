@@ -44,3 +44,17 @@ repos:
         language: system
         pass_filenames: false
         files: '^(src/claude_hpc/.*\.py|src/claude_hpc/schemas/.*\.json)$'
+
+      - id: build-schemas
+        name: regenerate JSON schemas from Pydantic models
+        entry: python scripts/build_schemas.py --write
+        language: system
+        pass_filenames: false
+        files: '^src/claude_hpc/_schema_models/.*\.py$'
+
+      - id: lint-primitive-doc-templates
+        name: check primitive doc templates match agent_facing tier
+        entry: python scripts/lint_primitive_doc_templates.py
+        language: system
+        pass_filenames: false
+        files: '^(docs/primitives/.*\.md|src/claude_hpc/.*\.py)$'

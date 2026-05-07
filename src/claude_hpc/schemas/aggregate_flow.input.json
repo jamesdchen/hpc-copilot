@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/aggregate_flow.input.json",
   "title": "aggregate-flow input spec",
-  "description": "Spec passed to `hpc-mapreduce aggregate-flow --spec <file>`. Workflow atom that ensures every wave is combined on the cluster, pulls the per-wave partials locally, and merges them into a single aggregated-metrics dict via reduce_partials. Pairs with submit-flow + monitor-flow as the third workflow atom in the campaign composition pattern.",
+  "description": "Spec passed to ``hpc-mapreduce aggregate-flow --spec <file>``.\n\nWorkflow atom that ensures every wave is combined on the cluster,\npulls the per-wave partials locally, and merges them into a\nsingle aggregated-metrics dict via reduce_partials. Pairs with\nsubmit-flow + monitor-flow as the third workflow atom in the\ncampaign composition pattern.",
   "type": "object",
   "required": [
     "run_id"
@@ -10,42 +10,60 @@
   "additionalProperties": false,
   "properties": {
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
     },
     "output_dir": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "Local destination for pulled artifacts. Null defaults to `<experiment_dir>/_aggregated/<run_id>/`. The combiner partials land under `<output_dir>/_combiner/`."
+      "default": null,
+      "description": "Local destination for pulled artifacts. Null defaults to `<experiment_dir>/_aggregated/<run_id>/`. The combiner partials land under `<output_dir>/_combiner/`.",
+      "title": "Output Dir"
     },
     "ensure_all_combined": {
-      "type": "boolean",
       "default": true,
-      "description": "Before pulling, invoke combine-wave for every wave in the sidecar's wave_map that isn't yet in combined_waves. Disable when monitor-flow already combined everything in flight (idempotent either way; this just saves SSH round-trips)."
+      "description": "Before pulling, invoke combine-wave for every wave in the sidecar's wave_map that isn't yet in combined_waves. Disable when monitor-flow already combined everything in flight (idempotent either way; this just saves SSH round-trips).",
+      "title": "Ensure All Combined",
+      "type": "boolean"
     },
     "combiner_max_retries": {
-      "type": "integer",
-      "minimum": 0,
       "default": 1,
-      "description": "Times to retry combine-wave with force=true after first failure. Beyond this, the wave is escalated and surfaces in failed_waves; aggregate-flow continues with whichever waves DID combine."
+      "description": "Times to retry combine-wave with force=true after first failure. Beyond this, the wave is escalated and surfaces in failed_waves; aggregate-flow continues with whichever waves DID combine.",
+      "minimum": 0,
+      "title": "Combiner Max Retries",
+      "type": "integer"
     },
     "pull_summaries": {
-      "type": "boolean",
       "default": false,
-      "description": "After pulling _combiner/, also rsync result summary files matching summary_glob from the cluster's results/ directory."
+      "description": "After pulling _combiner/, also rsync result summary files matching summary_glob from the cluster's results/ directory.",
+      "title": "Pull Summaries",
+      "type": "boolean"
     },
     "summary_glob": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "Required when pull_summaries=true. Rsync include pattern (e.g. 'metrics.json', 'qlike.json'). Ignored when pull_summaries=false."
+      "default": null,
+      "description": "Required when pull_summaries=true. Rsync include pattern (e.g. 'metrics.json', 'qlike.json'). Ignored when pull_summaries=false.",
+      "title": "Summary Glob"
     },
     "results_subdir": {
-      "type": "string",
       "default": "results",
-      "description": "Cluster-side subdir under remote_path that holds the per-task result trees. Defaults to 'results' to match the framework convention."
+      "description": "Cluster-side subdir under remote_path that holds the per-task result trees. Defaults to 'results' to match the framework convention.",
+      "title": "Results Subdir",
+      "type": "string"
     }
   }
 }

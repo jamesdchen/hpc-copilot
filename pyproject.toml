@@ -19,6 +19,13 @@ dependencies = [
     # resolution (consumer schemas reference envelope.json#/$defs/*).
     "jsonschema>=4.18",
     "referencing>=0.30",
+    # Pydantic v2 for Spec / Result models. The hand-authored JSON
+    # schemas under ``claude_hpc/schemas/`` are still the wire SoT;
+    # Pydantic models are the *authoring* surface and their
+    # ``model_json_schema()`` output is regenerated into the JSON
+    # files by ``scripts/build_schemas.py``. Switched on for the
+    # submit-flow canary; rolling out per-atom incrementally.
+    "pydantic>=2.6",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +34,8 @@ dev = [
     "mypy>=1.10",
     "pytest>=8.0",
     "pytest-xdist>=3.8",
+    "pytest-cov>=5.0",
+    "hypothesis>=6.100",
     "types-PyYAML>=6.0",
     "pre-commit>=3.5",
 ]
@@ -58,7 +67,10 @@ slash_commands = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -n auto"
+addopts = "-ra --strict-markers -n auto -m 'not slow'"
+markers = [
+    "slow: real-process / real-time tests (subprocess + signals, multi-hour forecast sweeps). Skipped by default. Opt in with `pytest -m slow`; run everything with `pytest -m ''`.",
+]
 
 [tool.ruff]
 target-version = "py310"
@@ -73,6 +85,29 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
 mypy_path = ["src"]
+
+# Coverage is a discovery tool, not a gate. Run with:
+#   pytest -m '' --cov=src/claude_hpc --cov-report=term-missing
+# to surface untested files in the critical path. No fail-under
+# threshold — chasing % over behaviour-coverage is the anti-pattern.
+[tool.coverage.run]
+source = ["src/claude_hpc"]
+branch = true
+omit = [
+    "src/claude_hpc/schemas/*",  # generated JSON, not Python
+    "src/claude_hpc/_schema_models/*",  # schema models — covered via roundtrip
+    "src/claude_hpc/mapreduce/templates/*",  # user-facing template files
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+show_missing = true
+skip_empty = true
 
 [dependency-groups]
 dev = [

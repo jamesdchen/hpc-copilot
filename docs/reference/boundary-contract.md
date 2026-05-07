@@ -22,9 +22,14 @@ The public boundary also now includes the **shell CLI** at
 `claude_hpc/agent_cli.py` (entry point `hpc-mapreduce`). Its envelope
 shape, subcommand list, and exit-code contract are documented in
 [`docs/reference/cli-spec.md`](cli-spec.md) and the JSON Schemas under
-`claude_hpc/schemas/`. The CLI calls into the same atomic-ops layer
-(`claude_hpc/runner/`) that the slash commands use, so the
-invariants in [`docs/internals/sync-checklist.md`](sync-checklist.md) bind both.
+`claude_hpc/schemas/`. The JSON Schemas are themselves a build
+artifact — they're regenerated from Pydantic models under
+`src/claude_hpc/_schema_models/` by `scripts/build_schemas.py`.
+External consumers read the JSON files (that's the wire contract);
+internal contributors edit the Pydantic. The CLI calls into the same
+atomic-ops layer (`claude_hpc/runner/`) that the slash commands use,
+so the invariants in [`docs/internals/sync-checklist.md`](../internals/sync-checklist.md)
+bind both.
 
 ### Package root
 

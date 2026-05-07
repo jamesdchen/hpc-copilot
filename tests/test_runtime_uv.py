@@ -201,16 +201,38 @@ def test_template_thread_reexport_honors_user_env_override(template: Path) -> No
 
 
 def test_submit_input_schema_accepts_runtime() -> None:
-    """The submit.input.json schema accepts an optional runtime field."""
+    """The submit.input.json schema accepts an optional runtime field.
+
+    The schema is now Pydantic-emitted (see _schema_models/submit.py),
+    so ``runtime`` renders as ``anyOf: [{"const": "uv"}, {"type":
+    "null"}]`` rather than the older ``enum: ["uv", null]``. Test
+    behaviorally — actually validate ``runtime: "uv"`` and ``runtime:
+    None`` payloads — instead of pinning the encoding.
+    """
     import json
 
-    # Schemas have not yet moved to claude_hpc/ at this point in the
-    # reorg; resolve via the legacy alias (will be cleaned up in Step 8).
     schema_path = _PACKAGE_ROOT / "schemas" / "submit.input.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert "runtime" in schema["properties"]
-    rt = schema["properties"]["runtime"]
-    assert "uv" in rt["enum"]
-    assert None in rt["enum"]
     # runtime is optional — must not be in required list
     assert "runtime" not in schema.get("required", [])
+
+    from claude_hpc._internal._schema import validate as _validate
+
+    base = {
+        "profile": "p",
+        "cluster": "c",
+        "ssh_target": "u@h",
+        "remote_path": "/tmp/x",
+        "job_name": "j",
+        "run_id": "r",
+        "job_ids": ["1"],
+        "total_tasks": 1,
+    }
+    # Both "uv" and null should validate; an unknown runtime should not.
+    _validate({**base, "runtime": "uv"}, schema)
+    _validate({**base, "runtime": None}, schema)
+    import jsonschema
+
+    with pytest.raises(jsonschema.ValidationError):
+        _validate({**base, "runtime": "bogus"}, schema)

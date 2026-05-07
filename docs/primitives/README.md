@@ -38,6 +38,35 @@ The body covers Purpose (one paragraph), Compose with (predecessor/successor pri
 
 **Why no `inputs:` / `outputs:` blocks?** Earlier iterations of this catalog included field-level contracts in frontmatter, then a validator script cross-checked them against schemas. Both layers are now obsolete: schemas are the single source of truth for field-level shapes, frontmatter is for behavioral metadata, and the validator was deleted (nothing to validate against). Keeping both was just maintaining duplicate contracts.
 
+## Two body templates
+
+Primitives carry one of two body templates depending on `agent_facing`. Both ship the same frontmatter — only the section structure changes — and `scripts/lint_primitive_doc_templates.py` gates the partition.
+
+- **`agent_facing=True`** — read by LLMs via `render_llms_full` and clicked through from slash commands / skills. Outward-facing template:
+  ```
+  # <name>
+  <one-paragraph what + why>
+  ## Inputs
+  ## Outputs
+  ## Errors
+  ## Idempotency
+  ## Notes
+  ```
+- **`agent_facing=False`** — framework internals composed inside workflows. Audience is the next contributor, not an LLM (`render_llms_full` skips these bodies, ships only the catalog row). Contributor-facing template:
+  ```
+  # <name>
+  > **Internal primitive.** [where it's composed from]
+  <one-paragraph what + why>
+  ## Composers
+  ## Invariants
+  ## Coupling
+  ## Failure modes
+  ```
+
+The lint script counts headers in each tier's vocabulary; a doc whose body leans toward the wrong template for its tier fails CI. Stub bodies (`_Documentation pending._` placeholders auto-scaffolded when the registry has a primitive without a doc) are tolerated.
+
+See [`docs/internals/adding-a-primitive.md`](../internals/adding-a-primitive.md) for the full add-a-primitive recipe.
+
 ## Catalog
 
 Auto-generated from frontmatter, grouped by `verb` — run `uv run python scripts/build_primitive_index.py` after adding or editing a primitive. CI gates on `--check` so the table can never drift from the source.

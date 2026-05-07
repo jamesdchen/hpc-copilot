@@ -6,17 +6,37 @@ The slash-command surface in `slash_commands/commands/` is documented elsewhere;
 
 ## Schemas (machine-readable contracts)
 
-The JSON Schemas under `claude_hpc/schemas/` are the source of truth — agents constructing or validating envelopes should validate against the schema, not parse this markdown.
+The JSON Schemas under `claude_hpc/schemas/` are the **wire contract** — agents
+constructing or validating envelopes validate against those files, not this
+markdown. Internally they are **regenerated** by
+`scripts/build_schemas.py` from Pydantic models under
+`src/claude_hpc/_schema_models/`; the Python models are the *authoring* SoT
+and the JSON files are a build artifact, the same posture
+`docs/generated/operations.md` and `docs/primitives/<name>.md` frontmatter use
+relative to the `@primitive` registry.
 
-- `envelope.json` — universal stdout envelope (success / error).
-- `submit.input.json`, `submit.output.json` — `submit --spec` shape.
-- `status.output.json` — `status` data block.
-- `capabilities.output.json` — `capabilities` data block.
-- `preflight.output.json` — `preflight` data block.
-- `resubmit.input.json` — `resubmit --spec` shape.
-- `campaign.output.json` — `campaign status` / `campaign list` data block.
-- `discover.output.json` — `discover` data block.
-- `stages.input.json` — output shape of `.hpc/stages.py::stages()` (loaded by `claude_hpc.planning.stages.load_stages`; not a CLI input but agents authoring `stages.py` should validate against this).
+External consumers (MARs, future agent harnesses, the in-process
+`validate_output` boundary check) read the JSON. Framework
+contributors edit the Pydantic. Pre-commit's `build-schemas`
+`--check` gate fails CI when the two diverge.
+
+53 schemas cover the full agent-facing surface:
+
+- `envelope.json` — universal stdout envelope (success / error variants
+  via discriminated union on `ok`).
+- One `<primitive>.input.json` per primitive that takes a `--spec` payload.
+- One `<primitive>.output.json` per primitive whose `data` block has a
+  declared shape.
+- Two persisted-data shapes used at runtime: `axes.json`
+  (`<experiment>/.hpc/axes.yaml`) and `campaign_manifest.json`
+  (`<campaign_dir>/manifest.json`).
+- `stages.input.json` — output shape of `.hpc/stages.py::stages()`.
+
+Cross-file `$ref` is rare post-Pydantic-migration; most schemas
+inline shared constraints (run_id pattern, scheduler enum, lifecycle
+states, error codes) from `_schema_models/_shared.py`. When a
+shared constraint changes, edit the Python alias and regenerate —
+every consumer schema updates in lock-step.
 
 ## Conventions
 

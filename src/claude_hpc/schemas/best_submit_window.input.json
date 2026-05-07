@@ -2,14 +2,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/best_submit_window.input.json",
   "title": "best-submit-window input",
-  "description": "Inputs for the `best-submit-window` primitive (hpc-mapreduce best-submit-window --profile <p> --cluster <c>).",
+  "description": "Inputs for the ``best-submit-window`` primitive.",
   "type": "object",
-  "required": ["profile", "cluster"],
+  "required": [
+    "profile",
+    "cluster"
+  ],
   "additionalProperties": false,
   "properties": {
-    "profile":      { "type": "string" },
-    "cluster":      { "type": "string" },
-    "within_hours": { "type": "integer", "minimum": 1, "default": 24 },
-    "top_k":        { "type": "integer", "minimum": 1, "default": 5 }
+    "profile": {
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "title": "Cluster",
+      "type": "string"
+    },
+    "within_hours": {
+      "default": 24,
+      "minimum": 1,
+      "title": "Within Hours",
+      "type": "integer"
+    },
+    "top_k": {
+      "default": 5,
+      "minimum": 1,
+      "title": "Top K",
+      "type": "integer"
+    }
   }
 }

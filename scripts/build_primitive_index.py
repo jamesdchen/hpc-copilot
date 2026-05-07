@@ -98,10 +98,10 @@ def primitives_from_registry() -> list[dict]:
     """Project the @primitive registry into the dict shape this script
     already consumes (name / verb / idempotent / side_effects / backed_by).
 
-    The registry is the SoT for behavior + structured side-effect kinds;
-    we still cross-reference each primitive's frontmatter to recover the
-    backed_by.cli string (the registry doesn't yet carry CLI invocations
-    — that's a follow-up).
+    The registry is the SoT for behavior, structured side-effect kinds,
+    and the ``cli`` invocation string. We still cross-reference each
+    primitive's frontmatter for ``error_codes`` prose (per-code category /
+    retry_safe / description fields the registry doesn't yet model).
 
     Falls through to pure-frontmatter parsing for any primitive missing
     from the registry, so the script stays useful during the C′
@@ -118,11 +118,10 @@ def primitives_from_registry() -> list[dict]:
     out: list[dict] = []
     seen: set[str] = set()
     for meta in registered.values():
-        # Read the matching frontmatter for cli + error_codes (prose
-        # fields the registry doesn't yet model).
+        # Read frontmatter only for error_codes prose (the registry
+        # carries the class refs but not the per-code prose fields yet).
         md_path = PRIMITIVES_DIR / f"{meta.name}.md"
         fm = parse_frontmatter(md_path) if md_path.is_file() else {}
-        backed_by = fm.get("backed_by") if isinstance(fm.get("backed_by"), dict) else {}
         out.append(
             {
                 "name": meta.name,
@@ -136,7 +135,15 @@ def primitives_from_registry() -> list[dict]:
                     {se.kind: se.target} if se.target else se.kind for se in meta.side_effects
                 ],
                 "error_codes": fm.get("error_codes", []),
-                "backed_by": backed_by,
+                # backed_by.cli now comes from the registry; python is
+                # derived from the func's qualified name. We still pass
+                # the dict shape downstream consumers expect.
+                "backed_by": {
+                    "cli": meta.cli
+                    if meta.cli is not None
+                    else "(none — Python-only primitive)",
+                    "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
+                },
             }
         )
         seen.add(meta.name)

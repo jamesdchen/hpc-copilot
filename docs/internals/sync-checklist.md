@@ -45,8 +45,10 @@ The full set of 12 values that may appear in an error envelope's
 | `outputs_missing` | `OutputsMissing` | cluster | yes |
 | `internal` | `HpcError` (base / catch-all) | internal | no |
 
-The same enum appears in `claude_hpc/schemas/envelope.json`. Adding
-a value requires updating both files.
+The same enum appears in `claude_hpc/schemas/envelope.json` —
+generated from `_schema_models/_shared.py:ErrorCode` so adding
+a value is a one-place edit (Python alias) followed by
+`scripts/build_schemas.py --write`.
 
 ### `failure_category` enum
 
@@ -153,22 +155,48 @@ Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
 - **Identity**: the `run_id` string is the sole identifier; sidecars
   are addressable directly at `.hpc/runs/<run_id>.json`.
 
+## Where source-of-truth lives
+
+The migration to Pydantic-as-authoring-SoT means most cross-cutting
+invariants now have a single Python definition; the JSON schemas are
+regenerated, the markdown is regenerated, and the cross-file `$ref`
+graph that used to hold them together is gone.
+
+| Invariant | Python SoT | Generated artifacts |
+|---|---|---|
+| `error_code` enum | `_schema_models/_shared.py:ErrorCode` + `errors.py` HpcError subclasses | `schemas/envelope.json`, every Pydantic model that types `error_code` |
+| `failure_category` enum | `mapreduce/reduce/classify.py:CATEGORIES` (still hand-mirrored — see below) | `schemas/resubmit.input.json` (Pydantic alias `ResubmitCategory`) |
+| Lifecycle states | `_internal/session.py:TERMINAL_STATUSES` (Python frozenset) + `_schema_models/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
+| `run_id` shape | `_schema_models/_shared.py:RunIdStrict` (input), `RunIdLoose` (output) | every input/output schema that types a run_id |
+| Scheduler / GpuType / Runtime / BackendName | `_schema_models/_shared.py` aliases | every consumer model |
+| `@primitive` decorator metadata (name, verb, side_effects, idempotent, idempotency_key, error_codes, composes, cli, agent_facing, exit_codes) | `_internal/_primitive.py` registry | `docs/primitives/<name>.md` frontmatter, `docs/primitives/README.md` table, `docs/generated/operations.md` |
+| Wire envelope shape | `_schema_models/envelope.py:EnvelopeAdapter` | `schemas/envelope.json` |
+
 ## How to extend
 
 When you add a new invariant or change one of the above:
 
-1. Update the source-of-truth file (the Python module that defines it).
-2. Update this checklist with the new value/format and pointer to the
-   defining file.
-3. Update the relevant downstream doc (`cli-spec.md`,
-   `boundary-contract.md`, `schema.md`, `config-precedence.md`).
-4. Update the JSON Schema under `claude_hpc/schemas/` if the
-   invariant is part of the CLI envelope contract.
-5. Bump the package version in `pyproject.toml`.
+1. Edit the Python SoT (the table above tells you which file).
+2. Run the regen scripts (or `pre-commit run -a`):
+   - `scripts/build_schemas.py --write` regenerates JSON schemas.
+   - `scripts/build_primitive_frontmatter.py --write` regenerates
+     `docs/primitives/<name>.md` frontmatter.
+   - `scripts/build_primitive_index.py` regenerates the catalog
+     table.
+   - `scripts/build_operations_index.py` regenerates
+     `docs/generated/operations.md`.
+3. Update prose docs that explain WHY the invariant exists if the
+   semantic changed (`cli-spec.md`, `boundary-contract.md`,
+   `config-precedence.md`).
+4. Bump the package version in `pyproject.toml` for breaking
+   wire-contract changes.
 
 ## Known discrepancies (v0.2.0)
 
-None at release. The `--spec.category` enum in
-`claude_hpc/schemas/resubmit.input.json` is the canonical mirror of
-`CATEGORIES` in `claude_hpc/mapreduce/reduce/classify.py`; if you add a new
-failure category, update both files in the same commit.
+`CATEGORIES` in `claude_hpc/mapreduce/reduce/classify.py` is still
+the hand-authored Python source for failure categories; the
+`ResubmitCategory` Literal in
+`_schema_models/resubmit.py` mirrors it manually. Adding a new
+failure category requires updating both. Future cleanup: lift
+`CATEGORIES` into `_schema_models/_shared.py` and re-export from
+`classify.py` so there's one definition.

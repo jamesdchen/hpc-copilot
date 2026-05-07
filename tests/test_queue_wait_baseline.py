@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
 from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.infra.inspect import (
     ClusterSnapshot,
@@ -11,6 +12,7 @@ from claude_hpc.infra.inspect import (
     persist_snapshot,
 )
 from claude_hpc.state import runtime_prior as rp
+
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"
@@ -42,9 +44,11 @@ class TestColdStart:
     def test_empty_pool_returns_cold(self, tmp_path):
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         assert out.predicted_wait_sec is None
         assert out.confidence == "cold"
@@ -61,9 +65,11 @@ class TestColdStart:
         )
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:30:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:30:00+00:00",
+            ),
         )
         assert out.predicted_wait_sec is None
         assert out.confidence == "cold"
@@ -73,7 +79,10 @@ class TestColdStart:
 
     def test_unparseable_at_iso_is_cold(self, tmp_path):
         out = qwb.predict_queue_wait(
-            tmp_path, profile=PROFILE, cluster=CLUSTER, at_iso="not-a-date"
+            tmp_path,
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE, cluster=CLUSTER, at_iso="not-a-date"
+            ),
         )
         assert out.predicted_wait_sec is None
         assert out.confidence == "cold"
@@ -93,9 +102,11 @@ class TestDiurnalMA:
         _seed_samples(tmp_path, seeds)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso=_iso(base + timedelta(minutes=45)),
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso=_iso(base + timedelta(minutes=45)),
+            ),
         )
         assert out.method == "diurnal_ma"
         assert out.confidence == "high"
@@ -117,9 +128,11 @@ class TestDiurnalMA:
         _seed_samples(tmp_path, seeds)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso=_iso(target + timedelta(minutes=30)),
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso=_iso(target + timedelta(minutes=30)),
+            ),
         )
         assert out.method == "diurnal_ma"
         assert out.confidence == "medium"
@@ -147,9 +160,11 @@ class TestBlendedFallback:
 
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso=_iso(target + timedelta(minutes=15)),
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso=_iso(target + timedelta(minutes=15)),
+            ),
         )
         assert out.method == "blended_ma"
         assert out.confidence == "low"
@@ -173,9 +188,11 @@ class TestBlendedFallback:
 
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso=_iso(target + timedelta(minutes=15)),
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso=_iso(target + timedelta(minutes=15)),
+            ),
         )
         assert out.method == "global_ma"
         assert out.confidence == "low"
@@ -190,9 +207,11 @@ class TestPredictionResult:
     def test_to_dict_round_trip(self, tmp_path):
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         d = out.to_dict()
         assert set(d) == {
@@ -246,11 +265,13 @@ class TestDESBackend:
         _persist_idle_snapshot(tmp_path)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            backend="des",
-            n_replications=4,
-            seed=1,
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                backend="des",
+                n_replications=4,
+                seed=1,
+            ),
         )
         assert out.method == "des"
         assert out.predicted_wait_sec == 0
@@ -262,10 +283,12 @@ class TestDESBackend:
         # Empty experiment dir → DES should fall back, tag method.
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            backend="des",
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                backend="des",
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         assert out.method == "des_no_snapshot"
         # No history → still cold; method tag tells the caller why.
@@ -275,10 +298,12 @@ class TestDESBackend:
         # No snapshot + no profiles → auto picks diurnal_ma path.
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            backend="auto",
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                backend="auto",
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         assert out.method in ("no_data", "diurnal_ma", "blended_ma", "global_ma")
 
@@ -286,20 +311,24 @@ class TestDESBackend:
         _persist_idle_snapshot(tmp_path)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            backend="auto",
-            n_replications=2,
-            seed=1,
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                backend="auto",
+                n_replications=2,
+                seed=1,
+            ),
         )
         assert out.method == "des"
         assert out.predicted_wait_sec == 0
 
     def test_des_seed_determinism(self, tmp_path):
         _persist_idle_snapshot(tmp_path)
-        kwargs = dict(profile=PROFILE, cluster=CLUSTER, backend="des", n_replications=4, seed=42)
-        a = qwb.predict_queue_wait(tmp_path, **kwargs)
-        b = qwb.predict_queue_wait(tmp_path, **kwargs)
+        spec = PredictQueueWaitSpec(
+            profile=PROFILE, cluster=CLUSTER, backend="des", n_replications=4, seed=42
+        )
+        a = qwb.predict_queue_wait(tmp_path, spec=spec)
+        b = qwb.predict_queue_wait(tmp_path, spec=spec)
         assert a.predicted_wait_sec == b.predicted_wait_sec
         assert a.p10_wait_sec == b.p10_wait_sec
         assert a.p90_wait_sec == b.p90_wait_sec

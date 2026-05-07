@@ -80,6 +80,8 @@ def _ssh_alive_job_ids(
     error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
     idempotent=True,
     idempotency_key="run_id",
+    cli="hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]",
+    agent_facing=True,
 )
 def reconcile(
     experiment_dir: Path,
@@ -189,6 +191,7 @@ def reconcile(
     error_codes=[errors.JournalCorrupt],
     idempotent=True,
     idempotency_key="run_id",
+    cli=None,  # Python-only primitive
 )
 def mark_terminal(
     experiment_dir: Path,

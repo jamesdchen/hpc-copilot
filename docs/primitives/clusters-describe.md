@@ -14,7 +14,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce clusters describe <name>
-  python: claude_hpc.agent_cli.cmd_clusters_describe
+  python: claude_hpc.atoms.clusters.describe_cluster
 exit_codes:
 - 0: ok
 - 1: cluster_unknown / config_invalid

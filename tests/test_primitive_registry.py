@@ -139,6 +139,8 @@ def test_primitive_meta_carries_all_fields() -> None:
         idempotency_key="run_id",
         exit_codes=[(0, "ok"), (1, "user-error")],
         description="explicit description",
+        cli="hpc-mapreduce test-carries-fields --spec <path>",
+        agent_facing=True,
     )
     def my_op() -> None:
         pass
@@ -157,5 +159,13 @@ def test_primitive_meta_carries_all_fields() -> None:
         assert meta.idempotency_key == "run_id"
         assert meta.exit_codes == ((0, "ok"), (1, "user-error"))
         assert meta.description == "explicit description"
+        assert meta.cli == "hpc-mapreduce test-carries-fields --spec <path>"
+        assert meta.agent_facing is True
+        # And atom_op defaults to agent_facing=False
+        assert get_meta(atom_name).agent_facing is False
     finally:
         _REGISTRY.pop(fname, None)
+        # atom_op is also registered; pop it too so it doesn't leak
+        # into other tests that walk the full registry (e.g.
+        # test_every_registered_primitive_has_a_doc).
+        _REGISTRY.pop(atom_name, None)

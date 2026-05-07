@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    cli="hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]",
 )
 def house_edge(
     *,

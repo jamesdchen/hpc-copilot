@@ -11,4 +11,66 @@ backed_by:
 ---
 # recall
 
-_Documentation pending._
+Walk one or more directory trees for `interview.json` files and
+return per-campaign summaries plus pre-computed cross-campaign
+aggregations. Drives "last time you ran this kind of campaign…"
+context for a fresh interview agent.
+
+## Inputs
+
+The full input schema is at `claude_hpc/schemas/recall.input.json`
+(Pydantic-emitted from `_schema_models/recall.py:RecallSpec`). All
+fields optional:
+
+- `root` (str) — filesystem directory to walk recursively. When
+  omitted, falls back to
+  `~/.claude-hpc/config.json:experiment_roots`. Both empty raises
+  `spec_invalid`.
+- `task_kind` (str) — exact-match filter against
+  `intent.task_kind` (`"ml-hparam-sweep"`, `"rl-rollout"`).
+- `operator` (str) — exact-match filter against
+  `intent.produced_by.operator` (for human-driven campaigns).
+- `since` (ISO-8601) — only return campaigns whose
+  `_materialized.at` is at or after this timestamp.
+- `limit` (int, default 20) — cap on results returned. The total
+  match count (pre-truncation) is reported via
+  `data.total_matching` so the caller can detect "200 matching
+  campaigns; narrow the filter."
+- `include_runtime` (bool, default false) — Tier 2 rollup. Walks
+  each matched campaign's `.hpc/runtimes/*.json` and aggregates
+  `elapsed_sec` + failure rate.
+- `include_generator_stats` (bool, default false) — Tier 3
+  rollup. Buckets matched campaigns by `task_generator.kind` and
+  reports observed parameter envelopes.
+
+## Outputs
+
+`{ok: true, data: {campaigns, total_matching, showing, rollup}}`.
+Each `campaigns[i]` projects the prior-decision fields the next
+interviewer would compare against (`goal`, `task_kind`,
+`task_count`, `budget`, `abort_if`, `cluster_target`,
+`task_generator`) — not just file-listing metadata. The `rollup`
+block always carries Tier 1 aggregations (count, distributions);
+`runtime_rollup` and `generator_rollup` appear only when the
+respective opt-in flags are set.
+
+## Errors
+
+- `spec_invalid` — `root` is empty and
+  `~/.claude-hpc/config.json:experiment_roots` is also empty.
+
+## Idempotency
+
+Pure read; no side effects. Safe to invoke arbitrarily.
+
+## Notes
+
+`recall` is the canonical entry-point for cross-campaign memory.
+The interview agent calls it before drafting a new
+`interview.json` so it can ask "operator's prior runs in this
+family targeted cluster X with LR range Y; reuse?" — turning a
+cold start into a warm one.
+
+Tier 2 and Tier 3 rollups are opt-in because they walk additional
+files (per-task runtime ledgers and per-recipe params); the
+default Tier-1 path is cheap (one read per `interview.json`).

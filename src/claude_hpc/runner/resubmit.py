@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc import errors
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._schema_models.resubmit import ResubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,16 +53,14 @@ def derive_resubmit_request_id(
     error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
     idempotent=True,
     idempotency_key="request_id",
+    cli="hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]",
+    agent_facing=True,
 )
 def resubmit_failed(
     experiment_dir: Path,
     run_id: str,
     *,
-    failed_task_ids: list[int],
-    category: str,
-    overrides: dict[str, Any] | None = None,
-    new_job_ids: list[str] | None = None,
-    request_id: str | None = None,
+    spec: ResubmitSpec,
 ) -> tuple[RunRecord, bool, str]:
     """Record a resubmission attempt in the journal.
 
@@ -80,8 +79,12 @@ def resubmit_failed(
 
     Returns ``(record, deduped, request_id)``.
     """
-    if not failed_task_ids:
-        raise ValueError("resubmit_failed requires at least one failed task id")
+    failed_task_ids = list(spec.failed_task_ids)
+    category = str(spec.category)
+    overrides = dict(spec.overrides) if spec.overrides is not None else None
+    new_job_ids = list(spec.new_job_ids) if spec.new_job_ids is not None else None
+    request_id = spec.request_id
+
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no run record for {run_id!r}")

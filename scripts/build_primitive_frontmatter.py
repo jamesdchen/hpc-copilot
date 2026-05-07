@@ -123,17 +123,15 @@ def _build_frontmatter(meta, fm_existing: dict) -> dict:
     # — they belong in the doc body, not the frontmatter.
     fm["idempotency_key"] = meta.idempotency_key if meta.idempotency_key is not None else "none"
     fm["error_codes"] = _render_error_codes(meta, fm_existing)
-    if "backed_by" in fm_existing:
-        fm["backed_by"] = fm_existing["backed_by"]
-    else:
-        # Auto-derive a minimal backed_by for newly-scaffolded docs.
-        # ``python`` is the canonical entry-point pointer; ``cli`` defaults
-        # to the conventional ``hpc-mapreduce <name>`` and the human
-        # tightens the placeholder with concrete arg syntax later.
-        fm["backed_by"] = {
-            "cli": f"hpc-mapreduce {meta.name}",
-            "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
-        }
+    # backed_by is now fully registry-owned. ``cli`` comes from the
+    # decorator's ``cli=`` kwarg (None for Python-only primitives, which
+    # we render as the legacy human-readable marker so existing readers
+    # stay happy). ``python`` is the canonical entry-point pointer derived
+    # from the func's qualified name.
+    fm["backed_by"] = {
+        "cli": meta.cli if meta.cli is not None else "(none — Python-only primitive)",
+        "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
+    }
     if "exit_codes" in fm_existing:
         fm["exit_codes"] = fm_existing["exit_codes"]
     return fm

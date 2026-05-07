@@ -148,9 +148,8 @@ def _from_registry() -> list[dict[str, Any]]:
       :func:`_summarize_side_effects` so frontmatter fallback entries
       remain shape-compatible.
     * ``cli`` and ``python`` are derived: ``python`` is
-      ``f"{func.__module__}.{func.__qualname__}"``; ``cli`` is read
-      from the existing frontmatter (the registry doesn't yet carry
-      CLI invocations — that's a follow-up).
+      ``f"{func.__module__}.{func.__qualname__}"``; ``cli`` comes
+      directly from the decorator's ``cli=`` kwarg (registry SoT).
     * ``input_schema`` / ``output_schema`` resolve via :func:`schema_for`
       using a synthetic ``backed_by`` dict.
     """
@@ -158,7 +157,7 @@ def _from_registry() -> list[dict[str, Any]]:
     for meta in get_registry().values():
         backed = {
             "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
-            "cli": _cli_for_registry_entry(meta.name),
+            "cli": meta.cli,
         }
         out.append(
             {
@@ -170,31 +169,10 @@ def _from_registry() -> list[dict[str, Any]]:
                 "python": backed["python"],
                 "input_schema": schema_for(meta.name, "input", backed),
                 "output_schema": schema_for(meta.name, "output", backed),
+                "agent_facing": bool(meta.agent_facing),
             }
         )
     return sorted(out, key=lambda o: (o["verb"], o["name"]))
-
-
-def _cli_for_registry_entry(name: str) -> str | None:
-    """Look up the ``cli:`` field from the primitive's frontmatter.
-
-    The registry decorator doesn't yet carry the CLI invocation string
-    (callers compose it themselves from argparse); we still read it
-    from the frontmatter as a presentation hint. Returns None if the
-    frontmatter is unavailable or has no cli field.
-    """
-    prims_dir = _primitives_dir()
-    if prims_dir is None:
-        return None
-    path = prims_dir / f"{name}.md"
-    if not path.is_file():
-        return None
-    fm = _parse_frontmatter(path)
-    backed = fm.get("backed_by") if isinstance(fm.get("backed_by"), dict) else None
-    if backed is None:
-        return None
-    cli = backed.get("cli")
-    return cli if isinstance(cli, str) else None
 
 
 def _format_catalog_table(catalog: list[dict[str, Any]]) -> str:
@@ -240,17 +218,29 @@ def _read_schema_file(name: str) -> str:
 
 
 def render_llms_full() -> str:
-    """Render the full claude-hpc API surface as one plain-text blob.
+    """Render the claude-hpc API surface as one plain-text blob.
 
-    Modeled on Modal\'s ``llms-full.txt`` pattern: one CLI invocation
-    dumps the entire API surface (catalog table + every primitive\'s doc
-    + every primitive\'s input/output schema + the envelope contract +
-    boundary-contract + cli-spec) so an agent harness can load the whole
-    context in a single read.
+    Modeled on Modal's ``llms-full.txt`` pattern: one CLI invocation
+    dumps the API surface so an agent harness can load context in a
+    single read.
 
-    Returns plain text suitable for human reading or LLM context loading
-    --- NOT the JSON envelope. ``hpc-mapreduce capabilities --full`` is
-    documented as an explicit human-mode flag analogous to ``--help``.
+    Tiered to keep agent context budget honest. ``agent_facing=True``
+    primitives — workflows, scaffolds, validators, plus the atoms
+    skills / slash commands link to — ship their full body + input /
+    output schemas. The remaining atoms are framework internals
+    composed inside workflows (e.g. ``poll-run-status`` inside
+    ``monitor-flow``); they appear in the catalog table above so
+    agents can still introspect "what exists" and shell to their CLI
+    for forensic access, but their per-primitive prose / schema block
+    is omitted. The Composite property is about runtime invocation
+    uniformity (Leaf and Composite share an envelope), not
+    documentation surface — clients only need full context for the
+    primitives they call directly.
+
+    Returns plain text suitable for human reading or LLM context
+    loading --- NOT the JSON envelope. ``hpc-mapreduce capabilities
+    --full`` is documented as an explicit human-mode flag analogous to
+    ``--help``.
     """
     catalog = operations_catalog()
     parts: list[str] = []
@@ -261,9 +251,19 @@ def render_llms_full() -> str:
     parts.append(_format_catalog_table(catalog))
     parts.append("\n")
 
+    agent_facing = [e for e in catalog if e.get("agent_facing")]
+    internal = [e for e in catalog if not e.get("agent_facing")]
+    parts.append(
+        f"\n_{len(agent_facing)} agent-facing primitives expanded below; "
+        f"{len(internal)} framework-internal primitives appear in the catalog "
+        "table only (composed transitively by workflows). Use "
+        "``hpc-mapreduce <subcommand> --help`` or read the schema file named "
+        "in the catalog row for forensic access._\n"
+    )
+
     prims_dir = _primitives_dir()
     if prims_dir is not None:
-        for entry in catalog:
+        for entry in agent_facing:
             name = entry["name"]
             parts.append(f"\n## Primitive: {name}\n\n")
             doc_path = prims_dir / f"{name}.md"

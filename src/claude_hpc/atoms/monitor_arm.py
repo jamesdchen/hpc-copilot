@@ -33,6 +33,7 @@ from typing import Any
 
 from claude_hpc import errors
 from claude_hpc._internal._primitive import primitive
+from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
 
 # Adaptive delay table — lifted from /monitor-hpc Step 5's Markdown
 # table so the primitive is the single source of truth. Each row is
@@ -136,18 +137,10 @@ def _classify_state(
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    cli="hpc-mapreduce decide-monitor-arm --spec <path>",
+    agent_facing=True,
 )
-def decide_monitor_arm(
-    *,
-    run_id: str,
-    summary: dict[str, int],
-    total_tasks: int,
-    invocation_argv: str,
-    user_invoked_via_loop: bool = False,
-    eta_sec: int | None = None,
-    pace_unstable: bool = False,
-    queue_wait_sec: int | None = None,
-) -> dict[str, Any]:
+def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     """Pick the arm mode + cadence + cron args + ``armed:`` line.
 
     Parameters
@@ -185,18 +178,15 @@ def decide_monitor_arm(
     ``armed_line``, ``cron_create_args``. The slash-command epilogue
     copies ``armed_line`` verbatim and (when ``arm == "cron"``) passes
     ``cron_create_args`` to the ``CronCreate`` tool.
-
-    Raises
-    ------
-    :class:`errors.SpecInvalid`
-        Empty run_id, total_tasks < 0, or summary is not a dict.
     """
-    if not run_id:
-        raise errors.SpecInvalid("run_id must be a non-empty string")
-    if not isinstance(summary, dict):
-        raise errors.SpecInvalid(f"summary must be a dict, got {type(summary).__name__}")
-    if int(total_tasks) < 0:
-        raise errors.SpecInvalid(f"total_tasks must be >=0, got {total_tasks!r}")
+    run_id = spec.run_id
+    summary = spec.summary
+    total_tasks = spec.total_tasks
+    invocation_argv = spec.invocation_argv
+    user_invoked_via_loop = bool(spec.user_invoked_via_loop)
+    eta_sec = spec.eta_sec
+    pace_unstable = bool(spec.pace_unstable)
+    queue_wait_sec = spec.queue_wait_sec
 
     # Terminal — no arming, cancel any prior cron.
     complete = int(summary.get("complete") or 0)

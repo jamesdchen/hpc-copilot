@@ -2,52 +2,78 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/monitor_flow.output.json",
   "title": "monitor-flow output data",
-  "description": "Shape of the `data` field on a successful `monitor-flow` envelope. The run may have finished cleanly, failed, been abandoned, or hit the wall-clock budget \u2014 in every case the envelope's `ok` is true (the *flow* completed its job of watching). Caller branches on `lifecycle_state` to decide what to do next.",
+  "description": "Shape of the ``data`` field on a successful ``monitor-flow`` envelope.\n\nThe run may have finished cleanly, failed, been abandoned, or hit\nthe wall-clock budget — in every case the envelope's ``ok`` is\ntrue (the *flow* completed its job of watching). Caller branches\non ``lifecycle_state`` to decide what to do next.",
   "type": "object",
   "required": [
     "run_id",
     "lifecycle_state",
-    "ticks",
-    "elapsed_seconds",
     "last_status",
     "combined_waves",
-    "failed_waves"
+    "failed_waves",
+    "ticks",
+    "elapsed_seconds"
   ],
   "additionalProperties": false,
   "properties": {
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id"
+      "title": "Run Id",
+      "type": "string"
     },
     "lifecycle_state": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/lifecycle_state_terminal",
-      "description": "Terminal-or-budget state. 'complete' = every task reported complete. 'failed' = at least one failure with no running/pending tasks left (no auto-resubmit in MVP). 'abandoned' = recorded job_ids are no longer known to the scheduler. 'timeout' = wall_clock_budget_seconds exceeded; cluster jobs may still be running."
+      "description": "Terminal-or-budget state. 'complete' = every task reported complete. 'failed' = at least one failure with no running/pending tasks left (no auto-resubmit in MVP). 'abandoned' = recorded job_ids are no longer known to the scheduler. 'timeout' = wall_clock_budget_seconds exceeded; cluster jobs may still be running.",
+      "enum": [
+        "complete",
+        "failed",
+        "abandoned",
+        "timeout"
+      ],
+      "title": "Lifecycle State",
+      "type": "string"
     },
     "last_status": {
-      "type": "object",
-      "description": "Final status snapshot from the cluster-side reporter (per-task counts plus checked_at timestamp)."
+      "additionalProperties": true,
+      "description": "Final status snapshot from the cluster-side reporter (per-task counts plus checked_at timestamp).",
+      "title": "Last Status",
+      "type": "object"
     },
     "combined_waves": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/combined_waves"
+      "items": {
+        "type": "integer"
+      },
+      "title": "Combined Waves",
+      "type": "array"
     },
     "failed_waves": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/failed_waves"
+      "items": {
+        "type": "integer"
+      },
+      "title": "Failed Waves",
+      "type": "array"
     },
     "ticks": {
-      "type": "integer",
+      "description": "Number of poll iterations executed before terminal/timeout.",
       "minimum": 1,
-      "description": "Number of poll iterations executed before terminal/timeout."
+      "title": "Ticks",
+      "type": "integer"
     },
     "elapsed_seconds": {
-      "type": "number",
+      "description": "Wall-clock seconds from monitor-flow start to return.",
       "minimum": 0,
-      "description": "Wall-clock seconds from monitor-flow start to return."
+      "title": "Elapsed Seconds",
+      "type": "number"
     },
     "escalation_reason": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "When non-null, indicates why monitor-flow stopped watching even though lifecycle is not 'complete'. Examples: 'failed_tasks_no_auto_recover_in_mvp', 'combiner_failed_max_retries:wave=3', 'abandoned_by_reconcile'. Null when lifecycle is 'complete' or 'timeout'."
+      "default": null,
+      "description": "When non-null, indicates why monitor-flow stopped watching even though lifecycle is not 'complete'. Examples: 'failed_tasks_no_auto_recover_in_mvp', 'combiner_failed_max_retries:wave=3', 'abandoned_by_reconcile'. Null when lifecycle is 'complete' or 'timeout'.",
+      "title": "Escalation Reason"
     }
   }
 }

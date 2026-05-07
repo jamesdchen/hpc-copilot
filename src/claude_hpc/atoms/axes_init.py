@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="experiment_dir",
+    cli="hpc-mapreduce axes-init",
+    agent_facing=True,
 )
 def axes_init(
     *,

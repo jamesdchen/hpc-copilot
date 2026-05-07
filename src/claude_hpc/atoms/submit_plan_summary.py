@@ -45,6 +45,8 @@ def _format_resources(spec: dict[str, Any]) -> str:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
+    cli="hpc-mapreduce summarize-submit-plan --spec <path>",
+    agent_facing=True,
 )
 def summarize_submit_plan(spec: dict[str, Any]) -> dict[str, Any]:
     """Render a canonical pre-submit confirmation summary for *spec*.

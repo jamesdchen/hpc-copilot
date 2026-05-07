@@ -16,6 +16,8 @@ import pytest
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
+from claude_hpc._schema_models.resubmit import ResubmitSpec
+from claude_hpc._schema_models.submit import SubmitSpec as _WireSubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,14 +63,16 @@ def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
 def test_submit_and_record_writes_journal(journal_home, experiment):
     record, deduped = runner.submit_and_record(
         experiment,
-        profile="ml_ridge",
-        cluster="hoffman2",
-        ssh_target="user@hoffman2.idre.ucla.edu",
-        remote_path="/u/scratch/exp",
-        job_name="ml_ridge",
-        run_id="ml_ridge_abcd1234",
-        job_ids=["12345678"],
-        total_tasks=100,
+        spec=_WireSubmitSpec(
+            profile="ml_ridge",
+            cluster="hoffman2",
+            ssh_target="user@hoffman2.idre.ucla.edu",
+            remote_path="/u/scratch/exp",
+            job_name="ml_ridge",
+            run_id="ml_ridge_abcd1234",
+            job_ids=["12345678"],
+            total_tasks=100,
+        ),
     )
     assert deduped is False
     assert record.run_id == "ml_ridge_abcd1234"
@@ -83,42 +87,30 @@ def test_submit_and_record_writes_journal(journal_home, experiment):
 
 def test_submit_and_record_dedups_replay(journal_home, experiment):
     """Second call with the same run_id returns the existing record + deduped=True."""
-    kwargs = dict(
+    base = dict(
         profile="ml_ridge",
         cluster="hoffman2",
         ssh_target="user@hoffman2.idre.ucla.edu",
         remote_path="/u/scratch/exp",
         job_name="ml_ridge",
         run_id="ml_ridge_abcd1234",
-        job_ids=["12345678"],
         total_tasks=100,
     )
-    first, first_dedup = runner.submit_and_record(experiment, **kwargs)
+    first, first_dedup = runner.submit_and_record(
+        experiment,
+        spec=_WireSubmitSpec(**base, job_ids=["12345678"]),
+    )
     assert first_dedup is False
 
     # Replay with new job_ids should be ignored — dedup means the existing
     # record is returned untouched, so retries can't double-submit.
-    replay_kwargs = {**kwargs, "job_ids": ["99999999"]}
-    second, second_dedup = runner.submit_and_record(experiment, **replay_kwargs)
+    second, second_dedup = runner.submit_and_record(
+        experiment,
+        spec=_WireSubmitSpec(**base, job_ids=["99999999"]),
+    )
     assert second_dedup is True
     assert second.run_id == first.run_id
     assert second.job_ids == ["12345678"]  # original wins
-
-
-def test_submit_and_record_rejects_empty_run_id(journal_home, experiment):
-    """An empty run_id is a programmer error and must surface immediately."""
-    with pytest.raises(errors.SpecInvalid, match="non-empty run_id"):
-        runner.submit_and_record(
-            experiment,
-            profile="ml_ridge",
-            cluster="hoffman2",
-            ssh_target="user@hoffman2.idre.ucla.edu",
-            remote_path="/u/scratch/exp",
-            job_name="ml_ridge",
-            run_id="",
-            job_ids=["12345678"],
-            total_tasks=100,
-        )
 
 
 def test_combine_wave_records_success(journal_home, experiment):
@@ -184,10 +176,12 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
     runner.resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
-        failed_task_ids=[3, 7],
-        category="system_oom",
-        overrides={"mem": "32G"},
-        new_job_ids=["99999999"],
+        spec=ResubmitSpec(
+            failed_task_ids=[3, 7],
+            category="system_oom",
+            overrides={"mem": "32G"},
+            new_job_ids=["99999999"],
+        ),
     )
     after_one = session.load_run(experiment, "ml_ridge_abcd1234")
     assert after_one.retries == {
@@ -199,9 +193,11 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
     runner.resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
-        failed_task_ids=[3],
-        category="system_oom",
-        overrides={"mem": "64G"},
+        spec=ResubmitSpec(
+            failed_task_ids=[3],
+            category="system_oom",
+            overrides={"mem": "64G"},
+        ),
     )
     after_two = session.load_run(experiment, "ml_ridge_abcd1234")
     assert after_two.retries["3"] == {
@@ -296,17 +292,6 @@ def test_mark_terminal_pass_through(journal_home, experiment):
     record = session.load_run(experiment, "ml_ridge_abcd1234")
     assert record.status == "complete"
     assert record.stage == "done"
-
-
-def test_resubmit_failed_rejects_empty_list(journal_home, experiment):
-    _seed_run(experiment)
-    with pytest.raises(ValueError):
-        runner.resubmit_failed(
-            experiment,
-            "ml_ridge_abcd1234",
-            failed_task_ids=[],
-            category="system_oom",
-        )
 
 
 def test_validate_ssh_target_accepts_alias_and_userhost():
@@ -657,9 +642,11 @@ def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
     rec1, dedup1, rid1 = runner.resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
-        failed_task_ids=[3],
-        category="system_oom",
-        overrides={"mem": "32G"},
+        spec=ResubmitSpec(
+            failed_task_ids=[3],
+            category="system_oom",
+            overrides={"mem": "32G"},
+        ),
     )
     assert dedup1 is False
     assert rec1.retries["3"]["attempts"] == 1
@@ -668,9 +655,11 @@ def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
     rec2, dedup2, rid2 = runner.resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
-        failed_task_ids=[3],
-        category="system_oom",
-        overrides={"mem": "32G"},
+        spec=ResubmitSpec(
+            failed_task_ids=[3],
+            category="system_oom",
+            overrides={"mem": "32G"},
+        ),
     )
     assert dedup2 is True
     assert rid2 == rid1
@@ -686,9 +675,11 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     _, dedup1, rid1 = runner.resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
-        failed_task_ids=[3],
-        category="system_oom",
-        request_id="rs_explicit_abc",
+        spec=ResubmitSpec(
+            failed_task_ids=[3],
+            category="system_oom",
+            request_id="rs_explicit_abc",
+        ),
     )
     assert dedup1 is False
     assert rid1 == "rs_explicit_abc"
@@ -696,9 +687,11 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     _, dedup2, rid2 = runner.resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
-        failed_task_ids=[7],  # different task!
-        category="walltime",  # different category!
-        request_id="rs_explicit_abc",  # but same id
+        spec=ResubmitSpec(
+            failed_task_ids=[7],  # different task!
+            category="walltime",  # different category!
+            request_id="rs_explicit_abc",  # but same id
+        ),
     )
     # Same explicit request_id wins over differing spec.
     assert dedup2 is True

@@ -53,6 +53,7 @@ from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
 from claude_hpc._internal._time import utcnow_iso
 from claude_hpc._internal.lifecycle import LifecycleState
+from claude_hpc._schema_models.monitor_flow import MonitorFlowSpec
 from claude_hpc.runner import mark_terminal, record_status
 from claude_hpc.state.runs import read_run_sidecar
 
@@ -353,20 +354,17 @@ def _is_terminal(
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+    cli="hpc-mapreduce monitor-flow --spec <path>",
+    agent_facing=True,
 )
 def monitor_flow(
-    *,
     experiment_dir: Path,
-    run_id: str,
-    poll_interval_seconds: float = 60.0,
-    wall_clock_budget_seconds: float = 86400.0,
-    auto_combine_waves: bool = True,
-    combiner_max_retries: int = 1,
-    file_glob: str = "*",
+    *,
+    spec: MonitorFlowSpec,
     _sleep: Any = time.sleep,
     _now: Any = time.monotonic,
 ) -> MonitorFlowResult:
-    """Poll *run_id* to terminal-or-budget; auto-combine waves; emit one result.
+    """Poll ``spec.run_id`` to terminal-or-budget; auto-combine waves; emit one result.
 
     Idempotent in the sense that re-invoking after a terminal return is
     a no-op (the journal record already carries the terminal state and
@@ -375,6 +373,17 @@ def monitor_flow(
     Parameters ``_sleep`` and ``_now`` are injected for testability;
     production callers leave them at the defaults.
     """
+    # Destructure the spec into typed locals so the body reads naturally
+    # and mypy/IDE see each field's narrowed type. The spec itself is
+    # the wire-validated authoring SoT (schemas/monitor_flow.input.json
+    # is regenerated from MonitorFlowSpec).
+    run_id = spec.run_id
+    poll_interval_seconds = spec.poll_interval_seconds
+    wall_clock_budget_seconds = spec.wall_clock_budget_seconds
+    auto_combine_waves = spec.auto_combine_waves
+    combiner_max_retries = spec.combiner_max_retries
+    file_glob = spec.file_glob
+
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(
