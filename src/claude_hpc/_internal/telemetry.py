@@ -53,13 +53,10 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc._internal.io import advisory_flock
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-try:  # POSIX-only flock; Windows degrades to no-op.
-    import fcntl as _fcntl
-except ImportError:  # pragma: no cover — non-POSIX
-    _fcntl = None  # type: ignore[assignment]
 
 
 # Environment override. Tests / orchestrators set this to redirect
@@ -70,31 +67,18 @@ _ENV_VAR = "HPC_TELEMETRY_SINK"
 
 @contextlib.contextmanager
 def flock_append(target: Path):
-    """Yield with an exclusive flock on a sibling ``.lock`` file.
+    """Yield with an exclusive flock on a sibling ``.lock`` file for *target*.
 
-    Mirrors :func:`claude_hpc.flows.monitor_flow._flock_append` and
-    :func:`claude_hpc._internal.session._locked` so all three writers to
-    ``<run_id>.monitor.jsonl`` serialize their appends. Without flock,
-    a concurrent monitor_flow tick and slash-command poll can produce
-    a torn JSON line.
-
-    On Windows / no-fcntl platforms degrades to a no-op so the module
-    stays importable; the torn-line risk is documented and acceptable
+    Thin wrapper around :func:`claude_hpc._internal.io.advisory_flock`
+    that derives the lock path (``<target>.lock``). Ensures all writers
+    to ``<run_id>.monitor.jsonl`` serialise their appends — without the
+    flock, a concurrent monitor_flow tick and slash-command poll can
+    produce a torn JSON line. On non-POSIX platforms ``advisory_flock``
+    degrades to a no-op; the torn-line risk is documented as acceptable
     for non-production environments.
     """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if _fcntl is None:
+    with advisory_flock(target.with_suffix(target.suffix + ".lock")):
         yield
-        return
-    lock = target.with_suffix(target.suffix + ".lock")
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        _fcntl.flock(fd, _fcntl.LOCK_EX)
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            _fcntl.flock(fd, _fcntl.LOCK_UN)
-        os.close(fd)
 
 
 def _resolve_sink(explicit: str | None) -> str:

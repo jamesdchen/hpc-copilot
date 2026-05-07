@@ -291,7 +291,7 @@ def resubmit_flow(
             )
             cluster_submitted = True
 
-    from claude_hpc._schema_models.resubmit import ResubmitSpec
+    from claude_hpc._schema_models.actions.resubmit import ResubmitSpec
 
     record, deduped, rid = runner.resubmit_failed(
         experiment_dir,

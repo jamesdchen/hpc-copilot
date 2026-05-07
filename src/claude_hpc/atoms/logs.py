@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._internal.primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
 
 if TYPE_CHECKING:

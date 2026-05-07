@@ -25,8 +25,8 @@ from importlib.resources import files as _resource_files
 from typing import Any
 
 from claude_hpc import errors
-from claude_hpc._internal._primitive import primitive
-from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
+from claude_hpc._internal.primitive import primitive
+from claude_hpc._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
 from claude_hpc.infra.remote import validate_ssh_target
 
 # Canonical cluster-side template paths. The local-side rsync ships the
@@ -227,7 +227,7 @@ def _validate(spec: dict[str, Any]) -> None:
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
-    from claude_hpc._internal._schema import validate as _validate
+    from claude_hpc._internal.schema import validate as _validate
 
     try:
         _validate(spec, schema)

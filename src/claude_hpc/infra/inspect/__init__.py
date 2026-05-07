@@ -45,7 +45,7 @@ import contextlib
 from pathlib import Path
 
 from claude_hpc import errors
-from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._internal.primitive import SideEffect, primitive
 from claude_hpc.infra.clusters import load_clusters_config
 
 from ._common import (
@@ -160,10 +160,12 @@ def inspect_cluster(
     return snap
 
 
-# Re-export the private helpers a few callers still reach for. New code
-# should import from the relevant submodule directly; these aliases keep
-# back-compat for tests that monkeypatch ``inspect._slurm_inspect`` and
-# the like.
+# Underscore re-exports retained ONLY for tests that monkeypatch the
+# inspect package (``monkeypatch.setattr('claude_hpc.infra.inspect._sge_inspect', ...)``).
+# New runtime code (including sibling backends) imports from the
+# submodule directly — see ``infra/backends/sge.py`` and
+# ``infra/backends/slurm.py``. Treat these names as deprecated public
+# API; they may move behind a ``DeprecationWarning`` in a later release.
 __all__ += [
     "_CACHE",
     "_CommandRunner",

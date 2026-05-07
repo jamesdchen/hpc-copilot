@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 
 from claude_hpc import errors
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.primitive import SideEffect, primitive
 from claude_hpc._internal.session import RunRecord, _atomic_write_json
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra import remote
 from claude_hpc.runner._ssh import _parse_remote_json
@@ -33,7 +33,7 @@ def _ssh_status_report(
 
     The reporter reads ``.hpc/runs/<run_id>.json`` for run metadata and
     ``.hpc/tasks.py`` for per-task kwargs, then emits the JSON envelope
-    pinned by ``docs/reference/cli-contract.md`` (summary / tasks / rollup /
+    pinned by ``docs/reference/python-api-contract.md`` (summary / tasks / rollup /
     errors).
     """
     job_ids_csv = ",".join(job_ids)

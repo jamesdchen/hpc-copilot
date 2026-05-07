@@ -18,8 +18,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._io import atomic_locked_update
-from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.io import atomic_locked_update
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc.campaign.dirs import campaign_dir
 
 if TYPE_CHECKING:

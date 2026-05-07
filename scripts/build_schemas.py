@@ -4,8 +4,8 @@ The wire SoT is the JSON file (every external consumer reads it).
 The *authoring* SoT is the Pydantic model under
 ``claude_hpc/_schema_models/``. This script bridges the two: it
 calls ``model.model_json_schema()`` (or ``adapter.json_schema()``
-for root-array schemas) for every entry in ``SCHEMA_REGISTRY`` and
-writes / diffs the matching JSON file.
+for root-array schemas) for every model auto-discovered under
+``_schema_models/`` and writes / diffs the matching JSON file.
 
 Same generator pattern as ``build_primitive_frontmatter.py``,
 ``build_primitive_index.py``, and ``build_operations_index.py``:
@@ -18,20 +18,39 @@ Usage::
     uv run python scripts/build_schemas.py --check    # CI gate
     uv run python scripts/build_schemas.py --write    # apply
 
+Discovery rules
+---------------
+
+For each non-private submodule of ``claude_hpc._schema_models``:
+
+1. Hardcoded mapping (``_NON_SUFFIX_MAPPING``) handles cross-cutting
+   shapes whose names don't fit the suffix convention — the three
+   ``TypeAdapter`` instances (``EnvelopeAdapter``, ``CampaignAdapter``,
+   ``StagesAdapter``) and two persisted-data ``BaseModel`` shapes
+   (``AxesConfig``, ``CampaignManifest``).
+2. Every other public ``BaseModel`` subclass *defined in that module*
+   (re-imports from sibling modules are skipped via ``__module__``
+   check) is discovered by name suffix:
+
+   * ``*Spec`` / ``*Input``    → ``<snake>.input.json``
+   * ``*Result`` / ``*Report`` / ``*Envelope`` → ``<snake>.output.json``
+   * Any other suffix          → skipped (treat as helper).
+
 Style policy: emit whatever Pydantic v2 produces (``anyOf`` for
 nullables, auto-titles per field, etc.). The wire validators and
 LLM consumers don't care about cosmetic differences; chasing
 byte-equality with hand-authored schemas isn't worth a custom
-``GenerateJsonSchema`` subclass. The script does inject
-``$schema``, ``$id``, and (when the model docstring or
-``model_config['title']`` is present) reorder the top-level keys
-into the conventional layout.
+``GenerateJsonSchema`` subclass. The script does inject ``$schema``,
+``$id``, and reorder the top-level keys into the conventional layout.
 """
 
 from __future__ import annotations
 
 import difflib
+import importlib
 import json
+import pkgutil
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -40,206 +59,109 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
-from claude_hpc._schema_models.aggregate_flow import (  # noqa: E402
-    AggregateFlowResult,
-    AggregateFlowSpec,
-)
-from claude_hpc._schema_models.axes import AxesConfig  # noqa: E402
-from claude_hpc._schema_models.best_submit_window import (  # noqa: E402
-    BestSubmitWindowResult,
-    BestSubmitWindowSpec,
-)
-from claude_hpc._schema_models.build_executor import BuildExecutorResult  # noqa: E402
-from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput  # noqa: E402
-from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput  # noqa: E402
-from claude_hpc._schema_models.campaign import CampaignAdapter  # noqa: E402
-from claude_hpc._schema_models.campaign_health import (  # noqa: E402
-    CampaignHealthResult,
-    CampaignHealthSpec,
-)
-from claude_hpc._schema_models.campaign_manifest import CampaignManifest  # noqa: E402
-from claude_hpc._schema_models.capabilities import CapabilitiesResult  # noqa: E402
-from claude_hpc._schema_models.cluster_reduce import ClusterReduceResult  # noqa: E402
-from claude_hpc._schema_models.clusters import (  # noqa: E402
-    ClustersDescribeResult,
-    ClustersListResult,
-)
-from claude_hpc._schema_models.combine_wave import CombineWaveResult  # noqa: E402
-from claude_hpc._schema_models.decide_monitor_arm import (  # noqa: E402
-    DecideMonitorArmResult,
-    DecideMonitorArmSpec,
-)
-from claude_hpc._schema_models.discover import DiscoverResult  # noqa: E402
-from claude_hpc._schema_models.envelope import EnvelopeAdapter  # noqa: E402
-from claude_hpc._schema_models.failures import FailuresResult  # noqa: E402
-from claude_hpc._schema_models.find_prior_run import FindPriorRunResult  # noqa: E402
-from claude_hpc._schema_models.inspect_cluster import InspectClusterResult  # noqa: E402
-from claude_hpc._schema_models.interview import (  # noqa: E402
-    InterviewEnvelope,
-    InterviewSpec,
-)
-from claude_hpc._schema_models.list_in_flight import ListInFlightResult  # noqa: E402
-from claude_hpc._schema_models.monitor_flow import (  # noqa: E402
-    MonitorFlowResult,
-    MonitorFlowSpec,
-)
-from claude_hpc._schema_models.monitor_summary import MonitorSummaryResult  # noqa: E402
-from claude_hpc._schema_models.plan_submit import PlanSubmitResult  # noqa: E402
-from claude_hpc._schema_models.predict_queue_wait import (  # noqa: E402
-    PredictQueueWaitResult,
-    PredictQueueWaitSpec,
-)
-from claude_hpc._schema_models.predict_start import (  # noqa: E402
-    PredictStartTimeResult,
-    PredictStartTimeSpec,
-)
-from claude_hpc._schema_models.preflight import PreflightResult  # noqa: E402
-from claude_hpc._schema_models.recall import RecallEnvelope, RecallSpec  # noqa: E402
-from claude_hpc._schema_models.recommend_partition import (  # noqa: E402
-    RecommendPartitionResult,
-    RecommendPartitionSpec,
-)
-from claude_hpc._schema_models.recommend_wait_alternative import (  # noqa: E402
-    RecommendWaitAlternativeResult,
-    RecommendWaitAlternativeSpec,
-)
-from claude_hpc._schema_models.reconcile import ReconcileResult  # noqa: E402
-from claude_hpc._schema_models.resubmit import ResubmitSpec  # noqa: E402
-from claude_hpc._schema_models.runtime_prior import RuntimePriorResult  # noqa: E402
-from claude_hpc._schema_models.stages import StagesAdapter  # noqa: E402
-from claude_hpc._schema_models.status import StatusResult  # noqa: E402
-from claude_hpc._schema_models.submit import SubmitResult, SubmitSpec  # noqa: E402
-from claude_hpc._schema_models.submit_flow import (  # noqa: E402
-    SubmitFlowResult,
-    SubmitFlowSpec,
-)
-from claude_hpc._schema_models.submit_flow_batch import (  # noqa: E402
-    SubmitFlowBatchResult,
-    SubmitFlowBatchSpec,
-)
-from claude_hpc._schema_models.suggest_setup_action import (  # noqa: E402
-    SuggestSetupActionResult,
-)
-from claude_hpc._schema_models.summarize_submit_plan import (  # noqa: E402
-    SummarizeSubmitPlanResult,
-)
-from claude_hpc._schema_models.update_run_constraints import (  # noqa: E402
-    UpdateRunConstraintsResult,
-    UpdateRunConstraintsSpec,
-)
-from claude_hpc._schema_models.validate import ValidateResult, ValidateSpec  # noqa: E402
-from claude_hpc._schema_models.validate_campaign import (  # noqa: E402
-    ValidateCampaignReport,
-    ValidateCampaignSpec,
-)
-from claude_hpc._schema_models.validate_executor_signatures import (  # noqa: E402
-    ValidateExecutorSignaturesResult,
-    ValidateExecutorSignaturesSpec,
-)
-from claude_hpc._schema_models.validate_input_dataset import (  # noqa: E402
-    ValidateInputDatasetResult,
-    ValidateInputDatasetSpec,
-)
-from claude_hpc._schema_models.validate_self_qos_limit import (  # noqa: E402
-    ValidateSelfQosLimitResult,
-    ValidateSelfQosLimitSpec,
-)
-from claude_hpc._schema_models.validate_walltime_against_history import (  # noqa: E402
-    ValidateWalltimeAgainstHistoryResult,
-    ValidateWalltimeAgainstHistorySpec,
-)
-from claude_hpc._schema_models.verify_aggregation_complete import (  # noqa: E402
-    VerifyAggregationCompleteResult,
-)
-from claude_hpc._schema_models.verify_canary import VerifyCanaryResult  # noqa: E402
+import claude_hpc._schema_models  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS_DIR = REPO_ROOT / "src" / "claude_hpc" / "schemas"
 
 _ID_BASE = "https://github.com/jamesdchen/claude-hpc/schemas"
 
-# Each entry: (Pydantic model OR TypeAdapter, schema filename).
-# The schema's ``$id`` is derived from the filename
-# (``<_ID_BASE>/<filename>``) — no need to repeat the URL here.
-SCHEMA_REGISTRY: list[tuple[type[BaseModel] | TypeAdapter[Any], str]] = [
-    # Cross-cutting wire envelope + persisted-data shapes
-    (EnvelopeAdapter, "envelope.json"),
-    (AxesConfig, "axes.json"),
-    (CampaignManifest, "campaign_manifest.json"),
-    (CampaignAdapter, "campaign.output.json"),
-    # Workflows
-    (AggregateFlowSpec, "aggregate_flow.input.json"),
-    (AggregateFlowResult, "aggregate_flow.output.json"),
-    (MonitorFlowSpec, "monitor_flow.input.json"),
-    (MonitorFlowResult, "monitor_flow.output.json"),
-    (SubmitFlowSpec, "submit_flow.input.json"),
-    (SubmitFlowResult, "submit_flow.output.json"),
-    (SubmitFlowBatchSpec, "submit_flow_batch.input.json"),
-    (SubmitFlowBatchResult, "submit_flow_batch.output.json"),
-    (VerifyCanaryResult, "verify_canary.output.json"),
-    # Scaffolds
-    (BuildExecutorResult, "build_executor.output.json"),
-    (BuildSubmitSpecInput, "build_submit_spec.input.json"),
-    (BuildTasksPyInput, "build_tasks_py.input.json"),
-    (InterviewSpec, "interview.input.json"),
-    (InterviewEnvelope, "interview.output.json"),
-    # Validate
-    (PreflightResult, "preflight.output.json"),
-    (ValidateSpec, "validate.input.json"),
-    (ValidateResult, "validate.output.json"),
-    (ValidateCampaignSpec, "validate_campaign.input.json"),
-    (ValidateCampaignReport, "validate_campaign.output.json"),
-    (ValidateExecutorSignaturesSpec, "validate_executor_signatures.input.json"),
-    (ValidateExecutorSignaturesResult, "validate_executor_signatures.output.json"),
-    (ValidateInputDatasetSpec, "validate_input_dataset.input.json"),
-    (ValidateInputDatasetResult, "validate_input_dataset.output.json"),
-    (ValidateSelfQosLimitSpec, "validate_self_qos_limit.input.json"),
-    (ValidateSelfQosLimitResult, "validate_self_qos_limit.output.json"),
-    (ValidateWalltimeAgainstHistorySpec, "validate_walltime_against_history.input.json"),
-    (ValidateWalltimeAgainstHistoryResult, "validate_walltime_against_history.output.json"),
-    # Mutate / submit
-    (ClusterReduceResult, "cluster_reduce.output.json"),
-    (CombineWaveResult, "combine_wave.output.json"),
-    (ReconcileResult, "reconcile.output.json"),
-    (ResubmitSpec, "resubmit.input.json"),
-    (SubmitSpec, "submit.input.json"),
-    (SubmitResult, "submit.output.json"),
-    # Query
-    (BestSubmitWindowSpec, "best_submit_window.input.json"),
-    (BestSubmitWindowResult, "best_submit_window.output.json"),
-    (CampaignHealthSpec, "campaign_health.input.json"),
-    (CampaignHealthResult, "campaign_health.output.json"),
-    (CapabilitiesResult, "capabilities.output.json"),
-    (ClustersDescribeResult, "clusters_describe.output.json"),
-    (ClustersListResult, "clusters_list.output.json"),
-    (DecideMonitorArmSpec, "decide_monitor_arm.input.json"),
-    (DecideMonitorArmResult, "decide_monitor_arm.output.json"),
-    (DiscoverResult, "discover.output.json"),
-    (FailuresResult, "failures.output.json"),
-    (FindPriorRunResult, "find_prior_run.output.json"),
-    (InspectClusterResult, "inspect_cluster.output.json"),
-    (ListInFlightResult, "list_in_flight.output.json"),
-    (MonitorSummaryResult, "monitor_summary.output.json"),
-    (PlanSubmitResult, "plan_submit.output.json"),
-    (PredictStartTimeSpec, "predict_start_time.input.json"),
-    (PredictStartTimeResult, "predict_start_time.output.json"),
-    (PredictQueueWaitSpec, "predict_queue_wait.input.json"),
-    (PredictQueueWaitResult, "predict_queue_wait.output.json"),
-    (RecallSpec, "recall.input.json"),
-    (RecallEnvelope, "recall.output.json"),
-    (RecommendPartitionSpec, "recommend_partition.input.json"),
-    (RecommendPartitionResult, "recommend_partition.output.json"),
-    (RecommendWaitAlternativeSpec, "recommend_wait_alternative.input.json"),
-    (RecommendWaitAlternativeResult, "recommend_wait_alternative.output.json"),
-    (RuntimePriorResult, "runtime_prior.output.json"),
-    (StagesAdapter, "stages.input.json"),
-    (StatusResult, "status.output.json"),
-    (SuggestSetupActionResult, "suggest_setup_action.output.json"),
-    (SummarizeSubmitPlanResult, "summarize_submit_plan.output.json"),
-    (UpdateRunConstraintsSpec, "update_run_constraints.input.json"),
-    (UpdateRunConstraintsResult, "update_run_constraints.output.json"),
-    (VerifyAggregationCompleteResult, "verify_aggregation_complete.output.json"),
-]
+# Cross-cutting shapes whose names don't fit the *Spec/*Result suffix
+# convention. Anything in this map is discovered verbatim regardless
+# of type — this is also how TypeAdapter instances get registered (they
+# have no class-name suffix to dispatch on).
+_NON_SUFFIX_MAPPING: dict[str, str] = {
+    "EnvelopeAdapter": "envelope.json",
+    "CampaignAdapter": "campaign.output.json",
+    "StagesAdapter": "stages.input.json",
+    "AxesConfig": "axes.json",
+    "CampaignManifest": "campaign_manifest.json",
+}
+
+# (suffix, output-side) pairs applied in order. The first match wins.
+_SUFFIX_RULES: tuple[tuple[str, str], ...] = (
+    ("Spec", "input"),
+    ("Input", "input"),
+    ("Result", "output"),
+    ("Report", "output"),
+    ("Envelope", "output"),
+)
+
+# Pydantic helpers we never want as standalone schemas.
+_HELPER_NAMES: frozenset[str] = frozenset({"SuccessEnvelope", "ErrorEnvelope"})
+
+
+_PASCAL_RE_1 = re.compile(r"(.)([A-Z][a-z]+)")
+_PASCAL_RE_2 = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def _pascal_to_snake(name: str) -> str:
+    """Convert PascalCase to snake_case (e.g. BestSubmitWindow -> best_submit_window)."""
+    return _PASCAL_RE_2.sub(r"\1_\2", _PASCAL_RE_1.sub(r"\1_\2", name)).lower()
+
+
+def _filename_for(obj: Any, attr_name: str, owning_module: str) -> str | None:
+    """Return the schema filename for *obj*, or ``None`` to skip it.
+
+    Discovery order:
+
+    1. Cross-cutting names (``_NON_SUFFIX_MAPPING``) — verbatim, regardless
+       of object type. This is how TypeAdapters get into the registry.
+    2. ``BaseModel`` subclass defined in this module (skip re-imports)
+       with a recognised suffix → ``<snake>.<side>.json``.
+    3. Anything else → ``None`` (helper / unrelated import).
+    """
+    if attr_name in _NON_SUFFIX_MAPPING:
+        return _NON_SUFFIX_MAPPING[attr_name]
+    if not (isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel):
+        return None
+    if obj.__name__ in _HELPER_NAMES:
+        return None
+    # Ignore re-imports (only the module that *defines* the class wins).
+    if getattr(obj, "__module__", None) != owning_module:
+        return None
+    for suffix, side in _SUFFIX_RULES:
+        if obj.__name__.endswith(suffix):
+            base = obj.__name__[: -len(suffix)]
+            return f"{_pascal_to_snake(base)}.{side}.json"
+    return None
+
+
+def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], str]]:
+    """Discover every (model, filename) pair in ``_schema_models/``.
+
+    Walks non-private submodules with :func:`pkgutil.iter_modules`; for
+    each, inspects only the symbols *defined in that module* and
+    applies :func:`_filename_for`. Returned list is sorted by filename
+    so callers see a stable order.
+    """
+    pkg = claude_hpc._schema_models
+
+    # Walk recursively so subpackages (workflows/, validators/,
+    # fixtures/, queries/, actions/) are picked up alongside any
+    # top-level helpers. ``walk_packages`` recurses into every
+    # non-private submodule and subpackage in one pass.
+    discovered: dict[str, tuple[Any, str]] = {}
+    for _finder, modname, _ispkg in pkgutil.walk_packages(
+        pkg.__path__,
+        prefix=f"{pkg.__name__}.",
+    ):
+        leaf = modname.rsplit(".", 1)[-1]
+        if leaf.startswith("_"):
+            continue
+        mod = importlib.import_module(modname)
+        for attr_name in dir(mod):
+            if attr_name.startswith("_") or attr_name in discovered:
+                continue
+            obj = getattr(mod, attr_name)
+            fname = _filename_for(obj, attr_name, owning_module=mod.__name__)
+            if fname is not None:
+                discovered[attr_name] = (obj, fname)
+
+    return sorted(discovered.values(), key=lambda pair: pair[1])
+
+
+SCHEMA_REGISTRY = _build_schema_registry()
 
 
 def _emit_schema(model_or_adapter: Any) -> dict[str, Any]:

@@ -81,7 +81,7 @@ def main() -> int:
     strict = "--strict" in sys.argv
 
     sys.path.insert(0, str(REPO_ROOT / "src"))
-    from claude_hpc._internal._primitive import get_registry, register_primitives
+    from claude_hpc._internal.primitive import get_registry, register_primitives
 
     register_primitives()
     registry = get_registry()

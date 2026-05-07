@@ -2,7 +2,7 @@ Help me run a closed-loop HPC campaign. A campaign is a sequence of `/submit-hpc
 
 The framework is intentionally tiny here: there is no `Strategy` Protocol, no `Context` Protocol, no state file. The user's `tasks.py` does the strategy work using whatever Python library suits — `random`, `optuna`, `nevergrad`, `scikit-optimize`, walk-forward indexing, custom PBT — by import. The framework just tags sidecars (the `campaign_id` field threads through `/submit-hpc` into every per-run sidecar) and reports history (`/campaign-hpc status`).
 
-CLI shapes for every tool referenced below: see `docs/reference/cli-contract.md`.
+CLI shapes for every tool referenced below: see `docs/reference/python-api-contract.md`.
 
 ## When to use this command
 

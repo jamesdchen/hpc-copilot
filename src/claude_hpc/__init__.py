@@ -103,7 +103,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from claude_hpc._internal._primitive import (
+from claude_hpc._internal.layout import JournalLayout, RepoLayout
+from claude_hpc._internal.primitive import (
     PrimitiveMeta,
     SideEffect,
     get_meta,
@@ -111,7 +112,6 @@ from claude_hpc._internal._primitive import (
     primitive,
     register_primitives,
 )
-from claude_hpc._internal.layout import JournalLayout, RepoLayout
 from claude_hpc.infra.clusters import load_clusters_config
 from claude_hpc.infra.gpu import pick_gpu
 from claude_hpc.infra.inspect import inspect_cluster

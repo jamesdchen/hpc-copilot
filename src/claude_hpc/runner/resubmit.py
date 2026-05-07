@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._schema_models.resubmit import ResubmitSpec
+from claude_hpc._internal.primitive import SideEffect, primitive
+from claude_hpc._schema_models.actions.resubmit import ResubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -58,3 +58,17 @@ repos:
         language: system
         pass_filenames: false
         files: '^(docs/primitives/.*\.md|src/claude_hpc/.*\.py)$'
+
+      - id: check-no-pending-primitive-docs
+        name: fail on '_Documentation pending._' in primitive docs
+        entry: python scripts/check_no_pending_primitive_docs.py
+        language: system
+        pass_filenames: false
+        files: '^docs/primitives/.*\.md$'
+
+      - id: lint-skill-command-sync
+        name: check skills/ <-> src/slash_commands/commands/ stay paired
+        entry: python scripts/lint_skill_command_sync.py
+        language: system
+        pass_filenames: false
+        files: '^(skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_skill_command_sync\.py)$'

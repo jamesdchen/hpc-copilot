@@ -563,7 +563,7 @@ Before any rsync/qsub, run the `validate-campaign` workflow primitive against th
 Build the spec from what the interview + planner have already resolved:
 
 ```python
-from claude_hpc._schema_models.validate_campaign import ValidateCampaignSpec
+from claude_hpc._schema_models.workflows.validate_campaign import ValidateCampaignSpec
 
 vc_spec = ValidateCampaignSpec(
     profile=profile,

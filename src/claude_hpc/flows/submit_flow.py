@@ -30,8 +30,8 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._schema_models.submit_flow import SubmitFlowSpec
+from claude_hpc._internal.primitive import SideEffect, primitive
+from claude_hpc._schema_models.workflows.submit_flow import SubmitFlowSpec
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
 from claude_hpc.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec
+    from claude_hpc._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec
     from claude_hpc.infra.backends import HPCBackend
 
 __all__ = ["SubmitFlowResult", "submit_flow", "submit_flow_batch"]
@@ -287,7 +287,9 @@ def submit_flow(
     classified ``complete`` (not ``failed``); aggregate-flow then skips
     the failed task IDs listed under ``<run_id>.failed.json``.
     """
-    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec as _BatchSpec
+    from claude_hpc._schema_models.workflows.submit_flow_batch import (
+        SubmitFlowBatchSpec as _BatchSpec,
+    )
 
     batch_spec = _BatchSpec(
         specs=[spec],
@@ -354,7 +356,7 @@ def _submit_one_spec(
             job_env=canary_env,
             cwd=experiment_dir,
         )
-        from claude_hpc._schema_models.submit import SubmitSpec as _SubmitSpec
+        from claude_hpc._schema_models.actions.submit import SubmitSpec as _SubmitSpec
 
         runner.submit_and_record(
             experiment_dir,
@@ -379,7 +381,7 @@ def _submit_one_spec(
         job_env=job_env_full,
         cwd=experiment_dir,
     )
-    from claude_hpc._schema_models.submit import SubmitSpec as _SubmitSpec
+    from claude_hpc._schema_models.actions.submit import SubmitSpec as _SubmitSpec
 
     runner.submit_and_record(
         experiment_dir,
@@ -487,11 +489,11 @@ def submit_flow_batch(
     # users who deliberately want concurrent submits).
     import os
 
-    from claude_hpc._internal import _io, session
+    from claude_hpc._internal import io, session
 
     use_lock = os.environ.get("HPC_SUBMIT_NO_LOCK") != "1"
     lock_path = session.journal_dir(experiment_dir) / ".submit_lock"
-    lock_ctx = _io.advisory_flock(lock_path) if use_lock else _noop_lock_ctx()
+    lock_ctx = io.advisory_flock(lock_path) if use_lock else _noop_lock_ctx()
     with lock_ctx:
         return _submit_flow_batch_locked(
             experiment_dir=experiment_dir,
