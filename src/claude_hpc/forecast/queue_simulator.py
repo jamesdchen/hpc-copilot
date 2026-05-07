@@ -388,6 +388,27 @@ def _hoq_reservation(
     return (float("inf"), hoq)
 
 
+def _placement_for_running(
+    j: SimJob,
+    snapshot: ClusterSnapshot,
+    free_by_node: dict[str, dict[str, Any]],
+) -> str | None:
+    """Find which node a running job from the snapshot is on.
+
+    The snapshot's ``co_tenants`` list per node IS the ground truth.
+    We search for a node whose ``co_tenants`` includes this job_id.
+    Falls back to first-fit if no exact match (defensive — pre-snapshot
+    races can drop the row).
+    """
+    for n in snapshot.nodes:
+        for tenant in n.co_tenants or []:
+            if str(tenant.get("job_id", "")).strip() == j.job_id and n.name in free_by_node:
+                return n.name
+    return _try_place(j, free_by_node)
+
+
+
+
 def simulate_one_pass(
     snapshot: ClusterSnapshot,
     *,
@@ -573,95 +594,14 @@ def simulate_one_pass(
     )
 
 
-def _placement_for_running(
-    j: SimJob,
-    snapshot: ClusterSnapshot,
-    free_by_node: dict[str, dict[str, Any]],
-) -> str | None:
-    """Find which node a running job from the snapshot is on.
 
-    The snapshot's ``co_tenants`` list per node IS the ground truth.
-    We search for a node whose ``co_tenants`` includes this job_id.
-    Falls back to first-fit if no exact match (defensive — pre-snapshot
-    races can drop the row).
-    """
-    for n in snapshot.nodes:
-        for tenant in n.co_tenants or []:
-            if str(tenant.get("job_id", "")).strip() == j.job_id and n.name in free_by_node:
-                return n.name
-    return _try_place(j, free_by_node)
+# Distribution simulation moved to queue_simulator_distribution.py;
+# lazy re-export so callers that imported simulate_distribution from
+# this module keep working without forcing the random / sampling
+# imports on the deterministic-only path.
+def __getattr__(name: str):  # noqa: ANN202
+    if name in ("simulate_distribution",):
+        from claude_hpc.forecast import queue_simulator_distribution
 
-
-def simulate_distribution(
-    snapshot: ClusterSnapshot,
-    *,
-    candidate: SimJob,
-    user_profiles: dict[str, Any] | None = None,
-    n_replications: int = 64,
-    max_horizon_sec: float = 7 * 86400.0,
-    seed: int | None = None,
-    arrival_sampler: Any = None,
-    residual_sampler: Any = None,
-) -> SimResult:
-    """Run ``n_replications`` simulations with sampled inputs.
-
-    Variance comes from:
-
-    * the sampled future arrival stream (per-user non-homogeneous
-      Poisson; via ``arrival_sampler(seed)``) and
-    * the sampled actual-walltime per running job (per-user empirical
-      ratio; via ``residual_sampler(seed)``).
-
-    When samplers are not provided, only the per-arrival jitter inside
-    ``simulate_one_pass`` provides variance; this still yields a
-    legitimate (narrower) distribution.
-
-    Returns p10/p50/p90 of the candidate's wait time.
-    """
-    if n_replications < 1:
-        raise ValueError("n_replications must be >= 1")
-    waits: list[float] = []
-    last_state: dict[str, Any] = {}
-    rng = random.Random(seed)
-    for _i in range(n_replications):
-        sub_seed = rng.randint(0, 2**31 - 1)
-        arr = arrival_sampler(sub_seed) if arrival_sampler is not None else None
-        res = residual_sampler(sub_seed) if residual_sampler is not None else None
-        out = simulate_one_pass(
-            snapshot,
-            candidate=dataclasses.replace(candidate),
-            user_profiles=user_profiles,
-            arrival_stream=arr,
-            residual_lifetimes=res,
-            max_horizon_sec=max_horizon_sec,
-            seed=sub_seed,
-        )
-        waits.append(out.predicted_start_offset_sec)
-        last_state = out.predicted_state_at_horizon
-    waits.sort()
-
-    def _pct(p: float) -> float:
-        if not waits:
-            return max_horizon_sec
-        if len(waits) == 1:
-            return waits[0]
-        k = (len(waits) - 1) * p
-        lo = int(k)
-        hi = min(lo + 1, len(waits) - 1)
-        frac = k - lo
-        return waits[lo] + frac * (waits[hi] - waits[lo])
-
-    return SimResult(
-        candidate_job_id=candidate.job_id,
-        predicted_start_offset_sec=_pct(0.5),
-        predicted_state_at_horizon=last_state,
-        n_replications=n_replications,
-        p10_wait_sec=_pct(0.1),
-        p50_wait_sec=_pct(0.5),
-        p90_wait_sec=_pct(0.9),
-    )
-
-
-def _job_iter(jobs: Iterable[SimJob]) -> list[SimJob]:
-    """Public-style helper for callers that want to iterate w/o exposing list mutability."""
-    return list(jobs)
+        return getattr(queue_simulator_distribution, name)
+    raise AttributeError(name)
