@@ -12,7 +12,7 @@ from pathlib import Path
 
 from claude_hpc import errors as errors_mod
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 MARS_INTEGRATION = REPO_ROOT / "docs" / "workflows" / "mars-integration.md"
 MARS_SNIPPET = REPO_ROOT / "docs" / "workflows" / "mars" / "experiment-runner.snippet.md"
 

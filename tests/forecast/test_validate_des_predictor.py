@@ -16,7 +16,7 @@ from claude_hpc.state import runtime_prior as rp
 
 def _load_script():
     """Import scripts/validate_des_predictor.py as a module by path."""
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent
     script = repo_root / "scripts" / "validate_des_predictor.py"
     spec = importlib.util.spec_from_file_location("validate_des", script)
     assert spec and spec.loader

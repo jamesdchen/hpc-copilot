@@ -78,7 +78,7 @@ def test_envelope_schema_enum_matches_subclass_inventory() -> None:
     instead of inlining the variants. Resolve the ref to find the
     error variant before reading its ``error_code`` enum.
     """
-    schema_path = Path(__file__).parent.parent / "src" / "claude_hpc" / "schemas" / "envelope.json"
+    schema_path = Path(__file__).parent.parent.parent / "src" / "claude_hpc" / "schemas" / "envelope.json"
     schema = json.loads(schema_path.read_text())
     defs = schema.get("$defs", {})
 

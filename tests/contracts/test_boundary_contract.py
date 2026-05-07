@@ -19,7 +19,7 @@ import yaml
 import claude_hpc
 from claude_hpc.state.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONTRACT_DOC = "docs/reference/boundary-contract.md"
 
 

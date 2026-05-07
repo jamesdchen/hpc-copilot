@@ -15,7 +15,7 @@ from pathlib import Path
 # Load the script as a module — scripts/ isn't on the package path.
 _SPEC = importlib.util.spec_from_file_location(
     "_snapshot_squeue",
-    Path(__file__).resolve().parent.parent / "scripts" / "snapshot_squeue.py",
+    Path(__file__).resolve().parent.parent.parent / "scripts" / "snapshot_squeue.py",
 )
 assert _SPEC is not None and _SPEC.loader is not None
 _MOD = importlib.util.module_from_spec(_SPEC)
