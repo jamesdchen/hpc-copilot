@@ -2,140 +2,193 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/submit_flow.input.json",
   "title": "submit-flow input spec",
-  "description": "Spec passed to `hpc-mapreduce submit-flow --spec <file>`. Workflow atom that does pre-flight + rsync + deploy + optional canary + qsub + record in one shot. All judgment (which constraint, which walltime, which executor, scaffold tasks.py) is the caller's responsibility \u2014 this atom takes resolved values and executes.",
+  "description": "Spec passed to ``hpc-mapreduce submit-flow --spec <file>``.\n\nWorkflow atom that does pre-flight + rsync + deploy + optional\ncanary + qsub + record in one shot. All judgment (which\nconstraint, which walltime, which executor, scaffold tasks.py)\nis the caller's responsibility — this atom takes resolved values\nand executes.",
   "type": "object",
   "required": [
     "profile",
     "cluster",
     "ssh_target",
     "remote_path",
+    "job_name",
     "run_id",
     "total_tasks",
     "backend",
-    "job_name",
     "script",
     "job_env"
   ],
   "additionalProperties": false,
   "properties": {
     "profile": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
     },
     "cluster": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
     },
     "ssh_target": {
-      "type": "string",
-      "pattern": "^[^@]+@[^@]+$"
+      "pattern": "^[^@]+@[^@]+$",
+      "title": "Ssh Target",
+      "type": "string"
     },
     "remote_path": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Remote Path",
+      "type": "string"
     },
     "job_name": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Job Name",
+      "type": "string"
     },
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id_strict"
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
     },
     "total_tasks": {
-      "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "title": "Total Tasks",
+      "type": "integer"
     },
     "backend": {
-      "type": "string",
       "enum": [
         "sge_remote",
         "slurm"
-      ]
+      ],
+      "title": "Backend",
+      "type": "string"
     },
     "script": {
-      "type": "string",
-      "description": "Path to the job script ON THE CLUSTER (e.g. .hpc/templates/cpu_array.sh). deploy_runtime places these under remote_path/.hpc/templates/."
+      "description": "Path to the job script ON THE CLUSTER (e.g. .hpc/templates/cpu_array.sh). deploy_runtime places these under remote_path/.hpc/templates/.",
+      "title": "Script",
+      "type": "string"
     },
     "job_env": {
-      "type": "object",
       "additionalProperties": {
         "type": "string"
       },
-      "description": "Env vars forwarded into the cluster job. Caller is responsible for setting EXECUTOR, HPC_RUN_ID, HPC_CMD_SHA, HPC_TASK_COUNT, REPO_DIR, MODULES, CONDA_SOURCE/CONDA_ENV (as needed), HPC_RUNTIME (if uv), HPC_CAMPAIGN_ID (if part of a campaign)."
+      "description": "Env vars forwarded into the cluster job. Caller is responsible for setting EXECUTOR, HPC_RUN_ID, HPC_CMD_SHA, HPC_TASK_COUNT, REPO_DIR, MODULES, CONDA_SOURCE/CONDA_ENV (as needed), HPC_RUNTIME (if uv), HPC_CAMPAIGN_ID (if part of a campaign).",
+      "title": "Job Env",
+      "type": "object"
     },
     "pass_env_keys": {
-      "type": [
-        "array",
-        "null"
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "items": {
-        "type": "string"
-      },
-      "description": "SGE-only: which job_env keys to forward via qsub -v. Null = forward every key in job_env. Ignored for SLURM (slurm forwards everything in job_env automatically via --export ALL,...)."
+      "default": null,
+      "description": "SGE-only: which job_env keys to forward via qsub -v. Null = forward every key in job_env. Ignored for SLURM (slurm forwards everything in job_env automatically via --export ALL,...).",
+      "title": "Pass Env Keys"
     },
     "slurm_account": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "SLURM-only: account to charge (sbatch --account). Defaults to whatever SLURM picks for the user."
+      "default": null,
+      "description": "SLURM-only: account to charge (sbatch --account). Defaults to whatever SLURM picks for the user.",
+      "title": "Slurm Account"
     },
     "slurm_cluster": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "SLURM-only: cluster name for federated SLURM installations (sbatch --clusters=). Most installs don't need this."
+      "default": null,
+      "description": "SLURM-only: cluster name for federated SLURM installations (sbatch --clusters=). Most installs don't need this.",
+      "title": "Slurm Cluster"
     },
     "tasks_per_array": {
-      "type": [
-        "integer",
-        "null"
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "minimum": 1,
-      "description": "Batch tasks into arrays of this size. Null = single array of total_tasks."
+      "default": null,
+      "description": "Batch tasks into arrays of this size. Null = single array of total_tasks.",
+      "title": "Tasks Per Array"
     },
     "canary": {
-      "type": "boolean",
       "default": true,
-      "description": "Submit a 1-task canary first; abort if it fails. Skip when caller has just smoke-tested or knows the pipeline is good."
+      "description": "Submit a 1-task canary first; abort if it fails. Skip when caller has just smoke-tested or knows the pipeline is good.",
+      "title": "Canary",
+      "type": "boolean"
     },
     "campaign_id": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "pattern": "^[A-Za-z0-9._\\-]+$"
+      "default": null,
+      "title": "Campaign Id"
     },
     "runtime": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "const": "uv",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "enum": [
-        "uv",
-        null
-      ]
+      "default": null,
+      "title": "Runtime"
     },
     "rsync_excludes": {
-      "type": [
-        "array",
-        "null"
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "items": {
-        "type": "string"
-      },
-      "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults."
+      "default": null,
+      "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
+      "title": "Rsync Excludes"
     },
     "skip_preflight": {
-      "type": "boolean",
       "default": false,
-      "description": "Skip the pre-flight check (caller has just run it; saves one SSH probe). Use with caution."
+      "description": "Skip the pre-flight check (caller has just run it; saves one SSH probe). Use with caution.",
+      "title": "Skip Preflight",
+      "type": "boolean"
     },
     "partial_ok": {
-      "type": "boolean",
       "default": false,
-      "description": "When true, the sidecar records partial_ok=True under the `extra` pocket. monitor-flow consults this on terminal classification: a wave with at least one success is reported as `complete` (instead of `failed`) when partial_ok=true, and a `<run_id>.failed.json` ledger lists the failed task IDs. aggregate-flow honors the same ledger by skipping those task IDs and reporting `partial_failures`."
+      "description": "When true, the sidecar records partial_ok=True under the `extra` pocket. monitor-flow consults this on terminal classification: a wave with at least one success is reported as `complete` (instead of `failed`) when partial_ok=true, and a `<run_id>.failed.json` ledger lists the failed task IDs. aggregate-flow honors the same ledger by skipping those task IDs and reporting `partial_failures`.",
+      "title": "Partial Ok",
+      "type": "boolean"
     }
   }
 }

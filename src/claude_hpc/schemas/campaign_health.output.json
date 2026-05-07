@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/campaign_health.output.json",
   "title": "campaign-health output (data block)",
-  "description": "Structured run-history aggregation. The suggested_prompt field is ready-to-feed-LLM (callers append no preamble; pass it directly).",
+  "description": "Structured run-history aggregation.\n\nThe ``suggested_prompt`` field is ready-to-feed-LLM (callers\nappend no preamble; pass it directly).",
   "type": "object",
   "required": [
     "campaign_id",
@@ -19,57 +19,75 @@
   "additionalProperties": false,
   "properties": {
     "campaign_id": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Campaign Id"
     },
     "since_iso": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Since Iso"
     },
     "n_runs": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "N Runs",
+      "type": "integer"
     },
     "n_complete": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "N Complete",
+      "type": "integer"
     },
     "n_failed": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "N Failed",
+      "type": "integer"
     },
     "walltime_cliff_rate": {
-      "type": "object",
       "additionalProperties": {
-        "type": "number",
-        "minimum": 0,
-        "maximum": 1
-      }
+        "type": "number"
+      },
+      "description": "Per-bucket cliff-rate fractions in [0, 1].",
+      "title": "Walltime Cliff Rate",
+      "type": "object"
     },
     "queue_wait_quantiles": {
-      "type": "object",
       "additionalProperties": {
+        "additionalProperties": true,
         "type": "object"
-      }
+      },
+      "title": "Queue Wait Quantiles",
+      "type": "object"
     },
     "failure_breakdown": {
-      "type": "object",
       "additionalProperties": {
-        "type": "integer",
-        "minimum": 0
-      }
+        "type": "integer"
+      },
+      "title": "Failure Breakdown",
+      "type": "object"
     },
     "gpu_utilization": {
-      "type": "object",
       "additionalProperties": {
+        "additionalProperties": true,
         "type": "object"
-      }
+      },
+      "title": "Gpu Utilization",
+      "type": "object"
     },
     "suggested_prompt": {
+      "title": "Suggested Prompt",
       "type": "string"
     }
   }

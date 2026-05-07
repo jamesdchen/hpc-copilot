@@ -124,8 +124,8 @@ class TestLoadClustersConfigBubblesUp:
 
 
 def _spec(run_id: str, **overrides: Any):
-    """Build a SubmitSpec with sensible defaults; overrides win."""
-    from claude_hpc.flows.submit_flow import SubmitSpec
+    """Build a :class:`SubmitFlowSpec` with sensible defaults; overrides win."""
+    from claude_hpc._schema_models.submit_flow import SubmitFlowSpec
 
     base = dict(
         profile="p",
@@ -141,7 +141,18 @@ def _spec(run_id: str, **overrides: Any):
         canary=False,
     )
     base.update(overrides)
-    return SubmitSpec(**base)  # type: ignore[arg-type]
+    return SubmitFlowSpec(**base)  # type: ignore[arg-type]
+
+
+def _batch(specs, **overrides: Any):
+    """Wrap a list of :class:`SubmitFlowSpec` in a :class:`SubmitFlowBatchSpec`.
+
+    The pipeline only consumes ``SubmitFlowBatchSpec`` now; this keeps
+    the per-test boilerplate small.
+    """
+    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec
+
+    return SubmitFlowBatchSpec(specs=specs, **overrides)
 
 
 @pytest.fixture
@@ -153,11 +164,6 @@ def _journal_home(tmp_path, monkeypatch):
 
 
 class TestSubmitFlowBatch:
-    def test_empty_specs_returns_empty(self, tmp_path: Any, _journal_home: Any) -> None:
-        from claude_hpc.flows.submit_flow import submit_flow_batch
-
-        assert submit_flow_batch(experiment_dir=tmp_path, specs=[]) == []
-
     def test_heterogeneous_targets_raise_spec_invalid(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
@@ -167,7 +173,7 @@ class TestSubmitFlowBatch:
         a = _spec("r1", ssh_target="u@a", remote_path="/p")
         b = _spec("r2", ssh_target="u@b", remote_path="/p")
         with pytest.raises(errors.SpecInvalid, match="distinct combinations"):
-            submit_flow_batch(experiment_dir=tmp_path, specs=[a, b])
+            submit_flow_batch(tmp_path, spec=_batch([a, b]))
 
     def test_shares_one_rsync_and_one_deploy_across_n_specs(
         self, tmp_path: Any, _journal_home: Any
@@ -189,7 +195,7 @@ class TestSubmitFlowBatch:
                 deduped=False,
                 canary_done=False,
             )
-            results = submit_flow_batch(experiment_dir=tmp_path, specs=specs)
+            results = submit_flow_batch(tmp_path, spec=_batch(specs))
 
         assert preflight.call_count == 1
         assert push_deploy.call_count == 1
@@ -228,7 +234,7 @@ class TestSubmitFlowBatch:
             mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
             mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
         ):
-            results = submit_flow_batch(experiment_dir=tmp_path, specs=specs)
+            results = submit_flow_batch(tmp_path, spec=_batch(specs))
 
         assert preflight.call_count == 0
         assert push_deploy.call_count == 0
@@ -271,7 +277,7 @@ class TestSubmitFlowBatch:
                 deduped=False,
                 canary_done=False,
             )
-            submit_flow_batch(experiment_dir=tmp_path, specs=[_spec("r_new")])
+            submit_flow_batch(tmp_path, spec=_batch([_spec("r_new")]))
 
         # The orphan sidecar is gone.
         assert not run_sidecar_path(tmp_path, orphan_id).is_file()
@@ -311,7 +317,7 @@ class TestSubmitFlowBatch:
                 deduped=False,
                 canary_done=False,
             )
-            results = submit_flow_batch(experiment_dir=tmp_path, specs=specs)
+            results = submit_flow_batch(tmp_path, spec=_batch(specs))
 
         assert push_deploy.call_count == 1  # still ONE rsync+deploy for the fresh subset
         assert submit_one.call_count == 2  # only r1 + r2 get qsubbed

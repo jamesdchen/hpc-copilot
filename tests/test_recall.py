@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from claude_hpc.atoms import recall as recall_mod
+from claude_hpc._schema_models.recall import RecallSpec
 from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
 
 if TYPE_CHECKING:
@@ -170,14 +171,14 @@ def test_filter_task_kind_exact_match(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a", task_kind="ml-hparam-sweep")
     _write_interview(tmp_path / "b", task_kind="rl-rollout")
     _write_interview(tmp_path / "c", task_kind="ml-hparam-sweep")
-    data = recall_campaigns([tmp_path], task_kind="ml-hparam-sweep")
+    data = recall_campaigns([tmp_path], spec=RecallSpec(task_kind="ml-hparam-sweep"))
     assert data["total_matching"] == 2
 
 
 def test_filter_operator_exact_match(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a", operator="james")
     _write_interview(tmp_path / "b", operator="alex")
-    data = recall_campaigns([tmp_path], operator="james")
+    data = recall_campaigns([tmp_path], spec=RecallSpec(operator="james"))
     assert data["total_matching"] == 1
 
 
@@ -185,7 +186,7 @@ def test_filter_since_iso_compare(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a", materialized_at="2026-01-15T10:00:00+00:00")
     _write_interview(tmp_path / "b", materialized_at="2026-04-15T10:00:00+00:00")
     _write_interview(tmp_path / "c", materialized_at="2026-06-15T10:00:00+00:00")
-    data = recall_campaigns([tmp_path], since="2026-04-01T00:00:00+00:00")
+    data = recall_campaigns([tmp_path], spec=RecallSpec(since="2026-04-01T00:00:00+00:00"))
     assert data["total_matching"] == 2
 
 
@@ -193,14 +194,14 @@ def test_combined_filters_are_anded(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a", task_kind="ml", operator="james")
     _write_interview(tmp_path / "b", task_kind="rl", operator="james")
     _write_interview(tmp_path / "c", task_kind="ml", operator="alex")
-    data = recall_campaigns([tmp_path], task_kind="ml", operator="james")
+    data = recall_campaigns([tmp_path], spec=RecallSpec(task_kind="ml", operator="james"))
     assert data["total_matching"] == 1
 
 
 def test_limit_truncates_and_reports_total(tmp_path: Path) -> None:
     for i in range(5):
         _write_interview(tmp_path / f"c{i}", materialized_at=f"2026-05-0{i + 1}T00:00:00+00:00")
-    data = recall_campaigns([tmp_path], limit=3)
+    data = recall_campaigns([tmp_path], spec=RecallSpec(limit=3))
     assert data["total_matching"] == 5
     assert data["showing"] == 3
     assert len(data["campaigns"]) == 3
@@ -248,7 +249,7 @@ def test_tier1_rollup_clusters_pulls_from_cluster_target(tmp_path: Path) -> None
 
 def test_tier1_rollup_empty_when_no_matches(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a", task_kind="ml")
-    rollup = recall_campaigns([tmp_path], task_kind="zzz")["rollup"]
+    rollup = recall_campaigns([tmp_path], spec=RecallSpec(task_kind="zzz"))["rollup"]
     assert rollup["count"] == 0
     assert rollup["task_count"] is None
 
@@ -267,7 +268,7 @@ def test_tier2_runtime_rollup_aggregates_walltime(tmp_path: Path) -> None:
     _write_runtime_samples(
         b, samples=[{"elapsed_sec": 300, "exit_code": 1}, {"elapsed_sec": 400, "exit_code": 0}]
     )
-    rollup = recall_campaigns([tmp_path], include_runtime=True)["rollup"]
+    rollup = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"]
     rt = rollup["runtime_rollup"]
     assert rt["walltime_per_task_sec"]["min"] == 100
     assert rt["walltime_per_task_sec"]["max"] == 400
@@ -281,7 +282,7 @@ def test_tier2_counts_campaigns_without_runtime_files(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a")  # no .hpc/runtimes/
     _write_interview(tmp_path / "b")
     _write_runtime_samples(tmp_path / "b", samples=[{"elapsed_sec": 50, "exit_code": 0}])
-    rt = recall_campaigns([tmp_path], include_runtime=True)["rollup"]["runtime_rollup"]
+    rt = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"]["runtime_rollup"]
     assert rt["campaigns_with_no_runtime"] == 1
     assert rt["total_task_samples"] == 1
 
@@ -295,7 +296,7 @@ def test_tier2_absent_when_not_requested(tmp_path: Path) -> None:
 
 def test_tier2_handles_no_samples_at_all(tmp_path: Path) -> None:
     _write_interview(tmp_path / "a")
-    rt = recall_campaigns([tmp_path], include_runtime=True)["rollup"]["runtime_rollup"]
+    rt = recall_campaigns([tmp_path], spec=RecallSpec(include_runtime=True))["rollup"]["runtime_rollup"]
     assert rt["walltime_per_task_sec"] is None
     assert rt["failure_rate"] is None
     assert rt["campaigns_with_no_runtime"] == 1
@@ -313,7 +314,7 @@ def test_tier3_logspace_param_envelope_across_campaigns(tmp_path: Path) -> None:
                 "params": {"param": "lr", "low": low, "high": high, "n": n},
             },
         )
-    rollup = recall_campaigns([tmp_path], include_generator_stats=True)["rollup"]
+    rollup = recall_campaigns([tmp_path], spec=RecallSpec(include_generator_stats=True))["rollup"]
     env = rollup["generator_rollup"]["by_kind"]["numeric_logspace"]["param_envelopes"]["lr"]
     assert env["low"] == [1e-6, 1e-4]
     assert env["high"] == [1e-2, 1e-1]
@@ -337,7 +338,7 @@ def test_tier3_cartesian_axis_value_unions(tmp_path: Path) -> None:
         },
         task_count=4,
     )
-    rollup = recall_campaigns([tmp_path], include_generator_stats=True)["rollup"]
+    rollup = recall_campaigns([tmp_path], spec=RecallSpec(include_generator_stats=True))["rollup"]
     union = rollup["generator_rollup"]["by_kind"]["cartesian_product"]["axis_value_unions"]
     assert sorted(union["lr"]) == [1e-3, 1e-2, 1e-1]
     assert sorted(union["bs"]) == [16, 32, 64]
@@ -356,7 +357,7 @@ def test_tier3_buckets_by_kind(tmp_path: Path) -> None:
         task_generator={"kind": "enumerated", "params": {"items": [{"x": 1}]}},
         task_count=1,
     )
-    rollup = recall_campaigns([tmp_path], include_generator_stats=True)["rollup"]
+    rollup = recall_campaigns([tmp_path], spec=RecallSpec(include_generator_stats=True))["rollup"]
     by_kind = rollup["generator_rollup"]["by_kind"]
     assert set(by_kind) == {"numeric_logspace", "enumerated"}
     assert by_kind["enumerated"]["count"] == 1
@@ -371,7 +372,7 @@ def test_tier3_skips_campaigns_without_task_generator(tmp_path: Path) -> None:
         task_generator={"kind": "enumerated", "params": {"items": [{"x": 1}]}},
         task_count=1,
     )
-    by_kind = recall_campaigns([tmp_path], include_generator_stats=True)["rollup"][
+    by_kind = recall_campaigns([tmp_path], spec=RecallSpec(include_generator_stats=True))["rollup"][
         "generator_rollup"
     ]["by_kind"]
     assert set(by_kind) == {"enumerated"}

@@ -2,69 +2,141 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/failures.output.json",
   "title": "failures output data",
-  "description": "Shape of the `data` field on a successful `failures` envelope. Source: claude_hpc.atoms.failures.fetch_failures. The `preempted_count` and `preempted_task_ids` fields are present only when at least one task was preempted by the scheduler \u2014 they let an agent harness branch on 'campus user got bumped, resubmit cleanly' without parsing per-cluster `error_class` strings.",
+  "description": "Shape of the ``data`` field on a successful ``failures`` envelope.\n\nSource: ``claude_hpc.atoms.failures.fetch_failures``. The\n``preempted_count`` and ``preempted_task_ids`` fields are\npresent only when at least one task was preempted by the\nscheduler — they let an agent harness branch on 'campus user got\nbumped, resubmit cleanly' without parsing per-cluster\n``error_class`` strings.",
   "type": "object",
   "required": [
     "run_id",
     "failed_count",
     "clusters"
   ],
-  "additionalProperties": true,
   "properties": {
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id"
+      "title": "Run Id",
+      "type": "string"
     },
     "failed_count": {
-      "type": "integer",
+      "description": "Total number of failed task ids in the current status report.",
       "minimum": 0,
-      "description": "Total number of failed task ids in the current status report."
+      "title": "Failed Count",
+      "type": "integer"
     },
     "clusters": {
-      "type": "array",
       "description": "Failure-fingerprint clusters. Each item groups failed task ids by stderr signature.",
       "items": {
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-          "error_class": {
-            "type": "string"
-          },
-          "task_ids": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
-        }
-      }
+        "$ref": "#/$defs/_FailureCluster"
+      },
+      "title": "Clusters",
+      "type": "array"
     },
     "scheduler": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/scheduler",
-      "description": "Per-cluster scheduler driver, surfaced for downstream resubmit shaping."
+      "anyOf": [
+        {
+          "enum": [
+            "sge",
+            "slurm"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-cluster scheduler driver, surfaced for downstream resubmit shaping.",
+      "title": "Scheduler"
     },
     "preempted_count": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Number of task ids whose failure cluster has error_class='preempted'. Optional \u2014 present only when > 0. Helps the agent harness route bumped runs (campus user got preempted by higher-priority work) through the clean resubmit path."
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Number of task ids whose failure cluster has error_class='preempted'. Optional — present only when > 0.",
+      "title": "Preempted Count"
     },
     "preempted_task_ids": {
-      "type": "array",
-      "items": {
-        "type": "integer",
-        "minimum": 0
-      },
-      "uniqueItems": true,
-      "description": "Sorted, deduplicated list of preempted task ids. Optional \u2014 present only when at least one preempted task is in the cluster set."
+      "anyOf": [
+        {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sorted, deduplicated list of preempted task ids. Optional — present only when at least one preempted task is in the cluster set.",
+      "title": "Preempted Task Ids"
     },
     "auto_retry_policy": {
-      "type": "object",
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
       "description": "Resolved per-run + framework-default auto-retry policy. Present when annotation succeeded.",
-      "additionalProperties": true
+      "title": "Auto Retry Policy"
     },
     "note": {
-      "type": "string",
-      "description": "Diagnostic note (e.g. 'no failed tasks in current status report')."
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Diagnostic note (e.g. 'no failed tasks in current status report').",
+      "title": "Note"
+    }
+  },
+  "$defs": {
+    "_FailureCluster": {
+      "additionalProperties": true,
+      "properties": {
+        "error_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Class"
+        },
+        "task_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Ids"
+        }
+      },
+      "title": "_FailureCluster",
+      "type": "object"
     }
   }
 }

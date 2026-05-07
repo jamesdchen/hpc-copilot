@@ -79,6 +79,8 @@ from claude_hpc.state.runtime_prior import read_samples, roll_up_quantiles
     side_effects=[SideEffect("ssh", "<cluster> (delegates to inspect-cluster)")],
     error_codes=[errors.SpecInvalid, errors.SshUnreachable, errors.ClusterUnknown],
     idempotent=True,
+    cli="hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]",
+    agent_facing=True,
 )
 def plan_submit(
     experiment_dir: Path,
@@ -436,15 +438,18 @@ def _eta_via_des(
     not yet bootstrapped.
     """
     try:
+        from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
         from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
         out = predict_queue_wait(
             experiment_dir,
-            profile=profile,
-            cluster=cluster,
-            backend="auto",
-            n_replications=16,
-            seed=0,
+            spec=PredictQueueWaitSpec(
+                profile=profile,
+                cluster=cluster,
+                backend="auto",
+                n_replications=16,
+                seed=0,
+            ),
         )
     except Exception:  # noqa: BLE001 — defensive
         return None

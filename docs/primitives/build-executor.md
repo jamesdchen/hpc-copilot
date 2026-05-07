@@ -24,7 +24,7 @@ error_codes: []
 backed_by:
   cli: hpc-mapreduce build-executor --name <stem> [--output-dir <dir>] [--type plain]
     [--force]
-  python: claude_hpc.agent_cli.cmd_build_executor
+  python: claude_hpc.atoms.build_executor.build_executor
 exit_codes:
 - 0: ok
 - 1: spec_invalid / config_invalid

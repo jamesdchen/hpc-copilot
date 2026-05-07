@@ -240,6 +240,7 @@ class TestPlannerWiring:
         assert result.planner is None
 
 
+@pytest.mark.slow
 class TestForecastWiring:
     def test_forecast_recommendation_attached_when_enabled(
         self, journal_home, experiment, tmp_path, monkeypatch

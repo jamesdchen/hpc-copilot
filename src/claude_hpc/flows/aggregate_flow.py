@@ -37,6 +37,7 @@ from typing import Any
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._schema_models.aggregate_flow import AggregateFlowSpec
 from claude_hpc.infra.remote import rsync_pull, validate_ssh_target
 from claude_hpc.mapreduce.reduce.metrics import reduce_partials
 from claude_hpc.runner import combine_wave, record_status
@@ -148,49 +149,26 @@ def _combine_missing(
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
+    cli="hpc-mapreduce aggregate-flow --spec <path>",
+    agent_facing=True,
 )
 def aggregate_flow(
-    *,
     experiment_dir: Path,
-    run_id: str,
-    output_dir: str | Path | None = None,
-    ensure_all_combined: bool = True,
-    combiner_max_retries: int = 1,
-    pull_summaries: bool = False,
-    summary_glob: str | None = None,
-    results_subdir: str = "results",
+    *,
+    spec: AggregateFlowSpec,
     mode: str = "auto",
     aggregate_cmd: str | None = None,
     aggregate_output_path: str | None = None,
 ) -> AggregateFlowResult:
     """Finalize a run's aggregation; return paths + reduced metrics.
 
-    Parameters
-    ----------
-    experiment_dir:
-        Repo root containing ``.hpc/runs/<run_id>.json``.
-    run_id:
-        Identifies the run; sidecar must already exist (via submit-flow
-        or submit-spec).
-    output_dir:
-        Local destination for pulled artifacts. Defaults to
-        ``<experiment_dir>/_aggregated/<run_id>/`` when None.
-    ensure_all_combined:
-        When True, invoke combine-wave for every wave_map entry not in
-        ``combined_waves`` before pulling. Cheap when monitor-flow already
-        combined everything; necessary when the caller skipped monitor-flow.
-    combiner_max_retries:
-        Per-wave retry budget for combine-wave failures. After this, the
-        wave lands in failed_waves and the run continues with whatever
-        partials did combine.
-    pull_summaries:
-        When True, also rsync per-task summary files matching
-        ``summary_glob`` from the cluster's ``results/`` subtree.
-    summary_glob:
-        Required when pull_summaries=True. Rsync include pattern.
-    results_subdir:
-        Cluster-side subdir under ``remote_path`` that holds per-task
-        outputs. Defaults to ``"results"``.
+    The wire-validated ``spec`` carries the user-facing knobs
+    (``run_id``, ``output_dir``, ``ensure_all_combined``,
+    ``combiner_max_retries``, ``pull_summaries``, ``summary_glob``,
+    ``results_subdir``); ``mode`` / ``aggregate_cmd`` /
+    ``aggregate_output_path`` are framework-mode flags that don't
+    belong on the wire (the framework decides which mode to enter
+    based on ``aggregate_defaults`` recorded on the run sidecar).
 
     Raises
     ------
@@ -201,6 +179,18 @@ def aggregate_flow(
     SshUnreachable, RemoteCommandFailed:
         rsync or SSH layer errors propagated from the underlying helpers.
     """
+    # Destructure the spec into typed locals so the body reads naturally
+    # and mypy sees each field's narrowed type. The spec itself is
+    # the wire-validated authoring SoT (schemas/aggregate_flow.input.json
+    # is regenerated from AggregateFlowSpec).
+    run_id = spec.run_id
+    output_dir = spec.output_dir
+    ensure_all_combined = spec.ensure_all_combined
+    combiner_max_retries = spec.combiner_max_retries
+    pull_summaries = spec.pull_summaries
+    summary_glob = spec.summary_glob
+    results_subdir = spec.results_subdir
+
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for {run_id!r}; submit the run first")

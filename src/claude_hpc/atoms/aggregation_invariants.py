@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="run_id",
+    cli="hpc-mapreduce verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>",
 )
 def verify_aggregation_complete(
     experiment_dir: Path,

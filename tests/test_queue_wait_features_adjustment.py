@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
 from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.forecast.queue_features import QueueFeatures
 from claude_hpc.state import runtime_prior as rp
+
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"
@@ -50,9 +52,11 @@ class TestNoOpAndDirection:
         _seed(tmp_path)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         assert out.features_adjustment_factor == 1.0
 
@@ -63,9 +67,11 @@ class TestNoOpAndDirection:
         feats = _features(queued_in_partition=qwb._DEFAULT_REFERENCE_DEPTH)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
             current_features=feats,
         )
         assert out.features_adjustment_factor == 1.0
@@ -74,16 +80,20 @@ class TestNoOpAndDirection:
         _seed(tmp_path)
         base = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         feats = _features(queued_in_partition=qwb._DEFAULT_REFERENCE_DEPTH * 2)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
             current_features=feats,
         )
         # 2× depth, dampened by 0.5 → factor 1.5.
@@ -96,16 +106,20 @@ class TestNoOpAndDirection:
         _seed(tmp_path)
         base = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         feats = _features(queued_in_partition=0)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
             current_features=feats,
         )
         # 0 depth, dampened → factor 0.5 (clamped at min, since
@@ -122,9 +136,11 @@ class TestBounded:
         feats = _features(queued_in_partition=10000)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
             current_features=feats,
         )
         assert out.features_adjustment_factor == qwb._MAX_FACTOR
@@ -156,9 +172,11 @@ class TestConfidenceNotPromoted:
         feats = _features(queued_in_partition=qwb._DEFAULT_REFERENCE_DEPTH * 2)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
             current_features=feats,
         )
         # Order-book multiplier nudges magnitude but doesn't change the
@@ -168,9 +186,11 @@ class TestConfidenceNotPromoted:
         # Whatever confidence we got without features, we get with.
         bare = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
         )
         assert out.confidence == bare.confidence
         assert out.method == bare.method
@@ -181,9 +201,11 @@ class TestConfidenceNotPromoted:
         feats = _features(queued_in_partition=qwb._DEFAULT_REFERENCE_DEPTH * 2)
         out = qwb.predict_queue_wait(
             tmp_path,
-            profile=PROFILE,
-            cluster=CLUSTER,
-            at_iso="2026-04-28T10:00:00+00:00",
+            spec=PredictQueueWaitSpec(
+                profile=PROFILE,
+                cluster=CLUSTER,
+                at_iso="2026-04-28T10:00:00+00:00",
+            ),
             current_features=feats,
         )
         assert out.predicted_wait_sec is None

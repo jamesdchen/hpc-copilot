@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/validate.output.json",
   "title": "validate output (data block)",
-  "description": "Data block from `hpc-mapreduce validate`. Wraps the scheduler's --test-only response into a structured timing prediction.",
+  "description": "Data block from ``hpc-mapreduce validate``.\n\nWraps the scheduler's --test-only response into a structured\ntiming prediction.",
   "type": "object",
   "required": [
     "profile",
@@ -18,42 +18,59 @@
   "additionalProperties": false,
   "properties": {
     "profile": {
+      "title": "Profile",
       "type": "string"
     },
     "cluster": {
+      "title": "Cluster",
       "type": "string"
     },
     "scheduler": {
+      "title": "Scheduler",
       "type": "string"
     },
     "estimated_start_iso": {
-      "type": [
-        "string",
-        "null"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "description": "ISO-8601 UTC timestamp when scheduler predicts start."
+      "description": "ISO-8601 UTC timestamp when scheduler predicts start.",
+      "title": "Estimated Start Iso"
     },
     "predicted_eta_sec": {
-      "type": [
-        "integer",
-        "null"
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
       ],
-      "minimum": 0,
-      "description": "Seconds from now until predicted start. None when the probe was unparseable or the scheduler is non-SLURM."
+      "description": "Seconds from now until predicted start. None when the probe was unparseable or the scheduler is non-SLURM.",
+      "title": "Predicted Eta Sec"
     },
     "fits_backfill": {
+      "title": "Fits Backfill",
       "type": "boolean"
     },
     "backfill_window_sec": {
-      "type": "integer",
-      "minimum": 1
+      "minimum": 1,
+      "title": "Backfill Window Sec",
+      "type": "integer"
     },
     "reason": {
+      "title": "Reason",
       "type": "string"
     },
     "scheduler_response": {
-      "type": "string",
-      "description": "Raw probe stdout/stderr (clamped to 2000 chars)."
+      "description": "Raw probe stdout/stderr (clamped to 2000 chars).",
+      "title": "Scheduler Response",
+      "type": "string"
     }
   }
 }

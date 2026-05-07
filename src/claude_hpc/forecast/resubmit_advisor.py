@@ -91,20 +91,24 @@ def recommend_resubmit_window(
         diurnal arbitrage, large enough that single-bucket noise won't
         flap the recommendation.
     """
+    from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+
     now_pred = predict_queue_wait(
         experiment_dir,
-        profile=profile,
-        cluster=cluster,
-        at_iso=None,
+        spec=PredictQueueWaitSpec(profile=profile, cluster=cluster, at_iso=None),
     )
     submit_now_wait = now_pred.predicted_wait_sec
 
+    from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
+
     candidates = best_submit_windows(
         experiment_dir,
-        profile=profile,
-        cluster=cluster,
-        within_hours=within_hours,
-        top_k=1,
+        spec=BestSubmitWindowSpec(
+            profile=profile,
+            cluster=cluster,
+            within_hours=within_hours,
+            top_k=1,
+        ),
     )
     best = candidates[0] if candidates else None
 

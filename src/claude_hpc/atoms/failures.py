@@ -57,6 +57,8 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
     side_effects=[SideEffect("ssh", "<cluster>")],
     error_codes=[errors.SshUnreachable],
     idempotent=True,
+    cli="hpc-mapreduce failures --run-id <id> [--lines <n>]",
+    agent_facing=True,
 )
 def fetch_failures(
     *,

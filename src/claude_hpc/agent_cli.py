@@ -270,9 +270,10 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     keeps working — schema validation is defence in depth, not the only
     line of defence (``submit_and_record`` etc. still validate inputs).
 
-    Cross-file ``$ref`` (e.g. into ``envelope.json#/$defs/run_id``)
-    resolves through the shared registry in :mod:`claude_hpc._internal._schema`;
-    consumer schemas no longer inline ``$defs`` copies verbatim.
+    Cross-file ``$ref`` (rare post-Pydantic-migration — most
+    schemas are now self-contained with constraints inlined from
+    :mod:`claude_hpc._schema_models._shared`) resolves through the
+    shared registry in :mod:`claude_hpc._internal._schema`.
     """
     try:
         import jsonschema  # type: ignore[import-untyped]
@@ -364,11 +365,41 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return EXIT_OK if data["all_ok"] else EXIT_CLUSTER_ERROR
 
 
+# ─── subcommand: validate-campaign ────────────────────────────────────────
+
+
+def cmd_validate_campaign(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at
+    ``claude_hpc.flows.validate_campaign``.
+
+    Exit codes:
+    * ``EXIT_OK`` — overall=pass or warn (warnings don't block).
+    * ``1`` — overall=fail (any error finding). The agent loop reads
+      ``data.findings`` to apply suggested fixes and re-run.
+    """
+    from claude_hpc._schema_models.validate_campaign import ValidateCampaignSpec
+    from claude_hpc.flows.validate_campaign import validate_campaign
+
+    intent = _load_spec(args.spec, schema_name="validate_campaign")
+    if not intent:
+        raise errors.SpecInvalid("--spec is required for `validate-campaign`")
+    try:
+        spec = ValidateCampaignSpec.model_validate(intent)
+    except Exception as exc:  # pydantic.ValidationError
+        raise errors.SpecInvalid(str(exc)) from exc
+
+    experiment_dir = Path(args.experiment_dir).resolve()
+    report = validate_campaign(experiment_dir, spec=spec)
+    _ok(report.model_dump(mode="json"), name="validate-campaign")
+    return EXIT_OK if report.overall != "fail" else 1
+
+
 # ─── subcommand: interview ─────────────────────────────────────────────────
 
 
 def cmd_interview(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.interview."""
+    from claude_hpc._schema_models.interview import InterviewSpec
     from claude_hpc.atoms.interview import record_interview
 
     intent = _load_spec(args.spec, schema_name="interview")
@@ -376,7 +407,11 @@ def cmd_interview(args: argparse.Namespace) -> int:
         raise errors.SpecInvalid("--spec is required for `interview`")
     campaign_dir = Path(args.campaign_dir).resolve()
     try:
-        data = record_interview(intent, campaign_dir=campaign_dir)
+        spec = InterviewSpec.model_validate(intent)
+    except Exception as exc:  # pydantic.ValidationError
+        raise errors.SpecInvalid(str(exc)) from exc
+    try:
+        data = record_interview(spec, campaign_dir=campaign_dir)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
     _ok(data, name="interview")
@@ -404,17 +439,12 @@ def cmd_recall(args: argparse.Namespace) -> int:
     if getattr(args, "since", None):
         payload["since"] = args.since
     _validate_against_schema(payload, "recall")
+    from claude_hpc._schema_models.recall import RecallSpec
+
     roots = resolve_roots(getattr(args, "root", None))
+    spec = RecallSpec.model_validate(payload)
     try:
-        data = recall_campaigns(
-            roots,
-            task_kind=getattr(args, "task_kind", None),
-            operator=getattr(args, "operator", None),
-            since=getattr(args, "since", None),
-            limit=int(getattr(args, "limit", 20)),
-            include_runtime=bool(getattr(args, "include_runtime", False)),
-            include_generator_stats=bool(getattr(args, "include_generator_stats", False)),
-        )
+        data = recall_campaigns(roots, spec=spec)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
     _ok(data, name="recall")
@@ -575,30 +605,24 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     consumes the result to suggest "submit now" vs. "wait until
     <hour>".
     """
+    from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
     from claude_hpc.forecast.best_submit_window import best_submit_windows
 
-    _validate_against_schema(
-        {
-            "profile": args.profile,
-            "cluster": args.cluster,
-            "within_hours": int(args.within_hours),
-            "top_k": int(args.top_k),
-        },
-        "best_submit_window",
-    )
-    candidates = best_submit_windows(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        within_hours=int(args.within_hours),
-        top_k=int(args.top_k),
-    )
+    raw = {
+        "profile": args.profile,
+        "cluster": args.cluster,
+        "within_hours": int(args.within_hours),
+        "top_k": int(args.top_k),
+    }
+    _validate_against_schema(raw, "best_submit_window")
+    spec = BestSubmitWindowSpec.model_validate(raw)
+    candidates = best_submit_windows(args.experiment_dir, spec=spec)
     _ok(
         {
-            "profile": args.profile,
-            "cluster": args.cluster,
-            "within_hours": int(args.within_hours),
-            "top_k": int(args.top_k),
+            "profile": spec.profile,
+            "cluster": spec.cluster,
+            "within_hours": spec.within_hours,
+            "top_k": spec.top_k,
             "candidates": [c.to_dict() for c in candidates],
         },
         name="best-submit-window",
@@ -627,15 +651,10 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     if args.seed is not None:
         payload["seed"] = int(args.seed)
     _validate_against_schema(payload, "predict_queue_wait")
-    out = predict_queue_wait(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        at_iso=args.at_iso,
-        backend=args.backend,
-        n_replications=int(args.n_replications),
-        seed=args.seed,
-    )
+    from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+
+    spec = PredictQueueWaitSpec.model_validate(payload)
+    out = predict_queue_wait(args.experiment_dir, spec=spec)
     _ok(out.to_dict(), name="predict-queue-wait")
     return EXIT_OK
 
@@ -759,16 +778,18 @@ def cmd_build_submit_spec(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_submit_spec")
+    from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
+
     try:
-        spec = build_submit_spec(**raw)
-    except TypeError as exc:
-        # Caller passed an unknown / missing kwarg.
+        bss_spec = BuildSubmitSpecInput.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
         return _err(
             error_code="spec_invalid",
             message=str(exc),
             category="user-error",
             retry_safe=False,
         )
+    spec = build_submit_spec(spec=bss_spec)
     _ok(spec, name="build-submit-spec")
     return EXIT_OK
 
@@ -793,13 +814,21 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_tasks_py")
+    from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
+
+    if args.force:
+        raw["force"] = True
     try:
-        out = build_tasks_py(
-            experiment_dir=args.experiment_dir,
-            axes=raw.get("axes") or [],
-            flags_by_executor=raw.get("flags_by_executor") or {},
-            force=bool(raw.get("force", False) or args.force),
+        spec = BuildTasksPyInput.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user-error",
+            retry_safe=False,
         )
+    try:
+        out = build_tasks_py(args.experiment_dir, spec=spec)
     except TypeError as exc:
         return _err(
             error_code="spec_invalid",
@@ -830,15 +859,18 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "decide_monitor_arm")
+    from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
+
     try:
-        out = decide_monitor_arm(**raw)
-    except TypeError as exc:
+        spec = DecideMonitorArmSpec.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
         return _err(
             error_code="spec_invalid",
             message=str(exc),
             category="user-error",
             retry_safe=False,
         )
+    out = decide_monitor_arm(spec=spec)
     _ok(out, name="decide-monitor-arm")
     return EXIT_OK
 
@@ -1226,17 +1258,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
+    from claude_hpc._schema_models.submit import SubmitSpec as _SubmitSpec
+
     record, deduped = runner.submit_and_record(
         args.experiment_dir,
-        profile=spec["profile"],
-        cluster=spec["cluster"],
-        ssh_target=spec["ssh_target"],
-        remote_path=spec["remote_path"],
-        job_name=spec["job_name"],
-        job_ids=list(spec["job_ids"]),
-        total_tasks=int(spec["total_tasks"]),
-        run_id=spec["run_id"],
-        campaign_id=spec.get("campaign_id") or "",
+        spec=_SubmitSpec.model_validate(spec),
     )
     _ok(
         {
@@ -1299,28 +1325,10 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
-    result = submit_flow(
-        experiment_dir=args.experiment_dir,
-        profile=spec["profile"],
-        cluster=spec["cluster"],
-        ssh_target=spec["ssh_target"],
-        remote_path=spec["remote_path"],
-        job_name=spec["job_name"],
-        run_id=spec["run_id"],
-        total_tasks=int(spec["total_tasks"]),
-        backend=spec["backend"],
-        script=spec["script"],
-        job_env=dict(spec["job_env"]),
-        pass_env_keys=spec.get("pass_env_keys"),
-        canary=bool(spec.get("canary", True)),
-        campaign_id=spec.get("campaign_id") or "",
-        runtime=spec.get("runtime"),
-        rsync_excludes=spec.get("rsync_excludes"),
-        skip_preflight=bool(spec.get("skip_preflight", False)),
-        slurm_account=spec.get("slurm_account"),
-        slurm_cluster=spec.get("slurm_cluster"),
-        partial_ok=bool(spec.get("partial_ok", False)),
-    )
+    from claude_hpc._schema_models.submit_flow import SubmitFlowSpec
+
+    submit_spec = SubmitFlowSpec.model_validate(spec)
+    result = submit_flow(args.experiment_dir, spec=submit_spec)
     _ok(result.to_envelope_data(), name="submit-flow")
     return EXIT_OK
 
@@ -1342,7 +1350,8 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     ssh_target and remote_path. The CLI emits one envelope wrapping
     a list of per-spec result records.
     """
-    from claude_hpc.flows.submit_flow import SubmitSpec, submit_flow_batch
+    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec
+    from claude_hpc.flows.submit_flow import submit_flow_batch
 
     raw = _load_spec(args.spec, schema_name=None)
     # Wrapper-shape validation (object with `specs` array, per-entry
@@ -1358,51 +1367,28 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
             category="user-error",
             retry_safe=False,
         )
-    spec_list = raw["specs"]
-    for entry in spec_list:
+    for entry in raw["specs"]:
         _validate_against_schema(entry, "submit_flow")
-    specs = [
-        SubmitSpec(
-            profile=s["profile"],
-            cluster=s["cluster"],
-            ssh_target=s["ssh_target"],
-            remote_path=s["remote_path"],
-            job_name=s["job_name"],
-            run_id=s["run_id"],
-            total_tasks=int(s["total_tasks"]),
-            backend=s["backend"],
-            script=s["script"],
-            job_env=dict(s["job_env"]),
-            pass_env_keys=s.get("pass_env_keys"),
-            canary=bool(s.get("canary", True)),
-            campaign_id=s.get("campaign_id") or "",
-            runtime=s.get("runtime"),
-            slurm_account=s.get("slurm_account"),
-            slurm_cluster=s.get("slurm_cluster"),
-            partial_ok=bool(s.get("partial_ok", False)),
-        )
-        for s in spec_list
-    ]
+    batch_spec = SubmitFlowBatchSpec.model_validate(raw)
 
     if args.dry_run:
-        targets = sorted({(s.ssh_target, s.remote_path) for s in specs})
+        targets = sorted({(s.ssh_target, s.remote_path) for s in batch_spec.specs})
         _ok(
             {
-                "would_launch": [{"run_id": s.run_id, "tasks": s.total_tasks} for s in specs],
-                "shared_targets": [{"ssh_target": t[0], "remote_path": t[1]} for t in targets],
-                "n_specs": len(specs),
+                "would_launch": [
+                    {"run_id": s.run_id, "tasks": s.total_tasks} for s in batch_spec.specs
+                ],
+                "shared_targets": [
+                    {"ssh_target": t[0], "remote_path": t[1]} for t in targets
+                ],
+                "n_specs": len(batch_spec.specs),
                 "dry_run": True,
             },
             name="submit-flow-batch",
         )
         return EXIT_OK
 
-    results = submit_flow_batch(
-        experiment_dir=args.experiment_dir,
-        specs=specs,
-        rsync_excludes=raw.get("rsync_excludes"),
-        skip_preflight=bool(raw.get("skip_preflight", False)),
-    )
+    results = submit_flow_batch(args.experiment_dir, spec=batch_spec)
     _ok(
         {"results": [r.to_envelope_data() for r in results], "n_results": len(results)},
         name="submit-flow-batch",
@@ -1423,33 +1409,29 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
     ``submit-flow`` for the campaign composition pattern
     ``submit-flow → monitor-flow → next iteration``.
     """
+    from claude_hpc._schema_models.monitor_flow import MonitorFlowSpec
     from claude_hpc.flows.monitor_flow import monitor_flow
 
-    spec = _load_spec(args.spec, schema_name=None)
-    _validate_against_schema(spec, "monitor_flow")
+    raw = _load_spec(args.spec, schema_name=None)
+    _validate_against_schema(raw, "monitor_flow")
+    # The Pydantic model is the authoring SoT for the wire shape; the
+    # jsonschema check above is a belt-and-suspenders fail-fast.
+    monitor_spec = MonitorFlowSpec.model_validate(raw)
 
     if args.dry_run:
         _ok(
             {
-                "run_id": spec["run_id"],
-                "poll_interval_seconds": spec.get("poll_interval_seconds", 60),
-                "wall_clock_budget_seconds": spec.get("wall_clock_budget_seconds", 86400),
-                "auto_combine_waves": spec.get("auto_combine_waves", True),
+                "run_id": monitor_spec.run_id,
+                "poll_interval_seconds": monitor_spec.poll_interval_seconds,
+                "wall_clock_budget_seconds": monitor_spec.wall_clock_budget_seconds,
+                "auto_combine_waves": monitor_spec.auto_combine_waves,
                 "dry_run": True,
             },
             name="monitor-flow",
         )
         return EXIT_OK
 
-    result = monitor_flow(
-        experiment_dir=args.experiment_dir,
-        run_id=spec["run_id"],
-        poll_interval_seconds=float(spec.get("poll_interval_seconds", 60.0)),
-        wall_clock_budget_seconds=float(spec.get("wall_clock_budget_seconds", 86400.0)),
-        auto_combine_waves=bool(spec.get("auto_combine_waves", True)),
-        combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
-        file_glob=spec.get("file_glob", "*"),
-    )
+    result = monitor_flow(args.experiment_dir, spec=monitor_spec)
     _ok(result.to_envelope_data(), name="monitor-flow")
     return EXIT_OK
 
@@ -1466,34 +1448,27 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
     atom — the campaign loop's per-iteration tail is
     ``submit-flow → monitor-flow → aggregate-flow → next iter``.
     """
+    from claude_hpc._schema_models.aggregate_flow import AggregateFlowSpec
     from claude_hpc.flows.aggregate_flow import aggregate_flow
 
-    spec = _load_spec(args.spec, schema_name=None)
-    _validate_against_schema(spec, "aggregate_flow")
+    raw = _load_spec(args.spec, schema_name=None)
+    _validate_against_schema(raw, "aggregate_flow")
+    aggregate_spec = AggregateFlowSpec.model_validate(raw)
 
     if args.dry_run:
         _ok(
             {
-                "run_id": spec["run_id"],
-                "ensure_all_combined": spec.get("ensure_all_combined", True),
-                "pull_summaries": spec.get("pull_summaries", False),
-                "output_dir": spec.get("output_dir"),
+                "run_id": aggregate_spec.run_id,
+                "ensure_all_combined": aggregate_spec.ensure_all_combined,
+                "pull_summaries": aggregate_spec.pull_summaries,
+                "output_dir": aggregate_spec.output_dir,
                 "dry_run": True,
             },
             name="aggregate-flow",
         )
         return EXIT_OK
 
-    result = aggregate_flow(
-        experiment_dir=args.experiment_dir,
-        run_id=spec["run_id"],
-        output_dir=spec.get("output_dir"),
-        ensure_all_combined=bool(spec.get("ensure_all_combined", True)),
-        combiner_max_retries=int(spec.get("combiner_max_retries", 1)),
-        pull_summaries=bool(spec.get("pull_summaries", False)),
-        summary_glob=spec.get("summary_glob"),
-        results_subdir=spec.get("results_subdir", "results"),
-    )
+    result = aggregate_flow(args.experiment_dir, spec=aggregate_spec)
     _ok(result.to_envelope_data(), name="aggregate-flow")
     return EXIT_OK
 
@@ -1812,14 +1787,11 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     if args.cluster is not None:
         payload["cluster"] = args.cluster
     _validate_against_schema(payload, "campaign_health")
+    from claude_hpc._schema_models.campaign_health import CampaignHealthSpec
+
+    spec = CampaignHealthSpec.model_validate(payload)
     try:
-        data = campaign_health(
-            args.experiment_dir,
-            campaign_id=args.campaign_id,
-            since_iso=args.since_iso,
-            profile=args.profile,
-            cluster=args.cluster,
-        )
+        data = campaign_health(args.experiment_dir, spec=spec)
     except Exception as exc:  # noqa: BLE001 — last-resort error envelope
         return _err(
             error_code="internal",
@@ -2197,6 +2169,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pre.add_argument("--cluster", help="Optional cluster name to TCP-probe on :22.")
     p_pre.set_defaults(func=cmd_preflight)
+
+    # validate-campaign
+    p_vc = sub.add_parser(
+        "validate-campaign",
+        help=(
+            "Pre-submit validator: cross-check tasks.py kwargs vs the executor "
+            "signature, verify dataset row indices + non-null cols, and compare "
+            "requested walltime against historical p95 + .hpc/playbook.yaml rules."
+        ),
+    )
+    p_vc.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="Path to validate_campaign.input.json conforming to the schema.",
+    )
+    p_vc.add_argument(
+        "--experiment-dir",
+        type=Path,
+        default=Path("."),
+        help="Path to the experiment directory; defaults to cwd.",
+    )
+    p_vc.set_defaults(func=cmd_validate_campaign)
 
     # interview
     p_iv = sub.add_parser(

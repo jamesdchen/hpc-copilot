@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-mapreduce campaign status --campaign-id <id> [--experiment-dir <dir>]
-  python: claude_hpc.mapreduce.reduce.history.prior
+  python: claude_hpc.atoms.campaign_status.campaign_status
 exit_codes:
 - 0: ok
 ---

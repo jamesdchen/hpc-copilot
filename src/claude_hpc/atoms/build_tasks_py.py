@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
 from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -80,8 +81,6 @@ def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
     ``tasks_example.py``. Single-axis sweeps render as a simple list
     comprehension; multi-axis as ``itertools.product``.
     """
-    if not axes:
-        return "_TASKS: list[dict] = []"
     if len(axes) == 1:
         ax = axes[0]
         return (
@@ -137,15 +136,19 @@ def resolve(task_id: int) -> dict:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="experiment_dir",
+    cli="hpc-mapreduce build-tasks-py --spec <path>",
+    agent_facing=True,
 )
 def build_tasks_py(
-    *,
     experiment_dir: Path,
-    axes: list[dict[str, Any]],
-    flags_by_executor: dict[str, list[dict[str, Any]]],
-    force: bool = False,
+    *,
+    spec: BuildTasksPyInput,
 ) -> dict[str, Any]:
     """Scaffold ``<experiment>/.hpc/tasks.py`` from the supplied axes + flags.
+
+    The wire-validated ``spec`` carries ``axes``, ``flags_by_executor``,
+    and ``force``; ``experiment_dir`` is the framework-context kwarg
+    (the spec's wire surface intentionally doesn't hold it).
 
     Parameters
     ----------
@@ -174,28 +177,16 @@ def build_tasks_py(
     ``{path, wrote, reason, n_tasks}``. ``n_tasks`` is the
     cartesian-product cardinality the rendered file will report
     via ``total()``.
-
-    Raises
-    ------
-    :class:`errors.SpecInvalid`
-        Empty axes list, malformed flag spec, or non-empty axis with
-        empty values list.
     """
-    if not axes:
-        raise errors.SpecInvalid("axes must be a non-empty list")
-    for i, ax in enumerate(axes):
-        if "name" not in ax or "values" not in ax:
-            raise errors.SpecInvalid(
-                f"axes[{i}] must have 'name' and 'values' keys, got {sorted(ax)!r}"
-            )
-        if not ax["values"]:
-            raise errors.SpecInvalid(f"axes[{i}={ax['name']!r}] has empty 'values' list")
-    for module_path, flag_list in flags_by_executor.items():
-        for j, f in enumerate(flag_list):
-            if "name" not in f or "type" not in f:
-                raise errors.SpecInvalid(
-                    f"flags_by_executor[{module_path!r}][{j}] missing 'name' or 'type'"
-                )
+    axes = [a.model_dump() for a in spec.axes]
+    # exclude_none on the flag dump so a flag without ``default`` doesn't
+    # acquire a synthetic ``default: None`` (the renderer's ``"default"
+    # in flag`` check would then emit a spurious ``default=None`` arg).
+    flags_by_executor = {
+        k: [f.model_dump(exclude_none=True) for f in v]
+        for k, v in spec.flags_by_executor.items()
+    }
+    force = bool(spec.force)
 
     target = experiment_dir / ".hpc" / "tasks.py"
     if target.exists() and not force:

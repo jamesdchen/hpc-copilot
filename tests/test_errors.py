@@ -71,12 +71,28 @@ def test_subclass_has_required_attributes(code: str, cls: type[errors.HpcError])
 
 
 def test_envelope_schema_enum_matches_subclass_inventory() -> None:
-    """The error_code enum in envelope.json must match the documented set."""
+    """The error_code enum in envelope.json must match the documented set.
+
+    The schema is now Pydantic-emitted: ``oneOf`` references
+    ``#/$defs/ErrorEnvelope`` and ``#/$defs/SuccessEnvelope``
+    instead of inlining the variants. Resolve the ref to find the
+    error variant before reading its ``error_code`` enum.
+    """
     schema_path = Path(__file__).parent.parent / "src" / "claude_hpc" / "schemas" / "envelope.json"
     schema = json.loads(schema_path.read_text())
-    # The schema is `oneOf [success, error]`; pull the error variant.
+    defs = schema.get("$defs", {})
+
+    def _resolve(node: dict) -> dict:
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            return defs[ref.removeprefix("#/$defs/")]
+        return node
+
     error_variant = next(
-        v for v in schema["oneOf"] if v.get("properties", {}).get("ok", {}).get("const") is False
+        resolved
+        for v in schema["oneOf"]
+        for resolved in [_resolve(v)]
+        if resolved.get("properties", {}).get("ok", {}).get("const") is False
     )
     enum_in_schema = frozenset(error_variant["properties"]["error_code"]["enum"])
     assert enum_in_schema == DOCUMENTED_ERROR_CODES, (

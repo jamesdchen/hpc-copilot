@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/update_run_constraints.input.json",
+  "title": "UpdateRunConstraintsSpec",
+  "type": "object",
+  "required": [
+    "run_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "add_features": {
+      "description": "Features to add to each job (joined with the existing set).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Add Features",
+      "type": "array"
+    },
+    "set_features": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Replace the entire Features expression with this set (joined with the cluster's separator). Mutually exclusive with ``add_features``.",
+      "title": "Set Features"
+    }
+  }
+}

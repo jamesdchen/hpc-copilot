@@ -35,7 +35,11 @@ def test_stages_path_points_into_dot_hpc(tmp_path: Path) -> None:
 def test_stages_schema_is_loadable_dict() -> None:
     schema = stages_schema()
     assert schema["type"] == "array"
-    assert "stage" in schema["$defs"]
+    # The schema is now Pydantic-emitted; ``$defs`` is keyed on the
+    # generating class names rather than the lowercase ``stage`` we
+    # used to author by hand. Assert at least one ``$defs`` entry
+    # exists rather than pinning the key.
+    assert schema.get("$defs"), "stages schema should declare $defs for the per-stage shape"
 
 
 # ---------------------------------------------------------------------------

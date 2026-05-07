@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING
 
 from claude_hpc import runner
+from claude_hpc._schema_models.submit import SubmitSpec as _WireSubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -58,14 +59,16 @@ def test_cmd_sha_dedup_short_circuits_when_sidecar_exists(tmp_path: Path) -> Non
 
     record, deduped = runner.submit_and_record(
         tmp_path,
-        profile="gpu-a100",
-        cluster="discovery",
-        ssh_target="me@cluster",
-        remote_path="/scratch/exp",
-        job_name="ml",
-        run_id="20260102-000000-newone1",  # different from sidecar
-        job_ids=["99999"],  # would be different
-        total_tasks=4,
+        spec=_WireSubmitSpec(
+            profile="gpu-a100",
+            cluster="discovery",
+            ssh_target="me@cluster",
+            remote_path="/scratch/exp",
+            job_name="ml",
+            run_id="20260102-000000-newone1",  # different from sidecar
+            job_ids=["99999"],  # would be different
+            total_tasks=4,
+        ),
         cmd_sha=cmd_sha,
     )
 
@@ -81,14 +84,16 @@ def test_cmd_sha_dedup_no_op_when_no_match(tmp_path: Path) -> None:
     _write_sidecar(tmp_path, "20260101-000000-other00", cmd_sha="b" * 64)
     record, deduped = runner.submit_and_record(
         tmp_path,
-        profile="cpu",
-        cluster="discovery",
-        ssh_target="me@cluster",
-        remote_path="/scratch/exp",
-        job_name="ml",
-        run_id="20260102-000000-fresh11",
-        job_ids=["55555"],
-        total_tasks=4,
+        spec=_WireSubmitSpec(
+            profile="cpu",
+            cluster="discovery",
+            ssh_target="me@cluster",
+            remote_path="/scratch/exp",
+            job_name="ml",
+            run_id="20260102-000000-fresh11",
+            job_ids=["55555"],
+            total_tasks=4,
+        ),
         cmd_sha="c" * 64,  # mismatches the sidecar
     )
     assert deduped is False
@@ -99,14 +104,16 @@ def test_cmd_sha_param_is_optional(tmp_path: Path) -> None:
     """Existing callers that do not pass cmd_sha must keep working."""
     record, deduped = runner.submit_and_record(
         tmp_path,
-        profile="cpu",
-        cluster="discovery",
-        ssh_target="me@cluster",
-        remote_path="/scratch/exp",
-        job_name="ml",
-        run_id="20260102-000000-noshahere",
-        job_ids=["7"],
-        total_tasks=1,
+        spec=_WireSubmitSpec(
+            profile="cpu",
+            cluster="discovery",
+            ssh_target="me@cluster",
+            remote_path="/scratch/exp",
+            job_name="ml",
+            run_id="20260102-000000-noshahere",
+            job_ids=["7"],
+            total_tasks=1,
+        ),
     )
     assert deduped is False
     assert record.run_id == "20260102-000000-noshahere"

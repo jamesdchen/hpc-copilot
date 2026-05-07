@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/verify_aggregation_complete.output.json",
   "title": "verify-aggregation-complete output",
-  "description": "Post-aggregate invariant report. Agent reads `ok` and surfaces violations (missing_waves / missing_tasks / unexpected_tasks / provenance_present) to the user.",
+  "description": "Post-aggregate invariant report.\n\nAgent reads ``ok`` and surfaces violations\n(missing_waves / missing_tasks / unexpected_tasks /\nprovenance_present) to the user.",
   "type": "object",
   "required": [
     "ok",
@@ -20,57 +20,66 @@
   ],
   "properties": {
     "ok": {
+      "title": "Ok",
       "type": "boolean"
     },
     "run_id": {
-      "$ref": "https://github.com/jamesdchen/claude-hpc/schemas/envelope.json#/$defs/run_id"
+      "title": "Run Id",
+      "type": "string"
     },
     "all_waves_combined": {
+      "title": "All Waves Combined",
       "type": "boolean"
     },
     "missing_waves": {
-      "type": "array",
       "items": {
-        "type": "integer",
-        "minimum": 0
-      }
+        "type": "integer"
+      },
+      "title": "Missing Waves",
+      "type": "array"
     },
     "all_tasks_present": {
+      "title": "All Tasks Present",
       "type": "boolean"
     },
     "missing_tasks": {
-      "type": "array",
       "items": {
-        "type": "integer",
-        "minimum": 0
-      }
+        "type": "integer"
+      },
+      "title": "Missing Tasks",
+      "type": "array"
     },
     "unexpected_tasks": {
-      "type": "array",
+      "description": "Cross-run contamination: task_ids in pulled partials but not in this run's wave_map.",
       "items": {
-        "type": "integer",
-        "minimum": 0
+        "type": "integer"
       },
-      "description": "Cross-run contamination: task_ids in pulled partials but not in this run's wave_map."
+      "title": "Unexpected Tasks",
+      "type": "array"
     },
     "provenance_present": {
+      "title": "Provenance Present",
       "type": "boolean"
     },
     "expected_wave_count": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "Expected Wave Count",
+      "type": "integer"
     },
     "pulled_wave_count": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "Pulled Wave Count",
+      "type": "integer"
     },
     "expected_task_count": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "Expected Task Count",
+      "type": "integer"
     },
     "pulled_task_count": {
-      "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "title": "Pulled Task Count",
+      "type": "integer"
     }
   }
 }

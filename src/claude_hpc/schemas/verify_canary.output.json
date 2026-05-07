@@ -2,33 +2,50 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/verify_canary.output.json",
   "title": "verify-canary output",
-  "description": "Result of the wait + grep + output-check protocol for a 1-task canary. Caller branches on `ok`: True → main array submit; False → surface stderr_tail to the user verbatim.",
+  "description": "Result of the wait + grep + output-check protocol for a 1-task canary.\n\nCaller branches on ``ok``: True → main array submit; False →\nsurface stderr_tail to the user verbatim.",
   "type": "object",
-  "required": ["ok", "failure_kind", "details", "stderr_tail"],
+  "required": [
+    "ok",
+    "details",
+    "stderr_tail"
+  ],
   "properties": {
-    "ok": { "type": "boolean" },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
     "failure_kind": {
-      "type": ["string", "null"],
-      "enum": [
-        "dispatcher_failed",
-        "import_error",
-        "module_not_found",
-        "traceback",
-        "oom_killed",
-        "segfault",
-        "missing_output",
-        "timeout",
-        "abandoned",
-        null
-      ]
+      "anyOf": [
+        {
+          "enum": [
+            "dispatcher_failed",
+            "import_error",
+            "module_not_found",
+            "traceback",
+            "oom_killed",
+            "segfault",
+            "missing_output",
+            "timeout",
+            "abandoned"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Failure Kind"
     },
     "details": {
-      "type": "string",
-      "description": "One-line human-readable summary the slash command surfaces above the raw stderr_tail."
+      "description": "One-line human-readable summary the slash command surfaces above the raw stderr_tail.",
+      "title": "Details",
+      "type": "string"
     },
     "stderr_tail": {
-      "type": "string",
-      "description": "Last ~50 lines of the canary's stderr log (or empty string when not retrievable)."
+      "description": "Last ~50 lines of the canary's stderr log (or empty string when not retrievable).",
+      "title": "Stderr Tail",
+      "type": "string"
     }
   }
 }

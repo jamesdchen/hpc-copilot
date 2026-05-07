@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from claude_hpc import errors
 from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal._time import utcnow
+from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
 from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
 if TYPE_CHECKING:
@@ -61,14 +62,13 @@ class WindowCandidate:
     side_effects=[],
     error_codes=[errors.HpcError],
     idempotent=True,
+    cli="hpc-mapreduce best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]",
+    agent_facing=True,
 )
 def best_submit_windows(
     experiment_dir: Path,
     *,
-    profile: str,
-    cluster: str,
-    within_hours: int = 24,
-    top_k: int = 5,
+    spec: BestSubmitWindowSpec,
 ) -> list[WindowCandidate]:
     """Sweep the predictor at hourly offsets and return the top_k.
 
@@ -77,26 +77,26 @@ def best_submit_windows(
     integer-hour offsets — hour-of-week buckets are 1h wide so
     sub-hour resolution wouldn't change the prediction.
 
-    Returns up to *top_k* candidates sorted ascending by
+    Returns up to ``spec.top_k`` candidates sorted ascending by
     ``predicted_wait_sec``. Ties are broken by ascending ``submit_iso``
     so an earlier window wins when the predictor returns identical
     values.
     """
-    if within_hours <= 0:
-        return []
-    if top_k <= 0:
-        return []
+    profile = spec.profile
+    cluster = spec.cluster
+    within_hours = spec.within_hours
+    top_k = spec.top_k
 
     now = utcnow().replace(minute=0, second=0, microsecond=0)
+    from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+
     candidates: list[WindowCandidate] = []
     for h in range(1, int(within_hours) + 1):
         ts = now + timedelta(hours=h)
         iso = ts.isoformat(timespec="seconds")
         result = predict_queue_wait(
             experiment_dir,
-            profile=profile,
-            cluster=cluster,
-            at_iso=iso,
+            spec=PredictQueueWaitSpec(profile=profile, cluster=cluster, at_iso=iso),
         )
         if result.predicted_wait_sec is None:
             continue

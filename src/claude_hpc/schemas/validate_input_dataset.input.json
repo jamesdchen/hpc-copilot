@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/claude-hpc/schemas/validate_input_dataset.input.json",
+  "title": "ValidateInputDatasetSpec",
+  "type": "object",
+  "required": [
+    "dataset_path",
+    "loader",
+    "row_indices"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "dataset_path": {
+      "minLength": 1,
+      "title": "Dataset Path",
+      "type": "string"
+    },
+    "loader": {
+      "enum": [
+        "parquet",
+        "csv",
+        "jsonl"
+      ],
+      "title": "Loader",
+      "type": "string"
+    },
+    "row_indices": {
+      "items": {
+        "type": "integer"
+      },
+      "minItems": 1,
+      "title": "Row Indices",
+      "type": "array"
+    },
+    "required_non_null_cols": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Required Non Null Cols",
+      "type": "array"
+    }
+  }
+}

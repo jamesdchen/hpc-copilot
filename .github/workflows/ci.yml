@@ -35,5 +35,11 @@ jobs:
         run: python scripts/lint_primitive_modules.py
       - name: Check primitive frontmatter is regenerated from registry
         run: python scripts/build_primitive_frontmatter.py --check
-      - name: Pytest
+      - name: Pytest (default)
         run: pytest -q
+      - name: Pytest (slow tier)
+        if: always()
+        run: pytest -q -m slow
+      - name: Coverage report (informational, not gated)
+        if: matrix.python-version == '3.12'
+        run: pytest -q -m '' --cov=src/claude_hpc --cov-report=term-missing

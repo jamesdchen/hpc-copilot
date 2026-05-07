@@ -1,0 +1,157 @@
+"""``update-run-constraints`` primitive — mutate cluster-side Features.
+
+Lesson 9: ``scontrol update jobid=N Features=X`` works without losing
+age priority. The framework's pre-existing path was "cancel + re-
+submit," which loses every minute of accumulated age priority
+(typically the difference between "shipped now" and "shipped in 6h").
+
+This primitive exposes ``scontrol update`` as a first-class operation:
+
+1. Read the run's sidecar; pull job_ids + ssh_target.
+2. For each job_id, run ``scontrol update jobid=<id> Features=<expr>``
+   over SSH.
+3. Update the sidecar's recorded features so subsequent observers see
+   the new set.
+
+Idempotent on (run_id, target features set): re-running with the
+same final feature set produces the same on-cluster state.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from typing import TYPE_CHECKING
+
+from claude_hpc import errors
+from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._schema_models.update_run_constraints import (
+    UpdateRunConstraintsResult,
+    UpdateRunConstraintsSpec,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+# SLURM uses ``|`` for OR, ``&`` for AND. We don't infer; the user
+# supplies the final feature list and we join with ``|`` as the
+# common case (any-of). A future spec might add ``operator: 'and'|'or'``
+# but that's a YAGNI for the lesson-9 use case.
+_FEATURE_JOIN = "|"
+
+# Feature names: alphanumerics, underscores, hyphens, periods. Reject
+# anything else as a defence against shell injection through the
+# scontrol command.
+_FEATURE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _validate_feature(feat: str) -> str:
+    if not _FEATURE_RE.fullmatch(feat):
+        raise errors.SpecInvalid(
+            f"feature name {feat!r} contains characters outside [A-Za-z0-9._-]"
+        )
+    return feat
+
+
+@primitive(
+    name="update-run-constraints",
+    verb="mutate",
+    side_effects=[SideEffect("ssh", "<cluster> (scontrol update Features)")],
+    error_codes=[
+        errors.SpecInvalid,
+        errors.SshUnreachable,
+        errors.RemoteCommandFailed,
+    ],
+    idempotent=True,
+    idempotency_key="run_id",
+    cli="hpc-mapreduce update-run-constraints --spec <path>",
+    agent_facing=True,
+)
+def update_run_constraints(
+    experiment_dir: Path,
+    *,
+    spec: UpdateRunConstraintsSpec,
+) -> UpdateRunConstraintsResult:
+    """Run ``scontrol update jobid=<id> Features=<expr>`` for each job
+    in the run's sidecar; update the sidecar's recorded Features.
+
+    Either ``spec.set_features`` (replace) or ``spec.add_features``
+    (extend) must be set. Both is rejected — ambiguous semantics.
+    """
+    if spec.set_features is not None and spec.add_features:
+        raise errors.SpecInvalid(
+            "Pass exactly one of `set_features` (replace) or `add_features` (extend)"
+        )
+    if spec.set_features is None and not spec.add_features:
+        raise errors.SpecInvalid("Pass at least one of `set_features` or `add_features`")
+
+    from claude_hpc.infra.remote import ssh_run
+    from claude_hpc.state.runs import read_run_sidecar, run_sidecar_path
+
+    sidecar = read_run_sidecar(experiment_dir, spec.run_id)
+    job_ids = list(sidecar.get("job_ids") or [])
+    if not job_ids:
+        raise errors.SpecInvalid(
+            f"sidecar for run_id={spec.run_id!r} has no job_ids; nothing to update"
+        )
+
+    # Resolve the SSH target. v2 sidecars carry it on `ssh_target`;
+    # v1 sidecars don't, in which case we error rather than guess.
+    ssh_target = sidecar.get("ssh_target")
+    if not ssh_target:
+        raise errors.SpecInvalid(
+            f"sidecar for run_id={spec.run_id!r} is missing ssh_target; "
+            "scontrol update requires explicit cluster routing"
+        )
+
+    # Compute the new Features expression.
+    constraints = sidecar.get("constraints") or {}
+    existing = list(constraints.get("features") or [])
+    if spec.set_features is not None:
+        new_features = [_validate_feature(f) for f in spec.set_features]
+    else:
+        added = [_validate_feature(f) for f in spec.add_features]
+        new_features = list(dict.fromkeys([*existing, *added]))
+
+    if not new_features:
+        raise errors.SpecInvalid("computed feature set is empty")
+
+    feature_expr = _FEATURE_JOIN.join(new_features)
+
+    updated: list[str] = []
+    failed: list[str] = []
+    for jid in job_ids:
+        if not _FEATURE_RE.fullmatch(jid):  # job-id is also command-substituted
+            failed.append(jid)
+            continue
+        cmd = f"scontrol update jobid={jid} Features={feature_expr}"
+        try:
+            cp = ssh_run(cmd, ssh_target=ssh_target)
+        except errors.SshUnreachable:
+            failed.append(jid)
+            continue
+        if cp.returncode == 0:
+            updated.append(jid)
+        else:
+            failed.append(jid)
+
+    # Persist the new feature set on the sidecar (best-effort; the
+    # cluster-side update succeeded for `updated` jobs regardless of
+    # whether the local mirror lands).
+    if updated:
+        # ``constraints`` may be backfilled to None on a v1 sidecar; coerce
+        # to a dict before assigning so the persisted shape matches v2.
+        cstr = sidecar.get("constraints")
+        if not isinstance(cstr, dict):
+            cstr = {}
+        cstr["features"] = new_features
+        sidecar["constraints"] = cstr
+        target = run_sidecar_path(experiment_dir, spec.run_id)
+        target.write_text(json.dumps(sidecar, indent=2, sort_keys=True))
+
+    return UpdateRunConstraintsResult(
+        run_id=spec.run_id,
+        job_ids_updated=updated,
+        job_ids_failed=failed,
+        new_features=new_features,
+    )

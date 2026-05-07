@@ -38,41 +38,61 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-mapreduce house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]
-  python: claude_hpc.agent_cli.cmd_house_edge
+  python: claude_hpc.atoms.house_edge.house_edge
 exit_codes:
 - 0: ok
 - 1: spec_invalid
 - 3: internal
 ---
+# house-edge
 
-## Purpose
+> **Internal primitive.** Calibration-loop helper consumed by
+> debug tooling and `score-submit-plan`'s lattice-tuning logic.
+> Not on any agent's hot path.
 
-Compare the planner's `--test-only` predictions for Submit→Start latency
-against what actually happened on the cluster. Validates that the
-backfill probe is finding real windows and surfaces miscalibration when
-the lattice is consistently off.
+Compare the planner's `--test-only` Submit→Start predictions
+against observed cluster reality. Validates that the backfill
+probe is finding real windows; surfaces miscalibration when the
+lattice is consistently optimistic / pessimistic.
 
-Pure read; no SSH. Reads sidecars produced by `runtime_prior` plus the
-`predicted_eta` sidecar that the planner writes during scoring.
+## Composers
 
-## Compose with
+- Operator-driven calibration dashboards
+  (`hpc-mapreduce house-edge --profile <p> --cluster <c>`).
+- `score-submit-plan`'s lattice-width tuner can read the
+  `calibration_ratio` to decide whether to widen or narrow its
+  search.
 
-- Common predecessors: at least a handful of submits that ran through
-  `score-submit-plan` (which seeds `predicted_eta`) and finished long
-  enough ago that `started_at` was recorded.
-- Common successors: `score-submit-plan` for the next batch — consumers
-  can use `calibration_ratio` to decide whether to widen or narrow the
-  planner's lattice search.
+No registered Python `composes=` references.
 
-## Notes
+## Invariants
 
-- Samples without a `predicted_eta` (typically open-loop submits that
-  bypassed the planner) are dropped; `n_with_prediction` reflects the
-  filtered count.
-- A `calibration_ratio` near 1.0 with low `p95_delta_sec` means the
-  planner is well-calibrated. Big positive `mean_delta_sec` means jobs
-  consistently sit longer than predicted — usually a sign the cluster
-  metric snapshot was stale.
-- Companion primitive `walltime-drift` covers the other half of the
-  lattice (walltime cliff vs. utilization). Together they form the
-  closed-loop calibration dashboard.
+- **Pure read.** Reads `runtime_prior` samples + the planner's
+  `predicted_eta` sidecar. No SSH, no journal mutation.
+- **Successful samples only.** `read_samples(...,
+  only_successful=True)` — calibration over runs that finished,
+  not failed/cancelled ones.
+- **Samples without `predicted_eta` are dropped silently.**
+  `n_with_prediction` reflects the filtered count, NOT the total
+  sample count.
+
+## Coupling
+
+- The five output stats (`n_with_prediction`, `mean_delta_sec`,
+  `median_delta_sec`, `p95_delta_sec`, `calibration_ratio`) are
+  the public contract. Adding a stat is a wire-extending change;
+  removing one breaks the calibration dashboard.
+- Pairs with `walltime-drift` (the other half of the calibration
+  loop). Refactors that touch `runtime_prior` shape need to
+  sanity-check both atoms.
+
+## Failure modes
+
+- Cold start (zero samples with `predicted_eta`) →
+  `calibration_ratio=1.0`, `n_with_prediction=0`. Caller must
+  not divide by `n_with_prediction` without guarding.
+- Stale cluster snapshots produce systematic positive
+  `mean_delta_sec` (jobs sit longer than predicted). A
+  consistently-positive number across a long sample window is a
+  signal that the planner's `inspect-cluster` cache TTL is too
+  long.

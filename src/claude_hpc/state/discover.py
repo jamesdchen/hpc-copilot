@@ -185,6 +185,8 @@ def is_executor_source(source: str) -> bool:
     verb="query",
     side_effects=[],
     idempotent=True,
+    cli="hpc-mapreduce discover --experiment-dir <path>",
+    agent_facing=True,
 )
 def discover_executors(
     root: Path | str,
@@ -470,6 +472,7 @@ def _classify_reducer(source: str, *, path: Path) -> ReducerInfo | None:
     verb="query",
     side_effects=[],
     idempotent=True,
+    cli="hpc-mapreduce discover-reducers --experiment-dir <path>",
 )
 def discover_reducers(
     root: Path | str,

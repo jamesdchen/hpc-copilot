@@ -21,6 +21,8 @@ from claude_hpc.infra.clusters import load_clusters_config
     verb="query",
     side_effects=[],
     idempotent=True,
+    cli="hpc-mapreduce clusters list",
+    agent_facing=True,
 )
 def list_clusters() -> dict[str, Any]:
     """Return the list of configured clusters.
@@ -44,6 +46,8 @@ def list_clusters() -> dict[str, Any]:
     side_effects=[],
     error_codes=[errors.ClusterUnknown],
     idempotent=True,
+    cli="hpc-mapreduce clusters describe <name>",
+    agent_facing=True,
 )
 def describe_cluster(*, name: str) -> dict[str, Any]:
     """Return the full config for a single cluster.
