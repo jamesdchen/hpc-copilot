@@ -18,7 +18,7 @@ import importlib.util
 import sys
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
+from claude_hpc._schema_models.actions.build_tasks_py import BuildTasksPyInput
 from claude_hpc.atoms.build_tasks_py import build_tasks_py
 
 if TYPE_CHECKING:

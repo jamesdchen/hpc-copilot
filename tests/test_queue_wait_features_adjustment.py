@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+from claude_hpc._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
 from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.forecast.queue_features import QueueFeatures
 from claude_hpc.state import runtime_prior as rp

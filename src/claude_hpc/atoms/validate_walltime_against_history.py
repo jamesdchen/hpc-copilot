@@ -29,8 +29,8 @@ from claude_hpc._internal.playbook import (
     WalltimeRule,
     load_playbook,
 )
-from claude_hpc._schema_models.validate_campaign import ValidatorFinding
-from claude_hpc._schema_models.validate_walltime_against_history import (
+from claude_hpc._schema_models.workflows.validate_campaign import ValidatorFinding
+from claude_hpc._schema_models.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistoryResult,
     ValidateWalltimeAgainstHistorySpec,
 )

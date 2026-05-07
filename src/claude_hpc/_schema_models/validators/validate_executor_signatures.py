@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from claude_hpc._schema_models.validate_campaign import (
+from claude_hpc._schema_models.workflows.validate_campaign import (
     ValidatorFinding,  # noqa: TC001 — Pydantic resolves the annotation at runtime
 )
 

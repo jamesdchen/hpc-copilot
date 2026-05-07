@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
+from claude_hpc._schema_models.queries.best_submit_window import BestSubmitWindowSpec
 from claude_hpc.forecast.best_submit_window import best_submit_windows
 from tests.conftest import seed_diurnal_dip
 

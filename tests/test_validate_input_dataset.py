@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.validate_input_dataset import (
+from claude_hpc._schema_models.validators.validate_input_dataset import (
     ValidateInputDatasetSpec,
 )
 from claude_hpc.atoms.validate_input_dataset import validate_input_dataset

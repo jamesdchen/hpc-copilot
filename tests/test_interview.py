@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.interview import InterviewSpec
+from claude_hpc._schema_models.actions.interview import InterviewSpec
 from claude_hpc.atoms.interview import record_interview
 
 if TYPE_CHECKING:

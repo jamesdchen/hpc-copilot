@@ -10,7 +10,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from ._shared import GpuType, Runtime
+from claude_hpc._schema_models._shared import GpuType, Runtime
 
 
 class _StageResources(BaseModel):

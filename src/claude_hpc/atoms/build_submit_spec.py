@@ -26,7 +26,7 @@ from typing import Any
 
 from claude_hpc import errors
 from claude_hpc._internal.primitive import primitive
-from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
+from claude_hpc._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
 from claude_hpc.infra.remote import validate_ssh_target
 
 # Canonical cluster-side template paths. The local-side rsync ships the

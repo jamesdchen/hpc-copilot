@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import RunIdLoose
+from claude_hpc._schema_models._shared import RunIdLoose
 
 
 class CombineWaveResult(BaseModel):

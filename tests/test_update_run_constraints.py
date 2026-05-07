@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from claude_hpc import errors
-from claude_hpc._schema_models.update_run_constraints import (
+from claude_hpc._schema_models.actions.update_run_constraints import (
     UpdateRunConstraintsSpec,
 )
 from claude_hpc.runner.update_constraints import update_run_constraints

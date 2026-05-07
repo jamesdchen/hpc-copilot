@@ -438,7 +438,7 @@ def _eta_via_des(
     not yet bootstrapped.
     """
     try:
-        from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+        from claude_hpc._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
         from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 
         out = predict_queue_wait(

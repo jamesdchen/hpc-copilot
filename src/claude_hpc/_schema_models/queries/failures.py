@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import RunIdLoose, Scheduler
+from claude_hpc._schema_models._shared import RunIdLoose, Scheduler
 
 
 class _FailureCluster(BaseModel):

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.validate_self_qos_limit import (
+from claude_hpc._schema_models.validators.validate_self_qos_limit import (
     ValidateSelfQosLimitSpec,
 )
 from claude_hpc.atoms.validate_self_qos_limit import validate_self_qos_limit

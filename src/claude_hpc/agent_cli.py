@@ -371,7 +371,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 def cmd_predict_start_time(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at
     ``claude_hpc.atoms.predict_start_time``."""
-    from claude_hpc._schema_models.predict_start import PredictStartTimeSpec
+    from claude_hpc._schema_models.queries.predict_start import PredictStartTimeSpec
     from claude_hpc.atoms.predict_start_time import predict_start_time_primitive
 
     intent = _load_spec(args.spec, schema_name="predict_start_time")
@@ -400,7 +400,7 @@ def cmd_validate_campaign(args: argparse.Namespace) -> int:
     * ``1`` — overall=fail (any error finding). The agent loop reads
       ``data.findings`` to apply suggested fixes and re-run.
     """
-    from claude_hpc._schema_models.validate_campaign import ValidateCampaignSpec
+    from claude_hpc._schema_models.workflows.validate_campaign import ValidateCampaignSpec
     from claude_hpc.flows.validate_campaign import validate_campaign
 
     intent = _load_spec(args.spec, schema_name="validate_campaign")
@@ -422,7 +422,7 @@ def cmd_validate_campaign(args: argparse.Namespace) -> int:
 
 def cmd_interview(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.interview."""
-    from claude_hpc._schema_models.interview import InterviewSpec
+    from claude_hpc._schema_models.actions.interview import InterviewSpec
     from claude_hpc.atoms.interview import record_interview
 
     intent = _load_spec(args.spec, schema_name="interview")
@@ -462,7 +462,7 @@ def cmd_recall(args: argparse.Namespace) -> int:
     if getattr(args, "since", None):
         payload["since"] = args.since
     _validate_against_schema(payload, "recall")
-    from claude_hpc._schema_models.recall import RecallSpec
+    from claude_hpc._schema_models.queries.recall import RecallSpec
 
     roots = resolve_roots(getattr(args, "root", None))
     spec = RecallSpec.model_validate(payload)
@@ -628,7 +628,7 @@ def cmd_best_submit_window(args: argparse.Namespace) -> int:
     consumes the result to suggest "submit now" vs. "wait until
     <hour>".
     """
-    from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
+    from claude_hpc._schema_models.queries.best_submit_window import BestSubmitWindowSpec
     from claude_hpc.forecast.best_submit_window import best_submit_windows
 
     raw = {
@@ -674,7 +674,7 @@ def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
     if args.seed is not None:
         payload["seed"] = int(args.seed)
     _validate_against_schema(payload, "predict_queue_wait")
-    from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+    from claude_hpc._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
 
     spec = PredictQueueWaitSpec.model_validate(payload)
     out = predict_queue_wait(args.experiment_dir, spec=spec)
@@ -801,7 +801,7 @@ def cmd_build_submit_spec(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_submit_spec")
-    from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
+    from claude_hpc._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
 
     try:
         bss_spec = BuildSubmitSpecInput.model_validate(raw)
@@ -837,7 +837,7 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_tasks_py")
-    from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
+    from claude_hpc._schema_models.actions.build_tasks_py import BuildTasksPyInput
 
     if args.force:
         raw["force"] = True
@@ -882,7 +882,7 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _validate_against_schema(raw, "decide_monitor_arm")
-    from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
+    from claude_hpc._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
 
     try:
         spec = DecideMonitorArmSpec.model_validate(raw)
@@ -1281,7 +1281,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
-    from claude_hpc._schema_models.submit import SubmitSpec as _SubmitSpec
+    from claude_hpc._schema_models.actions.submit import SubmitSpec as _SubmitSpec
 
     record, deduped = runner.submit_and_record(
         args.experiment_dir,
@@ -1348,7 +1348,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
-    from claude_hpc._schema_models.submit_flow import SubmitFlowSpec
+    from claude_hpc._schema_models.workflows.submit_flow import SubmitFlowSpec
 
     submit_spec = SubmitFlowSpec.model_validate(spec)
     result = submit_flow(args.experiment_dir, spec=submit_spec)
@@ -1373,7 +1373,7 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     ssh_target and remote_path. The CLI emits one envelope wrapping
     a list of per-spec result records.
     """
-    from claude_hpc._schema_models.submit_flow_batch import SubmitFlowBatchSpec
+    from claude_hpc._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec
     from claude_hpc.flows.submit_flow import submit_flow_batch
 
     raw = _load_spec(args.spec, schema_name=None)
@@ -1430,7 +1430,7 @@ def cmd_monitor_flow(args: argparse.Namespace) -> int:
     ``submit-flow`` for the campaign composition pattern
     ``submit-flow → monitor-flow → next iteration``.
     """
-    from claude_hpc._schema_models.monitor_flow import MonitorFlowSpec
+    from claude_hpc._schema_models.workflows.monitor_flow import MonitorFlowSpec
     from claude_hpc.flows.monitor_flow import monitor_flow
 
     raw = _load_spec(args.spec, schema_name=None)
@@ -1469,7 +1469,7 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
     atom — the campaign loop's per-iteration tail is
     ``submit-flow → monitor-flow → aggregate-flow → next iter``.
     """
-    from claude_hpc._schema_models.aggregate_flow import AggregateFlowSpec
+    from claude_hpc._schema_models.workflows.aggregate_flow import AggregateFlowSpec
     from claude_hpc.flows.aggregate_flow import aggregate_flow
 
     raw = _load_spec(args.spec, schema_name=None)
@@ -1808,7 +1808,7 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     if args.cluster is not None:
         payload["cluster"] = args.cluster
     _validate_against_schema(payload, "campaign_health")
-    from claude_hpc._schema_models.campaign_health import CampaignHealthSpec
+    from claude_hpc._schema_models.queries.campaign_health import CampaignHealthSpec
 
     spec = CampaignHealthSpec.model_validate(payload)
     try:

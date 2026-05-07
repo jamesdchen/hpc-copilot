@@ -56,7 +56,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from claude_hpc import errors
 from claude_hpc._internal.primitive import primitive
 from claude_hpc._internal.time import parse_iso_utc_or_none, utcnow
-from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec
+from claude_hpc._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
 from claude_hpc.state.runtime_prior import read_samples
 
 if TYPE_CHECKING:

@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from claude_hpc._internal.primitive import primitive
-from claude_hpc._schema_models.recommend_partition import (
+from claude_hpc._schema_models.queries.recommend_partition import (
     PartitionInfo,
     RecommendPartitionResult,
     RecommendPartitionSpec,

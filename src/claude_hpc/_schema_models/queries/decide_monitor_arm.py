@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import RunIdStrict
+from claude_hpc._schema_models._shared import RunIdStrict
 
 
 class DecideMonitorArmSpec(BaseModel):

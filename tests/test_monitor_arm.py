@@ -13,7 +13,7 @@ literal ``armed:`` line. We test:
 
 from __future__ import annotations
 
-from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
+from claude_hpc._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
 from claude_hpc.atoms.monitor_arm import decide_monitor_arm
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from claude_hpc._internal.primitive import primitive
-from claude_hpc._schema_models.predict_start import (
+from claude_hpc._schema_models.queries.predict_start import (
     PredictStartTimeResult,
     PredictStartTimeSpec,
 )
@@ -65,7 +65,7 @@ def predict_start_time_primitive(
         model_path=Path(spec.model_path) if spec.model_path else None,
     )
 
-    from claude_hpc._schema_models.predict_start import _CandidateOut
+    from claude_hpc._schema_models.queries.predict_start import _CandidateOut
 
     return PredictStartTimeResult(
         best_submit_offset_hours=best.best_submit_offset_hours,

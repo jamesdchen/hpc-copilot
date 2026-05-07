@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import Scheduler
+from claude_hpc._schema_models._shared import Scheduler
 
 
 class _ClusterYamlKey(BaseModel):
