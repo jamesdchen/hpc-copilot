@@ -52,9 +52,12 @@ def to_int(value: str | None, default: int = 0) -> int:
     try:
         return int(s)
     except ValueError:
+        # ``float("Infinity")`` succeeds but ``int(inf)`` raises
+        # ``OverflowError`` — catch both to keep the documented
+        # "returns default on failure" contract.
         try:
             return int(float(s))
-        except ValueError:
+        except (ValueError, OverflowError):
             return default
 
 
@@ -147,8 +150,10 @@ def parse_walltime_to_sec(s: str | None) -> int:
     m = re.match(r"^(\d+):(\d{2})$", text)
     if m:
         return int(m.group(1)) * 60 + int(m.group(2))
-    # SS (bare integer)
-    if text.isdigit():
+    # SS (bare integer). ``str.isdigit()`` is unicode-aware and accepts
+    # superscripts / circled digits / etc. that ``int()`` then rejects;
+    # restrict to ASCII to keep the "degrades to 0" contract intact.
+    if text.isascii() and text.isdigit():
         return int(text)
     return 0
 
