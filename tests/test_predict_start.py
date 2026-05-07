@@ -219,3 +219,75 @@ def test_negative_offset_filtered_out(tmp_path: Path) -> None:
     )
     offsets = {c.offset_hours for c in out.candidates}
     assert offsets == {0, 1}
+
+
+# ─── LGBM residual smoke test (skipped when lightgbm unavailable) ────
+
+
+def test_predict_start_loads_lgbm_model_when_present(tmp_path: Path) -> None:
+    """End-to-end: fit a tiny LightGBM model on synthetic data, persist,
+    point ``predict_start_time`` at it, verify the residual path fires.
+
+    Skipped when lightgbm isn't installed (it's an optional extra)."""
+    import pytest
+
+    lgb = pytest.importorskip("lightgbm")
+
+    # Tiny synthetic training: 100 rows, single feature whose value
+    # deterministically predicts the label.
+    feature_names = [
+        "constraint_specified",
+        "deadline_density_30d",
+        "floor_gap_sec",
+        "gpu_pool_count",
+        "hour_of_week",
+        "is_business_hours_utc",
+        "is_weekend",
+        "is_within_deadline_month",
+        "is_within_deadline_week",
+        "max_running_time_left_sec",
+        "mean_priority_of_pendings_ahead",
+        "median_running_time_left_sec",
+        "min_days_to_deadline",
+        "optimistic_floor_sec",
+        "partition_load_pct",
+        "pending_at_or_above_priority",
+        "pessimistic_floor_sec",
+        "queue_depth_pending",
+        "queue_depth_running",
+        "competitor_count_external_account",
+        "competitor_count_fs_top",
+        "competitor_count_fs_high",
+        "competitor_count_fs_mid",
+        "competitor_count_fs_low",
+        "recent_arrival_rate_per_hour",
+        "your_fairshare_value",
+        "your_priority",
+        "your_priority_percentile",
+    ]
+    X = [[float(i)] * len(feature_names) for i in range(100)]
+    y = [120.0] * 100  # constant label → model learns to predict ~120s overhead
+    train_set = lgb.Dataset(X, label=y, feature_name=feature_names)
+    params = {"objective": "regression", "metric": "mae", "verbose": -1, "num_leaves": 3}
+    booster = lgb.train(params, train_set, num_boost_round=10)
+
+    model_dir = tmp_path / ".hpc" / "wait_predictor"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    model_file = model_dir / "model.txt"
+    booster.save_model(str(model_file))
+
+    out = predict_start_time(
+        tmp_path,
+        now_iso=_NOW,
+        queue=[],
+        partition="gpu",
+        partition_slot_count=1,
+        your_priority=100,
+        your_walltime_sec=3600,
+        pending_walltime_default_sec=3600,
+        model_path=model_dir,
+    )
+    assert out.method == "floor_plus_residual"
+    assert out.overhead_sec >= 0
+    # Predicted iso must be after pessimistic floor (overhead ≥ 0).
+    assert out.predicted_iso >= out.floor_pessimistic_iso

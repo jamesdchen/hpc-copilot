@@ -89,6 +89,10 @@ from claude_hpc._schema_models.predict_queue_wait import (  # noqa: E402
     PredictQueueWaitResult,
     PredictQueueWaitSpec,
 )
+from claude_hpc._schema_models.predict_start import (  # noqa: E402
+    PredictStartTimeResult,
+    PredictStartTimeSpec,
+)
 from claude_hpc._schema_models.preflight import PreflightResult  # noqa: E402
 from claude_hpc._schema_models.recall import RecallEnvelope, RecallSpec  # noqa: E402
 from claude_hpc._schema_models.recommend_partition import (  # noqa: E402
@@ -217,6 +221,8 @@ SCHEMA_REGISTRY: list[tuple[type[BaseModel] | TypeAdapter[Any], str]] = [
     (ListInFlightResult, "list_in_flight.output.json"),
     (MonitorSummaryResult, "monitor_summary.output.json"),
     (PlanSubmitResult, "plan_submit.output.json"),
+    (PredictStartTimeSpec, "predict_start_time.input.json"),
+    (PredictStartTimeResult, "predict_start_time.output.json"),
     (PredictQueueWaitSpec, "predict_queue_wait.input.json"),
     (PredictQueueWaitResult, "predict_queue_wait.output.json"),
     (RecallSpec, "recall.input.json"),

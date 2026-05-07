@@ -60,6 +60,11 @@ class StartForecast:
     predicted_iso: str
     overhead_sec: int
     method: str
+    # Optional quantile predictions when the trainer fits separate
+    # ``model_p10.txt`` / ``model_p90.txt`` files. ``None`` means
+    # the model directory has only the median model.
+    predicted_iso_p10: str | None = None
+    predicted_iso_p90: str | None = None
     features: dict[str, Any] = field(default_factory=dict)
 
 
@@ -107,7 +112,9 @@ def predict_start_time(
     your_priority: int,
     your_walltime_sec: int,
     pending_walltime_default_sec: int,
+    your_user: str | None = None,
     your_constraint: str = "",
+    partition_slot_count_for_features: int | None = None,
     fairshare_by_user: dict[str, float] | None = None,
     recent_arrival_rate_per_hour: float | None = None,
     deadlines: tuple[Deadline, ...] | None = None,
@@ -152,7 +159,11 @@ def predict_start_time(
         queue=queue,
         your_priority=your_priority,
         your_partition=partition,
+        your_user=your_user,
         your_constraint=your_constraint,
+        partition_slot_count=partition_slot_count_for_features
+        if partition_slot_count_for_features is not None
+        else partition_slot_count,
         fairshare_by_user=fairshare_by_user,
         recent_arrival_rate_per_hour=recent_arrival_rate_per_hour,
         pessimistic_floor_sec=int((pess_dt - _to_dt(now_iso)).total_seconds()),
@@ -161,16 +172,23 @@ def predict_start_time(
     )
 
     overhead_sec = 0
+    overhead_sec_p10: int | None = None
+    overhead_sec_p90: int | None = None
     method = "floor_only"
-    if model_path is not None and model_path.is_file():
+    # ``model_path`` is either a single regression model file or a
+    # directory containing ``model.txt`` (median) plus optional
+    # ``model_p10.txt`` / ``model_p90.txt`` for quantile predictions.
+    p50_path, p10_path, p90_path = _resolve_model_paths(model_path)
+    if p50_path is not None and p50_path.is_file():
         try:
             import lightgbm as lgb  # noqa: PLC0415 — optional dep
 
-            booster = lgb.Booster(model_file=str(model_path))
-            # The booster expects a 2D array shaped (1, n_features).
-            row = [_coerce_numeric(features.get(name, -1)) for name in booster.feature_name()]
-            overhead_sec = max(0, int(round(float(booster.predict([row])[0]))))
+            overhead_sec = _predict_overhead(p50_path, features, lgb)
             method = "floor_plus_residual"
+            if p10_path is not None and p10_path.is_file():
+                overhead_sec_p10 = _predict_overhead(p10_path, features, lgb)
+            if p90_path is not None and p90_path.is_file():
+                overhead_sec_p90 = _predict_overhead(p90_path, features, lgb)
         except (ImportError, ValueError, OSError):
             method = "floor_only_cold_start"
 
@@ -179,14 +197,53 @@ def predict_start_time(
     if predicted_dt < _to_dt(now_iso).astimezone(timezone.utc):
         predicted_dt = _to_dt(now_iso).astimezone(timezone.utc)
 
+    predicted_iso_p10 = (
+        (pess_dt + timedelta(seconds=overhead_sec_p10)).isoformat(timespec="seconds")
+        if overhead_sec_p10 is not None
+        else None
+    )
+    predicted_iso_p90 = (
+        (pess_dt + timedelta(seconds=overhead_sec_p90)).isoformat(timespec="seconds")
+        if overhead_sec_p90 is not None
+        else None
+    )
+
     return StartForecast(
         floor_pessimistic_iso=floor_pess,
         floor_optimistic_iso=floor_opt,
         predicted_iso=predicted_dt.isoformat(timespec="seconds"),
+        predicted_iso_p10=predicted_iso_p10,
+        predicted_iso_p90=predicted_iso_p90,
         overhead_sec=overhead_sec,
         method=method,
         features=features,
     )
+
+
+def _resolve_model_paths(
+    model_path: Path | None,
+) -> tuple[Path | None, Path | None, Path | None]:
+    """Accept either a single ``.txt`` file (regression model) or a
+    directory containing ``model.txt`` / ``model_p10.txt`` /
+    ``model_p90.txt``. Returns ``(p50, p10, p90)`` paths."""
+    if model_path is None:
+        return (None, None, None)
+    if model_path.is_file():
+        return (model_path, None, None)
+    if model_path.is_dir():
+        return (
+            model_path / "model.txt",
+            model_path / "model_p10.txt",
+            model_path / "model_p90.txt",
+        )
+    return (None, None, None)
+
+
+def _predict_overhead(model_file: Path, features: dict[str, Any], lgb: Any) -> int:
+    """Run one LightGBM model on the feature row; clamp to ≥0."""
+    booster = lgb.Booster(model_file=str(model_file))
+    row = [_coerce_numeric(features.get(name, -1)) for name in booster.feature_name()]
+    return max(0, int(round(float(booster.predict([row])[0]))))
 
 
 def _coerce_numeric(value: Any) -> float:

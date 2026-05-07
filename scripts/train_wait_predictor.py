@@ -171,6 +171,21 @@ def fit_and_persist(
         return {"status": "no_training_data", "n_rows": 0}
 
     feature_names = sorted(rows[0][0].keys())
+    # Feature validation: warn (not fail) when a feature is missing /
+    # sentinel-only across ALL training rows. Indicates an upstream
+    # plumbing bug — the feature is being computed but not populated.
+    sentinel_only_features: list[str] = []
+    for name in feature_names:
+        values = [r[0].get(name, -1) for r in rows]
+        if all(v in (-1, -1.0, None, "", False) for v in values):
+            sentinel_only_features.append(name)
+    if sentinel_only_features:
+        print(
+            f"warning: features sentinel-only across all {len(rows)} rows: "
+            f"{sentinel_only_features}. Plumbing bug in build_training_rows?",
+            file=sys.stderr,
+        )
+
     X = [[_to_numeric(r[0].get(name, -1)) for name in feature_names] for r in rows]
     y = [r[1] for r in rows]
     n = len(rows)
@@ -178,29 +193,52 @@ def fit_and_persist(
     X_train, X_val = X[:-n_val], X[-n_val:]
     y_train, y_val = y[:-n_val], y[-n_val:]
 
-    train_set = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
-    val_set = lgb.Dataset(X_val, label=y_val, feature_name=feature_names, reference=train_set)
-    booster = lgb.train(
-        params={
-            "objective": "regression",
-            "metric": "mae",
+    out_dir = experiment_dir / ".hpc" / "wait_predictor"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _fit_one(*, alpha: float | None, name: str) -> lgb.Booster:
+        params: dict[str, Any] = {
+            "metric": "mae" if alpha is None else "quantile",
             "learning_rate": 0.05,
             "num_leaves": 31,
             "verbose": -1,
-        },
-        train_set=train_set,
-        valid_sets=[val_set],
-        num_boost_round=500,
-        callbacks=[lgb.early_stopping(stopping_rounds=20, verbose=False)],
-    )
+        }
+        if alpha is None:
+            params["objective"] = "regression"
+        else:
+            params["objective"] = "quantile"
+            params["alpha"] = alpha
+        train_set = lgb.Dataset(X_train, label=y_train, feature_name=feature_names)
+        val_set = lgb.Dataset(X_val, label=y_val, feature_name=feature_names, reference=train_set)
+        booster_local = lgb.train(
+            params=params,
+            train_set=train_set,
+            valid_sets=[val_set],
+            num_boost_round=500,
+            callbacks=[lgb.early_stopping(stopping_rounds=20, verbose=False)],
+        )
+        booster_local.save_model(str(out_dir / f"{name}.txt"))
+        return booster_local
 
-    out_dir = experiment_dir / ".hpc" / "wait_predictor"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    model_path = out_dir / "model.txt"
-    booster.save_model(str(model_path))
+    # Median (regression) model — the headline predictor.
+    booster = _fit_one(alpha=None, name="model")
+    # Quantile models for uncertainty surfaces (p10, p90). Trained
+    # only when there's enough data — quantile fits are noisy on
+    # small samples, and the predictor falls back to median-only
+    # when quantile model files are absent.
+    if len(X_train) >= 50:
+        _fit_one(alpha=0.1, name="model_p10")
+        _fit_one(alpha=0.9, name="model_p90")
 
     val_pred = booster.predict(X_val)
     mae = sum(abs(p - t) for p, t in zip(val_pred, y_val, strict=True)) / len(y_val)
+
+    # Naive baselines: how good would we be if we never learned anything?
+    # The model is only useful if val_mae beats both.
+    baseline_mae_floor = sum(abs(0.0 - t) for t in y_val) / len(y_val)
+    train_mean = sum(y_train) / len(y_train) if y_train else 0.0
+    baseline_mae_recent_mean = sum(abs(train_mean - t) for t in y_val) / len(y_val)
+
     pess_floor_idx = feature_names.index("pessimistic_floor_sec")
     opt_floor_idx = feature_names.index("optimistic_floor_sec")
 
@@ -224,15 +262,29 @@ def fit_and_persist(
         "n_train": len(X_train),
         "n_val": len(X_val),
         "val_mae_sec": mae,
+        "baseline_mae_floor_sec": baseline_mae_floor,
+        "baseline_mae_recent_mean_sec": baseline_mae_recent_mean,
+        "model_beats_floor_baseline": mae < baseline_mae_floor,
+        "model_beats_recent_mean_baseline": mae < baseline_mae_recent_mean,
         "bracket_pct": bracket_pct,
+        "sentinel_only_features": sentinel_only_features,
         "feature_names": feature_names,
         "feature_importance_gain": [
             {"feature": name, "gain": float(score)} for name, score in feature_importance
         ],
-        "model_path": str(model_path),
+        "model_path": str(out_dir / "model.txt"),
+        "model_dir": str(out_dir),
+        "has_quantile_models": (out_dir / "model_p10.txt").exists()
+        and (out_dir / "model_p90.txt").exists(),
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
     (out_dir / "training_summary.json").write_text(json.dumps(summary, indent=2))
+
+    # Append to drift-detection history.
+    from claude_hpc.forecast.drift_detector import append_run
+
+    append_run(experiment_dir, summary=summary)
+
     return summary
 
 

@@ -365,6 +365,29 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return EXIT_OK if data["all_ok"] else EXIT_CLUSTER_ERROR
 
 
+# ─── subcommand: predict-start-time ───────────────────────────────────────
+
+
+def cmd_predict_start_time(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at
+    ``claude_hpc.atoms.predict_start_time``."""
+    from claude_hpc._schema_models.predict_start import PredictStartTimeSpec
+    from claude_hpc.atoms.predict_start_time import predict_start_time_primitive
+
+    intent = _load_spec(args.spec, schema_name="predict_start_time")
+    if not intent:
+        raise errors.SpecInvalid("--spec is required for `predict-start-time`")
+    try:
+        spec = PredictStartTimeSpec.model_validate(intent)
+    except Exception as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
+
+    experiment_dir = Path(args.experiment_dir).resolve()
+    result = predict_start_time_primitive(experiment_dir, spec=spec)
+    _ok(result.model_dump(mode="json"), name="predict-start-time")
+    return EXIT_OK
+
+
 # ─── subcommand: validate-campaign ────────────────────────────────────────
 
 
@@ -2167,6 +2190,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pre.add_argument("--cluster", help="Optional cluster name to TCP-probe on :22.")
     p_pre.set_defaults(func=cmd_preflight)
+
+    # predict-start-time
+    p_pst = sub.add_parser(
+        "predict-start-time",
+        help=(
+            "Floor + LightGBM-residual forecast for when a hypothetical job "
+            "would start. Sweeps candidate submit-at-T offsets and returns "
+            "the lowest-total-time-to-start option."
+        ),
+    )
+    p_pst.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="Path to predict_start_time.input.json conforming to the schema.",
+    )
+    p_pst.add_argument(
+        "--experiment-dir",
+        type=Path,
+        default=Path("."),
+        help="Path to the experiment directory; defaults to cwd.",
+    )
+    p_pst.set_defaults(func=cmd_predict_start_time)
 
     # validate-campaign
     p_vc = sub.add_parser(
