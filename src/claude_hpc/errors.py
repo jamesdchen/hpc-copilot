@@ -234,7 +234,7 @@ class SchemaIncompat(HpcError):
     """An on-disk JSON file declared a ``schema_version`` outside our
     supported range for that domain.
 
-    Raised by :func:`claude_hpc._internal._version.compatibility_check` so the
+    Raised by :func:`claude_hpc._internal.version.compatibility_check` so the
     five readers in the codebase (session, blacklist, runtime_prior,
     calibration prediction, status rollup, per-run sidecar) all surface
     the same error code.
@@ -251,5 +251,5 @@ class SchemaIncompat(HpcError):
         "The on-disk JSON was written by a newer (or older, foreign) "
         "claude-hpc version than this one supports. Upgrade the package "
         "or migrate the file. The supported version set is declared in "
-        "``claude_hpc/_version.py:_MANIFEST``."
+        "``claude_hpc/_internal/version.py:_MANIFEST``."
     )

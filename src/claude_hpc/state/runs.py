@@ -23,7 +23,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._internal.primitive import SideEffect, primitive
 
 __all__ = [
     "MAX_RUNS",
@@ -357,13 +357,13 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
         raise FileNotFoundError(f"run sidecar not found: {target}")
     data: dict[str, Any] = json.loads(target.read_text())
     # B8: route the schema-version check through the cross-domain
-    # manifest in claude_hpc._internal._version. Strict here (raises) because
+    # manifest in claude_hpc._internal.version. Strict here (raises) because
     # the sidecar shape is critical to the dispatcher / aggregator —
     # mis-reading a future v3 with a v2 reader would silently corrupt
     # the run. Writer keeps SIDECAR_SCHEMA_VERSION as the value emitted.
     sv = data.get("sidecar_schema_version")
     if isinstance(sv, int):
-        from claude_hpc._internal._version import compatibility_check as _compat
+        from claude_hpc._internal.version import compatibility_check as _compat
 
         _compat("sidecar", sv)
     # Backfill missing v2 fields so callers see a uniform shape.

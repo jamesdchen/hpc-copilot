@@ -21,7 +21,7 @@ from claude_hpc import (
     get_registry,
     primitive,
 )
-from claude_hpc._internal._primitive import _REGISTRY
+from claude_hpc._internal.primitive import _REGISTRY
 
 
 def test_decorator_registers_under_given_name() -> None:

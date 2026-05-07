@@ -53,7 +53,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._io import advisory_flock
+from claude_hpc._internal.io import advisory_flock
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -69,7 +69,7 @@ _ENV_VAR = "HPC_TELEMETRY_SINK"
 def flock_append(target: Path):
     """Yield with an exclusive flock on a sibling ``.lock`` file for *target*.
 
-    Thin wrapper around :func:`claude_hpc._internal._io.advisory_flock`
+    Thin wrapper around :func:`claude_hpc._internal.io.advisory_flock`
     that derives the lock path (``<target>.lock``). Ensures all writers
     to ``<run_id>.monitor.jsonl`` serialise their appends — without the
     flock, a concurrent monitor_flow tick and slash-command poll can

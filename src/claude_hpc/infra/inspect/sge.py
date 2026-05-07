@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc.infra.parsing import (
     parse_mem_to_mb as _parse_mem_to_mb,
 )

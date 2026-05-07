@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc.forecast.state_forecast import forecast_state_at
 from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
 from claude_hpc.state.user_profiles import UserProfile

@@ -13,7 +13,7 @@ import dataclasses
 import subprocess
 from typing import Any
 
-from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
+from claude_hpc._internal.time import parse_iso_utc_or_none, utcnow
 from claude_hpc.infra.cache import TTLCache
 
 __all__ = [

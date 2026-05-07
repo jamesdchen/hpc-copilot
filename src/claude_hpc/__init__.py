@@ -103,7 +103,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from claude_hpc._internal._primitive import (
+from claude_hpc._internal.primitive import (
     PrimitiveMeta,
     SideEffect,
     get_meta,

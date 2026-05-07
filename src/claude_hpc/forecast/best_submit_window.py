@@ -23,8 +23,8 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from claude_hpc import errors
-from claude_hpc._internal._primitive import primitive
-from claude_hpc._internal._time import utcnow
+from claude_hpc._internal.primitive import primitive
+from claude_hpc._internal.time import utcnow
 from claude_hpc._schema_models.best_submit_window import BestSubmitWindowSpec
 from claude_hpc.forecast.queue_wait_baseline import predict_queue_wait
 

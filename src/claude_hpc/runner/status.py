@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 from claude_hpc import errors
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._internal._time import utcnow_iso
+from claude_hpc._internal.primitive import SideEffect, primitive
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc._internal.session import RunRecord, _atomic_write_json
 from claude_hpc.errors import RemoteCommandFailed
 from claude_hpc.infra import remote

@@ -13,7 +13,7 @@ import os
 import tempfile
 from typing import TYPE_CHECKING
 
-from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow
+from claude_hpc._internal.time import parse_iso_utc_or_none, utcnow
 
 from ._common import ClusterSnapshot, _snapshot_from_dict
 

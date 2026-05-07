@@ -52,9 +52,9 @@ import statistics
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
-from claude_hpc._internal._io import atomic_locked_update
-from claude_hpc._internal._primitive import primitive
-from claude_hpc._internal._time import parse_iso_utc_or_none, utcnow_iso
+from claude_hpc._internal.io import atomic_locked_update
+from claude_hpc._internal.primitive import primitive
+from claude_hpc._internal.time import parse_iso_utc_or_none, utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -154,7 +154,7 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
     # B8: cross-domain manifest check. Soft-skip on mismatch — a future
     # writer with a wider schema shouldn't poison the prior; treating
     # the file as empty makes the prior re-learn from fresh samples.
-    from claude_hpc._internal._version import is_compatible as _is_compat
+    from claude_hpc._internal.version import is_compatible as _is_compat
 
     if isinstance(doc, dict):
         sv = doc.get("schema_version")

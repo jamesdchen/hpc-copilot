@@ -36,7 +36,7 @@ from typing import Any
 
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import SideEffect, primitive
+from claude_hpc._internal.primitive import SideEffect, primitive
 from claude_hpc._schema_models.aggregate_flow import AggregateFlowSpec
 from claude_hpc.infra.remote import rsync_pull, validate_ssh_target
 from claude_hpc.mapreduce.reduce.metrics import reduce_partials

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from claude_hpc import errors
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
 
 # Adaptive delay table — lifted from /monitor-hpc Step 5's Markdown
