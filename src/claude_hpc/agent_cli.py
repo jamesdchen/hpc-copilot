@@ -371,7 +371,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 def cmd_predict_start_time(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at
     ``claude_hpc.atoms.predict_start_time``."""
-    from claude_hpc._schema_models.queries.predict_start import PredictStartTimeSpec
+    from claude_hpc._schema_models.queries.predict_start_time import PredictStartTimeSpec
     from claude_hpc.atoms.predict_start_time import predict_start_time_primitive
 
     intent = _load_spec(args.spec, schema_name="predict_start_time")
