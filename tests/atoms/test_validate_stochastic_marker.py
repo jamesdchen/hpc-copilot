@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc._internal.session import HPC_HOMEDIR, RunRecord, repo_hash, upsert_run
+from claude_hpc._internal.session import RunRecord, upsert_run
 from claude_hpc._internal.session import run_record as session_run_record
 from claude_hpc._schema_models.validators.validate_stochastic_marker import (
     ValidateStochasticMarkerSpec,
@@ -47,9 +47,7 @@ def _seed_run_sidecar(
 
 
 @pytest.fixture
-def journal_home(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Path:
+def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect HPC_HOMEDIR for the journal lookup the validator does
     via session.find_existing_runs.
 
@@ -64,9 +62,7 @@ def journal_home(
     return home
 
 
-def _seed_journal_run(
-    experiment_dir: Path, *, run_id: str, campaign_id: str = ""
-) -> None:
+def _seed_journal_run(experiment_dir: Path, *, run_id: str, campaign_id: str = "") -> None:
     """Seed a journal run record so list-by-campaign queries find it.
 
     The validator reads sidecars under ``.hpc/runs/`` directly; the
@@ -112,7 +108,9 @@ class TestValidateStochasticMarker:
             cmd_sha="aaaaaaa1234567890",
             campaign_id="ml_q1_optuna",
         )
-        _seed_journal_run(tmp_path, run_id="ml-20260507-100000-aaaaaaa1", campaign_id="ml_q1_optuna")
+        _seed_journal_run(
+            tmp_path, run_id="ml-20260507-100000-aaaaaaa1", campaign_id="ml_q1_optuna"
+        )
 
         spec = ValidateStochasticMarkerSpec(
             campaign_id="ml_q1_optuna",
@@ -132,7 +130,9 @@ class TestValidateStochasticMarker:
             cmd_sha="aaaaaaa1234567890",
             campaign_id="ml_q1_optuna",
         )
-        _seed_journal_run(tmp_path, run_id="ml-20260507-100000-aaaaaaa1", campaign_id="ml_q1_optuna")
+        _seed_journal_run(
+            tmp_path, run_id="ml-20260507-100000-aaaaaaa1", campaign_id="ml_q1_optuna"
+        )
 
         spec = ValidateStochasticMarkerSpec(
             campaign_id="ml_q1_optuna",
@@ -159,7 +159,9 @@ class TestValidateStochasticMarker:
             cmd_sha="aaaaaaa1234567890",
             campaign_id="other_campaign",
         )
-        _seed_journal_run(tmp_path, run_id="other-20260507-100000-aaaaaaa1", campaign_id="other_campaign")
+        _seed_journal_run(
+            tmp_path, run_id="other-20260507-100000-aaaaaaa1", campaign_id="other_campaign"
+        )
 
         spec = ValidateStochasticMarkerSpec(
             campaign_id="ml_q1_optuna",
@@ -173,7 +175,7 @@ class TestValidateStochasticMarker:
         """When N prior iterations all share the same cmd_sha, the
         finding's evidence reports the count and the matched run_ids
         list contains all of them (newest-first)."""
-        for i, run_id in enumerate(
+        for _i, run_id in enumerate(
             [
                 "ml-20260507-100000-aaaaaaa1",
                 "ml-20260507-110000-aaaaaaa1",
