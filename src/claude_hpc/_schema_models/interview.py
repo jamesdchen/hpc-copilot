@@ -8,7 +8,7 @@ numeric_logspace, numeric_linspace). Pydantic v2 emits this as a
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -140,13 +140,7 @@ class _NumericLinspace(BaseModel):
 
 
 _TaskGenerator = Annotated[
-    Union[
-        _Enumerated,
-        _CartesianProduct,
-        _ItemsXSeeds,
-        _NumericLogspace,
-        _NumericLinspace,
-    ],
+    _Enumerated | _CartesianProduct | _ItemsXSeeds | _NumericLogspace | _NumericLinspace,
     Field(discriminator="kind"),
 ]
 

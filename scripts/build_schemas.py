@@ -112,6 +112,22 @@ from claude_hpc._schema_models.summarize_submit_plan import (  # noqa: E402
     SummarizeSubmitPlanResult,
 )
 from claude_hpc._schema_models.validate import ValidateResult, ValidateSpec  # noqa: E402
+from claude_hpc._schema_models.validate_campaign import (  # noqa: E402
+    ValidateCampaignReport,
+    ValidateCampaignSpec,
+)
+from claude_hpc._schema_models.validate_executor_signatures import (  # noqa: E402
+    ValidateExecutorSignaturesResult,
+    ValidateExecutorSignaturesSpec,
+)
+from claude_hpc._schema_models.validate_input_dataset import (  # noqa: E402
+    ValidateInputDatasetResult,
+    ValidateInputDatasetSpec,
+)
+from claude_hpc._schema_models.validate_walltime_against_history import (  # noqa: E402
+    ValidateWalltimeAgainstHistoryResult,
+    ValidateWalltimeAgainstHistorySpec,
+)
 from claude_hpc._schema_models.verify_aggregation_complete import (  # noqa: E402
     VerifyAggregationCompleteResult,
 )
@@ -151,6 +167,14 @@ SCHEMA_REGISTRY: list[tuple[Union[type[BaseModel], TypeAdapter[Any]], str]] = [
     (PreflightResult, "preflight.output.json"),
     (ValidateSpec, "validate.input.json"),
     (ValidateResult, "validate.output.json"),
+    (ValidateCampaignSpec, "validate_campaign.input.json"),
+    (ValidateCampaignReport, "validate_campaign.output.json"),
+    (ValidateExecutorSignaturesSpec, "validate_executor_signatures.input.json"),
+    (ValidateExecutorSignaturesResult, "validate_executor_signatures.output.json"),
+    (ValidateInputDatasetSpec, "validate_input_dataset.input.json"),
+    (ValidateInputDatasetResult, "validate_input_dataset.output.json"),
+    (ValidateWalltimeAgainstHistorySpec, "validate_walltime_against_history.input.json"),
+    (ValidateWalltimeAgainstHistoryResult, "validate_walltime_against_history.output.json"),
     # Mutate / submit
     (ClusterReduceResult, "cluster_reduce.output.json"),
     (CombineWaveResult, "combine_wave.output.json"),

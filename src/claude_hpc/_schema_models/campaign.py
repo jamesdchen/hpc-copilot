@@ -50,6 +50,6 @@ class CampaignListData(BaseModel):
 # The wire schema is the union; the CLI loads the same file for both
 # subcommands and the framework picks the correct shape based on which
 # one was invoked.
-CampaignAdapter: TypeAdapter[Union[CampaignStatusData, CampaignListData]] = TypeAdapter(
+CampaignAdapter: TypeAdapter[CampaignStatusData | CampaignListData] = TypeAdapter(
     Union[CampaignStatusData, CampaignListData]
 )
