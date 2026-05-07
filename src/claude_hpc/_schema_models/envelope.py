@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -61,9 +61,9 @@ class ErrorEnvelope(BaseModel):
 # hand-authored envelope.json shape (with $defs orphans dropped — no
 # Pydantic-emitted schema references them since each consumer now
 # imports shared types from ``_shared.py`` instead).
-EnvelopeAdapter: TypeAdapter[Union[SuccessEnvelope, ErrorEnvelope]] = TypeAdapter(
+EnvelopeAdapter: TypeAdapter[SuccessEnvelope | ErrorEnvelope] = TypeAdapter(
     Annotated[
-        Union[SuccessEnvelope, ErrorEnvelope],
+        SuccessEnvelope | ErrorEnvelope,
         Field(discriminator="ok"),
     ]
 )

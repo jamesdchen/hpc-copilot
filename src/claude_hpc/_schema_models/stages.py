@@ -6,7 +6,7 @@ uses Pydantic's ``TypeAdapter`` instead of a top-level BaseModel.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Union
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -47,7 +47,7 @@ class StageEntry(BaseModel):
         min_length=1,
         description="Shell command (executor invocation) for this stage.",
     )
-    depends_on: Union[str, list[str]] | None = Field(
+    depends_on: str | list[str] | None = Field(
         default=None,
         description="Stage(s) that must complete before this one starts. String or list of strings.",
     )

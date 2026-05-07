@@ -556,6 +556,46 @@ The sidecar from Step 6 is already on disk, so re-running `/submit-hpc` after th
 
 The user can still invoke `/preflight --cluster <name>` standalone (e.g., to ad-hoc verify SSH agent forwarding without a pending submission); that command writes the same marker, so a recent standalone run satisfies this gate too.
 
+## Step 6c: Pre-submit campaign validation
+
+Before any rsync/qsub, run the `validate-campaign` workflow primitive against the resolved spec. Catches three bug classes that otherwise surface hours later in the queue: fabricated kwargs (executor's `Literal["a","b"]` parameter receiving `"x"`), NaN-trap row references in the input dataset, and walltime / GPU mismatches against historical priors + `.hpc/playbook.yaml` known-bad combinations.
+
+Build the spec from what the interview + planner have already resolved:
+
+```python
+from claude_hpc._schema_models.validate_campaign import ValidateCampaignSpec
+
+vc_spec = ValidateCampaignSpec(
+    profile=profile,
+    cluster=cluster,
+    executor_module="src.train",        # only when known; otherwise None
+    executor_function="main",
+    dataset_path=interview_intent.get("dataset_path"),
+    dataset_loader=interview_intent.get("dataset_loader"),
+    dataset_row_indices=interview_intent.get("dataset_row_indices"),
+    dataset_required_non_null_cols=interview_intent.get(
+        "dataset_required_non_null_cols", []
+    ),
+    requested_walltime_sec=resources["walltime_sec"],
+    gpu_type=resources.get("gpu_type"),
+    workload_tags=interview_intent.get("workload_tags", []),
+)
+```
+
+Invoke:
+
+```bash
+python -m claude_hpc validate-campaign --spec validate_campaign.input.json --experiment-dir .
+```
+
+Branch on `data.overall`:
+
+- `pass` — proceed to Step 7.
+- `warn` — surface every warning to the user; proceed to Step 7 unless the user explicitly asks to fix something first.
+- `fail` — do NOT proceed. List each `error`-severity finding with its `code`, `message`, and `suggested_fix`. Apply fixes, re-run `/validate-campaign`, repeat until `pass` or `warn`. There is no `--force` flag by design — if a rule is wrong for the project, edit `.hpc/playbook.yaml` (one version-controlled commit) rather than override at runtime.
+
+The validator is fast (no SSH, no qsub) and idempotent. Skipping a validator is automatic: if `executor_module` is None the signature check is skipped, if `dataset_path` is None the dataset check is skipped, etc. The slash command can construct a partial spec and the rest auto-skips.
+
 ## Step 7: Sync to Cluster
 
 Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework files** — `deploy_runtime` does that via scp, and rsync would otherwise overwrite the cluster-side `.hpc/_hpc_dispatch.py` etc. with files that don't exist locally.

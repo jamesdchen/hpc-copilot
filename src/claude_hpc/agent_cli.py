@@ -365,6 +365,35 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return EXIT_OK if data["all_ok"] else EXIT_CLUSTER_ERROR
 
 
+# ─── subcommand: validate-campaign ────────────────────────────────────────
+
+
+def cmd_validate_campaign(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at
+    ``claude_hpc.flows.validate_campaign``.
+
+    Exit codes:
+    * ``EXIT_OK`` — overall=pass or warn (warnings don't block).
+    * ``1`` — overall=fail (any error finding). The agent loop reads
+      ``data.findings`` to apply suggested fixes and re-run.
+    """
+    from claude_hpc._schema_models.validate_campaign import ValidateCampaignSpec
+    from claude_hpc.flows.validate_campaign import validate_campaign
+
+    intent = _load_spec(args.spec, schema_name="validate_campaign")
+    if not intent:
+        raise errors.SpecInvalid("--spec is required for `validate-campaign`")
+    try:
+        spec = ValidateCampaignSpec.model_validate(intent)
+    except Exception as exc:  # pydantic.ValidationError
+        raise errors.SpecInvalid(str(exc)) from exc
+
+    experiment_dir = Path(args.experiment_dir).resolve()
+    report = validate_campaign(experiment_dir, spec=spec)
+    _ok(report.model_dump(mode="json"), name="validate-campaign")
+    return EXIT_OK if report.overall != "fail" else 1
+
+
 # ─── subcommand: interview ─────────────────────────────────────────────────
 
 
@@ -2140,6 +2169,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pre.add_argument("--cluster", help="Optional cluster name to TCP-probe on :22.")
     p_pre.set_defaults(func=cmd_preflight)
+
+    # validate-campaign
+    p_vc = sub.add_parser(
+        "validate-campaign",
+        help=(
+            "Pre-submit validator: cross-check tasks.py kwargs vs the executor "
+            "signature, verify dataset row indices + non-null cols, and compare "
+            "requested walltime against historical p95 + .hpc/playbook.yaml rules."
+        ),
+    )
+    p_vc.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="Path to validate_campaign.input.json conforming to the schema.",
+    )
+    p_vc.add_argument(
+        "--experiment-dir",
+        type=Path,
+        default=Path("."),
+        help="Path to the experiment directory; defaults to cwd.",
+    )
+    p_vc.set_defaults(func=cmd_validate_campaign)
 
     # interview
     p_iv = sub.add_parser(

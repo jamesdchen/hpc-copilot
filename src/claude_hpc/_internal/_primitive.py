@@ -286,6 +286,9 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.recall",
     "claude_hpc.atoms.setup_actions",
     "claude_hpc.atoms.submit_plan_summary",
+    "claude_hpc.atoms.validate_executor_signatures",
+    "claude_hpc.atoms.validate_input_dataset",
+    "claude_hpc.atoms.validate_walltime_against_history",
     "claude_hpc.atoms.walltime_drift",
     "claude_hpc.runner.submit",
     "claude_hpc.runner.status",
@@ -297,6 +300,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.flows.submit_flow",
     "claude_hpc.flows.monitor_flow",
     "claude_hpc.flows.aggregate_flow",
+    "claude_hpc.flows.validate_campaign",
 )
 
 
