@@ -166,6 +166,7 @@ def _write_runner(
     )
 
 
+@pytest.mark.slow
 @pytest.mark.skipif(sys.platform.startswith("win"), reason="POSIX signals only")
 class TestPreemptionSignalTrap:
     def test_sigterm_writes_preempted_at_to_sidecar(self, tmp_path):

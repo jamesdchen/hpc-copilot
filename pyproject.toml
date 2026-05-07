@@ -65,7 +65,10 @@ slash_commands = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -n auto"
+addopts = "-ra --strict-markers -n auto -m 'not slow'"
+markers = [
+    "slow: real-process / real-time tests (subprocess + signals, multi-hour forecast sweeps). Skipped by default. Opt in with `pytest -m slow`; run everything with `pytest -m ''`.",
+]
 
 [tool.ruff]
 target-version = "py310"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from claude_hpc.forecast import best_submit_window as bsw
 from claude_hpc.forecast import queue_wait_baseline as qwb
 from claude_hpc.forecast.resubmit_advisor import recommend_resubmit_window
@@ -23,6 +25,7 @@ def _pin_now(monkeypatch, dt: datetime) -> None:
     monkeypatch.setattr(qwb, "utcnow", lambda: dt)
 
 
+@pytest.mark.slow
 class TestRecommendation:
     def test_busy_hour_recommends_wait_when_dip_is_within_horizon(self, tmp_path, monkeypatch):
         _seed_with_dip(tmp_path)
