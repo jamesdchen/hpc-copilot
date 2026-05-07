@@ -282,6 +282,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "claude_hpc.atoms.logs",
     "claude_hpc.atoms.monitor_arm",
     "claude_hpc.atoms.monitor_summary",
+    "claude_hpc.atoms.predict_start_time",
     "claude_hpc.atoms.preflight",
     "claude_hpc.atoms.recall",
     "claude_hpc.atoms.recommend_partition",
