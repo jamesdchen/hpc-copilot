@@ -25,19 +25,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from claude_hpc._schema_models.interview import InterviewSpec
-from claude_hpc.atoms.interview import record_interview as _real_record_interview
+from claude_hpc.atoms.interview import record_interview
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-
-def record_interview(intent, *, campaign_dir):
-    """Test shim — wraps the intent dict in :class:`InterviewSpec`.
-
-    Tests still flow through Pydantic so the validation signal stays
-    intact even with the helper.
-    """
-    return _real_record_interview(InterviewSpec.model_validate(intent), campaign_dir=campaign_dir)
 
 # ─── helpers ───────────────────────────────────────────────────────────────
 
@@ -99,7 +91,7 @@ def test_round_trip_across_experiment_families(
     (tmp_path / "tasks.py").write_text(tasks_src)
     intent = _minimal_intent(expected_count, task_kind="example-family")
 
-    data = record_interview(intent, campaign_dir=tmp_path)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
 
     assert data["total_tasks"] == expected_count
     # claude-hpc's tasks.py contract requires resolve(i) to return a dict
@@ -121,7 +113,9 @@ def test_non_dict_tasks_py_fails_with_existing_contract_error(tmp_path: Path) ->
         "def resolve(i): return _TASKS[i]\n"
     )
     with pytest.raises(TypeError, match="must return a dict"):
-        record_interview(_minimal_intent(2), campaign_dir=tmp_path)
+        record_interview(
+            InterviewSpec.model_validate(_minimal_intent(2)), campaign_dir=tmp_path
+        )
 
 
 # ─── persistence shape ────────────────────────────────────────────────────
@@ -138,7 +132,7 @@ def test_interview_json_round_trips_intent_verbatim(tmp_path: Path) -> None:
         notes="LR range chosen from prior 'narrow sweep' findings",
     )
 
-    record_interview(intent, campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
 
     persisted = json.loads((tmp_path / "interview.json").read_text())
     for key in ("goal", "task_count", "task_kind", "budget", "abort_if", "notes", "produced_by"):
@@ -151,7 +145,9 @@ def test_interview_json_round_trips_intent_verbatim(tmp_path: Path) -> None:
 def test_meta_json_only_written_when_intent_supplies_relevant_fields(tmp_path: Path) -> None:
     """No cluster_target and no budget → no meta.json update."""
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
-    data = record_interview(_minimal_intent(3), campaign_dir=tmp_path)
+    data = record_interview(
+        InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path
+    )
     assert data["artifacts"] == ["interview.json"]
     assert not (tmp_path / "meta.json").exists()
 
@@ -173,7 +169,7 @@ def test_meta_json_merge_preserves_existing_keys(tmp_path: Path) -> None:
         cluster_target={"cluster": "new-cluster", "profile": "gpu-a100"},
     )
 
-    record_interview(intent, campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
 
     meta = json.loads((tmp_path / "meta.json").read_text())
     assert meta["experiment_id"] == "exp-001"  # preserved
@@ -190,14 +186,16 @@ def test_task_count_mismatch_raises(tmp_path: Path) -> None:
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)  # 3 tasks
     intent = _minimal_intent(99)  # operator says 99
     with pytest.raises(ValueError, match="task_count = 99 but tasks.total"):
-        record_interview(intent, campaign_dir=tmp_path)
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     # On mismatch, interview.json must NOT be written (atomicity).
     assert not (tmp_path / "interview.json").exists()
 
 
 def test_missing_tasks_py_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="missing tasks.py"):
-        record_interview(_minimal_intent(1), campaign_dir=tmp_path)
+        record_interview(
+            InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path
+        )
 
 
 def test_empty_tasks_py_raises(tmp_path: Path) -> None:
@@ -205,7 +203,9 @@ def test_empty_tasks_py_raises(tmp_path: Path) -> None:
     than slipping through to a divide-by-zero downstream."""
     (tmp_path / "tasks.py").write_text("def total(): return 0\ndef resolve(i): raise IndexError\n")
     with pytest.raises(ValueError, match="no tasks to dispatch"):
-        record_interview(_minimal_intent(1), campaign_dir=tmp_path)
+        record_interview(
+            InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path
+        )
 
 
 # ─── task_generator: typed materializer ────────────────────────────────────
@@ -227,7 +227,7 @@ def test_generator_enumerated(tmp_path: Path) -> None:
             },
         },
     )
-    data = record_interview(intent, campaign_dir=tmp_path)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert data["total_tasks"] == 3
     assert "tasks.py" in data["artifacts"]
     assert (tmp_path / "tasks.py").is_file()
@@ -243,7 +243,7 @@ def test_generator_cartesian_product(tmp_path: Path) -> None:
             "params": {"axes": {"lr": [1e-4, 1e-3, 1e-2], "batch_size": [16, 32]}},
         },
     )
-    data = record_interview(intent, campaign_dir=tmp_path)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert data["total_tasks"] == 6
     assert set(data["preview"]["first"]) == {"lr", "batch_size"}
 
@@ -260,7 +260,7 @@ def test_generator_items_x_seeds(tmp_path: Path) -> None:
             },
         },
     )
-    data = record_interview(intent, campaign_dir=tmp_path)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert data["total_tasks"] == 4
     first = data["preview"]["first"]
     assert "env" in first and "seed" in first
@@ -275,7 +275,7 @@ def test_generator_numeric_logspace(tmp_path: Path) -> None:
             "params": {"param": "lr", "low": 1e-5, "high": 1e-1, "n": 5},
         },
     )
-    data = record_interview(intent, campaign_dir=tmp_path)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert data["total_tasks"] == 5
     assert abs(data["preview"]["first"]["lr"] - 1e-5) < 1e-12
     assert abs(data["preview"]["last"]["lr"] - 1e-1) < 1e-12
@@ -289,7 +289,7 @@ def test_generator_numeric_linspace(tmp_path: Path) -> None:
             "params": {"param": "alpha", "low": 0.0, "high": 1.0, "n": 4},
         },
     )
-    data = record_interview(intent, campaign_dir=tmp_path)
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert data["total_tasks"] == 4
     assert data["preview"]["first"]["alpha"] == 0.0
     assert data["preview"]["last"]["alpha"] == 1.0
@@ -305,7 +305,7 @@ def test_generator_count_mismatch_does_not_write_tasks_py(tmp_path: Path) -> Non
         },
     )
     with pytest.raises(ValueError, match="recipe and stated count disagree"):
-        record_interview(intent, campaign_dir=tmp_path)
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert not (tmp_path / "tasks.py").exists()
     assert not (tmp_path / "interview.json").exists()
 
@@ -319,9 +319,9 @@ def test_generator_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
             "params": {"items": [{"a": 1}, {"a": 2}, {"a": 3}]},
         },
     )
-    record_interview(intent, campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     first = (tmp_path / "tasks.py").read_bytes()
-    record_interview(intent, campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     second = (tmp_path / "tasks.py").read_bytes()
     assert first == second
 
@@ -336,7 +336,7 @@ def test_generator_then_validate_mode_picks_up_hand_edits(tmp_path: Path) -> Non
             "params": {"items": [{"a": 1}, {"a": 2}, {"a": 3}]},
         },
     )
-    record_interview(gen_intent, campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(gen_intent), campaign_dir=tmp_path)
     # Operator hand-edits tasks.py to add a fourth task
     (tmp_path / "tasks.py").write_text(
         "_TASKS = [{'a': 1}, {'a': 2}, {'a': 3}, {'a': 4}]\n"
@@ -345,7 +345,7 @@ def test_generator_then_validate_mode_picks_up_hand_edits(tmp_path: Path) -> Non
     )
     # Re-interview with task_generator dropped and updated count
     edit_intent = _minimal_intent(4)
-    data = record_interview(edit_intent, campaign_dir=tmp_path)
+    data = record_interview(InterviewSpec.model_validate(edit_intent), campaign_dir=tmp_path)
     assert data["total_tasks"] == 4
     # cmd_sha should differ from the generator-mode run
     interview_doc = json.loads((tmp_path / "interview.json").read_text())
@@ -361,9 +361,9 @@ def test_re_running_with_same_intent_overwrites_byte_equivalently(tmp_path: Path
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
     intent = _minimal_intent(3, task_kind="ml-hparam-sweep")
 
-    record_interview(intent, campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     first = json.loads((tmp_path / "interview.json").read_text())
-    record_interview(intent, campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     second = json.loads((tmp_path / "interview.json").read_text())
 
     # Drop timestamps before comparison

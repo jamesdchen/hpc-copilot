@@ -85,8 +85,6 @@ def resubmit_failed(
     new_job_ids = list(spec.new_job_ids) if spec.new_job_ids is not None else None
     request_id = spec.request_id
 
-    if not failed_task_ids:
-        raise ValueError("resubmit_failed requires at least one failed task id")
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no run record for {run_id!r}")

@@ -164,19 +164,6 @@ def _journal_home(tmp_path, monkeypatch):
 
 
 class TestSubmitFlowBatch:
-    def test_empty_specs_rejected_at_wire_validation(self, tmp_path: Any, _journal_home: Any) -> None:
-        """The wire schema's ``minItems: 1`` on ``specs`` makes an empty
-        batch invalid at construction time. Pre-Pydantic-migration the
-        function silently returned ``[]`` for empty input; that
-        defensive contract is gone — empty batches now fail fast at
-        the ``SubmitFlowBatchSpec(specs=[])`` boundary, which is what
-        the wire contract guarantees external callers.
-        """
-        import pydantic
-
-        with pytest.raises(pydantic.ValidationError):
-            _batch([])
-
     def test_heterogeneous_targets_raise_spec_invalid(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:

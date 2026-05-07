@@ -81,8 +81,6 @@ def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
     ``tasks_example.py``. Single-axis sweeps render as a simple list
     comprehension; multi-axis as ``itertools.product``.
     """
-    if not axes:
-        return "_TASKS: list[dict] = []"
     if len(axes) == 1:
         ax = axes[0]
         return (
@@ -179,12 +177,6 @@ def build_tasks_py(
     ``{path, wrote, reason, n_tasks}``. ``n_tasks`` is the
     cartesian-product cardinality the rendered file will report
     via ``total()``.
-
-    Raises
-    ------
-    :class:`errors.SpecInvalid`
-        Empty axes list, malformed flag spec, or non-empty axis with
-        empty values list.
     """
     axes = [a.model_dump() for a in spec.axes]
     # exclude_none on the flag dump so a flag without ``default`` doesn't
@@ -195,21 +187,6 @@ def build_tasks_py(
         for k, v in spec.flags_by_executor.items()
     }
     force = bool(spec.force)
-    if not axes:
-        raise errors.SpecInvalid("axes must be a non-empty list")
-    for i, ax in enumerate(axes):
-        if "name" not in ax or "values" not in ax:
-            raise errors.SpecInvalid(
-                f"axes[{i}] must have 'name' and 'values' keys, got {sorted(ax)!r}"
-            )
-        if not ax["values"]:
-            raise errors.SpecInvalid(f"axes[{i}={ax['name']!r}] has empty 'values' list")
-    for module_path, flag_list in flags_by_executor.items():
-        for j, f in enumerate(flag_list):
-            if "name" not in f or "type" not in f:
-                raise errors.SpecInvalid(
-                    f"flags_by_executor[{module_path!r}][{j}] missing 'name' or 'type'"
-                )
 
     target = experiment_dir / ".hpc" / "tasks.py"
     if target.exists() and not force:

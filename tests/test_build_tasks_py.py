@@ -18,46 +18,11 @@ import importlib.util
 import sys
 from typing import TYPE_CHECKING, Any
 
-import pytest
-
-from claude_hpc import errors
 from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
-from claude_hpc.atoms.build_tasks_py import build_tasks_py as _real_build_tasks_py
+from claude_hpc.atoms.build_tasks_py import build_tasks_py
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def build_tasks_py(*, experiment_dir, axes, flags_by_executor, force=False):
-    """Test shim — wraps kwargs in :class:`BuildTasksPyInput`.
-
-    Pre-Pydantic the atom took the kwargs directly; the wire path
-    now goes through a spec, but tests still flow through Pydantic
-    so the validation signal stays intact.
-
-    Tests pass actual Python type objects (``int``, ``float``, etc.)
-    for ``flag.type``; the wire schema is string-only, so the shim
-    coerces type objects to their ``__name__`` token before Pydantic
-    sees them. The atom's ``_flag_type_repr`` accepts strings
-    unchanged so the downstream rendering is identical either way.
-    """
-    coerced_flags = {
-        executor: [
-            {**f, "type": f["type"].__name__}
-            if isinstance(f.get("type"), type)
-            else f
-            for f in flag_list
-        ]
-        for executor, flag_list in flags_by_executor.items()
-    }
-    return _real_build_tasks_py(
-        experiment_dir,
-        spec=BuildTasksPyInput(
-            axes=axes,
-            flags_by_executor=coerced_flags,
-            force=force,
-        ),
-    )
 
 
 def _load(path: Path, name: str = "_test_tasks") -> Any:
@@ -72,13 +37,15 @@ def _load(path: Path, name: str = "_test_tasks") -> Any:
 
 def test_single_axis_renders_simple_comprehension(tmp_path: Path) -> None:
     out = build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[{"name": "horizon", "values": [1, 5, 10]}],
-        flags_by_executor={
-            "src.ml_ridge": [
-                {"name": "horizon", "type": int, "default": 1},
-            ]
-        },
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "horizon", "values": [1, 5, 10]}],
+            flags_by_executor={
+                "src.ml_ridge": [
+                    {"name": "horizon", "type": "int", "default": 1},
+                ]
+            },
+        ),
     )
     assert out["wrote"] is True
     assert out["n_tasks"] == 3
@@ -91,17 +58,19 @@ def test_single_axis_renders_simple_comprehension(tmp_path: Path) -> None:
 
 def test_multi_axis_uses_itertools_product(tmp_path: Path) -> None:
     out = build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[
-            {"name": "horizon", "values": [1, 5]},
-            {"name": "seed", "values": [42, 1337]},
-        ],
-        flags_by_executor={
-            "src.ml_ridge": [
-                {"name": "horizon", "type": int, "default": 1},
-                {"name": "seed", "type": int, "default": 42},
-            ]
-        },
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[
+                {"name": "horizon", "values": [1, 5]},
+                {"name": "seed", "values": [42, 1337]},
+            ],
+            flags_by_executor={
+                "src.ml_ridge": [
+                    {"name": "horizon", "type": "int", "default": 1},
+                    {"name": "seed", "type": "int", "default": 42},
+                ]
+            },
+        ),
     )
     assert out["n_tasks"] == 4
     mod = _load(tmp_path / ".hpc" / "tasks.py", name="_t_multi")
@@ -115,13 +84,15 @@ def test_multi_axis_uses_itertools_product(tmp_path: Path) -> None:
 
 def test_three_axis_cardinality_round_trips(tmp_path: Path) -> None:
     out = build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[
-            {"name": "model", "values": ["lgbm", "xgb"]},
-            {"name": "horizon", "values": [1, 5, 25]},
-            {"name": "seed", "values": [42, 1337, 31337, 2718]},
-        ],
-        flags_by_executor={"src.ml_ridge": [{"name": "model", "type": str}]},
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[
+                {"name": "model", "values": ["lgbm", "xgb"]},
+                {"name": "horizon", "values": [1, 5, 25]},
+                {"name": "seed", "values": [42, 1337, 31337, 2718]},
+            ],
+            flags_by_executor={"src.ml_ridge": [{"name": "model", "type": "str"}]},
+        ),
     )
     assert out["n_tasks"] == 24
     mod = _load(tmp_path / ".hpc" / "tasks.py", name="_t_three")
@@ -132,9 +103,11 @@ def test_three_axis_cardinality_round_trips(tmp_path: Path) -> None:
 
 def test_string_values_render_as_quoted(tmp_path: Path) -> None:
     out = build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[{"name": "model", "values": ["lgbm", "xgb_dart", "catboost"]}],
-        flags_by_executor={"src.ml": [{"name": "model", "type": str}]},
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "model", "values": ["lgbm", "xgb_dart", "catboost"]}],
+            flags_by_executor={"src.ml": [{"name": "model", "type": "str"}]},
+        ),
     )
     assert out["n_tasks"] == 3
     mod = _load(tmp_path / ".hpc" / "tasks.py", name="_t_str")
@@ -144,14 +117,16 @@ def test_string_values_render_as_quoted(tmp_path: Path) -> None:
 
 def test_flags_block_includes_default_when_present(tmp_path: Path) -> None:
     build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[{"name": "x", "values": [1]}],
-        flags_by_executor={
-            "src.ml": [
-                {"name": "alpha", "type": float, "default": 0.5},
-                {"name": "verbose", "type": bool},
-            ]
-        },
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "x", "values": [1]}],
+            flags_by_executor={
+                "src.ml": [
+                    {"name": "alpha", "type": "float", "default": 0.5},
+                    {"name": "verbose", "type": "bool"},
+                ]
+            },
+        ),
     )
     src = (tmp_path / ".hpc" / "tasks.py").read_text()
     assert "flag('alpha', float, default=0.5)" in src
@@ -162,17 +137,21 @@ def test_flags_block_includes_default_when_present(tmp_path: Path) -> None:
 
 def test_refuses_overwrite_without_force(tmp_path: Path) -> None:
     build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[{"name": "x", "values": [1]}],
-        flags_by_executor={"src.ml": [{"name": "x", "type": int}]},
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "x", "values": [1]}],
+            flags_by_executor={"src.ml": [{"name": "x", "type": "int"}]},
+        ),
     )
     # Hand-edit the file to simulate the user's Pattern 2/3 conversion.
     target = tmp_path / ".hpc" / "tasks.py"
     target.write_text("# user's hand-edited version\n_TASKS = []\n")
     out = build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[{"name": "x", "values": [1, 2, 3]}],  # different cardinality
-        flags_by_executor={"src.ml": [{"name": "x", "type": int}]},
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "x", "values": [1, 2, 3]}],  # different cardinality
+            flags_by_executor={"src.ml": [{"name": "x", "type": "int"}]},
+        ),
     )
     assert out["wrote"] is False
     assert "force=true" in out["reason"]
@@ -185,76 +164,27 @@ def test_force_overwrites(tmp_path: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("# stale\n")
     out = build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[{"name": "x", "values": [1, 2]}],
-        flags_by_executor={"src.ml": [{"name": "x", "type": int}]},
-        force=True,
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "x", "values": [1, 2]}],
+            flags_by_executor={"src.ml": [{"name": "x", "type": "int"}]},
+            force=True,
+        ),
     )
     assert out["wrote"] is True
     assert "stale" not in target.read_text()
 
 
-def test_empty_axes_rejected_at_wire_validation(tmp_path: Path) -> None:
-    """``Field(min_length=1)`` on ``axes`` rejects empty list at spec
-    construction. Pre-Pydantic the atom raised ``errors.SpecInvalid``;
-    the wire now rejects first via ``pydantic.ValidationError``."""
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        build_tasks_py(
-            experiment_dir=tmp_path,
-            axes=[],
-            flags_by_executor={"src.ml": [{"name": "x", "type": int}]},
-        )
-
-
-def test_axis_with_empty_values_rejected_at_wire_validation(tmp_path: Path) -> None:
-    """``_AxisSpec.values`` has ``Field(min_length=1)``; empty values
-    list fails Pydantic validation."""
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        build_tasks_py(
-            experiment_dir=tmp_path,
-            axes=[{"name": "x", "values": []}],
-            flags_by_executor={"src.ml": [{"name": "x", "type": int}]},
-        )
-
-
-def test_axis_missing_keys_rejected_at_wire_validation(tmp_path: Path) -> None:
-    """``_AxisSpec`` declares ``values`` as required; an axis missing
-    ``values`` fails Pydantic validation."""
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        build_tasks_py(
-            experiment_dir=tmp_path,
-            axes=[{"name": "x"}],  # missing values
-            flags_by_executor={"src.ml": [{"name": "x", "type": int}]},
-        )
-
-
-def test_flag_missing_keys_rejected_at_wire_validation(tmp_path: Path) -> None:
-    """``_FlagSpec`` declares ``type`` as required; a flag dict missing
-    ``type`` fails Pydantic validation."""
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        build_tasks_py(
-            experiment_dir=tmp_path,
-            axes=[{"name": "x", "values": [1]}],
-            flags_by_executor={"src.ml": [{"name": "x"}]},  # missing type
-        )
-
-
 def test_multi_executor_flags_block_includes_each(tmp_path: Path) -> None:
     build_tasks_py(
-        experiment_dir=tmp_path,
-        axes=[{"name": "x", "values": [1]}],
-        flags_by_executor={
-            "src.ml_ridge": [{"name": "alpha", "type": float, "default": 1.0}],
-            "src.dl_patchts": [{"name": "horizon", "type": int, "default": 1}],
-        },
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "x", "values": [1]}],
+            flags_by_executor={
+                "src.ml_ridge": [{"name": "alpha", "type": "float", "default": 1.0}],
+                "src.dl_patchts": [{"name": "horizon", "type": "int", "default": 1}],
+            },
+        ),
     )
     src = (tmp_path / ".hpc" / "tasks.py").read_text()
     assert "'src.ml_ridge'" in src

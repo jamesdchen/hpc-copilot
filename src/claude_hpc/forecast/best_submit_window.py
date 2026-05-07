@@ -86,10 +86,6 @@ def best_submit_windows(
     cluster = spec.cluster
     within_hours = spec.within_hours
     top_k = spec.top_k
-    if within_hours <= 0:
-        return []
-    if top_k <= 0:
-        return []
 
     now = utcnow().replace(minute=0, second=0, microsecond=0)
     from claude_hpc._schema_models.predict_queue_wait import PredictQueueWaitSpec

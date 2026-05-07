@@ -178,11 +178,6 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     ``armed_line``, ``cron_create_args``. The slash-command epilogue
     copies ``armed_line`` verbatim and (when ``arm == "cron"``) passes
     ``cron_create_args`` to the ``CronCreate`` tool.
-
-    Raises
-    ------
-    :class:`errors.SpecInvalid`
-        Empty run_id, total_tasks < 0, or summary is not a dict.
     """
     run_id = spec.run_id
     summary = spec.summary
@@ -192,13 +187,6 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     eta_sec = spec.eta_sec
     pace_unstable = bool(spec.pace_unstable)
     queue_wait_sec = spec.queue_wait_sec
-
-    if not run_id:
-        raise errors.SpecInvalid("run_id must be a non-empty string")
-    if not isinstance(summary, dict):
-        raise errors.SpecInvalid(f"summary must be a dict, got {type(summary).__name__}")
-    if int(total_tasks) < 0:
-        raise errors.SpecInvalid(f"total_tasks must be >=0, got {total_tasks!r}")
 
     # Terminal — no arming, cancel any prior cron.
     complete = int(summary.get("complete") or 0)
