@@ -89,7 +89,7 @@ class TestExecutorTemplateEmitsMetrics:
 
         template_path = (
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            + "/src/claude_hpc/mapreduce/templates/starters/executor_template.py"
+            + "/src/claude_hpc/mapreduce/templates/scaffolds/executor_template.py"
         )
         spec = importlib.util.spec_from_file_location("executor_template_under_test", template_path)
         assert spec is not None and spec.loader is not None

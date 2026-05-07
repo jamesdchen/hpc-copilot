@@ -2919,6 +2919,86 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# ─── Verb grouping (post-rename UX bump) ───────────────────────────────────
+#
+# ``hpc-agent`` flat-lists 60-odd subcommands; agents that don't already
+# know the surface struggle to discover the right one. Adding ``git
+# remote`` / ``kubectl get``-style verb groups gives a navigable
+# top-level. We don't want to refactor the entire argparse tree, so the
+# grouping is implemented as an argv pre-processor: ``hpc-agent forecast
+# predict-queue-wait <args>`` strips the ``forecast`` prefix before
+# argparse sees it. The flat form (``hpc-agent predict-queue-wait
+# <args>``) keeps working — both routes hit the same handler.
+#
+# Add a primitive to a group: append it to the matching frozenset.
+# ``hpc-agent forecast`` (no further argv) prints the group's
+# subcommand list.
+
+_VERB_GROUPS: dict[str, frozenset[str]] = {
+    "forecast": frozenset(
+        {
+            "best-submit-window",
+            "house-edge",
+            "predict-queue-wait",
+            "predict-start-time",
+            "recommend-partition",
+            "recommend-wait-alternative",
+            "walltime-drift",
+        }
+    ),
+    "validate": frozenset(
+        {
+            "validate-campaign",
+            "validate-executor-signatures",
+            "validate-input-dataset",
+            "validate-self-qos-limit",
+            "validate-walltime-against-history",
+        }
+    ),
+    "build": frozenset(
+        {
+            "axes-init",
+            "build-executor",
+            "build-submit-spec",
+            "build-tasks-py",
+        }
+    ),
+}
+
+
+def _print_group_help(group: str) -> None:
+    """List the subcommands belonging to a verb group, one per line."""
+    members = sorted(_VERB_GROUPS[group])
+    print(f"hpc-agent {group} <subcommand>", file=sys.stderr)
+    print(f"\nSubcommands ({len(members)}):", file=sys.stderr)
+    for cmd in members:
+        print(f"  hpc-agent {group} {cmd}", file=sys.stderr)
+    print(
+        "\nFlat form also works: ``hpc-agent <subcommand>``. "
+        "Pass ``--help`` to any subcommand for arguments.",
+        file=sys.stderr,
+    )
+
+
+def _strip_verb_group(argv: list[str]) -> list[str]:
+    """If argv[0] names a verb group, strip it (or print group help)."""
+    if not argv or argv[0] not in _VERB_GROUPS:
+        return argv
+    group = argv[0]
+    if len(argv) == 1 or argv[1] in {"-h", "--help"}:
+        _print_group_help(group)
+        raise SystemExit(0)
+    if argv[1] in _VERB_GROUPS[group]:
+        return argv[1:]
+    # Unknown subcommand under a known group — surface a helpful error.
+    print(
+        f"hpc-agent: {argv[1]!r} is not in the {group!r} group.",
+        file=sys.stderr,
+    )
+    _print_group_help(group)
+    raise SystemExit(2)
+
+
 def main(argv: list[str] | None = None) -> int:
     # Populate the primitive registry once before any subcommand
     # dispatch — without this, get_registry() raises RuntimeError
@@ -2927,6 +3007,9 @@ def main(argv: list[str] | None = None) -> int:
     from claude_hpc._internal.primitive import register_primitives
 
     register_primitives()
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = _strip_verb_group(argv)
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

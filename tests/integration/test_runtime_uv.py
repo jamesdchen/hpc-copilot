@@ -19,16 +19,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 TEMPLATES = [
-    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "cpu_array.sh",
-    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "gpu_array.sh",
-    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "cpu_array.slurm",
-    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "gpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "sge" / "cpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "sge" / "gpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "slurm" / "cpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "slurm" / "gpu_array.slurm",
 ]
 
 # Each per-scheduler template now sources the shared preamble for the
 # uv-sync block. Check the union of the template body + any preamble it
 # sources so the invariants survive the dedup.
-COMMON_PREAMBLE = _PACKAGE_ROOT / "mapreduce" / "templates" / "common" / "hpc_preamble.sh"
+COMMON_PREAMBLE = (
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "common" / "hpc_preamble.sh"
+)
 
 
 def _effective_template_text(template: Path) -> str:
@@ -166,9 +168,9 @@ def test_template_no_nfs_staging_when_env_unset(template: Path) -> None:
 
 
 _TEMPLATES_WITH_THREAD_REEXPORT = [
-    _PACKAGE_ROOT / "mapreduce" / "templates" / "sge" / "gpu_array.sh",
-    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "cpu_array.slurm",
-    _PACKAGE_ROOT / "mapreduce" / "templates" / "slurm" / "gpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "sge" / "gpu_array.sh",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "slurm" / "cpu_array.slurm",
+    _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "slurm" / "gpu_array.slurm",
 ]
 
 

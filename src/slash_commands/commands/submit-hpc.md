@@ -87,7 +87,7 @@ Which do you want to run?
 If `discover_executors` returns an empty list, pivot to a scaffolding sub-interview right here (this absorbs what `/build-executor-hpc` used to be):
 
 1. Ask: "No executors found in `executors/` / `scripts/` / `src/`. Want me to scaffold one — what should it do?"
-2. Copy `claude_hpc/templates/starters/executor_template.py` to a user-chosen path (default: `src/<name>.py`).
+2. Copy `claude_hpc/templates/scaffolds/executor_template.py` to a user-chosen path (default: `src/<name>.py`).
 3. Walk the user through filling in `compute(args)` based on what they described — model fit/predict, simulation step, data transform, etc.
 4. Capture the flag set the user wants (this becomes that executor's entry in the FLAGS dict during Step 6b).
 5. Re-run `discover_executors` to confirm the new file is recognized, then continue to Step 2.
@@ -113,7 +113,7 @@ For multi-executor submissions: submit as **separate array jobs** (independent m
 
 ## Step 3: Plan the parallelization axis
 
-In the new model, the **task list lives in user-written `.hpc/tasks.py`**: a small Python module exposing `total()` and `resolve(task_id)`. Step 6 walks the user through writing it once per experiment, adapting from the canonical example at `claude_hpc/templates/tasks_example.py`. From then on, the file is committed to git and reused on every submit.
+In the new model, the **task list lives in user-written `.hpc/tasks.py`**: a small Python module exposing `total()` and `resolve(task_id)`. Step 6 walks the user through writing it once per experiment, adapting from the canonical example at `claude_hpc/templates/scaffolds/tasks_example.py`. From then on, the file is committed to git and reused on every submit.
 
 Step 3's job is to gather enough context that Step 6 can write a sensible first draft. From executor CLI args and the user's intent, propose:
 
@@ -390,7 +390,7 @@ If the user wants to change the axis, tell them to edit `.hpc/tasks.py` directly
 
 If `tp.exists()` is False, enter the scaffolding sub-flow:
 
-1. **Read the canonical example.** Resolve `claude_hpc/templates/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
+1. **Read the canonical example.** Resolve `claude_hpc/templates/scaffolds/tasks_example.py` via `_PACKAGE_ROOT / "templates" / "tasks_example.py"` and read it. This is the only `tasks.py` reference the framework ships — top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, with three commented-out usage patterns inline (Cartesian product, chunking by row count, date-window backtest).
 
 2. **Gather context for the draft.** Read the user's executor module(s) (the same `info.path` from Step 1's `discover_executors`) and any `meta.json` at the experiment root for axis hints (parameter names, ranges, chunking intent, date windows). Recent run sidecars under `.hpc/runs/` are also a useful source — they capture the full kwargs dict from any previous `tasks.resolve(i)` materializations.
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-hpc"
-version = "0.2.0"
+version = "0.3.0"
 description = "HPC orchestrator for Claude Code and agent harnesses (MARs, etc.)"
 requires-python = ">=3.10"
 dependencies = [
