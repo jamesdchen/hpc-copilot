@@ -50,3 +50,6 @@ The primitive is pure local — it reads the text you pass in and returns a dete
 - The primitive does not make SSH calls; the slash command handles all cluster I/O and passes the raw text in. This keeps the framework boundary side-effect-free.
 - When `model_path` is absent or unreadable, the primitive falls back to the floor predictor (pessimistic + optimistic bounds from queueing theory).
 - The sweep is transparent: returning the full `candidates` list lets the agent see the confidence across offsets (e.g., if multiple offsets score similarly, waiting has less downside risk).
+- The spec uses `extra="forbid"` — passing an unknown field raises `pydantic.ValidationError` rather than silently ignoring it.
+
+**Schemas:** [`predict_start_time.input.json`](../../src/claude_hpc/schemas/predict_start_time.input.json), [`predict_start_time.output.json`](../../src/claude_hpc/schemas/predict_start_time.output.json).

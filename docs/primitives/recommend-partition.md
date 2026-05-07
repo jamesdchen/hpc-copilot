@@ -47,3 +47,5 @@ Pure local routing logic — calling twice with the same inputs produces the sam
 - Rule 3 (Debug Overrun): If a debug partition exists and `requested_walltime_sec > walltime_cap_sec`, refuse debug (job would be killed mid-flight) and route to the highest-priority non-debug partition.
 - Rule 4 (Fallback): If no debug partition exists, recommend the highest-priority partition.
 - The `leverage_estimate` is the ratio `debug.priority_tier / fallback.priority_tier` when recommending debug; otherwise 1.0. This helps the agent understand whether the routing difference is meaningful.
+
+**Schemas:** [`recommend_partition.input.json`](../../src/claude_hpc/schemas/recommend_partition.input.json), [`recommend_partition.output.json`](../../src/claude_hpc/schemas/recommend_partition.output.json).

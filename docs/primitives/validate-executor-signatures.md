@@ -53,3 +53,5 @@ The validator reads tasks.py and the executor module; calling twice with the sam
 - When the executor module fails to import (e.g., missing optional dependency, import-time side effect), the validator emits an info-level finding and skips the signature check rather than failing hard. This lets the rest of the campaign validate.
 - The validator uses `inspect.signature()` so it supports type annotations like `Literal`, `Union`, `Optional`, and standard type hints. If a parameter has no annotation, any value passes the check.
 - Sampling instead of exhaustive walk keeps the validator O(sample_n_tasks) rather than O(tasks); the first failing task surfaces a finding, so larger samples reduce statistical noise without linear cost scaling.
+
+**Schemas:** [`validate_executor_signatures.input.json`](../../src/claude_hpc/schemas/validate_executor_signatures.input.json), [`validate_executor_signatures.output.json`](../../src/claude_hpc/schemas/validate_executor_signatures.output.json).

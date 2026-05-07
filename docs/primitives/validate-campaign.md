@@ -49,3 +49,5 @@ Idempotency key: `experiment_dir`. The workflow is pure read-only (reads tasks.p
 - **No force flag**: There is no `--force` runtime override. If a rule is wrong for your project, edit `.hpc/playbook.yaml` (version-controlled, per-rule) rather than bypassing the whole validation layer.
 - **Agent loop integration**: On `overall == "fail"`, the submit-flow hook aborts and surfaces findings. On `overall == "warn"`, the warnings are printed but submission proceeds. On `overall == "pass"`, submission proceeds silently.
 - **Finding codes**: Each finding carries a machine-readable `code` (e.g., `"missing_parameter"`, `"row_index_oob"`, `"walltime_below_quantile"`) and `suggested_fix` hint so the agent loop can apply fixes programmatically without LLM reasoning.
+
+**Schemas:** [`validate_campaign.input.json`](../../src/claude_hpc/schemas/validate_campaign.input.json), [`validate_campaign.output.json`](../../src/claude_hpc/schemas/validate_campaign.output.json). The `ValidatorFinding` shape is shared across every validator and lives at the top of the workflow's input schema's `$defs`.

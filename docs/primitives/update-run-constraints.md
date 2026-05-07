@@ -54,3 +54,6 @@ Idempotency key: `run_id`. Re-running with the same target Features set produces
 - Features are joined with the SLURM OR operator `|` (any-of). A future extension might add `set_operator` to the spec to support AND (`&`) semantics, but the lesson-9 use case (add fallback GPUs) requires OR.
 - Feature names are validated against `[A-Za-z0-9._-]` to defend against shell injection via the scontrol command.
 - The sidecar's recorded Features are updated after the cluster-side operation succeeds (best-effort); if the sidecar write fails, the cluster-side update has already succeeded for the affected jobs.
+- `run_id` is a `RunIdStrict` (regex-validated against the canonical run-id pattern).
+
+**Schemas:** [`update_run_constraints.input.json`](../../src/claude_hpc/schemas/update_run_constraints.input.json), [`update_run_constraints.output.json`](../../src/claude_hpc/schemas/update_run_constraints.output.json).
