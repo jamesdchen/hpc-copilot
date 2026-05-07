@@ -94,12 +94,17 @@ def test_journal_layout_runs_distinct_from_repo_layout(
 
 def test_journal_layout_root_honors_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
-    # ``claude_hpc._internal.session`` resolves ``HPC_HOMEDIR`` at import time;
-    # we have to reload it for the env override to bite.
+    # ``HPC_HOMEDIR`` lives in
+    # :mod:`claude_hpc._internal.session.run_record` and is resolved
+    # at import time; we reload that submodule (and the package) so
+    # the env override bites for both ``session.HPC_HOMEDIR`` (the
+    # re-export) and the canonical run_record binding.
     import importlib
 
     import claude_hpc._internal.session as session
+    from claude_hpc._internal.session import run_record
 
+    importlib.reload(run_record)
     importlib.reload(session)
     try:
         journal = JournalLayout(tmp_path)
