@@ -90,7 +90,9 @@ def extract_features(
     queue: list[QueuedJob],
     your_priority: int,
     your_partition: str,
+    your_user: str | None = None,
     your_constraint: str = "",
+    partition_slot_count: int | None = None,
     fairshare_by_user: dict[str, float] | None = None,
     recent_arrival_rate_per_hour: float | None = None,
     pessimistic_floor_sec: int | None = None,
@@ -171,6 +173,19 @@ def extract_features(
             ),
             "recent_arrival_rate_per_hour": (
                 recent_arrival_rate_per_hour if recent_arrival_rate_per_hour is not None else -1.0
+            ),
+            # Your own fair-share value (separate from competitor-by-tier
+            # counts). Captures "you've been quiet recently → priority
+            # climbs faster than absolute lookup suggests."
+            "your_fairshare_value": (
+                fs.get(your_user, -1.0) if (your_user is not None and fs) else -1.0
+            ),
+            # Partition load: running_count / partition_slot_count.
+            # Sentinel -1.0 when slot count is unknown.
+            "partition_load_pct": (
+                len(running) / partition_slot_count
+                if partition_slot_count is not None and partition_slot_count > 0
+                else -1.0
             ),
             "pessimistic_floor_sec": (
                 pessimistic_floor_sec if pessimistic_floor_sec is not None else -1

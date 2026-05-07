@@ -213,6 +213,12 @@ def fit_and_persist(
         1 for x, p in zip(X_val, val_pred, strict=True) if _within_bracket(x, p)
     ) / len(y_val)
 
+    # Feature importance (gain) — tells you which features actually
+    # moved the model. Surface in the summary so you can prune the
+    # feature list when one or two clearly dominate.
+    importances = list(booster.feature_importance(importance_type="gain"))
+    feature_importance = sorted(zip(feature_names, importances, strict=True), key=lambda t: -t[1])
+
     summary = {
         "status": "ok",
         "n_train": len(X_train),
@@ -220,6 +226,9 @@ def fit_and_persist(
         "val_mae_sec": mae,
         "bracket_pct": bracket_pct,
         "feature_names": feature_names,
+        "feature_importance_gain": [
+            {"feature": name, "gain": float(score)} for name, score in feature_importance
+        ],
         "model_path": str(model_path),
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
