@@ -13,6 +13,21 @@ Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteratio
 
 For one-shot parallel work with no feedback loop, use `hpc-submit` directly.
 
+## Two paths: manual vs strategy-driven
+
+Closed-loop campaigns split along whether `tasks.py` chooses parameters by hand or via a Python optimization library:
+
+- **Path A — manual params**: `tasks.py` enumerates a fixed grid; iteration N submits exactly the entries the user specified. Use when the experimenter knows the search space upfront (small grid, walk-forward windows, ablations).
+- **Path B — strategy-driven**: `tasks.py` imports Optuna / RandomSearch / a custom optimizer; calls `prior(experiment_dir, campaign_id)` to read previous iterations' metrics, calls `study.tell(...)` for each one, then `study.ask()` for the next batch. Use when the search space is large and the experimenter wants adaptive sampling.
+
+The framework doesn't care which path the user picks — `tasks.py`'s `total()` + `resolve(task_id)` is the only contract. Both paths thread `campaign_id` through `submit-flow`; both read history via the same `campaign-status` primitive (or its Python form, `claude_hpc.mapreduce.reduce.history.prior`).
+
+## Stochastic-marker requirement (Path B only)
+
+Strategies that re-sample the same param ranges across iterations (Optuna, random-search, PBT) MUST include a unique iteration-disambiguating field in `tasks.resolve()` so each iteration's `cmd_sha` differs even when the strategy happens to pick repeat params. Idiomatic: a `_optuna_trial_number` (or equivalent) integer in the kwargs dict. Without this, two iterations with identical params would compute the same `cmd_sha`, and the second one would dedupe at submit time — collapsing the campaign into a single iteration silently.
+
+For Path A (manual params), this isn't needed: the param tuple itself differs per iteration.
+
 ## Inspection
 
 1. **List every campaign** in this experiment: invoke [campaign-list](../../docs/primitives/campaign-list.md). Empty list if no tagged sidecars exist yet.
