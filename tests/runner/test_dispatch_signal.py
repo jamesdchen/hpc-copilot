@@ -182,7 +182,7 @@ class TestPreemptionSignalTrap:
         )
 
         runner = tmp_path / "run.py"
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent.parent
         _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
 
         # Redirect stdout/stderr to files so the test can read them
@@ -255,7 +255,7 @@ class TestPreemptionSignalTrap:
         )
 
         runner = tmp_path / "run.py"
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent.parent
         _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
 
         env = dict(os.environ)
@@ -301,7 +301,7 @@ class TestPreemptionSignalTrap:
         )
 
         runner = tmp_path / "run.py"
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent.parent
         _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
 
         env = dict(os.environ)
@@ -354,7 +354,7 @@ class TestPreemptionSignalTrap:
         )
 
         runner = tmp_path / "run.py"
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent.parent
         _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
 
         env = dict(os.environ)
@@ -404,7 +404,7 @@ class TestPreemptionSignalTrap:
         )
 
         runner = tmp_path / "run.py"
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent.parent
         _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
 
         env = dict(os.environ)
@@ -447,7 +447,7 @@ class TestPreemptionSignalTrap:
         )
 
         runner = tmp_path / "run.py"
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent.parent
         _write_runner(runner, hpc_dir=hpc, repo_root=repo_root)
 
         env = dict(os.environ)

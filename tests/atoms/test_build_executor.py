@@ -42,7 +42,7 @@ def _load_template_module(path: Path):
     return mod
 
 
-FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mock_experiment"
+FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "mock_experiment"
 TEMPLATES_DIR = _PACKAGE_ROOT / "mapreduce" / "templates" / "starters"
 
 

@@ -148,7 +148,7 @@ def test_decorator_matches_frontmatter(registry: dict[str, PrimitiveMeta]) -> No
     on every PR so a developer who edits a primitive decorator without
     regenerating the frontmatter has to fix the gap before merging.
     """
-    docs_root = Path(__file__).resolve().parent.parent / "docs" / "primitives"
+    docs_root = Path(__file__).resolve().parent.parent.parent / "docs" / "primitives"
     failures: list[str] = []
     for name, meta in registry.items():
         md = docs_root / f"{name}.md"
@@ -269,7 +269,7 @@ def test_idempotency_key_names_input_schema_property(
     import json
     import re
 
-    schemas_dir = Path(__file__).resolve().parent.parent / "src" / "claude_hpc" / "schemas"
+    schemas_dir = Path(__file__).resolve().parent.parent.parent / "src" / "claude_hpc" / "schemas"
 
     def _input_schema_for(name: str) -> dict | None:
         for fname in (

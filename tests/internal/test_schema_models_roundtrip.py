@@ -40,7 +40,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from pydantic import BaseModel
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCHEMAS_DIR = REPO_ROOT / "src" / "claude_hpc" / "schemas"
 BUILD_SCRIPT = REPO_ROOT / "scripts" / "build_schemas.py"
 

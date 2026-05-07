@@ -13,7 +13,7 @@ from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
     "_extract_sacct_history",
-    Path(__file__).resolve().parent.parent / "scripts" / "extract_sacct_history.py",
+    Path(__file__).resolve().parent.parent.parent / "scripts" / "extract_sacct_history.py",
 )
 assert _SPEC is not None and _SPEC.loader is not None
 _MOD = importlib.util.module_from_spec(_SPEC)

@@ -24,7 +24,7 @@ import yaml
 from claude_hpc.infra import gpu as gpu_module
 from claude_hpc.infra import remote as remote_module
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
 
 

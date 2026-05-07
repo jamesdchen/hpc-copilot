@@ -20,7 +20,7 @@ from claude_hpc._internal.lifecycle import (
     TaskStatus,
 )
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 SCHEMAS = REPO / "src" / "claude_hpc" / "schemas"
 
 

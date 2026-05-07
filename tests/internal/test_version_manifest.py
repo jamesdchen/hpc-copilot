@@ -67,7 +67,7 @@ _WRITER_CONSTANTS = {
 
 
 def test_writer_constants_are_in_supported_set() -> None:
-    repo = Path(__file__).resolve().parent.parent
+    repo = Path(__file__).resolve().parent.parent.parent
     for domain, pairs in _WRITER_CONSTANTS.items():
         supported = version.supported_versions(domain)
         for relpath, name in pairs:

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PRIM_DIR = REPO_ROOT / "docs" / "primitives"
 REQUIRED_FIELDS = ("name", "verb", "side_effects", "idempotent", "error_codes", "backed_by")
 ALLOWED_VERBS = ("query", "validate", "mutate", "submit", "scaffold", "workflow")
