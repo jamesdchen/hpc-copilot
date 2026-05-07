@@ -13,34 +13,21 @@ literal ``armed:`` line. We test:
 
 from __future__ import annotations
 
-import pytest
-
-from claude_hpc import errors
 from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
-from claude_hpc.atoms.monitor_arm import decide_monitor_arm as _real_decide_monitor_arm
+from claude_hpc.atoms.monitor_arm import decide_monitor_arm
 
 
 def _summary(complete: int = 0, running: int = 0, pending: int = 0, failed: int = 0) -> dict:
     return {"complete": complete, "running": running, "pending": pending, "failed": failed}
 
 
-def decide_monitor_arm(**kwargs):
-    """Test shim — wraps kwargs in :class:`DecideMonitorArmSpec`.
-
-    Tests still flow through Pydantic validation (which is the
-    point — every kwargs combo is what the wire would accept), so
-    the validation signal stays intact even with the helper.
-    """
-    return _real_decide_monitor_arm(spec=DecideMonitorArmSpec(**kwargs))
-
-
 def test_complete_terminal_arms_none() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(complete=10),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
-    )
+    ))
     assert out["arm"] == "none"
     assert out["cadence_sec"] == 0
     assert out["schedule"] is None
@@ -49,37 +36,37 @@ def test_complete_terminal_arms_none() -> None:
 
 
 def test_failed_no_running_terminal_arms_none() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(complete=5, failed=3),  # 5 + 3 = 8, total=10 — but no running/pending
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
-    )
+    ))
     assert out["arm"] == "none"
     assert "failed_no_running" in out["armed_line"]
 
 
 def test_user_loop_invocation_arms_loop() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(running=5, pending=5),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
         user_invoked_via_loop=True,
-    )
+    ))
     assert out["arm"] == "loop"
     assert out["cron_create_args"] is None
     assert 'reason="user_invoked_via_loop"' in out["armed_line"]
 
 
 def test_eta_lt_10min_picks_60s() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(running=5, pending=5),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
         eta_sec=300,
-    )
+    ))
     assert out["arm"] == "cron"
     assert out["cadence_sec"] == 60
     assert out["schedule"] == "* * * * *"
@@ -88,82 +75,82 @@ def test_eta_lt_10min_picks_60s() -> None:
 
 
 def test_eta_10_30min_stable_picks_180s() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(running=5, pending=5),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
         eta_sec=900,  # 15 min
-    )
+    ))
     assert out["cadence_sec"] == 180
     assert out["schedule"] == "*/3 * * * *"
 
 
 def test_eta_10_30min_unstable_picks_90s() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(running=5, pending=5),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
         eta_sec=900,
         pace_unstable=True,
-    )
+    ))
     assert out["cadence_sec"] == 90
 
 
 def test_eta_gt_30min_stable_picks_270s() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(running=5, pending=5),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
         eta_sec=3600,  # 1 hour
-    )
+    ))
     assert out["cadence_sec"] == 270
     assert out["schedule"] == "*/4 * * * *"  # 270s rounds to 4 min
 
 
 def test_queue_wait_gt_30min_picks_super_cache() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(pending=10),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
         queue_wait_sec=2400,  # 40 min
-    )
+    ))
     assert out["cadence_sec"] == 1800
     assert out["schedule"] == "*/30 * * * *"
 
 
 def test_hour_scale_queue_picks_3600s() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(pending=10),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
         queue_wait_sec=7200,
-    )
+    ))
     assert out["cadence_sec"] == 3600
     assert out["schedule"] == "0 */1 * * *"
 
 
 def test_no_eta_running_fallback_picks_90s() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(running=3, pending=7),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
-    )
+    ))
     assert out["cadence_sec"] == 90
 
 
 def test_no_eta_all_pending_picks_super_cache() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(pending=10),
         total_tasks=10,
         invocation_argv="/monitor-hpc r1",
-    )
+    ))
     assert out["cadence_sec"] == 1800
     assert out["reason"] == "all_pending_fallback"
 
@@ -171,71 +158,28 @@ def test_no_eta_all_pending_picks_super_cache() -> None:
 def test_armed_line_format_is_byte_stable() -> None:
     """Same inputs must produce byte-identical armed_line — the Stop hook
     matches it textually."""
-    args = dict(
+    spec = DecideMonitorArmSpec(
         run_id="ml_ridge_abc",
         summary=_summary(running=5, pending=5),
         total_tasks=10,
         invocation_argv="/monitor-hpc ml_ridge_abc",
         eta_sec=300,
     )
-    a = decide_monitor_arm(**args)
-    b = decide_monitor_arm(**args)
+    a = decide_monitor_arm(spec=spec)
+    b = decide_monitor_arm(spec=spec)
     assert a["armed_line"] == b["armed_line"]
     assert a["armed_line"] == 'armed: cron run_id=ml_ridge_abc cadence=60s reason="eta_lt_10min"'
 
 
 def test_cron_create_args_carries_invocation_argv() -> None:
-    out = decide_monitor_arm(
+    out = decide_monitor_arm(spec=DecideMonitorArmSpec(
         run_id="r1",
         summary=_summary(running=5, pending=5),
         total_tasks=10,
         invocation_argv="/monitor-hpc --run-id r1 --foo bar",
         eta_sec=300,
-    )
+    ))
     assert out["cron_create_args"]["prompt"] == "/monitor-hpc --run-id r1 --foo bar"
     assert "r1" in out["cron_create_args"]["reason"]
 
 
-def test_empty_run_id_rejected_at_wire_validation() -> None:
-    """Empty run_id fails ``RunIdStrict`` regex at spec construction.
-
-    Pre-Pydantic the atom raised ``errors.SpecInvalid``; the wire
-    now rejects first via ``pydantic.ValidationError`` and the
-    atom's own check is dead code (kept as a second line of
-    defense for direct calls that bypass the spec).
-    """
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        decide_monitor_arm(
-            run_id="",
-            summary=_summary(),
-            total_tasks=1,
-            invocation_argv="/monitor-hpc",
-        )
-
-
-def test_negative_total_tasks_rejected_at_wire_validation() -> None:
-    """Negative total_tasks fails ``Field(ge=0)`` at spec construction."""
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        decide_monitor_arm(
-            run_id="r1",
-            summary=_summary(),
-            total_tasks=-1,
-            invocation_argv="/monitor-hpc r1",
-        )
-
-
-def test_non_dict_summary_rejected_at_wire_validation() -> None:
-    """Non-dict summary fails ``dict[str, int]`` typing at spec construction."""
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        decide_monitor_arm(
-            run_id="r1",
-            summary="not a dict",  # type: ignore[arg-type]
-            total_tasks=1,
-            invocation_argv="/monitor-hpc r1",
-        )

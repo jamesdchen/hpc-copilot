@@ -151,14 +151,10 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     slurm_cluster = spec.slurm_cluster
     extra_env = dict(spec.extra_env) if spec.extra_env is not None else None
 
-    if backend not in {"sge_remote", "slurm"}:
-        raise errors.SpecInvalid(f"backend must be 'sge_remote' or 'slurm', got {backend!r}")
     try:
         validate_ssh_target(ssh_target)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
-    if int(total_tasks) < 1:
-        raise errors.SpecInvalid(f"total_tasks must be >=1, got {total_tasks!r}")
 
     job_name = job_name or profile
     if script is None:

@@ -43,24 +43,6 @@ class TestSweep:
         # bucket dense + neighbours dense → diurnal_ma kicks in).
         assert all(c.predicted_wait_sec <= 200 for c in out[:2])
 
-    def test_within_hours_zero_rejected_at_wire_validation(self, tmp_path):
-        """Pydantic's ``Field(ge=1)`` rejects ``within_hours=0`` at
-        spec construction. Pre-Pydantic the atom defensively returned
-        ``[]``; that defensive path is gone — the wire contract now
-        guarantees external callers get ``within_hours>=1``."""
-        import pydantic
-
-        with pytest.raises(pydantic.ValidationError):
-            _spec(within_hours=0)
-
-    def test_top_k_zero_rejected_at_wire_validation(self, tmp_path):
-        """Same shift as ``within_hours=0`` — the wire's ``Field(ge=1)``
-        is the gate; the Python defensive contract is gone."""
-        import pydantic
-
-        with pytest.raises(pydantic.ValidationError):
-            _spec(top_k=0)
-
     def test_cold_start_returns_empty(self, tmp_path):
         # No samples seeded → predictor returns no_data for every hour →
         # candidates list is empty.

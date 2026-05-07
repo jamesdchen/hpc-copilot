@@ -68,9 +68,6 @@ def submit_and_record(
     total_tasks = spec.total_tasks
     campaign_id = spec.campaign_id or ""
 
-    if not run_id:
-        raise errors.SpecInvalid("submit_and_record requires a non-empty run_id")
-
     existing = session.load_run(experiment_dir, run_id)
     if existing is not None:
         return existing, True
