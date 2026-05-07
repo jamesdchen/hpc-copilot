@@ -35,7 +35,9 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 import jsonschema
 import pytest
-from annotated_types import Ge, Gt, MinLen
+from annotated_types import Ge, Gt, Le, Lt, MinLen
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -121,6 +123,19 @@ def _extract_min_int(metadata: list[Any]) -> int:
         elif isinstance(m, Gt):
             lo = max(lo, int(m.gt) + 1)
     return lo
+
+
+def _extract_max_int(metadata: list[Any], default: int) -> int:
+    """Pull ``Le``/``Lt`` from *metadata* into a max bound, defaulting
+    to *default* when no upper-bound constraint is declared."""
+    hi: int | None = None
+    for m in metadata:
+        if isinstance(m, Le):
+            hi = int(m.le) if hi is None else min(hi, int(m.le))
+        elif isinstance(m, Lt):
+            cap = int(m.lt) - 1
+            hi = cap if hi is None else min(hi, cap)
+    return default if hi is None else hi
 
 
 def _string_for_metadata(metadata: list[Any]) -> str:
@@ -253,3 +268,160 @@ def test_typeadapter_emits_self_consistent_schemas() -> None:
     success = SuccessEnvelope(ok=True, idempotent=True, data={})
     schema = json.loads((SCHEMAS_DIR / "envelope.json").read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator(schema).validate(EnvelopeAdapter.dump_python(success))
+
+
+# ---------------------------------------------------------------------------
+# Hypothesis-driven fuzz: generate diverse valid instances per model and
+# verify each model_dump validates against the emitted schema.
+#
+# The deterministic synthesizer above pins one minimal-instance round-trip
+# per model. This goes wider: hypothesis generates instances across the
+# whole constraint surface (varying string lengths within pattern, varying
+# optional-field presence, edge values at numeric ge/le bounds, etc.).
+# Surfaces serialization edge cases a single instance can't probe.
+#
+# Marked @pytest.mark.slow — the deterministic synthesizer covers the
+# default tier; this is the wide-net check that runs in CI.
+# ---------------------------------------------------------------------------
+
+
+_OMIT = object()  # sentinel for "don't pass this kwarg" in builds
+
+
+def _strategy_for(annotation: Any, metadata: list[Any]) -> st.SearchStrategy:
+    """Build a hypothesis strategy that produces values valid for
+    *annotation* + its constraints. Mirrors ``_resolve`` but returns
+    a strategy instead of a single value."""
+    if annotation is Any:
+        return st.one_of(st.none(), st.booleans(), st.integers(), st.text(max_size=8))
+
+    # ``Optional[T]`` expands to ``Union[T, None]`` whose args include
+    # ``type(None)`` (alias ``NoneType``). Map directly to ``st.none()``.
+    if annotation is type(None):
+        return st.none()
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin is Union or origin is _types_mod.UnionType:
+        # Optional[T] with field-level constraints (e.g.
+        # ``Optional[int] = Field(ge=1)``) stores the constraint in the
+        # field's metadata, not the inner type's. Propagate metadata to
+        # each non-None arm so the strategy respects ``ge=1`` etc.
+        return st.one_of(*[_strategy_for(a, metadata) for a in args])
+
+    if origin is Literal:
+        return st.sampled_from(args)
+
+    if origin is list:
+        item_t = args[0] if args else str
+        min_len = _extract_min_len(metadata)
+        return st.lists(_strategy_for(item_t, []), min_size=min_len, max_size=min_len + 2)
+
+    if origin is dict:
+        key_t, val_t = (args + (str, str))[:2]
+        min_len = _extract_min_len(metadata)
+        return st.dictionaries(
+            _strategy_for(key_t, []),
+            _strategy_for(val_t, []),
+            min_size=min_len,
+            max_size=min_len + 2,
+        )
+
+    if origin is tuple:
+        return st.tuples(*[_strategy_for(a, []) for a in args])
+
+    if hasattr(annotation, "__metadata__"):
+        return _strategy_for(annotation.__origin__, list(annotation.__metadata__) + metadata)
+
+    if isinstance(annotation, type):
+        if issubclass(annotation, Enum):
+            return st.sampled_from(list(annotation))
+        if issubclass(annotation, BaseModel):
+            return _strategy_for_model(annotation)
+        if annotation is bool:
+            return st.booleans()
+        if annotation is int:
+            lo = _extract_min_int(metadata)
+            hi = _extract_max_int(metadata, default=lo + 100)
+            return st.integers(min_value=lo, max_value=hi)
+        if annotation is float:
+            lo = float(_extract_min_int(metadata))
+            hi = float(_extract_max_int(metadata, default=int(lo) + 100))
+            return st.floats(
+                min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False
+            )
+        if annotation is str:
+            pattern = None
+            for m in metadata:
+                p = getattr(m, "pattern", None)
+                if p is not None:
+                    pattern = p
+                    break
+            min_len = _extract_min_len(metadata)
+            if pattern is not None:
+                return st.from_regex(pattern, fullmatch=True).filter(lambda s: len(s) >= min_len)
+            return st.text(min_size=min_len, max_size=max(min_len, 8))
+
+    raise TypeError(f"hypothesis strategy builder cannot handle {annotation!r}")
+
+
+def _strategy_for_model(model: type[BaseModel]) -> st.SearchStrategy:
+    """Strategy that produces valid instances of *model*. Required fields
+    always set, optional fields randomly omitted to exercise default
+    paths.
+
+    Field-level validators (e.g. uniqueness checks) reject some
+    type-correct inputs; ``_build`` returns ``None`` for those and the
+    surrounding ``filter`` discards them. Hypothesis sees this as a
+    rejection, similar to ``assume()``.
+    """
+    from pydantic import ValidationError
+
+    field_strategies: dict[str, st.SearchStrategy] = {}
+    for name, info in model.model_fields.items():
+        s = _strategy_for(info.annotation, list(info.metadata))
+        if info.is_required():
+            field_strategies[name] = s
+        else:
+            field_strategies[name] = st.one_of(st.just(_OMIT), s)
+
+    def _build(**kwargs: Any) -> BaseModel | None:
+        try:
+            return model(**{k: v for k, v in kwargs.items() if v is not _OMIT})
+        except ValidationError:
+            return None
+
+    return st.builds(_build, **field_strategies).filter(lambda x: x is not None)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "src,fname",
+    [(s, f) for s, f in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
+    ids=[f for s, f in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
+)
+def test_fuzz_instances_validate_against_emitted_schema(src: Any, fname: str) -> None:
+    """For every model in the registry, generate diverse valid instances
+    and verify each ``model_dump`` validates against the emitted JSON
+    schema. Surfaces the "Pydantic emits a schema it can't validate its
+    own output against" bug class across the constraint surface, not
+    just the single minimal-instance corner."""
+    try:
+        strategy = _strategy_for_model(src)
+    except TypeError as exc:
+        pytest.skip(f"{fname}: strategy builder doesn't handle a field type — {exc}")
+
+    schema = json.loads((SCHEMAS_DIR / fname).read_text(encoding="utf-8"))
+    validator = jsonschema.Draft202012Validator(schema)
+
+    @given(strategy)
+    @settings(
+        max_examples=25,
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
+    )
+    def _check(instance: BaseModel) -> None:
+        validator.validate(instance.model_dump(mode="json"))
+
+    _check()

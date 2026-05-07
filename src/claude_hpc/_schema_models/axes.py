@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 # A non-empty axis-name string. Mirrors the per-item ``minLength: 1``
 # the hand-authored schema enforced.
@@ -52,6 +52,15 @@ class AxesConfig(BaseModel):
         ),
         # Pydantic's list[str] does not natively emit uniqueItems;
         # inject it via json_schema_extra so the wire constraint
-        # (preserved from the hand-authored schema) survives.
+        # (preserved from the hand-authored schema) survives. The
+        # field_validator below enforces the same constraint at
+        # validation time so Pydantic and the emitted schema agree.
         json_schema_extra={"uniqueItems": True},
     )
+
+    @field_validator("homogeneous_axes")
+    @classmethod
+    def _check_homogeneous_axes_unique(cls, v: list[str] | None) -> list[str] | None:
+        if v is not None and len(set(v)) != len(v):
+            raise ValueError("homogeneous_axes must contain unique values")
+        return v
