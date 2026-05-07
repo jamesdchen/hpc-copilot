@@ -33,9 +33,9 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._internal._time import utcnow
-from claude_hpc._schema_models.interview import InterviewSpec
+from claude_hpc._internal.primitive import SideEffect, primitive
+from claude_hpc._internal.time import utcnow
+from claude_hpc._schema_models.actions.interview import InterviewSpec
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

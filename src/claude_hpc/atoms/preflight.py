@@ -14,7 +14,7 @@ import socket
 import subprocess
 from typing import Any
 
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 from claude_hpc.infra.clusters import load_clusters_config
 
 

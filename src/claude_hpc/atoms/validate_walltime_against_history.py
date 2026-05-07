@@ -22,18 +22,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._primitive import primitive
 from claude_hpc._internal.playbook import (
     KnownBadCombination,
     Playbook,
     WalltimeRule,
     load_playbook,
 )
-from claude_hpc._schema_models.validate_campaign import ValidatorFinding
-from claude_hpc._schema_models.validate_walltime_against_history import (
+from claude_hpc._internal.primitive import primitive
+from claude_hpc._schema_models.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistoryResult,
     ValidateWalltimeAgainstHistorySpec,
 )
+from claude_hpc._schema_models.workflows.validate_campaign import ValidatorFinding
 
 if TYPE_CHECKING:
     from pathlib import Path

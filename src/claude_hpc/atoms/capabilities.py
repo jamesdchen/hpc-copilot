@@ -13,7 +13,7 @@ from typing import Any
 
 import claude_hpc
 from claude_hpc._internal import session
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 
 # Names of the MARs-shipped slash-command skill bundles. Capabilities
 # reports the absolute path to each present ``SKILL.md`` so an

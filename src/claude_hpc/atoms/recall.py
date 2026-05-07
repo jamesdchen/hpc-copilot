@@ -37,8 +37,8 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._internal._primitive import primitive
-from claude_hpc._schema_models.recall import RecallSpec
+from claude_hpc._internal.primitive import primitive
+from claude_hpc._schema_models.queries.recall import RecallSpec
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence

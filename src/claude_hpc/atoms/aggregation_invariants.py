@@ -18,7 +18,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
-from claude_hpc._internal._primitive import primitive
+from claude_hpc._internal.primitive import primitive
 
 if TYPE_CHECKING:
     from pathlib import Path

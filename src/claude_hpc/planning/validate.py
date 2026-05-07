@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._schema_models.validate import ValidateResult, ValidateSpec
+from claude_hpc._internal.primitive import SideEffect, primitive
+from claude_hpc._schema_models.validators.validate import ValidateResult, ValidateSpec
 from claude_hpc.infra.clusters import load_clusters_config
 
 if TYPE_CHECKING:
@@ -85,7 +85,7 @@ def validate_submission(experiment_dir: Path, *, spec: ValidateSpec) -> Validate
     else:
         from datetime import datetime, timezone
 
-        from claude_hpc._internal._time import utcnow
+        from claude_hpc._internal.time import utcnow
 
         ts = utcnow().timestamp() + int(eta_sec)
         estimated_start_iso = datetime.fromtimestamp(ts, tz=timezone.utc).strftime(

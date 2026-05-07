@@ -34,7 +34,7 @@ from typing import Any
 # Allow ``python scripts/validate_des_predictor.py`` from a checkout.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from claude_hpc._internal._time import parse_iso_utc_or_none
+from claude_hpc._internal.time import parse_iso_utc_or_none
 from claude_hpc.forecast.queue_simulator import SimJob, simulate_distribution
 from claude_hpc.forecast.queue_simulator_inputs import (
     sample_arrival_stream,

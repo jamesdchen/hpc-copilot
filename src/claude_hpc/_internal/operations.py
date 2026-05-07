@@ -1,19 +1,20 @@
 """Runtime catalog of the framework's operations.
 
-Reads `docs/primitives/*.md` frontmatter once per call and returns a list
-of dicts describing each operation: its verb tier, idempotency, side
-effects, CLI invocation, Python entry point, and the schema files
-that pin its input/output shapes (where they exist).
+Projects the in-process ``@primitive`` registry into a list of dicts
+describing each operation: its verb tier, idempotency, side effects,
+CLI invocation, Python entry point, and the schema files that pin its
+input/output shapes (where they exist).
 
 Used by :func:`claude_hpc.agent_cli.cmd_capabilities` to expose the
 operation catalog over the JSON envelope, so external agents can
 discover what's invokable without reading any docs. The same data
-drives `docs/generated/operations.md` via `scripts/build_operations_index.py`.
+drives ``docs/generated/operations.md`` via
+``scripts/build_operations_index.py``.
 
-For source-tree installs, frontmatters live next to the package at
-`<repo_root>/docs/primitives/`. For future wheel installs, this module
-will fall through to a baked `operations.json` shipped in the package
-(not yet implemented; tracked as a packaging TODO).
+For wheel installs that ship without ``docs/`` on the file system, this
+module would fall through to a baked ``operations.json`` shipped inside
+the package — not yet implemented; tracked as a packaging TODO. The
+registry is the only authoritative source today.
 """
 
 from __future__ import annotations
@@ -21,10 +22,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-import yaml  # type: ignore[import-untyped]
-
 import claude_hpc
-from claude_hpc._internal._primitive import get_registry
+from claude_hpc._internal.primitive import get_registry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -50,13 +49,6 @@ def _primitives_dir() -> Path | None:
 def _baked_path() -> Path:
     """Path the baked operations JSON would live at in a wheel install."""
     return _PACKAGE_ROOT / "operations.json"
-
-
-def _parse_frontmatter(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8")
-    end = text.find("\n---\n", 4)
-    fm = yaml.safe_load(text[4:end]) if end != -1 else None
-    return fm if isinstance(fm, dict) else {}
 
 
 def _cli_subcommand(backed_by: dict) -> str | None:
@@ -86,19 +78,6 @@ def schema_for(name: str, side: str, backed_by: dict) -> str | None:
     return None
 
 
-def _summarize_side_effects(side_effects: list) -> list[str]:
-    """One-token-per-effect summary; e.g. ['rsyncs', 'submits', 'writes']."""
-    if not side_effects:
-        return []
-    out: set[str] = set()
-    for entry in side_effects:
-        if isinstance(entry, dict):
-            out.add(next(iter(entry)))
-        else:
-            out.add(str(entry).split(":", 1)[0].strip())
-    return sorted(out)
-
-
 def operations_catalog() -> list[dict[str, Any]]:
     """Return the operation catalog as a list of dicts.
 
@@ -107,25 +86,16 @@ def operations_catalog() -> list[dict[str, Any]]:
     ``None`` (not absent) so callers can distinguish "no schema" from
     "field not present in this entry."
 
-    Source-of-truth chain (C′):
+    Source-of-truth chain:
 
-    1. The ``@primitive`` registry (``claude_hpc._internal._primitive.get_registry``).
-       Decorator metadata is the canonical SoT; this path is taken
-       whenever any primitives have been registered.
-    2. Frontmatter under ``docs/primitives/*.md``. Used to fill in
-       any primitives missing from the registry (migration safety
-       net — emits ``UserWarning`` so missing decorations get caught).
-    3. Baked ``operations.json`` for wheel installs that ship without
-       ``docs/`` on the file system.
+    1. The ``@primitive`` registry (``claude_hpc._internal.primitive.get_registry``).
+       Decorator metadata is the canonical SoT.
+    2. Baked ``operations.json`` for wheel installs that ship without
+       ``docs/`` on the file system. (Not yet implemented — tracked as
+       a packaging TODO.)
 
     Order: stable, sorted by (verb, name) so consumers can diff.
     """
-    # C′-v2 step 4: registry is the only source of truth. The previous
-    # frontmatter fallback existed during migration; primitives without
-    # decorators are now treated as orphans and ignored. Since the
-    # frontmatter generator (scripts/build_primitive_frontmatter.py)
-    # writes from the registry, an orphan frontmatter file is a
-    # build-process bug, not a primitive worth surfacing here.
     registry_entries = _from_registry()
     if registry_entries:
         return sorted(registry_entries, key=lambda o: (o["verb"], o["name"]))
@@ -144,9 +114,8 @@ def _from_registry() -> list[dict[str, Any]]:
     plain dicts. Field correspondence:
 
     * ``name``, ``verb``, ``idempotent`` map directly.
-    * ``side_effects`` is summarized to one token per kind, mirroring
-      :func:`_summarize_side_effects` so frontmatter fallback entries
-      remain shape-compatible.
+    * ``side_effects`` is summarized to one token per kind (the
+      :class:`SideEffect.kind` of each entry).
     * ``cli`` and ``python`` are derived: ``python`` is
       ``f"{func.__module__}.{func.__qualname__}"``; ``cli`` comes
       directly from the decorator's ``cli=`` kwarg (registry SoT).
@@ -293,27 +262,3 @@ def render_llms_full() -> str:
     parts.append(_read_doc_file("docs/reference/cli-spec.md"))
 
     return "".join(parts)
-
-
-def _from_frontmatters(prims_dir: Path) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for path in sorted(prims_dir.glob("*.md")):
-        if path.name == "README.md":
-            continue
-        fm = _parse_frontmatter(path)
-        if not fm or "name" not in fm:
-            continue
-        backed = fm.get("backed_by", {}) if isinstance(fm.get("backed_by"), dict) else {}
-        out.append(
-            {
-                "name": fm["name"],
-                "verb": fm.get("verb", "query"),
-                "idempotent": bool(fm.get("idempotent", False)),
-                "side_effects": _summarize_side_effects(fm.get("side_effects", [])),
-                "cli": backed.get("cli"),
-                "python": backed.get("python"),
-                "input_schema": schema_for(fm["name"], "input", backed),
-                "output_schema": schema_for(fm["name"], "output", backed),
-            }
-        )
-    return sorted(out, key=lambda o: (o["verb"], o["name"]))

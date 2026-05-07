@@ -24,8 +24,8 @@ import re
 from typing import TYPE_CHECKING
 
 from claude_hpc import errors
-from claude_hpc._internal._primitive import SideEffect, primitive
-from claude_hpc._schema_models.update_run_constraints import (
+from claude_hpc._internal.primitive import SideEffect, primitive
+from claude_hpc._schema_models.actions.update_run_constraints import (
     UpdateRunConstraintsResult,
     UpdateRunConstraintsSpec,
 )

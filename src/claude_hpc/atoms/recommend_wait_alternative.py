@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc._internal._primitive import primitive
-from claude_hpc._schema_models.recommend_wait_alternative import (
+from claude_hpc._internal.primitive import primitive
+from claude_hpc._schema_models.queries.recommend_wait_alternative import (
     RecommendWaitAlternativeResult,
     RecommendWaitAlternativeSpec,
     _ForecastEntry,
