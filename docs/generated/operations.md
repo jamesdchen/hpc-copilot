@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-mapreduce capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**50 operations total**: 45 primitive atoms + 5 workflow atoms.
+**59 operations total**: 53 primitive atoms + 6 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `claude-hpc` is a CLI atom or a Python-only primitive that em
 
 **Discoverability**: `hpc-mapreduce capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (30)
+## `query` (33)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -43,15 +43,18 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-mapreduce monitor-summary --experiment-dir <path> --run-id <id>` | `claude_hpc.atoms.monitor_summary.monitor_summary` | — | `claude_hpc/schemas/monitor_summary.output.json` |
 | [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` | `claude_hpc.runner.status.record_status` | — | `claude_hpc/schemas/status.output.json` |
 | [`predict-queue-wait`](primitives/predict-queue-wait.md) | ✓ | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` | `claude_hpc.forecast.queue_wait_baseline.predict_queue_wait` | `claude_hpc/schemas/predict_queue_wait.input.json` | `claude_hpc/schemas/predict_queue_wait.output.json` |
+| [`predict-start-time`](primitives/predict-start-time.md) | ✓ | _none_ | `hpc-mapreduce predict-start-time --spec <path>` | `claude_hpc.atoms.predict_start_time.predict_start_time_primitive` | `claude_hpc/schemas/predict_start_time.input.json` | `claude_hpc/schemas/predict_start_time.output.json` |
 | [`read-runtime-prior`](primitives/read-runtime-prior.md) | ✓ | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` | `claude_hpc.state.runtime_prior.roll_up_quantiles` | — | `claude_hpc/schemas/runtime_prior.output.json` |
 | [`recall`](primitives/recall.md) | ✓ | _none_ | `hpc-mapreduce recall` | `claude_hpc.atoms.recall.recall_campaigns` | `claude_hpc/schemas/recall.input.json` | `claude_hpc/schemas/recall.output.json` |
+| [`recommend-partition`](primitives/recommend-partition.md) | ✓ | _none_ | `hpc-mapreduce recommend-partition --spec <path>` | `claude_hpc.atoms.recommend_partition.recommend_partition` | `claude_hpc/schemas/recommend_partition.input.json` | `claude_hpc/schemas/recommend_partition.output.json` |
+| [`recommend-wait-alternative`](primitives/recommend-wait-alternative.md) | ✓ | _none_ | `hpc-mapreduce recommend-wait-alternative --spec <path>` | `claude_hpc.atoms.recommend_wait_alternative.recommend_wait_alternative` | `claude_hpc/schemas/recommend_wait_alternative.input.json` | `claude_hpc/schemas/recommend_wait_alternative.output.json` |
 | [`score-submit-plan`](primitives/score-submit-plan.md) | ✓ | ssh | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` | `claude_hpc.planning.planner.plan_submit` | — | `claude_hpc/schemas/plan_submit.output.json` |
 | [`suggest-setup-action`](primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-mapreduce suggest-setup-action --experiment-dir <path>` | `claude_hpc.atoms.setup_actions.suggest_setup_action` | — | `claude_hpc/schemas/suggest_setup_action.output.json` |
 | [`summarize-submit-plan`](primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-mapreduce summarize-submit-plan --spec <path>` | `claude_hpc.atoms.submit_plan_summary.summarize_submit_plan` | — | `claude_hpc/schemas/summarize_submit_plan.output.json` |
 | [`verify-aggregation-complete`](primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-mapreduce verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` | `claude_hpc.atoms.aggregation_invariants.verify_aggregation_complete` | — | `claude_hpc/schemas/verify_aggregation_complete.output.json` |
 | [`walltime-drift`](primitives/walltime-drift.md) | ✓ | _none_ | `hpc-mapreduce walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` | `claude_hpc.atoms.walltime_drift.walltime_drift` | — | — |
 
-## `validate` (2)
+## `validate` (6)
 
 Read + binary health check. Same composability as `query`.
 
@@ -59,8 +62,12 @@ Read + binary health check. Same composability as `query`.
 |---|---|---|---|---|---|---|
 | [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-mapreduce preflight [--cluster <name>]` | `claude_hpc.atoms.preflight.check_preflight` | — | `claude_hpc/schemas/preflight.output.json` |
 | [`validate`](primitives/validate.md) | ✓ | ssh | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` | `claude_hpc.planning.validate.validate_submission` | `claude_hpc/schemas/validate.input.json` | `claude_hpc/schemas/validate.output.json` |
+| [`validate-executor-signatures`](primitives/validate-executor-signatures.md) | ✓ | _none_ | `hpc-mapreduce validate-executor-signatures --spec <path>` | `claude_hpc.atoms.validate_executor_signatures.validate_executor_signatures` | `claude_hpc/schemas/validate_executor_signatures.input.json` | `claude_hpc/schemas/validate_executor_signatures.output.json` |
+| [`validate-input-dataset`](primitives/validate-input-dataset.md) | ✓ | _none_ | `hpc-mapreduce validate-input-dataset --spec <path>` | `claude_hpc.atoms.validate_input_dataset.validate_input_dataset` | `claude_hpc/schemas/validate_input_dataset.input.json` | `claude_hpc/schemas/validate_input_dataset.output.json` |
+| [`validate-self-qos-limit`](primitives/validate-self-qos-limit.md) | ✓ | _none_ | `hpc-mapreduce validate-self-qos-limit --spec <path>` | `claude_hpc.atoms.validate_self_qos_limit.validate_self_qos_limit` | `claude_hpc/schemas/validate_self_qos_limit.input.json` | `claude_hpc/schemas/validate_self_qos_limit.output.json` |
+| [`validate-walltime-against-history`](primitives/validate-walltime-against-history.md) | ✓ | _none_ | `hpc-mapreduce validate-walltime-against-history --spec <path>` | `claude_hpc.atoms.validate_walltime_against_history.validate_walltime_against_history` | `claude_hpc/schemas/validate_walltime_against_history.input.json` | `claude_hpc/schemas/validate_walltime_against_history.output.json` |
 
-## `mutate` (6)
+## `mutate` (7)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -72,6 +79,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`prune-orphan-sidecars`](primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `hpc-mapreduce prune-orphan-sidecars` | `claude_hpc.state.runs.prune_orphan_sidecars` | — | — |
 | [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` | `claude_hpc.runner.reconcile.reconcile` | — | `claude_hpc/schemas/reconcile.output.json` |
 | [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` | `claude_hpc.runner.resubmit.resubmit_failed` | `claude_hpc/schemas/resubmit.input.json` | — |
+| [`update-run-constraints`](primitives/update-run-constraints.md) | ✓ | ssh | `hpc-mapreduce update-run-constraints --spec <path>` | `claude_hpc.runner.update_constraints.update_run_constraints` | `claude_hpc/schemas/update_run_constraints.input.json` | `claude_hpc/schemas/update_run_constraints.output.json` |
 
 ## `submit` (1)
 
@@ -94,7 +102,7 @@ Creates new files (e.g. starter executor templates).
 | [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `hpc-mapreduce campaign-init` | `claude_hpc.atoms.campaign_init.campaign_init` | — | — |
 | [`interview`](primitives/interview.md) | ✓ | file_write | `hpc-mapreduce interview` | `claude_hpc.atoms.interview.record_interview` | `claude_hpc/schemas/interview.input.json` | `claude_hpc/schemas/interview.output.json` |
 
-## `workflow` (5)
+## `workflow` (6)
 
 End-to-end pipelines composing other primitives. Same envelope shape as primitives — indistinguishable to higher-level callers (the Composite property).
 
@@ -104,5 +112,6 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-mapreduce monitor-flow --spec <path>` | `claude_hpc.flows.monitor_flow.monitor_flow` | `claude_hpc/schemas/monitor_flow.input.json` | `claude_hpc/schemas/monitor_flow.output.json` |
 | [`submit-flow`](primitives/submit-flow.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-mapreduce submit-flow --spec <path>` | `claude_hpc.flows.submit_flow.submit_flow` | `claude_hpc/schemas/submit_flow.input.json` | `claude_hpc/schemas/submit_flow.output.json` |
 | [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-mapreduce submit-flow-batch --spec <path>` | `claude_hpc.flows.submit_flow.submit_flow_batch` | `claude_hpc/schemas/submit_flow_batch.input.json` | `claude_hpc/schemas/submit_flow_batch.output.json` |
+| [`validate-campaign`](primitives/validate-campaign.md) | ✓ | _none_ | `hpc-mapreduce validate-campaign --spec <path>` | `claude_hpc.flows.validate_campaign.validate_campaign` | `claude_hpc/schemas/validate_campaign.input.json` | `claude_hpc/schemas/validate_campaign.output.json` |
 | [`verify-canary`](primitives/verify-canary.md) | ✓ | ssh | `hpc-mapreduce verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]` | `claude_hpc.atoms.canary_verify.verify_canary` | — | `claude_hpc/schemas/verify_canary.output.json` |
 

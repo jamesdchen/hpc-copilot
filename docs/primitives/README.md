@@ -108,8 +108,11 @@ The verb partitions primitives into bands the reader can scan independently:
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-mapreduce monitor-summary --experiment-dir <path> --run-id <id>` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce status --run-id <id> [--experiment-dir <dir>]` |
 | [predict-queue-wait](predict-queue-wait.md) | yes | _none_ | `hpc-mapreduce predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` |
+| [predict-start-time](predict-start-time.md) | yes | _none_ | `hpc-mapreduce predict-start-time --spec <path>` |
 | [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-mapreduce runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
 | [recall](recall.md) | yes | _none_ | `hpc-mapreduce recall` |
+| [recommend-partition](recommend-partition.md) | yes | _none_ | `hpc-mapreduce recommend-partition --spec <path>` |
+| [recommend-wait-alternative](recommend-wait-alternative.md) | yes | _none_ | `hpc-mapreduce recommend-wait-alternative --spec <path>` |
 | [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-mapreduce plan-submit --profile <name> --cluster <name> [...]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-mapreduce suggest-setup-action --experiment-dir <path>` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-mapreduce summarize-submit-plan --spec <path>` |
@@ -122,6 +125,10 @@ The verb partitions primitives into bands the reader can scan independently:
 |---|---|---|---|
 | [check-preflight](check-preflight.md) | yes | _none_ | `hpc-mapreduce preflight [--cluster <name>]` |
 | [validate](validate.md) | yes | ssh: `<cluster>` | `hpc-mapreduce validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` |
+| [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `hpc-mapreduce validate-executor-signatures --spec <path>` |
+| [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `hpc-mapreduce validate-input-dataset --spec <path>` |
+| [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `hpc-mapreduce validate-self-qos-limit --spec <path>` |
+| [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `hpc-mapreduce validate-walltime-against-history --spec <path>` |
 
 ### `mutate` primitives
 
@@ -133,6 +140,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `hpc-mapreduce prune-orphan-sidecars` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-mapreduce reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
+| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `hpc-mapreduce update-run-constraints --spec <path>` |
 
 ### `submit` primitives
 
@@ -159,6 +167,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce monitor-flow --spec <path>` |
 | [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow --spec <path>` |
 | [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-mapreduce submit-flow-batch --spec <path>` |
+| [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-mapreduce validate-campaign --spec <path>` |
 | [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-mapreduce verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]` |
 <!-- END PRIMITIVE CATALOG -->
 
