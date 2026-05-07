@@ -40,3 +40,6 @@ jobs:
       - name: Pytest (slow tier)
         if: always()
         run: pytest -q -m slow
+      - name: Coverage report (informational, not gated)
+        if: matrix.python-version == '3.12'
+        run: pytest -q -m '' --cov=src/claude_hpc --cov-report=term-missing
