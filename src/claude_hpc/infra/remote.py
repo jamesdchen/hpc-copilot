@@ -47,13 +47,35 @@ from typing import TYPE_CHECKING, Any, Final
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+
+def _env_int(name: str, default: int) -> int:
+    """Return ``int(os.environ[name])`` if set to a valid int, else *default*.
+
+    Used so site operators can tune the SSH/rsync timeouts without a
+    code edit (campus clusters with slow login nodes / NFS mounts often
+    need higher ceilings). Invalid values fall back to the default so a
+    typo can't disable timeout enforcement.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
 # Default subprocess timeouts (in seconds).  ``ssh_run`` covers login-node
 # commands, including the status-reporter SSH calls that exec python and may
 # need a few seconds; 60s is a generous ceiling for those.  ``rsync`` runs
 # may legitimately move large repos over slow links, so we allow up to 30
 # minutes before declaring the transfer hung.
-SSH_TIMEOUT_SEC = 60
-RSYNC_TIMEOUT_SEC = 1800
+#
+# Both are tunable via env-var (``HPC_SSH_TIMEOUT_SEC`` /
+# ``HPC_RSYNC_TIMEOUT_SEC``) so a slow campus cluster can raise the
+# ceiling without a fork.
+SSH_TIMEOUT_SEC = _env_int("HPC_SSH_TIMEOUT_SEC", 60)
+RSYNC_TIMEOUT_SEC = _env_int("HPC_RSYNC_TIMEOUT_SEC", 1800)
 
 # Characters that should never appear in an ssh_target. We intentionally
 # do NOT require ``@`` — bare OpenSSH aliases (``usc-discovery``) are

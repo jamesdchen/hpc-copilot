@@ -35,6 +35,12 @@ jobs:
         run: python scripts/lint_primitive_modules.py
       - name: Check primitive frontmatter is regenerated from registry
         run: python scripts/build_primitive_frontmatter.py --check
+      - name: Check no pending primitive docs
+        run: python scripts/check_no_pending_primitive_docs.py
+      - name: Check skills <-> slash_commands stay in sync
+        run: python scripts/lint_skill_command_sync.py
+      - name: Check JSON schemas regenerated from Pydantic
+        run: python scripts/build_schemas.py --check
       - name: Pytest (default)
         run: pytest -q
       - name: Pytest (slow tier)

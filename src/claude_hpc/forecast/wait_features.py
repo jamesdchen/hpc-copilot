@@ -17,7 +17,7 @@ Design rules:
   has uniform shape across rows.
 
 Feature tiers (matches the discussion in
-``docs/forecast_design.md`` if/when written):
+``docs/internals/queue-wait-predictor-architecture.md``):
 
 * **Tier S** — required, ~80% of variance: hour_of_week, queue depth,
   competitor count, your-rank percentile.

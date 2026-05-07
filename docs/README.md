@@ -23,13 +23,17 @@ docs/
 │   └── mars/
 │       └── experiment-runner.snippet.md
 ├── reference/                 wire contracts; agent-facing
-│   ├── cli-spec.md            envelope shape, exit codes, error_codes
-│   ├── cli-contract.md        CLI invocation contract
-│   ├── agent-surface.md       what the agent sees
-│   ├── boundary-contract.md   producer/consumer guarantees
-│   └── config-precedence.md   config-resolution order
+│   ├── cli-spec.md                  envelope shape, exit codes, error_codes
+│   ├── python-api-contract.md       Python API + sidecar schema
+│   ├── agent-surface.md             what the agent sees
+│   ├── boundary-contract.md         producer/consumer guarantees
+│   ├── config-precedence.md         config-resolution order
+│   └── reducer-contract.md          on-cluster output conventions
 ├── internals/                 subsystem deep-dives
-│   ├── queue-wait-predictor.md
+│   ├── README.md                          index
+│   ├── adding-a-primitive.md              recipe
+│   ├── queue-wait-predictor.md            ops notes
+│   ├── queue-wait-predictor-architecture.md  design deep-dive
 │   └── sync-checklist.md
 ├── primitives/                hybrid: frontmatter auto-generated, body hand-written
 │   ├── README.md              indexed catalog (table is auto-regenerated)

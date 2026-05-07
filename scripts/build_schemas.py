@@ -31,7 +31,10 @@ into the conventional layout.
 from __future__ import annotations
 
 import difflib
+import importlib
 import json
+import pkgutil
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -40,206 +43,112 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
-from claude_hpc._schema_models.aggregate_flow import (  # noqa: E402
-    AggregateFlowResult,
-    AggregateFlowSpec,
-)
-from claude_hpc._schema_models.axes import AxesConfig  # noqa: E402
-from claude_hpc._schema_models.best_submit_window import (  # noqa: E402
-    BestSubmitWindowResult,
-    BestSubmitWindowSpec,
-)
-from claude_hpc._schema_models.build_executor import BuildExecutorResult  # noqa: E402
-from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput  # noqa: E402
-from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput  # noqa: E402
-from claude_hpc._schema_models.campaign import CampaignAdapter  # noqa: E402
-from claude_hpc._schema_models.campaign_health import (  # noqa: E402
-    CampaignHealthResult,
-    CampaignHealthSpec,
-)
-from claude_hpc._schema_models.campaign_manifest import CampaignManifest  # noqa: E402
-from claude_hpc._schema_models.capabilities import CapabilitiesResult  # noqa: E402
-from claude_hpc._schema_models.cluster_reduce import ClusterReduceResult  # noqa: E402
-from claude_hpc._schema_models.clusters import (  # noqa: E402
-    ClustersDescribeResult,
-    ClustersListResult,
-)
-from claude_hpc._schema_models.combine_wave import CombineWaveResult  # noqa: E402
-from claude_hpc._schema_models.decide_monitor_arm import (  # noqa: E402
-    DecideMonitorArmResult,
-    DecideMonitorArmSpec,
-)
-from claude_hpc._schema_models.discover import DiscoverResult  # noqa: E402
-from claude_hpc._schema_models.envelope import EnvelopeAdapter  # noqa: E402
-from claude_hpc._schema_models.failures import FailuresResult  # noqa: E402
-from claude_hpc._schema_models.find_prior_run import FindPriorRunResult  # noqa: E402
-from claude_hpc._schema_models.inspect_cluster import InspectClusterResult  # noqa: E402
-from claude_hpc._schema_models.interview import (  # noqa: E402
-    InterviewEnvelope,
-    InterviewSpec,
-)
-from claude_hpc._schema_models.list_in_flight import ListInFlightResult  # noqa: E402
-from claude_hpc._schema_models.monitor_flow import (  # noqa: E402
-    MonitorFlowResult,
-    MonitorFlowSpec,
-)
-from claude_hpc._schema_models.monitor_summary import MonitorSummaryResult  # noqa: E402
-from claude_hpc._schema_models.plan_submit import PlanSubmitResult  # noqa: E402
-from claude_hpc._schema_models.predict_queue_wait import (  # noqa: E402
-    PredictQueueWaitResult,
-    PredictQueueWaitSpec,
-)
-from claude_hpc._schema_models.predict_start import (  # noqa: E402
-    PredictStartTimeResult,
-    PredictStartTimeSpec,
-)
-from claude_hpc._schema_models.preflight import PreflightResult  # noqa: E402
-from claude_hpc._schema_models.recall import RecallEnvelope, RecallSpec  # noqa: E402
-from claude_hpc._schema_models.recommend_partition import (  # noqa: E402
-    RecommendPartitionResult,
-    RecommendPartitionSpec,
-)
-from claude_hpc._schema_models.recommend_wait_alternative import (  # noqa: E402
-    RecommendWaitAlternativeResult,
-    RecommendWaitAlternativeSpec,
-)
-from claude_hpc._schema_models.reconcile import ReconcileResult  # noqa: E402
-from claude_hpc._schema_models.resubmit import ResubmitSpec  # noqa: E402
-from claude_hpc._schema_models.runtime_prior import RuntimePriorResult  # noqa: E402
-from claude_hpc._schema_models.stages import StagesAdapter  # noqa: E402
-from claude_hpc._schema_models.status import StatusResult  # noqa: E402
-from claude_hpc._schema_models.submit import SubmitResult, SubmitSpec  # noqa: E402
-from claude_hpc._schema_models.submit_flow import (  # noqa: E402
-    SubmitFlowResult,
-    SubmitFlowSpec,
-)
-from claude_hpc._schema_models.submit_flow_batch import (  # noqa: E402
-    SubmitFlowBatchResult,
-    SubmitFlowBatchSpec,
-)
-from claude_hpc._schema_models.suggest_setup_action import (  # noqa: E402
-    SuggestSetupActionResult,
-)
-from claude_hpc._schema_models.summarize_submit_plan import (  # noqa: E402
-    SummarizeSubmitPlanResult,
-)
-from claude_hpc._schema_models.update_run_constraints import (  # noqa: E402
-    UpdateRunConstraintsResult,
-    UpdateRunConstraintsSpec,
-)
-from claude_hpc._schema_models.validate import ValidateResult, ValidateSpec  # noqa: E402
-from claude_hpc._schema_models.validate_campaign import (  # noqa: E402
-    ValidateCampaignReport,
-    ValidateCampaignSpec,
-)
-from claude_hpc._schema_models.validate_executor_signatures import (  # noqa: E402
-    ValidateExecutorSignaturesResult,
-    ValidateExecutorSignaturesSpec,
-)
-from claude_hpc._schema_models.validate_input_dataset import (  # noqa: E402
-    ValidateInputDatasetResult,
-    ValidateInputDatasetSpec,
-)
-from claude_hpc._schema_models.validate_self_qos_limit import (  # noqa: E402
-    ValidateSelfQosLimitResult,
-    ValidateSelfQosLimitSpec,
-)
-from claude_hpc._schema_models.validate_walltime_against_history import (  # noqa: E402
-    ValidateWalltimeAgainstHistoryResult,
-    ValidateWalltimeAgainstHistorySpec,
-)
-from claude_hpc._schema_models.verify_aggregation_complete import (  # noqa: E402
-    VerifyAggregationCompleteResult,
-)
-from claude_hpc._schema_models.verify_canary import VerifyCanaryResult  # noqa: E402
+import claude_hpc._schema_models  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS_DIR = REPO_ROOT / "src" / "claude_hpc" / "schemas"
 
 _ID_BASE = "https://github.com/jamesdchen/claude-hpc/schemas"
 
-# Each entry: (Pydantic model OR TypeAdapter, schema filename).
-# The schema's ``$id`` is derived from the filename
-# (``<_ID_BASE>/<filename>``) — no need to repeat the URL here.
-SCHEMA_REGISTRY: list[tuple[type[BaseModel] | TypeAdapter[Any], str]] = [
-    # Cross-cutting wire envelope + persisted-data shapes
-    (EnvelopeAdapter, "envelope.json"),
-    (AxesConfig, "axes.json"),
-    (CampaignManifest, "campaign_manifest.json"),
-    (CampaignAdapter, "campaign.output.json"),
-    # Workflows
-    (AggregateFlowSpec, "aggregate_flow.input.json"),
-    (AggregateFlowResult, "aggregate_flow.output.json"),
-    (MonitorFlowSpec, "monitor_flow.input.json"),
-    (MonitorFlowResult, "monitor_flow.output.json"),
-    (SubmitFlowSpec, "submit_flow.input.json"),
-    (SubmitFlowResult, "submit_flow.output.json"),
-    (SubmitFlowBatchSpec, "submit_flow_batch.input.json"),
-    (SubmitFlowBatchResult, "submit_flow_batch.output.json"),
-    (VerifyCanaryResult, "verify_canary.output.json"),
-    # Scaffolds
-    (BuildExecutorResult, "build_executor.output.json"),
-    (BuildSubmitSpecInput, "build_submit_spec.input.json"),
-    (BuildTasksPyInput, "build_tasks_py.input.json"),
-    (InterviewSpec, "interview.input.json"),
-    (InterviewEnvelope, "interview.output.json"),
-    # Validate
-    (PreflightResult, "preflight.output.json"),
-    (ValidateSpec, "validate.input.json"),
-    (ValidateResult, "validate.output.json"),
-    (ValidateCampaignSpec, "validate_campaign.input.json"),
-    (ValidateCampaignReport, "validate_campaign.output.json"),
-    (ValidateExecutorSignaturesSpec, "validate_executor_signatures.input.json"),
-    (ValidateExecutorSignaturesResult, "validate_executor_signatures.output.json"),
-    (ValidateInputDatasetSpec, "validate_input_dataset.input.json"),
-    (ValidateInputDatasetResult, "validate_input_dataset.output.json"),
-    (ValidateSelfQosLimitSpec, "validate_self_qos_limit.input.json"),
-    (ValidateSelfQosLimitResult, "validate_self_qos_limit.output.json"),
-    (ValidateWalltimeAgainstHistorySpec, "validate_walltime_against_history.input.json"),
-    (ValidateWalltimeAgainstHistoryResult, "validate_walltime_against_history.output.json"),
-    # Mutate / submit
-    (ClusterReduceResult, "cluster_reduce.output.json"),
-    (CombineWaveResult, "combine_wave.output.json"),
-    (ReconcileResult, "reconcile.output.json"),
-    (ResubmitSpec, "resubmit.input.json"),
-    (SubmitSpec, "submit.input.json"),
-    (SubmitResult, "submit.output.json"),
-    # Query
-    (BestSubmitWindowSpec, "best_submit_window.input.json"),
-    (BestSubmitWindowResult, "best_submit_window.output.json"),
-    (CampaignHealthSpec, "campaign_health.input.json"),
-    (CampaignHealthResult, "campaign_health.output.json"),
-    (CapabilitiesResult, "capabilities.output.json"),
-    (ClustersDescribeResult, "clusters_describe.output.json"),
-    (ClustersListResult, "clusters_list.output.json"),
-    (DecideMonitorArmSpec, "decide_monitor_arm.input.json"),
-    (DecideMonitorArmResult, "decide_monitor_arm.output.json"),
-    (DiscoverResult, "discover.output.json"),
-    (FailuresResult, "failures.output.json"),
-    (FindPriorRunResult, "find_prior_run.output.json"),
-    (InspectClusterResult, "inspect_cluster.output.json"),
-    (ListInFlightResult, "list_in_flight.output.json"),
-    (MonitorSummaryResult, "monitor_summary.output.json"),
-    (PlanSubmitResult, "plan_submit.output.json"),
-    (PredictStartTimeSpec, "predict_start_time.input.json"),
-    (PredictStartTimeResult, "predict_start_time.output.json"),
-    (PredictQueueWaitSpec, "predict_queue_wait.input.json"),
-    (PredictQueueWaitResult, "predict_queue_wait.output.json"),
-    (RecallSpec, "recall.input.json"),
-    (RecallEnvelope, "recall.output.json"),
-    (RecommendPartitionSpec, "recommend_partition.input.json"),
-    (RecommendPartitionResult, "recommend_partition.output.json"),
-    (RecommendWaitAlternativeSpec, "recommend_wait_alternative.input.json"),
-    (RecommendWaitAlternativeResult, "recommend_wait_alternative.output.json"),
-    (RuntimePriorResult, "runtime_prior.output.json"),
-    (StagesAdapter, "stages.input.json"),
-    (StatusResult, "status.output.json"),
-    (SuggestSetupActionResult, "suggest_setup_action.output.json"),
-    (SummarizeSubmitPlanResult, "summarize_submit_plan.output.json"),
-    (UpdateRunConstraintsSpec, "update_run_constraints.input.json"),
-    (UpdateRunConstraintsResult, "update_run_constraints.output.json"),
-    (VerifyAggregationCompleteResult, "verify_aggregation_complete.output.json"),
-]
+
+def _pascal_to_snake(name: str) -> str:
+    """Convert PascalCase to snake_case."""
+    s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
+
+def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], str]]:
+    """Auto-discover Pydantic models and TypeAdapters in _schema_models.
+
+    Rules:
+    1. Walk all submodules, import them.
+    2. Collect every public BaseModel subclass and TypeAdapter instance.
+    3. Skip helpers from _shared.py and anything starting with underscore.
+    4. Derive filename from class/adapter name:
+       - *Spec or *Input → <snake>.input.json
+       - *Result or *Report → <snake>.output.json
+       - Exception list (Adapters, special shapes) → hardcoded mappings
+    5. Convert PascalCase → snake_case, stripping suffix before conversion.
+    """
+    # Exception mappings: class name to filename
+    exception_map: dict[str, str] = {
+        "EnvelopeAdapter": "envelope.json",
+        "AxesConfig": "axes.json",
+        "CampaignManifest": "campaign_manifest.json",
+        "CampaignAdapter": "campaign.output.json",
+        "StagesAdapter": "stages.input.json",
+    }
+
+    # Import all submodules
+    pkg_path = Path(claude_hpc._schema_models.__file__).parent
+    for _importer, modname, _ispkg in pkgutil.iter_modules([str(pkg_path)]):
+        if modname.startswith("_"):
+            continue
+        importlib.import_module(f"claude_hpc._schema_models.{modname}")
+
+    discovered: dict[str, tuple[Any, str]] = {}
+
+    # Inspect all submodules and extract classes/adapters
+    for name, mod in vars(claude_hpc._schema_models).items():
+        if name.startswith("_") or not hasattr(mod, "__dict__"):
+            continue
+
+        # mod is actually a module
+        for attr_name, obj in vars(mod).items():
+            if attr_name.startswith("_"):
+                continue
+
+            # Check exception list first
+            if attr_name in exception_map:
+                discovered[attr_name] = (obj, exception_map[attr_name])
+                continue
+
+            # Check if it's a TypeAdapter instance (must come before BaseModel check)
+            if isinstance(obj, TypeAdapter):
+                # Only include if in exception map (already handled above)
+                continue
+
+            # Check if it's a BaseModel subclass
+            if isinstance(obj, type) and issubclass(obj, BaseModel) and obj is not BaseModel:
+                # Skip internal helper models (those starting with underscore or
+                # internal envelope models that aren't top-level exports)
+                if attr_name.startswith("_") or obj.__name__ in (
+                    "SuccessEnvelope",
+                    "ErrorEnvelope",
+                ):
+                    continue
+
+                # Strip suffix and derive filename
+                # Only include if it matches recognized suffixes
+                suffix = None
+                base_name = obj.__name__
+
+                if obj.__name__.endswith("Spec"):
+                    suffix = "input.json"
+                    base_name = obj.__name__[:-4]
+                elif obj.__name__.endswith("Input"):
+                    suffix = "input.json"
+                    base_name = obj.__name__[:-5]
+                elif obj.__name__.endswith(("Result", "Report")):
+                    suffix = "output.json"
+                    base_name = obj.__name__[:-6]
+                elif obj.__name__.endswith("Envelope"):
+                    suffix = "output.json"
+                    base_name = obj.__name__[:-8]
+                else:
+                    # No recognized suffix, skip (e.g., internal helper models)
+                    continue
+
+                snake_name = _pascal_to_snake(base_name)
+                filename = f"{snake_name}.{suffix}"
+                discovered[obj.__name__] = (obj, filename)
+
+    # Build the registry, sorted by filename for stability
+    registry: list[tuple[Any, str]] = list(discovered.values())
+    return sorted(registry, key=lambda x: x[1])
+
+
+SCHEMA_REGISTRY = _build_schema_registry()
 
 
 def _emit_schema(model_or_adapter: Any) -> dict[str, Any]:
