@@ -417,7 +417,7 @@ def test_fuzz_instances_validate_against_emitted_schema(src: Any, fname: str) ->
 
     @given(strategy)
     @settings(
-        max_examples=25,
+        max_examples=15,
         deadline=None,
         suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much],
     )

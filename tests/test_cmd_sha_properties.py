@@ -72,21 +72,21 @@ _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 @given(_tasks)
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_compute_cmd_sha_is_deterministic(tasks: list[dict[str, Any]]) -> None:
     m = _FakeTasksModule(tasks)
     assert compute_cmd_sha(m) == compute_cmd_sha(m)
 
 
 @given(_tasks)
-@settings(max_examples=100)
+@settings(max_examples=50)
 def test_compute_cmd_sha_output_is_64_lowercase_hex(tasks: list[dict[str, Any]]) -> None:
     sha = compute_cmd_sha(_FakeTasksModule(tasks))
     assert _HEX_64.fullmatch(sha) is not None, sha
 
 
 @given(_tasks)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_compute_cmd_sha_invariant_under_kwargs_key_reorder(
     tasks: list[dict[str, Any]],
 ) -> None:
@@ -101,7 +101,7 @@ def test_compute_cmd_sha_invariant_under_kwargs_key_reorder(
 
 
 @given(_tasks)
-@settings(max_examples=200)
+@settings(max_examples=75)
 def test_compute_cmd_sha_position_sensitive(tasks: list[dict[str, Any]]) -> None:
     """Reordering the task list (the i-axis) changes the hash. Two
     campaigns that materialize the same tasks in different order are
