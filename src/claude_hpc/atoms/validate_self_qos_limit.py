@@ -95,8 +95,7 @@ def validate_self_qos_limit(
                 f"of the {cap}-job QOS cap)."
             ),
             suggested_fix=(
-                "Consider splitting if any other campaign would submit before "
-                "these clear."
+                "Consider splitting if any other campaign would submit before these clear."
             ),
             evidence={
                 "current_user_pending_count": spec.current_user_pending_count,

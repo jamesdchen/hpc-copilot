@@ -596,6 +596,56 @@ Branch on `data.overall`:
 
 The validator is fast (no SSH, no qsub) and idempotent. Skipping a validator is automatic: if `executor_module` is None the signature check is skipped, if `dataset_path` is None the dataset check is skipped, etc. The slash command can construct a partial spec and the rest auto-skips.
 
+## Step 6d: Predict start time + recommend submit-at-T offset
+
+Before qsub, run the [predict-start-time](../../docs/primitives/predict-start-time.md) primitive to forecast when this job will actually start. The primitive sweeps candidate submit-at-T offsets and returns whichever minimizes total time-to-actual-start (offset + predicted wait after submission).
+
+Two things drive the prediction:
+
+1. **Two simulators** compute deterministic floors from the current squeue snapshot — pessimistic (pure FIFO drain, hard lower bound) and optimistic (phantom-slot backfill, loose upper bound on backfill leverage).
+2. **A LightGBM residual model** learns the empirical overhead between the FIFO floor and observed start times across historical jobs. Captures stochastic reality (future arrivals, fair-share decay, scheduler config drift) the simulator can't model. When no model has been trained yet, the predictor falls back to the pessimistic floor + zero overhead.
+
+Inputs the slash command must gather (over SSH, before invoking the primitive):
+
+```bash
+SQUEUE=$(ssh "$SSH_TARGET" "squeue --user='*' -O 'JOBID|PRIORITY|PARTITION|USERNAME|STATE|TIME_LEFT|TIME_LIMIT'")
+SSHARE=$(ssh "$SSH_TARGET" "sshare -P")  # cached via forecast/fairshare_cache for ~1h
+```
+
+Build the spec:
+
+```json
+{
+  "now_iso": "<UTC ISO>",
+  "squeue_text": "<above>",
+  "sshare_text": "<above>",
+  "partition": "<from cluster config>",
+  "partition_slot_count": <from `scontrol show partition`>,
+  "your_priority": <estimated from sprio of similar past jobs, or fallback to median>,
+  "your_walltime_sec": <Step 4b walltime decision>,
+  "your_user": "$USER",
+  "your_constraint": "<resolved Features= expression>",
+  "candidate_offsets_hours": [0, 1, 3, 6, 12, 24],
+  "model_path": ".hpc/wait_predictor"
+}
+```
+
+Invoke:
+
+```bash
+python -m claude_hpc predict-start-time --spec spec.json --experiment-dir .
+```
+
+Surface the result:
+
+- `data.best_submit_offset_hours == 0` → **submit now** is the lowest-total-time option. Continue to Step 7.
+- `data.best_submit_offset_hours > 0` → **wait N hours, then submit**. Show the user: "Predicted total time to actual start: 45 min (submit now would be 4h). OK to wait?" — if they decline, proceed anyway; if they accept, schedule the submit (or pause and let the operator resume manually).
+- The full sweep is in `data.candidates` for transparency. When uncertainty fields are populated (`predicted_iso_p10` / `predicted_iso_p90` on each candidate), surface them as "expected 45min, worst-case 4h" rather than a point estimate.
+
+This step is advisory, NOT a gate. The agent always proceeds to Step 7 (or follows the user's decision); the predictor is decision support, not refusal logic.
+
+If you don't have squeue / sshare snapshots history yet (cold cluster, first time using the predictor), the predictor returns `method="floor_only"` and the prediction equals the pessimistic floor. Snapshotting + training catches up over the next ~1-2 weeks; until then the floor is still actionable.
+
 ## Step 7: Sync to Cluster
 
 Two pipes populate the cluster's `$REMOTE_PATH`. **Don't hand-copy any framework files** — `deploy_runtime` does that via scp, and rsync would otherwise overwrite the cluster-side `.hpc/_hpc_dispatch.py` etc. with files that don't exist locally.

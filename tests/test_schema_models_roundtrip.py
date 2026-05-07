@@ -138,6 +138,36 @@ def _extract_max_int(metadata: list[Any], default: int) -> int:
     return default if hi is None else hi
 
 
+def _extract_min_float(metadata: list[Any]) -> float:
+    """Pull ``Ge``/``Gt`` into a float min bound. Unlike the int variant,
+    ``Gt(0.0)`` becomes ``nextafter(0.0, +inf)`` rather than ``int(0.0)+1``
+    so float fields like ``Field(gt=0.0, lt=1.0)`` synthesize correctly."""
+    import math
+
+    lo = 0.0
+    for m in metadata:
+        if isinstance(m, Ge):
+            lo = max(lo, float(m.ge))
+        elif isinstance(m, Gt):
+            lo = max(lo, math.nextafter(float(m.gt), math.inf))
+    return lo
+
+
+def _extract_max_float(metadata: list[Any], default: float) -> float:
+    """Pull ``Le``/``Lt`` into a float max bound. ``Lt(1.0)`` becomes
+    ``nextafter(1.0, -inf)`` rather than ``int(1.0)-1``."""
+    import math
+
+    hi: float | None = None
+    for m in metadata:
+        if isinstance(m, Le):
+            hi = float(m.le) if hi is None else min(hi, float(m.le))
+        elif isinstance(m, Lt):
+            cap = math.nextafter(float(m.lt), -math.inf)
+            hi = cap if hi is None else min(hi, cap)
+    return default if hi is None else hi
+
+
 def _string_for_metadata(metadata: list[Any]) -> str:
     pattern = None
     for m in metadata:
@@ -203,7 +233,7 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
         if annotation is int:
             return _extract_min_int(metadata)
         if annotation is float:
-            return float(_extract_min_int(metadata))
+            return _extract_min_float(metadata)
 
     raise TypeError(f"synthesizer cannot handle annotation {annotation!r}")
 
@@ -346,11 +376,9 @@ def _strategy_for(annotation: Any, metadata: list[Any]) -> st.SearchStrategy:
             hi = _extract_max_int(metadata, default=lo + 100)
             return st.integers(min_value=lo, max_value=hi)
         if annotation is float:
-            lo = float(_extract_min_int(metadata))
-            hi = float(_extract_max_int(metadata, default=int(lo) + 100))
-            return st.floats(
-                min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False
-            )
+            lo = _extract_min_float(metadata)
+            hi = _extract_max_float(metadata, default=lo + 100.0)
+            return st.floats(min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False)
         if annotation is str:
             pattern = None
             for m in metadata:
