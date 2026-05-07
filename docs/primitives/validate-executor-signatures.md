@@ -34,15 +34,15 @@ A `ValidateExecutorSignaturesResult` object with:
 
 ## Errors
 
-Common `code` values in findings:
+None declared on the primitive (no envelope-level `error_code`). Findings carry the diagnostic code instead; common `code` values:
 
-- `tasks_py_missing` — Campaign hasn't been interviewed yet; tasks.py doesn't exist.
-- `tasks_py_import_error` — tasks.py exists but raises on import.
-- `executor_module_import_error` — Module path is wrong or module fails on import (info-level; signature check skipped).
-- `executor_function_not_found` — Function name typo or not callable.
-- `missing_parameter` — `tasks.resolve(i)` passes a kwarg not in the function signature (and no `**kwargs`).
-- `literal_value_not_allowed` — Parameter is annotated `Literal[...]` but the value isn't in the allowed set (the SEGMENT_CHOICES bug).
-- `resolve_returned_non_dict` — tasks.py contract violation; `resolve(i)` returned a non-dict.
+- `tasks_py_missing` (warning) — campaign hasn't been interviewed yet; tasks.py doesn't exist.
+- `tasks_py_import_error` (error) — tasks.py exists but raises on import.
+- `executor_module_import_error` (info) — module path wrong or module fails to import; signature check skipped, validator-level pass.
+- `executor_function_not_found` (error) — function name typo or attribute is not callable.
+- `missing_parameter` (error) — `tasks.resolve(i)` passes a kwarg the function has no parameter for (and no `**kwargs`).
+- `literal_value_not_allowed` (error) — parameter annotated `Literal[...]` but the kwarg value isn't in the allowed set (the SEGMENT_CHOICES bug class).
+- `resolve_returned_non_dict` (error) — `tasks.resolve(i)` returned a non-dict; the framework requires a dict so kwargs can be `**`-unpacked.
 
 ## Idempotency
 

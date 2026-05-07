@@ -35,7 +35,7 @@ A `RecommendWaitAlternativeResult` object with:
 
 ## Errors
 
-No error codes are defined. The primitive always returns a result, even with zero samples.
+None declared. Spec validation errors raise `pydantic.ValidationError`; with fewer than two samples the primitive still returns a result with `method="insufficient_data"` and an empty `forecasts` list — sparse-data signalling is structured, not an error.
 
 ## Idempotency
 
