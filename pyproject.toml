@@ -42,6 +42,13 @@ dev = [
 tui = [
     "rich>=13.0",
 ]
+forecasting = [
+    # Used by ``scripts/train_wait_predictor.py`` to fit the queue-wait
+    # residual regression. Inference (``forecast/predict_start.py``)
+    # also imports it lazily; without lightgbm installed the predictor
+    # falls back to the deterministic floor only.
+    "lightgbm>=4.0",
+]
 
 [project.scripts]
 hpc-mapreduce = "claude_hpc.agent_cli:main"
