@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import re
 import sys
 import types as _types_mod
 from enum import Enum
@@ -37,8 +36,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 import jsonschema
 import pytest
 from annotated_types import Ge, Gt, MinLen
-from pydantic import BaseModel, StringConstraints, TypeAdapter
-from pydantic.fields import FieldInfo
+from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS_DIR = REPO_ROOT / "src" / "claude_hpc" / "schemas"
