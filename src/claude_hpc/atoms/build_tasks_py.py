@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors
 from claude_hpc._internal.primitive import SideEffect, primitive
-from claude_hpc._schema_models.build_tasks_py import BuildTasksPyInput
+from claude_hpc._schema_models.actions.build_tasks_py import BuildTasksPyInput
 
 if TYPE_CHECKING:
     from pathlib import Path

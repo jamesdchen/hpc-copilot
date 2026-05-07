@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from claude_hpc._schema_models.recall import RecallSpec
+from claude_hpc._schema_models.queries.recall import RecallSpec
 from claude_hpc.atoms import recall as recall_mod
 from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
 

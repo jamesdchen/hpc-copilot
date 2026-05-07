@@ -13,7 +13,7 @@ import json
 from typing import TYPE_CHECKING
 
 from claude_hpc import runner
-from claude_hpc._schema_models.submit import SubmitSpec as _WireSubmitSpec
+from claude_hpc._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path

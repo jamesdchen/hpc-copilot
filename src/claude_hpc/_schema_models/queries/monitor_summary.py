@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import LifecycleStateObservableWithTimeout
+from claude_hpc._schema_models._shared import LifecycleStateObservableWithTimeout
 
 
 class MonitorSummaryResult(BaseModel):

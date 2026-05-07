@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import BackendName, CampaignId, RunIdLoose, RunIdStrict, Runtime, SshTarget
+from claude_hpc._schema_models._shared import BackendName, CampaignId, RunIdLoose, RunIdStrict, Runtime, SshTarget
 
 
 class SubmitFlowSpec(BaseModel):

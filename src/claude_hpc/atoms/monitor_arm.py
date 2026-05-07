@@ -33,7 +33,7 @@ from typing import Any
 
 from claude_hpc import errors
 from claude_hpc._internal.primitive import primitive
-from claude_hpc._schema_models.decide_monitor_arm import DecideMonitorArmSpec
+from claude_hpc._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
 
 # Adaptive delay table — lifted from /monitor-hpc Step 5's Markdown
 # table so the primitive is the single source of truth. Each row is

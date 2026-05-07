@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from claude_hpc._internal.primitive import SideEffect, primitive
-from claude_hpc._schema_models.validate import ValidateResult, ValidateSpec
+from claude_hpc._schema_models.validators.validate import ValidateResult, ValidateSpec
 from claude_hpc.infra.clusters import load_clusters_config
 
 if TYPE_CHECKING:

@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from claude_hpc import errors
-from claude_hpc._schema_models.build_submit_spec import BuildSubmitSpecInput
+from claude_hpc._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
 from claude_hpc.atoms.build_submit_spec import build_submit_spec
 
 

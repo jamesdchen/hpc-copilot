@@ -286,8 +286,8 @@ def test_typeadapter_emits_self_consistent_schemas() -> None:
     but a 1-stage array passes; a discriminated envelope union
     accepts a minimal success envelope.
     """
-    from claude_hpc._schema_models.envelope import EnvelopeAdapter, SuccessEnvelope
-    from claude_hpc._schema_models.stages import StagesAdapter
+    from claude_hpc._schema_models.fixtures.envelope import EnvelopeAdapter, SuccessEnvelope
+    from claude_hpc._schema_models.fixtures.stages import StagesAdapter
 
     # stages: 1-element list passes
     one_stage = StagesAdapter.dump_python([{"name": "fit", "run": "python fit.py"}])

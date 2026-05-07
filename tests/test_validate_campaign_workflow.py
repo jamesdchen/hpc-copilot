@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.validate_campaign import ValidateCampaignSpec
+from claude_hpc._schema_models.workflows.validate_campaign import ValidateCampaignSpec
 from claude_hpc.flows.validate_campaign import validate_campaign
 from claude_hpc.state import runtime_prior as rp
 

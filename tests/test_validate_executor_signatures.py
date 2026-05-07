@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.validate_executor_signatures import (
+from claude_hpc._schema_models.validators.validate_executor_signatures import (
     ValidateExecutorSignaturesSpec,
 )
 from claude_hpc.atoms.validate_executor_signatures import (

@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ._shared import CombinedWaves, FailedWaves, RunIdLoose, RunIdStrict
+from claude_hpc._schema_models._shared import CombinedWaves, FailedWaves, RunIdLoose, RunIdStrict
 
 
 class AggregateFlowSpec(BaseModel):

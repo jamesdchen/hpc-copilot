@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from ._shared import ErrorCode
+from claude_hpc._schema_models._shared import ErrorCode
 
 
 class _PartialError(BaseModel):

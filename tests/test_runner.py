@@ -16,8 +16,8 @@ import pytest
 from claude_hpc import runner
 from claude_hpc._internal import session
 from claude_hpc._internal.session import RunRecord
-from claude_hpc._schema_models.resubmit import ResubmitSpec
-from claude_hpc._schema_models.submit import SubmitSpec as _WireSubmitSpec
+from claude_hpc._schema_models.actions.resubmit import ResubmitSpec
+from claude_hpc._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path

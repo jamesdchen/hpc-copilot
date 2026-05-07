@@ -136,15 +136,19 @@ def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], s
     so callers see a stable order.
     """
     pkg = claude_hpc._schema_models
-    pkg_path = Path(pkg.__file__).parent
 
-    # Keyed by attribute name to dedupe (a cross-cutting Adapter may be
-    # re-exported but should only register once).
+    # Walk recursively so subpackages (workflows/, validators/,
+    # fixtures/, queries/, actions/) are picked up alongside any
+    # top-level helpers. ``walk_packages`` recurses into every
+    # non-private submodule and subpackage in one pass.
     discovered: dict[str, tuple[Any, str]] = {}
-    for _finder, modname, _ispkg in pkgutil.iter_modules([str(pkg_path)]):
-        if modname.startswith("_"):
+    for _finder, modname, _ispkg in pkgutil.walk_packages(
+        pkg.__path__, prefix=f"{pkg.__name__}.",
+    ):
+        leaf = modname.rsplit(".", 1)[-1]
+        if leaf.startswith("_"):
             continue
-        mod = importlib.import_module(f"{pkg.__name__}.{modname}")
+        mod = importlib.import_module(modname)
         for attr_name in dir(mod):
             if attr_name.startswith("_") or attr_name in discovered:
                 continue

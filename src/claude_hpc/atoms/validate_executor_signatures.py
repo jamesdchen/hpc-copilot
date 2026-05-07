@@ -22,8 +22,8 @@ import inspect
 from typing import TYPE_CHECKING, Literal, get_args, get_origin
 
 from claude_hpc._internal.primitive import primitive
-from claude_hpc._schema_models.validate_campaign import ValidatorFinding
-from claude_hpc._schema_models.validate_executor_signatures import (
+from claude_hpc._schema_models.workflows.validate_campaign import ValidatorFinding
+from claude_hpc._schema_models.validators.validate_executor_signatures import (
     ValidateExecutorSignaturesResult,
     ValidateExecutorSignaturesSpec,
 )
