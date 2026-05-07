@@ -293,6 +293,7 @@ def predict_queue_wait(
     n_replications = spec.n_replications
     seed = spec.seed
     from claude_hpc.forecast.queue_wait_des import _des_eligible, _predict_des
+
     if backend == "des":
         return _predict_des(
             experiment_dir,
@@ -473,7 +474,6 @@ def _global_fallback(
         bucket_hour_of_week=target_bucket,
         fallback_reason=reason,
     )
-
 
 
 # DES backend wiring moved to queue_wait_des.py for navigability.

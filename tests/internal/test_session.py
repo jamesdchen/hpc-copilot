@@ -12,7 +12,8 @@ from unittest.mock import patch
 import pytest
 
 from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord, index as session_index, run_record
+from claude_hpc._internal.session import RunRecord, run_record
+from claude_hpc._internal.session import index as session_index
 
 if TYPE_CHECKING:
     from pathlib import Path

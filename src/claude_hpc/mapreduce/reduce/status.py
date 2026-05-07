@@ -35,14 +35,15 @@ completed ones) using whatever the scheduler has reported so far.
 from __future__ import annotations
 
 __all__ = [
+    "_grid_point_key",
     "check_results",
     "check_results_from_tasks",
+    "detect_scheduler",
+    "get_err_log_paths",
     "report_status",
     "report_status_from_tasks",
     "rollup_by_grid_point",
     "rollup_by_wave",
-    "get_err_log_paths",
-    "detect_scheduler",
 ]
 
 import glob
@@ -51,8 +52,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from claude_hpc._internal.time import utcnow_iso
 from claude_hpc._internal.lifecycle import TaskStatus
+from claude_hpc._internal.time import utcnow_iso
 from claude_hpc.mapreduce.reduce.rollup import (
     _grid_point_key,
     rollup_by_grid_point,
@@ -346,7 +347,6 @@ def report_status(
 # ---------------------------------------------------------------------------
 
 
-
 def check_results_from_tasks(
     tasks_data: dict,
     file_glob: str = "*",
@@ -525,7 +525,6 @@ def report_status_from_tasks(
     if err_paths:
         report["err_log_paths"] = err_paths
     return report
-
 
 
 # ---------------------------------------------------------------------------

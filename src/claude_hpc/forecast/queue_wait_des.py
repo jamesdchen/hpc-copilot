@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_hpc.forecast.queue_wait_baseline import (
     _DEFAULT_BUCKET_RADIUS,
@@ -24,6 +24,8 @@ from claude_hpc.forecast.queue_wait_baseline import (
     _predict_diurnal_ma,
 )
 
+if TYPE_CHECKING:
+    from claude_hpc.forecast.queue_features import QueueFeatures
 
 # ---------------------------------------------------------------------------
 # DES backend wiring (Phase 4c)

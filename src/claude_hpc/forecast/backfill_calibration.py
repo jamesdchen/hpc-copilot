@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import math
+from typing import TYPE_CHECKING, Any
 
-from claude_hpc.forecast.backfill import BackfillProbe, ResourceTuple
+from claude_hpc.forecast.backfill import BackfillProbe
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _log = logging.getLogger(__name__)
 
@@ -141,5 +144,3 @@ def pick_earliest_calibrated(
         eligible,
         key=lambda c: (c.eta_sec_calibrated, c.probe.tuple_.walltime_sec),
     )
-
-

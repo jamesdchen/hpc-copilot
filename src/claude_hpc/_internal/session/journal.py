@@ -18,12 +18,12 @@ import warnings
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal.session.run_record import (
+    _UPDATABLE_FIELDS,
     RunRecord,
     _atomic_write_json,
     _locked,
     _read_json,
     _run_path,
-    _UPDATABLE_FIELDS,
     journal_dir,
 )
 

@@ -7,15 +7,14 @@ Shared subprocess + envelope helpers live in :mod:`._helpers`.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
-
-import pytest
 
 from claude_hpc import agent_cli as cli
 
-from ._helpers import SUBMIT_SPEC, env_without_ssh_agent as _env_without_ssh_agent, parse_envelope as _parse_envelope, run_cli as _run_cli
+from ._helpers import SUBMIT_SPEC
+from ._helpers import env_without_ssh_agent as _env_without_ssh_agent
+from ._helpers import parse_envelope as _parse_envelope
+from ._helpers import run_cli as _run_cli
 
 # ─── Bug 6: aggregate no longer advertises a non-functional --output-dir ─
 
@@ -148,7 +147,6 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
         rc = cli.main(["capabilities"])
     assert rc == cli.EXIT_INTERNAL
     assert captured[-1]["error_code"] == "internal"
-
 
 
 # ─── aggregate preconditions / postconditions / provenance ─────────────────
@@ -426,5 +424,3 @@ def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
         env=env,
     )
     assert rc == 0, _parse_envelope(out)
-
-

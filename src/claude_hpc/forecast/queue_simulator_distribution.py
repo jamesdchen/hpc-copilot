@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any
 from claude_hpc.forecast.queue_simulator import (
     SimJob,
     SimResult,
-    available_resources,
     simulate_one_pass,
 )
 
@@ -24,7 +23,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from claude_hpc.infra.inspect._common import ClusterSnapshot
-
 
 
 def simulate_distribution(

@@ -21,11 +21,11 @@ from pathlib import Path
 from typing import Any
 
 from claude_hpc._internal.primitive import primitive
-from claude_hpc._schema_models.workflows.validate_campaign import ValidatorFinding
 from claude_hpc._schema_models.validators.validate_input_dataset import (
     ValidateInputDatasetResult,
     ValidateInputDatasetSpec,
 )
+from claude_hpc._schema_models.workflows.validate_campaign import ValidatorFinding
 
 _VALIDATOR = "validate-input-dataset"
 

@@ -7,15 +7,14 @@ Shared subprocess + envelope helpers live in :mod:`._helpers`.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
-
-import pytest
 
 from claude_hpc import agent_cli as cli
 
-from ._helpers import SUBMIT_SPEC, env_without_ssh_agent as _env_without_ssh_agent, parse_envelope as _parse_envelope, run_cli as _run_cli
+from ._helpers import SUBMIT_SPEC
+from ._helpers import env_without_ssh_agent as _env_without_ssh_agent
+from ._helpers import parse_envelope as _parse_envelope
+from ._helpers import run_cli as _run_cli
 
 # ─── A-M1: cmd_status surfaces preempted tasks from sidecar ───────────────
 
@@ -169,9 +168,7 @@ def test_resubmit_preempted_category_with_partial_marks_does_not_raise(
         "partial preempt markers must not trigger envelope-level Preempted"
     )
 
-
-# ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
-
+    # ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
 
     return {
         "PATH": os.environ.get("PATH", ""),
@@ -367,5 +364,3 @@ def test_list_in_flight_envelope_includes_age_field(tmp_path: Path) -> None:
     assert len(runs) == 1
     # No status poll yet: last_status is empty/missing -> age is None.
     assert runs[0].get("last_status_age_seconds") is None
-
-

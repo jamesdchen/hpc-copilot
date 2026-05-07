@@ -111,8 +111,7 @@ class TestLoadGpuConfigForCluster:
 class TestExcludedPrefixes:
     def test_none_cluster_returns_default(self):
         assert (
-            gpu_module._excluded_prefixes_for_cluster(None)
-            == gpu_module._DEFAULT_EXCLUDED_PREFIXES
+            gpu_module._excluded_prefixes_for_cluster(None) == gpu_module._DEFAULT_EXCLUDED_PREFIXES
         )
 
     def test_unknown_cluster_returns_default(self, fake_clusters_yaml):
@@ -123,9 +122,7 @@ class TestExcludedPrefixes:
         )
 
     def test_loads_yaml_override(self, fake_clusters_yaml):
-        fake_clusters_yaml(
-            {"carc": {"excluded_gpu_queue_prefixes": ["gpu_legacy", "gpu_test"]}}
-        )
+        fake_clusters_yaml({"carc": {"excluded_gpu_queue_prefixes": ["gpu_legacy", "gpu_test"]}})
         assert gpu_module._excluded_prefixes_for_cluster("carc") == {
             "gpu_legacy",
             "gpu_test",

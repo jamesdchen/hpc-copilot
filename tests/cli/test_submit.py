@@ -7,19 +7,15 @@ Shared subprocess + envelope helpers live in :mod:`._helpers`.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from claude_hpc import agent_cli as cli
-
-from ._helpers import SUBMIT_SPEC, parse_envelope as _parse_envelope, run_cli as _run_cli
+from ._helpers import SUBMIT_SPEC
+from ._helpers import parse_envelope as _parse_envelope
+from ._helpers import run_cli as _run_cli
 
 # ─── submit dry-run + dedup contract ───────────────────────────────────────
-
-
 
 
 def test_submit_dry_run_does_not_touch_journal(tmp_path: Path) -> None:
@@ -186,7 +182,6 @@ def test_list_in_flight_surfaces_campaign_id_when_tagged(tmp_path: Path) -> None
     assert "campaign_id" not in runs["untagged-run-5678"]
 
 
-
 # ─── submit --from-meta overlay ────────────────────────────────────────────
 
 
@@ -244,7 +239,9 @@ class TestSubmitFromMeta:
         from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
-        monkeypatch.setattr("claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal")
+        monkeypatch.setattr(
+            "claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal"
+        )
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
         assert record.profile == "run-001-foo"
@@ -269,7 +266,9 @@ class TestSubmitFromMeta:
         from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
-        monkeypatch.setattr("claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal")
+        monkeypatch.setattr(
+            "claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal"
+        )
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
         assert record.profile == "explicit"
@@ -294,7 +293,9 @@ class TestSubmitFromMeta:
         from claude_hpc._internal import session
 
         monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "journal")
-        monkeypatch.setattr("claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal")
+        monkeypatch.setattr(
+            "claude_hpc._internal.session.run_record.HPC_HOMEDIR", tmp_path / "journal"
+        )
         record = session.load_run(tmp_path, env["data"]["run_id"])
         assert record is not None
         assert record.profile == "p"
