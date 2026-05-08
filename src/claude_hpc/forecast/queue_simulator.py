@@ -406,6 +406,16 @@ def _placement_for_running(
     return _try_place(j, free_by_node)
 
 
+DEFAULT_WALLTIME_ACTUAL_BAND: tuple[float, float] = (0.6, 1.0)
+"""Default ratio range for sampled actual walltime vs. requested.
+
+Empirical SLURM users routinely over-ask by 0–40%; this 60–100% band is
+a reasonable starting point for academic clusters but should be tuned
+per-cluster from sacct history. Pass ``walltime_actual_band`` to
+``simulate_one_pass`` to override.
+"""
+
+
 def simulate_one_pass(
     snapshot: ClusterSnapshot,
     *,
@@ -415,6 +425,7 @@ def simulate_one_pass(
     residual_lifetimes: dict[str, float] | None = None,
     max_horizon_sec: float = 7 * 86400.0,
     seed: int | None = None,
+    walltime_actual_band: tuple[float, float] = DEFAULT_WALLTIME_ACTUAL_BAND,
 ) -> SimResult:
     """Simulate the scheduler forward from ``snapshot``'s state.
 
@@ -430,7 +441,16 @@ def simulate_one_pass(
     ``residual_lifetimes``: optional ``{job_id: end_offset_sec}`` mapping
     that overrides the default ``walltime_ask`` for running jobs in the
     snapshot. Sampled by ``queue_simulator_inputs.sample_residual_lifetimes``.
+
+    ``walltime_actual_band``: ``(low, high)`` ratios applied to
+    ``walltime_ask`` when an arrival has no pre-set ``walltime_actual``.
+    Defaults to :data:`DEFAULT_WALLTIME_ACTUAL_BAND`.
     """
+    lo, hi = walltime_actual_band
+    if not (0.0 < lo <= hi):
+        raise ValueError(
+            f"walltime_actual_band must satisfy 0 < lo <= hi; got ({lo}, {hi})"
+        )
     rng = random.Random(seed)
     free_by_node = available_resources(snapshot)
     running = extract_running_jobs(snapshot)
@@ -479,34 +499,34 @@ def simulate_one_pass(
     completed = 0
     failed = 0
 
-    def _policy_loop(now: float) -> None:
-        """FIFO + EASY-backfill policy. Mutates queued + free_by_node + events."""
+    def _start_job(job: SimJob, target: str, now: float, actual: float) -> None:
+        """Move a job from ``queued`` state to ``running`` and emit its END event."""
         nonlocal seq, candidate_started, candidate_start
-        if not queued:
-            return
-        queued.sort(key=lambda j: (j.submit_time, j.job_id))
-        # Tier 1: drain HoQ-eligible runs.
+        _consume(target, job, free_by_node)
+        job.state = "running"
+        job.start_time = now
+        job.walltime_actual = actual
+        job.end_time = now + actual
+        placed_node[job.job_id] = target
+        seq += 1
+        heapq.heappush(events, (job.end_time, _EVT_END, seq, job.job_id))
+        if job.job_id == candidate.job_id and not candidate_started:
+            candidate_started = True
+            candidate_start = now
+
+    def _drain_hoq_eligible(now: float) -> None:
+        """Tier 1: start head-of-queue jobs in priority order while they fit."""
         while queued:
             head = queued[0]
             target = _try_place(head, free_by_node)
             if target is None:
-                break
+                return
             queued.pop(0)
-            _consume(target, head, free_by_node)
-            head.state = "running"
-            head.start_time = now
-            placed_node[head.job_id] = target
-            if head.walltime_actual is None:
-                head.walltime_actual = head.walltime_ask
-            head.end_time = now + head.walltime_actual
-            seq += 1
-            heapq.heappush(events, (head.end_time, _EVT_END, seq, head.job_id))
-            if head.job_id == candidate.job_id and not candidate_started:
-                candidate_started = True
-                candidate_start = now
-        if not queued:
-            return
-        # Tier 2: EASY backfill.
+            actual = head.walltime_actual if head.walltime_actual is not None else head.walltime_ask
+            _start_job(head, target, now, actual)
+
+    def _easy_backfill(now: float) -> None:
+        """Tier 2: backfill queued jobs that fit AND finish before HoQ reservation."""
         running_endings = [
             (job_table[jid].end_time or float("inf"), job_table[jid], placed_node.get(jid, ""))
             for _, kind, _, jid in events
@@ -530,17 +550,16 @@ def simulate_one_pass(
                 i += 1
                 continue
             queued.pop(i)
-            _consume(target, cand, free_by_node)
-            cand.state = "running"
-            cand.start_time = now
-            cand.walltime_actual = actual
-            cand.end_time = now + actual
-            placed_node[cand.job_id] = target
-            seq += 1
-            heapq.heappush(events, (cand.end_time, _EVT_END, seq, cand.job_id))
-            if cand.job_id == candidate.job_id and not candidate_started:
-                candidate_started = True
-                candidate_start = now
+            _start_job(cand, target, now, actual)
+
+    def _policy_loop(now: float) -> None:
+        """FIFO + EASY-backfill policy. Mutates queued + free_by_node + events."""
+        if not queued:
+            return
+        queued.sort(key=lambda j: (j.submit_time, j.job_id))
+        _drain_hoq_eligible(now)
+        if queued:
+            _easy_backfill(now)
 
     while events:
         time, kind, _seq, jid = heapq.heappop(events)
@@ -564,7 +583,7 @@ def simulate_one_pass(
                 continue
             ev_job.state = "queued"
             if ev_job is not candidate and ev_job.walltime_actual is None:
-                ev_job.walltime_actual = max(1.0, ev_job.walltime_ask * rng.uniform(0.6, 1.0))
+                ev_job.walltime_actual = max(1.0, ev_job.walltime_ask * rng.uniform(lo, hi))
             queued.append(ev_job)
             _policy_loop(time)
 

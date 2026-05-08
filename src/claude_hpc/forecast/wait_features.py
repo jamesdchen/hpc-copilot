@@ -160,6 +160,12 @@ def extract_features(
             "is_business_hours_utc": 9 <= hour_utc < 17,
             "gpu_pool_count": _gpu_pool_count(your_constraint),
             "constraint_specified": bool(your_constraint),
+            # Upper-median (sorted[n // 2]) for even n; matches the
+            # convention in calibration.HouseEdge. Differs from
+            # numpy/statistics.median which average the two middle
+            # values — for small running-job counts (typical: <50) the
+            # difference is at most one job's remaining time and is
+            # immaterial as a feature.
             "median_running_time_left_sec": (
                 sorted(j.time_left_sec for j in running if j.time_left_sec is not None)[
                     len([j for j in running if j.time_left_sec is not None]) // 2
