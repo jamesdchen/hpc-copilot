@@ -14,6 +14,7 @@ import random
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc.forecast.queue_simulator import (
+    DEFAULT_WALLTIME_ACTUAL_BAND,
     SimJob,
     SimResult,
     simulate_one_pass,
@@ -35,6 +36,7 @@ def simulate_distribution(
     seed: int | None = None,
     arrival_sampler: Any = None,
     residual_sampler: Any = None,
+    walltime_actual_band: tuple[float, float] = DEFAULT_WALLTIME_ACTUAL_BAND,
 ) -> SimResult:
     """Run ``n_replications`` simulations with sampled inputs.
 
@@ -68,6 +70,7 @@ def simulate_distribution(
             residual_lifetimes=res,
             max_horizon_sec=max_horizon_sec,
             seed=sub_seed,
+            walltime_actual_band=walltime_actual_band,
         )
         waits.append(out.predicted_start_offset_sec)
         last_state = out.predicted_state_at_horizon

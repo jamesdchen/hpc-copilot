@@ -204,9 +204,16 @@ class HouseEdge:
 
     n_with_prediction: int
     mean_delta_sec: float | None
-    median_delta_sec: float | None
-    p95_delta_sec: float | None
+    median_delta_sec: float | None  # upper-median for even n: sorted[n // 2]
+    p95_delta_sec: float | None  # nearest-rank: sorted[round(0.95 * (n - 1))]
     calibration_ratio: float | None  # mean(actual / predicted)
+    # Note: the median and p95 use simple index-based estimators rather
+    # than numpy/scipy linear-interpolation conventions. For the small
+    # sample sizes typical of per-cluster calibration buckets (<100), the
+    # difference is at most one rank step and never changes the
+    # qualitative signal (optimistic vs. pessimistic). For larger
+    # samples, callers wanting interpolated quantiles should compute
+    # them externally on the raw deltas.
 
 
 def compute_house_edge(samples: list[dict[str, Any]]) -> HouseEdge:
