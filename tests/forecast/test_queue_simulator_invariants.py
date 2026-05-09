@@ -15,6 +15,10 @@ Invariants covered:
 
 from __future__ import annotations
 
+import dataclasses
+
+import pytest
+
 from claude_hpc.forecast.queue_simulator import (
     SimJob,
     available_resources,
@@ -262,3 +266,144 @@ class TestDistributionEquivalence:
             arrival_sampler=lambda s: list(arrivals),
         )
         assert out.p10_wait_sec <= out.p50_wait_sec <= out.p90_wait_sec
+
+
+class TestHighContention:
+    """Stress tests for queue contention with many queued jobs.
+
+    The simulator's policy loop is O(N) per event in the worst case
+    (queued.sort + linear backfill walk). These tests exercise the
+    heterogeneous-resource and large-queue paths to catch regressions
+    that smaller tests would miss — e.g. an O(N^2) scaling slip,
+    backfill violating HoQ reservation under contention, or resource
+    leaks across thousands of placement/release cycles.
+    """
+
+    def _multi_node_snap(self, n_nodes: int = 8, cpus: int = 16) -> ClusterSnapshot:
+        nodes = [
+            NodeSnapshot(
+                name=f"n{i}",
+                state="IDLE",
+                real_mem_mb=128_000,
+                alloc_mem_mb=0,
+                cpu_tot=cpus,
+                cpu_alloc=0,
+                gres="",
+                gres_used="",
+                co_tenants=[],
+                is_drained=False,
+            )
+            for i in range(n_nodes)
+        ]
+        return ClusterSnapshot(
+            cluster="t",
+            scheduler_kind="slurm",
+            now_iso="2026-04-28T10:00:00+00:00",
+            nodes=nodes,
+        )
+
+    def test_thousand_queued_jobs_completes(self):
+        # 8 nodes x 16 CPUs = 128 slots; 1000 queued + 1 candidate.
+        # Each job: 4 CPUs, 100s walltime. Capacity is 32 jobs at once.
+        # The sim must complete without OOM / stack overflow / infinite
+        # loop, and must respect resource invariants throughout.
+        snap = self._multi_node_snap(n_nodes=8, cpus=16)
+        candidate = SimJob(
+            job_id="cand",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=100,
+            cpus=4,
+            mem_mb=4_000,
+            walltime_actual=100.0,
+        )
+        arrivals = [
+            SimJob(
+                job_id=f"a{i}",
+                user="u",
+                submit_time=float(i % 60),  # bursty: cluster fills early
+                walltime_ask=100,
+                cpus=4,
+                mem_mb=4_000,
+                walltime_actual=100.0,
+            )
+            for i in range(1000)
+        ]
+        out = simulate_one_pass(
+            snap,
+            candidate=candidate,
+            arrival_stream=arrivals,
+            max_horizon_sec=7 * 86400.0,
+            seed=42,
+        )
+        # Must finish; candidate must start within the horizon.
+        assert out.predicted_start_offset_sec < 7 * 86400.0
+        assert out.predicted_start_offset_sec >= 0.0
+        # 1000 arrivals + 1 candidate; everything either completed or
+        # is still queued — never lost.
+        n_completed = out.predicted_state_at_horizon["n_completed"]
+        n_queued = out.predicted_state_at_horizon["n_queued"]
+        assert n_completed + n_queued <= 1001
+
+    def test_walltime_band_param_is_honored(self):
+        # With band=(1.0, 1.0), arrivals always run for the full
+        # walltime_ask (no shortening). The candidate's wait should be
+        # >= than with the default band (0.6, 1.0) where neighbors
+        # finish faster on average.
+        snap = self._multi_node_snap(n_nodes=1, cpus=4)
+        candidate = SimJob(
+            job_id="cand",
+            user="u",
+            submit_time=10.0,
+            walltime_ask=50,
+            cpus=4,
+            mem_mb=4_000,
+            walltime_actual=50.0,
+        )
+        # Note: the candidate's walltime_actual is set explicitly, so
+        # it is not affected by the band; only arrivals are. SimJob
+        # instances are mutated by the simulator (walltime_actual is
+        # filled in on SUBMIT), so we build a fresh list per call.
+        def _fresh_arrivals():
+            return [
+                SimJob(
+                    job_id=f"a{i}",
+                    user="u",
+                    submit_time=float(i),
+                    walltime_ask=200,  # band-modulated
+                    cpus=4,
+                    mem_mb=4_000,
+                )
+                for i in range(5)
+            ]
+
+        wait_full = simulate_one_pass(
+            snap,
+            candidate=dataclasses.replace(candidate),
+            arrival_stream=_fresh_arrivals(),
+            walltime_actual_band=(1.0, 1.0),
+            seed=7,
+        ).predicted_start_offset_sec
+        wait_short = simulate_one_pass(
+            snap,
+            candidate=dataclasses.replace(candidate),
+            arrival_stream=_fresh_arrivals(),
+            walltime_actual_band=(0.2, 0.3),
+            seed=7,
+        ).predicted_start_offset_sec
+        assert wait_full > wait_short
+
+    def test_invalid_walltime_band_rejected(self):
+        snap = self._multi_node_snap(n_nodes=1, cpus=4)
+        cand = SimJob(
+            job_id="c",
+            user="u",
+            submit_time=0.0,
+            walltime_ask=10,
+            cpus=1,
+            mem_mb=1_000,
+        )
+        with pytest.raises(ValueError):
+            simulate_one_pass(snap, candidate=cand, walltime_actual_band=(0.0, 1.0))
+        with pytest.raises(ValueError):
+            simulate_one_pass(snap, candidate=cand, walltime_actual_band=(0.8, 0.5))

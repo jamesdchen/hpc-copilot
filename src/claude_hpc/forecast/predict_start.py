@@ -26,6 +26,7 @@ are still computed and surfaced for diagnostic purposes.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,6 +39,8 @@ from claude_hpc.forecast.academic_calendar import (
 from claude_hpc.forecast.drain_simulator import simulate_drain
 from claude_hpc.forecast.squeue_priority_field import QueuedJob
 from claude_hpc.forecast.wait_features import extract_features
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -242,18 +245,31 @@ def _resolve_model_paths(
 def _predict_overhead(model_file: Path, features: dict[str, Any], lgb: Any) -> int:
     """Run one LightGBM model on the feature row; clamp to ≥0."""
     booster = lgb.Booster(model_file=str(model_file))
-    row = [_coerce_numeric(features.get(name, -1)) for name in booster.feature_name()]
+    row = [_coerce_numeric(name, features.get(name, -1)) for name in booster.feature_name()]
     return max(0, int(round(float(booster.predict([row])[0]))))
 
 
-def _coerce_numeric(value: Any) -> float:
-    """LightGBM expects floats; coerce booleans / None / strings safely."""
+def _coerce_numeric(name: str, value: Any) -> float:
+    """LightGBM expects floats; coerce booleans / None / strings safely.
+
+    None and non-numeric values fall back to the ``-1.0`` sentinel — the
+    same convention :mod:`wait_features` uses for missing numerics — but
+    only None and bool are silent. Any other unexpected type triggers a
+    warning so silent data-quality issues surface in logs instead of
+    being papered over by the sentinel.
+    """
     if value is None:
         return -1.0
     if isinstance(value, bool):
         return 1.0 if value else 0.0
     if isinstance(value, (int, float)):
         return float(value)
+    _log.warning(
+        "feature %r has non-numeric value %r (type=%s); using -1.0 sentinel",
+        name,
+        value,
+        type(value).__name__,
+    )
     return -1.0
 
 
