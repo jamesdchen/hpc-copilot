@@ -162,6 +162,8 @@ If `tp.exists()`, read it as-is — never regenerate. To change the axis, the us
 
 If `tp.exists()` is False, walk through `claude_hpc/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
 
+**Axis naming (fidelity vs. serial)**: when the user proposes axis names, prefer experiment-prefixed forms (`exp_horizon`, `ridge_alpha`) over bare names (`horizon`, `alpha`). The dispatcher exports each kwarg as both `HPC_KW_<KEY>` and bare `<KEY>` (uppercased), and the bare form silently shadows real env vars when names collide — an axis named `home` becomes `$HOME` for the executor, breaking everything that uses the home directory. `build-tasks-py` rejects names that match a reserved set (`HOME`, `PATH`, `USER`, `LD_LIBRARY_PATH`, `OMP_NUM_THREADS`, the framework's own `HPC_*`, scheduler-injected `SLURM_*`/`SGE_*`/`PBS_*`, etc.) so the failure surfaces at scaffold time, but the safest pattern is to prefix all experiment kwargs and avoid the question. Setting `HPC_KW_NAMESPACE_ONLY=1` in the spec's `job_env` disables the bare-uppercase export entirely (executor reads `HPC_KW_<KEY>` only) and is the recommended default for new campaigns.
+
 Copy the dispatcher:
 ```python
 import shutil

@@ -59,7 +59,7 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
     error_codes=[errors.SpecInvalid, errors.SshUnreachable],
     idempotent=True,
     idempotency_key="canary_run_id",
-    cli="hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]",  # noqa: E501
+    cli="hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]",  # noqa: E501
     agent_facing=True,
 )
 def verify_canary(
@@ -67,6 +67,7 @@ def verify_canary(
     *,
     canary_run_id: str,
     expect_output: str | None = None,
+    fingerprint: str | None = None,
     poll_interval_sec: int = _DEFAULT_POLL_INTERVAL_SEC,
     wait_budget_sec: int = _DEFAULT_WAIT_BUDGET_SEC,
     log_dir: str = "logs",
@@ -84,6 +85,13 @@ def verify_canary(
         Path (relative to ``remote_path`` or absolute) the canary
         should have written. Verified via SSH + ``[ -f ... ]``. ``None``
         skips the output check; the exit-code + log scan still run.
+    fingerprint:
+        Relative path (under the canary's result_dir) of a file to
+        SHA256 over SSH. The hex digest is returned as
+        ``data.metrics_fingerprint``. Lets the caller diff the canary
+        output against a local reference run of the same task to detect
+        framework-induced divergence (different GPU SKU, library drift,
+        env-var collision). ``None`` skips the fingerprint.
     poll_interval_sec, wait_budget_sec:
         Adaptive poll knobs. Exits early once the canary is terminal;
         otherwise gives up after *wait_budget_sec* with
@@ -223,6 +231,32 @@ def verify_canary(
             "stderr_tail": stderr_tail,
         }
 
+    # Optional fingerprint. Best-effort: a fingerprint failure does NOT
+    # invalidate the canary (the run itself is fine; we just couldn't
+    # hash). Returns ``None`` when unavailable rather than raising.
+    # ``fingerprint`` is treated as an absolute remote path or a path
+    # relative to ``record.remote_path``; the caller is responsible for
+    # constructing it (the sidecar's ``result_dir_template`` plus
+    # ``tasks.resolve(0)`` is the canonical local-side derivation).
+    metrics_fingerprint: str | None = None
+    if fingerprint:
+        import shlex
+
+        from claude_hpc.infra.remote import ssh_run
+
+        target = fingerprint
+        if not target.startswith("/"):
+            target = f"{record.remote_path.rstrip('/')}/{target.lstrip('/')}"
+        try:
+            sha = ssh_run(
+                f"sha256sum {shlex.quote(target)} 2>/dev/null | awk '{{print $1}}'",
+                ssh_target=record.ssh_target,
+            )
+            if sha.returncode == 0:
+                metrics_fingerprint = sha.stdout.strip() or None
+        except (errors.RemoteCommandFailed, OSError):
+            metrics_fingerprint = None
+
     return {
         "ok": True,
         "failure_kind": None,
@@ -231,4 +265,5 @@ def verify_canary(
             + (f"output {expect_output!r} present." if expect_output else "no output check.")
         ),
         "stderr_tail": stderr_tail,
+        "metrics_fingerprint": metrics_fingerprint,
     }

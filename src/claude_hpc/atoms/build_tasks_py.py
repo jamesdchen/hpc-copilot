@@ -24,6 +24,107 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+# Axis names whose uppercase form would shadow a real env var when the
+# dispatcher exports them. The dispatcher (mapreduce/dispatch.py) does
+# ``env[key.upper()] = str(value)`` for every kwarg in tasks.resolve()'s
+# return dict; an axis named ``home`` becomes ``HOME=...``, silently
+# breaking the executor's environment.
+#
+# Three groups:
+#   1. POSIX/standard env vars every shell relies on.
+#   2. Library env vars that change Python/BLAS/CUDA behavior.
+#   3. Framework-reserved keys the dispatcher itself uses.
+#
+# An axis name is rejected if its uppercase form is in this set (or
+# matches one of the prefix-reserved patterns below). The kwarg-name
+# space is large; any single experiment's axes are ~5 names; collision
+# is rare but always wrong, so fail-fast at scaffold time.
+_RESERVED_AXIS_NAMES: frozenset[str] = frozenset(
+    {
+        # POSIX shell / OS
+        "HOME",
+        "PATH",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "PWD",
+        "OLDPWD",
+        "TERM",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        # Library: Python
+        "PYTHONPATH",
+        "PYTHONHASHSEED",
+        "PYTHONUNBUFFERED",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONIOENCODING",
+        "PYTHONHOME",
+        # Library: BLAS / threading
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        # Library: CUDA / GPU
+        "CUDA_VISIBLE_DEVICES",
+        "CUDA_HOME",
+        "LD_LIBRARY_PATH",
+        "CUBLAS_WORKSPACE_CONFIG",
+        "XLA_FLAGS",
+        "PYTORCH_CUDA_ALLOC_CONF",
+        # Framework-reserved
+        "RESULT_DIR",
+        "HPC_RESULT_DIR",
+        "HPC_TASK_ID",
+        "HPC_RUN_ID",
+        "HPC_GPU_TYPE",
+        "HPC_RUNTIME",
+        "HPC_PREEMPT_GRACE_SEC",
+        "HPC_NFS_DATA_DIR",
+        "HPC_KW_NAMESPACE_ONLY",
+        "HPC_FORCE_RERUN",
+        "LOCAL_DATA_DIR",
+        # Scheduler-injected (subset; prefix check below covers the rest)
+        "JOB_ID",
+        "TASK_ID",
+        "NSLOTS",
+    }
+)
+
+# Prefix patterns: any axis name whose uppercase starts with one of
+# these is reserved. Catches the long tail of scheduler-injected vars
+# (SLURM_JOB_ID, SGE_TASK_ID, ...) and the framework's own kwarg
+# namespace (HPC_KW_*).
+_RESERVED_AXIS_PREFIXES: tuple[str, ...] = (
+    "SLURM_",
+    "SGE_",
+    "PBS_",
+    "HPC_KW_",
+)
+
+
+def _validate_axis_name(name: str) -> None:
+    """Raise :class:`errors.SpecInvalid` if *name* would collide with an env var.
+
+    Called per axis at scaffold time so a problem name fails before
+    ``.hpc/tasks.py`` is written, rather than as a silent runtime
+    divergence after the executor reads (e.g.) the wrong ``$HOME``.
+    """
+    upper = name.upper()
+    if upper in _RESERVED_AXIS_NAMES or any(
+        upper.startswith(p) for p in _RESERVED_AXIS_PREFIXES
+    ):
+        raise errors.SpecInvalid(
+            f"axis name {name!r} would shadow the env var {upper!r} "
+            "when the dispatcher exports kwargs to the executor's "
+            "environment. Rename the axis (a per-experiment prefix like "
+            f"`exp_{name}` is the canonical fix), or set "
+            "HPC_KW_NAMESPACE_ONLY=1 in the spec's job_env to disable "
+            "the bare-uppercase export entirely (HPC_KW_<NAME> still works)."
+        )
+
+
 # Whitelist of types we know how to emit. Anything else (numpy.float32,
 # user-defined classes, Decimal) routes to ``str`` since cluster-side
 # argparse downcasts via the type ctor anyway and emitting opaque types
@@ -179,6 +280,12 @@ def build_tasks_py(
     via ``total()``.
     """
     axes = [a.model_dump() for a in spec.axes]
+    # Reject axis names that would shadow real env vars when the
+    # dispatcher exports kwargs. Done before the file write so a typo
+    # like ``home`` or ``path`` fails at scaffold time, not at runtime
+    # when the executor's $HOME has been silently overwritten.
+    for ax in axes:
+        _validate_axis_name(ax["name"])
     # exclude_none on the flag dump so a flag without ``default`` doesn't
     # acquire a synthetic ``default: None`` (the renderer's ``"default"
     # in flag`` check would then emit a spurious ``default=None`` arg).

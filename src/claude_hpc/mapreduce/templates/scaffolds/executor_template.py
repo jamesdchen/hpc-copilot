@@ -34,11 +34,31 @@ Convention details:
   combiner can aggregate per grid point. No-op outside the HPC
   dispatcher.
 
-Smoke test during development::
+Reproducibility (parity with a serial run):
 
-    python -c "import argparse; \
-               from src.<this_module> import compute; \
-               compute(argparse.Namespace(output_file='/tmp/out.csv'))"
+* **Seed deterministically from ``HPC_TASK_ID``** (or a kwarg derived
+  from it in ``tasks.py``). Same task_id → same numbers regardless of
+  which compute node it lands on. The dispatcher exports
+  ``HPC_TASK_ID`` for every task; reading it here is the difference
+  between "deterministic across the array" and "wall-clock-seeded
+  every run."
+* **Read kwargs from ``HPC_KW_<KEY>`` rather than the bare uppercase
+  ``<KEY>``.** The dispatcher exports both forms by default for back-
+  compat, but the bare form silently overwrites real env vars (a
+  kwarg named ``home`` becomes ``$HOME``). The ``HPC_KW_*`` namespace
+  is collision-free.
+* **Pin thread counts before importing numpy/scipy/torch** if you do
+  numerical reductions. The cluster preamble already defaults
+  ``OMP_NUM_THREADS=1`` etc., but doing it inside the executor too
+  makes the executor reproducible when run serially outside the
+  framework.
+
+Smoke test during development (mimics the dispatcher env)::
+
+    HPC_TASK_ID=0 RESULT_DIR=/tmp/out python -c \
+        "import argparse; \
+         from src.<this_module> import compute; \
+         compute(argparse.Namespace(output_file='/tmp/out.csv'))"
 """
 
 # ruff: noqa: E501  (LLM-facing scaffolds read better with long lines)
@@ -60,8 +80,19 @@ def compute(args: argparse.Namespace) -> None:
     Namespace is whatever the dispatcher parsed from argv against this
     executor's per-key entry in ``.hpc/tasks.py`` FLAGS.
     """
+    # Reproducibility seed. Falls back to ``args.seed`` (the
+    # generic_args default of 42) when run serially outside the
+    # dispatcher. ``HPC_TASK_ID`` makes parallel tasks differ
+    # deterministically; ``args.seed`` keeps a serial smoke-test
+    # bit-identical across runs.
+    _seed = int(os.environ.get("HPC_TASK_ID", str(getattr(args, "seed", 42))))
+    # Pass _seed to your RNG, e.g.:
+    #     rng = numpy.random.default_rng(_seed)
+    # ``np.random.default_rng`` is preferred over ``np.random.seed`` —
+    # the latter mutates a process-global state and is not thread-safe.
+
     # Example minimal output: one-row CSV with a placeholder metric.
-    result: dict[str, Any] = {"value": 0.0, "n_samples": 0}
+    result: dict[str, Any] = {"value": 0.0, "n_samples": 0, "seed": _seed}
 
     os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
     with open(args.output_file, "w", newline="") as f:
@@ -112,3 +143,32 @@ def compute(args: argparse.Namespace) -> None:
 #        my_files = files[args.shard_id::args.n_shards]
 #        rows = sum((process(f) for f in my_files), [])
 #        write_parquet(args.output_file, rows)
+#
+# ── PyTorch determinism (drop in if you import torch) ─────────────────────
+#
+#    import torch
+#    torch.manual_seed(_seed)
+#    torch.cuda.manual_seed_all(_seed)
+#    torch.use_deterministic_algorithms(True)
+#    torch.backends.cudnn.deterministic = True
+#    torch.backends.cudnn.benchmark = False
+#    # CUBLAS_WORKSPACE_CONFIG=:4096:8 is required for the above to work
+#    # on CUDA matmuls; the framework's gpu_preamble.sh exports it.
+#    # If you use DataLoader(num_workers>0), pass:
+#    #     g = torch.Generator(); g.manual_seed(_seed)
+#    #     DataLoader(..., generator=g,
+#    #                worker_init_fn=lambda i: numpy.random.seed(_seed + i))
+#
+# ── Reading kwargs from HPC_KW_* (collision-free) ─────────────────────────
+#
+# The dispatcher exports each kwarg as both ``HPC_KW_<KEY>`` and bare
+# ``<KEY>`` (uppercased). The bare form can shadow real env vars
+# (``home`` → ``$HOME``); prefer the namespaced form when reading from
+# os.environ rather than from args.<name>:
+#
+#    horizon = int(os.environ.get("HPC_KW_HORIZON", "1"))
+#
+# (When the .hpc/cli.py dispatcher hands you ``args``, this is a moot
+# point — argparse parses from the CLI, not the env. The env-var form
+# matters only if your shell command in the spec uses ``$HORIZON`` or
+# you read kwargs from inside a non-Python wrapper.)

@@ -711,7 +711,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>]",
+    "cli": "hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]",
     "idempotent": true,
     "input_schema": null,
     "name": "verify-canary",
