@@ -448,9 +448,7 @@ def simulate_one_pass(
     """
     lo, hi = walltime_actual_band
     if not (0.0 < lo <= hi):
-        raise ValueError(
-            f"walltime_actual_band must satisfy 0 < lo <= hi; got ({lo}, {hi})"
-        )
+        raise ValueError(f"walltime_actual_band must satisfy 0 < lo <= hi; got ({lo}, {hi})")
     rng = random.Random(seed)
     free_by_node = available_resources(snapshot)
     running = extract_running_jobs(snapshot)
