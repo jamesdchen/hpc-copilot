@@ -77,9 +77,7 @@ def compute_submission_plan(
     """
     total = workload.total_tasks
     if total <= 0:
-        raise ValueError(
-            f"total_tasks must be >= 1 to build a submission plan; got {total}."
-        )
+        raise ValueError(f"total_tasks must be >= 1 to build a submission plan; got {total}.")
 
     # 1. Batch count
     n_batches = math.ceil(total / constraints.max_array_size)

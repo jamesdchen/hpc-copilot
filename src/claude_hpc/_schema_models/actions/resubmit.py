@@ -91,7 +91,5 @@ class ResubmitSpec(BaseModel):
                 if value is None
             ]
             if missing:
-                raise ValueError(
-                    f"submit_to_cluster=true requires {', '.join(missing)} to be set"
-                )
+                raise ValueError(f"submit_to_cluster=true requires {', '.join(missing)} to be set")
         return self
