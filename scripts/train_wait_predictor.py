@@ -170,7 +170,13 @@ def fit_and_persist(
     if not rows:
         return {"status": "no_training_data", "n_rows": 0}
 
-    feature_names = sorted(rows[0][0].keys())
+    # Union of all keys, not just the first row: a feature added by a
+    # later extractor version would otherwise be silently dropped from
+    # training.
+    _all_keys: set[str] = set()
+    for r in rows:
+        _all_keys.update(r[0].keys())
+    feature_names = sorted(_all_keys)
     # Feature validation: warn (not fail) when a feature is missing /
     # sentinel-only across ALL training rows. Indicates an upstream
     # plumbing bug — the feature is being computed but not populated.

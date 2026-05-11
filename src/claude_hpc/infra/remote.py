@@ -288,7 +288,11 @@ def ssh_run(
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
     effective_timeout: float | None = SSH_TIMEOUT_SEC if timeout is _DEFAULT else timeout
-    argv = ["ssh", *_ssh_multiplex_opts(), ssh_target, cmd]
+    # BatchMode=yes refuses password/keyboard-interactive prompts so an
+    # unknown host or missing key surfaces as an immediate auth failure
+    # rather than blocking until the timeout. _tar_ssh_push and
+    # _scp_pull already use this flag.
+    argv = ["ssh", "-o", "BatchMode=yes", *_ssh_multiplex_opts(), ssh_target, cmd]
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:

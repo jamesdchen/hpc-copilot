@@ -90,6 +90,18 @@ def main() -> int:
             print(f"  {m}")
         print("\nAdd them to _PRIMITIVE_MODULES in claude_hpc/_internal/_primitive.py.")
         return 1
+    stale = expected - found
+    if stale:
+        # Warning rather than failure: some modules are intentionally
+        # listed (e.g. agent_cli.py registers via the cmd_* dispatcher,
+        # not via @primitive). A hard failure would require unwinding
+        # those legitimate cases.
+        print(
+            "WARNING: _PRIMITIVE_MODULES entries with no @primitive(...) decorator:",
+            file=sys.stderr,
+        )
+        for m in sorted(stale):
+            print(f"  {m}", file=sys.stderr)
     return 0
 
 

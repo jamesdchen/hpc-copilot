@@ -111,7 +111,10 @@ def diagnose_drift(
     recent = history[-1].get("val_mae_sec")
     baseline_runs = history[-(min_baseline_runs + 1) : -1]
     baseline_maes = [r["val_mae_sec"] for r in baseline_runs if "val_mae_sec" in r]
-    if recent is None or not baseline_maes:
+    # Guard the post-filter size too: if 3 of 5 baseline runs are
+    # missing val_mae_sec, median() runs on 2 values and the detector
+    # fires regression/improvement on noise.
+    if recent is None or len(baseline_maes) < min_baseline_runs:
         return DriftDiagnosis(
             status="insufficient_history",
             recent_mae_sec=recent,

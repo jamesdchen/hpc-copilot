@@ -1,5 +1,11 @@
 #!/bin/bash
-set -e
+# Fail loudly: -e exits on error, -o pipefail propagates failures
+# through `time $EXECUTOR | ...`. -u is intentionally NOT set because
+# the sourced preambles use the `if [ -n "$VAR" ]` pattern on
+# optionally-set vars. Explicit guards on the critical scheduler vars
+# below catch the "task -1" dispatch failure mode.
+set -eo pipefail
+: "${SGE_TASK_ID:?SGE_TASK_ID is not set; refusing to dispatch task -1}"
 
 # ==============================================================
 # SGE GPU Array Job Template (claude-hpc)

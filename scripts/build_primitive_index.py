@@ -174,6 +174,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    README.parent.mkdir(parents=True, exist_ok=True)
     README.write_text(new, encoding="utf-8")
     print(f"regenerated catalog ({len(primitives)} primitives)")
     return 0

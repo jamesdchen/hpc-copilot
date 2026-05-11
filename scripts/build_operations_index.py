@@ -135,6 +135,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(new, encoding="utf-8")
     print(f"regenerated docs/generated/operations.md ({len(operations)} operations)")
     return 0

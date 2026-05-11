@@ -21,6 +21,7 @@ parsed structures to :class:`ClusterSnapshot`.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -77,14 +78,29 @@ _KV_TOKEN = re.compile(r"(\w+)=(\S*)")
 
 def _slurm_time_to_iso(token: str) -> str | None:
     """Parse SLURM's compact time format (``2026-04-15T03:00:00``) to
-    a UTC ISO string. Returns None on parse failure (token absent,
-    relative ``NOW+...`` form, or unrecognised shape)."""
+    an ISO string. Returns None on parse failure (token absent,
+    relative ``NOW+...`` form, or unrecognised shape).
+
+    SLURM emits reservation times in slurmctld's local timezone, NOT
+    UTC. The TZ is read from ``HPC_SLURM_TZ`` (e.g. ``America/Los_Angeles``);
+    when unset we tag as UTC for backwards compatibility — callers that
+    compare against UTC ``now()`` on non-UTC clusters will be off by the
+    cluster's offset.
+    """
     if not token or token in {"Unknown", "N/A"}:
         return None
     try:
         dt = datetime.strptime(token, "%Y-%m-%dT%H:%M:%S")
     except ValueError:
         return None
+    tz_name = os.environ.get("HPC_SLURM_TZ")
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            return dt.replace(tzinfo=ZoneInfo(tz_name)).astimezone(timezone.utc).isoformat()
+        except Exception:  # noqa: BLE001 — bad TZ falls back to UTC tag
+            pass
     return dt.replace(tzinfo=timezone.utc).isoformat()
 
 
