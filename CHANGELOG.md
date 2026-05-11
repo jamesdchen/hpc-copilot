@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Determinism — fidelity guardrails for parallel-vs-serial executor parity
+
+The framework's value is "parallelize without changing what computes." This
+release closes the realistic divergence sources between a serial run and
+the same task running as part of a parallel array, while keeping every
+guard overridable per-experiment.
+
+**Cluster preamble**
+- `hpc_preamble.sh` pins `PYTHONUNBUFFERED=1`, `PYTHONHASHSEED=0`,
+  `PYTHONDONTWRITEBYTECODE=1`, `PYTHONIOENCODING=utf-8`,
+  `LC_ALL=C.UTF-8`, `LANG=C.UTF-8` by default. Each overridable via
+  `HPC_<NAME>`; empty string disables.
+- `gpu_preamble.sh` pins `CUBLAS_WORKSPACE_CONFIG=:4096:8` (required
+  for `torch.use_deterministic_algorithms`) and
+  `XLA_FLAGS=--xla_gpu_deterministic_ops=true` (JAX).
+
+**Dispatcher**
+- `HPC_KW_NAMESPACE_ONLY=1` opt-in skips the bare-uppercase kwarg
+  export, eliminating the `HOME=`/`PATH=` collision class. Recommended
+  for new campaigns.
+- `HPC_FORCE_RERUN=1` bypasses the `metrics.json` idempotency skip.
+- `cmd_sha`-mismatch auto-rerun: each successful task stamps
+  `<result_dir>/.hpc_cmd_sha`; on re-entry, a mismatch between the
+  stamped sha and the sidecar's `cmd_sha` forces re-run. Code/kwarg
+  changes never silently reuse a stale result.
+
+**Validators**
+- `build-tasks-py` rejects axis names whose uppercase form would
+  shadow real env vars (`HOME`, `PATH`, `LD_LIBRARY_PATH`,
+  `OMP_NUM_THREADS`, framework `HPC_*`, scheduler `SLURM_*`/`SGE_*`/
+  `PBS_*`, ...) with a remediation message.
+- `verify-canary` gains optional `--fingerprint <relpath>` that
+  SHA256s a file under the canary's result_dir over SSH; lets callers
+  diff against a local reference run to detect framework-induced
+  divergence.
+
+**Documentation**
+- `docs/reference/boundary-contract.md` new "Determinism contract"
+  section enumerating what the framework guarantees and what stays
+  user-side, with a recipe for reproducing a task locally.
+- `skills/hpc-submit/SKILL.md` Step 6b: namespaced-axis-naming
+  guidance so the agent recommends prefixed kwargs at conversation
+  time.
+- `combiner.py` docstring: explicit order-invariance guarantee
+  (`sorted()` iteration + Neumaier-compensated summation).
+- `executor_template.py` scaffold: demonstrates seed-from-
+  `HPC_TASK_ID`, `HPC_KW_*` reads, torch determinism flags,
+  `np.random.default_rng` over `np.random.seed`.
+
 ### Refactor — repo audit: hygiene fixes across docs, infra, and lint gates
 
 Multi-agent audit of the 542-file tree surfaced ~25 cross-cutting issues;
