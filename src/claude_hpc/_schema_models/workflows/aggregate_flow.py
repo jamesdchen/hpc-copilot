@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from claude_hpc._schema_models._shared import CombinedWaves, FailedWaves, RunIdLoose, RunIdStrict
 
@@ -73,6 +73,12 @@ class AggregateFlowSpec(BaseModel):
             "the framework convention."
         ),
     )
+
+    @model_validator(mode="after")
+    def _require_summary_glob_when_pulling(self) -> AggregateFlowSpec:
+        if self.pull_summaries and not self.summary_glob:
+            raise ValueError("summary_glob is required when pull_summaries=true")
+        return self
 
 
 class AggregateFlowResult(BaseModel):

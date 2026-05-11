@@ -30,6 +30,7 @@ the same run_id is safe and cheap.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -323,7 +324,9 @@ def aggregate_flow(
                 f"[aggregate-flow] ingested {ingested} runtime samples "
                 f"into .hpc/runtimes/{record.profile}.{record.cluster}.json"
             )
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        # Runtime ingestion is best-effort — a corrupt sidecar or
+        # missing runtime file MUST NOT crash aggregate_flow.
         pass
 
     # Optionally pull summaries.

@@ -87,15 +87,20 @@ def recommend_partition(
             leverage_estimate=1.0,
         )
 
-    cap = debug.walltime_cap_sec or 0
-    if cap > 0 and spec.requested_walltime_sec <= cap:
+    # debug.walltime_cap_sec == None means the partition has no
+    # walltime cap declared; treat that as "any walltime is in-bounds".
+    # Coalescing None to 0 (the previous behaviour) routed every job to
+    # debug_overrun_refused with a nonsensical "> 0s cap" message.
+    cap = debug.walltime_cap_sec
+    if cap is None or spec.requested_walltime_sec <= cap:
         leverage = max(debug.priority_tier / fallback_tier, 1.0)
+        cap_str = f"<= {cap}s cap" if cap is not None else "no cap"
         return RecommendPartitionResult(
             recommended_partition=debug.name,
             rationale="debug_short_walltime",
             message=(
                 f"Routing to {debug.name!r} (walltime {spec.requested_walltime_sec}s "
-                f"<= {cap}s cap; PriorityTier {debug.priority_tier} vs "
+                f"{cap_str}; PriorityTier {debug.priority_tier} vs "
                 f"{fallback_tier} on {fallback.name!r})."
             ),
             leverage_estimate=leverage,

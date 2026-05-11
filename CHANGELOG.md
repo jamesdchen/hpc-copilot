@@ -2,6 +2,167 @@
 
 ## Unreleased
 
+### Audit pass — bug fixes across CLI, planning, flows, runner, mapreduce, forecast, schema, infra
+
+A cross-subsystem audit (11 parallel reviewers, 217 modules) surfaced
+~50 defects. The high- and medium-impact ones are now fixed; all 1938
+tests pass.
+
+**CLI (`agent_cli.py`)**
+- `category="user-error"` (9 callsites) fell through `_EXIT_CODE_BY_CATEGORY`
+  and returned exit 3 (internal) instead of 1 (user); the valid key is
+  `"user"`. Every "user error" was reported as an internal error.
+- `validate-campaign` returned bare `1` instead of `EXIT_USER_ERROR`.
+- `_VERB_GROUPS` listed seven ops (`recommend-partition`,
+  `recommend-wait-alternative`, `validate-executor-signatures`,
+  `validate-input-dataset`, `validate-self-qos-limit`,
+  `validate-walltime-against-history`) with no argparse parser;
+  trimmed to only the registered ones.
+
+**Planning**
+- `validate.py` looked up clusters as `(cfg["clusters"]).get(name)`
+  but the loader is flat — every `validate_submission` raised
+  "unknown cluster". Fixed to match `planner.py` / `resubmit_planner.py`.
+- `throughput.py` divided by zero when `total_tasks=0`; guard up front.
+- `checkpoint_detect.py` could `rglob` the filesystem root when a
+  `result_dir_template`'s first non-root segment is a placeholder.
+
+**Campaign**
+- `cursor.advance_cursor` discarded `atomic_locked_update`'s return
+  and re-read the cursor outside the lock — concurrent bumps could
+  observe a later iteration than the caller's own bump.
+- `manifest.write_manifest` had no fsync and no advisory lock;
+  routed through `atomic_locked_update` so concurrent `campaign_init`
+  calls serialize on the same flock the cursor uses.
+- `goal=""` is now preserved (was dropped because of `if goal:`).
+
+**Mapreduce**
+- `combiner.SUPPORTED_SCHEMA_VERSIONS=(1,)` while writers emit
+  version 2; every production wave-combine was rejected. Tests
+  masked the regression because `conftest.py` pinned v1 fixtures.
+- `reduce/metrics.py` `_run_id` joined `params.values()` in
+  insertion order; identical-content dicts grouped separately.
+- `dispatch.py` promoted output files in `os.listdir` order, so a
+  kill mid-promotion could leave `metrics.json` (the idempotency
+  marker) in place while siblings remained in `_wip_/`. Now demoted
+  to last.
+- `dispatch.py` `prior_cmd_sha` could be unbound when
+  `current_cmd_sha` was falsy.
+- `reduce/history.py` `path.stat()` raced with sidecar deletion;
+  now guarded.
+- `metrics_io.write_metrics` missing `flush()/fsync()` before
+  `os.replace`; node crash could leave a zero-byte `metrics.json`
+  (which the dispatcher's idempotency check treats as "complete").
+- `reduce/tui.py` raw stderr passed to Rich Table without escaping;
+  log lines like `[red]Error[/red]` triggered MarkupError. Per-task
+  dict write is now atomic.
+
+**Flows**
+- `monitor_flow.py` `FAILED` branch never called `runner.mark_terminal`
+  — every monitor re-invocation re-polled the cluster until budget.
+- `monitor_flow.py` escalated combiner waves (sentinel `10**9`) were
+  retried indefinitely because `_newly_complete_waves` kept surfacing
+  them. Skip waves past the sentinel.
+- `aggregate_flow.py` best-effort runtime-ingest swallowed only
+  `OSError`, not `JSONDecodeError`; corrupt sidecar crashed aggregate.
+- `resubmit_flow.py` mid-loop `RemoteCommandFailed` orphaned
+  already-submitted batches; retry would double-submit. Persist
+  partial IDs to the journal before re-raising.
+- `validate_campaign.py` `dataset_row_indices=[]` (empty list)
+  silently bypassed dataset validation; only skip when `None`.
+
+**Atoms**
+- `canary_verify.py` picked scheduler via `"slurm" in cluster.lower()`
+  — clusters like `discovery`, `hoffman2`, `cascade` mis-routed to
+  SGE log paths. Now reads `scheduler` from `clusters.yaml` like the
+  other atoms do.
+- `recommend_partition.py` coalesced `None walltime_cap_sec` to 0,
+  then routed every job to `debug_overrun_refused` with a "> 0s cap"
+  message.
+- `interview.py` generated `tasks.py` with division by `(_N - 1)`
+  for both `numeric_linspace` and `numeric_logspace`; `n=1` crashed
+  at resolve time.
+- `build_executor.py` `read_text()`/`write_text()` use the locale
+  codec; on HPC nodes with `LC_ALL=C` the UTF-8 template would
+  raise or corrupt. Pinned `encoding="utf-8"`.
+- `campaign_budget.py`/`campaign_converged.py` narrowed
+  `except Exception` to `(OSError, ValueError, JSONDecodeError)`
+  so `KeyboardInterrupt` isn't swallowed during long scans.
+
+**Forecast**
+- `drain_simulator.py` used `datetime.max` (naive) as the
+  indefinite-job sentinel against tz-aware datetimes;
+  `running_slots.sort()` raised `TypeError`. Now `datetime.max.replace(tzinfo=utc)`.
+- `calibration.py` near-miss filter counted failed jobs in
+  `[near_miss_ratio, cliff_ratio)`; docstring requires `exit_code == 0`.
+- `backfill.py` probe cache key omitted `mem_mb` and `cpus` — two
+  `ResourceTuple`s differing only in mem/cpus collided and returned
+  the wrong ETA.
+- `drift_detector.py` `insufficient_history` check now includes the
+  filtered list size, not just `len(history)`.
+
+**Runner**
+- `failures.py` exit-code-130 fallback only overrode `"unknown"`;
+  SLURM preempt notifications contain `"signal SIGTERM 15"` which
+  trips the walltime regex, so preempted jobs were mis-advised
+  `increase-walltime`. Now also overrides `"walltime"`.
+- `update_constraints.py` overwrote the sidecar in place with
+  `write_text`; interruption left a corrupt file. Switched to
+  tempfile + fsync + replace.
+
+**Infra**
+- `infra/inspect/slurm.py` SLURM node names interpolated into a
+  `shell=True` sacct command without quoting; `shlex.quote` added.
+- `infra/inspect/slurm.py` `len(parts) < 8` guard but
+  `_SACCT_BUCKET_FORMAT` has 9 columns — rows with exactly 8
+  silently dropped.
+- `infra/remote.ssh_run` missing `-o BatchMode=yes`; new-host-key or
+  password prompts blocked until timeout instead of failing fast.
+- `infra/slurm_reservations._slurm_time_to_iso` force-tagged SLURM
+  timestamps as UTC even though slurmctld emits local time. Added
+  `HPC_SLURM_TZ` env override and documented the assumption.
+
+**Schema models (with regen of the committed JSON schemas)**
+- `runtime_prior.RuntimePriorResult` had `extra="forbid"` but
+  `roll_up_quantiles` returns `mem_quantiles_mb` and
+  `cpu_cores_quantiles` — added the fields.
+- `update_run_constraints.UpdateRunConstraintsSpec` now enforces
+  `set_features` vs `add_features` mutual exclusion at the spec
+  layer (function-level guard preserved as belt-and-suspenders).
+- `aggregate_flow.AggregateFlowSpec` requires `summary_glob` when
+  `pull_summaries=true`.
+- `resubmit.ResubmitSpec` requires `script`, `backend`, `job_name`
+  when `submit_to_cluster=true`.
+- `axes.AxesConfig.homogeneous_axes` must be a subset of `axes`
+  when both are present.
+- `submit.SubmitResult.total_tasks` tightened to `ge=1` (matches
+  spec).
+- `validate.ValidateResult.scheduler` typed `Literal["sge","slurm"]`.
+
+**State**
+- `state/runs.py` `_warned_version_mismatch` was an unbounded set;
+  a monitor watching a 10k-task campaign would grow it indefinitely.
+  Replaced with a bounded LRU (`OrderedDict`, cap 1024).
+
+**Runtime templates (`mapreduce/templates/runtime/{sge,slurm}/`)**
+- Switched from `set -e` to `set -eo pipefail` on all four array
+  templates and added an explicit
+  `: "${SGE_TASK_ID:?...}"` / `: "${SLURM_ARRAY_TASK_ID:?...}"`
+  guard so a missing scheduler-injected task id refuses to dispatch
+  task -1.
+
+**Scripts**
+- `build_operations_index.py` crashed with `IndexError` when
+  `hpc-agent` produced no stdout; now errors out cleanly.
+- `build_schemas.py` first-seen-wins silently masked schema-name
+  collisions; now raises `RuntimeError` listing both modules.
+- `build_{schemas,operations_index,primitive_index,validate_des_predictor}.py`
+  now `mkdir(parents=True)` before write.
+- `train_wait_predictor.py` `feature_names` is the union of keys
+  across all rows, not just `rows[0]`.
+- `lint_primitive_modules.py` warns on stale `_PRIMITIVE_MODULES`
+  entries that have no `@primitive` decorator.
+
 ### Determinism — fidelity guardrails for parallel-vs-serial executor parity
 
 The framework's value is "parallelize without changing what computes." This

@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from claude_hpc._internal.io import atomic_locked_update
 from claude_hpc._internal.time import utcnow_iso
 from claude_hpc.campaign.dirs import campaign_dir
 
@@ -85,7 +86,9 @@ def write_manifest(
         "campaign_id": campaign_id,
         "created_at": created_at or utcnow_iso(),
     }
-    if goal:
+    # Preserve goal="" (empty string is a valid explicit value) — only
+    # drop None to keep the manifest tidy.
+    if goal is not None:
         payload["goal"] = goal
     if budget is not None:
         payload["budget"] = budget
@@ -96,9 +99,10 @@ def write_manifest(
     validate_manifest(payload)
 
     target = manifest_path(experiment_dir, campaign_id)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n")
-    tmp.replace(target)
+    # Route through atomic_locked_update so concurrent campaign_init
+    # calls serialize on the same flock that advance_cursor uses; the
+    # mutator just returns the new payload (read state is ignored).
+    atomic_locked_update(target, lambda _existing: payload)
     return target
 
 

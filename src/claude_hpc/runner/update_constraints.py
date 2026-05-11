@@ -20,7 +20,9 @@ same final feature set produces the same on-cluster state.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from typing import TYPE_CHECKING
 
 from claude_hpc import errors
@@ -147,7 +149,22 @@ def update_run_constraints(
         cstr["features"] = new_features
         sidecar["constraints"] = cstr
         target = run_sidecar_path(experiment_dir, spec.run_id)
-        target.write_text(json.dumps(sidecar, indent=2, sort_keys=True))
+        # Atomic write: tempfile + fsync + replace. Plain write_text
+        # leaves the file truncated/corrupt if interrupted mid-write.
+        payload = json.dumps(sidecar, indent=2, sort_keys=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            delete=False,
+            dir=str(target.parent),
+            prefix=target.name + ".",
+            suffix=".tmp",
+            encoding="utf-8",
+        ) as tmp:
+            tmp.write(payload)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_name = tmp.name
+        os.replace(tmp_name, target)
 
     return UpdateRunConstraintsResult(
         run_id=spec.run_id,

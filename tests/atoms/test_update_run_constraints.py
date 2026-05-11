@@ -148,11 +148,12 @@ def test_ssh_unreachable_marks_job_failed(tmp_path: Path) -> None:
 
 def test_both_set_and_add_features_rejected(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path, job_ids=["1"])
-    with pytest.raises(errors.SpecInvalid, match="Pass exactly one"):
-        update_run_constraints(
-            tmp_path,
-            spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a"], add_features=["b"]),
-        )
+    # Mutex is enforced at spec construction (Pydantic model_validator);
+    # the function-level guard remains as a redundant check.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="Pass exactly one"):
+        UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a"], add_features=["b"])
 
 
 def test_neither_set_nor_add_features_rejected(tmp_path: Path) -> None:

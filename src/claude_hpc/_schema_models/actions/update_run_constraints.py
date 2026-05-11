@@ -9,7 +9,7 @@ exhausted) without re-submitting and losing rank.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from claude_hpc._schema_models._shared import (
     RunIdStrict,  # noqa: TC001 — Pydantic resolves the annotation at runtime
@@ -32,6 +32,15 @@ class UpdateRunConstraintsSpec(BaseModel):
             "``add_features``."
         ),
     )
+
+    @model_validator(mode="after")
+    def _enforce_mutual_exclusion(self) -> UpdateRunConstraintsSpec:
+        if self.add_features and self.set_features is not None:
+            raise ValueError(
+                "Pass exactly one of `set_features` (replace) or "
+                "`add_features` (extend); they are mutually exclusive."
+            )
+        return self
 
 
 class UpdateRunConstraintsResult(BaseModel):

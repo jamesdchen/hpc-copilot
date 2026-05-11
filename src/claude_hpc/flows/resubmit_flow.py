@@ -274,21 +274,44 @@ def resubmit_flow(
         )
         already_done = existing is not None and existing.last_resubmit_request_id == derived_rid
         if not already_done:
-            cluster_job_ids = _submit_resubmit_batches(
-                experiment_dir=experiment_dir,
-                run_id=run_id,
-                failed_task_ids=failed_task_ids,
-                effective_overrides=effective_overrides,
-                ssh_target=(sidecar or {}).get("ssh_target") or "",
-                remote_path=(sidecar or {}).get("remote_path") or "",
-                scheduler=backend,
-                script=script,
-                job_name=job_name,
-                job_env=dict(job_env or {}),
-                total_tasks=int((existing.total_tasks if existing else 0) or 0),
-                constraints=constraints,
-                backend_factory=backend_factory,
-            )
+            partial_ids: list[str] = []
+            try:
+                cluster_job_ids = _submit_resubmit_batches(
+                    experiment_dir=experiment_dir,
+                    run_id=run_id,
+                    failed_task_ids=failed_task_ids,
+                    effective_overrides=effective_overrides,
+                    ssh_target=(sidecar or {}).get("ssh_target") or "",
+                    remote_path=(sidecar or {}).get("remote_path") or "",
+                    scheduler=backend,
+                    script=script,
+                    job_name=job_name,
+                    job_env=dict(job_env or {}),
+                    total_tasks=int((existing.total_tasks if existing else 0) or 0),
+                    constraints=constraints,
+                    backend_factory=backend_factory,
+                    submitted_ids_out=partial_ids,
+                )
+            except errors.RemoteCommandFailed:
+                # Persist whatever batches succeeded BEFORE re-raising
+                # so a retry doesn't double-submit batches 0..N-1.
+                if partial_ids:
+                    from claude_hpc._schema_models.actions.resubmit import (
+                        ResubmitSpec as _ResubmitSpec,
+                    )
+
+                    runner.resubmit_failed(
+                        experiment_dir,
+                        run_id,
+                        spec=_ResubmitSpec(
+                            failed_task_ids=failed_task_ids,
+                            category=category,  # type: ignore[arg-type]
+                            overrides=effective_overrides,
+                            new_job_ids=partial_ids,
+                            request_id=request_id,
+                        ),
+                    )
+                raise
             cluster_submitted = True
 
     from claude_hpc._schema_models.actions.resubmit import ResubmitSpec
@@ -333,6 +356,7 @@ def _submit_resubmit_batches(
     total_tasks: int,
     constraints: Any,
     backend_factory: Any,
+    submitted_ids_out: list[str] | None = None,
 ) -> list[str]:
     """Build the array-submission shape and qsub each batch.
 
@@ -384,7 +408,9 @@ def _submit_resubmit_batches(
             job_env_keys=tuple(job_env.keys()),
         )
 
-    submitted_ids: list[str] = []
+    # Share the list with the caller so a mid-loop failure still
+    # surfaces the IDs that DID land on the cluster.
+    submitted_ids: list[str] = submitted_ids_out if submitted_ids_out is not None else []
     cwd = experiment_dir
     for batch in plan.batches:
         job_id = _submit_one_batch(

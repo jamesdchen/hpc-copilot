@@ -8,6 +8,7 @@ Parses ``scontrol show node`` and ``sacct -P`` output into the shared
 from __future__ import annotations
 
 import re
+import shlex
 from typing import Any
 
 from claude_hpc._internal.time import utcnow_iso
@@ -210,7 +211,10 @@ def _slurm_inspect(
     # per allocation.
     node_names = [n.name for n in snap.nodes if not n.is_drained]
     if node_names:
-        nodelist = ",".join(node_names)
+        # Quote each name before joining — runner.run goes through the
+        # shell, so a hypothetical node name containing ';' would
+        # otherwise execute follow-on commands.
+        nodelist = shlex.quote(",".join(node_names))
         cmd = (
             f"sacct -N {nodelist} -S now-{sacct_window_hours}hours "
             "-P --noheader -X "
@@ -249,7 +253,10 @@ def _bucket_tenants_by_node(sacct_out: str) -> dict[str, list[dict[str, Any]]]:
     terminal = {"COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "NODE_FAIL"}
     for line in sacct_out.strip().splitlines():
         parts = line.split("|")
-        if len(parts) < 8:
+        # _SACCT_BUCKET_FORMAT has 9 fields ending in NodeList; a row
+        # with exactly 8 would silently strip NodeList and drop the
+        # row from co-tenant attribution.
+        if len(parts) < 9:
             continue
         row = parse_sacct_pipe_row(parts, _SACCT_BUCKET_FORMAT)
         base_job = row["JobID"].split(".", 1)[0]

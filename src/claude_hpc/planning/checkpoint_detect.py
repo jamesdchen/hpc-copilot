@@ -84,6 +84,12 @@ def _result_dir_candidates(experiment_dir: Path, *, profile: str, cluster: str) 
             literal_parts.append(part)
         if not literal_parts:
             continue
+        # Refuse to walk filesystem root. A template whose first
+        # non-root segment is a placeholder (e.g. "/run_{run_id}/...")
+        # would otherwise rglob("/"), recursing every mount on the
+        # node.
+        if literal_parts == ["/"] or (len(literal_parts) == 1 and literal_parts[0] in ("/", "")):
+            continue
         out.append(Path(*literal_parts))
     return out
 

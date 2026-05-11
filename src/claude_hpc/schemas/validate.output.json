@@ -26,6 +26,10 @@
       "type": "string"
     },
     "scheduler": {
+      "enum": [
+        "sge",
+        "slurm"
+      ],
       "title": "Scheduler",
       "type": "string"
     },

@@ -77,7 +77,15 @@ def find_sidecars_by_campaign(
             continue
         if data.get("campaign_id") != campaign_id:
             continue
-        matched.append((path.stat().st_mtime, data))
+        # path.stat() can race with deletion between the safe-read above
+        # and this call; skip the entry rather than letting the
+        # FileNotFoundError propagate through every caller of
+        # find_sidecars_by_campaign.
+        try:
+            mtime = path.stat().st_mtime
+        except (FileNotFoundError, OSError):
+            continue
+        matched.append((mtime, data))
     matched.sort(key=lambda item: item[0])  # oldest-first
     return [data for _, data in matched]
 

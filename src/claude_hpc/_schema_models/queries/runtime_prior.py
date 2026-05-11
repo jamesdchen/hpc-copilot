@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -33,5 +35,11 @@ class RuntimePriorResult(BaseModel):
     quantiles: dict[str, _RuntimeQuantiles] = Field(
         description="Per-gpu_type runtime quantile rollup. Empty dict when needs_canary is true.",
     )
+    # roll_up_quantiles() emits these footprint-shrink rollups. The
+    # adversarial planner consumes them to right-size --mem and --cpus;
+    # without them on the model, extra="forbid" rejects the live
+    # output.
+    mem_quantiles_mb: dict[str, Any] = Field(default_factory=dict)
+    cpu_cores_quantiles: dict[str, Any] = Field(default_factory=dict)
     total_samples: int = Field(ge=0)
     filtered_by_cmd_sha: str | None = None

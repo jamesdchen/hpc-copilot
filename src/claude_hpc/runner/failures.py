@@ -195,7 +195,10 @@ def cluster_failures_by_fingerprint(
         # line may have been clipped from the log tail, but exit 130
         # is still a definitive preempted signal. Match the campus
         # user's bumped jobs to the ``preempted`` cluster regardless.
-        if category == "unknown" and entry.get("exit_code") == 130:
+        # Also overrides ``walltime`` because the SLURM/SGE preempt
+        # notification contains "signal SIGTERM 15" which the walltime
+        # regex would otherwise claim.
+        if entry.get("exit_code") == 130 and category in ("unknown", "walltime"):
             category = "preempted"
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather

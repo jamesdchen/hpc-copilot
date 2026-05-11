@@ -451,6 +451,12 @@ def monitor_flow(
                 already_combined=set(state.last_combined_waves),
             )
             for wave in newly_done:
+                # Skip waves already escalated past combiner_max_retries
+                # (sentinel = 10**9). Without this, every tick would
+                # re-call runner.combine_wave on a permanently failed
+                # wave, wasting SSH round-trips indefinitely.
+                if state.combiner_attempts.get(wave, 0) >= 10**9:
+                    continue
                 attempt = state.combiner_attempts.get(wave, 0) + 1
                 state.combiner_attempts[wave] = attempt
                 ok, _stdout, stderr = runner.combine_wave(
@@ -510,6 +516,7 @@ def monitor_flow(
                 escalation_reason=None,
             )
         if terminal == LifecycleState.FAILED:
+            runner.mark_terminal(experiment_dir, run_id, status=LifecycleState.FAILED)
             _append_tick(
                 experiment_dir,
                 run_id,

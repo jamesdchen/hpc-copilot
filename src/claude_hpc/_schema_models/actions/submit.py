@@ -31,5 +31,5 @@ class SubmitResult(BaseModel):
 
     run_id: RunIdStrict
     job_ids: list[str]
-    total_tasks: int = Field(ge=0)
+    total_tasks: int = Field(ge=1)
     deduped: bool
