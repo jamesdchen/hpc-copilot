@@ -360,6 +360,7 @@ class TestHighContention:
             mem_mb=4_000,
             walltime_actual=50.0,
         )
+
         # Note: the candidate's walltime_actual is set explicitly, so
         # it is not affected by the band; only arrivals are. SimJob
         # instances are mutated by the simulator (walltime_actual is

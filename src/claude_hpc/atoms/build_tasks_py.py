@@ -112,9 +112,7 @@ def _validate_axis_name(name: str) -> None:
     divergence after the executor reads (e.g.) the wrong ``$HOME``.
     """
     upper = name.upper()
-    if upper in _RESERVED_AXIS_NAMES or any(
-        upper.startswith(p) for p in _RESERVED_AXIS_PREFIXES
-    ):
+    if upper in _RESERVED_AXIS_NAMES or any(upper.startswith(p) for p in _RESERVED_AXIS_PREFIXES):
         raise errors.SpecInvalid(
             f"axis name {name!r} would shadow the env var {upper!r} "
             "when the dispatcher exports kwargs to the executor's "
