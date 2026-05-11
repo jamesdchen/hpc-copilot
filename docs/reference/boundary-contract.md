@@ -331,6 +331,89 @@ The lint test `test_clusters_yaml_is_infra_only` enforces that
 keys; any experiment-shaped field (e.g. `grid`, `executors`) leaking
 into a cluster entry will fail it.
 
+## Determinism contract
+
+The framework's value proposition is "parallelize an experiment without
+changing what it computes." This section enumerates what the framework
+guarantees about parity between a serial run of the user's executor
+and the same task running as part of a parallel array, what guardrails
+are wired in by default, and where determinism is fundamentally on the
+user.
+
+### What the framework guarantees
+
+- **Per-task isolation.** Each task runs in a fresh subprocess
+  (`mapreduce/dispatch.py:Popen`); no in-process state leaks across
+  tasks. The task's `RESULT_DIR` is a per-task `_wip_<task_id>/`
+  tempdir that atomically promotes to the final dir on exit-0.
+- **Deterministic env defaults.** The cluster preamble
+  (`templates/runtime/common/hpc_preamble.sh`) exports
+  `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
+  `NUMEXPR_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`,
+  `PYTHONUNBUFFERED=1`, `PYTHONHASHSEED=0`,
+  `PYTHONDONTWRITEBYTECODE=1`, `PYTHONIOENCODING=utf-8`,
+  `LC_ALL=C.UTF-8`, `LANG=C.UTF-8`. The GPU preamble adds
+  `CUBLAS_WORKSPACE_CONFIG=:4096:8` and
+  `XLA_FLAGS=--xla_gpu_deterministic_ops=true`. Each is overridable via
+  the matching `HPC_<NAME>` env var in the spec's `job_env`; the
+  empty string disables the export entirely.
+- **Order-invariant aggregation.** The combiner
+  (`mapreduce/combiner.py`) uses `sorted()` for grid-key and
+  per-key iteration plus Neumaier-compensated summation. Re-running
+  the combiner on the same per-task outputs produces bit-identical
+  aggregates regardless of which task finished first.
+- **Identity-tracked re-runs.** Each successful task stamps
+  `<result_dir>/.hpc_cmd_sha`. On re-entry, the dispatcher compares
+  this against the current sidecar's `cmd_sha` and re-runs the
+  executor when they differ — so a code/kwarg change never silently
+  reuses a stale `metrics.json`. `HPC_FORCE_RERUN=1` bypasses the
+  idempotency skip unconditionally.
+- **Collision-free kwarg namespace.** The dispatcher exports each
+  kwarg as `HPC_KW_<KEY>=<value>`. The legacy bare-uppercase form
+  `<KEY>=<value>` is exported by default for back-compat; setting
+  `HPC_KW_NAMESPACE_ONLY=1` disables it. `build-tasks-py` rejects
+  axis names whose uppercase form would shadow a real env var
+  (`HOME`, `PATH`, `LD_LIBRARY_PATH`, `OMP_NUM_THREADS`, framework-
+  reserved `HPC_*`, scheduler-injected `SLURM_*`/`SGE_*`/`PBS_*`,
+  ...) — see `_RESERVED_AXIS_NAMES` and `_RESERVED_AXIS_PREFIXES`
+  in `atoms/build_tasks_py.py`.
+
+### What the framework does not — and cannot — guarantee
+
+- **Floating-point identity across GPU SKUs.** Different GPU models run
+  different CUDA kernels with different reduction trees. To pin: set
+  a single entry in `clusters.yaml`'s `gpu_types`, or pass a single-
+  element `gpu_fallback`.
+- **Identical outputs across Python or library versions.** Pin
+  `modules: [python/3.11.9]` in `clusters.yaml` and use a locked
+  conda env. If `HPC_RUNTIME=uv`, commit `uv.lock`.
+- **BLAS backend identity.** Conda envs that pull whichever BLAS is
+  available (OpenBLAS vs. MKL vs. Apple Accelerate) produce subtly
+  different float results. Pin the BLAS provider in your env.
+- **Determinism inside the executor.** RNG seeding, library-level
+  determinism flags (`torch.use_deterministic_algorithms(True)`,
+  `np.random.default_rng(seed)` over `np.random.seed`), and avoiding
+  wallclock-driven branches are the user's responsibility. The
+  scaffold at `templates/scaffolds/executor_template.py` demonstrates
+  the recommended seed-from-`HPC_TASK_ID` pattern.
+
+### Reproducing one task locally
+
+To reproduce a task's behavior outside the dispatcher (e.g. for a
+local reference run), set the env vars the dispatcher would set:
+
+```sh
+HPC_TASK_ID=0 \
+HPC_RUN_ID=local-ref \
+RESULT_DIR=/tmp/ref \
+HPC_KW_HORIZON=5 HPC_KW_SEED=42 \
+python executors/ml_ridge.py --horizon 5 --seed 42 --output-file /tmp/ref/out.csv
+```
+
+A task that produces bit-identical output here and on the cluster has
+no framework-induced divergence; any gap traces back to one of the
+"cannot guarantee" items above (GPU/Python/lib version drift).
+
 ## How to extend
 
 When adding a new public export, a new reserved filename, or a new template,

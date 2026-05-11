@@ -12,6 +12,9 @@
 #      cluster-side dispatcher reads this and stamps it onto the
 #      per-task _runtime.json so the local-side rollup can group
 #      samples by GPU type).
+#   4. Pin GPU determinism env vars (CUBLAS_WORKSPACE_CONFIG for cuBLAS;
+#      XLA_FLAGS for JAX). These are the GPU-side complement to the
+#      CPU-side hash/locale/IO-encoding pins in hpc_preamble.sh.
 #
 # OMP_NUM_THREADS / MKL_NUM_THREADS are NOT set here because the two
 # schedulers expose the per-task CPU count differently ($NSLOTS on SGE,
@@ -29,6 +32,29 @@ echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 # CUDA memory optimization — splits large allocations into 128MB
 # blocks so PyTorch fragments less under heavy mixed-batch workloads.
 export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"
+
+# --- GPU determinism env (fidelity vs. serial) ---
+# CUBLAS_WORKSPACE_CONFIG=:4096:8 is the value cuBLAS requires for
+# torch.use_deterministic_algorithms(True) to actually produce
+# reproducible matrix multiplies. Without it, torch raises at runtime
+# the moment user code asks for determinism. Cheap to leave on for
+# everyone; the workspace allocation is one-time.
+#
+# XLA_FLAGS=--xla_gpu_deterministic_ops=true is the JAX/XLA equivalent.
+# For users not on JAX it's a no-op; for JAX users it's the difference
+# between deterministic and not.
+#
+# Override either by exporting HPC_<NAME> in the spec's job_env; the
+# empty string leaves the corresponding variable unset.
+_hpc_default_cublas=":4096:8"
+_hpc_default_xla="--xla_gpu_deterministic_ops=true"
+if [ "${HPC_CUBLAS_WORKSPACE_CONFIG-$_hpc_default_cublas}" != "" ]; then
+    export CUBLAS_WORKSPACE_CONFIG="${HPC_CUBLAS_WORKSPACE_CONFIG:-$_hpc_default_cublas}"
+fi
+if [ "${HPC_XLA_FLAGS-$_hpc_default_xla}" != "" ]; then
+    export XLA_FLAGS="${HPC_XLA_FLAGS:-$_hpc_default_xla}"
+fi
+unset _hpc_default_cublas _hpc_default_xla
 
 # Detect GPU model from nvidia-smi when the submit-side didn't already
 # export HPC_GPU_TYPE (e.g. via qsub -v / sbatch --export). Used by

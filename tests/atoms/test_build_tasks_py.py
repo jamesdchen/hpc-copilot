@@ -191,3 +191,71 @@ def test_multi_executor_flags_block_includes_each(tmp_path: Path) -> None:
     assert "'src.dl_patchts'" in src
     assert "flag('alpha', float, default=1.0)" in src
     assert "flag('horizon', int, default=1)" in src
+
+
+# ── Reserved-name lint (fidelity vs. serial) ─────────────────────────────
+
+
+def test_reserved_axis_name_rejected(tmp_path: Path) -> None:
+    """Axis whose uppercase form would shadow $HOME must fail at scaffold time."""
+    import pytest
+
+    from claude_hpc import errors
+
+    with pytest.raises(errors.SpecInvalid, match=r"would shadow the env var 'HOME'"):
+        build_tasks_py(
+            tmp_path,
+            spec=BuildTasksPyInput(
+                axes=[{"name": "home", "values": ["/u/a", "/u/b"]}],
+                flags_by_executor={"src.ml": [{"name": "home", "type": "str"}]},
+            ),
+        )
+    # The scaffold must NOT have been written.
+    assert not (tmp_path / ".hpc" / "tasks.py").exists()
+
+
+def test_reserved_axis_name_prefixed_form_allowed(tmp_path: Path) -> None:
+    """The recommended fix — prefix the axis — must succeed."""
+    out = build_tasks_py(
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "exp_home", "values": ["/u/a", "/u/b"]}],
+            flags_by_executor={"src.ml": [{"name": "exp_home", "type": "str"}]},
+        ),
+    )
+    assert out["wrote"] is True
+    assert out["n_tasks"] == 2
+
+
+def test_reserved_axis_name_scheduler_prefix_rejected(tmp_path: Path) -> None:
+    """SLURM_*/SGE_*/PBS_* and HPC_KW_* prefixes are reserved."""
+    import pytest
+
+    from claude_hpc import errors
+
+    for bad in ("slurm_job_id", "sge_task_id", "hpc_kw_horizon"):
+        with pytest.raises(errors.SpecInvalid):
+            build_tasks_py(
+                tmp_path,
+                spec=BuildTasksPyInput(
+                    axes=[{"name": bad, "values": [1]}],
+                    flags_by_executor={"src.ml": [{"name": bad, "type": "int"}]},
+                ),
+            )
+
+
+def test_reserved_axis_name_framework_keys_rejected(tmp_path: Path) -> None:
+    """Framework-reserved keys (RESULT_DIR, HPC_TASK_ID, ...) are rejected."""
+    import pytest
+
+    from claude_hpc import errors
+
+    for bad in ("result_dir", "hpc_task_id", "hpc_run_id"):
+        with pytest.raises(errors.SpecInvalid):
+            build_tasks_py(
+                tmp_path,
+                spec=BuildTasksPyInput(
+                    axes=[{"name": bad, "values": [1]}],
+                    flags_by_executor={"src.ml": [{"name": bad, "type": "str"}]},
+                ),
+            )
