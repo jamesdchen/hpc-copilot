@@ -79,7 +79,6 @@ class AxesConfig(BaseModel):
             extra = [n for n in self.homogeneous_axes if n not in known]
             if extra:
                 raise ValueError(
-                    f"homogeneous_axes {extra!r} not present in axes "
-                    f"(known: {sorted(known)})"
+                    f"homogeneous_axes {extra!r} not present in axes (known: {sorted(known)})"
                 )
         return self

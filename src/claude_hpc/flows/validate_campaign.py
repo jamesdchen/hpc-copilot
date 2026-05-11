@@ -108,11 +108,7 @@ def validate_campaign(
     # `dataset_row_indices=[]` is semantically distinct from absent
     # (an empty list still requests the validator); only skip when the
     # field is None/missing.
-    if (
-        spec.dataset_path
-        and spec.dataset_loader
-        and spec.dataset_row_indices is not None
-    ):
+    if spec.dataset_path and spec.dataset_loader and spec.dataset_row_indices is not None:
         result_d = validate_input_dataset(
             experiment_dir,
             spec=ValidateInputDatasetSpec(
