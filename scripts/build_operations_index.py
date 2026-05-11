@@ -47,7 +47,10 @@ def fetch_operations() -> list[dict]:
         text=True,
         check=True,
     )
-    envelope = json.loads(result.stdout.strip().splitlines()[-1])
+    lines = result.stdout.strip().splitlines()
+    if not lines:
+        raise SystemExit("hpc-agent capabilities produced no stdout")
+    envelope = json.loads(lines[-1])
     if not envelope.get("ok"):
         raise SystemExit(f"capabilities envelope returned ok=false: {envelope}")
     return envelope["data"].get("operations", [])

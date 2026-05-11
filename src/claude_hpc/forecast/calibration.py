@@ -114,9 +114,13 @@ def compute_walltime_drift(
         )
 
     cliff = sum(1 for u, ec in eligible if u >= cliff_ratio and ec != 0)
-    near = sum(
-        1 for u, ec in eligible if u >= near_miss_ratio and not (u >= cliff_ratio and ec != 0)
-    )
+    # Near-miss requires exit_code == 0 (the job survived); without
+    # this guard, failed jobs in [near_miss_ratio, cliff_ratio) get
+    # counted as near-misses, inflating the weighted cliff rate.
+    # High-utilization successful jobs (u >= cliff_ratio, ec == 0) are
+    # still near-misses — they barely finished — so the cliff check
+    # only excludes failures.
+    near = sum(1 for u, ec in eligible if u >= near_miss_ratio and ec == 0)
     weighted = (cliff + 0.5 * near) / n_recent
     utils = sorted(u for u, _ in eligible)
     median = utils[len(utils) // 2]

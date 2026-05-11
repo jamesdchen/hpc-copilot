@@ -375,6 +375,9 @@ def main() -> None:
     current_cmd_sha = sidecar.get("cmd_sha")
     cmd_sha_marker = Path(result_dir) / ".hpc_cmd_sha"
     cmd_sha_changed = False
+    # Initialize unconditionally so the diagnostic at line ~403 never
+    # raises NameError when current_cmd_sha is falsy.
+    prior_cmd_sha = ""
     if current_cmd_sha and cmd_sha_marker.is_file():
         try:
             prior_cmd_sha = cmd_sha_marker.read_text().strip()
@@ -504,7 +507,16 @@ def main() -> None:
 
     if returncode == 0:
         # Promote: atomically move each output file to the final directory.
-        for fname in os.listdir(wip_dir):
+        # metrics.json is the idempotency marker — if the process is
+        # killed mid-promotion, a half-promoted task with metrics.json
+        # already in place would be skipped on retry and the missing
+        # outputs would never be recovered. Move metrics.json last so a
+        # crash before that point leaves the task obviously incomplete.
+        entries = sorted(
+            os.listdir(wip_dir),
+            key=lambda n: (n == "metrics.json", n),
+        )
+        for fname in entries:
             os.replace(os.path.join(wip_dir, fname), os.path.join(result_dir, fname))
         shutil.rmtree(wip_dir, ignore_errors=True)
         # Stamp this submission's cmd_sha so a subsequent re-entry can

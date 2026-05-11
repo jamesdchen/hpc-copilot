@@ -88,7 +88,7 @@ def advance_cursor(
             "updated_at": utcnow_iso(),
         }
 
-    atomic_locked_update(path, _bump)
-    new_state = read_cursor(experiment_dir, campaign_id)
-    assert new_state is not None  # we just wrote it
-    return new_state
+    # Use the doc returned by atomic_locked_update directly. A second
+    # read_cursor() outside the lock would race with concurrent writers
+    # and could observe a later iteration than this caller's bump.
+    return atomic_locked_update(path, _bump)

@@ -174,12 +174,24 @@ def verify_canary(
         }
 
     # Fetch the canary's stderr tail (1 task, task_id=0).
+    # Resolve scheduler from clusters.yaml — substring-matching on the
+    # cluster name misroutes any cluster whose name doesn't literally
+    # contain "slurm" (discovery, hoffman2, cascade, …) to the SGE
+    # log-path template.
+    from claude_hpc.infra.clusters import load_clusters_config
+
+    try:
+        clusters_cfg = load_clusters_config()
+    except Exception:  # noqa: BLE001
+        clusters_cfg = {}
+    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler") or "slurm"
+
     logs = fetch_task_logs(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
         job_name=record.job_name,
         job_ids=list(record.job_ids),
-        scheduler="slurm" if "slurm" in record.cluster.lower() else "sge",
+        scheduler=scheduler,
         task_ids=[0],
         lines=50,
     )
