@@ -20,6 +20,25 @@ combiner via env.
 Exit codes:
     0  - success
     1  - bad input (missing wave, malformed sidecar, output already exists)
+
+Determinism guarantee
+---------------------
+The combiner produces bit-identical output for a given input set,
+independent of file enumeration order or wave-completion timing:
+
+* Per-task sidecars are grouped by grid point, then keys within each
+  group are iterated via ``sorted()`` (see ``for grid_key in sorted(...)``
+  and ``for key in sorted(all_keys)``).
+* Reductions use Neumaier-compensated summation (Kahan with high-magnitude
+  swap), which is order-invariant for floats up to the compensation term's
+  precision — re-running the combiner on the same per-task outputs produces
+  the same aggregate regardless of which task finished first.
+* Weighted means use ``n_samples`` as the weight (default 1 when absent).
+
+This means: if your executors are deterministic for a given task_id (see
+the executor scaffold for the seed-from-HPC_TASK_ID pattern), the entire
+local-side aggregate is reproducible across re-runs of the combiner.
+The framework does not introduce nondeterminism into the reduction.
 """
 
 import argparse

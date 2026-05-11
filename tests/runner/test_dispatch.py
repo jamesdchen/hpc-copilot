@@ -198,3 +198,175 @@ class TestCheckResultsIgnoresWip:
         assert 1 in results
         assert 2 not in results
         assert len(results) == 1
+
+
+class TestKwargNamespaceOnly:
+    def test_default_exports_both_forms(self, tmp_path, monkeypatch):
+        """Without HPC_KW_NAMESPACE_ONLY, executor sees both HPC_KW_X and X."""
+        result_root = tmp_path / "results"
+        # Executor stamps both env-var forms into separate files so we
+        # can check both are present in the dispatcher's env without
+        # depending on shell-export semantics.
+        hpc = _scaffold(
+            tmp_path,
+            executor=(
+                'echo "$HPC_KW_HORIZON" > "$RESULT_DIR/kw_form.txt" && '
+                'echo "$HORIZON" > "$RESULT_DIR/bare_form.txt"'
+            ),
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{"horizon": 5}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        out_dir = result_root / "0"
+        assert (out_dir / "kw_form.txt").read_text().strip() == "5"
+        assert (out_dir / "bare_form.txt").read_text().strip() == "5"
+
+    def test_namespace_only_skips_bare_form(self, tmp_path, monkeypatch):
+        """With HPC_KW_NAMESPACE_ONLY=1, bare-uppercase HORIZON is NOT exported."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor=(
+                'echo "$HPC_KW_HORIZON" > "$RESULT_DIR/kw_form.txt" && '
+                'echo "${HORIZON:-UNSET}" > "$RESULT_DIR/bare_form.txt"'
+            ),
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{"horizon": 5}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_KW_NAMESPACE_ONLY", "1")
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        out_dir = result_root / "0"
+        assert (out_dir / "kw_form.txt").read_text().strip() == "5"
+        assert (out_dir / "bare_form.txt").read_text().strip() == "UNSET"
+
+
+class TestIdempotencyBypass:
+    def _seed_metrics(self, result_dir, content="{}"):
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "metrics.json").write_text(content)
+
+    def test_metrics_present_skips_by_default(self, tmp_path, monkeypatch):
+        """Existing metrics.json triggers the idempotency exit-0 skip."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo NEVER_RUN > "$RESULT_DIR/marker.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        self._seed_metrics(result_root / "0", '{"value": 1}')
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # Executor must NOT have run.
+        assert not (result_root / "0" / "marker.txt").exists()
+
+    def test_force_rerun_bypasses_skip(self, tmp_path, monkeypatch):
+        """HPC_FORCE_RERUN=1 runs the executor even with metrics.json present."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo RAN > "$RESULT_DIR/marker.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        self._seed_metrics(result_root / "0", '{"value": 1}')
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setenv("HPC_FORCE_RERUN", "1")
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_root / "0" / "marker.txt").read_text().strip() == "RAN"
+
+    def test_cmd_sha_mismatch_bypasses_skip(self, tmp_path, monkeypatch):
+        """A stamped .hpc_cmd_sha that disagrees with the sidecar forces re-run."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo RAN > "$RESULT_DIR/marker.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        # Sidecar default cmd_sha is "deadbeef"*8; stamp a different one.
+        result_dir = result_root / "0"
+        self._seed_metrics(result_dir, '{"value": 1}')
+        (result_dir / ".hpc_cmd_sha").write_text("0" * 64)
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert (result_dir / "marker.txt").read_text().strip() == "RAN"
+        # After a successful re-run, the marker should now match the sidecar.
+        assert (result_dir / ".hpc_cmd_sha").read_text() == "deadbeef" * 8
+
+    def test_cmd_sha_match_preserves_skip(self, tmp_path, monkeypatch):
+        """A stamped .hpc_cmd_sha that matches the sidecar still skips."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo NEVER_RUN > "$RESULT_DIR/marker.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        result_dir = result_root / "0"
+        self._seed_metrics(result_dir, '{"value": 1}')
+        (result_dir / ".hpc_cmd_sha").write_text("deadbeef" * 8)
+
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        assert not (result_dir / "marker.txt").exists()
+
+    def test_successful_run_stamps_cmd_sha(self, tmp_path, monkeypatch):
+        """A fresh successful run writes .hpc_cmd_sha next to the result files."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo done > "$RESULT_DIR/out.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        marker = result_root / "0" / ".hpc_cmd_sha"
+        assert marker.is_file()
+        assert marker.read_text() == "deadbeef" * 8

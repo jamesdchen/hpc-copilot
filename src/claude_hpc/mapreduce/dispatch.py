@@ -345,6 +345,20 @@ def main() -> None:
     # picks up the existing output on the next wave; the agent harness
     # sees the same exit-0 envelope as a normal completion.
     #
+    # Two opt-outs to keep the skip from masking divergence:
+    #
+    #   1. ``HPC_FORCE_RERUN=1`` in the spec's job_env: always run,
+    #      even if metrics.json exists. Use when the user knows the
+    #      executor changed but the kwargs didn't (e.g. fixed a bug
+    #      and wants to re-run a campaign without bumping the version).
+    #
+    #   2. Auto-bypass on ``cmd_sha`` mismatch: each successful run
+    #      stamps ``<result_dir>/.hpc_cmd_sha`` with this submission's
+    #      cmd_sha. On re-entry, if the stamped sha differs from the
+    #      sidecar's cmd_sha, the task list materially changed (code
+    #      or kwargs); the stale metrics.json is from a different
+    #      experiment and must not be reused. Re-run.
+    #
     # Defensive: a 0-byte ``metrics.json`` (e.g. crashed mid-write) does
     # NOT trigger the skip — the user must be able to re-run.
     #
@@ -357,6 +371,18 @@ def main() -> None:
     # case in the same call. Cheap (one byte, no JSON parse) and
     # contract-tight: a metrics.json file that opens and yields ≥1 byte
     # is by construction non-empty as seen by *us*, not the cache.
+    force_rerun = os.environ.get("HPC_FORCE_RERUN", "").strip() == "1"
+    current_cmd_sha = sidecar.get("cmd_sha")
+    cmd_sha_marker = Path(result_dir) / ".hpc_cmd_sha"
+    cmd_sha_changed = False
+    if current_cmd_sha and cmd_sha_marker.is_file():
+        try:
+            prior_cmd_sha = cmd_sha_marker.read_text().strip()
+        except OSError:
+            prior_cmd_sha = ""
+        if prior_cmd_sha and prior_cmd_sha != current_cmd_sha:
+            cmd_sha_changed = True
+
     metrics_path = Path(result_dir) / "metrics.json"
     already_complete = False
     if metrics_path.is_file():
@@ -365,12 +391,23 @@ def main() -> None:
                 already_complete = bool(fh.read(1))
         except OSError:
             already_complete = False
-    if already_complete:
+    if already_complete and not force_rerun and not cmd_sha_changed:
         print(
             f"[claude-hpc] task {task_id} already complete (metrics.json found); skipping",
             file=sys.stderr,
         )
         sys.exit(0)
+    if already_complete and cmd_sha_changed:
+        print(
+            f"[claude-hpc] task {task_id} metrics.json exists but cmd_sha changed "
+            f"(prior={prior_cmd_sha[:8]}, current={current_cmd_sha[:8]}); re-running",
+            file=sys.stderr,
+        )
+    elif already_complete and force_rerun:
+        print(
+            f"[claude-hpc] task {task_id} metrics.json exists but HPC_FORCE_RERUN=1; re-running",
+            file=sys.stderr,
+        )
 
     # --- Install SIGTERM trap ---
     # Most preemption scenarios send SIGTERM 30-60s before SIGKILL.
@@ -424,10 +461,23 @@ def main() -> None:
     env["HPC_RESULT_DIR"] = wip_dir
     env["HPC_TASK_ID"] = str(task_id)
     env["HPC_RUN_ID"] = run_id
+    # Kwarg export contract. Each kwarg ships as ``HPC_KW_<KEY>`` always
+    # — namespaced, collision-free. The bare-uppercase ``<KEY>`` form is
+    # the legacy contract (kept default-on for back-compat) and is the
+    # single biggest fidelity-vs-serial risk: a kwarg named ``home`` or
+    # ``path`` silently overwrites $HOME or $PATH for the executor's
+    # process, changing import resolution, dataset paths, etc.
+    #
+    # Setting ``HPC_KW_NAMESPACE_ONLY=1`` in the spec's ``job_env``
+    # disables the bare-uppercase form, exporting only ``HPC_KW_*``.
+    # Recommended for new campaigns; existing campaigns that read bare
+    # uppercase from inside the executor must update first.
+    namespace_only = os.environ.get("HPC_KW_NAMESPACE_ONLY", "").strip() == "1"
     for key, value in kwargs.items():
         s = str(value)
-        env[key.upper()] = s
         env[f"HPC_KW_{key.upper()}"] = s
+        if not namespace_only:
+            env[key.upper()] = s
 
     print(f"[dispatch] task_id={task_id} run_id={run_id} result_dir={result_dir}")
     print(f"[dispatch] cmd={executor}")
@@ -457,6 +507,19 @@ def main() -> None:
         for fname in os.listdir(wip_dir):
             os.replace(os.path.join(wip_dir, fname), os.path.join(result_dir, fname))
         shutil.rmtree(wip_dir, ignore_errors=True)
+        # Stamp this submission's cmd_sha so a subsequent re-entry can
+        # detect "code or kwargs changed since this result was written"
+        # and bypass the metrics.json idempotency skip. Best-effort: a
+        # write failure here MUST NOT change the dispatcher's exit code
+        # (the task succeeded; the marker is only a hint for next time).
+        if current_cmd_sha:
+            try:
+                Path(result_dir, ".hpc_cmd_sha").write_text(current_cmd_sha)
+            except OSError as exc:
+                print(
+                    f"[dispatch] WARN: failed to stamp .hpc_cmd_sha in {result_dir}: {exc}",
+                    file=sys.stderr,
+                )
     else:
         print(
             f"[dispatch] FAILED (exit {returncode}), partial output preserved in {wip_dir}",

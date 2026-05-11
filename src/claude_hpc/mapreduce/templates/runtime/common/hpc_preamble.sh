@@ -25,6 +25,14 @@
 #   $HPC_OMP_NUM_THREADS / $HPC_MKL_NUM_THREADS / $HPC_OPENBLAS_NUM_THREADS /
 #     $HPC_NUMEXPR_NUM_THREADS / $HPC_VECLIB_NUM_THREADS
 #                   per-library thread cap overrides; default 1 each
+#   $HPC_PYTHONUNBUFFERED / $HPC_PYTHONHASHSEED /
+#     $HPC_PYTHONDONTWRITEBYTECODE / $HPC_PYTHONIOENCODING /
+#     $HPC_LC_ALL / $HPC_LANG
+#                   reproducibility env overrides; defaults pin Python's
+#                   hash seed, disable bytecode writes, force UTF-8, and
+#                   unbuffer stdout so a parallel array's outputs match
+#                   what a serial run would produce. Set any to "" to
+#                   leave the corresponding variable unset.
 #   $HPC_NFS_DATA_DIR
 #                   optional NFS path to stage into node-local SSD before
 #                   the executor runs. When set, the preamble exports
@@ -92,6 +100,60 @@ export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-1}"
 export OPENBLAS_NUM_THREADS="${HPC_OPENBLAS_NUM_THREADS:-1}"
 export NUMEXPR_NUM_THREADS="${HPC_NUMEXPR_NUM_THREADS:-1}"
 export VECLIB_MAXIMUM_THREADS="${HPC_VECLIB_NUM_THREADS:-1}"
+
+# --- Reproducibility env (fidelity vs. serial) ---
+# These defaults narrow the gap between an array task on a compute node
+# and the same task run serially on a workstation. They cost ~nothing
+# for code that doesn't depend on them and close real divergence sources
+# for code that does.
+#
+#   PYTHONUNBUFFERED=1
+#     Force unbuffered stdout/stderr so the scheduler's per-task log
+#     captures every print() in order, the way an interactive run would.
+#     Without it, a crashed task can leave its last few prints in the
+#     stdio buffer and the campus user sees a truncated log.
+#
+#   PYTHONHASHSEED=0
+#     Pin the hash randomization seed. CPython's default is "random per
+#     interpreter," which makes set/dict iteration order vary across
+#     runs. Most code doesn't depend on iteration order, but code that
+#     does (e.g. building a list from a set, then doing a stable
+#     reduction) becomes silently nondeterministic across the array.
+#
+#   PYTHONDONTWRITEBYTECODE=1
+#     Don't write .pyc files. When 200 array tasks land on the same
+#     node simultaneously and all import the same module, they race to
+#     write the same .pyc — corruption is rare but real, and the .pyc
+#     cache is per-node-shared so a corruption affects every subsequent
+#     task on that node. Cheap to disable; cost is one re-parse per
+#     import per task.
+#
+#   PYTHONIOENCODING=utf-8 / LC_ALL=C.UTF-8 / LANG=C.UTF-8
+#     Pin locale and stdio encoding. Locale affects float-string parsing
+#     ("1,5" vs "1.5"), date parsing, and string sort order. Different
+#     compute nodes can have different default locales — pinning makes
+#     the executor's behavior independent of which node it lands on.
+#
+# Override any of these by exporting HPC_<NAME> in the spec's job_env;
+# the empty string leaves the corresponding variable unset.
+if [ "${HPC_PYTHONUNBUFFERED-1}" != "" ]; then
+    export PYTHONUNBUFFERED="${HPC_PYTHONUNBUFFERED:-1}"
+fi
+if [ "${HPC_PYTHONHASHSEED-0}" != "" ]; then
+    export PYTHONHASHSEED="${HPC_PYTHONHASHSEED:-0}"
+fi
+if [ "${HPC_PYTHONDONTWRITEBYTECODE-1}" != "" ]; then
+    export PYTHONDONTWRITEBYTECODE="${HPC_PYTHONDONTWRITEBYTECODE:-1}"
+fi
+if [ "${HPC_PYTHONIOENCODING-utf-8}" != "" ]; then
+    export PYTHONIOENCODING="${HPC_PYTHONIOENCODING:-utf-8}"
+fi
+if [ "${HPC_LC_ALL-C.UTF-8}" != "" ]; then
+    export LC_ALL="${HPC_LC_ALL:-C.UTF-8}"
+fi
+if [ "${HPC_LANG-C.UTF-8}" != "" ]; then
+    export LANG="${HPC_LANG:-C.UTF-8}"
+fi
 
 # --- NFS staging (survival) ---
 # Survival: copy the read-only dataset to local node SSD before the
