@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from claude_hpc._schema_models._shared import BackendName, FailureCategoryResubmittable
 
@@ -77,3 +77,21 @@ class ResubmitSpec(BaseModel):
         default=None,
         description="Environment variables to forward to each resubmitted batch. Same shape submit-flow accepts. Ignored unless submit_to_cluster is true.",
     )
+
+    @model_validator(mode="after")
+    def _enforce_cluster_submit_fields(self) -> ResubmitSpec:
+        if self.submit_to_cluster:
+            missing = [
+                name
+                for name, value in (
+                    ("script", self.script),
+                    ("backend", self.backend),
+                    ("job_name", self.job_name),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"submit_to_cluster=true requires {', '.join(missing)} to be set"
+                )
+        return self

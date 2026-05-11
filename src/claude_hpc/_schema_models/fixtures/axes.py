@@ -10,7 +10,14 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 # A non-empty axis-name string. Mirrors the per-item ``minLength: 1``
 # the hand-authored schema enforced.
@@ -64,3 +71,15 @@ class AxesConfig(BaseModel):
         if v is not None and len(set(v)) != len(v):
             raise ValueError("homogeneous_axes must contain unique values")
         return v
+
+    @model_validator(mode="after")
+    def _check_homogeneous_axes_subset(self) -> AxesConfig:
+        if self.axes is not None and self.homogeneous_axes:
+            known = {a.name for a in self.axes}
+            extra = [n for n in self.homogeneous_axes if n not in known]
+            if extra:
+                raise ValueError(
+                    f"homogeneous_axes {extra!r} not present in axes "
+                    f"(known: {sorted(known)})"
+                )
+        return self

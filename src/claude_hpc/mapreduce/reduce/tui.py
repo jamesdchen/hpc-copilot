@@ -247,10 +247,18 @@ def _render(state: _UiState, report: dict, per_task_dict: dict, poll_interval: i
     tail_tbl.add_column("task_id", justify="right")
     tail_tbl.add_column("diagnostic", overflow="fold")
     if tail:
+        from rich.markup import escape as _rich_escape
+
         for tid, diag in tail:
             is_focused = state.focused_failing and str(tid) == str(state.focused_task_id)
             prefix = "> " if is_focused else ""
-            tail_tbl.add_row(prefix + str(tid), diag or "(no diagnostic)")
+            # Escape diagnostic text — raw log content can contain
+            # bracketed sequences ([red]Error[/red], etc.) that Rich
+            # would otherwise interpret as markup or trip MarkupError.
+            tail_tbl.add_row(
+                prefix + str(tid),
+                _rich_escape(diag) if diag else "(no diagnostic)",
+            )
         # Track the focused task if none set yet.
         if state.focused_failing and state.focused_task_id is None:
             state.focused_task_id = tail[-1][0]
@@ -531,10 +539,13 @@ def _main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"failed to build per-task dict: {exc}", file=sys.stderr)
         return 2
-    # The TUI is interactive (no concurrent writers), so a plain write
-    # is sufficient.
+    # Atomic write: a SIGINT mid-write would otherwise leave a
+    # truncated JSON file, which the next TUI launch reads as `{}` and
+    # silently shows every task as `unknown`.
     per_task_dict_path = sidecar_path.with_suffix(".per-task-dict.json")
-    per_task_dict_path.write_text(json.dumps(per_task_dict, sort_keys=True))
+    _tmp = per_task_dict_path.with_suffix(per_task_dict_path.suffix + ".tmp")
+    _tmp.write_text(json.dumps(per_task_dict, sort_keys=True))
+    _tmp.replace(per_task_dict_path)
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
     return run_tui(

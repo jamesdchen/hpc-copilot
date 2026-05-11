@@ -12,6 +12,7 @@ defaults. Returns ``exhausted=True`` if any supplied cap is met.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc._internal.primitive import primitive
@@ -65,7 +66,10 @@ def campaign_budget(
     manifest_budget: dict[str, Any] = {}
     try:
         manifest = read_manifest(experiment_dir, campaign_id)
-    except Exception:
+    except (OSError, ValueError, json.JSONDecodeError):
+        # A malformed manifest shouldn't crash budget reads, but a bare
+        # `except Exception` would also swallow KeyboardInterrupt /
+        # SystemExit. Narrow to the IO + parse errors we expect here.
         manifest = None
     if manifest is not None:
         manifest_budget = manifest.get("budget") or {}

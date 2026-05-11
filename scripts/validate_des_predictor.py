@@ -195,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.output == "-":
         sys.stdout.write(text + "\n")
     else:
-        Path(args.output).write_text(text + "\n")
+        out_path = Path(args.output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text + "\n")
     return 0
 
 
