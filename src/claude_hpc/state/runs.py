@@ -20,6 +20,7 @@ import json
 import os
 import re
 import warnings
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -180,7 +181,14 @@ _HARDENED_DEFAULTS: dict[str, Any] = {
 # Module-level dedup for the version-mismatch warning. Keyed on
 # (run_id, sidecar_version) so a long-running monitor that re-reads the
 # same sidecar 1000 times only emits one warning per (run, version).
-_warned_version_mismatch: set[tuple[str, str]] = set()
+#
+# Bounded LRU: a long-running monitor that watches a 10k-task campaign
+# would otherwise accumulate a 10k-entry set with no eviction. The
+# warning is best-effort dedup, not a correctness contract — falling
+# off the LRU after _WARNED_VERSION_MISMATCH_CAP entries just means an
+# old (run, version) pair could re-warn, which is fine.
+_WARNED_VERSION_MISMATCH_CAP: int = 1024
+_warned_version_mismatch: OrderedDict[tuple[str, str], None] = OrderedDict()
 
 
 def _maybe_derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str, list[int]] | None:
@@ -402,7 +410,13 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
         if _pkg_version and sidecar_version != _pkg_version:
             key = (run_id, sidecar_version)
             if key not in _warned_version_mismatch:
-                _warned_version_mismatch.add(key)
+                _warned_version_mismatch[key] = None
+                # Evict oldest entries past the cap. The set was
+                # previously unbounded; a monitor watching a 10k-task
+                # campaign would accumulate a 10k-entry set with no
+                # eviction over a multi-day run.
+                while len(_warned_version_mismatch) > _WARNED_VERSION_MISMATCH_CAP:
+                    _warned_version_mismatch.popitem(last=False)
                 warnings.warn(
                     f"sidecar {run_id!r} written by claude-hpc "
                     f"{sidecar_version!r} but reader is {_pkg_version!r}; "
@@ -410,6 +424,10 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
                     "behaviour drifts.",
                     stacklevel=2,
                 )
+            else:
+                # Touch on hit so frequently-seen keys don't get
+                # evicted while rarely-seen ones stay.
+                _warned_version_mismatch.move_to_end(key)
     return data
 
 
