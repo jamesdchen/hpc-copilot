@@ -151,12 +151,25 @@ def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], s
             continue
         mod = importlib.import_module(modname)
         for attr_name in dir(mod):
-            if attr_name.startswith("_") or attr_name in discovered:
+            if attr_name.startswith("_"):
                 continue
             obj = getattr(mod, attr_name)
             fname = _filename_for(obj, attr_name, owning_module=mod.__name__)
-            if fname is not None:
-                discovered[attr_name] = (obj, fname)
+            if fname is None:
+                continue
+            if attr_name in discovered:
+                # First-seen-wins silently hides re-exports; surface
+                # collisions so a misregistered name is visible
+                # instead of producing the wrong schema.
+                prior_obj, prior_fname = discovered[attr_name]
+                if prior_obj is not obj or prior_fname != fname:
+                    raise RuntimeError(
+                        f"schema name collision: {attr_name!r} defined in "
+                        f"both {prior_obj.__module__} (→ {prior_fname}) and "
+                        f"{mod.__name__} (→ {fname})"
+                    )
+                continue
+            discovered[attr_name] = (obj, fname)
 
     return sorted(discovered.values(), key=lambda pair: pair[1])
 
@@ -242,6 +255,7 @@ def main() -> int:
 
     if write:
         for path, _, new in drift:
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(new, encoding="utf-8")
             print(f"  wrote {path.relative_to(REPO_ROOT)}")
         print(f"regenerated {len(drift)} schema file(s)")

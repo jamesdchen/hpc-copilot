@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from claude_hpc._schema_models._shared import Scheduler
+
 
 class ValidateSpec(BaseModel):
     """Kwargs contract for ``claude_hpc.planning.validate.validate_submission``.
@@ -45,7 +47,7 @@ class ValidateResult(BaseModel):
 
     profile: str
     cluster: str
-    scheduler: str
+    scheduler: Scheduler
     estimated_start_iso: str | None = Field(
         description="ISO-8601 UTC timestamp when scheduler predicts start.",
     )

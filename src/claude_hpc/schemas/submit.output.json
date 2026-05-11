@@ -25,7 +25,7 @@
       "type": "array"
     },
     "total_tasks": {
-      "minimum": 0,
+      "minimum": 1,
       "title": "Total Tasks",
       "type": "integer"
     },

@@ -55,7 +55,9 @@ def validate_submission(experiment_dir: Path, *, spec: ValidateSpec) -> Validate
     unknown) propagate as ``ValueError``.
     """
     cfg = load_clusters_config()
-    cluster_cfg = (cfg.get("clusters") or {}).get(spec.cluster)
+    # load_clusters_config returns a flat {cluster_name: {...}} dict;
+    # planner.py and resubmit_planner.py both index it directly.
+    cluster_cfg = cfg.get(spec.cluster)
     if cluster_cfg is None:
         raise ValueError(f"unknown cluster {spec.cluster!r}; not in clusters.yaml")
     scheduler = cluster_cfg.get("scheduler", "slurm")

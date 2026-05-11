@@ -414,7 +414,7 @@ def cmd_validate_campaign(args: argparse.Namespace) -> int:
     experiment_dir = Path(args.experiment_dir).resolve()
     report = validate_campaign(experiment_dir, spec=spec)
     _ok(report.model_dump(mode="json"), name="validate-campaign")
-    return EXIT_OK if report.overall != "fail" else 1
+    return EXIT_OK if report.overall != "fail" else EXIT_USER_ERROR
 
 
 # ─── subcommand: interview ─────────────────────────────────────────────────
@@ -797,7 +797,7 @@ def cmd_build_submit_spec(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message="build-submit-spec input must be a JSON object",
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_submit_spec")
@@ -809,7 +809,7 @@ def cmd_build_submit_spec(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message=str(exc),
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     spec = build_submit_spec(spec=bss_spec)
@@ -833,7 +833,7 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message="build-tasks-py input must be a JSON object",
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     _validate_against_schema(raw, "build_tasks_py")
@@ -847,7 +847,7 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message=str(exc),
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     try:
@@ -856,7 +856,7 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message=str(exc),
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     _ok(out, name="build-tasks-py")
@@ -878,7 +878,7 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message="decide-monitor-arm input must be a JSON object",
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     _validate_against_schema(raw, "decide_monitor_arm")
@@ -890,7 +890,7 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message=str(exc),
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     out = decide_monitor_arm(spec=spec)
@@ -935,7 +935,7 @@ def cmd_summarize_submit_plan(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message="summarize-submit-plan input must be a JSON object",
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     _ok(summarize_submit_plan(spec), name="summarize-submit-plan")
@@ -1387,7 +1387,7 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
         return _err(
             error_code="spec_invalid",
             message="submit-flow-batch spec must be an object with a 'specs' list",
-            category="user-error",
+            category="user",
             retry_safe=False,
         )
     for entry in raw["specs"]:
@@ -2935,24 +2935,21 @@ def build_parser() -> argparse.ArgumentParser:
 # subcommand list.
 
 _VERB_GROUPS: dict[str, frozenset[str]] = {
+    # Only include subcommands that have parsers registered in
+    # build_parser() — _strip_verb_group passes the verb through to
+    # argparse, which raises "invalid choice" for unregistered names.
     "forecast": frozenset(
         {
             "best-submit-window",
             "house-edge",
             "predict-queue-wait",
             "predict-start-time",
-            "recommend-partition",
-            "recommend-wait-alternative",
             "walltime-drift",
         }
     ),
     "validate": frozenset(
         {
             "validate-campaign",
-            "validate-executor-signatures",
-            "validate-input-dataset",
-            "validate-self-qos-limit",
-            "validate-walltime-against-history",
         }
     ),
     "build": frozenset(

@@ -1,5 +1,11 @@
 #!/bin/bash
-set -e
+# Fail loudly: -e exits on error, -o pipefail propagates failures
+# through pipelines. -u is intentionally NOT set because the sourced
+# preambles use `if [ -n "$VAR" ]` on optional vars. Explicit guard
+# on the scheduler's task-id var below catches the "task -1" failure
+# mode.
+set -eo pipefail
+: "${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is not set; refusing to dispatch task -1}"
 
 # ==============================================================
 # SLURM CPU Array Job Template (claude-hpc)

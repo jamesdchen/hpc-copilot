@@ -13,6 +13,7 @@ with reason ``"no_criteria"``.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any, Literal
 
 from claude_hpc._internal.primitive import primitive
@@ -74,7 +75,9 @@ def campaign_converged(
     manifest_stop: dict[str, Any] = {}
     try:
         manifest = read_manifest(experiment_dir, campaign_id)
-    except Exception:
+    except (OSError, ValueError, json.JSONDecodeError):
+        # See campaign_budget.py for the rationale; we narrow this so
+        # ^C during a long scan isn't silently swallowed.
         manifest = None
     if manifest is not None:
         manifest_stop = manifest.get("stop_criteria") or {}

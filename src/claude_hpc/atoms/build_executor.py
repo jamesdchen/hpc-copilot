@@ -58,7 +58,10 @@ def build_executor(
     if dest.exists() and not force:
         raise errors.SpecInvalid(f"refusing to overwrite {dest}; pass --force to overwrite")
     output_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_text(src.read_text())
+    # Pin UTF-8 — HPC nodes with LC_ALL=C / LANG=POSIX would otherwise
+    # decode the UTF-8 template using the locale codec and either raise
+    # UnicodeDecodeError or silently corrupt non-ASCII content.
+    dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
     return {"path": str(dest.resolve()), "type": type, "source": str(src)}
 
 

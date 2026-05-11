@@ -259,7 +259,10 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
             f"_BASE = {base!r}\n"
             f"_LOG_LO = math.log(_LOW, _BASE)\n"
             f"_LOG_HI = math.log(_HIGH, _BASE)\n"
-            f"_TASKS = [\n"
+            # _N == 1 is a single-point sweep; division by (_N - 1)
+            # would otherwise raise ZeroDivisionError at task-resolve
+            # time.
+            f"_TASKS = [{{{params['param']!r}: _LOW}}] if _N == 1 else [\n"
             f"    {{{params['param']!r}: _BASE ** "
             f"(_LOG_LO + (_LOG_HI - _LOG_LO) * i / (_N - 1))}}\n"
             f"    for i in range(_N)\n"
@@ -270,7 +273,8 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
     elif kind == "numeric_linspace":
         body = (
             f"_LOW, _HIGH, _N = {params['low']!r}, {params['high']!r}, {int(params['n'])}\n"
-            f"_TASKS = [\n"
+            # _N == 1 → single-point sweep; avoid division by (_N - 1).
+            f"_TASKS = [{{{params['param']!r}: _LOW}}] if _N == 1 else [\n"
             f"    {{{params['param']!r}: _LOW + (_HIGH - _LOW) * i / (_N - 1)}}\n"
             f"    for i in range(_N)\n"
             f"]\n\n"

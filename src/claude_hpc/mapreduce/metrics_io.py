@@ -94,6 +94,12 @@ def write_metrics(metrics: dict, *, result_dir: str | None = None) -> str:
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(metrics, f)
+            # fsync before replace — a node-level crash between the
+            # rename and the OS page-cache writeback would otherwise
+            # leave a zero-byte metrics.json, tripping the dispatcher's
+            # idempotency skip on the next attempt.
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, dst)
     except BaseException:
         with contextlib.suppress(OSError):

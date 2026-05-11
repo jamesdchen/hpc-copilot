@@ -39,6 +39,16 @@
       "title": "Quantiles",
       "type": "object"
     },
+    "mem_quantiles_mb": {
+      "additionalProperties": true,
+      "title": "Mem Quantiles Mb",
+      "type": "object"
+    },
+    "cpu_cores_quantiles": {
+      "additionalProperties": true,
+      "title": "Cpu Cores Quantiles",
+      "type": "object"
+    },
     "total_samples": {
       "minimum": 0,
       "title": "Total Samples",

@@ -54,7 +54,7 @@ from pathlib import Path
 
 __all__ = ["main"]
 
-SUPPORTED_SCHEMA_VERSIONS = (1,)
+SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 
 
 def _default_max_workers():
