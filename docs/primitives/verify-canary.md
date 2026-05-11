@@ -14,7 +14,7 @@ error_codes:
   retry_safe: true
 backed_by:
   cli: hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output
-    <path>]
+    <path>] [--fingerprint <relpath>]
   python: claude_hpc.atoms.canary_verify.verify_canary
 exit_codes:
 - 0: ok
