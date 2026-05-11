@@ -548,18 +548,22 @@ def pick_earliest(probes: list[BackfillProbe]) -> BackfillProbe | None:
 # eviction and a ``clear_all()`` test hook shared with infra.inspect.
 from claude_hpc.infra.cache import TTLCache as _TTLCache  # noqa: E402
 
-_PROBE_CACHE: _TTLCache[tuple[str, str, int], BackfillProbe] = _TTLCache(
+_PROBE_CACHE: _TTLCache[tuple[str, str, int, int, int], BackfillProbe] = _TTLCache(
     "job.backfill.probe", ttl_sec=60.0, max_size=512
 )
 
 
 def _cache_get(cluster_name: str, t: ResourceTuple) -> BackfillProbe | None:
-    key = (cluster_name, t.constraint, t.walltime_sec // 60)
+    # mem_mb and cpus are part of the key — two ResourceTuples that
+    # differ only in mem or cpu count would otherwise collide and
+    # return a stale ETA from a different resource shape.
+    key = (cluster_name, t.constraint, t.walltime_sec // 60, t.mem_mb, t.cpus)
     return _PROBE_CACHE.get(key)
 
 
 def _cache_put(cluster_name: str, probe: BackfillProbe) -> None:
-    key = (cluster_name, probe.tuple_.constraint, probe.tuple_.walltime_sec // 60)
+    t = probe.tuple_
+    key = (cluster_name, t.constraint, t.walltime_sec // 60, t.mem_mb, t.cpus)
     _PROBE_CACHE.put(key, probe)
 
 

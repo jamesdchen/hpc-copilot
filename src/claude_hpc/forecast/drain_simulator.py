@@ -30,7 +30,7 @@ the agent can render for diagnostics.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from claude_hpc.forecast.squeue_priority_field import QueuedJob
@@ -147,7 +147,9 @@ def simulate_drain(
         if r.time_left_sec is None or r.time_left_sec < 0:
             # Treat as occupying a slot indefinitely — never frees.
             # Distant-future sentinel keeps the comparison total.
-            running_slots.append((datetime.max, r.job_id))
+            # Must carry the same tzinfo as `now` so the subsequent
+            # `running_slots.sort()` doesn't mix naive and aware.
+            running_slots.append((datetime.max.replace(tzinfo=timezone.utc), r.job_id))
         else:
             running_slots.append((now + timedelta(seconds=r.time_left_sec), r.job_id))
 
@@ -196,7 +198,7 @@ def simulate_drain(
         # boundary for backfill candidates.
         running_slots.sort(key=lambda s: s[0])
         next_end_dt, next_end_id = running_slots[0]
-        if next_end_dt == datetime.max:
+        if next_end_dt == datetime.max.replace(tzinfo=timezone.utc):
             # All running slots are indefinite — the hypothetical
             # never starts in this simulation horizon.
             return DrainResult(

@@ -127,7 +127,11 @@ def reduce_by_grid_point(tasks_data: dict) -> dict[str, dict]:
     import re as _re
 
     def _run_id(params: dict[str, str]) -> str:
-        raw = "_".join(str(v) for v in params.values())
+        # Sort by key so two tasks with identical params but different
+        # dict construction order group together. Without this, tasks
+        # whose params dicts were built in different orders end up in
+        # separate grid points.
+        raw = "_".join(str(params[k]) for k in sorted(params))
         return _re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
     # Group tasks by grid point (via run_id over params)
