@@ -11,6 +11,7 @@
     "candidates",
     "reason"
   ],
+  "additionalProperties": false,
   "properties": {
     "priority": {
       "enum": [

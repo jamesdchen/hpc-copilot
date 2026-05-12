@@ -33,6 +33,13 @@ def _is_fresh(cached_at_iso: str, *, ttl_minutes: int, now: datetime) -> bool:
         cached_at = datetime.fromisoformat(cached_at_iso)
     except (ValueError, TypeError):
         return False
+    # Normalize both sides to tz-aware UTC so a naive/aware mix doesn't
+    # raise TypeError (silently treated as "not fresh" by the catch-all
+    # below, masking real cache reads).
+    if cached_at.tzinfo is None:
+        cached_at = cached_at.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     age = now - cached_at
     return age < timedelta(minutes=ttl_minutes)
 

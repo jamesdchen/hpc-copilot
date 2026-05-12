@@ -153,10 +153,12 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
       4. Forwards SIGINT to the executor subprocess so its except blocks
          run during the cluster's preemption window. If the SIGTERM lands
          in the race window between ``Popen()`` returning and the main
-         flow assigning into ``child_holder[0]``, falls back to
-         ``killpg`` on the dispatcher's own process group — which the
-         child inherits via ``preexec_fn=os.setpgrp`` — so no executor
-         is ever orphaned by the race.
+         flow assigning into ``child_holder[0]``, the dispatcher has no
+         handle to the orphaned child — the executor is in its own
+         process group (via ``preexec_fn=os.setpgrp``) and was never
+         reachable via the dispatcher's pgid. We log the orphan and exit;
+         the cgroup teardown will eventually reap it. Documented limitation,
+         not a fixable race in pure Python.
       5. Waits up to *grace_sec* for the executor to exit cleanly, then
          escalates ``terminate() → wait(2) → kill()`` to guarantee
          teardown. A zombie executor outliving the dispatcher would keep
@@ -210,17 +212,19 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
                         child.wait(timeout=2)
         else:
             # A-H1: race window. SIGTERM landed before the main flow
-            # could populate child_holder[0]. The Popen() call ran with
-            # preexec_fn=os.setpgrp, so the child (if it exists) is in
-            # our process group; signal the whole pgid so the executor
-            # gets the SIGINT even though we never saw the Popen handle.
-            # Best-effort: if there genuinely is no child yet, killpg
-            # is a no-op against ourselves (we're about to sys.exit
-            # anyway, and SIGINT to ourselves while SIGTERM is now
-            # ignored is harmless — the default Python SIGINT handler
-            # raises KeyboardInterrupt which sys.exit overrides).
-            with contextlib.suppress(OSError, ProcessLookupError):
-                os.killpg(os.getpgid(0), signal.SIGINT)
+            # could populate child_holder[0]. The child (if Popen
+            # already returned but the assignment didn't land) is in its
+            # OWN process group (preexec_fn=os.setpgrp made it the
+            # leader), so we can't reach it via the dispatcher's pgid.
+            # Log the orphan honestly; cgroup teardown is the eventual
+            # cleanup. This is a documented limitation, not a fixable
+            # race in pure Python.
+            print(
+                "[claude-hpc] SIGTERM in race window before child handle was "
+                "captured; child (if any) was placed in its own process group "
+                "and cannot be signaled. Cgroup teardown will reap it.",
+                file=sys.stderr,
+            )
 
         sys.exit(_EXIT_PREEMPTED)
 
@@ -489,14 +493,14 @@ def main() -> None:
     # the child via *child_holder* and forward SIGINT during the
     # cluster's preemption grace window.
     #
-    # preexec_fn=os.setpgrp puts the executor in its own process group
-    # rooted at the dispatcher's pgid. Closes A-H1: if SIGTERM lands
-    # between Popen() returning and the line that assigns into
-    # child_holder[0], the handler falls back to killpg on our pgid
-    # — which the child has just joined — instead of leaving the
-    # executor orphaned (inherited by init, eventually cleaned up by
-    # cgroup teardown but possibly still writing output in the
-    # meantime, surprising the next user of the same node).
+    # preexec_fn=os.setpgrp makes the executor its OWN process-group
+    # leader (separate from the dispatcher's pgid). This isolates the
+    # child from any signals the scheduler sends to the dispatcher's
+    # pgroup so the dispatcher's SIGTERM handler can manage cleanup
+    # explicitly. Trade-off: an A-H1 race between Popen() returning and
+    # ``child_holder[0]`` assignment leaves the child unreachable by
+    # the handler (its pgid is unknown to us); the handler logs and
+    # exits, and cgroup teardown reaps the orphan.
     started_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     started_at_mono = time.monotonic()
     child = subprocess.Popen(executor, shell=True, env=env, preexec_fn=os.setpgrp)

@@ -107,7 +107,7 @@ def primitives_from_registry() -> list[dict]:
     from the registry, so the script stays useful during the C′
     migration window where some primitives might not be decorated yet.
     """
-    sys.path.insert(0, str(REPO_ROOT))
+    sys.path.insert(0, str(REPO_ROOT / "src"))
     from claude_hpc._internal.primitive import get_registry, register_primitives
 
     # The registry is now explicit: callers must register primitives

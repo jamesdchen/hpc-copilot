@@ -29,7 +29,7 @@ repos:
         entry: python scripts/build_primitive_frontmatter.py --write
         language: system
         pass_filenames: false
-        files: '^(src/claude_hpc/atoms/.*\.py|docs/primitives/.*\.md|src/claude_hpc/_internal/_primitive\.py)$'
+        files: '^(src/claude_hpc/atoms/.*\.py|docs/primitives/.*\.md|src/claude_hpc/_internal/primitive\.py)$'
 
       - id: build-primitive-index
         name: regenerate primitive catalog table

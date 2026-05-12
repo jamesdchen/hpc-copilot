@@ -12,6 +12,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from claude_hpc._schema_models._shared import (
+    RunIdLoose,  # noqa: TC001 — Pydantic resolves the annotation at runtime
     RunIdStrict,  # noqa: TC001 — Pydantic resolves the annotation at runtime
 )
 
@@ -40,13 +41,18 @@ class UpdateRunConstraintsSpec(BaseModel):
                 "Pass exactly one of `set_features` (replace) or "
                 "`add_features` (extend); they are mutually exclusive."
             )
+        if not self.add_features and self.set_features is None:
+            raise ValueError(
+                "Pass at least one of `set_features` (replace) or "
+                "`add_features` (extend); both are missing."
+            )
         return self
 
 
 class UpdateRunConstraintsResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: RunIdStrict
+    run_id: RunIdLoose
     job_ids_updated: list[str] = Field(default_factory=list)
     job_ids_failed: list[str] = Field(default_factory=list)
     new_features: list[str] = Field(default_factory=list)

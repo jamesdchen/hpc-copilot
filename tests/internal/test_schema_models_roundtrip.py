@@ -238,6 +238,14 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
     raise TypeError(f"synthesizer cannot handle annotation {annotation!r}")
 
 
+# Override map for models whose cross-field validators require optional
+# fields the per-field synthesizer would otherwise skip. Keyed by model
+# qualname; values are merged into the synthesized kwargs.
+_CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
+    "UpdateRunConstraintsSpec": {"add_features": ["a"]},
+}
+
+
 def _synthesize_minimal(model: type[BaseModel]) -> BaseModel:
     """Build a minimal valid instance by walking required fields."""
     kwargs: dict[str, Any] = {}
@@ -245,6 +253,7 @@ def _synthesize_minimal(model: type[BaseModel]) -> BaseModel:
         if not info.is_required():
             continue
         kwargs[name] = _resolve(info.annotation, list(info.metadata))
+    kwargs.update(_CROSS_FIELD_OVERRIDES.get(model.__name__, {}))
     return model(**kwargs)
 
 

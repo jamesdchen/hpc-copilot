@@ -1,18 +1,20 @@
 """Unified idempotency-key resolver.
 
-The framework has five idempotency mechanisms with no shared shape:
+The framework has four idempotency mechanisms with no shared shape:
 
 1. Frontmatter ``idempotent: true|false`` (advisory; per-primitive).
 2. Envelope ``idempotent`` (hardcoded per call site, ~47 callers).
 3. ``run_id``-keyed dedup in :func:`claude_hpc.runner.submit_and_record`.
 4. ``cmd_sha``-keyed :func:`claude_hpc.state.runs.find_run_by_cmd_sha`
    (wired to ``submit_and_record`` in item A5).
-5. ``request_id``-keyed resubmit dedup in ``slash_commands/runner.py``.
 
-This module collapses the *lookup* side of (3), (4), and (5) onto one
-typed shape — a small ABC for the key plus a stateless
+This module collapses the *lookup* side of (3) and (4) onto one typed
+shape — a small ABC for the key plus a stateless
 :func:`dedup_check` resolver that reads journal + sidecar without
-mutating state.
+mutating state. A :class:`RequestIdKey` shape is reserved for a
+future request-id-keyed resubmit dedup mechanism but the underlying
+lookup helper is not implemented; passing one to ``dedup_check``
+currently raises ``TypeError`` (via the unknown-subclass branch).
 
 Why a typed key rather than a dict
 ----------------------------------
@@ -145,8 +147,6 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
         record = session.load_run(experiment_dir, key.run_id)
         if record is None:
             return None
-        if (record.status or "").lower() == "cancelled":
-            return None
         return PriorResult(
             origin="journal",
             run_id=record.run_id,
@@ -164,32 +164,13 @@ def dedup_check(experiment_dir: Path, key: IdempotencyKey) -> PriorResult | None
             data = read_run_sidecar(experiment_dir, run_id)
         except (FileNotFoundError, OSError):
             return None
-        if (data.get("status") or "").lower() == "cancelled":
-            return None
         return PriorResult(origin="sidecar", run_id=run_id, details=data)
 
-    if isinstance(key, RequestIdKey):
-        # Request-log dedup is owned by claude_hpc.runner's
-        # _request_log helpers; the resolver hands off the lookup
-        # rather than duplicate that file format here.
-        try:
-            from claude_hpc import runner as _runner_mod
-        except ImportError:
-            return None
-        _lookup_request_id = getattr(_runner_mod, "_lookup_request_id", None)
-        if _lookup_request_id is None:
-            return None
-        try:
-            run_id = _lookup_request_id(experiment_dir, key.request_id)
-        except Exception:  # noqa: BLE001 — defensive read
-            return None
-        if run_id is None:
-            return None
-        return PriorResult(
-            origin="request_log",
-            run_id=run_id,
-            details={"request_id": key.request_id},
-        )
+    # RequestIdKey was previously here but the underlying
+    # ``_lookup_request_id`` helper never landed in the runner module,
+    # so the branch was always a silent no-op. Removed to make the
+    # resolver honest; if request-id-keyed dedup is reintroduced,
+    # restore both the branch AND the lookup helper.
 
     raise TypeError(f"unknown IdempotencyKey subclass: {type(key).__name__}")
 

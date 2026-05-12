@@ -47,7 +47,7 @@ The cadence parameters live on the spec's `wall_clock_budget_seconds` + the per-
 When `lifecycle_state == "failed"` with `failed_task_ids` non-empty:
 
 1. Read the failed tasks' stderr tails via `poll-run-status` (the cluster-side reporter surfaces them in `data.tasks[<id>].err_log_path` for any task in `failed`/`unknown`).
-2. Classify the failure via [classify-failure](../../docs/primitives/classify-failure.md). Recoverable categories (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the matching category. Non-recoverable (`spec_invalid`, `executor_crash`) → surface to caller.
+2. Classify the failure via [failures](../../docs/primitives/failures.md). Recoverable categories (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the matching category. Non-recoverable (`spec_invalid`, `executor_crash`) → surface to caller.
 3. The auto-retry resolver in [resubmit-failed](../../docs/primitives/resubmit-failed.md) reads the run sidecar's `auto_retry` block to decide whether the resubmit is allowed (per-category `max_attempts`).
 
 ## Polling cadence (poll-run-status, manual loops)

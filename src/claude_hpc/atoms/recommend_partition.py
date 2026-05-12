@@ -36,10 +36,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _highest_priority_non_debug(parts: list[PartitionInfo]) -> PartitionInfo:
+def _highest_priority_non_debug(parts: list[PartitionInfo]) -> PartitionInfo | None:
+    """Return the highest-priority non-debug partition, or None if only debug exists.
+
+    Returns None when ``parts`` is empty or contains only debug partitions.
+    Callers must handle the None case (recommending the debug-overrun fallback
+    was wrong because the debug partition would kill the very job we routed
+    away from).
+    """
     non_debug = [p for p in parts if not p.is_debug]
-    pool = non_debug or parts  # if there's only debug, use it
-    return max(pool, key=lambda p: p.priority_tier)
+    if not non_debug:
+        return None
+    return max(non_debug, key=lambda p: p.priority_tier)
 
 
 @primitive(
@@ -56,6 +64,18 @@ def recommend_partition(
     spec: RecommendPartitionSpec,
 ) -> RecommendPartitionResult:
     """Pick a partition for the requested walltime and return the rationale."""
+    if not spec.partitions:
+        return RecommendPartitionResult(
+            recommended_partition="",
+            rationale="no_partitions_declared",
+            message=(
+                "Cluster declared no partitions. Provide at least one "
+                "non-empty entry in spec.partitions before requesting a "
+                "recommendation."
+            ),
+            leverage_estimate=1.0,
+        )
+
     by_name = {p.name: p for p in spec.partitions}
 
     # Rule 1: honour user preference verbatim.
@@ -74,9 +94,12 @@ def recommend_partition(
 
     debug = next((p for p in spec.partitions if p.is_debug), None)
     fallback = _highest_priority_non_debug(spec.partitions)
-    fallback_tier = max(fallback.priority_tier, 1)
+    fallback_tier = max(fallback.priority_tier, 1) if fallback is not None else 1
 
     if debug is None:
+        # _highest_priority_non_debug returns None only when every entry is
+        # debug; if debug is also None we already returned above (empty list).
+        assert fallback is not None
         return RecommendPartitionResult(
             recommended_partition=fallback.name,
             rationale="no_debug_partition_available",
@@ -93,6 +116,9 @@ def recommend_partition(
     # debug_overrun_refused with a nonsensical "> 0s cap" message.
     cap = debug.walltime_cap_sec
     if cap is None or spec.requested_walltime_sec <= cap:
+        # In the debug-fits case we want the debug partition itself, regardless
+        # of whether a non-debug fallback exists.
+        fallback_name = fallback.name if fallback is not None else debug.name
         leverage = max(debug.priority_tier / fallback_tier, 1.0)
         cap_str = f"<= {cap}s cap" if cap is not None else "no cap"
         return RecommendPartitionResult(
@@ -101,9 +127,25 @@ def recommend_partition(
             message=(
                 f"Routing to {debug.name!r} (walltime {spec.requested_walltime_sec}s "
                 f"{cap_str}; PriorityTier {debug.priority_tier} vs "
-                f"{fallback_tier} on {fallback.name!r})."
+                f"{fallback_tier} on {fallback_name!r})."
             ),
             leverage_estimate=leverage,
+        )
+
+    if fallback is None:
+        # Only debug is declared and it can't handle the walltime — refuse
+        # rather than silently route back to the partition that would kill
+        # the job mid-flight.
+        return RecommendPartitionResult(
+            recommended_partition="",
+            rationale="only_debug_available_walltime_too_long",
+            message=(
+                f"Only a debug partition ({debug.name!r}) is declared; "
+                f"requested walltime {spec.requested_walltime_sec}s exceeds "
+                f"its {cap}s cap. No safe partition available — declare a "
+                f"non-debug partition or shorten the walltime ask."
+            ),
+            leverage_estimate=1.0,
         )
 
     return RecommendPartitionResult(

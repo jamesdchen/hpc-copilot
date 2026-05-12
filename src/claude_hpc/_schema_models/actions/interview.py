@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _Provenance(BaseModel):
@@ -84,6 +84,13 @@ class _CartesianProductParams(BaseModel):
         description="Named axes; tasks = full Cartesian product. resolve(i) returns a dict with one key per axis.",
     )
 
+    @model_validator(mode="after")
+    def _enforce_nonempty_axes(self) -> _CartesianProductParams:
+        empties = [name for name, vals in self.axes.items() if not vals]
+        if empties:
+            raise ValueError(f"Cartesian-product axes must each have >=1 value; empty: {empties}")
+        return self
+
 
 class _CartesianProduct(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -113,7 +120,15 @@ class _NumericLogspaceParams(BaseModel):
     low: float = Field(gt=0)
     high: float = Field(gt=0)
     n: int = Field(ge=2)
-    base: float = Field(default=10, gt=1)
+    base: float = Field(default=10.0, gt=1)
+
+    @model_validator(mode="after")
+    def _enforce_low_lt_high(self) -> _NumericLogspaceParams:
+        if self.low >= self.high:
+            raise ValueError(
+                f"numeric_logspace requires low < high; got low={self.low}, high={self.high}"
+            )
+        return self
 
 
 class _NumericLogspace(BaseModel):
@@ -130,6 +145,14 @@ class _NumericLinspaceParams(BaseModel):
     low: float
     high: float
     n: int = Field(ge=2)
+
+    @model_validator(mode="after")
+    def _enforce_low_lt_high(self) -> _NumericLinspaceParams:
+        if self.low >= self.high:
+            raise ValueError(
+                f"numeric_linspace requires low < high; got low={self.low}, high={self.high}"
+            )
+        return self
 
 
 class _NumericLinspace(BaseModel):

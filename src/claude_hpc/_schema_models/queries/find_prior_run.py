@@ -15,7 +15,7 @@ class FindPriorRunResult(BaseModel):
     doesn't trip.
     """
 
-    model_config = ConfigDict(title="find-prior-run output")
+    model_config = ConfigDict(extra="forbid", title="find-prior-run output")
 
     found: bool
     prior_run_id: str | None = Field(

@@ -15,7 +15,7 @@ class VerifyAggregationCompleteResult(BaseModel):
     provenance_present) to the user.
     """
 
-    model_config = ConfigDict(title="verify-aggregation-complete output")
+    model_config = ConfigDict(extra="forbid", title="verify-aggregation-complete output")
 
     ok: bool
     run_id: RunIdLoose

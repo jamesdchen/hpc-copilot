@@ -81,7 +81,10 @@ def _meta_idempotent(name: str) -> bool:
         for entry in operations_catalog():
             if entry.get("name") == name:
                 return bool(entry.get("idempotent", True))
-    except Exception:
+    except (LookupError, KeyError, FileNotFoundError):
+        # Narrow catch so programmer errors (e.g. registry queried
+        # before register_primitives()) surface in main() rather than
+        # being silently coerced to ``idempotent=True``.
         pass
     return True
 
@@ -276,8 +279,19 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     shared registry in :mod:`claude_hpc._internal.schema`.
     """
     try:
-        import jsonschema  # type: ignore[import-untyped]
+        import jsonschema  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
+        # Warn once so missing-dep installs (minimal venv, broken pip
+        # state) don't silently bypass the defence-in-depth layer. The
+        # Pydantic-driven inner validation still runs.
+        import warnings as _warnings
+
+        _warnings.warn(
+            "jsonschema not installed; skipping wire-schema validation. "
+            "Install with `pip install claude-hpc[<extras>]` or `pip install jsonschema>=4.18`.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         return
     try:
         schema_text = (
@@ -1673,10 +1687,22 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
 
     from claude_hpc.flows.resubmit_flow import resubmit_flow
 
+    # Validate per-element so a bad index surfaces with the slot
+    # information rather than a bare ``ValueError: invalid literal for
+    # int()``.
+    parsed_failed: list[int] = []
+    for i, t in enumerate(failed):
+        try:
+            parsed_failed.append(int(t))
+        except (TypeError, ValueError) as exc:
+            raise errors.SpecInvalid(
+                f"--spec.failed_task_ids[{i}]={t!r} is not an integer"
+            ) from exc
+
     result = resubmit_flow(
         Path(args.experiment_dir),
         args.run_id,
-        failed_task_ids=[int(t) for t in failed],
+        failed_task_ids=parsed_failed,
         category=category,
         overrides=spec.get("overrides"),
         new_job_ids=spec.get("new_job_ids"),

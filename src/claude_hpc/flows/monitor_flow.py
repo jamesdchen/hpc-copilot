@@ -206,6 +206,18 @@ def _newly_complete_waves(
     waves_block = last_status.get("waves")
     if not isinstance(waves_block, dict):
         return []
+    # Restrict to waves the local wave_map declared so a cluster-side
+    # reporter that picks up unexpected wave numbers (e.g. from a stale
+    # status report, or after a fresh resubmission added new groups) can't
+    # trigger combine_wave on waves the framework doesn't track.
+    declared_waves: set[int] | None = None
+    if wave_map is not None:
+        declared_waves = set()
+        for k in wave_map:
+            try:
+                declared_waves.add(int(k))
+            except (TypeError, ValueError):
+                continue
     out: list[int] = []
     for k, counts in waves_block.items():
         try:
@@ -214,11 +226,20 @@ def _newly_complete_waves(
             continue
         if wave_num in already_combined:
             continue
+        if declared_waves is not None and wave_num not in declared_waves:
+            continue
         if not isinstance(counts, dict):
             continue
-        total = counts.get("total")
-        complete = counts.get("complete")
-        if total and complete and total == complete:
+        # Coerce to int explicitly so a missing/None counter doesn't
+        # falsy-skip a legitimate (e.g. total=5, complete=5) match, and
+        # require total > 0 explicitly so empty waves don't loop until
+        # walltime budget.
+        try:
+            total = int(counts.get("total") or 0)
+            complete = int(counts.get("complete") or 0)
+        except (TypeError, ValueError):
+            continue
+        if total > 0 and complete == total:
             out.append(wave_num)
     return sorted(out)
 

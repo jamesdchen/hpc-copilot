@@ -43,8 +43,10 @@ _DEFAULT_OUTPUT_REL = "_aggregated/{run_id}.json"
 
 
 def _format_output_rel(template: str, *, run_id: str) -> str:
-    """Substitute ``{run_id}`` in *template*. Bare-format-only (no kwargs)."""
-    return template.format(run_id=run_id)
+    """Substitute ``{run_id}`` in *template*. Bare string replace so other
+    literal braces (e.g. ``{date}``) in a user-supplied path don't raise
+    ``KeyError`` from ``str.format``. Only ``{run_id}`` is recognised."""
+    return template.replace("{run_id}", run_id)
 
 
 def _resolve_aggregate_cmd(
@@ -234,14 +236,28 @@ def cluster_reduce(
 
     local_dir_path.mkdir(parents=True, exist_ok=True)
     output_basename = os.path.basename(output_rel)
-    pull_proc = rsync_pull(
-        ssh_target=record.ssh_target,
-        remote_path=record.remote_path,
-        remote_subdir=os.path.dirname(output_rel) or ".",
-        local_dir=str(local_dir_path),
-        include=[output_basename],
-        timeout=float(timeout_sec),
-    )
+    if output_rel.startswith("/"):
+        # Absolute remote path: rsync_pull joins remote_path + remote_subdir
+        # via path-stripping that mangles absolute inputs (`record.remote_path`
+        # ends up prepended to the absolute target). Use the absolute dirname
+        # as the rsync source directly, with an empty project-relative base.
+        pull_proc = rsync_pull(
+            ssh_target=record.ssh_target,
+            remote_path=os.path.dirname(output_rel) or "/",
+            remote_subdir="",
+            local_dir=str(local_dir_path),
+            include=[output_basename],
+            timeout=float(timeout_sec),
+        )
+    else:
+        pull_proc = rsync_pull(
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            remote_subdir=os.path.dirname(output_rel) or ".",
+            local_dir=str(local_dir_path),
+            include=[output_basename],
+            timeout=float(timeout_sec),
+        )
     if pull_proc.returncode != 0:
         raise errors.RemoteCommandFailed(
             f"rsync_pull of {output_rel!r} failed (exit "

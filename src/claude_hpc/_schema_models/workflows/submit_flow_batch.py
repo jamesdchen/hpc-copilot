@@ -31,7 +31,7 @@ class SubmitFlowBatchSpec(BaseModel):
     standalone ``submit-flow`` atom takes.
     """
 
-    model_config = ConfigDict(title="submit-flow-batch input spec")
+    model_config = ConfigDict(extra="forbid", title="submit-flow-batch input spec")
 
     specs: list[SubmitFlowSpec] = Field(min_length=1)
     rsync_excludes: list[str] | None = Field(
@@ -51,6 +51,8 @@ class _SubmitFlowResultEntry(BaseModel):
     model so the batch wrapper schema doesn't reference
     ``submit_flow.output.json#`` cross-file — single self-contained file.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     run_id: RunIdLoose
     job_ids: list[str]

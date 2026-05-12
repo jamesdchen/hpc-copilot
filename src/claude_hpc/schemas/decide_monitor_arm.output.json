@@ -12,6 +12,7 @@
     "armed_line",
     "cron_create_args"
   ],
+  "additionalProperties": false,
   "properties": {
     "arm": {
       "enum": [

@@ -68,24 +68,43 @@ def _index_is_stale(experiment_dir: Path) -> bool:
 
 
 def _rebuild_index(experiment_dir: Path) -> dict:
-    from claude_hpc._internal.time import utcnow_iso
     from claude_hpc._internal.version import is_compatible
 
-    entries: dict[str, dict] = {}
-    for path in _all_run_files(experiment_dir):
-        payload = _read_json(path)
-        if payload is None:
-            continue
-        sv = payload.get("schema_version")
-        if not isinstance(sv, int) or not is_compatible("session", sv):
-            continue
-        run_id = payload.get("run_id") or path.stem
-        entries[run_id] = {
-            "status": payload.get("status", "in_flight"),
-            "updated_at": utcnow_iso(),
-        }
     idx_path = journal_dir(experiment_dir) / "index.json"
+    # Hold the index lock for the entire scan+write so concurrent
+    # ``_refresh_index_entry`` writes from other processes can't slip in
+    # between the directory scan and the index rewrite (which would
+    # otherwise clobber the freshly-installed terminal-transition
+    # entry). Use each run file's mtime as ``updated_at`` so a routine
+    # rebuild doesn't clobber the real timestamps with "time of last
+    # rebuild".
     with _locked(idx_path):
+        entries: dict[str, dict] = {}
+        for path in _all_run_files(experiment_dir):
+            payload = _read_json(path)
+            if payload is None:
+                continue
+            sv = payload.get("schema_version")
+            if not isinstance(sv, int) or not is_compatible("session", sv):
+                continue
+            run_id = payload.get("run_id") or path.stem
+            try:
+                mtime_iso = (
+                    __import__("datetime")
+                    .datetime.fromtimestamp(
+                        path.stat().st_mtime,
+                        tz=__import__("datetime").timezone.utc,
+                    )
+                    .isoformat(timespec="seconds")
+                )
+            except OSError:
+                from claude_hpc._internal.time import utcnow_iso as _utcnow_iso
+
+                mtime_iso = _utcnow_iso()
+            entries[run_id] = {
+                "status": payload.get("status", "in_flight"),
+                "updated_at": mtime_iso,
+            }
         _atomic_write_json(idx_path, entries)
     return entries
 

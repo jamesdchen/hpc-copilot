@@ -72,8 +72,9 @@ def validate_self_qos_limit(
             ),
             suggested_fix=(
                 f"Split the array into smaller submissions of <= "
-                f"{max(1, cap - spec.current_user_pending_count - 1)} tasks, "
-                "or wait for existing pendings to clear before submitting."
+                f"{max(0, cap - spec.current_user_pending_count - 1)} tasks, "
+                "or wait for existing pendings to clear before submitting "
+                "(0 means no headroom available — wait is the only option)."
             ),
             evidence={
                 "current_user_pending_count": spec.current_user_pending_count,

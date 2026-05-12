@@ -289,6 +289,7 @@ def plan_submit(
     # backfill shadows the round-number ask doesn't reach. The lattice
     # path supersedes this when priors exist.
     walltime_arbitraged_from: int | None = None
+    walltime_arbitraged_to: int | None = None
     # The lattice probe "wins" only when at least one candidate produced
     # a non-None predicted_eta_sec — that's the signal that priors exist
     # and the scheduler actually scored the right-sized resource tuple.
@@ -303,6 +304,7 @@ def plan_submit(
         trimmed = arbitrage_walltime(int(walltime_user_ask_sec))
         if trimmed != walltime_user_ask_sec:
             walltime_arbitraged_from = int(walltime_user_ask_sec)
+            walltime_arbitraged_to = int(trimmed)
 
     # Auto-daisy-chain decision. Survives the cluster's hard walltime
     # ceiling by splitting the ask into N segments where each segment
@@ -353,6 +355,7 @@ def plan_submit(
         "walltime_split": walltime_split,
         "walltime_drift": drift_report,
         "walltime_arbitraged_from": walltime_arbitraged_from,
+        "walltime_arbitraged_to": walltime_arbitraged_to,
         "daisy_chain_segments": daisy_chain_segments,
         # Filled at submit time once each segment's jobid is known. The
         # plan layer cannot know jobids ahead of qsub/sbatch, so this is

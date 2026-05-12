@@ -6,9 +6,10 @@ Third workflow atom in the :mod:`claude_hpc.flows.submit_flow` /
 1. Read the per-run sidecar to discover the wave_map + remote_path.
 2. (Optional, default on) ``ensure_all_combined`` — for every wave in
    the wave_map that isn't yet in ``record.combined_waves``, invoke
-   ``runner.combine_wave`` (with one ``force=true`` retry on failure).
-   Idempotent: already-combined waves are no-ops; this just guarantees
-   no missing partials before the pull.
+   ``runner.combine_wave``. The first attempt runs with ``force=false``;
+   if it fails the subsequent ``max_retries`` attempts run with
+   ``force=true``. Idempotent: already-combined waves are no-ops; this
+   just guarantees no missing partials before the pull.
 3. ``rsync_pull`` the cluster's ``_combiner/`` directory locally.
 4. ``reduce_partials`` over the local dir → aggregated metrics dict.
 5. (Optional) ``rsync_pull`` per-task result summaries matching

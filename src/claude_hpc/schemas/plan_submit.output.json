@@ -72,6 +72,19 @@
       "description": "Original walltime ask in seconds before cold-start arbitrage trimmed it. Null when arbitrage didn't fire.",
       "title": "Walltime Arbitraged From"
     },
+    "walltime_arbitraged_to": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cold-start-trimmed walltime in seconds (the value callers should actually use). Null when arbitrage didn't fire.",
+      "title": "Walltime Arbitraged To"
+    },
     "daisy_chain_segments": {
       "anyOf": [
         {

@@ -179,7 +179,7 @@ def recommend_safety_mult_adjustment(
         )
     # Tighten if we're systematically over-asking. Conservative: only
     # tighten when the median is well below the cliff.
-    if drift.median_utilization is not None and drift.median_utilization < 0.5 and rate == 0.0:
+    if drift.median_utilization is not None and drift.median_utilization < 0.5 and rate < 1e-9:
         adjusted = max(base_safety_mult - 0.10, floor_safety_mult)
         if adjusted < base_safety_mult:
             return round(adjusted, 3), (
@@ -360,7 +360,12 @@ def record_prediction_sidecar(
         "cpus": int(cpus),
         "submitted_at_iso": submitted_at_iso or utcnow_iso(),
     }
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # Use a per-process unique tmp suffix so concurrent writes for the
+    # same run_id don't race on the same path (the previous shared
+    # ``<path>.tmp`` could have one writer unlink another's mid-write).
+    import os as _os
+
+    tmp = path.with_suffix(path.suffix + f".tmp.{_os.getpid()}")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
     tmp.replace(path)
     return path

@@ -60,15 +60,27 @@ def _patch_sibling_lookup(monkeypatch, hpc: Path) -> None:
 
 class TestGridKeyStability:
     def test_simple_params(self):
-        assert _grid_key({"model": "ridge", "horizon": "1"}) == "ridge_1"
+        # Sorted-by-key: ``horizon`` < ``model`` -> "1_ridge". The previous
+        # ``params.values()`` form was insertion-order sensitive; the
+        # current form sorts keys so two tasks with identical params but
+        # different dict construction order group into the same grid point.
+        assert _grid_key({"model": "ridge", "horizon": "1"}) == "1_ridge"
+
+    def test_simple_params_order_invariant(self):
+        # Same params, different dict order, same key.
+        assert _grid_key({"model": "ridge", "horizon": "1"}) == _grid_key(
+            {"horizon": "1", "model": "ridge"}
+        )
 
     def test_special_chars_sanitized(self):
         # "/" and " " aren't in [A-Za-z0-9.-]; both become "_".
-        assert _grid_key({"path": "/some/path", "name": "foo bar"}) == "_some_path_foo_bar"
+        # Sorted-by-key: ``name`` < ``path``.
+        assert _grid_key({"path": "/some/path", "name": "foo bar"}) == "foo_bar__some_path"
 
     def test_handles_non_string_values(self):
         # The new combiner casts via str(), so numeric kwargs work.
-        assert _grid_key({"seed": 42, "model": "v1"}) == "42_v1"
+        # Sorted-by-key: ``model`` < ``seed`` -> "v1_42".
+        assert _grid_key({"seed": 42, "model": "v1"}) == "v1_42"
 
 
 class TestWeightedMeanSingleEntry:
