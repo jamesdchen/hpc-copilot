@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-@register("sge-remote")
+@register("sge")
 class RemoteSGEBackend(RemoteHPCBackend, SGEBackend):
     """SGE backend that runs qsub on the cluster via SSH.
 

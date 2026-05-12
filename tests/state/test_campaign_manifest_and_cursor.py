@@ -137,3 +137,50 @@ def test_advance_isolates_campaigns(tmp_path: Path) -> None:
     advance_cursor(tmp_path, "camp_b")
     assert read_cursor(tmp_path, "camp_a")["iteration"] == 2
     assert read_cursor(tmp_path, "camp_b")["iteration"] == 1
+
+
+def test_read_rejects_newer_schema_version(tmp_path: Path) -> None:
+    # Forward-compat guard: a cursor written by a newer framework must
+    # be loud, not silently mis-parsed.
+    import json as _json
+
+    from claude_hpc.campaign.cursor import CURSOR_SCHEMA_VERSION
+
+    path = cursor_path(tmp_path, "camp_x")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _json.dumps(
+            {
+                "cursor_schema_version": CURSOR_SCHEMA_VERSION + 1,
+                "iteration": 7,
+                "last_run_id": "from_future",
+                "updated_at": "2099-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="newer than"):
+        read_cursor(tmp_path, "camp_x")
+
+
+def test_read_accepts_lower_or_equal_schema_version(tmp_path: Path) -> None:
+    # Backward-compat: the current schema_version (and any future lower
+    # version) round-trips without error. Future bumps land migrations.
+    import json as _json
+
+    from claude_hpc.campaign.cursor import CURSOR_SCHEMA_VERSION
+
+    path = cursor_path(tmp_path, "camp_y")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _json.dumps(
+            {
+                "cursor_schema_version": CURSOR_SCHEMA_VERSION,
+                "iteration": 3,
+                "last_run_id": "ok",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    state = read_cursor(tmp_path, "camp_y")
+    assert state is not None
+    assert state["iteration"] == 3

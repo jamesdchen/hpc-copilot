@@ -134,9 +134,13 @@ class TestComputeDaisyChainPlan:
 
     def test_two_day_task_on_24h_cluster(self):
         # 48h on 24h cluster: per-segment cap = 23h; ceil(48/23) = 3.
+        # Rebalanced: each segment = ceil(48*3600 / 3) = 57600 sec = 16h
+        # (not 23h, since 3 equal segments fit comfortably below the cap).
         plan = compute_daisy_chain_plan(48 * 3600, max_walltime_sec=86400)
         assert plan.n_segments == 3
-        assert plan.segment_walltime_sec == 86400 - QUEUE_WAIT_BUFFER_SEC
+        assert plan.segment_walltime_sec == 16 * 3600
+        # Sanity: rebalanced segment <= per-segment cap.
+        assert plan.segment_walltime_sec <= 86400 - QUEUE_WAIT_BUFFER_SEC
         assert plan.total_walltime_sec == 48 * 3600
 
     def test_seven_day_task_on_24h_cluster(self):
@@ -148,6 +152,23 @@ class TestComputeDaisyChainPlan:
         # 30 days = 720h; per-segment cap = 23h; ceil(720/23) = 32.
         plan = compute_daisy_chain_plan(30 * 86400, max_walltime_sec=86400)
         assert plan.n_segments == 32
+
+    def test_boundary_just_above_per_segment_rebalances(self):
+        # Ask = per_segment_cap + 1: naive split would emit a 1-second tail.
+        # Rebalanced: 2 segments of ceil((cap + 1) / 2) seconds — well above
+        # the 60s sanity floor and the cluster's minimum-job duration.
+        max_walltime = 86400
+        per_segment_cap = max_walltime - QUEUE_WAIT_BUFFER_SEC
+        plan = compute_daisy_chain_plan(per_segment_cap + 1, max_walltime_sec=max_walltime)
+        assert plan.n_segments == 2
+        # Every segment is >= 60s (no degenerate slivers).
+        assert plan.segment_walltime_sec >= 60
+        # And still under the per-segment cap.
+        assert plan.segment_walltime_sec <= per_segment_cap
+        # Exactly: ceil((per_segment_cap + 1) / 2).
+        import math as _math
+
+        assert plan.segment_walltime_sec == _math.ceil((per_segment_cap + 1) / 2)
 
     def test_invalid_max_walltime_raises(self):
         # max <= queue-wait buffer: chain can't make progress.

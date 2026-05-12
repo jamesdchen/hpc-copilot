@@ -120,26 +120,37 @@ def campaign_converged(
                 "best_metric": best,
             }
 
-    if metric and plateau_window is not None and len(metric_values) >= int(plateau_window) + 1:
+    if metric and plateau_window is not None:
         window = int(plateau_window)
-        prior_best = _best(metric_values[:-window], resolved_direction)
-        recent_best = _best(metric_values[-window:], resolved_direction)
-        if prior_best is not None and recent_best is not None:
-            improved = (
-                (prior_best - recent_best)
-                if resolved_direction == "minimize"
-                else (recent_best - prior_best)
-            )
-            if improved <= float(plateau_tolerance):
-                return {
-                    "converged": True,
-                    "reason": (
-                        f"plateau (last {window} iters improved by {improved:.6g} "
-                        f"<= tolerance {plateau_tolerance})"
-                    ),
-                    "iterations": n_iters,
-                    "best_metric": best,
-                }
+        if window <= 0:
+            # Explicit short-circuit: a non-positive plateau window means
+            # the caller asked for "no plateau check" — say so plainly
+            # rather than silently slicing an empty window.
+            return {
+                "converged": False,
+                "reason": f"plateau_check_disabled (plateau_window={window})",
+                "iterations": n_iters,
+                "best_metric": best,
+            }
+        if len(metric_values) >= window + 1:
+            prior_best = _best(metric_values[:-window], resolved_direction)
+            recent_best = _best(metric_values[-window:], resolved_direction)
+            if prior_best is not None and recent_best is not None:
+                improved = (
+                    (prior_best - recent_best)
+                    if resolved_direction == "minimize"
+                    else (recent_best - prior_best)
+                )
+                if improved <= float(plateau_tolerance):
+                    return {
+                        "converged": True,
+                        "reason": (
+                            f"plateau (last {window} iters improved by {improved:.6g} "
+                            f"<= tolerance {plateau_tolerance})"
+                        ),
+                        "iterations": n_iters,
+                        "best_metric": best,
+                    }
 
     if max_iters is None and metric is None:
         return {

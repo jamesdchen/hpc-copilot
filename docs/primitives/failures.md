@@ -37,6 +37,9 @@ error_codes:
 - code: ssh_unreachable
   category: network
   retry_safe: true
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
 backed_by:
   cli: hpc-agent failures --run-id <id> [--lines <n>]
   python: claude_hpc.atoms.failures.fetch_failures

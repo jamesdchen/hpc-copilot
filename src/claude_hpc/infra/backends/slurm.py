@@ -1,12 +1,19 @@
-"""SLURM backend — submits array jobs via sbatch."""
+"""SLURM backend — submits array jobs via sbatch.
+
+The wire-facing ``backend`` value ``"slurm"`` resolves to
+:class:`claude_hpc.infra.backends.slurm_remote.RemoteSlurmBackend` (the
+remote-over-ssh subclass). This local class is no longer registered
+because nothing in src/ or tests/ submits jobs from a local SLURM shell —
+every submission flows through the SSH boundary. It remains as a base
+class for the remote subclass.
+"""
 
 import os
 import re
 
-from claude_hpc.infra.backends import HPCBackend, register
+from claude_hpc.infra.backends import HPCBackend
 
 
-@register("slurm")
 class SlurmBackend(HPCBackend):
     # sbatch prints ``Submitted batch job 12345``.  Anchor on the phrase
     # so a warning prefix containing digits (``sbatch: warning: 30% of

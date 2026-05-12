@@ -142,7 +142,7 @@ def render_overrides_to_extra_flags(
     if not overrides:
         return []
     s = (scheduler or "").lower()
-    if s not in {"slurm", "sge", "sge_remote"}:
+    if s not in {"slurm", "sge"}:
         raise ValueError(
             f"render_overrides_to_extra_flags: unknown scheduler {scheduler!r}; "
             "expected 'slurm' or 'sge'"
@@ -163,7 +163,7 @@ def render_overrides_to_extra_flags(
             out += [f"--gpus={gpus}"]
         if isinstance(cpus, int) and cpus > 0:
             out += [f"--cpus-per-task={cpus}"]
-    else:  # sge / sge_remote
+    else:  # sge
         if isinstance(mem_mb, int) and mem_mb > 0:
             out += ["-l", f"h_data={mem_mb}M"]
         if isinstance(walltime_sec, int) and walltime_sec > 0:
@@ -407,7 +407,13 @@ def _submit_resubmit_batches(
     extra_flags = render_overrides_to_extra_flags(scheduler, effective_overrides)
 
     if backend_factory is None:
-        from claude_hpc.flows.submit_flow import _build_backend
+        from claude_hpc.flows.submit_flow import _build_backend, _validate_ssh_target
+
+        # Validate ssh_target up front — _build_backend no longer
+        # double-validates internally (see BUG-4-10), so callers own the
+        # check. We surface the same SpecInvalid envelope the submit
+        # path uses.
+        _validate_ssh_target(ssh_target)
 
         backend_obj = _build_backend(
             backend_name=scheduler,

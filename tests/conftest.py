@@ -81,11 +81,10 @@ def write_hpc_tasks(hpc_dir: Path, tasks: list[dict[str, Any]]) -> Path:
     """
     hpc_dir.mkdir(parents=True, exist_ok=True)
     tasks_py = hpc_dir / "tasks.py"
+    # Use repr() rather than json.dumps so tests can exercise richer Python
+    # literals (tuples, sets, etc.) that production handles fine.
     tasks_py.write_text(
-        "import json\n"
-        f"_TASKS = {json.dumps(tasks)}\n"
-        "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+        f"_TASKS = {tasks!r}\ndef total(): return len(_TASKS)\ndef resolve(i): return _TASKS[i]\n"
     )
     return tasks_py
 

@@ -16,7 +16,7 @@ def _spec(**overrides) -> dict:
         remote_path="/u/scratch/alice",
         run_id="r1",
         total_tasks=42,
-        backend="sge_remote",
+        backend="sge",
         job_name="ml_ridge",
         script=".hpc/templates/cpu_array.sh",
         job_env={},

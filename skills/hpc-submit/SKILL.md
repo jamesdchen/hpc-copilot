@@ -233,7 +233,7 @@ Steps 7 (rsync), 7b (canary), 8 (qsub), 10 (record) are ONE CLI call. Spec shape
   "profile": "<job_name>", "cluster": "<cluster>", "ssh_target": "user@host",
   "remote_path": "<remote_path>", "job_name": "<job_name>",
   "run_id": "<run_id from 6d>", "total_tasks": <tasks.total()>,
-  "backend": "sge_remote", "script": ".hpc/templates/cpu_array.sh",
+  "backend": "sge", "script": ".hpc/templates/cpu_array.sh",
   "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
   "pass_env_keys": [...],
   "canary": true, "campaign_id": "<slug>", "runtime": "uv",

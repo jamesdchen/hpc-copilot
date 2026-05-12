@@ -20,7 +20,7 @@ External consumers (MARs, future agent harnesses, the in-process
 contributors edit the Pydantic. Pre-commit's `build-schemas`
 `--check` gate fails CI when the two diverge.
 
-53 schemas cover the full agent-facing surface:
+73 schemas cover the full agent-facing surface:
 
 - `envelope.json` — universal stdout envelope (success / error variants
   via discriminated union on `ok`).

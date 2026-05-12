@@ -131,7 +131,7 @@ def _spec(run_id: str, **overrides: Any):
         job_name=run_id,
         run_id=run_id,
         total_tasks=4,
-        backend="sge_remote",
+        backend="sge",
         script="run.sh",
         job_env={},
         canary=False,

@@ -464,7 +464,10 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     if not runs.exists():
         return []
     hits = [p for p in runs.iterdir() if p.is_file() and p.suffix == ".json"]
-    hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    # Secondary key: run_id (path.stem) is ``YYYYMMDD-HHMMSS-<sha>`` — its ISO
+    # prefix is monotonic, so it's a stable tiebreaker when two sidecars share
+    # the same coarse-FS mtime (e.g. seconds-resolution filesystems).
+    hits.sort(key=lambda p: (p.stat().st_mtime, p.stem), reverse=True)
     return hits
 
 
