@@ -134,6 +134,14 @@ def verify_canary(
     record = session.load_run(experiment_dir, canary_run_id)
     if record is None:
         raise errors.SpecInvalid(f"no journal record for canary run_id={canary_run_id!r}")
+    if int(record.total_tasks) <= 0:
+        # A 0-task canary can never satisfy `complete >= total_tasks > 0`,
+        # so the poll loop would always exit via timeout. Reject up-front
+        # with a clearer error.
+        raise errors.SpecInvalid(
+            f"canary run_id={canary_run_id!r} has total_tasks={record.total_tasks}; "
+            "a canary must have at least 1 task"
+        )
 
     deadline = time.monotonic() + int(wait_budget_sec)
     last_summary: dict[str, Any] = {}
@@ -171,6 +179,7 @@ def verify_canary(
                 f"{wait_budget_sec}s (last summary: {last_summary})"
             ),
             "stderr_tail": "",
+            "metrics_fingerprint": None,
         }
 
     # Fetch the canary's stderr tail (1 task, task_id=0).
@@ -211,6 +220,7 @@ def verify_canary(
                     f"likely {kind.replace('_', ' ')}."
                 ),
                 "stderr_tail": stderr_tail,
+                "metrics_fingerprint": None,
             }
 
     # Optional output verification.
@@ -228,6 +238,7 @@ def verify_canary(
                     f"canary {canary_run_id!r} expected output {expect_output!r} {output_detail}"
                 ),
                 "stderr_tail": stderr_tail,
+                "metrics_fingerprint": None,
             }
 
     # Final check: complete == total_tasks, no failures.
@@ -241,6 +252,7 @@ def verify_canary(
                 "but no recognized stderr marker found."
             ),
             "stderr_tail": stderr_tail,
+            "metrics_fingerprint": None,
         }
 
     # Optional fingerprint. Best-effort: a fingerprint failure does NOT

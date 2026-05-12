@@ -83,7 +83,7 @@
       "title": "Fallback Reason"
     },
     "features_adjustment_factor": {
-      "description": "Order-book adjustment factor (Phase 1c). 1.0 when no current_features were supplied or on the DES path.",
+      "description": "Order-book adjustment factor (Phase 1c). 1.0 on the wire-driven path and on the DES path; only non-1.0 for internal callers that pass live QueueFeatures directly (not exposed on the spec).",
       "title": "Features Adjustment Factor",
       "type": "number"
     },

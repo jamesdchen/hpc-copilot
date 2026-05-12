@@ -122,7 +122,7 @@ def _classify_state(
         # >30 min
         if not pace_unstable:
             return "eta_gt_30min_stable", 270
-        return "eta_10_30min_unstable", 90
+        return "eta_gt_30min_unstable", 90
     # No ETA — fall back on running vs all-pending.
     if all_pending:
         return "all_pending_fallback", 1800

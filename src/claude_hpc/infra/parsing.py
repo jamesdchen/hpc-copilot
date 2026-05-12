@@ -99,21 +99,32 @@ def to_float_or_none(s: Any) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-def parse_mem_to_gb(s: str | None) -> float | None:
+def parse_mem_to_gb(s: str | None, *, cpus: int | None = None) -> float | None:
     """Parse a SLURM/SGE memory token (e.g. ``128G``, ``1024M``) -> GB.
 
     Accepts an optional trailing ``B`` (``128GB``); unit defaults to MB
     when absent (matches SLURM's default sacct ``ReqMem`` formatting).
+
+    Recognises SLURM's per-CPU (``c``) and per-node (``n``) suffixes
+    after the unit: ``1000Mc`` means 1000MB per CPU. When ``cpus`` is
+    provided and the suffix is ``c``, the result is scaled accordingly.
+    When ``cpus`` is None the per-CPU value is returned (caller must
+    multiply); this matches the historical behaviour where the suffix
+    was ignored.
     """
     if not s:
         return None
-    m = re.match(r"(\d+(?:\.\d+)?)\s*([KMGTkmgt])?[bB]?", s.strip())
+    m = re.match(r"(\d+(?:\.\d+)?)\s*([KMGTkmgt])?[bB]?([cn])?", s.strip())
     if not m:
         return None
     val = float(m.group(1))
     unit = (m.group(2) or "M").upper()
+    per = m.group(3)
     factor = {"K": 1 / (1024 * 1024), "M": 1 / 1024, "G": 1.0, "T": 1024.0}.get(unit, 1 / 1024)
-    return round(val * factor, 3)
+    result = val * factor
+    if per == "c" and cpus is not None and cpus > 0:
+        result *= cpus
+    return round(result, 3)
 
 
 def parse_mem_to_mb(s: str | None) -> int | None:

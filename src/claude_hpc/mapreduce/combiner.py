@@ -72,8 +72,14 @@ def _grid_key(params):
 
     Mirrors ``claude_hpc.mapreduce.reduce.metrics.run_id`` semantics. Duplicated
     here because the combiner is deployed standalone (no package).
+
+    Sort by key so two tasks with identical params but different dict
+    insertion order group into the same grid point. The previous form
+    ``"_".join(str(v) for v in params.values())`` was insertion-order
+    sensitive — kwargs constructed in different orders produced
+    different keys and silently split a single grid point.
     """
-    raw = "_".join(str(v) for v in params.values())
+    raw = "_".join(str(params[k]) for k in sorted(params))
     return re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
 
@@ -335,6 +341,9 @@ def main(max_workers=None, argv=None):
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(output, f, indent=2)
+            f.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(f.fileno())
         os.replace(tmp, out_path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -359,6 +368,9 @@ def main(max_workers=None, argv=None):
         try:
             with os.fdopen(fd, "w") as f:
                 json.dump(runtime_payload, f, indent=2, sort_keys=True)
+                f.flush()
+                with contextlib.suppress(OSError):
+                    os.fsync(f.fileno())
             os.replace(tmp, runtime_out)
         except BaseException:
             with contextlib.suppress(OSError):

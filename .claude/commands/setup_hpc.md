@@ -37,8 +37,8 @@ Copy all slash commands from this repo into the global Claude commands directory
    - **On Y**: install the cron line idempotently. First check whether an entry already exists; if so, report and skip:
 
      ```bash
-     CRON_LINE="*/5 * * * * cd \"$EXPERIMENT_DIR\" && python -m scripts.snapshot_squeue --ssh-target \"$SSH_TARGET\" --experiment-dir \"$EXPERIMENT_DIR\" >> .hpc/snapshot_squeue.log 2>&1"
-     if crontab -l 2>/dev/null | grep -qF "scripts.snapshot_squeue"; then
+     CRON_LINE="*/5 * * * * cd \"$EXPERIMENT_DIR\" && python scripts/snapshot_squeue.py --ssh-target \"$SSH_TARGET\" --experiment-dir \"$EXPERIMENT_DIR\" >> .hpc/snapshot_squeue.log 2>&1"
+     if crontab -l 2>/dev/null | grep -qF "scripts/snapshot_squeue.py"; then
          echo "snapshot cron already installed; skipping"
      else
          (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
@@ -53,7 +53,7 @@ Copy all slash commands from this repo into the global Claude commands directory
      On Y, append a daily cron entry:
 
      ```bash
-     TRAIN_LINE="0 3 * * * cd \"$EXPERIMENT_DIR\" && python -m scripts.extract_sacct_history --ssh-target \"$SSH_TARGET\" --since-days 30 --out completed_jobs.json && python -m scripts.train_wait_predictor --completed-jobs completed_jobs.json --slot-counts slot_counts.json --experiment-dir \"$EXPERIMENT_DIR\" >> .hpc/train_wait_predictor.log 2>&1"
+     TRAIN_LINE="0 3 * * * cd \"$EXPERIMENT_DIR\" && python scripts/extract_sacct_history.py --ssh-target \"$SSH_TARGET\" --since-days 30 --out completed_jobs.json && python scripts/train_wait_predictor.py --completed-jobs completed_jobs.json --slot-counts slot_counts.json --experiment-dir \"$EXPERIMENT_DIR\" >> .hpc/train_wait_predictor.log 2>&1"
      if crontab -l 2>/dev/null | grep -qF "train_wait_predictor"; then
          echo "training cron already installed; skipping"
      else

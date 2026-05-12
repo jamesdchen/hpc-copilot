@@ -180,6 +180,12 @@ def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
     ``tasks_example.py``. Single-axis sweeps render as a simple list
     comprehension; multi-axis as ``itertools.product``.
     """
+    from claude_hpc import errors
+
+    if not axes:
+        raise errors.SpecInvalid(
+            "build-tasks-py requires at least one axis; received an empty axes list"
+        )
     if len(axes) == 1:
         ax = axes[0]
         return (

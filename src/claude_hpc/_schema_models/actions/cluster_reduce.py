@@ -17,7 +17,7 @@ class ClusterReduceResult(BaseModel):
     file.
     """
 
-    model_config = ConfigDict(title="cluster-reduce output")
+    model_config = ConfigDict(extra="forbid", title="cluster-reduce output")
 
     ok: bool
     run_id: RunIdLoose = Field(

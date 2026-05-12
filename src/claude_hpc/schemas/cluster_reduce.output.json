@@ -13,6 +13,7 @@
     "exit_code",
     "stderr_tail"
   ],
+  "additionalProperties": false,
   "properties": {
     "ok": {
       "title": "Ok",

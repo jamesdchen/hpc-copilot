@@ -230,18 +230,25 @@ def reservations_active_at(
     on that side (match the SLURM semantics where ``Unknown`` end
     means "until further notice").
     """
-    try:
-        target = datetime.fromisoformat(at_iso)
-    except ValueError:
-        return []
 
     def _to_dt(iso: str | None) -> datetime | None:
         if iso is None:
             return None
         try:
-            return datetime.fromisoformat(iso)
+            dt = datetime.fromisoformat(iso)
         except ValueError:
             return None
+        # Normalize to tz-aware UTC. ``_slurm_time_to_iso`` always tags
+        # with UTC, but callers may pass naive timestamps for ``at_iso``;
+        # without normalization the start <= target comparison raises
+        # ``TypeError: can't compare offset-naive and offset-aware``.
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    target = _to_dt(at_iso)
+    if target is None:
+        return []
 
     out: list[ReservationHold] = []
     for r in reservations:

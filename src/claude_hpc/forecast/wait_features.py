@@ -154,6 +154,9 @@ def extract_features(
     # Tier A
     weekday = now.astimezone(timezone.utc).weekday()
     hour_utc = now.astimezone(timezone.utc).hour
+    _running_time_left_sorted = sorted(
+        j.time_left_sec for j in running if j.time_left_sec is not None
+    )
     features.update(
         {
             "is_weekend": weekday >= 5,
@@ -167,10 +170,8 @@ def extract_features(
             # difference is at most one job's remaining time and is
             # immaterial as a feature.
             "median_running_time_left_sec": (
-                sorted(j.time_left_sec for j in running if j.time_left_sec is not None)[
-                    len([j for j in running if j.time_left_sec is not None]) // 2
-                ]
-                if any(j.time_left_sec is not None for j in running)
+                _running_time_left_sorted[len(_running_time_left_sorted) // 2]
+                if _running_time_left_sorted
                 else -1
             ),
             "max_running_time_left_sec": max(

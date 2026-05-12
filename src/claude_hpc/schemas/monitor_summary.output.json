@@ -11,6 +11,7 @@
     "armed_hint",
     "journal_missing"
   ],
+  "additionalProperties": false,
   "properties": {
     "lifecycle_state": {
       "description": "Lifecycle state set used when an observer also surfaces 'timeout' (e.g. status / reconcile reading sidecars previously marked timeout by monitor-flow). Superset of lifecycle_state_observable.",

@@ -34,7 +34,7 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from _shared import REPO_ROOT  # noqa: E402
 
 from claude_hpc._internal.primitive import get_registry, register_primitives  # noqa: E402

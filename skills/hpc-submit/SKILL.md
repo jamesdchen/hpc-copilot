@@ -36,7 +36,7 @@ Map flag set per contract:
 - **New-contract** (`info.has_compute_function == true`): if `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If first submit, capture intended flags during Step 6b interview.
 - **Old-contract** (`info.has_main_guard` only): run `python3 <info.path> --help` to map the CLI interface.
 
-If `discover_executors` returns empty, the slash command surfaces a scaffolding sub-interview to the user; that dialog is human UX (it lives in the slash) but the actual work it does — copy `claude_hpc/templates/scaffolds/executor_template.py` to a user-chosen path, then walk through `compute(args)` — is what `hpc-build-executor` skill encodes.
+If `discover_executors` returns empty, the slash command surfaces a scaffolding sub-interview to the user; that dialog is human UX (it lives in the slash) but the actual work it does — copy `claude_hpc/mapreduce/templates/scaffolds/executor_template.py` to a user-chosen path, then walk through `compute(args)` — is what `hpc-build-executor` skill encodes.
 
 ## Step 2: Parse user intent
 
@@ -46,7 +46,7 @@ For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **ba
 
 ## Step 3: Plan the parallelization axis
 
-The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 walks the user through writing it once per experiment, adapting from `claude_hpc/templates/scaffolds/tasks_example.py`. From then on the file is committed and reused on every submit.
+The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 walks the user through writing it once per experiment, adapting from `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`. From then on the file is committed and reused on every submit.
 
 Step 3's job is to gather enough context for Step 6 to write a sensible first draft: axis shape, kwargs `resolve(task_id)` returns, expected task count.
 
@@ -160,7 +160,7 @@ If `tp.exists()`, read it as-is — never regenerate. To change the axis, the us
 
 ### 6b: Scaffold from canonical example (first submit only)
 
-If `tp.exists()` is False, walk through `claude_hpc/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
+If `tp.exists()` is False, walk through `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
 
 **Axis naming (fidelity vs. serial)**: when the user proposes axis names, prefer experiment-prefixed forms (`exp_horizon`, `ridge_alpha`) over bare names (`horizon`, `alpha`). The dispatcher exports each kwarg as both `HPC_KW_<KEY>` and bare `<KEY>` (uppercased), and the bare form silently shadows real env vars when names collide — an axis named `home` becomes `$HOME` for the executor, breaking everything that uses the home directory. `build-tasks-py` rejects names that match a reserved set (`HOME`, `PATH`, `USER`, `LD_LIBRARY_PATH`, `OMP_NUM_THREADS`, the framework's own `HPC_*`, scheduler-injected `SLURM_*`/`SGE_*`/`PBS_*`, etc.) so the failure surfaces at scaffold time, but the safest pattern is to prefix all experiment kwargs and avoid the question. Setting `HPC_KW_NAMESPACE_ONLY=1` in the spec's `job_env` disables the bare-uppercase export entirely (executor reads `HPC_KW_<KEY>` only) and is the recommended default for new campaigns.
 
@@ -168,7 +168,7 @@ Copy the dispatcher:
 ```python
 import shutil
 from claude_hpc import _PACKAGE_ROOT
-shutil.copy(_PACKAGE_ROOT / "templates" / "scaffolds" / "cli_dispatcher.py", experiment_dir / ".hpc" / "cli.py")
+shutil.copy(_PACKAGE_ROOT / "mapreduce" / "templates" / "scaffolds" / "cli_dispatcher.py", experiment_dir / ".hpc" / "cli.py")
 ```
 
 Commit `.hpc/tasks.py` + `.hpc/cli.py`. No push — user controls upstream.

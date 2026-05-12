@@ -267,12 +267,30 @@ def resubmit_flow(
         from claude_hpc._internal import session as _session
 
         existing = _session.load_run(experiment_dir, run_id)
+        if existing is None:
+            # No journal record means the post-submit `resubmit_failed`
+            # bookkeeping would raise JournalCorrupt — and we'd already
+            # have orphaned cluster jobs by that point. Fail up-front so
+            # nothing is submitted that the framework can't track.
+            raise errors.JournalCorrupt(
+                f"resubmit_flow: no journal record for run_id={run_id!r}; "
+                "cannot submit_to_cluster without a journal record to "
+                "track the new jobs against."
+            )
         derived_rid = request_id or runner.derive_resubmit_request_id(
             failed_task_ids=failed_task_ids,
             category=category,
             overrides=effective_overrides,
         )
-        already_done = existing is not None and existing.last_resubmit_request_id == derived_rid
+        already_done = existing.last_resubmit_request_id == derived_rid
+        if already_done:
+            # Replaying the same request_id — earlier call already
+            # submitted the batches. Surface the prior job_ids on the
+            # cluster_job_ids field so callers branching on
+            # cluster_submitted/cluster_job_ids see the durable state
+            # instead of treating the dedup as "no submission happened".
+            cluster_job_ids = list(existing.job_ids or [])
+            cluster_submitted = True
         if not already_done:
             partial_ids: list[str] = []
             try:
@@ -287,7 +305,7 @@ def resubmit_flow(
                     script=script,
                     job_name=job_name,
                     job_env=dict(job_env or {}),
-                    total_tasks=int((existing.total_tasks if existing else 0) or 0),
+                    total_tasks=int(existing.total_tasks or 0),
                     constraints=constraints,
                     backend_factory=backend_factory,
                     submitted_ids_out=partial_ids,

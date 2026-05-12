@@ -22,7 +22,7 @@ training rows.
 
 Usage::
 
-    python -m scripts.extract_sacct_history \\
+    python scripts/extract_sacct_history.py \\
         --ssh-target alice@cluster \\
         --since-days 30 \\
         --out completed_jobs.json

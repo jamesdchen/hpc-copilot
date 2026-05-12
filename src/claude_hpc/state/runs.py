@@ -334,9 +334,36 @@ def write_run_sidecar(
             sidecar[k] = v
     target = run_sidecar_path(experiment_dir, run_id)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(sidecar, indent=2, sort_keys=True))
+    # Write atomically (tempfile + flush + fsync + rename) so a crash
+    # mid-write leaves either the previous sidecar or the new one — never
+    # a 0-byte or partial-JSON file.
+    _atomic_write_json(target, sidecar)
     prune_old_runs(experiment_dir, keep=MAX_RUNS)
     return target
+
+
+def _atomic_write_json(target: Path, payload: dict) -> None:
+    """Atomic ``json.dumps`` + ``os.replace`` with flush + fsync.
+
+    Same recipe as ``_internal.session._atomic_write_json`` but inlined here
+    so this module doesn't take a circular import on the session helpers.
+    Uses ``os.getpid()`` in the tmp suffix to prevent concurrent writers
+    for the same path from clobbering each other's tmp files.
+    """
+    import os as _os
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + f".tmp.{_os.getpid()}")
+    text = json.dumps(payload, indent=2, sort_keys=True)
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        # NFS or non-fsync-able fs: best-effort.
+        import contextlib as _contextlib
+
+        with _contextlib.suppress(OSError):
+            _os.fsync(fh.fileno())
+    _os.replace(tmp, target)
 
 
 def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
@@ -539,9 +566,7 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
         raise FileNotFoundError(f"run sidecar not found: {target}")
     data: dict[str, Any] = json.loads(target.read_text())
     data["job_ids"] = [str(j) for j in job_ids]
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    tmp.replace(target)
+    _atomic_write_json(target, data)
     return target
 
 

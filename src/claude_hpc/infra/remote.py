@@ -101,6 +101,11 @@ def validate_ssh_target(ssh_target: str) -> str:
     """
     if not isinstance(ssh_target, str) or not ssh_target:
         raise ValueError(f"ssh_target must be a non-empty string, got {ssh_target!r}")
+    if ssh_target.startswith("-"):
+        # OpenSSH interprets ``-oProxyCommand=...`` etc. as option flags
+        # when they appear as the destination arg. Reject any
+        # leading-dash target to close the argument-injection vector.
+        raise ValueError(f"ssh_target must not start with '-': {ssh_target!r}")
     bad = [c for c in _DISALLOWED_TARGET_CHARS if c in ssh_target]
     if bad:
         raise ValueError(f"ssh_target contains disallowed characters {bad!r}: {ssh_target!r}")

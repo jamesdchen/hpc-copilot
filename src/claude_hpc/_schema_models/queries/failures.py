@@ -27,7 +27,7 @@ class FailuresResult(BaseModel):
     ``error_class`` strings.
     """
 
-    model_config = ConfigDict(title="failures output data")
+    model_config = ConfigDict(extra="forbid", title="failures output data")
 
     run_id: RunIdLoose
     failed_count: int = Field(

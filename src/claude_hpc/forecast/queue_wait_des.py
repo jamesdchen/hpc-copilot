@@ -209,7 +209,11 @@ def _predict_des(
         profiles = {}
 
     cand = candidate if isinstance(candidate, SimJob) else _default_candidate(profile)
-    snap_how = _hour_of_week(snap.now_iso) or 0
+    # ``hour_of_week`` legitimately returns 0 (Monday 00:00 UTC); using
+    # ``or 0`` would collapse a None ("unparseable") to the same value as
+    # a valid Monday-midnight bucket. Branch explicitly.
+    _snap_how_raw = _hour_of_week(snap.now_iso)
+    snap_how = 0 if _snap_how_raw is None else _snap_how_raw
     profile_dicts = {
         u: (p if isinstance(p, dict) else _profile_to_dict(p)) for u, p in profiles.items()
     }
@@ -235,7 +239,10 @@ def _predict_des(
     )
 
     n_running = len(extract_running_jobs(snap))
-    target_bucket = _hour_of_week(at_iso or snap.now_iso) or -1
+    # ``hour_of_week`` returns ``0`` for Monday midnight; ``or -1`` would
+    # mis-tag that valid bucket as "unparseable". Branch on None.
+    _target_raw = _hour_of_week(at_iso or snap.now_iso)
+    target_bucket = -1 if _target_raw is None else _target_raw
     base = PredictionResult(
         predicted_wait_sec=int(round(sim_out.p50_wait_sec)),
         confidence="medium" if n_running > 0 else "low",

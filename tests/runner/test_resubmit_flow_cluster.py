@@ -239,9 +239,11 @@ class TestClusterSubmission:
         )
         assert result.cluster_submitted is True
         assert len(result.new_job_ids) == 1  # one batch
-        # task_range should pack the failed IDs into "3,7,12-14"
+        # task_range packs failed IDs into "4,8,13-15": 1-based to match
+        # the scheduler array-expression convention (the SLURM/SGE
+        # templates subtract 1 to recover the 0-based HPC_TASK_ID).
         build_calls = [c for c in stub.calls if c["step"] == "build_command"]
-        assert build_calls[0]["task_range"] == "3,7,12-14"
+        assert build_calls[0]["task_range"] == "4,8,13-15"
         # extra_flags carry the planner-adjusted overrides. Walltime
         # gets cold-start arbitraged from 14400s (4h) → 13500s (3h45m)
         # by the planner — the whole point of Phase 5 is that this
@@ -291,7 +293,13 @@ class TestClusterSubmission:
             job_env={},
             backend_factory=_make_factory(stub2),
         )
-        assert second.cluster_submitted is False
+        # On dedup, ``cluster_submitted`` now reflects the durable
+        # state (a prior call DID submit; the new call deduped against
+        # it) rather than "this specific invocation submitted". Combined
+        # with ``deduped=True``, callers can distinguish "fresh submit"
+        # from "replay of prior submit". The qsub stub still sees zero
+        # calls — no new cluster work was issued.
+        assert second.cluster_submitted is True
         assert second.deduped is True
         assert stub2.calls == []  # no qsub calls
 

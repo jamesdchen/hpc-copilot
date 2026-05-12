@@ -71,6 +71,7 @@ _UPDATABLE_FIELDS = frozenset(
         "stage",
         "job_ids",
         "last_resubmit_request_id",
+        "recent_resubmit_request_ids",
     }
 )
 
@@ -98,6 +99,12 @@ class RunRecord:
     stage: str = "monitor"
     status: str = "in_flight"
     last_resubmit_request_id: str = ""
+    # Bounded list of recent resubmit request_ids so an A→B→A replay
+    # sequence is correctly recognised as a duplicate of A (the
+    # ``last_resubmit_request_id`` alone only catches back-to-back
+    # replays and double-increments retry counters otherwise). Newest
+    # last; capped via ``_MAX_RECENT_RESUBMIT_IDS`` at write time.
+    recent_resubmit_request_ids: list[str] = dataclasses.field(default_factory=list)
     # Closed-loop campaign tag. Empty string for open-loop submits.
     # Populated when /submit was invoked with --campaign-id (or with
     # campaign_id set on the submit spec). The asyncio campaign loop
@@ -181,7 +188,13 @@ def _locked(target: Path) -> Iterator[None]:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Write *payload* to *path* atomically (tmp + os.replace)."""
+    """Write *payload* to *path* atomically (tmp + os.replace).
+
+    After ``os.replace`` we also fsync the parent directory so the
+    rename is durable across a kernel panic / power loss — the inode
+    is already synced via fsync(fd), but the directory entry only
+    becomes durable after the dir's own fsync.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     try:
@@ -190,6 +203,16 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            # Some filesystems (e.g. NFS) don't support directory fsync;
+            # best-effort.
+            pass
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp)

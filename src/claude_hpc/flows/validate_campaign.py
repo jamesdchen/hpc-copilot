@@ -14,7 +14,7 @@ project, the response is to edit ``.hpc/playbook.yaml``
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from claude_hpc._internal.primitive import primitive
 from claude_hpc._schema_models.validators.validate_executor_signatures import (
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _aggregate_overall(findings: list[ValidatorFinding]) -> str:
+def _aggregate_overall(findings: list[ValidatorFinding]) -> Literal["pass", "warn", "fail"]:
     """Reduce findings to a single overall verdict.
 
     Rule: any error → "fail"; else any warning → "warn"; else "pass".
@@ -150,7 +150,7 @@ def validate_campaign(
         validators_run.append("validate-stochastic-marker")
 
     return ValidateCampaignReport(
-        overall=_aggregate_overall(findings),  # type: ignore[arg-type]
+        overall=_aggregate_overall(findings),
         findings=findings,
         validators_run=validators_run,
     )

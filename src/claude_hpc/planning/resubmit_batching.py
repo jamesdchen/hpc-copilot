@@ -91,8 +91,16 @@ class ResubmitBatch:
 
     @property
     def task_range(self) -> str:
-        """Scheduler-compatible array expression, e.g. ``"3,7,12-14"``."""
-        return compact_task_ids(list(self.task_ids))
+        """Scheduler-compatible 1-based array expression, e.g. ``"4,8,13-15"``.
+
+        ``task_ids`` are 0-based HPC_TASK_IDs (matching the resolve(i)
+        contract); the SLURM/SGE templates subtract 1 from
+        ``SLURM_ARRAY_TASK_ID``/``SGE_TASK_ID`` to recover the 0-based id.
+        Initial submits use ``1-N`` array expressions for exactly this
+        reason; resubmits must shift by +1 to stay on the same convention,
+        otherwise task ``k`` is retried as task ``k-1``.
+        """
+        return compact_task_ids([tid + 1 for tid in self.task_ids])
 
     @property
     def array_size(self) -> int:

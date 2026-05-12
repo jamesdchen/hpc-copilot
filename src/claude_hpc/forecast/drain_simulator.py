@@ -68,8 +68,16 @@ _HYPO_JOB_ID = "__hypothetical__"
 
 
 def _parse_iso(s: str) -> datetime:
-    """Parse an ISO timestamp; raises ValueError on garbage."""
-    return datetime.fromisoformat(s)
+    """Parse an ISO timestamp and force tz-aware UTC; raises ``ValueError`` on garbage.
+
+    The simulator builds tz-aware sentinels (``datetime.max`` with UTC
+    tzinfo) and would otherwise raise ``TypeError`` on naive-vs-aware
+    comparisons. Naive inputs are treated as already-UTC.
+    """
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def simulate_drain(

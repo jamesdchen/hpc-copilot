@@ -62,7 +62,7 @@ class PredictQueueWaitResult(BaseModel):
     bucket_hour_of_week: int = Field(ge=-1, le=167)
     fallback_reason: str | None
     features_adjustment_factor: float = Field(
-        description="Order-book adjustment factor (Phase 1c). 1.0 when no current_features were supplied or on the DES path.",
+        description="Order-book adjustment factor (Phase 1c). 1.0 on the wire-driven path and on the DES path; only non-1.0 for internal callers that pass live QueueFeatures directly (not exposed on the spec).",
     )
     p10_wait_sec: int | None = Field(
         description="DES p10 quantile in seconds. null on the diurnal_ma path.",

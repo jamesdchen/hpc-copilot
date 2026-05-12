@@ -122,7 +122,27 @@ def recommend_resubmit_window(
             savings_threshold_sec=savings_threshold_sec,
         )
 
-    savings = submit_now_wait - best.predicted_wait_sec
+    # Total time to start = (time spent waiting for submit window) +
+    # (queue wait after submitting). For "submit now" the first term is 0.
+    # The earlier formulation ``submit_now_wait - best.predicted_wait_sec``
+    # ignored the wait-until-submit interval, so a 6h delay to save 90min
+    # of queue wait got reported as "savings = 90min" instead of "loss = 4.5h".
+    from claude_hpc._internal.time import parse_iso_utc_or_none, utcnow
+
+    best_submit_dt = parse_iso_utc_or_none(best.submit_iso)
+    if best_submit_dt is None:
+        # Best-window ISO unparseable — can't compare total times.
+        return ResubmitRecommendation(
+            recommendation="unknown",
+            submit_now_wait_sec=submit_now_wait,
+            best_window=best,
+            savings_sec=None,
+            within_hours=within_hours,
+            savings_threshold_sec=savings_threshold_sec,
+        )
+    wait_until_submit_sec = max(0, int((best_submit_dt - utcnow()).total_seconds()))
+    total_time_wait = wait_until_submit_sec + best.predicted_wait_sec
+    savings = submit_now_wait - total_time_wait
     verdict: Recommendation = "wait" if savings >= savings_threshold_sec else "now"
     return ResubmitRecommendation(
         recommendation=verdict,
