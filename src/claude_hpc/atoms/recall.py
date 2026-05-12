@@ -394,7 +394,9 @@ def _tier3_generator_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
                 for pname, d in by_param.items()
             }
         elif kind == "cartesian_product":
-            axis_values: dict[str, set[Any]] = {}
+            # Split the dedup set keyed by (type-name, value) so True/1 and
+            # False/0 don't collapse together (Python treats bool as int).
+            axis_values: dict[str, set[tuple[str, Any]]] = {}
             for p in paramsets:
                 axes = p.get("axes")
                 if not isinstance(axes, dict):
@@ -402,11 +404,16 @@ def _tier3_generator_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
                 for axis_name, vals in axes.items():
                     if isinstance(vals, list):
                         axis_values.setdefault(axis_name, set()).update(
-                            v for v in vals if isinstance(v, (str, int, float, bool))
+                            (type(v).__name__, v)
+                            for v in vals
+                            if isinstance(v, (str, int, float, bool))
                         )
             bucket["axis_value_unions"] = {
-                name: sorted(vals, key=lambda x: (isinstance(x, str), x))
-                for name, vals in axis_values.items()
+                name: [
+                    v
+                    for _, v in sorted(pairs, key=lambda kv: (isinstance(kv[1], str), kv[0], kv[1]))
+                ]
+                for name, pairs in axis_values.items()
             }
         out["by_kind"][kind] = bucket
     return out

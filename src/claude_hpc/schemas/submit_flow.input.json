@@ -55,7 +55,7 @@
     },
     "backend": {
       "enum": [
-        "sge_remote",
+        "sge",
         "slurm"
       ],
       "title": "Backend",

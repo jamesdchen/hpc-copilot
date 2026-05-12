@@ -34,8 +34,8 @@ from claude_hpc.infra.remote import validate_ssh_target
 # there); the script field on the submit_flow spec is just the relative
 # path the qsub/sbatch will execute on the cluster.
 _DEFAULT_SCRIPTS: dict[tuple[str, bool], str] = {
-    ("sge_remote", False): ".hpc/templates/cpu_array.sh",
-    ("sge_remote", True): ".hpc/templates/gpu_array.sh",
+    ("sge", False): ".hpc/templates/cpu_array.sh",
+    ("sge", True): ".hpc/templates/gpu_array.sh",
     ("slurm", False): ".hpc/templates/cpu_array.slurm",
     ("slurm", True): ".hpc/templates/gpu_array.slurm",
 }
@@ -69,7 +69,8 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     profile, cluster, ssh_target, remote_path, run_id, total_tasks,
     backend:
         Required identity fields that flow straight through to the
-        spec. ``backend`` is one of ``sge_remote`` / ``slurm``.
+        spec. ``backend`` is one of ``sge`` / ``slurm`` (both resolve
+        to the remote-over-ssh backend).
     cmd_sha:
         SHA-256 of the materialized task list, computed by
         :func:`compute_cmd_sha`. Stamped into ``job_env["HPC_CMD_SHA"]``

@@ -4,7 +4,7 @@ filtering, result-dir resolution, and per-iteration reduce."""
 from __future__ import annotations
 
 import json
-import time
+import os
 from typing import TYPE_CHECKING
 
 import pytest
@@ -14,7 +14,7 @@ from claude_hpc.mapreduce.reduce.history import (
     prior,
     result_dirs_for_sidecar,
 )
-from claude_hpc.state.runs import write_run_sidecar
+from claude_hpc.state.runs import run_sidecar_path, write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -49,14 +49,24 @@ def test_find_sidecars_filters_by_campaign_and_orders_oldest_first(
     write_run_sidecar(
         tmp_path, **_common_required_kwargs("20260101-000000-aaaaaaa"), campaign_id="A"
     )
-    time.sleep(0.01)
     write_run_sidecar(
         tmp_path, **_common_required_kwargs("20260101-000001-bbbbbbb"), campaign_id="B"
     )
-    time.sleep(0.01)
     write_run_sidecar(
         tmp_path, **_common_required_kwargs("20260101-000002-ccccccc"), campaign_id="A"
     )
+    # Force distinct, ascending mtimes so the test does not depend on FS
+    # mtime resolution. Run_id-stem tiebreak would also produce the same
+    # ordering here, but explicit mtimes make the contract self-evident.
+    t0 = 1_700_000_000.0
+    for i, run_id in enumerate(
+        (
+            "20260101-000000-aaaaaaa",
+            "20260101-000001-bbbbbbb",
+            "20260101-000002-ccccccc",
+        )
+    ):
+        os.utime(run_sidecar_path(tmp_path, run_id), (t0 + i, t0 + i))
 
     matched = find_sidecars_by_campaign(tmp_path, "A")
     assert [s["run_id"] for s in matched] == [
@@ -149,7 +159,6 @@ def test_prior_returns_per_iteration_reduced_metrics(tmp_path: Path) -> None:
         tmp_path / "results" / "20260101-000000-iter0001" / "task_0",
         {"loss": 0.5, "n_samples": 1},
     )
-    time.sleep(0.01)
     # iteration 2: loss = 0.1
     write_run_sidecar(
         tmp_path,
@@ -160,6 +169,10 @@ def test_prior_returns_per_iteration_reduced_metrics(tmp_path: Path) -> None:
         tmp_path / "results" / "20260101-000001-iter0002" / "task_0",
         {"loss": 0.1, "n_samples": 1},
     )
+    # Pin distinct mtimes so ordering does not depend on FS resolution.
+    t0 = 1_700_000_000.0
+    for i, run_id in enumerate(("20260101-000000-iter0001", "20260101-000001-iter0002")):
+        os.utime(run_sidecar_path(tmp_path, run_id), (t0 + i, t0 + i))
 
     history = prior(tmp_path, "A")
     assert len(history) == 2

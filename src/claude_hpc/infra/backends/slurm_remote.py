@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-@register("slurm-remote")
+@register("slurm")
 class RemoteSlurmBackend(RemoteHPCBackend, SlurmBackend):
     """SLURM backend that runs sbatch on the cluster via SSH.
 

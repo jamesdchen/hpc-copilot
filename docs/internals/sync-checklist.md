@@ -26,7 +26,7 @@ update both surfaces and bump the version.
 
 ### `error_code` enum
 
-The full set of 12 values that may appear in an error envelope's
+The full set of 15 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
 `claude_hpc/errors.py`.
 
@@ -43,6 +43,9 @@ The full set of 12 values that may appear in an error envelope's
 | `combiner_failed` | `CombinerFailed` | cluster | yes |
 | `cluster_timeout` | `ClusterTimeout` | cluster | yes |
 | `outputs_missing` | `OutputsMissing` | cluster | yes |
+| `cluster_partially_degraded` | `ClusterPartiallyDegraded` | cluster | yes |
+| `preempted` | `Preempted` | cluster | yes |
+| `schema_incompat` | `SchemaIncompat` | internal | no |
 | `internal` | `HpcError` (base / catch-all) | internal | no |
 
 The same enum appears in `claude_hpc/schemas/envelope.json` —
@@ -81,9 +84,10 @@ Possible values of `RunRecord.status`:
 - `abandoned` — terminal, no `job_ids` are alive on the scheduler
   (set by `runner.reconcile`).
 
-Defined in `claude_hpc/_internal/session.py` (`TERMINAL_STATUSES` frozenset
-+ default `status="in_flight"` on `RunRecord`). Validated in
-`mark_run`.
+Defined in `claude_hpc/_internal/session/` (`TERMINAL_STATUSES`
+frozenset lives in `run_record.py`; default `status="in_flight"` is
+set on `RunRecord` there too). Validated in `mark_run` (in
+`journal.py`).
 
 ### Journal `schema_version`
 

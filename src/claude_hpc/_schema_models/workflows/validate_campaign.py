@@ -57,7 +57,7 @@ class ValidatorFinding(BaseModel):
     message: str = Field(min_length=1)
     suggested_fix: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
-    file: str | None = None
+    file: str | None = Field(default=None, min_length=1)
     line: int | None = Field(default=None, ge=1)
 
 

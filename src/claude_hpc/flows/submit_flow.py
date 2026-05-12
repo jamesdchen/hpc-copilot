@@ -102,13 +102,18 @@ def _build_backend(
     the local backends (which assume a local ``qsub``/``sbatch`` binary)
     are never used here. submit-flow is for laptop-driven submissions
     only.
+
+    Callers MUST validate ``ssh_target`` before calling — both internal
+    call sites (:func:`_submit_flow_batch_locked` for submit-flow,
+    :func:`claude_hpc.flows.resubmit_flow._submit_resubmit_batches` for
+    resubmit-flow) do so up-front so we avoid the wasteful duplicate
+    validation that used to fire once per spec inside the per-spec loop.
     """
-    _validate_ssh_target(ssh_target)
 
     def ssh(cmd: str):
         return ssh_run(cmd, ssh_target=ssh_target)
 
-    if backend_name == "sge_remote":
+    if backend_name == "sge":
         keys = pass_env_keys if pass_env_keys is not None else job_env_keys
         return RemoteSGEBackend(
             script=script,

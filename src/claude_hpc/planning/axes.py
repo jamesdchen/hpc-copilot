@@ -80,9 +80,13 @@ def write_axes(
 ) -> Path:
     """Write the axes config atomically and return its path.
 
-    Cross-validation: if both *axes* and *homogeneous_axes* are supplied,
-    every name in *homogeneous_axes* must appear in *axes*; otherwise a
-    :class:`ValueError` is raised before any file write.
+    Cross-validation: every name in *homogeneous_axes* must appear in
+    the axes list — whether that list is supplied in this call or
+    already on disk from a prior write. The on-disk fallback closes a
+    silent-corruption window where a write that only supplied
+    *homogeneous_axes* could replace the file with names that don't
+    reference any declared axis. :class:`ValueError` is raised before
+    any file write (atomic-write contract preserved).
     """
     payload: dict[str, Any] = {"axes_schema_version": AXES_SCHEMA_VERSION}
     if axes is not None:
@@ -94,6 +98,26 @@ def write_axes(
         unknown = [n for n in homogeneous_axes if n not in axis_names]
         if unknown:
             raise ValueError(f"homogeneous_axes references axes not in axes list: {unknown}")
+    elif axes is None and homogeneous_axes:
+        # On-disk fallback: cross-validate against whatever axes the
+        # existing file declared. If there is no file (or no axes
+        # enumeration), we can't validate names → accept the write so
+        # bootstrap flows (homogeneous_axes-only writes before axes are
+        # known) still succeed. Read failures (corruption / schema
+        # violation) are surfaced loudly by read_axes itself.
+        try:
+            existing = read_axes(experiment_dir)
+        except (ValueError, OSError):
+            existing = None
+        if existing is not None:
+            existing_axes = existing.get("axes") or []
+            if existing_axes:
+                axis_names = {a["name"] for a in existing_axes}
+                unknown = [n for n in homogeneous_axes if n not in axis_names]
+                if unknown:
+                    raise ValueError(
+                        f"homogeneous_axes references axes not in axes list: {unknown}"
+                    )
     validate_axes(payload)
     target = axes_path(experiment_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -302,8 +326,8 @@ def compute_wave_map(
     experiment_dir: Path | str,
     *,
     picked_axis: str,
-) -> dict[int, list[int]]:
-    """Build a wave_map keyed by wave_id, valued by task_ids.
+) -> dict[str, list[int]]:
+    """Build a wave_map keyed by wave_id (stringified), valued by task_ids.
 
     Reads ``axes.yaml``'s ordered ``axes`` list and computes a wave per
     cross-product of the non-picked axes. Within each wave, ``task_ids``
@@ -311,6 +335,12 @@ def compute_wave_map(
     last-axis-varies-fastest (numpy / row-major)::
 
         task_id = sum(coords[i] * prod(sizes[i+1:]) for i in range(len(axes)))
+
+    Keys are emitted as ``str`` to match the on-disk JSON shape used by
+    the sidecar (JSON objects only allow string keys, so wave_maps that
+    round-trip through disk are already coerced). Returning strings here
+    means in-memory callers don't have to think about whether they're
+    holding a freshly-computed or freshly-loaded map.
 
     If ``axes.yaml`` is absent or has no ``axes`` enumeration, raises
     :class:`ValueError` — the caller (typically submit-flow) is expected
@@ -339,7 +369,7 @@ def compute_wave_map(
     other_indices = [i for i in range(len(axes)) if i != picked_idx]
     other_sizes = [sizes[i] for i in other_indices]
 
-    wave_map: dict[int, list[int]] = {}
+    wave_map: dict[str, list[int]] = {}
     for wave_id, other_combo in enumerate(_product(*[range(s) for s in other_sizes])):
         coords = [0] * len(axes)
         for k, idx in enumerate(other_indices):
@@ -349,6 +379,6 @@ def compute_wave_map(
             coords[picked_idx] = picked_val
             tid = sum(c * strides[i] for i, c in enumerate(coords))
             task_ids.append(tid)
-        wave_map[wave_id] = sorted(task_ids)
+        wave_map[str(wave_id)] = sorted(task_ids)
 
     return wave_map

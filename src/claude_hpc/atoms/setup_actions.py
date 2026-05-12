@@ -186,10 +186,13 @@ def find_prior_run(
 
     Returns
     -------
-    ``{found, run_id, is_orphan, status, age_sec, profile, cluster,
-    job_ids, campaign_id, submitted_at}``. ``found=False`` when no
-    sidecar matches and the rest of the keys are None/empty —
-    distinguishes "no prior run" from "prior run is orphan."
+    ``{found, prior_run_id, is_orphan, status, age_sec, profile,
+    cluster, job_ids, campaign_id, submitted_at}``. ``found=False``
+    when no sidecar matches and the rest of the keys are None/empty —
+    distinguishes "no prior run" from "prior run is orphan." The field
+    is named ``prior_run_id`` (not ``run_id``) so the schema-defs
+    consistency check — which forbids nullable ``run_id`` keys — stays
+    happy on the ``found=False`` branch.
 
     The ``is_orphan`` field signals the half-baked-sidecar case
     (sidecar on disk but no journal job_ids). Resume detection should

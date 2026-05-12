@@ -152,7 +152,7 @@ class TestRenderOverridesToExtraFlags:
 
     def test_sge_renders_mem_walltime_gpus_cpus(self):
         flags = render_overrides_to_extra_flags(
-            "sge_remote",
+            "sge",
             {"mem_mb": 32_000, "walltime_sec": 14400, "gpus": 2, "cpus": 8},
         )
         assert flags == [

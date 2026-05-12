@@ -348,13 +348,15 @@ def test_campaign_id_round_trips_through_journal(journal_home, experiment):
 
 
 def test_find_runs_by_campaign_filters_and_orders_oldest_first(journal_home, experiment):
-    import time
-
     session.upsert_run(experiment, _make_record(run_id="r1", campaign_id="A"))
-    time.sleep(0.01)
     session.upsert_run(experiment, _make_record(run_id="r2", campaign_id="B"))
-    time.sleep(0.01)
     session.upsert_run(experiment, _make_record(run_id="r3", campaign_id="A"))
+    # Pin distinct, ascending mtimes — run_ids ``r1``/``r2``/``r3`` are not
+    # ISO-sortable, so the oldest-first ordering must come from mtime, not
+    # the filename.
+    t0 = 1_700_000_000.0
+    for i, run_id in enumerate(("r1", "r2", "r3")):
+        os.utime(session._run_path(experiment, run_id), (t0 + i, t0 + i))
 
     matched = session.find_runs_by_campaign(experiment, "A")
     assert [r.run_id for r in matched] == ["r1", "r3"]

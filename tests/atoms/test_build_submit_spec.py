@@ -19,7 +19,7 @@ def _required() -> dict:
         run_id="20260101-000000-deadbee",
         cmd_sha="a" * 64,
         total_tasks=42,
-        backend="sge_remote",
+        backend="sge",
     )
 
 

@@ -91,7 +91,10 @@ def best_submit_windows(
     from claude_hpc._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
 
     candidates: list[WindowCandidate] = []
-    for h in range(1, int(within_hours) + 1):
+    # Include the current hour (h=0) so "submit now" is a legitimate
+    # candidate — otherwise we always recommend waiting at least 1h
+    # even when now is already the best window.
+    for h in range(0, int(within_hours)):
         ts = now + timedelta(hours=h)
         iso = ts.isoformat(timespec="seconds")
         result = predict_queue_wait(

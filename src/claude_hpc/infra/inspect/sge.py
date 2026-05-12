@@ -122,7 +122,7 @@ def _parse_qhost(text: str) -> list[NodeSnapshot]:
             current.cpu_load_frac = round(current.cpu_load / max(current.cpu_tot, 1), 4)
         current.real_mem_mb = _parse_mem_to_mb(cols[7])
         mem_used = _parse_mem_to_mb(cols[8])
-        if current.real_mem_mb and mem_used is not None and current.real_mem_mb > 0:
+        if current.real_mem_mb and mem_used is not None:
             current.alloc_mem_mb = mem_used
             current.alloc_mem_pct = round(mem_used / current.real_mem_mb, 4)
         nodes.append(current)
