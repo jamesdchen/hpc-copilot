@@ -453,8 +453,10 @@ def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
 @pytest.fixture
 def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     from claude_hpc._internal import session
+    from claude_hpc._internal.session import run_record
 
     home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
     monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 

@@ -83,16 +83,23 @@ CATALOG: list[FailureSignature] = [
     ),
     FailureSignature(
         error_class="walltime",
-        # ``CANCELLED.*TIME LIMIT`` covers SLURM's per-step cancellation
-        # message; the bare ``\bwalltime\b`` token covers SGE qacct lines
-        # that just say "h_rt ... walltime" without an "expired"/"exceeded"
-        # qualifier (folded in from the older mapreduce/reduce/classify.py
-        # patterns when classify_failure was deduped onto this catalog).
+        # Scheduler-specific markers only. The bare ``\bwalltime\b`` token
+        # and ``signal SIGTERM.*15`` previously included here collide with
+        # preemption (SLURM/SGE preemption is delivered via SIGTERM with
+        # exit 143). The narrowed set matches the sibling
+        # ``failures._FAILURE_CATEGORY_PATTERNS`` so the two classifiers
+        # cannot disagree — a preempted task no longer gets
+        # ``suggested_fix=increase-walltime`` from this catalog while
+        # ``failures.py`` correctly tags it ``preempted``.
         stderr_pattern=re.compile(
             r"DUE TO TIME LIMIT|CANCELLED.*TIME LIMIT|"
             r"wall.?time.*expired|wall.?time.*exceeded|"
-            r"Time limit exceeded|\bwalltime\b|"
-            r"signal SIGTERM.*15",
+            r"Time limit exceeded|h_rt.*exceeded|"
+            # SGE qacct prints "qmaster enforced h_rt, h_cpu, or h_vmem
+            # limit" when a job is killed for exceeding walltime. This
+            # is distinct enough from the bare ``\bwalltime\b`` token
+            # (which collided with preemption) to be safe.
+            r"qmaster enforced h_rt",
             re.I,
         ),
         exit_code=271,

@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from claude_hpc import errors
 from claude_hpc._internal.primitive import primitive
 from claude_hpc._schema_models.queries.predict_start_time import (
     PredictStartTimeResult,
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     name="predict-start-time",
     verb="query",
     side_effects=[],
+    error_codes=[errors.SpecInvalid],
     idempotent=True,
     cli="hpc-agent predict-start-time --spec <path>",
     agent_facing=True,
@@ -49,21 +51,24 @@ def predict_start_time_primitive(
     queue = parse_squeue_priority_field(spec.squeue_text)
     fairshare = parse_sshare(spec.sshare_text or "") or None
 
-    best = recommend_best_submit_time(
-        experiment_dir,
-        now_iso=spec.now_iso,
-        queue=queue,
-        partition=spec.partition,
-        partition_slot_count=spec.partition_slot_count,
-        your_priority=spec.your_priority,
-        your_walltime_sec=spec.your_walltime_sec,
-        pending_walltime_default_sec=spec.pending_walltime_default_sec,
-        candidate_offsets_hours=tuple(spec.candidate_offsets_hours),
-        your_user=spec.your_user,
-        your_constraint=spec.your_constraint,
-        fairshare_by_user=fairshare,
-        model_path=Path(spec.model_path) if spec.model_path else None,
-    )
+    try:
+        best = recommend_best_submit_time(
+            experiment_dir,
+            now_iso=spec.now_iso,
+            queue=queue,
+            partition=spec.partition,
+            partition_slot_count=spec.partition_slot_count,
+            your_priority=spec.your_priority,
+            your_walltime_sec=spec.your_walltime_sec,
+            pending_walltime_default_sec=spec.pending_walltime_default_sec,
+            candidate_offsets_hours=tuple(spec.candidate_offsets_hours),
+            your_user=spec.your_user,
+            your_constraint=spec.your_constraint,
+            fairshare_by_user=fairshare,
+            model_path=Path(spec.model_path) if spec.model_path else None,
+        )
+    except ValueError as exc:
+        raise errors.SpecInvalid(str(exc)) from exc
 
     from claude_hpc._schema_models.queries.predict_start_time import _CandidateOut
 

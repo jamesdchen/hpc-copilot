@@ -155,8 +155,11 @@ def _batch(specs, **overrides: Any):
 def _journal_home(tmp_path, monkeypatch):
     """Redirect ~/.claude/hpc/ to tmp_path so journal writes don't pollute home."""
     from claude_hpc._internal import session
+    from claude_hpc._internal.session import run_record
 
-    monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "home_hpc")
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
+    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
 
 
 class TestSubmitFlowBatch:

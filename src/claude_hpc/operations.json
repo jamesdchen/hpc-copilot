@@ -44,7 +44,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent prune-orphan-sidecars",
+    "cli": null,
     "idempotent": true,
     "input_schema": null,
     "name": "prune-orphan-sidecars",
@@ -85,7 +85,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent update-run-constraints --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "update_run_constraints.input.json",
     "name": "update-run-constraints",
@@ -109,33 +109,33 @@
   },
   {
     "agent_facing": false,
-    "cli": "hpc-agent campaign-advance",
+    "cli": "hpc-agent campaign advance --campaign-id <id>",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-advance",
-    "output_schema": null,
+    "output_schema": "campaign.output.json",
     "python": "claude_hpc.atoms.campaign_advance.campaign_advance",
     "side_effects": [],
     "verb": "query"
   },
   {
     "agent_facing": false,
-    "cli": "hpc-agent campaign-budget",
+    "cli": "hpc-agent campaign budget --campaign-id <id>",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-budget",
-    "output_schema": null,
+    "output_schema": "campaign.output.json",
     "python": "claude_hpc.atoms.campaign_budget.campaign_budget",
     "side_effects": [],
     "verb": "query"
   },
   {
     "agent_facing": false,
-    "cli": "hpc-agent campaign-converged",
+    "cli": "hpc-agent campaign converged --campaign-id <id>",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-converged",
-    "output_schema": null,
+    "output_schema": "campaign.output.json",
     "python": "claude_hpc.atoms.campaign_converged.campaign_converged",
     "side_effects": [],
     "verb": "query"
@@ -164,11 +164,11 @@
   },
   {
     "agent_facing": false,
-    "cli": "hpc-agent campaign-replay",
+    "cli": "hpc-agent campaign replay --campaign-id <id> [--last-n <n>]",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-replay",
-    "output_schema": null,
+    "output_schema": "campaign.output.json",
     "python": "claude_hpc.atoms.campaign_replay.campaign_replay",
     "side_effects": [],
     "verb": "query"
@@ -393,7 +393,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent recommend-partition --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "recommend_partition.input.json",
     "name": "recommend-partition",
@@ -404,7 +404,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent recommend-wait-alternative --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "recommend_wait_alternative.input.json",
     "name": "recommend-wait-alternative",
@@ -522,11 +522,11 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent campaign-init",
+    "cli": "hpc-agent campaign init --campaign-id <id> --strategy <s>",
     "idempotent": true,
     "input_schema": null,
     "name": "campaign-init",
-    "output_schema": null,
+    "output_schema": "campaign.output.json",
     "python": "claude_hpc.atoms.campaign_init.campaign_init",
     "side_effects": [
       "writes-sidecar"
@@ -573,7 +573,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "validate.input.json",
     "name": "validate",
@@ -586,7 +586,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent validate-executor-signatures --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "validate_executor_signatures.input.json",
     "name": "validate-executor-signatures",
@@ -597,7 +597,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent validate-input-dataset --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "validate_input_dataset.input.json",
     "name": "validate-input-dataset",
@@ -608,7 +608,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent validate-self-qos-limit --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "validate_self_qos_limit.input.json",
     "name": "validate-self-qos-limit",
@@ -619,7 +619,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent validate-stochastic-marker --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "validate_stochastic_marker.input.json",
     "name": "validate-stochastic-marker",
@@ -630,7 +630,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent validate-walltime-against-history --spec <path>",
+    "cli": null,
     "idempotent": true,
     "input_schema": "validate_walltime_against_history.input.json",
     "name": "validate-walltime-against-history",

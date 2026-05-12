@@ -63,6 +63,7 @@
   },
   "$defs": {
     "_CronCreateArgs": {
+      "additionalProperties": false,
       "properties": {
         "schedule": {
           "title": "Schedule",

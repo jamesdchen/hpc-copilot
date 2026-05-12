@@ -282,7 +282,15 @@ def resubmit_flow(
             category=category,
             overrides=effective_overrides,
         )
-        already_done = existing.last_resubmit_request_id == derived_rid
+        # Match the dedup-depth the runner enforces: ``resubmit_failed``
+        # checks BOTH ``last_resubmit_request_id`` AND the bounded
+        # ``recent_resubmit_request_ids`` list (so an A→B→A replay
+        # dedups correctly). If the flow only checks the last id, A→B→A
+        # short-circuits the runner update but the cluster-submit step
+        # below fires again and orphans the new array. Mirror the
+        # runner's check here.
+        _recent = list(existing.recent_resubmit_request_ids or [])
+        already_done = existing.last_resubmit_request_id == derived_rid or derived_rid in _recent
         if already_done:
             # Replaying the same request_id — earlier call already
             # submitted the batches. Surface the prior job_ids on the

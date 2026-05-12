@@ -66,6 +66,7 @@
       "type": "object"
     },
     "_FlagSpec": {
+      "additionalProperties": false,
       "properties": {
         "name": {
           "minLength": 1,

@@ -39,7 +39,6 @@ _VALIDATOR = "validate-executor-signatures"
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent validate-executor-signatures --spec <path>",
     agent_facing=True,
 )
 def validate_executor_signatures(
@@ -136,7 +135,23 @@ def validate_executor_signatures(
     parameters = inspect.signature(fn).parameters
     accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
 
-    n = int(tasks_module.total())
+    try:
+        n = int(tasks_module.total())
+    except Exception as exc:  # noqa: BLE001
+        findings.append(
+            ValidatorFinding(
+                validator=_VALIDATOR,
+                severity="error",
+                code="tasks_py_contract_error",
+                message=str(exc),
+                suggested_fix=(
+                    "tasks.total() must return an int. Inspect the module for "
+                    "import-time failures or a broken total() implementation."
+                ),
+                evidence={"module": spec.tasks_module},
+            )
+        )
+        return ValidateExecutorSignaturesResult(findings=findings)
     for i in range(min(n, spec.sample_n_tasks)):
         kwargs = tasks_module.resolve(i)
         if not isinstance(kwargs, dict):

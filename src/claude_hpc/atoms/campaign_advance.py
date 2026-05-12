@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign-advance",
+    cli="hpc-agent campaign advance --campaign-id <id>",
 )
 def campaign_advance(
     *,

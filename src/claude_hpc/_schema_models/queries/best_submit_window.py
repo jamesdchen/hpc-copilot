@@ -12,8 +12,8 @@ class BestSubmitWindowSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="best-submit-window input")
 
-    profile: str
-    cluster: str
+    profile: str = Field(min_length=1)
+    cluster: str = Field(min_length=1)
     within_hours: int = Field(default=24, ge=1)
     top_k: int = Field(default=5, ge=1)
 

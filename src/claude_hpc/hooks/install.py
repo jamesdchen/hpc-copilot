@@ -7,7 +7,9 @@ be invoked programmatically (from setup_hpc skill, tests, etc.).
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -98,9 +100,18 @@ def install_hooks(*, settings_path: Path | None = None, dry_run: bool = False) -
     wrote = False
     if added and not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(new_settings, indent=2) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        # PID-suffixed temp + fsync before atomic replace. Mirrors
+        # state/runs.py:_atomic_write_json so concurrent installers
+        # (rare, but possible across shells) don't clobber each other,
+        # and a crash mid-write can't leave a half-flushed settings.json.
+        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+        text = json.dumps(new_settings, indent=2) + "\n"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(fh.fileno())
+        os.replace(tmp, path)
         wrote = True
 
     return {

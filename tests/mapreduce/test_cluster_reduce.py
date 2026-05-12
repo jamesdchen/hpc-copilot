@@ -17,7 +17,7 @@ import pytest
 
 from claude_hpc import errors
 from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord
+from claude_hpc._internal.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,8 +25,10 @@ if TYPE_CHECKING:
 
 @pytest.fixture
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "home_hpc")
-    return tmp_path / "home_hpc"
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
+    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
+    return home
 
 
 def _seed(experiment: Path, run_id: str = "r1") -> RunRecord:

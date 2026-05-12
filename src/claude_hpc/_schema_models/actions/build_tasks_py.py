@@ -15,6 +15,8 @@ class _AxisSpec(BaseModel):
 
 
 class _FlagSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1)
     type: str = Field(
         description="Type token: int|float|str|bool, or any string the generated `flag(...)` call accepts as the type ctor.",

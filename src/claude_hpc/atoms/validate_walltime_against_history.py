@@ -141,7 +141,6 @@ def _known_bad_findings(
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent validate-walltime-against-history --spec <path>",
     agent_facing=True,
 )
 def validate_walltime_against_history(

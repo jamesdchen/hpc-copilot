@@ -16,6 +16,7 @@
     "add_features": {
       "description": "Features to add to each job (joined with the existing set).",
       "items": {
+        "minLength": 1,
         "type": "string"
       },
       "title": "Add Features",
@@ -25,6 +26,7 @@
       "anyOf": [
         {
           "items": {
+            "minLength": 1,
             "type": "string"
           },
           "type": "array"

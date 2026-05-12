@@ -55,7 +55,7 @@ class _SubmitFlowResultEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: RunIdLoose
-    job_ids: list[str]
+    job_ids: list[str] = Field(min_length=1)
     total_tasks: int = Field(ge=1)
     deduped: bool
     canary_done: bool

@@ -55,7 +55,6 @@ def _highest_priority_non_debug(parts: list[PartitionInfo]) -> PartitionInfo | N
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent recommend-partition --spec <path>",
     agent_facing=True,
 )
 def recommend_partition(

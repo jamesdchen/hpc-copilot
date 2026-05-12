@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent campaign-replay",
+    cli="hpc-agent campaign replay --campaign-id <id> [--last-n <n>]",
 )
 def campaign_replay(
     *,

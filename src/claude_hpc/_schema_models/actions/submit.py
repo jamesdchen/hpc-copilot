@@ -36,6 +36,6 @@ class SubmitResult(BaseModel):
     model_config = ConfigDict(extra="forbid", title="submit output data")
 
     run_id: RunIdLoose
-    job_ids: list[str]
+    job_ids: list[str] = Field(min_length=1)
     total_tasks: int = Field(ge=1)
     deduped: bool

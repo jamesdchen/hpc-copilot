@@ -98,6 +98,32 @@
       "description": "Number of dependency-chained segments the task was split into. Null when no chaining.",
       "title": "Daisy Chain Segments"
     },
+    "daisy_chain_segment_walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-segment walltime (post-rebalance) callers should request for each chained segment. Null when no chaining.",
+      "title": "Daisy Chain Segment Walltime Sec"
+    },
+    "daisy_chain_total_walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sum of per-segment walltimes across the chain (==original ask after rebalance). Null when no chaining.",
+      "title": "Daisy Chain Total Walltime Sec"
+    },
     "daisy_chain_dep_jobids": {
       "anyOf": [
         {

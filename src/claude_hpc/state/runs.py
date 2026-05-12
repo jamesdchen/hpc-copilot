@@ -581,7 +581,6 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     ],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-agent prune-orphan-sidecars",
     agent_facing=True,
 )
 def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:

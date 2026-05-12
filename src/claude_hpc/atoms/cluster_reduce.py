@@ -241,9 +241,20 @@ def cluster_reduce(
         # via path-stripping that mangles absolute inputs (`record.remote_path`
         # ends up prepended to the absolute target). Use the absolute dirname
         # as the rsync source directly, with an empty project-relative base.
+        abs_dirname = os.path.dirname(output_rel)
+        if abs_dirname in ("", "/"):
+            # Files at filesystem root (``/foo.json``) — `validate_remote_path`
+            # rejects an empty string, and an absolute-root path is almost
+            # certainly a misconfiguration. Refuse with a clear message
+            # rather than crash with the validator's generic error.
+            raise errors.SpecInvalid(
+                f"cluster_reduce output_path {output_rel!r} resolves to a "
+                "filesystem-root location; choose an output under remote_path "
+                "or a non-root absolute directory."
+            )
         pull_proc = rsync_pull(
             ssh_target=record.ssh_target,
-            remote_path=os.path.dirname(output_rel) or "/",
+            remote_path=abs_dirname,
             remote_subdir="",
             local_dir=str(local_dir_path),
             include=[output_basename],

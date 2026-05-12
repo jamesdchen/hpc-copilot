@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class _RuntimeQuantiles(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     p50: float = Field(ge=0)
     p95: float = Field(ge=0)
     p99: float | None = Field(default=None, ge=0)

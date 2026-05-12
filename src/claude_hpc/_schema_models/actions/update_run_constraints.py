@@ -9,6 +9,8 @@ exhausted) without re-submitting and losing rank.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from claude_hpc._schema_models._shared import (
@@ -16,16 +18,18 @@ from claude_hpc._schema_models._shared import (
     RunIdStrict,  # noqa: TC001 — Pydantic resolves the annotation at runtime
 )
 
+_NonEmptyStr = Annotated[str, Field(min_length=1)]
+
 
 class UpdateRunConstraintsSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     run_id: RunIdStrict
-    add_features: list[str] = Field(
+    add_features: list[_NonEmptyStr] = Field(
         default_factory=list,
         description="Features to add to each job (joined with the existing set).",
     )
-    set_features: list[str] | None = Field(
+    set_features: list[_NonEmptyStr] | None = Field(
         default=None,
         description=(
             "Replace the entire Features expression with this set (joined "

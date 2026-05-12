@@ -92,7 +92,7 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 ### Journal `schema_version`
 
 - **Current value**: `1` (the constant `SCHEMA_VERSION` in
-  `claude_hpc/_internal/session.py`).
+  `claude_hpc/_internal/session/run_record.py`).
 - Records with a mismatched `schema_version` are skipped (warned, not
   raised) by `load_run`. Bumping requires a migration story.
 
@@ -154,8 +154,8 @@ set on `RunRecord` there too). Validated in `mark_run` (in
   `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`,
   `compute_cmd_sha`, `run_sidecar_path`. All re-exported at package
   root; see `docs/reference/boundary-contract.md`.
-- **Retention**: `MAX_RUNS = 10`, oldest by mtime evicted on every
-  write.
+- **Retention**: `MAX_RUNS = 500` (overridable via the `HPC_MAX_RUNS`
+  environment variable), oldest by mtime evicted on every write.
 - **Identity**: the `run_id` string is the sole identifier; sidecars
   are addressable directly at `.hpc/runs/<run_id>.json`.
 
@@ -170,10 +170,10 @@ graph that used to hold them together is gone.
 |---|---|---|
 | `error_code` enum | `_schema_models/_shared.py:ErrorCode` + `errors.py` HpcError subclasses | `schemas/envelope.json`, every Pydantic model that types `error_code` |
 | `failure_category` enum | `mapreduce/reduce/classify.py:CATEGORIES` (still hand-mirrored — see below) | `schemas/resubmit.input.json` (Pydantic alias `ResubmitCategory`) |
-| Lifecycle states | `_internal/session.py:TERMINAL_STATUSES` (Python frozenset) + `_schema_models/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
+| Lifecycle states | `_internal/session/run_record.py:TERMINAL_STATUSES` (Python frozenset) + `_schema_models/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
 | `run_id` shape | `_schema_models/_shared.py:RunIdStrict` (input), `RunIdLoose` (output) | every input/output schema that types a run_id |
 | Scheduler / GpuType / Runtime / BackendName | `_schema_models/_shared.py` aliases | every consumer model |
-| `@primitive` decorator metadata (name, verb, side_effects, idempotent, idempotency_key, error_codes, composes, cli, agent_facing, exit_codes) | `_internal/_primitive.py` registry | `docs/primitives/<name>.md` frontmatter, `docs/primitives/README.md` table, `docs/generated/operations.md` |
+| `@primitive` decorator metadata (name, verb, side_effects, idempotent, idempotency_key, error_codes, composes, cli, agent_facing, exit_codes) | `_internal/primitive.py` registry | `docs/primitives/<name>.md` frontmatter, `docs/primitives/README.md` table, `docs/generated/operations.md` |
 | Wire envelope shape | `_schema_models/envelope.py:EnvelopeAdapter` | `schemas/envelope.json` |
 
 ## How to extend
