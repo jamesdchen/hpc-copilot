@@ -58,6 +58,14 @@ class PlanSubmitResult(BaseModel):
         default=None,
         description="Number of dependency-chained segments the task was split into. Null when no chaining.",
     )
+    daisy_chain_segment_walltime_sec: int | None = Field(
+        default=None,
+        description="Per-segment walltime (post-rebalance) callers should request for each chained segment. Null when no chaining.",
+    )
+    daisy_chain_total_walltime_sec: int | None = Field(
+        default=None,
+        description="Sum of per-segment walltimes across the chain (==original ask after rebalance). Null when no chaining.",
+    )
     daisy_chain_dep_jobids: list[str] | None = Field(
         default=None,
         description="Scheduler job IDs of each prior segment. Always null at plan_submit time; submit_flow populates it.",

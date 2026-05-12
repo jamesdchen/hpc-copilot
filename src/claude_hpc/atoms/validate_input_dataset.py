@@ -205,7 +205,6 @@ def _check_non_null_jsonl(
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent validate-input-dataset --spec <path>",
     agent_facing=True,
 )
 def validate_input_dataset(
@@ -267,7 +266,11 @@ def validate_input_dataset(
                     message=f"unsupported loader: {spec.loader!r}",
                 )
             ]
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except Exception as exc:  # noqa: BLE001 — pyarrow.lib.ArrowInvalid and friends
+        # We deliberately catch broadly: pyarrow may raise ArrowInvalid /
+        # ArrowIOError (subclasses of Exception, not OSError/ValueError),
+        # the csv/json paths can raise their own Errors, and we never want
+        # the validator itself to crash — its contract is "return findings".
         findings = [
             ValidatorFinding(
                 validator=_VALIDATOR,

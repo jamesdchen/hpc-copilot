@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         ),
     ],
     idempotent=False,
+    error_codes=[errors.SpecInvalid, errors.ConfigInvalid],
     cli="hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]",
     agent_facing=True,
 )

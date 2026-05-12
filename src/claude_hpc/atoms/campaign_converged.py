@@ -45,7 +45,7 @@ def _extract_metric(history: list[dict[str, Any]], metric: str) -> list[float]:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign-converged",
+    cli="hpc-agent campaign converged --campaign-id <id>",
 )
 def campaign_converged(
     *,

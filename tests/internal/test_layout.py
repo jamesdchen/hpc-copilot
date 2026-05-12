@@ -8,7 +8,6 @@ error rather than a P0 bug waiting to happen.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -110,8 +109,8 @@ def test_journal_layout_root_honors_env(tmp_path: Path, monkeypatch: pytest.Monk
         journal = JournalLayout(tmp_path)
         assert str(journal.root).startswith(str(tmp_path / "journal"))
     finally:
-        # Clean up so other tests aren't surprised.
-        os.environ.pop("HPC_JOURNAL_DIR", None)
+        # monkeypatch handles env teardown; just reload so other tests
+        # observe the restored HPC_JOURNAL_DIR.
         importlib.reload(session)
 
 
@@ -135,5 +134,6 @@ def test_journal_layout_run_record_path(tmp_path: Path, monkeypatch: pytest.Monk
         assert idx.name == "index.json"
         assert idx.parent == journal.root
     finally:
-        os.environ.pop("HPC_JOURNAL_DIR", None)
+        # monkeypatch handles env teardown; just reload so other tests
+        # observe the restored HPC_JOURNAL_DIR.
         importlib.reload(session)

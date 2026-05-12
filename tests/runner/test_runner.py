@@ -15,7 +15,7 @@ import pytest
 
 from claude_hpc import runner
 from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord
+from claude_hpc._internal.session import RunRecord, run_record
 from claude_hpc._schema_models.actions.resubmit import ResubmitSpec
 from claude_hpc._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
 
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 @pytest.fixture
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
     monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 

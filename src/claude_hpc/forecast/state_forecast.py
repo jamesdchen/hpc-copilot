@@ -140,7 +140,12 @@ def forecast_state_at(
     completing_mem_gb = 0.0
     n_completing = 0
 
-    pending = {"PD", "PENDING", "QUEUED", "qw"}
+    # All upper-case so the ``state.upper() in pending`` check below works
+    # for SGE rows that report "qw" verbatim — the v1 fix to
+    # ``queue_features._PENDING_STATES`` corrected this for the order-book
+    # feature path but the sibling state-forecaster was missed and
+    # SGE-cluster pendings were silently classified as RUNNING.
+    pending = {"PD", "PENDING", "QUEUED", "QW"}
 
     for node in snap.nodes:
         if node.is_drained:

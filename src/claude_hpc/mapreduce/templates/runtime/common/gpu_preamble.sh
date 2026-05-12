@@ -44,8 +44,12 @@ export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"
 # For users not on JAX it's a no-op; for JAX users it's the difference
 # between deterministic and not.
 #
-# Override either by exporting HPC_<NAME> in the spec's job_env; the
-# empty string leaves the corresponding variable unset.
+# Override either by exporting HPC_<NAME> in the spec's job_env. The
+# convention across this preamble is: an UNSET HPC_<NAME> means "fall
+# back to the default / auto-detect"; an EXPLICITLY EMPTY HPC_<NAME>=""
+# means "disable this knob — leave the corresponding variable unset
+# / skip auto-detect." Set with care: a stray `export HPC_GPU_TYPE=`
+# in a wrapper script disables auto-detection on every job.
 _hpc_default_cublas=":4096:8"
 _hpc_default_xla="--xla_gpu_deterministic_ops=true"
 if [ "${HPC_CUBLAS_WORKSPACE_CONFIG-$_hpc_default_cublas}" != "" ]; then
@@ -63,7 +67,11 @@ unset _hpc_default_cublas _hpc_default_xla
 # under "" (empty string). Best-effort: a missing nvidia-smi or an
 # unrecognized model leaves HPC_GPU_TYPE unset, and the dispatcher
 # falls back to $SLURM_JOB_PARTITION → "".
-if [ -z "$HPC_GPU_TYPE" ] && command -v nvidia-smi >/dev/null 2>&1; then
+# Use ${VAR+set} so we distinguish unset (auto-detect) from
+# explicitly-empty (operator-disabled): an empty string MUST NOT
+# trigger auto-detection — that would silently overwrite the
+# operator's "leave it unset" intent on every GPU node.
+if [ -z "${HPC_GPU_TYPE+set}" ] && command -v nvidia-smi >/dev/null 2>&1; then
     _detected=$(nvidia-smi -L 2>/dev/null | head -1 \
         | grep -ioE '(h200|h100|a100|a6000|a40|v100|p100|k80|t4|rtx ?2080 ?ti|rtx ?3090|rtx ?4090|l40s|l4)' \
         | head -1 \

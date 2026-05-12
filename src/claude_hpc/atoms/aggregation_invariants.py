@@ -152,13 +152,24 @@ def verify_aggregation_complete(
     # post-reduce layer.
     unexpected_aggregated_keys: list[str] = []
     if aggregated_metrics is not None and aggregated_keying == "grid_point":
+        import re as _re
+
         from claude_hpc import load_tasks_module, tasks_path
-        from claude_hpc.mapreduce.reduce.rollup import _grid_point_key
+
+        # ``aggregated_metrics`` keys are produced by
+        # ``reduce_by_grid_point._run_id`` (bare-values, sanitised). The
+        # rollup helper ``rollup._grid_point_key`` uses a different
+        # ``k=v`` format intended for human-readable rollup tables; using
+        # it here made every key look "unexpected". Mirror the metrics
+        # format inline so the check actually compares like-for-like.
+        def _metrics_key(params: dict[str, object]) -> str:
+            raw = "_".join(str(params[k]) for k in sorted(params))
+            return _re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
         try:
             tasks = load_tasks_module(tasks_path(experiment_dir))
             total = int(tasks.total())
-            expected_grid_points = {_grid_point_key(tasks.resolve(i) or {}) for i in range(total)}
+            expected_grid_points = {_metrics_key(tasks.resolve(i) or {}) for i in range(total)}
             keys = set(aggregated_metrics.keys())
             unexpected_aggregated_keys = sorted(keys - expected_grid_points)
         except (FileNotFoundError, AttributeError, TypeError, ValueError):

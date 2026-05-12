@@ -18,8 +18,8 @@ class PredictQueueWaitSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="predict-queue-wait input")
 
-    profile: str
-    cluster: str
+    profile: str = Field(min_length=1)
+    cluster: str = Field(min_length=1)
     at_iso: str | None = Field(
         default=None,
         description="Reference timestamp the forecast is for; null means now.",

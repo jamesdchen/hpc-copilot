@@ -15,7 +15,7 @@ import pytest
 
 from claude_hpc import errors
 from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord
+from claude_hpc._internal.session import RunRecord, run_record
 from claude_hpc.flows.resubmit_flow import (
     ResubmitFlowResult,
     resubmit_flow,
@@ -34,7 +34,9 @@ RUN_ID = "ml_ridge_abcd1234"
 
 @pytest.fixture
 def journal_home(tmp_path, monkeypatch):
-    monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "home_hpc")
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
+    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return tmp_path
 
 

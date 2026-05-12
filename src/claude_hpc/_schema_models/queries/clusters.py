@@ -10,6 +10,8 @@ from claude_hpc._schema_models._shared import Scheduler
 
 
 class _ClusterListEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     host: str
     scheduler: Scheduler

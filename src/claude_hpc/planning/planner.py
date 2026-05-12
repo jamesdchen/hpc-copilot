@@ -311,6 +311,12 @@ def plan_submit(
     # N+1 holds on segment N (afterany on SLURM, hold_jid on SGE) so
     # preempted segment N (exit 130 from PR-A) still triggers N+1.
     daisy_chain_segments: int | None = None
+    # ``compute_daisy_chain_plan`` returns the rebalanced per-segment
+    # walltime (post-v1 BUG-4-6 fix). Previously the planner discarded
+    # this and callers had to recompute via ``max - 1h``, defeating the
+    # rebalance.
+    daisy_chain_segment_walltime_sec: int | None = None
+    daisy_chain_total_walltime_sec: int | None = None
     if walltime_user_ask_sec is not None:
         from claude_hpc.planning.daisy_chain import (
             compute_daisy_chain_plan,
@@ -342,6 +348,8 @@ def plan_submit(
             if chain_decision:
                 plan = compute_daisy_chain_plan(int(walltime_user_ask_sec), max_walltime_sec=max_wt)
                 daisy_chain_segments = plan.n_segments
+                daisy_chain_segment_walltime_sec = plan.segment_walltime_sec
+                daisy_chain_total_walltime_sec = plan.total_walltime_sec
 
     return {
         "profile": profile,
@@ -357,6 +365,8 @@ def plan_submit(
         "walltime_arbitraged_from": walltime_arbitraged_from,
         "walltime_arbitraged_to": walltime_arbitraged_to,
         "daisy_chain_segments": daisy_chain_segments,
+        "daisy_chain_segment_walltime_sec": daisy_chain_segment_walltime_sec,
+        "daisy_chain_total_walltime_sec": daisy_chain_total_walltime_sec,
         # Filled at submit time once each segment's jobid is known. The
         # plan layer cannot know jobids ahead of qsub/sbatch, so this is
         # always null at plan_submit time and the caller (submit_flow)

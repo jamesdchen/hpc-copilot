@@ -210,8 +210,15 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
     if kind == "enumerated":
         return len(params["items"])
     if kind == "cartesian_product":
+        axes = params["axes"]
+        if not axes:
+            # Mirror the v1 ``build_tasks_py`` axes=[] fix — an empty
+            # axes mapping silently produces the degenerate `n=1` "one
+            # empty-kwargs task" outcome. Reject up-front so the
+            # interview cross-check catches it.
+            raise ValueError("cartesian_product requires at least one axis")
         n = 1
-        for axis_values in params["axes"].values():
+        for axis_values in axes.values():
             n *= len(axis_values)
         return n
     if kind == "items_x_seeds":

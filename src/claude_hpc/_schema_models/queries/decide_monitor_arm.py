@@ -33,6 +33,8 @@ class DecideMonitorArmSpec(BaseModel):
 
 
 class _CronCreateArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     schedule: str
     prompt: str
     reason: str

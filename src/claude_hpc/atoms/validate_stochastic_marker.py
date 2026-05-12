@@ -37,7 +37,6 @@ _VALIDATOR = "validate-stochastic-marker"
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent validate-stochastic-marker --spec <path>",
     agent_facing=True,
 )
 def validate_stochastic_marker(

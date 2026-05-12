@@ -91,7 +91,23 @@ def compute_walltime_drift(
         try:
             elapsed = int(s.get("elapsed_sec") or 0)
             requested = int(s.get("walltime_requested_sec") or 0)
-            exit_code = int(s.get("exit_code") or 0)
+            ec_raw = s.get("exit_code") or 0
+            if isinstance(ec_raw, str) and ":" in ec_raw:
+                # sacct ExitCode is "<code>:<signal>" — e.g. "0:15" for
+                # TIMEOUT (SIGTERM on exit 0). int() on the raw string
+                # would crash and the surrounding try/except would
+                # silently drop the sample.
+                code_str, _, signal_str = ec_raw.partition(":")
+                code = int(code_str) if code_str.strip() else 0
+                signal_num = int(signal_str) if signal_str.strip() else 0
+                # SIGTERM (15) or SIGKILL (9) on exit 0 indicates the
+                # scheduler killed the job (TIMEOUT). Treat as non-zero
+                # so cliff detection counts it.
+                if code == 0 and signal_num in (9, 15):
+                    code = 15
+                exit_code = code
+            else:
+                exit_code = int(ec_raw)
         except (TypeError, ValueError):
             continue
         if elapsed <= 0 or requested <= 0:

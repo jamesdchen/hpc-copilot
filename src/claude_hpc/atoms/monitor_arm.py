@@ -193,9 +193,21 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     failed = int(summary.get("failed") or 0)
     running = int(summary.get("running") or 0)
     pending = int(summary.get("pending") or 0)
-    is_terminal = (complete == int(total_tasks) and total_tasks > 0) or (
-        failed > 0 and running == 0 and pending == 0
-    )
+    # ``total_tasks <= 0`` is a degenerate run; arming a cron tick on it
+    # would loop forever (the canary equivalent of this trap was fixed
+    # in v1 BUG-2-17). Treat as immediately terminal so the slash
+    # command surfaces a "no tasks" envelope and exits.
+    if int(total_tasks) <= 0:
+        decision = MonitorArm(
+            arm="none",
+            cadence_sec=0,
+            reason="no_tasks",
+            schedule=None,
+            armed_line=f'armed: none run_id={run_id} cadence=0s reason="no_tasks"',
+            cron_create_args=None,
+        )
+        return decision.to_envelope_data()
+    is_terminal = (complete == int(total_tasks)) or (failed > 0 and running == 0 and pending == 0)
     if is_terminal:
         decision = MonitorArm(
             arm="none",
