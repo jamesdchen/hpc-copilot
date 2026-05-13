@@ -275,9 +275,15 @@ def compute_house_edge(samples: list[dict[str, Any]]) -> HouseEdge:
             p95_delta_sec=None,
             calibration_ratio=None,
         )
+    import statistics as _stat
+
     sorted_deltas = sorted(deltas)
     mean = sum(deltas) / n
-    median = sorted_deltas[n // 2]
+    # statistics.median averages the two middle values for even n;
+    # the ``sorted_deltas[n // 2]`` upper-middle hack biased median
+    # high. The v2 BUG-2V2-2 fix covered the other two sites but
+    # missed this one (compute_house_edge).
+    median = _stat.median(sorted_deltas)
     p95_idx = max(0, min(n - 1, int(round(0.95 * (n - 1)))))
     p95 = sorted_deltas[p95_idx]
     cal = (sum(ratios) / len(ratios)) if ratios else None

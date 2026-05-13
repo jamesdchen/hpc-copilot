@@ -9,7 +9,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent campaign-replay
+  cli: hpc-agent campaign replay --campaign-id <id> [--last-n <n>]
   python: claude_hpc.atoms.campaign_replay.campaign_replay
 ---
 # campaign-replay

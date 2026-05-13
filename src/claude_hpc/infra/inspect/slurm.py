@@ -162,7 +162,7 @@ def parse_sacct_node_jobs(text: str, *, recent_only: bool = True) -> list[dict[s
         if recent_only and state in terminal:
             continue
         cpus = _to_int_or_none(row["ReqCPUS"]) or 0
-        mem_gb = _parse_mem_to_gb(row["ReqMem"])
+        mem_gb = _parse_mem_to_gb(row["ReqMem"], cpus=cpus)
         started_h_ago = _hours_since(row["Start"])
         elapsed = _parse_elapsed_to_sec(row["Elapsed"])
         gpus = _parse_gpu_count_from_tres(row["AllocTRES"])
@@ -267,7 +267,7 @@ def _bucket_tenants_by_node(sacct_out: str) -> dict[str, list[dict[str, Any]]]:
         if state in terminal:
             continue
         cpus = _to_int_or_none(row["ReqCPUS"]) or 0
-        mem_gb = _parse_mem_to_gb(row["ReqMem"])
+        mem_gb = _parse_mem_to_gb(row["ReqMem"], cpus=cpus)
         started_h_ago = _hours_since(row["Start"])
         elapsed = _parse_elapsed_to_sec(row["Elapsed"])
         nodes = _expand_slurm_nodelist(row["NodeList"])
