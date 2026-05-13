@@ -168,13 +168,8 @@ def test_resubmit_preempted_category_with_partial_marks_does_not_raise(
         "partial preempt markers must not trigger envelope-level Preempted"
     )
 
-    # ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
 
-    return {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        # No SSH_AUTH_SOCK on purpose.
-    }
+# ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
 
 
 def test_ssh_gate_status_fails_fast_without_agent(tmp_path: Path) -> None:
