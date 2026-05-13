@@ -18,8 +18,8 @@ class PredictQueueWaitSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", title="predict-queue-wait input")
 
-    profile: str
-    cluster: str
+    profile: str = Field(min_length=1)
+    cluster: str = Field(min_length=1)
     at_iso: str | None = Field(
         default=None,
         description="Reference timestamp the forecast is for; null means now.",
@@ -62,14 +62,23 @@ class PredictQueueWaitResult(BaseModel):
     bucket_hour_of_week: int = Field(ge=-1, le=167)
     fallback_reason: str | None
     features_adjustment_factor: float = Field(
-        description="Order-book adjustment factor (Phase 1c). 1.0 when no current_features were supplied or on the DES path.",
+        description="Order-book adjustment factor (Phase 1c). 1.0 on the wire-driven path and on the DES path; only non-1.0 for internal callers that pass live QueueFeatures directly (not exposed on the spec).",
     )
     p10_wait_sec: int | None = Field(
+        default=None,
+        ge=0,
         description="DES p10 quantile in seconds. null on the diurnal_ma path.",
     )
     p90_wait_sec: int | None = Field(
+        default=None,
+        ge=0,
         description="DES p90 quantile in seconds. null on the diurnal_ma path.",
     )
+    # Mirrors the input's ``ge=1`` invariant — a DES run with zero
+    # passes is a contract violation (would divide-by-zero downstream).
+    # Diurnal-MA path emits null (v3 BUG-3V3-4).
     n_replications: int | None = Field(
+        default=None,
+        ge=1,
         description="Number of DES passes executed. null on the diurnal_ma path.",
     )

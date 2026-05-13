@@ -28,9 +28,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from claude_hpc.forecast.drain_simulator import simulate_drain
-from claude_hpc.forecast.squeue_priority_field import parse_squeue_priority_field
-from claude_hpc.forecast.wait_features import extract_features
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from claude_hpc.forecast.drain_simulator import simulate_drain  # noqa: E402
+from claude_hpc.forecast.squeue_priority_field import parse_squeue_priority_field  # noqa: E402
+from claude_hpc.forecast.wait_features import extract_features  # noqa: E402
 
 
 def _read_snapshot(path: Path) -> str:

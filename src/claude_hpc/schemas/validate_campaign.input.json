@@ -149,6 +149,7 @@
     "expected_cmd_sha": {
       "anyOf": [
         {
+          "minLength": 8,
           "type": "string"
         },
         {
@@ -156,7 +157,7 @@
         }
       ],
       "default": null,
-      "description": "The cmd_sha the about-to-submit run will have. Required alongside ``campaign_id`` to enable the stochastic-marker check; ignored otherwise.",
+      "description": "The cmd_sha the about-to-submit run will have. Required alongside ``campaign_id`` to enable the stochastic-marker check; ignored otherwise. Minimum 8 hex chars (matches the inner stochastic-marker validator's constraint).",
       "title": "Expected Cmd Sha"
     }
   }

@@ -11,6 +11,7 @@ scheduler routing, ...) instead of just the malformed field.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -93,22 +94,17 @@ class TestLoadClustersConfigBubblesUp:
     — silently submitting without cluster routing would land the run
     in an unexpected partition and surprise the user."""
 
-    def test_load_error_propagates_through_resolution(self) -> None:
-        from claude_hpc.flows import submit_flow as sf_module
+    def test_load_error_propagates_through_resolution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Point HPC_CLUSTERS_CONFIG at a path that doesn't exist; the
+        # loader must raise FileNotFoundError, NOT swallow it.
+        bogus = tmp_path / "does_not_exist.yaml"
+        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(bogus))
+        from claude_hpc.infra.clusters import load_clusters_config
 
-        with mock.patch.object(
-            sf_module,
-            "submit_flow",  # we don't actually call it; just keep the import path live
-            create=False,
-        ):
-            pass
-
-        # Direct check: load_clusters_config raises FileNotFoundError
-        # when the path is wrong; the surrounding submit_flow code
-        # MUST NOT swallow it. We assert on the contract by importing
-        # the symbol — the patch target only exists if it's still
-        # imported at module scope.
-        from claude_hpc.infra.clusters import load_clusters_config  # noqa: F401
+        with pytest.raises(FileNotFoundError):
+            load_clusters_config()
 
     def test_value_error_from_get_nfs_data_dir_does_not_propagate(self) -> None:
         """Cross-check the validator's behavior matches the resolver:
@@ -135,7 +131,7 @@ def _spec(run_id: str, **overrides: Any):
         job_name=run_id,
         run_id=run_id,
         total_tasks=4,
-        backend="sge_remote",
+        backend="sge",
         script="run.sh",
         job_env={},
         canary=False,
@@ -159,8 +155,11 @@ def _batch(specs, **overrides: Any):
 def _journal_home(tmp_path, monkeypatch):
     """Redirect ~/.claude/hpc/ to tmp_path so journal writes don't pollute home."""
     from claude_hpc._internal import session
+    from claude_hpc._internal.session import run_record
 
-    monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path / "home_hpc")
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
+    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
 
 
 class TestSubmitFlowBatch:

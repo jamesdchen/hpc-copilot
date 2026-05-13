@@ -17,7 +17,7 @@ class SuggestSetupActionResult(BaseModel):
     nullable run_id) doesn't trip.
     """
 
-    model_config = ConfigDict(title="suggest-setup-action output")
+    model_config = ConfigDict(extra="forbid", title="suggest-setup-action output")
 
     priority: Literal[0, 1, 2, 3]
     action: Literal["monitor", "reuse", "interview", "fresh"]

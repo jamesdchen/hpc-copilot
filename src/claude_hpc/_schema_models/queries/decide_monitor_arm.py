@@ -33,6 +33,8 @@ class DecideMonitorArmSpec(BaseModel):
 
 
 class _CronCreateArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     schedule: str
     prompt: str
     reason: str
@@ -45,7 +47,7 @@ class DecideMonitorArmResult(BaseModel):
     arm == 'cron') passes cron_create_args to CronCreate.
     """
 
-    model_config = ConfigDict(title="decide-monitor-arm output")
+    model_config = ConfigDict(extra="forbid", title="decide-monitor-arm output")
 
     arm: Literal["cron", "loop", "none"]
     cadence_sec: int = Field(ge=0)

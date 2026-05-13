@@ -9,8 +9,9 @@
 │  ┌──────────────┐   ┌─────────────┐   ┌─────────────┐  │
 │  │ FIFO drain   │   │ Backfill    │   │ LightGBM    │  │
 │  │ simulator    │   │ drain       │   │ residual    │  │
-│  │ (pessimistic │   │ (optimistic │   │ regression  │  │
-│  │  floor)      │   │  floor)     │   │             │  │
+│  │ (earliest    │   │ (even-      │   │ regression  │  │
+│  │  start floor)│   │  earlier    │   │ (how much   │  │
+│  │              │   │  floor)     │   │  later?)    │  │
 │  └──────┬───────┘   └──────┬──────┘   └──────┬──────┘  │
 │         │                  │                  │        │
 │         └──────────┬───────┴──────────────────┘        │
@@ -20,27 +21,33 @@
 └────────────────────────────────────────────────────────┘
 ```
 
-**Floor + residual learning.** Two simulators bracket the
-prediction. A LightGBM regression learns the empirical overhead the
-simulator can't model (future arrivals, fair-share decay, scheduler
+**Floor + residual learning.** Two simulators produce
+earliest-start floors. A LightGBM regression learns how much LATER
+reality usually is (future arrivals, fair-share decay, scheduler
 config drift). The combined prediction is `pessimistic_floor +
-overhead_sec`. Both floors are also passed as features so the
-regression weights them empirically.
+overhead_sec` — the FIFO-drain start time plus the empirical
+extra-wait the regression expects. Both floors are also passed as
+features so the regression can weight them empirically.
 
 ## Why two simulators
 
+Both simulators compute an **earliest possible start time** under
+different assumptions. Neither is a worst-case bound on wait — the
+LGBM residual is the term that pushes the prediction *past* the
+floor when reality is slower than the simulator's assumptions.
+
 | Simulator | Mode | Captures |
 |---|---|---|
-| FIFO drain | `enable_backfill=False` | Hard lower bound: assumes no future arrivals, slots drain in priority order, no SLURM backfill scheduler. Pessimistic. |
-| Backfill drain | `enable_backfill=True` (phantom-slot) | Loose upper bound: any short pending job that fits in any running-job shadow runs immediately. Unrealistic about parallelism but predicts how early backfill could plausibly land your job. |
+| FIFO drain | `enable_backfill=False` | Earliest start assuming no future arrivals and no SLURM backfill scheduler. Conservative (slower) of the two floors, so we call it the "pessimistic floor" — but it's still an *earliest* start, not an upper bound on wait. |
+| Backfill drain | `enable_backfill=True` (phantom-slot) | Even earlier start: any short pending job that fits in any running-job shadow runs immediately. Optimistic about parallelism and backfill aggressiveness. |
 
 Both feed into the LGBM as features:
 
 * `pessimistic_floor_sec` — strong predictor in busy windows
-  (regression learns "expected wait correlates with FIFO drain
-  time").
+  (regression learns "expected wait is the FIFO drain time plus
+  some learned overhead").
 * `optimistic_floor_sec` — strong predictor in idle windows
-  (regression learns "when backfill exists, predicted wait drops
+  (regression learns "when backfill exists, predicted start drops
   toward the optimistic floor").
 * `floor_gap_sec` — measure of cluster slack; the difference
   between the two floors. Wide gap → the regression can place the
@@ -179,8 +186,8 @@ label leakage).
 
 ## Why this architecture
 
-* **Sim does what sim is good at.** Hard lower bounds, structural
-  knowledge about running jobs' end times.
+* **Sim does what sim is good at.** Earliest-start floors,
+  structural knowledge about running jobs' end times.
 * **Regression does what regression is good at.** Learning patterns
   the model can't predict deterministically (future arrivals,
   fair-share recompute, scheduler config drift).

@@ -32,6 +32,7 @@
     "profile": {
       "anyOf": [
         {
+          "minLength": 1,
           "type": "string"
         },
         {
@@ -44,6 +45,7 @@
     "cluster": {
       "anyOf": [
         {
+          "minLength": 1,
           "type": "string"
         },
         {

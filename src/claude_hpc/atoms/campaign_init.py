@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc import errors
 from claude_hpc._internal.primitive import SideEffect, primitive
 
 if TYPE_CHECKING:
@@ -30,7 +31,8 @@ if TYPE_CHECKING:
     ],
     idempotent=True,
     idempotency_key="campaign_id",
-    cli="hpc-agent campaign-init",
+    error_codes=[errors.SpecInvalid],
+    cli="hpc-agent campaign init --campaign-id <id> --strategy <s>",
     agent_facing=True,
 )
 def campaign_init(
@@ -90,9 +92,14 @@ def campaign_init(
     if strategy_name is not None:
         params: dict[str, Any] = {}
         if strategy_params_json:
-            parsed = json.loads(strategy_params_json)
+            try:
+                parsed = json.loads(strategy_params_json)
+            except ValueError as exc:
+                raise errors.SpecInvalid(
+                    f"--strategy-params-json is not valid JSON: {exc}"
+                ) from exc
             if not isinstance(parsed, dict):
-                raise ValueError("--strategy-params-json must decode to a JSON object")
+                raise errors.SpecInvalid("--strategy-params-json must decode to a JSON object")
             params = parsed
         strategy = {"name": strategy_name, "params": params}
 

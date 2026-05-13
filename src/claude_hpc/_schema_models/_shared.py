@@ -137,7 +137,9 @@ FailureCategoryResubmittable = Literal[
 # Optional execution runtime override. Today only ``uv`` is supported.
 Runtime = Literal["uv"]
 
-# Submit backend names exposed on the wire. Mirrors the keys of
-# ``infra.backends.BACKENDS`` minus the local-only variants — submissions
-# go through SSH so the remote-* variants are the relevant ones.
-BackendName = Literal["sge_remote", "slurm"]
+# Submit backend names exposed on the wire. The registered backend keys
+# in ``infra.backends`` are ``sge`` and ``slurm``; both resolve to the
+# remote-over-ssh variant since submit-flow only ever submits across an
+# SSH boundary (the local SGE/Slurm backend classes are kept as base
+# classes for the remote subclasses but are not registered).
+BackendName = Literal["sge", "slurm"]

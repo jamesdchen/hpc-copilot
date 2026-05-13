@@ -16,6 +16,7 @@
     "campaign_id",
     "submitted_at"
   ],
+  "additionalProperties": false,
   "properties": {
     "found": {
       "title": "Found",

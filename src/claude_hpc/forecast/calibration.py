@@ -91,7 +91,23 @@ def compute_walltime_drift(
         try:
             elapsed = int(s.get("elapsed_sec") or 0)
             requested = int(s.get("walltime_requested_sec") or 0)
-            exit_code = int(s.get("exit_code") or 0)
+            ec_raw = s.get("exit_code") or 0
+            if isinstance(ec_raw, str) and ":" in ec_raw:
+                # sacct ExitCode is "<code>:<signal>" — e.g. "0:15" for
+                # TIMEOUT (SIGTERM on exit 0). int() on the raw string
+                # would crash and the surrounding try/except would
+                # silently drop the sample.
+                code_str, _, signal_str = ec_raw.partition(":")
+                code = int(code_str) if code_str.strip() else 0
+                signal_num = int(signal_str) if signal_str.strip() else 0
+                # SIGTERM (15) or SIGKILL (9) on exit 0 indicates the
+                # scheduler killed the job (TIMEOUT). Treat as non-zero
+                # so cliff detection counts it.
+                if code == 0 and signal_num in (9, 15):
+                    code = 15
+                exit_code = code
+            else:
+                exit_code = int(ec_raw)
         except (TypeError, ValueError):
             continue
         if elapsed <= 0 or requested <= 0:
@@ -120,10 +136,24 @@ def compute_walltime_drift(
     # High-utilization successful jobs (u >= cliff_ratio, ec == 0) are
     # still near-misses — they barely finished — so the cliff check
     # only excludes failures.
-    near = sum(1 for u, ec in eligible if u >= near_miss_ratio and ec == 0)
+    # Near-miss = survived but ran close to walltime. The upper bound
+    # was previously ``< 1.0`` to drop "overtime-with-survival" as a
+    # clock-skew artifact, but that biased the signal LOW on clusters
+    # with measurable NTP drift / sacct latency: a job that genuinely
+    # ran to u=1.02 with ec=0 IS the strongest possible near-miss
+    # signal (the walltime ask was provably too tight) and silently
+    # dropping it lets the safety_mult recommender stay tight in the
+    # exact regime it should loosen (v3 BUG-5V3-4).
+    near = sum(1 for u, ec in eligible if near_miss_ratio <= u and ec == 0)
     weighted = (cliff + 0.5 * near) / n_recent
     utils = sorted(u for u, _ in eligible)
-    median = utils[len(utils) // 2]
+    # statistics.median averages the two middle values for even n;
+    # ``sorted[n // 2]`` picks the upper of the two, biasing the
+    # median high (notably blocks the "tighten if median < 0.5" rule
+    # for an even-n eligible set with one outlier above 0.5).
+    import statistics as _stat
+
+    median = _stat.median(utils)
     return WalltimeDrift(
         n_recent=n_recent,
         n_cliff_events=cliff,
@@ -179,7 +209,7 @@ def recommend_safety_mult_adjustment(
         )
     # Tighten if we're systematically over-asking. Conservative: only
     # tighten when the median is well below the cliff.
-    if drift.median_utilization is not None and drift.median_utilization < 0.5 and rate == 0.0:
+    if drift.median_utilization is not None and drift.median_utilization < 0.5 and rate < 1e-9:
         adjusted = max(base_safety_mult - 0.10, floor_safety_mult)
         if adjusted < base_safety_mult:
             return round(adjusted, 3), (
@@ -248,9 +278,15 @@ def compute_house_edge(samples: list[dict[str, Any]]) -> HouseEdge:
             p95_delta_sec=None,
             calibration_ratio=None,
         )
+    import statistics as _stat
+
     sorted_deltas = sorted(deltas)
     mean = sum(deltas) / n
-    median = sorted_deltas[n // 2]
+    # statistics.median averages the two middle values for even n;
+    # the ``sorted_deltas[n // 2]`` upper-middle hack biased median
+    # high. The v2 BUG-2V2-2 fix covered the other two sites but
+    # missed this one (compute_house_edge).
+    median = _stat.median(sorted_deltas)
     p95_idx = max(0, min(n - 1, int(round(0.95 * (n - 1)))))
     p95 = sorted_deltas[p95_idx]
     cal = (sum(ratios) / len(ratios)) if ratios else None
@@ -360,7 +396,12 @@ def record_prediction_sidecar(
         "cpus": int(cpus),
         "submitted_at_iso": submitted_at_iso or utcnow_iso(),
     }
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # Use a per-process unique tmp suffix so concurrent writes for the
+    # same run_id don't race on the same path (the previous shared
+    # ``<path>.tmp`` could have one writer unlink another's mid-write).
+    import os as _os
+
+    tmp = path.with_suffix(path.suffix + f".tmp.{_os.getpid()}")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True))
     tmp.replace(path)
     return path

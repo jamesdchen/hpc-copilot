@@ -13,7 +13,6 @@
   "additionalProperties": false,
   "properties": {
     "run_id": {
-      "pattern": "^[A-Za-z0-9._\\-]+$",
       "title": "Run Id",
       "type": "string"
     },
@@ -21,6 +20,7 @@
       "items": {
         "type": "string"
       },
+      "minItems": 1,
       "title": "Job Ids",
       "type": "array"
     },

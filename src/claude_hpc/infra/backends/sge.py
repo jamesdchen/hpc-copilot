@@ -1,12 +1,20 @@
-"""SGE (Sun/Univa Grid Engine) backend — submits array jobs via qsub."""
+"""SGE (Sun/Univa Grid Engine) backend — submits array jobs via qsub.
+
+The wire-facing ``backend`` value ``"sge"`` resolves to
+:class:`claude_hpc.infra.backends.sge_remote.RemoteSGEBackend` (the
+remote-over-ssh subclass). This local class is no longer registered
+because nothing in src/ or tests/ submits jobs from a local SGE shell —
+every submission flows through the SSH boundary. It remains as a base
+class for the remote subclass (which inherits its capability metadata
+and parser regexes).
+"""
 
 import os
 import re
 
-from claude_hpc.infra.backends import HPCBackend, register
+from claude_hpc.infra.backends import HPCBackend
 
 
-@register("sge")
 class SGEBackend(HPCBackend):
     # B5: capability metadata. SGE has no ``qsub --test-only``
     # equivalent so supports_test_only_eta stays False; the planner

@@ -41,7 +41,7 @@ def _spent_walltime_sec(sidecar: dict[str, Any]) -> float:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign-budget",
+    cli="hpc-agent campaign budget --campaign-id <id>",
 )
 def campaign_budget(
     *,

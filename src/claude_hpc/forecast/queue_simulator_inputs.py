@@ -156,7 +156,12 @@ def sample_arrival_stream(
     rng = random.Random(seed)
     arrivals: list[SimJob] = []
     counter = 0
-    for uname, profile in user_profiles.items():
+    # Sort by uname so the arrival stream is a function of (seed,
+    # profile content) rather than (seed, profile, dict insertion
+    # order). Without this, cross-cluster reproductions diverge
+    # because ``user_profiles.json`` is keyed by first-observed-user
+    # order which changes per experiment.
+    for uname, profile in sorted(user_profiles.items()):
         rate_per_day = float(_profile_get(profile, "median_submits_per_day", 0.0))
         if rate_per_day <= 0:
             continue
@@ -171,10 +176,10 @@ def sample_arrival_stream(
             continue
         t = 0.0
         while t < horizon_sec:
-            # Exponential candidate.
-            u = rng.random()
-            if u <= 0.0:
-                continue
+            # Exponential candidate. ``rng.random()`` returns in [0, 1);
+            # ``1.0 - r`` then lives in (0, 1] so ``log(u)`` is finite
+            # and we don't need a guard against u == 0.
+            u = 1.0 - rng.random()
             t += -math.log(u) / lam_max
             if t >= horizon_sec:
                 break
@@ -210,8 +215,13 @@ def sample_residual_lifetimes(
     Algorithm per job:
 
     * elapsed_sec = co_tenant.elapsed_s
-    * walltime_ask = elapsed + 1h cushion (snapshot-derived; same default
-      as ``extract_running_jobs``).
+    * walltime_ask = user's ``median_walltime_ask_sec`` /
+      ``common_walltime_ask_sec`` from the profile when available; falls
+      back to ``elapsed + 1h`` for unknown users. The previous form
+      always used the ``elapsed + 1h`` heuristic, which biased long-
+      running jobs to a residual near zero — a 24h job got a residual
+      <=1h with high probability, distorting the DES sim's view of when
+      slots free up.
     * Sample ratio = ``Triangular(p10, median, p90)`` over the user's
       ``actual_over_ask`` distribution; default to ``Triangular(0.6, 0.9, 1.0)``
       when the profile is missing.
@@ -237,7 +247,18 @@ def sample_residual_lifetimes(
         mode = max(lo, min(hi, med))
         ratio = rng.triangular(lo, hi, mode)
         elapsed = -j.submit_time
-        walltime_total = j.walltime_ask * ratio
+        # Replace the snapshot-derived ``elapsed + 3600`` heuristic with
+        # the user's typical walltime ask when available. ``j.walltime_ask``
+        # is still the heuristic (extract_running_jobs doesn't see the
+        # profile), so override it here.
+        profile_ask = _profile_get(prof, "median_walltime_ask_sec", None)
+        if profile_ask is None:
+            profile_ask = _profile_get(prof, "common_walltime_ask_sec", None)
+        if profile_ask is not None and float(profile_ask) > 0:
+            walltime_ask = float(profile_ask)
+        else:
+            walltime_ask = j.walltime_ask  # heuristic fallback
+        walltime_total = walltime_ask * ratio
         residual = max(0.0, walltime_total - elapsed)
         out[j.job_id] = residual
     return out

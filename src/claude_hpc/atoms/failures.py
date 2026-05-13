@@ -55,7 +55,7 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
     name="failures",
     verb="query",
     side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.SshUnreachable],
+    error_codes=[errors.SshUnreachable, errors.JournalCorrupt],
     idempotent=True,
     cli="hpc-agent failures --run-id <id> [--lines <n>]",
     agent_facing=True,

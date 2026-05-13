@@ -230,10 +230,28 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
     path = Path(tasks_py_path)
     if not path.is_file():
         raise FileNotFoundError(f"tasks.py not found: {path}")
-    spec = importlib.util.spec_from_file_location("hpc_user_tasks", path)
+    # Per-path unique module name so two different tasks.py files loaded
+    # in the same Python process don't collide in the import cache (and
+    # don't shadow any unrelated third-party module named
+    # ``hpc_user_tasks``).
+    import hashlib as _hashlib
+    import sys as _sys
+
+    _digest = _hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
+    mod_name = f"hpc_user_tasks_{_digest}"
+    spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"could not load tasks.py from {path}")
     module = importlib.util.module_from_spec(spec)
+    # Register in sys.modules BEFORE exec_module so:
+    #   * pickle can re-locate classes defined inside tasks.py via
+    #     ``sys.modules[cls.__module__]`` (otherwise pickle.loads raises
+    #     ModuleNotFoundError in any subprocess worker that re-imports);
+    #   * ``typing.get_type_hints`` can resolve forward references via
+    #     ``sys.modules[cls.__module__].__dict__``;
+    #   * any ``from __future__ import annotations`` user module that
+    #     introspects its own type hints works.
+    _sys.modules[mod_name] = module
     spec.loader.exec_module(module)
     if not hasattr(module, "total") or not hasattr(module, "resolve"):
         raise AttributeError(

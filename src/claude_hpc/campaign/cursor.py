@@ -46,7 +46,22 @@ def cursor_path(experiment_dir: Path | str, campaign_id: str) -> Path:
 
 
 def read_cursor(experiment_dir: Path | str, campaign_id: str) -> dict[str, Any] | None:
-    """Return the current cursor state, or ``None`` if no cursor exists."""
+    """Return the current cursor state, or ``None`` if no cursor exists.
+
+    Forward-compat guard: a cursor on disk with a
+    ``cursor_schema_version`` greater than the current
+    :data:`CURSOR_SCHEMA_VERSION` raises :class:`ValueError`. The user is
+    running an older framework binary against a cursor that a newer
+    binary wrote, and silently parsing it could mis-interpret fields the
+    older binary doesn't understand.
+
+    Lower versions are accepted (backward-compat) — the field schema is
+    additive within a major version, and older cursors round-trip
+    through :func:`advance_cursor` which rewrites them at the current
+    version. Future schema bumps should land a migration alongside the
+    bump (here, or in a dedicated migrator) before raising on the older
+    version.
+    """
     path = cursor_path(experiment_dir, campaign_id)
     try:
         text = path.read_text()
@@ -58,6 +73,27 @@ def read_cursor(experiment_dir: Path | str, campaign_id: str) -> dict[str, Any] 
         return None
     if not isinstance(data, dict):
         return None
+    on_disk_version = data.get("cursor_schema_version")
+    if on_disk_version is None:
+        # Missing version key — likely a pre-v1 cursor from before the
+        # version field was introduced. Treat as v1 explicitly so a
+        # future v2 reader can detect "no version OR version < 2" and
+        # apply v1 → v2 backfills.
+        on_disk_version = 1
+        data["cursor_schema_version"] = 1
+    elif not isinstance(on_disk_version, int):
+        # Non-int value (string, null after JSON manual edit, etc.) is
+        # corruption; refuse rather than silently mis-typing downstream.
+        raise ValueError(
+            f"cursor at {path} declares non-integer cursor_schema_version="
+            f"{on_disk_version!r}; wipe the cursor or fix the file"
+        )
+    if on_disk_version > CURSOR_SCHEMA_VERSION:
+        raise ValueError(
+            f"cursor at {path} declares cursor_schema_version={on_disk_version}, "
+            f"newer than this framework's CURSOR_SCHEMA_VERSION={CURSOR_SCHEMA_VERSION}; "
+            f"upgrade claude-hpc to read this cursor"
+        )
     return data
 
 

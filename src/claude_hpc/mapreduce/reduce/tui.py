@@ -345,7 +345,16 @@ def _open_log(ssh_target: str | None, log_path: str, live: Any) -> None:
     If no *ssh_target* is configured, fall back to local ``less`` so that a
     plain file path still opens cleanly.
     """
-    argv: list[str] = ["ssh", ssh_target, "less", log_path] if ssh_target else ["less", log_path]
+    if ssh_target:
+        # When ssh forwards positional args to a remote shell they are
+        # joined and re-parsed there. A log path with whitespace or shell
+        # metachars would mis-parse (or, in the worst case, injection-
+        # execute). Quote the path explicitly with shlex.quote.
+        import shlex as _shlex
+
+        argv: list[str] = ["ssh", ssh_target, f"less {_shlex.quote(log_path)}"]
+    else:
+        argv = ["less", log_path]
     # Stop the Live refresh before handing the TTY over to less.
     live.stop()
     try:

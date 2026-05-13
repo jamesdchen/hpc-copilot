@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign-advance",
+    cli="hpc-agent campaign advance --campaign-id <id>",
 )
 def campaign_advance(
     *,
@@ -78,12 +78,14 @@ def campaign_advance(
     if budget["exhausted"]:
         decision = "stop_over_budget"
         reason = budget["reason"]
+    elif status["in_flight"] > 0:
+        # In-flight runs must finish before a stop decision so we don't
+        # orphan cluster jobs the campaign can't keep tracking.
+        decision = "wait_in_flight"
+        reason = f"{status['in_flight']} run(s) still in flight"
     elif converged["converged"]:
         decision = "stop_converged"
         reason = converged["reason"]
-    elif status["in_flight"] > 0:
-        decision = "wait_in_flight"
-        reason = f"{status['in_flight']} run(s) still in flight"
     else:
         decision = "continue"
         reason = (

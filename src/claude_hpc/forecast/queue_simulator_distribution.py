@@ -59,9 +59,19 @@ def simulate_distribution(
     last_state: dict[str, Any] = {}
     rng = random.Random(seed)
     for _i in range(n_replications):
-        sub_seed = rng.randint(0, 2**31 - 1)
-        arr = arrival_sampler(sub_seed) if arrival_sampler is not None else None
-        res = residual_sampler(sub_seed) if residual_sampler is not None else None
+        # Independent sub-seeds for arrival, residual, and the
+        # per-pass policy rng inside simulate_one_pass. Sharing one
+        # sub-seed correlates the first draws of distinct
+        # random.Random instances, tightening the predicted p10/p90
+        # band and hiding genuine variance. The third sub-seed
+        # (``pass_seed``) decouples the candidate-walltime sample
+        # from the arrival stream — v2 fixed arr↔res but kept
+        # arr↔policy coupled via ``seed=arr_seed`` (v3 BUG-5V3-2).
+        arr_seed = rng.randint(0, 2**31 - 1)
+        res_seed = rng.randint(0, 2**31 - 1)
+        pass_seed = rng.randint(0, 2**31 - 1)
+        arr = arrival_sampler(arr_seed) if arrival_sampler is not None else None
+        res = residual_sampler(res_seed) if residual_sampler is not None else None
         out = simulate_one_pass(
             snapshot,
             candidate=dataclasses.replace(candidate),
@@ -69,7 +79,7 @@ def simulate_distribution(
             arrival_stream=arr,
             residual_lifetimes=res,
             max_horizon_sec=max_horizon_sec,
-            seed=sub_seed,
+            seed=pass_seed,
             walltime_actual_band=walltime_actual_band,
         )
         waits.append(out.predicted_start_offset_sec)

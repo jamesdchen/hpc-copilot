@@ -28,7 +28,6 @@ import hashlib
 import json
 import logging
 import os
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,8 +48,37 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 SCHEMA_VERSION = 1
-# Resolve at import time. MARs (and any caller that wants its own state tree)
-# can set HPC_JOURNAL_DIR before importing this module to redirect the journal.
+
+
+def _current_homedir() -> Path:
+    """Re-resolve the journal home on every call.
+
+    Lookup order:
+    1. ``HPC_JOURNAL_DIR`` env var — wins always, so
+       ``monkeypatch.setenv("HPC_JOURNAL_DIR", tmp_path)`` alone is
+       enough to redirect state writes (v3 BUG-8V3-1 root cause was a
+       cached import-time snapshot that ignored the env override).
+    2. The module-level ``HPC_HOMEDIR`` attribute — back-compat with the
+       pre-v3 ``monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path)``
+       pattern used in ~20 test files. Patching the attribute still
+       redirects as long as the env var is unset.
+    3. ``~/.claude/hpc`` — the default.
+    """
+    env_val = os.environ.get("HPC_JOURNAL_DIR")
+    if env_val:
+        return Path(env_val)
+    attr = globals().get("HPC_HOMEDIR")
+    if isinstance(attr, Path):
+        return attr
+    return Path.home() / ".claude" / "hpc"
+
+
+# Import-time snapshot kept as a public attribute for back-compat —
+# read-mostly callers (capabilities envelope, doc-gen) that just want
+# the configured location are fine with the snapshot. State-touching
+# call sites (``journal_dir``, ``find_in_flight_runs``,
+# ``find_runs_by_campaign``) go through ``_current_homedir()`` so
+# per-test env redirection actually applies.
 HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
 
 # Re-exported for back-compat. Derived from the canonical
@@ -71,6 +99,7 @@ _UPDATABLE_FIELDS = frozenset(
         "stage",
         "job_ids",
         "last_resubmit_request_id",
+        "recent_resubmit_request_ids",
     }
 )
 
@@ -98,6 +127,12 @@ class RunRecord:
     stage: str = "monitor"
     status: str = "in_flight"
     last_resubmit_request_id: str = ""
+    # Bounded list of recent resubmit request_ids so an A→B→A replay
+    # sequence is correctly recognised as a duplicate of A (the
+    # ``last_resubmit_request_id`` alone only catches back-to-back
+    # replays and double-increments retry counters otherwise). Newest
+    # last; capped via ``_MAX_RECENT_RESUBMIT_IDS`` at write time.
+    recent_resubmit_request_ids: list[str] = dataclasses.field(default_factory=list)
     # Closed-loop campaign tag. Empty string for open-loop submits.
     # Populated when /submit was invoked with --campaign-id (or with
     # campaign_id set on the submit spec). The asyncio campaign loop
@@ -124,7 +159,7 @@ def journal_dir(experiment_dir: Path) -> Path:
     """Return ``~/.claude/hpc/<repo_hash>/`` for *experiment_dir* (created)."""
     from claude_hpc._internal.time import utcnow_iso
 
-    d = HPC_HOMEDIR / repo_hash(experiment_dir)
+    d = _current_homedir() / repo_hash(experiment_dir)
     d.mkdir(parents=True, exist_ok=True)
     repo_meta = d / "repo.json"
     if not repo_meta.exists():
@@ -181,19 +216,16 @@ def _locked(target: Path) -> Iterator[None]:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Write *payload* to *path* atomically (tmp + os.replace)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    """Deprecated forwarder for :func:`claude_hpc._internal.io.atomic_write_json`.
+
+    Kept so callers that import this module-level name don't break;
+    new code should import ``atomic_write_json`` from
+    ``claude_hpc._internal.io`` directly. This forwarder will be
+    removed in a future release.
+    """
+    from claude_hpc._internal.io import atomic_write_json
+
+    atomic_write_json(path, payload)
 
 
 def _read_json(path: Path) -> dict | None:

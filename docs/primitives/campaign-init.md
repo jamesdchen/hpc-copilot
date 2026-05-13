@@ -5,9 +5,12 @@ side_effects:
 - writes-sidecar: <experiment>/.hpc/campaigns/<id>/manifest.json
 idempotent: true
 idempotency_key: campaign_id
-error_codes: []
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
 backed_by:
-  cli: hpc-agent campaign-init
+  cli: hpc-agent campaign init --campaign-id <id> --strategy <s>
   python: claude_hpc.atoms.campaign_init.campaign_init
 ---
 # campaign-init

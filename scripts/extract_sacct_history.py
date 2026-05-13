@@ -22,7 +22,7 @@ training rows.
 
 Usage::
 
-    python -m scripts.extract_sacct_history \\
+    python scripts/extract_sacct_history.py \\
         --ssh-target alice@cluster \\
         --since-days 30 \\
         --out completed_jobs.json
@@ -36,7 +36,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from claude_hpc.infra.parsing import parse_sacct_pipe_row, parse_walltime_to_sec
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from claude_hpc.infra.parsing import parse_sacct_pipe_row, parse_walltime_to_sec  # noqa: E402
 
 _SACCT_FORMAT = "JobID,Submit,Start,Priority,Partition,User,TimeLimit"
 

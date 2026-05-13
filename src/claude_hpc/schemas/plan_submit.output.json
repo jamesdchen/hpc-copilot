@@ -72,6 +72,19 @@
       "description": "Original walltime ask in seconds before cold-start arbitrage trimmed it. Null when arbitrage didn't fire.",
       "title": "Walltime Arbitraged From"
     },
+    "walltime_arbitraged_to": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cold-start-trimmed walltime in seconds (the value callers should actually use). Null when arbitrage didn't fire.",
+      "title": "Walltime Arbitraged To"
+    },
     "daisy_chain_segments": {
       "anyOf": [
         {
@@ -84,6 +97,32 @@
       "default": null,
       "description": "Number of dependency-chained segments the task was split into. Null when no chaining.",
       "title": "Daisy Chain Segments"
+    },
+    "daisy_chain_segment_walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-segment walltime (post-rebalance) callers should request for each chained segment. Null when no chaining.",
+      "title": "Daisy Chain Segment Walltime Sec"
+    },
+    "daisy_chain_total_walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sum of per-segment walltimes across the chain (==original ask after rebalance). Null when no chaining.",
+      "title": "Daisy Chain Total Walltime Sec"
     },
     "daisy_chain_dep_jobids": {
       "anyOf": [

@@ -125,9 +125,13 @@ def check_results(
                     results[tid] = {"status": "complete", "path": path_str}
                 break  # one match per task is enough
 
-    # Strategy 2: fall back to flat directory scan if no task subdirs found
+    # Strategy 2: fall back to flat directory scan if no task subdirs found.
+    # Sort the glob output so task-id assignment is deterministic across
+    # OS / filesystem implementations (Linux glob order is not sorted by
+    # default; assigning ``tid = len(results) + 1`` over an unsorted list
+    # silently mis-correlates files to task ids).
     if not results:
-        for path_str in glob.glob(str(rdir / file_glob)):
+        for path_str in sorted(glob.glob(str(rdir / file_glob))):
             if "/_wip_" in path_str:
                 continue
             if validate and path_str.endswith(".csv"):

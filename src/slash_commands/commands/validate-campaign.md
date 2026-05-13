@@ -45,7 +45,7 @@ on `tasks.py`).
 2. Invoke the CLI:
 
    ```bash
-   python -m claude_hpc validate-campaign --spec spec.json --experiment-dir .
+   hpc-agent validate-campaign --spec spec.json --experiment-dir .
    ```
 
    Output is a single-line JSON envelope on stdout. Parse it.

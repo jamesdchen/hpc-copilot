@@ -11,10 +11,12 @@
   "additionalProperties": false,
   "properties": {
     "profile": {
+      "minLength": 1,
       "title": "Profile",
       "type": "string"
     },
     "cluster": {
+      "minLength": 1,
       "title": "Cluster",
       "type": "string"
     },

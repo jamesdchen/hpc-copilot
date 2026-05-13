@@ -33,7 +33,7 @@ hpc-agent inspect-cluster --cluster <c>                    # per-node alloc/load
 hpc-agent runtime-prior --profile <p> --cluster <c>        # quantile rollup of past task runtimes
 hpc-agent plan-submit --profile <p> --cluster <c>          # constraint scorecard for /submit-hpc
 ```
-Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/reference/cli-spec.md`](docs/reference/cli-spec.md); JSON Schema files for runtime validation under `hpc_mapreduce/schemas/`.
+Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/reference/cli-spec.md`](docs/reference/cli-spec.md); JSON Schema files for runtime validation under `claude_hpc/schemas/`.
 
 ### Using with MARs
 
@@ -119,7 +119,7 @@ The boundary between claude-hpc and your experiment repo is documented in [`docs
 
 ### Parallelism Model
 
-The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_mapreduce/templates/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
+The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
 
 ### Memory across campaigns
 
@@ -175,7 +175,7 @@ The slash commands above compose ~50 primitives exposed as `hpc-agent <name>`. F
 
 ### `clusters.yaml` (required)
 
-Cluster infrastructure definitions. Ships inside the package at `hpc_mapreduce/config/clusters.yaml`. Override the active path with `HPC_CLUSTERS_CONFIG=/your/clusters.yaml` (useful for MARs users who want to keep their cluster definitions outside the package):
+Cluster infrastructure definitions. Ships inside the package at `claude_hpc/config/clusters.yaml`. Override the active path with `HPC_CLUSTERS_CONFIG=/your/clusters.yaml` (useful for MARs users who want to keep their cluster definitions outside the package):
 
 ```yaml
 hoffman2:
@@ -212,10 +212,10 @@ Claude remembers your preferences (cluster, executor directory, environment, res
 
 | Template | SGE | SLURM |
 |----------|-----|-------|
-| CPU array | `hpc_mapreduce/templates/sge/cpu_array.sh` | `hpc_mapreduce/templates/slurm/cpu_array.slurm` |
-| GPU array | `hpc_mapreduce/templates/sge/gpu_array.sh` | `hpc_mapreduce/templates/slurm/gpu_array.slurm` |
+| CPU array | `claude_hpc/mapreduce/templates/runtime/sge/cpu_array.sh` | `claude_hpc/mapreduce/templates/runtime/slurm/cpu_array.slurm` |
+| GPU array | `claude_hpc/mapreduce/templates/runtime/sge/gpu_array.sh` | `claude_hpc/mapreduce/templates/runtime/slurm/gpu_array.slurm` |
 
-Templates are parameterized via environment variables injected at submission time. Resolve paths via `hpc_mapreduce.get_template_path(scheduler, template)`. The GPU template is used when the configured resources include `gpus`; otherwise the CPU template is used.
+Templates are parameterized via environment variables injected at submission time. Resolve paths via `claude_hpc.get_template_path(scheduler, template)`. The GPU template is used when the configured resources include `gpus`; otherwise the CPU template is used.
 
 ## Supported Clusters
 
@@ -224,12 +224,12 @@ Templates are parameterized via environment variables injected at submission tim
 | Hoffman2 | UCLA IDRE | SGE |
 | Discovery | USC CARC | SLURM |
 
-Cluster connection details are in `hpc_mapreduce/config/clusters.yaml` (or whatever `HPC_CLUSTERS_CONFIG` points at).
+Cluster connection details are in `claude_hpc/config/clusters.yaml` (or whatever `HPC_CLUSTERS_CONFIG` points at).
 
 ## Python API
 
 ```python
-from hpc_mapreduce import (
+from claude_hpc import (
     # Framework subdirectory layout
     framework_subdir, runs_subdir, tasks_path, load_tasks_module,
     # Per-run sidecars
@@ -242,7 +242,7 @@ from hpc_mapreduce import (
     WorkloadSpec, compute_submission_plan, build_wave_map,
     deploy_runtime, run_combiner_checked,
 )
-from hpc_mapreduce.infra.backends import get_backend
+from claude_hpc.infra.backends import get_backend
 ```
 
 ## Development

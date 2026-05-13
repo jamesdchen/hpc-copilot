@@ -11,10 +11,11 @@ discover what's invokable without reading any docs. The same data
 drives ``docs/generated/operations.md`` via
 ``scripts/build_operations_index.py``.
 
-For wheel installs that ship without ``docs/`` on the file system, this
-module would fall through to a baked ``operations.json`` shipped inside
-the package — not yet implemented; tracked as a packaging TODO. The
-registry is the only authoritative source today.
+The in-process ``@primitive`` registry is the only source of truth.
+``scripts/bake_operations_json.py`` writes a redundant snapshot to
+``src/claude_hpc/operations.json`` for diff/discoverability and for
+the docs-build cross-check, but the runtime catalog is always derived
+from the live registry — never from the baked file.
 """
 
 from __future__ import annotations
@@ -39,16 +40,11 @@ def _primitives_dir() -> Path | None:
     Source-tree installs: `<repo>/src/claude_hpc/` is the package, so the
     repo root is two levels up and frontmatters live at
     `<repo>/docs/primitives/`. Wheel installs don't ship docs/; this
-    returns None and callers fall through to the baked operations.json
-    (when implemented).
+    returns None and ``render_llms_full`` skips the per-primitive prose
+    block (the catalog table + schemas still render).
     """
     candidate = _PACKAGE_ROOT.parent.parent / "docs" / "primitives"
     return candidate if candidate.is_dir() else None
-
-
-def _baked_path() -> Path:
-    """Path the baked operations JSON would live at in a wheel install."""
-    return _PACKAGE_ROOT / "operations.json"
 
 
 def _cli_subcommand(backed_by: dict) -> str | None:
@@ -86,25 +82,16 @@ def operations_catalog() -> list[dict[str, Any]]:
     ``None`` (not absent) so callers can distinguish "no schema" from
     "field not present in this entry."
 
-    Source-of-truth chain:
-
-    1. The ``@primitive`` registry (``claude_hpc._internal.primitive.get_registry``).
-       Decorator metadata is the canonical SoT.
-    2. Baked ``operations.json`` for wheel installs that ship without
-       ``docs/`` on the file system. (Not yet implemented — tracked as
-       a packaging TODO.)
+    Source of truth: the in-process ``@primitive`` registry
+    (``claude_hpc._internal.primitive.get_registry``). Decorator
+    metadata is the canonical SoT and the only source consulted at
+    runtime — the baked ``src/claude_hpc/operations.json`` exists for
+    diff/discoverability via ``scripts/bake_operations_json.py`` but
+    is never read back.
 
     Order: stable, sorted by (verb, name) so consumers can diff.
     """
-    registry_entries = _from_registry()
-    if registry_entries:
-        return sorted(registry_entries, key=lambda o: (o["verb"], o["name"]))
-
-    baked = _baked_path()
-    if baked.is_file():
-        loaded = json.loads(baked.read_text(encoding="utf-8"))
-        return loaded if isinstance(loaded, list) else []
-    return []
+    return sorted(_from_registry(), key=lambda o: (o["verb"], o["name"]))
 
 
 def _from_registry() -> list[dict[str, Any]]:

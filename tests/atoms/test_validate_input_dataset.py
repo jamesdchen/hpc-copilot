@@ -228,10 +228,6 @@ def test_parquet_loader_unavailable_emits_info_when_pyarrow_missing(
     assert finding.severity == "info"
 
 
-@pytest.mark.skipif(
-    pytest.importorskip("pyarrow", reason="pyarrow not available") is None,
-    reason="pyarrow not available",
-)
 def test_parquet_clean_pass(tmp_path: Path) -> None:
     """Smoke test for the pyarrow path. Only runs when pyarrow is
     actually installed in the test env."""

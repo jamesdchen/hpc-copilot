@@ -438,7 +438,7 @@
           "type": "integer"
         },
         "base": {
-          "default": 10,
+          "default": 10.0,
           "exclusiveMinimum": 1,
           "title": "Base",
           "type": "number"

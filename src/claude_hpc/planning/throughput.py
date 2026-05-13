@@ -78,6 +78,21 @@ def compute_submission_plan(
     total = workload.total_tasks
     if total <= 0:
         raise ValueError(f"total_tasks must be >= 1 to build a submission plan; got {total}.")
+    # ``wave = i // max_concurrent_jobs`` and ``ceil(n_batches /
+    # max_concurrent_jobs)`` both divide by this; a malformed
+    # clusters.yaml with ``max_concurrent_jobs: 0`` would otherwise crash
+    # the planner with a low-signal ZeroDivisionError instead of a
+    # user-friendly contract error (v3 BUG-4V3-9).
+    if constraints.max_concurrent_jobs <= 0:
+        raise ValueError(
+            "max_concurrent_jobs must be >= 1 to build a submission plan; "
+            f"got {constraints.max_concurrent_jobs}."
+        )
+    if constraints.max_array_size <= 0:
+        raise ValueError(
+            "max_array_size must be >= 1 to build a submission plan; "
+            f"got {constraints.max_array_size}."
+        )
 
     # 1. Batch count
     n_batches = math.ceil(total / constraints.max_array_size)

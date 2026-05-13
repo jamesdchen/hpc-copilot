@@ -12,6 +12,7 @@
     "armed_line",
     "cron_create_args"
   ],
+  "additionalProperties": false,
   "properties": {
     "arm": {
       "enum": [
@@ -62,6 +63,7 @@
   },
   "$defs": {
     "_CronCreateArgs": {
+      "additionalProperties": false,
       "properties": {
         "schedule": {
           "title": "Schedule",

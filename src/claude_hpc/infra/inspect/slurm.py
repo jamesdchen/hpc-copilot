@@ -162,7 +162,7 @@ def parse_sacct_node_jobs(text: str, *, recent_only: bool = True) -> list[dict[s
         if recent_only and state in terminal:
             continue
         cpus = _to_int_or_none(row["ReqCPUS"]) or 0
-        mem_gb = _parse_mem_to_gb(row["ReqMem"])
+        mem_gb = _parse_mem_to_gb(row["ReqMem"], cpus=cpus)
         started_h_ago = _hours_since(row["Start"])
         elapsed = _parse_elapsed_to_sec(row["Elapsed"])
         gpus = _parse_gpu_count_from_tres(row["AllocTRES"])
@@ -267,7 +267,7 @@ def _bucket_tenants_by_node(sacct_out: str) -> dict[str, list[dict[str, Any]]]:
         if state in terminal:
             continue
         cpus = _to_int_or_none(row["ReqCPUS"]) or 0
-        mem_gb = _parse_mem_to_gb(row["ReqMem"])
+        mem_gb = _parse_mem_to_gb(row["ReqMem"], cpus=cpus)
         started_h_ago = _hours_since(row["Start"])
         elapsed = _parse_elapsed_to_sec(row["Elapsed"])
         nodes = _expand_slurm_nodelist(row["NodeList"])
@@ -290,28 +290,51 @@ def _bucket_tenants_by_node(sacct_out: str) -> dict[str, list[dict[str, Any]]]:
 def _expand_slurm_nodelist(spec: str) -> list[str]:
     """Expand a SLURM hostlist spec like ``d11-[03,07-09]`` into names.
 
-    Permissive: if the spec doesn't match, returns ``[spec]`` so the
-    caller still has something to attribute the row to.
+    Supports multi-group specs like ``cn[01-02],cn[10]`` by splitting on
+    top-level commas (commas outside brackets) and recursing per chunk.
+    Permissive: if a chunk doesn't match, the chunk itself is appended so
+    the caller still has something to attribute the row to.
     """
     if not spec:
         return []
-    if "[" not in spec:
-        return [s.strip() for s in spec.split(",") if s.strip()]
-    m = re.match(r"^([^\[]+)\[([^\]]+)\](.*)$", spec)
-    if not m:
-        return [spec]
-    prefix, body, suffix = m.group(1), m.group(2), m.group(3)
+    # Split on top-level commas only (commas inside ``[...]`` are part of
+    # a range body and must be preserved).
+    chunks: list[str] = []
+    depth = 0
+    start = 0
+    for i, ch in enumerate(spec):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            chunks.append(spec[start:i])
+            start = i + 1
+    chunks.append(spec[start:])
+
     out: list[str] = []
-    for chunk in body.split(","):
-        chunk = chunk.strip()
-        if "-" in chunk:
-            lo, _, hi = chunk.partition("-")
-            try:
-                width = max(len(lo), len(hi))
-                for i in range(int(lo), int(hi) + 1):
-                    out.append(f"{prefix}{str(i).zfill(width)}{suffix}")
-            except ValueError:
-                out.append(f"{prefix}{chunk}{suffix}")
-        else:
-            out.append(f"{prefix}{chunk}{suffix}")
+    for raw in chunks:
+        chunk = raw.strip()
+        if not chunk:
+            continue
+        if "[" not in chunk:
+            out.append(chunk)
+            continue
+        m = re.match(r"^([^\[]+)\[([^\]]+)\](.*)$", chunk)
+        if not m:
+            out.append(chunk)
+            continue
+        prefix, body, suffix = m.group(1), m.group(2), m.group(3)
+        for sub in body.split(","):
+            sub = sub.strip()
+            if "-" in sub:
+                lo, _, hi = sub.partition("-")
+                try:
+                    width = max(len(lo), len(hi))
+                    for i in range(int(lo), int(hi) + 1):
+                        out.append(f"{prefix}{str(i).zfill(width)}{suffix}")
+                except ValueError:
+                    out.append(f"{prefix}{sub}{suffix}")
+            else:
+                out.append(f"{prefix}{sub}{suffix}")
     return out

@@ -12,8 +12,8 @@ class CampaignHealthSpec(BaseModel):
 
     campaign_id: str | None = None
     since_iso: str | None = None
-    profile: str | None = None
-    cluster: str | None = None
+    profile: str | None = Field(default=None, min_length=1)
+    cluster: str | None = Field(default=None, min_length=1)
 
 
 class CampaignHealthResult(BaseModel):

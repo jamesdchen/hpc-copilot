@@ -9,6 +9,7 @@
     "failed_count",
     "clusters"
   ],
+  "additionalProperties": false,
   "properties": {
     "run_id": {
       "title": "Run Id",

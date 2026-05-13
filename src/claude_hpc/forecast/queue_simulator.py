@@ -98,6 +98,11 @@ class SimJob:
     start_time: float | None = None
     end_time: float | None = None
     backfill_eligible: bool = True
+    # Internal: when ``gpu_type==""`` _consume sweeps multiple typed
+    # buckets — we record exactly which buckets were drained and by how
+    # much so _release can restore symmetrically (v3 BUG-5V3-1/-5). Set
+    # by _consume; consumed by _release. Not part of the public contract.
+    _consumed_gpu_buckets: dict[str, int] | None = None
 
     def required_resources(self) -> tuple[int, int, int, str]:
         return (self.cpus, self.mem_mb, self.gpus, self.gpu_type)
@@ -318,15 +323,25 @@ def _consume(
     if job.gpus > 0:
         if job.gpu_type:
             free["gpus_free"][job.gpu_type] -= job.gpus
+            job._consumed_gpu_buckets = {job.gpu_type: job.gpus}
         else:
             remaining = job.gpus
+            taken: dict[str, int] = {}
             for t in sorted(free["gpus_free"]):
                 avail = free["gpus_free"][t]
                 take = min(avail, remaining)
-                free["gpus_free"][t] -= take
+                if take > 0:
+                    free["gpus_free"][t] -= take
+                    taken[t] = take
                 remaining -= take
                 if remaining <= 0:
                     break
+            # Whatever we couldn't satisfy goes to the "" bucket so
+            # conservation holds even when _try_place's untyped check
+            # over-allowed the placement.
+            if remaining > 0:
+                taken[""] = taken.get("", 0) + remaining
+            job._consumed_gpu_buckets = taken
 
 
 def _release(
@@ -338,12 +353,23 @@ def _release(
     free["cpus_free"] += job.cpus
     free["mem_mb_free"] += job.mem_mb
     if job.gpus > 0:
-        if job.gpu_type:
+        # Symmetric with _consume: restore to the exact buckets that
+        # were drained. Falls back to the typed bucket / "" only when
+        # this job was created without going through _consume (e.g. a
+        # snapshot-extracted running job whose initial occupation is
+        # encoded into ``free_by_node`` by ``available_resources``
+        # rather than by a _consume call) — v3 BUG-5V3-1/-5.
+        buckets = job._consumed_gpu_buckets
+        if buckets:
+            for t, n in buckets.items():
+                free["gpus_free"][t] = free["gpus_free"].get(t, 0) + n
+            job._consumed_gpu_buckets = None
+        elif job.gpu_type:
             free["gpus_free"][job.gpu_type] = free["gpus_free"].get(job.gpu_type, 0) + job.gpus
         else:
-            # Best-effort symmetric to _consume: bump first known type.
-            keys = sorted(free["gpus_free"]) or [""]
-            free["gpus_free"][keys[0]] = free["gpus_free"].get(keys[0], 0) + job.gpus
+            # Untyped snapshot job with no prior consume: route to "" so
+            # _hoq_reservation's virtual release agrees with us.
+            free["gpus_free"][""] = free["gpus_free"].get("", 0) + job.gpus
 
 
 def _hoq_reservation(
@@ -380,8 +406,19 @@ def _hoq_reservation(
         f = virt[node]
         f["cpus_free"] += job.cpus
         f["mem_mb_free"] += job.mem_mb
-        if job.gpus > 0 and job.gpu_type:
-            f["gpus_free"][job.gpu_type] = f["gpus_free"].get(job.gpu_type, 0) + job.gpus
+        if job.gpus > 0:
+            # Mirror _release's bucket selection so the virtual release
+            # agrees with the real one. Without ``_consumed_gpu_buckets``
+            # tracking, snapshot-extracted running jobs fall back to
+            # typed bucket / "" — same convention as _release above
+            # (v3 BUG-5V3-1/-5).
+            buckets = job._consumed_gpu_buckets
+            if buckets:
+                for t, n in buckets.items():
+                    f["gpus_free"][t] = f["gpus_free"].get(t, 0) + n
+            else:
+                bucket = job.gpu_type or ""
+                f["gpus_free"][bucket] = f["gpus_free"].get(bucket, 0) + job.gpus
         if _try_place(hoq, virt) is not None:
             return (max(end_t, now), hoq)
     return (float("inf"), hoq)
@@ -580,7 +617,13 @@ def simulate_one_pass(
             if ev_job is None:
                 continue
             ev_job.state = "queued"
-            if ev_job is not candidate and ev_job.walltime_actual is None:
+            # Sample walltime_actual for the candidate too. The
+            # previous form excluded it, so the candidate's backfill-fit
+            # check used the FULL walltime_ask while every other job's
+            # check used a 60-100% shorter actual — the candidate was
+            # held to a strictly tighter shadow-fit criterion than the
+            # population it competed with, biasing predicted-wait HIGH.
+            if ev_job.walltime_actual is None:
                 ev_job.walltime_actual = max(1.0, ev_job.walltime_ask * rng.uniform(lo, hi))
             queued.append(ev_job)
             _policy_loop(time)

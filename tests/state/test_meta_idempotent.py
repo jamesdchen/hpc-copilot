@@ -54,8 +54,11 @@ def test_meta_idempotent_distinguishes_idempotent_and_not() -> None:
     catalog = {e["name"]: bool(e.get("idempotent", True)) for e in operations_catalog()}
     if "build-executor" not in catalog:
         pytest.skip("build-executor primitive not registered in this checkout")
-    # Known non-idempotent
-    assert _meta_idempotent("build-executor") is catalog["build-executor"]
+    # Pin the expected values explicitly so a regression that flips
+    # BOTH the catalog AND the helper to the same wrong answer would
+    # still fail (the previous form ``is catalog["build-executor"]``
+    # was self-consistency-only).
+    assert _meta_idempotent("build-executor") is False
     # Known idempotent — pick the first idempotent entry deterministically
     idem_name = next(
         (n for n, flag in sorted(catalog.items()) if flag is True),

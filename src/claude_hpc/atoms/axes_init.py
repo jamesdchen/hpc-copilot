@@ -56,10 +56,18 @@ def axes_init(
 
     target = axes_path(experiment_dir)
     if target.exists() and not force:
+        # On refuse, echo the on-disk state (not the requested values) so
+        # callers don't mistake the refusal for "your axes were accepted".
+        from claude_hpc.planning.axes import read_axes
+
+        try:
+            existing = read_axes(experiment_dir) or {}
+        except (FileNotFoundError, OSError, ValueError):
+            existing = {}
         return {
             "axes_path": str(target),
-            "axes": list(axes or []),
-            "homogeneous_axes": list(homogeneous_axes or []),
+            "axes": list(existing.get("axes") or []),
+            "homogeneous_axes": list(existing.get("homogeneous_axes") or []),
             "wrote": False,
             "reason": (
                 f"{target} already exists; pass force=true to overwrite. "
