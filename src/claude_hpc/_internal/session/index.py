@@ -116,9 +116,9 @@ def find_in_flight_runs(experiment_dir: Path) -> list[RunRecord]:
     if it's missing or stale.
     """
     from claude_hpc._internal.session.journal import load_run
-    from claude_hpc._internal.session.run_record import HPC_HOMEDIR, _run_path
+    from claude_hpc._internal.session.run_record import _current_homedir, _run_path
 
-    if not HPC_HOMEDIR.exists() or not journal_dir(experiment_dir).exists():
+    if not _current_homedir().exists() or not journal_dir(experiment_dir).exists():
         return []
     if _index_is_stale(experiment_dir):
         _rebuild_index(experiment_dir)
@@ -149,11 +149,11 @@ def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRec
     open-loop submits never match a campaign.
     """
     from claude_hpc._internal.session.journal import load_run
-    from claude_hpc._internal.session.run_record import HPC_HOMEDIR
+    from claude_hpc._internal.session.run_record import _current_homedir
 
     if not campaign_id:
         return []
-    if not HPC_HOMEDIR.exists() or not journal_dir(experiment_dir).exists():
+    if not _current_homedir().exists() or not journal_dir(experiment_dir).exists():
         return []
     files = _all_run_files(experiment_dir)
     matched: list[tuple[float, RunRecord]] = []

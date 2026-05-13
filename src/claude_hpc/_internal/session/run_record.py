@@ -48,8 +48,37 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 SCHEMA_VERSION = 1
-# Resolve at import time. MARs (and any caller that wants its own state tree)
-# can set HPC_JOURNAL_DIR before importing this module to redirect the journal.
+
+
+def _current_homedir() -> Path:
+    """Re-resolve the journal home on every call.
+
+    Lookup order:
+    1. ``HPC_JOURNAL_DIR`` env var — wins always, so
+       ``monkeypatch.setenv("HPC_JOURNAL_DIR", tmp_path)`` alone is
+       enough to redirect state writes (v3 BUG-8V3-1 root cause was a
+       cached import-time snapshot that ignored the env override).
+    2. The module-level ``HPC_HOMEDIR`` attribute — back-compat with the
+       pre-v3 ``monkeypatch.setattr(session, "HPC_HOMEDIR", tmp_path)``
+       pattern used in ~20 test files. Patching the attribute still
+       redirects as long as the env var is unset.
+    3. ``~/.claude/hpc`` — the default.
+    """
+    env_val = os.environ.get("HPC_JOURNAL_DIR")
+    if env_val:
+        return Path(env_val)
+    attr = globals().get("HPC_HOMEDIR")
+    if isinstance(attr, Path):
+        return attr
+    return Path.home() / ".claude" / "hpc"
+
+
+# Import-time snapshot kept as a public attribute for back-compat —
+# read-mostly callers (capabilities envelope, doc-gen) that just want
+# the configured location are fine with the snapshot. State-touching
+# call sites (``journal_dir``, ``find_in_flight_runs``,
+# ``find_runs_by_campaign``) go through ``_current_homedir()`` so
+# per-test env redirection actually applies.
 HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
 
 # Re-exported for back-compat. Derived from the canonical
@@ -130,7 +159,7 @@ def journal_dir(experiment_dir: Path) -> Path:
     """Return ``~/.claude/hpc/<repo_hash>/`` for *experiment_dir* (created)."""
     from claude_hpc._internal.time import utcnow_iso
 
-    d = HPC_HOMEDIR / repo_hash(experiment_dir)
+    d = _current_homedir() / repo_hash(experiment_dir)
     d.mkdir(parents=True, exist_ok=True)
     repo_meta = d / "repo.json"
     if not repo_meta.exists():

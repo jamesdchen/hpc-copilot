@@ -79,7 +79,9 @@ def test_submit_dedup_envelope_marks_replay(tmp_path: Path) -> None:
     assert env2["data"]["run_id"] == env1["data"]["run_id"]
 
 
-def test_submit_persists_campaign_id_to_journal(tmp_path: Path) -> None:
+def test_submit_persists_campaign_id_to_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A spec with `campaign_id` lands on the RunRecord and is later
     discoverable via session.find_runs_by_campaign."""
     import os
@@ -102,23 +104,14 @@ def test_submit_persists_campaign_id_to_journal(tmp_path: Path) -> None:
     env_resp = _parse_envelope(out)
     assert env_resp["ok"] is True
 
-    # Confirm the journal carries the tag and the campaign filter sees it.
+    # In-process check: ``session.find_runs_by_campaign`` re-resolves
+    # ``HPC_JOURNAL_DIR`` from os.environ on every call (v3 fix), so
+    # setting the env var here is sufficient — no module attribute
+    # patching needed.
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(journal))
     from claude_hpc._internal import session
-    from claude_hpc._internal.session import run_record
 
-    # Redirect HPC_HOMEDIR for this in-process check the same way the CLI
-    # did. After the session.py split the canonical module attribute lives
-    # in :mod:`session.run_record`; patch both for back-compat with any
-    # caller that reads through the package re-export.
-    saved_pkg = session.HPC_HOMEDIR
-    saved_rr = run_record.HPC_HOMEDIR
-    try:
-        session.HPC_HOMEDIR = journal  # type: ignore[misc]
-        run_record.HPC_HOMEDIR = journal
-        matched = session.find_runs_by_campaign(tmp_path, "ml_ridge_q1")
-    finally:
-        session.HPC_HOMEDIR = saved_pkg  # type: ignore[misc]
-        run_record.HPC_HOMEDIR = saved_rr
+    matched = session.find_runs_by_campaign(tmp_path, "ml_ridge_q1")
     assert len(matched) == 1
     assert matched[0].campaign_id == "ml_ridge_q1"
 
