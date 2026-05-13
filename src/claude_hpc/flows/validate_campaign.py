@@ -121,14 +121,21 @@ def validate_campaign(
             return
         findings.extend(result.findings)
 
+    # Note on the local rebindings below: mypy does not preserve
+    # ``if x is not None`` type-narrowing into a lambda closure (lambda
+    # bodies are treated as deferred even when ``_safe_run`` invokes
+    # them synchronously). Each branch captures the narrowed value into
+    # a local first so the lambda references a definitely-non-None name.
     if spec.executor_module and spec.executor_function:
+        executor_module = spec.executor_module
+        executor_function = spec.executor_function
         _safe_run(
             "validate-executor-signatures",
             lambda: validate_executor_signatures(
                 experiment_dir,
                 spec=ValidateExecutorSignaturesSpec(
-                    executor_module=spec.executor_module,
-                    executor_function=spec.executor_function,
+                    executor_module=executor_module,
+                    executor_function=executor_function,
                 ),
             ),
         )
@@ -139,13 +146,15 @@ def validate_campaign(
     # no row-level checks". Previously the ``is not None`` gate silently
     # skipped the validator when the user wanted a smoke-test.
     if spec.dataset_path and spec.dataset_loader:
+        dataset_path = spec.dataset_path
+        dataset_loader = spec.dataset_loader
         _safe_run(
             "validate-input-dataset",
             lambda: validate_input_dataset(
                 experiment_dir,
                 spec=ValidateInputDatasetSpec(
-                    dataset_path=spec.dataset_path,
-                    loader=spec.dataset_loader,
+                    dataset_path=dataset_path,
+                    loader=dataset_loader,
                     row_indices=spec.dataset_row_indices or [],
                     required_non_null_cols=spec.dataset_required_non_null_cols,
                 ),
@@ -153,6 +162,7 @@ def validate_campaign(
         )
 
     if spec.requested_walltime_sec is not None:
+        requested_walltime_sec = spec.requested_walltime_sec
         _safe_run(
             "validate-walltime-against-history",
             lambda: validate_walltime_against_history(
@@ -160,7 +170,7 @@ def validate_campaign(
                 spec=ValidateWalltimeAgainstHistorySpec(
                     profile=spec.profile,
                     cluster=spec.cluster,
-                    requested_walltime_sec=spec.requested_walltime_sec,
+                    requested_walltime_sec=requested_walltime_sec,
                     gpu_type=spec.gpu_type,
                     workload_tags=spec.workload_tags,
                 ),
@@ -171,13 +181,15 @@ def validate_campaign(
     # expected_cmd_sha are supplied. Catches the silent-dedup bug for
     # stochastic strategies that re-pick the same params.
     if spec.campaign_id and spec.expected_cmd_sha:
+        campaign_id = spec.campaign_id
+        expected_cmd_sha = spec.expected_cmd_sha
         _safe_run(
             "validate-stochastic-marker",
             lambda: validate_stochastic_marker(
                 experiment_dir,
                 spec=ValidateStochasticMarkerSpec(
-                    campaign_id=spec.campaign_id,
-                    expected_cmd_sha=spec.expected_cmd_sha,
+                    campaign_id=campaign_id,
+                    expected_cmd_sha=expected_cmd_sha,
                 ),
             ),
         )

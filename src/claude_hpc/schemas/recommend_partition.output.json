@@ -21,7 +21,9 @@
         "debug_short_walltime",
         "debug_overrun_refused",
         "default_long_walltime",
-        "no_debug_partition_available"
+        "no_debug_partition_available",
+        "no_partitions_declared",
+        "only_debug_available_walltime_too_long"
       ],
       "title": "Rationale",
       "type": "string"
