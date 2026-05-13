@@ -405,18 +405,37 @@ def _submit_resubmit_batches(
     """
     from claude_hpc.planning.constraints import ClusterConstraints
 
-    # Pass ``total_tasks`` verbatim instead of widening to
-    # ``max(total_tasks, max(failed_task_ids)+1)``. The widening was
-    # silently making resubmit_plan's upper-bound validation a no-op:
-    # a corrupted ``failed_task_ids=[999999]`` against a 100-task run
-    # would slip through and qsub a cluster job that dispatch.py only
-    # rejects at runtime. Let the validator catch the bad IDs before
-    # any cluster work.
+    # When the caller didn't pass constraints, load them from the
+    # sidecar's cluster's yaml entry. Symmetric with submit_flow, which
+    # always threads cluster-specific constraints; without this fallback
+    # the planner used stdlib defaults (max_array_size=1000) and
+    # over-packed batches on clusters with stricter limits, tripping the
+    # scheduler's batch-size guard at qsub time. We re-read the sidecar
+    # here (already loaded once upstream) to keep the helper's signature
+    # narrow — the IO cost is a single JSON read.
+    effective_constraints: ClusterConstraints | None = (
+        constraints if isinstance(constraints, ClusterConstraints) else None
+    )
+    if effective_constraints is None:
+        try:
+            from claude_hpc.infra.clusters import load_clusters_config, load_constraints
+            from claude_hpc.state.runs import read_run_sidecar
+
+            sidecar = read_run_sidecar(experiment_dir, run_id)
+            cluster_name = sidecar.get("cluster") if isinstance(sidecar, dict) else None
+            if cluster_name:
+                clusters = load_clusters_config()
+                cluster_cfg = clusters.get(cluster_name) if isinstance(clusters, dict) else None
+                if isinstance(cluster_cfg, dict):
+                    effective_constraints = load_constraints(cluster_cfg)
+        except Exception:  # noqa: BLE001 — fall back to defaults on any failure
+            effective_constraints = None
+
     plan = resubmit_plan(
         task_count=total_tasks,
         failed_task_ids=failed_task_ids,
         overrides=effective_overrides,
-        constraints=constraints if isinstance(constraints, ClusterConstraints) else None,
+        constraints=effective_constraints,
     )
 
     extra_flags = render_overrides_to_extra_flags(scheduler, effective_overrides)

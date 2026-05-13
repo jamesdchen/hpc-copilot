@@ -28,7 +28,6 @@ import hashlib
 import json
 import logging
 import os
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -188,35 +187,16 @@ def _locked(target: Path) -> Iterator[None]:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Write *payload* to *path* atomically (tmp + os.replace).
+    """Deprecated forwarder for :func:`claude_hpc._internal.io.atomic_write_json`.
 
-    After ``os.replace`` we also fsync the parent directory so the
-    rename is durable across a kernel panic / power loss — the inode
-    is already synced via fsync(fd), but the directory entry only
-    becomes durable after the dir's own fsync.
+    Kept so callers that import this module-level name don't break;
+    new code should import ``atomic_write_json`` from
+    ``claude_hpc._internal.io`` directly. This forwarder will be
+    removed in a future release.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(payload, fh, indent=2, sort_keys=True)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        try:
-            dir_fd = os.open(str(path.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            # Some filesystems (e.g. NFS) don't support directory fsync;
-            # best-effort.
-            pass
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
-        raise
+    from claude_hpc._internal.io import atomic_write_json
+
+    atomic_write_json(path, payload)
 
 
 def _read_json(path: Path) -> dict | None:
