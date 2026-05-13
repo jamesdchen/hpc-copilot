@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent validate-stochastic-marker --spec <path>
+  cli: (none — Python-only primitive)
   python: claude_hpc.atoms.validate_stochastic_marker.validate_stochastic_marker
 ---
 # validate-stochastic-marker

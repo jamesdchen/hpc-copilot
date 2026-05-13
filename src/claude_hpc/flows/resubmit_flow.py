@@ -51,7 +51,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from claude_hpc import errors, runner
-from claude_hpc._internal.lifecycle import FailureCategory
+from claude_hpc._internal.lifecycle import FailureCategory  # noqa: F401 — re-export
+from claude_hpc._schema_models._shared import FailureCategoryResubmittable
 from claude_hpc.planning.resubmit_batching import resubmit_plan
 from claude_hpc.planning.resubmit_planner import (
     PlannedResubmitOverrides,
@@ -73,7 +74,15 @@ __all__ = [
 ]
 
 
-_VALID_CATEGORIES = frozenset({fc.value for fc in FailureCategory})
+# Tighter than the full ``FailureCategory`` StrEnum — only categories the
+# scheduler can resubmit get past this gate. Otherwise the up-front
+# validation accepts a classifier-emitted code (e.g. ``import_error``)
+# that ``ResubmitSpec`` (which is keyed on the narrower
+# :class:`FailureCategoryResubmittable` Literal) rejects later, AFTER
+# the cluster qsub already fired — orphaning the new jobs (v3 BUG-4V3-1).
+from typing import get_args as _typing_get_args
+
+_VALID_CATEGORIES = frozenset(_typing_get_args(FailureCategoryResubmittable))
 
 
 @dataclass(frozen=True)

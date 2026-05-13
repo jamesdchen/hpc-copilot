@@ -113,8 +113,12 @@ def _find_paired_assistant_for_invocation(
     The naive "last user + last assistant" approach silently picks the
     wrong pair when the most recent user message isn't the
     ``/monitor-hpc`` turn. Walk the transcript in order, remembering the
-    most recent matching user index, then return the FIRST assistant
-    message that follows it. If no match, return ("", "").
+    most recent matching user index, then return the LAST assistant
+    message produced *before the next user message* — i.e. the agent's
+    final response in the same turn. Returning the FIRST assistant
+    message instead misses arming text that the agent typically appends
+    after its tool-use round-trip (v3 BUG-6V3-4). If no match, return
+    ("", "").
     """
     last_match_idx = -1
     last_match_text = ""
@@ -127,10 +131,14 @@ def _find_paired_assistant_for_invocation(
             last_match_text = text
     if last_match_idx < 0:
         return "", ""
+    last_assistant_text = ""
     for entry in transcript[last_match_idx + 1 :]:
-        if entry.get("role") == "assistant":
-            return last_match_text, _content_text(entry.get("content"))
-    return last_match_text, ""
+        role = entry.get("role")
+        if role == "user":
+            break
+        if role == "assistant":
+            last_assistant_text = _content_text(entry.get("content"))
+    return last_match_text, last_assistant_text
 
 
 def settings_entry(

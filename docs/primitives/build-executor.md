@@ -20,7 +20,13 @@ side_effects:
 - writes-file: <output_dir>/<name>.py (refuses to overwrite without --force)
 idempotent: false
 idempotency_key: none
-error_codes: []
+error_codes:
+- code: spec_invalid
+  category: user
+  retry_safe: false
+- code: config_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain]
     [--force]

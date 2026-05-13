@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent recommend-wait-alternative --spec <path>
+  cli: (none — Python-only primitive)
   python: claude_hpc.atoms.recommend_wait_alternative.recommend_wait_alternative
 ---
 # recommend-wait-alternative

@@ -12,6 +12,9 @@ error_codes:
 - code: cluster_unknown
   category: user
   retry_safe: false
+- code: config_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent clusters describe <name>
   python: claude_hpc.atoms.clusters.describe_cluster

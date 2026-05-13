@@ -206,7 +206,11 @@ def cluster_failures_by_fingerprint(
         # (128 + SIGTERM=15) is what the scheduler reports when the
         # dispatcher was killed directly before it could re-emit 130 —
         # so both indicate preemption.
-        if entry.get("exit_code") in (130, 143) and category in ("unknown", "walltime"):
+        preempted_override = entry.get("exit_code") in (130, 143) and category in (
+            "unknown",
+            "walltime",
+        )
+        if preempted_override:
             category = "preempted"
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather
@@ -215,6 +219,17 @@ def cluster_failures_by_fingerprint(
         from claude_hpc.runner.failure_signatures import classify
 
         sig = classify(content, entry.get("exit_code"))
+        # The category fallback above also needs to override sig — otherwise
+        # the cluster carries ``category=preempted`` but
+        # ``suggested_fix=increase-walltime`` (or ``unknown``) from the catalog,
+        # which would auto-bump h_rt on every preempted job and burn the budget
+        # (v3 BUG-6V3-3).
+        if preempted_override:
+            sig = {
+                "error_class": "preempted",
+                "suggested_fix": {"action": "resubmit-preempted"},
+                "matched_pattern": "exit_code_fallback",
+            }
         key = (category, fp)
         bucket = by_fp.setdefault(
             key,

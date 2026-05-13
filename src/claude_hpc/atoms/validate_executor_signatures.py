@@ -143,17 +143,34 @@ def validate_executor_signatures(
                 validator=_VALIDATOR,
                 severity="error",
                 code="tasks_py_contract_error",
-                message=str(exc),
+                message=f"tasks.total() raised: {type(exc).__name__}: {exc}",
                 suggested_fix=(
                     "tasks.total() must return an int. Inspect the module for "
                     "import-time failures or a broken total() implementation."
                 ),
-                evidence={"module": spec.tasks_module},
+                evidence={"tasks_py_path": spec.tasks_py_path},
             )
         )
         return ValidateExecutorSignaturesResult(findings=findings)
     for i in range(min(n, spec.sample_n_tasks)):
-        kwargs = tasks_module.resolve(i)
+        try:
+            kwargs = tasks_module.resolve(i)
+        except Exception as exc:  # noqa: BLE001 — validator boundary
+            findings.append(
+                ValidatorFinding(
+                    validator=_VALIDATOR,
+                    severity="error",
+                    code="tasks_py_contract_error",
+                    message=f"tasks.resolve({i}) raised: {type(exc).__name__}: {exc}",
+                    suggested_fix=(
+                        "tasks.resolve(i) must return a dict for every i in "
+                        "range(tasks.total()). Inspect the module for an "
+                        "off-by-one or a broken resolve() branch."
+                    ),
+                    evidence={"tasks_py_path": spec.tasks_py_path, "task_id": i},
+                )
+            )
+            return ValidateExecutorSignaturesResult(findings=findings)
         if not isinstance(kwargs, dict):
             findings.append(
                 ValidatorFinding(
