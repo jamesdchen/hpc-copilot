@@ -57,10 +57,17 @@ def load_recent_snapshots(
 
     Permissive — unparseable snapshot filenames are skipped, garbled
     contents yield empty queues. Caller iterates; never raises.
+
+    *now* is normalized to UTC-aware if naive — snapshot timestamps are
+    always tz-aware (UTC), so a naive *now* would otherwise raise
+    ``TypeError: can't compare offset-naive and offset-aware datetimes``
+    inside the cutoff comparison. v3 BUG-5V3-3.
     """
     snap_dir = experiment_dir / ".hpc" / "squeue_snapshots"
     if not snap_dir.is_dir():
         return
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     cutoff = now - timedelta(hours=window_hours)
     triples: list[tuple[datetime, Path]] = []
     for path in snap_dir.iterdir():

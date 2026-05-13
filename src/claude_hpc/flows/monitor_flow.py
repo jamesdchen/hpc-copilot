@@ -498,6 +498,13 @@ def monitor_flow(
                 if ok:
                     actions.append({"kind": "combine_wave", "wave": wave, "attempt": attempt})
                     state.last_combined_waves = sorted({*state.last_combined_waves, wave})
+                    # A wave that previously failed and now succeeds on retry
+                    # must drop off ``failed_waves`` — otherwise the returned
+                    # MonitorFlowResult reports the wave in BOTH lists and a
+                    # downstream consumer keying off the failure ledger
+                    # (escalation surfaces, campaign-loop auto-resubmit) acts
+                    # on a stale failure (v3 BUG-4V3-2).
+                    state.last_failed_waves = sorted(set(state.last_failed_waves) - {wave})
                     diff["newly_combined_waves"].append(wave)
                 else:
                     actions.append(

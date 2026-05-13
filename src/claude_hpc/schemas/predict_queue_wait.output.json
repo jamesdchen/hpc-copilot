@@ -12,10 +12,7 @@
     "n_total_samples",
     "bucket_hour_of_week",
     "fallback_reason",
-    "features_adjustment_factor",
-    "p10_wait_sec",
-    "p90_wait_sec",
-    "n_replications"
+    "features_adjustment_factor"
   ],
   "additionalProperties": false,
   "properties": {
@@ -90,36 +87,42 @@
     "p10_wait_sec": {
       "anyOf": [
         {
+          "minimum": 0,
           "type": "integer"
         },
         {
           "type": "null"
         }
       ],
+      "default": null,
       "description": "DES p10 quantile in seconds. null on the diurnal_ma path.",
       "title": "P10 Wait Sec"
     },
     "p90_wait_sec": {
       "anyOf": [
         {
+          "minimum": 0,
           "type": "integer"
         },
         {
           "type": "null"
         }
       ],
+      "default": null,
       "description": "DES p90 quantile in seconds. null on the diurnal_ma path.",
       "title": "P90 Wait Sec"
     },
     "n_replications": {
       "anyOf": [
         {
+          "minimum": 1,
           "type": "integer"
         },
         {
           "type": "null"
         }
       ],
+      "default": null,
       "description": "Number of DES passes executed. null on the diurnal_ma path.",
       "title": "N Replications"
     }
