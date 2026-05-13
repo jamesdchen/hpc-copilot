@@ -55,8 +55,8 @@ class _ForecastEntry(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    wait_hours: float
-    forecast_priority: int
+    wait_hours: float = Field(ge=0)
+    forecast_priority: int = Field(ge=0)
 
 
 class RecommendWaitAlternativeResult(BaseModel):

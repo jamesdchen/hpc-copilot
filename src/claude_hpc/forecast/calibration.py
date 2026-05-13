@@ -136,10 +136,21 @@ def compute_walltime_drift(
     # High-utilization successful jobs (u >= cliff_ratio, ec == 0) are
     # still near-misses — they barely finished — so the cliff check
     # only excludes failures.
-    near = sum(1 for u, ec in eligible if u >= near_miss_ratio and ec == 0)
+    # Near-miss = survived but ran close to walltime. Bound the upper
+    # end at 1.0 so a clock-skewed sample with u=1.05 + ec=0 doesn't
+    # count as "barely survived" — that's overtime-with-survival, a
+    # different category. The original cap was unbounded; this lower
+    # bound to ``< 1.0`` is the cleanest interpretation of "near miss".
+    near = sum(1 for u, ec in eligible if near_miss_ratio <= u < 1.0 and ec == 0)
     weighted = (cliff + 0.5 * near) / n_recent
     utils = sorted(u for u, _ in eligible)
-    median = utils[len(utils) // 2]
+    # statistics.median averages the two middle values for even n;
+    # ``sorted[n // 2]`` picks the upper of the two, biasing the
+    # median high (notably blocks the "tighten if median < 0.5" rule
+    # for an even-n eligible set with one outlier above 0.5).
+    import statistics as _stat
+
+    median = _stat.median(utils)
     return WalltimeDrift(
         n_recent=n_recent,
         n_cliff_events=cliff,

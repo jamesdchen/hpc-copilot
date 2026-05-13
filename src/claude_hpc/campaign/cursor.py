@@ -74,7 +74,21 @@ def read_cursor(experiment_dir: Path | str, campaign_id: str) -> dict[str, Any] 
     if not isinstance(data, dict):
         return None
     on_disk_version = data.get("cursor_schema_version")
-    if isinstance(on_disk_version, int) and on_disk_version > CURSOR_SCHEMA_VERSION:
+    if on_disk_version is None:
+        # Missing version key — likely a pre-v1 cursor from before the
+        # version field was introduced. Treat as v1 explicitly so a
+        # future v2 reader can detect "no version OR version < 2" and
+        # apply v1 → v2 backfills.
+        on_disk_version = 1
+        data["cursor_schema_version"] = 1
+    elif not isinstance(on_disk_version, int):
+        # Non-int value (string, null after JSON manual edit, etc.) is
+        # corruption; refuse rather than silently mis-typing downstream.
+        raise ValueError(
+            f"cursor at {path} declares non-integer cursor_schema_version="
+            f"{on_disk_version!r}; wipe the cursor or fix the file"
+        )
+    if on_disk_version > CURSOR_SCHEMA_VERSION:
         raise ValueError(
             f"cursor at {path} declares cursor_schema_version={on_disk_version}, "
             f"newer than this framework's CURSOR_SCHEMA_VERSION={CURSOR_SCHEMA_VERSION}; "

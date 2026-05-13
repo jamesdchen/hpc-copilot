@@ -26,6 +26,7 @@ class StatusResult(BaseModel):
     )
     last_status_age_seconds: int | None = Field(
         default=None,
+        ge=0,
         description="Age of last_status.checked_at in seconds; null when unavailable. Callers may treat any value above their threshold as stale.",
     )
     combined_waves: CombinedWaves

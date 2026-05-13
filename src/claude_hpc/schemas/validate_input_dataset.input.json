@@ -5,8 +5,7 @@
   "type": "object",
   "required": [
     "dataset_path",
-    "loader",
-    "row_indices"
+    "loader"
   ],
   "additionalProperties": false,
   "properties": {
@@ -28,7 +27,6 @@
       "items": {
         "type": "integer"
       },
-      "minItems": 1,
       "title": "Row Indices",
       "type": "array"
     },

@@ -103,6 +103,36 @@ def _last_message_of_role(transcript: list[dict[str, Any]], role: str) -> str:
     return ""
 
 
+def _find_paired_assistant_for_invocation(
+    transcript: list[dict[str, Any]],
+    user_pattern: re.Pattern[str],
+) -> tuple[str, str]:
+    """Find the (user_text, assistant_text) pair around the most recent
+    user message matching *user_pattern*.
+
+    The naive "last user + last assistant" approach silently picks the
+    wrong pair when the most recent user message isn't the
+    ``/monitor-hpc`` turn. Walk the transcript in order, remembering the
+    most recent matching user index, then return the FIRST assistant
+    message that follows it. If no match, return ("", "").
+    """
+    last_match_idx = -1
+    last_match_text = ""
+    for i, entry in enumerate(transcript):
+        if entry.get("role") != "user":
+            continue
+        text = _content_text(entry.get("content"))
+        if user_pattern.search(text):
+            last_match_idx = i
+            last_match_text = text
+    if last_match_idx < 0:
+        return "", ""
+    for entry in transcript[last_match_idx + 1 :]:
+        if entry.get("role") == "assistant":
+            return last_match_text, _content_text(entry.get("content"))
+    return last_match_text, ""
+
+
 def settings_entry(
     *, command: str = "python -m claude_hpc.hooks.monitor_armed_check"
 ) -> dict[str, Any]:
@@ -132,9 +162,17 @@ def main() -> int:
     if isinstance(transcript_path, str) and transcript_path:
         transcript = _read_jsonl(Path(transcript_path))
 
-    user_text = _last_message_of_role(transcript, "user")
-    if not USER_INVOCATION_RE.search(user_text):
-        # Not a /monitor-hpc turn — nothing to enforce.
+    # Find the (user, assistant) pair around the most recent
+    # ``/monitor-hpc`` invocation rather than the most recent user +
+    # most recent assistant independently. Without this pairing a
+    # session whose latest user message is an unrelated follow-up
+    # would either skip enforcement (false negative) or block a turn
+    # that isn't responding to /monitor-hpc (false positive).
+    user_text, paired_assistant_text = _find_paired_assistant_for_invocation(
+        transcript, USER_INVOCATION_RE
+    )
+    if not user_text:
+        # No /monitor-hpc invocation anywhere in the transcript.
         return 0
 
     inline_output = payload.get("output")
@@ -142,7 +180,7 @@ def main() -> int:
     if isinstance(inline_output, str) and inline_output.strip():
         assistant_text = inline_output
     if not assistant_text:
-        assistant_text = _last_message_of_role(transcript, "assistant")
+        assistant_text = paired_assistant_text
 
     if ARMED_RE.search(assistant_text):
         return 0  # contract met

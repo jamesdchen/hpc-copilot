@@ -380,8 +380,13 @@ def _hoq_reservation(
         f = virt[node]
         f["cpus_free"] += job.cpus
         f["mem_mb_free"] += job.mem_mb
-        if job.gpus > 0 and job.gpu_type:
-            f["gpus_free"][job.gpu_type] = f["gpus_free"].get(job.gpu_type, 0) + job.gpus
+        if job.gpus > 0:
+            # Release GPUs even when ``gpu_type == ""`` (untyped GRES on
+            # the snapshot). Without this the GPU pool is permanently
+            # occupied for any running job with untyped GPUs, making
+            # ``hoq_resv = inf`` and disabling the shadow-fit check.
+            bucket = job.gpu_type or ""
+            f["gpus_free"][bucket] = f["gpus_free"].get(bucket, 0) + job.gpus
         if _try_place(hoq, virt) is not None:
             return (max(end_t, now), hoq)
     return (float("inf"), hoq)
@@ -580,7 +585,13 @@ def simulate_one_pass(
             if ev_job is None:
                 continue
             ev_job.state = "queued"
-            if ev_job is not candidate and ev_job.walltime_actual is None:
+            # Sample walltime_actual for the candidate too. The
+            # previous form excluded it, so the candidate's backfill-fit
+            # check used the FULL walltime_ask while every other job's
+            # check used a 60-100% shorter actual — the candidate was
+            # held to a strictly tighter shadow-fit criterion than the
+            # population it competed with, biasing predicted-wait HIGH.
+            if ev_job.walltime_actual is None:
                 ev_job.walltime_actual = max(1.0, ev_job.walltime_ask * rng.uniform(lo, hi))
             queued.append(ev_job)
             _policy_loop(time)

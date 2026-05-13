@@ -35,9 +35,7 @@ from claude_hpc._schema_models.workflows.submit_flow import SubmitFlowSpec
 from claude_hpc.infra.backends.sge_remote import RemoteSGEBackend
 from claude_hpc.infra.backends.slurm_remote import RemoteSlurmBackend
 from claude_hpc.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
-from claude_hpc.planning.planner import plan_submit
 from claude_hpc.runner import submit_and_record
-from claude_hpc.state.discover import discover_executors
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -238,7 +236,12 @@ def _make_single_array_submission(
 @primitive(
     name="submit-flow",
     verb="workflow",
-    composes=[submit_and_record, discover_executors, plan_submit],
+    # ``submit_and_record`` is the only atom this workflow actually invokes
+    # at runtime. ``discover_executors`` and ``plan_submit`` are imported
+    # for type hints / pre-submit advisory paths but not in the composition
+    # itself; advertising them here previously made operations.json over-
+    # promise the workflow's dependency graph.
+    composes=[submit_and_record],
     side_effects=[
         SideEffect("rsync", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster>"),
@@ -424,7 +427,12 @@ def _submit_one_spec(
 @primitive(
     name="submit-flow-batch",
     verb="workflow",
-    composes=[submit_and_record, discover_executors, plan_submit],
+    # ``submit_and_record`` is the only atom this workflow actually invokes
+    # at runtime. ``discover_executors`` and ``plan_submit`` are imported
+    # for type hints / pre-submit advisory paths but not in the composition
+    # itself; advertising them here previously made operations.json over-
+    # promise the workflow's dependency graph.
+    composes=[submit_and_record],
     side_effects=[
         SideEffect("rsync", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster> (one qsub per spec)"),
@@ -565,7 +573,23 @@ def _submit_flow_batch_locked(
     )
 
     # Per-spec submission work.
+    #
+    # If spec ``i`` raises mid-loop, specs ``0..i-1`` are already on the
+    # cluster (qsubbed AND journal-recorded by submit_and_record); we
+    # can't recall them. Attach the partial result list to the
+    # exception so the caller can recover state (which run_ids landed,
+    # which to retry) instead of getting a bare raise with no
+    # accounting.
     for i in fresh_indices:
-        results[i] = _submit_one_spec(experiment_dir=experiment_dir, spec=specs[i])
+        try:
+            results[i] = _submit_one_spec(experiment_dir=experiment_dir, spec=specs[i])
+        except Exception as exc:
+            # Mutate the exception to carry the partial results. The
+            # caller can branch on ``hasattr(exc, "partial_submit_results")``
+            # to recover the (succeeded, failed_index) split.
+            partial = [r for r in results if r is not None]
+            exc.partial_submit_results = partial  # type: ignore[attr-defined]
+            exc.failed_spec_index = i  # type: ignore[attr-defined]
+            raise
     # mypy: every slot is now non-None.
     return [r for r in results if r is not None]

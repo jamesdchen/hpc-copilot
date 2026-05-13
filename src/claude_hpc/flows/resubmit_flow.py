@@ -405,8 +405,15 @@ def _submit_resubmit_batches(
     """
     from claude_hpc.planning.constraints import ClusterConstraints
 
+    # Pass ``total_tasks`` verbatim instead of widening to
+    # ``max(total_tasks, max(failed_task_ids)+1)``. The widening was
+    # silently making resubmit_plan's upper-bound validation a no-op:
+    # a corrupted ``failed_task_ids=[999999]`` against a 100-task run
+    # would slip through and qsub a cluster job that dispatch.py only
+    # rejects at runtime. Let the validator catch the bad IDs before
+    # any cluster work.
     plan = resubmit_plan(
-        task_count=max(total_tasks, max(failed_task_ids) + 1),
+        task_count=total_tasks,
         failed_task_ids=failed_task_ids,
         overrides=effective_overrides,
         constraints=constraints if isinstance(constraints, ClusterConstraints) else None,
