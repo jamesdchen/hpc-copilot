@@ -57,9 +57,9 @@ def validate_stochastic_marker(
     ``cmd_sha`` differs even when the strategy re-picks the same
     params.
     """
-    from claude_hpc.state.runs import find_existing_runs, read_run_sidecar
-
     import json
+
+    from claude_hpc.state.runs import find_existing_runs, read_run_sidecar
 
     matched_prior_run_ids: list[str] = []
     for sidecar_path in find_existing_runs(experiment_dir):

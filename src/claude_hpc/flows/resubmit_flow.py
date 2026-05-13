@@ -548,8 +548,7 @@ def _safe_read_sidecar(experiment_dir: Path, run_id: str) -> dict | None:
         import logging
 
         logging.getLogger(__name__).warning(
-            "sidecar for run_id=%s is corrupted; refusing to silently bypass "
-            "downstream gates",
+            "sidecar for run_id=%s is corrupted; refusing to silently bypass downstream gates",
             run_id,
         )
         raise
