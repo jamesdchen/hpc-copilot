@@ -136,12 +136,15 @@ def compute_walltime_drift(
     # High-utilization successful jobs (u >= cliff_ratio, ec == 0) are
     # still near-misses — they barely finished — so the cliff check
     # only excludes failures.
-    # Near-miss = survived but ran close to walltime. Bound the upper
-    # end at 1.0 so a clock-skewed sample with u=1.05 + ec=0 doesn't
-    # count as "barely survived" — that's overtime-with-survival, a
-    # different category. The original cap was unbounded; this lower
-    # bound to ``< 1.0`` is the cleanest interpretation of "near miss".
-    near = sum(1 for u, ec in eligible if near_miss_ratio <= u < 1.0 and ec == 0)
+    # Near-miss = survived but ran close to walltime. The upper bound
+    # was previously ``< 1.0`` to drop "overtime-with-survival" as a
+    # clock-skew artifact, but that biased the signal LOW on clusters
+    # with measurable NTP drift / sacct latency: a job that genuinely
+    # ran to u=1.02 with ec=0 IS the strongest possible near-miss
+    # signal (the walltime ask was provably too tight) and silently
+    # dropping it lets the safety_mult recommender stay tight in the
+    # exact regime it should loosen (v3 BUG-5V3-4).
+    near = sum(1 for u, ec in eligible if near_miss_ratio <= u and ec == 0)
     weighted = (cliff + 0.5 * near) / n_recent
     utils = sorted(u for u, _ in eligible)
     # statistics.median averages the two middle values for even n;
