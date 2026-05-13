@@ -527,11 +527,33 @@ def _submit_one_batch(
 
 
 def _safe_read_sidecar(experiment_dir: Path, run_id: str) -> dict | None:
+    """Return the sidecar dict, or ``None`` when the file is absent.
+
+    Distinguishes ``FileNotFoundError`` (a missing sidecar is a benign
+    pre-condition for callers that gate optional behaviour on it) from
+    ``JSONDecodeError`` (corruption is a real failure that must NOT
+    silently disable downstream gates — e.g. the preempt-throttle
+    check would otherwise fire resubmits into the same storm that
+    just corrupted the sidecar — v3 BUG-4V3-4). On corruption we log a
+    warning and re-raise so the caller can decide whether to fail
+    loud or bypass via an explicit flag.
+    """
     import json
 
     try:
         return read_run_sidecar(experiment_dir, run_id)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "sidecar for run_id=%s is corrupted; refusing to silently bypass "
+            "downstream gates",
+            run_id,
+        )
+        raise
+    except OSError:
         return None
 
 

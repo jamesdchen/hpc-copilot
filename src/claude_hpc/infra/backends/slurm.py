@@ -175,6 +175,19 @@ class SlurmBackend(HPCBackend):
             f"{self.log_dir}/%x_%A_%a.err",
         ]
         if job_env:
+            # SLURM's --export uses comma to separate K=V pairs, so a value
+            # containing a comma silently splits into extra malformed pairs
+            # on the scheduler side — e.g. ``MODULES="python/3.11,gcc/11"``
+            # corrupts the cluster-side env. Reject up front rather than
+            # silently truncate (matches v2's SGE-side guard in
+            # ``infra.backends.sge`` — v3 BUG-6V3-2).
+            bad = [k for k, v in job_env.items() if "," in str(v)]
+            if bad:
+                raise ValueError(
+                    "SLURM --export cannot transport env values containing "
+                    f"','; offending keys: {sorted(bad)}. Pre-encode "
+                    "(base64, space-delimited list, etc.) before submission."
+                )
             export_str = ",".join(f"{k}={v}" for k, v in job_env.items())
             cmd += ["--export", f"ALL,{export_str}"]
         if extra_flags:

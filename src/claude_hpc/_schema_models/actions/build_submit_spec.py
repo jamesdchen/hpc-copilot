@@ -28,7 +28,12 @@ class BuildSubmitSpecInput(BaseModel):
     ssh_target: SshTarget
     remote_path: str = Field(min_length=1)
     run_id: RunIdStrict
-    cmd_sha: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    # Lowercase-hex only (sha256.hexdigest produces lowercase). Width
+    # 8-64 to match the canonical shape used by recall / interview /
+    # validate_stochastic_marker — letting a recall lookup's 8-char
+    # prefix thread through to build-submit-spec without hitting a wire
+    # validation error (v3 BUG-3V3-3, unify cmd_sha regex across models).
+    cmd_sha: str = Field(pattern=r"^[0-9a-f]{8,64}$")
     total_tasks: int = Field(ge=1)
     backend: BackendName
     is_gpu: bool | None = None

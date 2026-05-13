@@ -74,7 +74,13 @@
           "type": "string"
         },
         "type": {
-          "description": "Type token: int|float|str|bool, or any string the generated `flag(...)` call accepts as the type ctor.",
+          "description": "One of int|float|str|bool — the four ctors the scaffold knows how to emit.",
+          "enum": [
+            "int",
+            "float",
+            "str",
+            "bool"
+          ],
           "title": "Type",
           "type": "string"
         },
