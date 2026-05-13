@@ -114,6 +114,15 @@ def compute_arrival_rate_per_hour(
                 and j.job_id not in pre_existing_pending_ids
             ):
                 seen_arrivals.add(j.job_id)
+    # Denominator is ``t_last - t_baseline`` because the counting
+    # window is half-open ``(t_baseline, t_last]``: arrivals that
+    # occurred between the baseline and the first follow-up snapshot
+    # show up at ``chronological[1]`` as PENDING-not-in-baseline, so
+    # the baseline IS the lower bound on observable arrival time —
+    # not chronological[1]. Using ``[-1] - [1]`` (which an earlier
+    # audit pass proposed) would bias the rate HIGH by dropping the
+    # ``(t0, t1]`` interval from the denominator while keeping the
+    # arrivals it observed in the numerator.
     actual_window_hours = (chronological[-1][0] - chronological[0][0]).total_seconds() / 3600
     if actual_window_hours <= 0:
         return None

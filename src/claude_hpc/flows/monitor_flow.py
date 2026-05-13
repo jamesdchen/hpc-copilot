@@ -93,6 +93,13 @@ class MonitorFlowResult:
         }
 
 
+#: Sentinel value used in ``_LoopState.combiner_attempts`` to mark a
+#: wave as permanently given-up after ``combiner_max_retries`` failures.
+#: Any value much larger than ``combiner_max_retries`` works; ``10**9``
+#: is large enough to be unreachable in practice without ambiguity.
+_COMBINER_GIVE_UP_SENTINEL: int = 10**9
+
+
 @dataclass
 class _LoopState:
     """Mutable per-call state accumulated across ticks."""
@@ -476,7 +483,7 @@ def monitor_flow(
                 # (sentinel = 10**9). Without this, every tick would
                 # re-call runner.combine_wave on a permanently failed
                 # wave, wasting SSH round-trips indefinitely.
-                if state.combiner_attempts.get(wave, 0) >= 10**9:
+                if state.combiner_attempts.get(wave, 0) >= _COMBINER_GIVE_UP_SENTINEL:
                     continue
                 attempt = state.combiner_attempts.get(wave, 0) + 1
                 state.combiner_attempts[wave] = attempt
@@ -506,7 +513,7 @@ def monitor_flow(
                         # Escalate: stop combining this wave but keep
                         # watching the rest of the run. The caller's
                         # envelope will surface failed_waves.
-                        state.combiner_attempts[wave] = 10**9  # never retry again
+                        state.combiner_attempts[wave] = _COMBINER_GIVE_UP_SENTINEL
 
         # Terminal check.
         terminal, esc_reason = _is_terminal(

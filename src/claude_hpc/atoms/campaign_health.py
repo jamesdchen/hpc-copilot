@@ -61,10 +61,13 @@ def _gpu_utilization(samples: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
         elapsed = s.get("elapsed_sec")
         if isinstance(elapsed, (int, float)) and elapsed > 0:
             by_gpu.setdefault(gpu, []).append(int(elapsed))
+    import statistics as _stat
+
     out: dict[str, dict[str, Any]] = {}
     for gpu, xs in by_gpu.items():
-        xs_sorted = sorted(xs)
-        p50 = xs_sorted[len(xs_sorted) // 2]
+        # ``statistics.median`` averages the two middle values for even
+        # n; the prior ``sorted[n//2]`` form biased the p50 high.
+        p50 = _stat.median(xs)
         out[gpu] = {"n_runs": len(xs), "p50_elapsed_sec": int(p50)}
     return out
 
@@ -73,7 +76,10 @@ def _failure_breakdown(samples: list[dict[str, Any]]) -> dict[str, int]:
     """Count failures by ``failure_category`` (unset → ``unknown``)."""
     counts: dict[str, int] = {}
     for s in samples:
-        if int(s.get("exit_code", 0)) == 0:
+        # ``s.get("exit_code", 0)`` returns ``None`` when the key is
+        # present-but-null (half-recorded sample); ``int(None)`` then
+        # crashes the whole rollup. Coerce ``None``/missing to 0.
+        if int(s.get("exit_code") or 0) == 0:
             continue
         cat = str(s.get("failure_category") or "unknown")
         counts[cat] = counts.get(cat, 0) + 1

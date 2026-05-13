@@ -22,7 +22,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: pyproject.toml
+          # Include uv.lock so a transitive-dep bump invalidates the
+          # cache; pyproject.toml alone misses lockfile-only changes.
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
       - name: Install package with dev extras
         run: pip install -e '.[dev]'
       - name: Ruff lint
@@ -50,4 +54,7 @@ jobs:
         run: pytest -q -m slow
       - name: Coverage report (informational, not gated)
         if: matrix.python-version == '3.12'
-        run: pytest -q -m '' --cov=src/claude_hpc --cov-report=term-missing
+        # Pass ``-m 'not slow'`` so we don't re-run the slow tier here
+        # (it already ran above). Coverage only needs ONE pass through
+        # the test set to measure executed-line coverage.
+        run: pytest -q -m 'not slow' --cov=src/claude_hpc --cov-report=term-missing

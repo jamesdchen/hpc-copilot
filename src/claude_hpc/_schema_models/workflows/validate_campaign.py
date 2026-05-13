@@ -130,10 +130,16 @@ class ValidateCampaignSpec(BaseModel):
     )
     expected_cmd_sha: str | None = Field(
         default=None,
+        # Match the inner ``ValidateStochasticMarkerSpec.expected_cmd_sha``
+        # min_length=8; the workflow used to accept any non-empty string
+        # and then crash inside the inner construction with a Pydantic
+        # ValidationError rather than a structured spec_invalid envelope.
+        min_length=8,
         description=(
             "The cmd_sha the about-to-submit run will have. Required "
             "alongside ``campaign_id`` to enable the stochastic-marker "
-            "check; ignored otherwise."
+            "check; ignored otherwise. Minimum 8 hex chars (matches the "
+            "inner stochastic-marker validator's constraint)."
         ),
     )
 

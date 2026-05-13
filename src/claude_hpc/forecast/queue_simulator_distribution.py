@@ -59,9 +59,15 @@ def simulate_distribution(
     last_state: dict[str, Any] = {}
     rng = random.Random(seed)
     for _i in range(n_replications):
-        sub_seed = rng.randint(0, 2**31 - 1)
-        arr = arrival_sampler(sub_seed) if arrival_sampler is not None else None
-        res = residual_sampler(sub_seed) if residual_sampler is not None else None
+        # Independent sub-seeds for arrival vs residual samplers.
+        # Sharing one sub-seed seeded two distinct random.Random
+        # instances identically, making the first draws of each
+        # generator perfectly correlated — under-estimating joint
+        # variance and tightening the predicted p10/p90 band.
+        arr_seed = rng.randint(0, 2**31 - 1)
+        res_seed = rng.randint(0, 2**31 - 1)
+        arr = arrival_sampler(arr_seed) if arrival_sampler is not None else None
+        res = residual_sampler(res_seed) if residual_sampler is not None else None
         out = simulate_one_pass(
             snapshot,
             candidate=dataclasses.replace(candidate),
@@ -69,7 +75,12 @@ def simulate_distribution(
             arrival_stream=arr,
             residual_lifetimes=res,
             max_horizon_sec=max_horizon_sec,
-            seed=sub_seed,
+            # ``simulate_one_pass`` uses ``seed`` to drive the
+            # per-replication policy/exec rng (distinct from the
+            # sampler seeds). Use ``arr_seed`` here for back-compat:
+            # n_replications=1 with arr_seed==sub_seed == seed
+            # reproduces the old single-seed contract.
+            seed=arr_seed,
             walltime_actual_band=walltime_actual_band,
         )
         waits.append(out.predicted_start_offset_sec)

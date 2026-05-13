@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from claude_hpc._schema_models._shared import BackendName, RunIdStrict
+from claude_hpc._schema_models._shared import (
+    BackendName,
+    CampaignId,
+    RunIdStrict,
+    Runtime,
+    SshTarget,
+)
 
 
 class BuildSubmitSpecInput(BaseModel):
@@ -19,7 +25,7 @@ class BuildSubmitSpecInput(BaseModel):
 
     profile: str = Field(min_length=1)
     cluster: str = Field(min_length=1)
-    ssh_target: str = Field(min_length=1)
+    ssh_target: SshTarget
     remote_path: str = Field(min_length=1)
     run_id: RunIdStrict
     cmd_sha: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
@@ -31,8 +37,8 @@ class BuildSubmitSpecInput(BaseModel):
     modules: str | None = None
     conda_source: str | None = None
     conda_env: str | None = None
-    runtime: str | None = None
-    campaign_id: str | None = None
+    runtime: Runtime | None = None
+    campaign_id: CampaignId | None = None
     canary: bool | None = None
     partial_ok: bool | None = None
     skip_preflight: bool | None = None

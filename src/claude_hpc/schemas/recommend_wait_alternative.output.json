@@ -46,10 +46,12 @@
       "description": "Forecast for one wait-horizon.",
       "properties": {
         "wait_hours": {
+          "minimum": 0,
           "title": "Wait Hours",
           "type": "number"
         },
         "forecast_priority": {
+          "minimum": 0,
           "title": "Forecast Priority",
           "type": "integer"
         }

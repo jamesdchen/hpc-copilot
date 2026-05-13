@@ -133,10 +133,12 @@ def validate_campaign(
             ),
         )
 
-    # `dataset_row_indices=[]` is semantically distinct from absent
-    # (an empty list still requests the validator); only skip when the
-    # field is None/missing.
-    if spec.dataset_path and spec.dataset_loader and spec.dataset_row_indices is not None:
+    # Run the dataset validator whenever ``dataset_path + dataset_loader``
+    # are both supplied. ``dataset_row_indices`` is now optional all the
+    # way down: ``None`` and ``[]`` both mean "loader smoke-test only,
+    # no row-level checks". Previously the ``is not None`` gate silently
+    # skipped the validator when the user wanted a smoke-test.
+    if spec.dataset_path and spec.dataset_loader:
         _safe_run(
             "validate-input-dataset",
             lambda: validate_input_dataset(
@@ -144,7 +146,7 @@ def validate_campaign(
                 spec=ValidateInputDatasetSpec(
                     dataset_path=spec.dataset_path,
                     loader=spec.dataset_loader,
-                    row_indices=spec.dataset_row_indices,
+                    row_indices=spec.dataset_row_indices or [],
                     required_non_null_cols=spec.dataset_required_non_null_cols,
                 ),
             ),

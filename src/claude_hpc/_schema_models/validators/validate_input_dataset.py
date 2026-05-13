@@ -28,7 +28,13 @@ class ValidateInputDatasetSpec(BaseModel):
 
     dataset_path: str = Field(min_length=1)
     loader: Literal["parquet", "csv", "jsonl"]
-    row_indices: list[int] = Field(min_length=1)
+    # Empty list is a deliberate "loader smoke-test" request (open the
+    # file but skip row-level checks). The validate-campaign workflow's
+    # gate (``dataset_row_indices is not None``) treats it as an
+    # explicit "still run the validator" signal, distinct from "absent".
+    # Previously this constraint crashed the workflow on empty input
+    # with a Pydantic ValidationError instead of running the loader.
+    row_indices: list[int] = Field(default_factory=list)
     required_non_null_cols: list[str] = Field(default_factory=list)
 
 

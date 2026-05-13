@@ -156,7 +156,12 @@ def sample_arrival_stream(
     rng = random.Random(seed)
     arrivals: list[SimJob] = []
     counter = 0
-    for uname, profile in user_profiles.items():
+    # Sort by uname so the arrival stream is a function of (seed,
+    # profile content) rather than (seed, profile, dict insertion
+    # order). Without this, cross-cluster reproductions diverge
+    # because ``user_profiles.json`` is keyed by first-observed-user
+    # order which changes per experiment.
+    for uname, profile in sorted(user_profiles.items()):
         rate_per_day = float(_profile_get(profile, "median_submits_per_day", 0.0))
         if rate_per_day <= 0:
             continue

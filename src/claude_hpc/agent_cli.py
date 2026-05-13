@@ -371,12 +371,18 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at claude_hpc.atoms.preflight."""
+    """Argparse adapter — primitive lives at claude_hpc.atoms.preflight.
+
+    Always returns EXIT_OK on a successful primitive call; callers read
+    ``data.all_ok`` from the envelope to branch. The previous form
+    returned EXIT_CLUSTER_ERROR while still emitting ``ok:true``, which
+    contradicts the cli-spec contract (exit code 2 implies ``ok:false``).
+    """
     from claude_hpc.atoms.preflight import check_preflight
 
     data = check_preflight(cluster=getattr(args, "cluster", None))
     _ok(data, name="check-preflight")
-    return EXIT_OK if data["all_ok"] else EXIT_CLUSTER_ERROR
+    return EXIT_OK
 
 
 # ─── subcommand: predict-start-time ───────────────────────────────────────
@@ -428,7 +434,10 @@ def cmd_validate_campaign(args: argparse.Namespace) -> int:
     experiment_dir = Path(args.experiment_dir).resolve()
     report = validate_campaign(experiment_dir, spec=spec)
     _ok(report.model_dump(mode="json"), name="validate-campaign")
-    return EXIT_OK if report.overall != "fail" else EXIT_USER_ERROR
+    # Always EXIT_OK on a successful primitive call. Callers branch on
+    # ``data.overall`` (``pass``/``warn``/``fail``); exit codes are
+    # reserved for envelope-level failure (``ok:false``).
+    return EXIT_OK
 
 
 # ─── subcommand: interview ─────────────────────────────────────────────────
@@ -1634,6 +1643,12 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
         }
         if sidecar_path is not None:
             data["provenance_sidecar"] = sidecar_path
+        # NOTE: cmd_aggregate has its own envelope shape (run_id + wave +
+        # combined + provenance + tails) distinct from the ``combine-wave``
+        # primitive's output schema (which mandates output_dir for the
+        # cluster-side caller). The validate_output bypass is intentional
+        # here; a dedicated ``aggregate-cli`` schema would be the right
+        # forward fix, but is out of scope for this audit pass.
         _ok(data, idempotent=True)
         return EXIT_OK
     # Combiner returned non-zero — surface as a typed error so the

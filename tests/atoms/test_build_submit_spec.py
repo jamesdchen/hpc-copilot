@@ -120,7 +120,14 @@ def test_omitted_optional_fields_not_in_output() -> None:
 
 
 def test_invalid_ssh_target_raises_spec_invalid() -> None:
-    with pytest.raises(errors.SpecInvalid):
+    # ``BuildSubmitSpecInput.ssh_target`` is now typed ``SshTarget``
+    # (pattern-validated). A shell-injection-shaped value fails at the
+    # Pydantic boundary BEFORE reaching the atom, which is the stronger
+    # contract; the atom-side ``validate_ssh_target`` raise remains for
+    # callers that construct the spec dict directly.
+    from pydantic import ValidationError
+
+    with pytest.raises((errors.SpecInvalid, ValidationError)):
         build_submit_spec(
             spec=BuildSubmitSpecInput(**{**_required(), "ssh_target": "alice; rm -rf /"})
         )
