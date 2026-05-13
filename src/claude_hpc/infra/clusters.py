@@ -178,7 +178,7 @@ def _field_default_for_manifest(info: Any) -> Any:
 def _annotation_to_str(annotation: Any) -> str:
     """Compact human-readable rendering of a Pydantic field annotation."""
     name = getattr(annotation, "__name__", None)
-    if name:
+    if isinstance(name, str):
         return name
     return str(annotation).replace("typing.", "")
 
