@@ -232,8 +232,24 @@ def _maybe_derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str
         )
         return None
 
-    picked_name, _ = pick_array_axis(experiment_dir)
+    picked_name, picker_reason = pick_array_axis(experiment_dir)
     if picked_name is None:
+        # Picker couldn't choose (no homogeneous_axes hint, no qualifying
+        # axis after CV scoring, etc). axes.yaml HAD a multi-axis
+        # enumeration; degrading to single-wave aggregation silently
+        # surprises the user when they later see per-wave combiner
+        # output collapse. Warn loudly so the operator knows what
+        # changed; the degraded path still works (downstream treats
+        # a missing wave_map as "single implicit wave-0").
+        warnings.warn(
+            f"axes.yaml declared multi-axis enumeration but pick_array_axis "
+            f"returned None ({picker_reason!r}); sidecar will lack wave_map "
+            "and downstream auto-combine-waves will degrade to single-wave "
+            "aggregation. Add homogeneous_axes to axes.yaml or pass "
+            "wave_map explicitly to /submit to enforce a specific shape.",
+            UserWarning,
+            stacklevel=3,
+        )
         return None
     try:
         derived = compute_wave_map(experiment_dir, picked_axis=picked_name)
@@ -334,9 +350,24 @@ def write_run_sidecar(
             sidecar[k] = v
     target = run_sidecar_path(experiment_dir, run_id)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(sidecar, indent=2, sort_keys=True))
+    # Write atomically (tempfile + flush + fsync + rename) so a crash
+    # mid-write leaves either the previous sidecar or the new one — never
+    # a 0-byte or partial-JSON file.
+    _atomic_write_json(target, sidecar)
     prune_old_runs(experiment_dir, keep=MAX_RUNS)
     return target
+
+
+def _atomic_write_json(target: Path, payload: dict) -> None:
+    """Forwarder to :func:`claude_hpc._internal.io.atomic_write_json`.
+
+    The canonical helper handles tempfile creation, fsync, replace, and
+    parent-dir fsync. Kept as a local alias so the existing call sites
+    in this module don't need to change.
+    """
+    from claude_hpc._internal.io import atomic_write_json
+
+    atomic_write_json(target, payload)
 
 
 def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
@@ -437,7 +468,10 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     if not runs.exists():
         return []
     hits = [p for p in runs.iterdir() if p.is_file() and p.suffix == ".json"]
-    hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    # Secondary key: run_id (path.stem) is ``YYYYMMDD-HHMMSS-<sha>`` — its ISO
+    # prefix is monotonic, so it's a stable tiebreaker when two sidecars share
+    # the same coarse-FS mtime (e.g. seconds-resolution filesystems).
+    hits.sort(key=lambda p: (p.stat().st_mtime, p.stem), reverse=True)
     return hits
 
 
@@ -539,9 +573,7 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
         raise FileNotFoundError(f"run sidecar not found: {target}")
     data: dict[str, Any] = json.loads(target.read_text())
     data["job_ids"] = [str(j) for j in job_ids]
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    tmp.replace(target)
+    _atomic_write_json(target, data)
     return target
 
 
@@ -553,7 +585,6 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     ],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-agent prune-orphan-sidecars",
     agent_facing=True,
 )
 def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:

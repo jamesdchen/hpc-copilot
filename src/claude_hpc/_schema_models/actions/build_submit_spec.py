@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from claude_hpc._schema_models._shared import BackendName, RunIdStrict
+from claude_hpc._schema_models._shared import (
+    BackendName,
+    CampaignId,
+    RunIdStrict,
+    Runtime,
+    SshTarget,
+)
 
 
 class BuildSubmitSpecInput(BaseModel):
@@ -19,10 +25,15 @@ class BuildSubmitSpecInput(BaseModel):
 
     profile: str = Field(min_length=1)
     cluster: str = Field(min_length=1)
-    ssh_target: str = Field(min_length=1)
+    ssh_target: SshTarget
     remote_path: str = Field(min_length=1)
     run_id: RunIdStrict
-    cmd_sha: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    # Lowercase-hex only (sha256.hexdigest produces lowercase). Width
+    # 8-64 to match the canonical shape used by recall / interview /
+    # validate_stochastic_marker — letting a recall lookup's 8-char
+    # prefix thread through to build-submit-spec without hitting a wire
+    # validation error (v3 BUG-3V3-3, unify cmd_sha regex across models).
+    cmd_sha: str = Field(pattern=r"^[0-9a-f]{8,64}$")
     total_tasks: int = Field(ge=1)
     backend: BackendName
     is_gpu: bool | None = None
@@ -31,8 +42,8 @@ class BuildSubmitSpecInput(BaseModel):
     modules: str | None = None
     conda_source: str | None = None
     conda_env: str | None = None
-    runtime: str | None = None
-    campaign_id: str | None = None
+    runtime: Runtime | None = None
+    campaign_id: CampaignId | None = None
     canary: bool | None = None
     partial_ok: bool | None = None
     skip_preflight: bool | None = None

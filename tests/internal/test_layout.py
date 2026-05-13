@@ -8,7 +8,6 @@ error rather than a P0 bug waiting to happen.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -93,47 +92,28 @@ def test_journal_layout_runs_distinct_from_repo_layout(
 
 
 def test_journal_layout_root_honors_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # ``journal_dir`` re-resolves ``HPC_JOURNAL_DIR`` from os.environ on
+    # every call (v3 fix for the test-leak bug class), so the prior
+    # ``importlib.reload`` dance is no longer needed — and was itself
+    # buggy: the finally-block reload ran while monkeypatch's env value
+    # was still live, leaving ``session.HPC_HOMEDIR`` /
+    # ``run_record.HPC_HOMEDIR`` permanently bound to tmp_path across
+    # the rest of the session (v3 BUG-8V3-2/6).
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
-    # ``HPC_HOMEDIR`` lives in
-    # :mod:`claude_hpc._internal.session.run_record` and is resolved
-    # at import time; we reload that submodule (and the package) so
-    # the env override bites for both ``session.HPC_HOMEDIR`` (the
-    # re-export) and the canonical run_record binding.
-    import importlib
-
-    import claude_hpc._internal.session as session
-    from claude_hpc._internal.session import run_record
-
-    importlib.reload(run_record)
-    importlib.reload(session)
-    try:
-        journal = JournalLayout(tmp_path)
-        assert str(journal.root).startswith(str(tmp_path / "journal"))
-    finally:
-        # Clean up so other tests aren't surprised.
-        os.environ.pop("HPC_JOURNAL_DIR", None)
-        importlib.reload(session)
+    journal = JournalLayout(tmp_path)
+    assert str(journal.root).startswith(str(tmp_path / "journal"))
 
 
 def test_journal_layout_run_record_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
-    import importlib
-
-    import claude_hpc._internal.session as session
-
-    importlib.reload(session)
-    try:
-        journal = JournalLayout(tmp_path)
-        rec = journal.run_record("run-1")
-        assert rec.name == "run-1.json"
-        assert rec.parent == journal.runs
-        last = journal.last_status("run-1")
-        assert last.name == "run-1.last_status.json"
-        mon = journal.monitor_jsonl("run-1")
-        assert mon.name == "run-1.monitor.jsonl"
-        idx = journal.index()
-        assert idx.name == "index.json"
-        assert idx.parent == journal.root
-    finally:
-        os.environ.pop("HPC_JOURNAL_DIR", None)
-        importlib.reload(session)
+    journal = JournalLayout(tmp_path)
+    rec = journal.run_record("run-1")
+    assert rec.name == "run-1.json"
+    assert rec.parent == journal.runs
+    last = journal.last_status("run-1")
+    assert last.name == "run-1.last_status.json"
+    mon = journal.monitor_jsonl("run-1")
+    assert mon.name == "run-1.monitor.jsonl"
+    idx = journal.index()
+    assert idx.name == "index.json"
+    assert idx.parent == journal.root

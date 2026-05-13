@@ -51,10 +51,13 @@ class ClimbEstimate:
 
 
 def _to_dt(iso: str) -> datetime | None:
-    try:
-        return datetime.fromisoformat(iso)
-    except ValueError:
-        return None
+    # Always normalize to tz-aware UTC. The raw upstream samples mix
+    # naive (legacy journals) and aware (current writers) ISO strings,
+    # and sorting a mixed list crashes with TypeError. Routing through
+    # parse_iso_utc_or_none guarantees every datetime is in UTC.
+    from claude_hpc._internal.time import parse_iso_utc_or_none
+
+    return parse_iso_utc_or_none(iso)
 
 
 def estimate_climb_rate(samples: list[PrioritySample]) -> ClimbEstimate:

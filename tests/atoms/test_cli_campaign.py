@@ -7,12 +7,12 @@ other consumers will depend on.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
-import time
 from typing import TYPE_CHECKING
 
-from claude_hpc.state.runs import write_run_sidecar
+from claude_hpc.state.runs import run_sidecar_path, write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,9 +66,14 @@ def test_campaign_list_empty(tmp_path: Path) -> None:
 
 def test_campaign_list_groups_by_campaign_id(tmp_path: Path) -> None:
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
-    time.sleep(0.01)
     write_run_sidecar(tmp_path, **_common_required_kwargs("r2"), campaign_id="B")
     write_run_sidecar(tmp_path, **_common_required_kwargs("r3"), campaign_id="A")
+    # Pin distinct mtimes — ``campaign list`` only counts per-campaign
+    # totals here, but the sidecar sort is mtime-driven; explicit utimes
+    # make the test independent of FS mtime resolution.
+    t0 = 1_700_000_000.0
+    for i, run_id in enumerate(("r1", "r2", "r3")):
+        os.utime(run_sidecar_path(tmp_path, run_id), (t0 + i, t0 + i))
 
     rc, out, _ = _run_cli("campaign", "list", "--experiment-dir", str(tmp_path))
     assert rc == 0
@@ -109,9 +114,13 @@ def test_campaign_status_reports_per_iteration_history(tmp_path: Path) -> None:
     """Each matching sidecar contributes one history dict; oldest-first."""
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
     _write_metrics(tmp_path / "results" / "r1" / "task_0", {"loss": 0.5, "n_samples": 1})
-    time.sleep(0.01)
     write_run_sidecar(tmp_path, **_common_required_kwargs("r2"), campaign_id="A")
     _write_metrics(tmp_path / "results" / "r2" / "task_0", {"loss": 0.1, "n_samples": 1})
+    # Pin distinct mtimes — ``r1``/``r2`` are not ISO-sortable, so the
+    # oldest-first contract is enforced via mtime, not via run_id stem.
+    t0 = 1_700_000_000.0
+    for i, run_id in enumerate(("r1", "r2")):
+        os.utime(run_sidecar_path(tmp_path, run_id), (t0 + i, t0 + i))
 
     rc, out, _ = _run_cli(
         "campaign", "status", "--experiment-dir", str(tmp_path), "--campaign-id", "A"

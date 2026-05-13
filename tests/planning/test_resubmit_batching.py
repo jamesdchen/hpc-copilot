@@ -47,7 +47,10 @@ class TestResubmitPlanBasic:
 
         only = plan.batches[0]
         assert isinstance(only, ResubmitBatch)
-        assert only.task_range == "3,7,12-14"
+        # task_range is 1-based to match the scheduler array-expression
+        # convention (``1-N`` initial submits; SLURM/SGE templates
+        # subtract 1 to recover the 0-based HPC_TASK_ID).
+        assert only.task_range == "4,8,13-15"
         assert only.array_size == 5
         assert only.task_ids == (3, 7, 12, 13, 14)
 

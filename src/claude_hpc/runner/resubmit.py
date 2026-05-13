@@ -94,8 +94,12 @@ def resubmit_failed(
         category=category,
         overrides=overrides,
     )
-    if record.last_resubmit_request_id and record.last_resubmit_request_id == rid:
-        # Deduped: replay of the same resubmit. Don't increment counters.
+    recent_ids = list(record.recent_resubmit_request_ids or [])
+    if rid in recent_ids or (
+        record.last_resubmit_request_id and record.last_resubmit_request_id == rid
+    ):
+        # Deduped: replay of a prior resubmit (back-to-back OR an A→B→A
+        # sequence). Don't increment counters.
         return record, True, rid
 
     retries = dict(record.retries)
@@ -108,9 +112,16 @@ def resubmit_failed(
             "category": category,
             "overrides": overrides,
         }
+    # Append the new rid and cap the history. 64 is a generous bound for
+    # typical resubmit storms (per-category retries × a handful of cycles).
+    _MAX_RECENT = 64
+    recent_ids.append(rid)
+    if len(recent_ids) > _MAX_RECENT:
+        recent_ids = recent_ids[-_MAX_RECENT:]
     fields: dict[str, Any] = {
         "retries": retries,
         "last_resubmit_request_id": rid,
+        "recent_resubmit_request_ids": recent_ids,
     }
     if new_job_ids is not None:
         fields["job_ids"] = list(new_job_ids)

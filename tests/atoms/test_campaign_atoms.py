@@ -264,9 +264,12 @@ def test_campaign_init_minimal(tmp_path: Path) -> None:
 
 
 def test_campaign_init_rejects_non_object_strategy_params(tmp_path: Path) -> None:
+    from claude_hpc import errors
     from claude_hpc.atoms.campaign_init import campaign_init
 
-    with pytest.raises(ValueError, match="strategy-params-json must decode"):
+    # campaign-init declares error_codes=[SpecInvalid]; the legacy
+    # bare-ValueError raise was rewrapped as part of BUG-2V2-9.
+    with pytest.raises(errors.SpecInvalid, match="strategy-params-json must decode"):
         campaign_init(
             experiment_dir=tmp_path,
             campaign_id="camp_z",

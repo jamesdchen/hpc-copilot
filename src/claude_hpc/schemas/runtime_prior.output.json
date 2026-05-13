@@ -69,6 +69,7 @@
   },
   "$defs": {
     "_RuntimeQuantiles": {
+      "additionalProperties": false,
       "properties": {
         "p50": {
           "minimum": 0,

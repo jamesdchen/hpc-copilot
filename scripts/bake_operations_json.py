@@ -1,18 +1,15 @@
-"""Bake the operations catalog to ``claude_hpc/operations.json`` for wheel installs.
+"""Bake the operations catalog to ``claude_hpc/operations.json``.
 
-Source-tree installs let :func:`claude_hpc._internal.operations.operations_catalog`
-project the live ``@primitive`` registry into the catalog dict. Wheel
-installs (``pip install claude-hpc`` from PyPI / a built wheel) ship
-without ``docs/`` and the registry-loading path is the only thing that
-keeps working — but if a downstream consumer disables decorator
-registration (e.g. AOT-compiled Pyodide bundle, frozen interpreter)
-the catalog goes empty.
+:func:`claude_hpc._internal.operations.operations_catalog` projects the
+live ``@primitive`` registry into the catalog dict; the registry is
+the only runtime source of truth. This script writes a redundant
+on-disk snapshot at ``src/claude_hpc/operations.json`` so the catalog
+is greppable / diff-able without booting Python, and CI can fail when
+a ``@primitive`` decorator drifts from the committed snapshot.
 
-This script writes a baked ``operations.json`` next to the package so
-``operations_catalog`` has a deterministic fallback. The fallback is
-already wired in :func:`operations_catalog` (the
-``baked = _baked_path(); if baked.is_file(): ...`` branch); this
-script is what populates it.
+The runtime catalog does NOT read this file — see the docstring on
+``operations_catalog`` — but the bake check IS the gate that keeps
+the registry projection deterministic across PRs.
 
 Same generator pattern as ``build_primitive_frontmatter.py``,
 ``build_primitive_index.py``, ``build_operations_index.py``,

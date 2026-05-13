@@ -17,7 +17,16 @@ of one cluster-side mechanism contradicting another.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+import pytest
+
 from claude_hpc import runner
+from claude_hpc._internal import session
+from claude_hpc._internal.session import RunRecord, run_record
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _log_entry(task_id: int, *, content: str = "", exit_code: int | None = None) -> dict:
@@ -91,29 +100,71 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
     preempted_count + preempted_task_ids at the top level so a harness
     can branch without parsing per-cluster ``error_class`` strings."""
 
-    def test_envelope_key_extraction_logic(self) -> None:
-        # Simulate the cluster shape post-annotation: the runner emits
-        # 'category' but atoms/failures.py also accepts 'error_class'
-        # for symmetry with the failure-signature pipeline. Test both
-        # to keep the contract honest.
-        clusters = [
-            {
-                "category": "preempted",
-                "error_class": "preempted",
-                "task_ids": [0, 1, 2],
-                "count": 3,
+    def test_fetch_failures_surfaces_preempted_keys_in_envelope(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Drive the real ``fetch_failures`` atom with mocked SSH
+        primitives and assert that ``preempted_count`` and
+        ``preempted_task_ids`` appear at the envelope top level.
+
+        This is the inverse of the previous tautological test, which
+        re-implemented the production loop in the test body and never
+        called the atom under test."""
+        from claude_hpc.atoms import failures as failures_atom
+
+        # Redirect HPC_HOMEDIR for the journal write (both bindings —
+        # see tests/internal/test_session.py for the rationale).
+        home = tmp_path / "home_hpc"
+        monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
+        monkeypatch.setattr(session, "HPC_HOMEDIR", home)
+
+        experiment = tmp_path / "exp"
+        experiment.mkdir()
+        record = RunRecord(
+            run_id="r1-preempted",
+            profile="p",
+            cluster="hoffman2",
+            ssh_target="user@h",
+            remote_path="/x",
+            job_name="j",
+            job_ids=["job_42"],
+            total_tasks=3,
+            submitted_at="2026-01-01T00:00:00+00:00",
+            experiment_dir=str(experiment.resolve()),
+        )
+        session.upsert_run(experiment, record)
+
+        # Mock the SSH primitives: three failed tasks, all preempted.
+        monkeypatch.setattr(
+            failures_atom.runner,
+            "_ssh_status_report",
+            lambda **_: {
+                "tasks": {
+                    "0": {"status": "failed"},
+                    "1": {"status": "failed"},
+                    "2": {"status": "failed"},
+                }
             },
-            {
-                "category": "gpu_oom",
-                "error_class": "gpu_oom",
-                "task_ids": [3],
-                "count": 1,
-            },
-        ]
-        # Mirror atoms/failures.py:fetch_failures end-of-function logic:
-        preempted_task_ids: list[int] = []
-        for cluster in clusters:
-            if cluster.get("error_class") == "preempted":
-                preempted_task_ids.extend(cluster.get("task_ids") or [])
-        assert sorted(preempted_task_ids) == [0, 1, 2]
-        assert len(preempted_task_ids) == 3
+        )
+        sigterm_line = "[claude-hpc] SIGTERM received; cluster preemption imminent"
+        monkeypatch.setattr(
+            failures_atom.runner,
+            "fetch_task_logs",
+            lambda **_: [
+                _log_entry(0, content=f"trace\n{sigterm_line}\n"),
+                _log_entry(1, content=f"trace\n{sigterm_line}\n"),
+                _log_entry(2, content=f"trace\n{sigterm_line}\n"),
+            ],
+        )
+
+        # Call the production atom — this is what was missing before.
+        envelope = failures_atom.fetch_failures(experiment_dir=experiment, run_id="r1-preempted")
+
+        # Top-level envelope keys are what a harness branches on.
+        assert envelope["run_id"] == "r1-preempted"
+        assert envelope["failed_count"] == 3
+        assert envelope["preempted_count"] == 3
+        assert envelope["preempted_task_ids"] == [0, 1, 2]
+        # Sanity: the underlying cluster shape still carries the
+        # preempted category so per-cluster consumers keep working.
+        assert any(c.get("error_class") == "preempted" for c in envelope["clusters"])

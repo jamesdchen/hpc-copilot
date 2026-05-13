@@ -37,6 +37,7 @@
     "last_status_age_seconds": {
       "anyOf": [
         {
+          "minimum": 0,
           "type": "integer"
         },
         {

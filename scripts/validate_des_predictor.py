@@ -32,7 +32,10 @@ from pathlib import Path
 from typing import Any
 
 # Allow ``python scripts/validate_des_predictor.py`` from a checkout.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# After the src-layout migration, claude_hpc is importable only with
+# repo_root/src on the path (editable installs handle this; standalone
+# invocations need the explicit insert).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from claude_hpc._internal.time import parse_iso_utc_or_none
 from claude_hpc.forecast.queue_simulator import SimJob, simulate_distribution

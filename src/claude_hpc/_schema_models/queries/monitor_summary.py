@@ -16,7 +16,7 @@ class MonitorSummaryResult(BaseModel):
     than a distinct lifecycle value.
     """
 
-    model_config = ConfigDict(title="monitor-summary output")
+    model_config = ConfigDict(extra="forbid", title="monitor-summary output")
 
     lifecycle_state: LifecycleStateObservableWithTimeout = Field(
         description=(

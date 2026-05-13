@@ -113,14 +113,55 @@ def mark_run(
     return record
 
 
-def _refresh_index_entry(experiment_dir: Path, run_id: str, status: str) -> None:
-    """Bump a single ``index.json`` entry; called after every successful write."""
+def _refresh_index_entry(
+    experiment_dir: Path,
+    run_id: str,
+    status: str,  # noqa: ARG001 — kept for back-compat callers
+) -> None:
+    """Bump a single ``index.json`` entry; called after every successful write.
+
+    Re-reads the run file under the index lock and uses its freshly-read
+    status (instead of the caller-supplied ``status`` argument). This
+    closes a lost-update race: two writers A and B that each release the
+    per-run lock before grabbing the index lock could otherwise install
+    A's stale status over B's terminal-transition write.
+
+    If the index read fails (transient OSError, partial-write torn JSON)
+    AND the index file exists, we refuse to overwrite — the index will
+    self-heal on the next ``_index_is_stale`` rebuild. Previously the
+    helper treated a failed read as "treat the entire index as empty,"
+    which clobbered every other entry with a single-key dict.
+    """
+    from claude_hpc._internal.session.run_record import _read_json as _read_run
+    from claude_hpc._internal.session.run_record import _run_path
     from claude_hpc._internal.time import utcnow_iso
 
     idx_path = journal_dir(experiment_dir) / "index.json"
     with _locked(idx_path):
-        idx = _read_json(idx_path) or {}
-        if not isinstance(idx, dict):
+        # Re-read the current status from disk so a concurrent writer's
+        # terminal transition can't get clobbered by our stale snapshot.
+        run_path = _run_path(experiment_dir, run_id)
+        fresh_status = status
+        try:
+            payload = _read_run(run_path)
+        except Exception:  # noqa: BLE001 — fall back to caller-supplied value
+            payload = None
+        if isinstance(payload, dict):
+            payload_status = payload.get("status")
+            if isinstance(payload_status, str) and payload_status:
+                fresh_status = payload_status
+
+        idx_existed = idx_path.exists()
+        idx = _read_json(idx_path)
+        if idx is None:
+            if idx_existed:
+                # Read failed on a file that exists — likely transient.
+                # Refuse to overwrite the whole index with a one-entry
+                # dict; the staleness check will rebuild from per-run
+                # files on the next find_in_flight_runs call.
+                return
             idx = {}
-        idx[run_id] = {"status": status, "updated_at": utcnow_iso()}
+        if not isinstance(idx, dict):
+            return  # corrupt index — same self-heal logic applies
+        idx[run_id] = {"status": fresh_status, "updated_at": utcnow_iso()}
         _atomic_write_json(idx_path, idx)

@@ -66,7 +66,6 @@ def _validate_feature(feat: str) -> str:
     ],
     idempotent=True,
     idempotency_key="run_id",
-    cli="hpc-agent update-run-constraints --spec <path>",
     agent_facing=True,
 )
 def update_run_constraints(

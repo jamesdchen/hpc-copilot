@@ -27,7 +27,7 @@
       "type": "string"
     },
     "ssh_target": {
-      "minLength": 1,
+      "pattern": "^[^@]+@[^@]+$",
       "title": "Ssh Target",
       "type": "string"
     },
@@ -42,7 +42,7 @@
       "type": "string"
     },
     "cmd_sha": {
-      "pattern": "^[0-9a-fA-F]{64}$",
+      "pattern": "^[0-9a-f]{8,64}$",
       "title": "Cmd Sha",
       "type": "string"
     },
@@ -53,7 +53,7 @@
     },
     "backend": {
       "enum": [
-        "sge_remote",
+        "sge",
         "slurm"
       ],
       "title": "Backend",
@@ -134,6 +134,7 @@
     "runtime": {
       "anyOf": [
         {
+          "const": "uv",
           "type": "string"
         },
         {
@@ -146,6 +147,7 @@
     "campaign_id": {
       "anyOf": [
         {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
           "type": "string"
         },
         {

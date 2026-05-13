@@ -50,9 +50,21 @@ class PlanSubmitResult(BaseModel):
         default=None,
         description="Original walltime ask in seconds before cold-start arbitrage trimmed it. Null when arbitrage didn't fire.",
     )
+    walltime_arbitraged_to: int | None = Field(
+        default=None,
+        description="Cold-start-trimmed walltime in seconds (the value callers should actually use). Null when arbitrage didn't fire.",
+    )
     daisy_chain_segments: int | None = Field(
         default=None,
         description="Number of dependency-chained segments the task was split into. Null when no chaining.",
+    )
+    daisy_chain_segment_walltime_sec: int | None = Field(
+        default=None,
+        description="Per-segment walltime (post-rebalance) callers should request for each chained segment. Null when no chaining.",
+    )
+    daisy_chain_total_walltime_sec: int | None = Field(
+        default=None,
+        description="Sum of per-segment walltimes across the chain (==original ask after rebalance). Null when no chaining.",
     )
     daisy_chain_dep_jobids: list[str] | None = Field(
         default=None,

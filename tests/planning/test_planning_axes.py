@@ -133,6 +133,41 @@ def test_homogeneous_must_be_subset_of_axes(tmp_path: Path) -> None:
         )
 
 
+def test_homogeneous_only_cross_validates_against_on_disk_axes(tmp_path: Path) -> None:
+    # Seed with axes enumeration first, then write a homogeneous_axes-only
+    # update that references a name absent from the on-disk axes list —
+    # the cross-validation must fire even without an in-call axes arg.
+    write_axes(
+        tmp_path,
+        axes=[{"name": "model", "size": 4}],
+    )
+    with pytest.raises(ValueError, match="homogeneous_axes references"):
+        write_axes(tmp_path, homogeneous_axes=["window"])
+
+
+def test_homogeneous_only_accepted_when_names_match_on_disk(tmp_path: Path) -> None:
+    # Same setup but the homogeneous_axes-only update references an axis
+    # that IS in the on-disk list — must succeed.
+    write_axes(
+        tmp_path,
+        axes=[{"name": "model", "size": 4}, {"name": "window", "size": 20}],
+    )
+    write_axes(tmp_path, homogeneous_axes=["window"])
+    out = read_axes(tmp_path)
+    assert out is not None
+    assert out["homogeneous_axes"] == ["window"]
+
+
+def test_homogeneous_only_no_on_disk_axes_bootstrap_succeeds(tmp_path: Path) -> None:
+    # Bootstrap path: no axes.yaml on disk yet, homogeneous_axes-only
+    # write must succeed (we can't validate names we don't have).
+    write_axes(tmp_path, homogeneous_axes=["window"])
+    out = read_axes(tmp_path)
+    assert out is not None
+    assert out["homogeneous_axes"] == ["window"]
+    assert "axes" not in out
+
+
 def test_axes_schema_rejects_zero_size() -> None:
     with pytest.raises(jsonschema.ValidationError):
         validate_axes(
@@ -148,12 +183,13 @@ def test_axes_schema_rejects_zero_size() -> None:
 
 def test_wave_map_array_axis_is_last(tmp_path: Path) -> None:
     # axes order: [model(2), window(3)]; pick window (last) → 2 waves of 3.
+    # Keys are stringified to match the on-disk JSON shape.
     write_axes(
         tmp_path,
         axes=[{"name": "model", "size": 2}, {"name": "window", "size": 3}],
     )
     wave_map = compute_wave_map(tmp_path, picked_axis="window")
-    assert wave_map == {0: [0, 1, 2], 1: [3, 4, 5]}
+    assert wave_map == {"0": [0, 1, 2], "1": [3, 4, 5]}
 
 
 def test_wave_map_array_axis_is_first(tmp_path: Path) -> None:
@@ -167,7 +203,7 @@ def test_wave_map_array_axis_is_first(tmp_path: Path) -> None:
     # Wave 0 = (window=0): task_ids = [0, 3]
     # Wave 1 = (window=1): task_ids = [1, 4]
     # Wave 2 = (window=2): task_ids = [2, 5]
-    assert wave_map == {0: [0, 3], 1: [1, 4], 2: [2, 5]}
+    assert wave_map == {"0": [0, 3], "1": [1, 4], "2": [2, 5]}
 
 
 def test_wave_map_three_axes_picks_middle(tmp_path: Path) -> None:

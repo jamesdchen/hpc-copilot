@@ -19,6 +19,7 @@
   },
   "$defs": {
     "_ClusterListEntry": {
+      "additionalProperties": false,
       "properties": {
         "name": {
           "title": "Name",

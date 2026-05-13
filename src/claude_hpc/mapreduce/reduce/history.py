@@ -70,7 +70,7 @@ def find_sidecars_by_campaign(
     """
     if not campaign_id:
         return []
-    matched: list[tuple[float, dict[str, Any]]] = []
+    matched: list[tuple[float, str, dict[str, Any]]] = []
     for path in find_existing_runs(experiment_dir):  # newest-first by mtime
         data = _read_sidecar_safe(path)
         if data is None:
@@ -85,9 +85,12 @@ def find_sidecars_by_campaign(
             mtime = path.stat().st_mtime
         except (FileNotFoundError, OSError):
             continue
-        matched.append((mtime, data))
-    matched.sort(key=lambda item: item[0])  # oldest-first
-    return [data for _, data in matched]
+        matched.append((mtime, path.stem, data))
+    # Secondary key: run_id (path.stem) is ``YYYYMMDD-HHMMSS-<sha>`` — its ISO
+    # prefix is monotonic, so it's a stable tiebreaker when two sidecars share
+    # the same coarse-FS mtime.
+    matched.sort(key=lambda item: (item[0], item[1]))  # oldest-first
+    return [data for _, _, data in matched]
 
 
 def result_dirs_for_sidecar(

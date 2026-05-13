@@ -9,6 +9,7 @@
     "details",
     "stderr_tail"
   ],
+  "additionalProperties": false,
   "properties": {
     "ok": {
       "title": "Ok",
@@ -46,6 +47,19 @@
       "description": "Last ~50 lines of the canary's stderr log (or empty string when not retrievable).",
       "title": "Stderr Tail",
       "type": "string"
+    },
+    "metrics_fingerprint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional sha256 of the canary's expected output file when the caller asked for a fingerprint. None on every failure path and when fingerprinting is skipped or fails.",
+      "title": "Metrics Fingerprint"
     }
   }
 }

@@ -2,7 +2,7 @@
 
 Run via cron every 5 minutes::
 
-    */5 * * * *  python -m scripts.snapshot_squeue \
+    */5 * * * *  python scripts/snapshot_squeue.py \
                      --ssh-target alice@cluster \
                      --experiment-dir /home/alice/exp
 

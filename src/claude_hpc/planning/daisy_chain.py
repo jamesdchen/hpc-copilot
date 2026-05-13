@@ -77,8 +77,13 @@ def compute_daisy_chain_plan(
     """Compute the segment count and per-segment walltime for a chain.
 
     Splits *walltime_ask_sec* into ``ceil(ask / (max - 1h))`` segments.
-    Each segment is sized at ``max - 1h`` (the per-segment cap) so the
-    chain accommodates queue-wait variance without overlapping.
+    When the chain actually fires (``n_segments > 1``), segments are
+    rebalanced to an equal per-segment walltime of
+    ``ceil(ask / n_segments)`` rather than the naive ``max - 1h`` cap.
+    Rebalancing avoids the degenerate boundary case where the tail
+    segment is a 1-second sliver (e.g. ``ask == per_segment + 1`` would
+    otherwise produce 2 segments of widths ``per_segment`` and ``1``) —
+    wasteful, and below the cluster's minimum job duration anyway.
 
     No segment cap — a 7-day task on a 24h cluster becomes ~8 segments;
     a 30-day task becomes ~31. Bounded only by checkpointing actually
@@ -92,8 +97,8 @@ def compute_daisy_chain_plan(
             f"max_walltime_sec ({max_walltime_sec}) must exceed the queue-wait buffer "
             f"({QUEUE_WAIT_BUFFER_SEC}); chain cannot make progress otherwise"
         )
-    per_segment = max_walltime_sec - QUEUE_WAIT_BUFFER_SEC
-    if walltime_ask_sec <= per_segment:
+    per_segment_cap = max_walltime_sec - QUEUE_WAIT_BUFFER_SEC
+    if walltime_ask_sec <= per_segment_cap:
         # Not actually chained; the caller can read n_segments==1 as
         # "no chain needed" without checking should_daisy_chain again.
         return DaisyChainPlan(
@@ -101,10 +106,17 @@ def compute_daisy_chain_plan(
             segment_walltime_sec=walltime_ask_sec,
             total_walltime_sec=walltime_ask_sec,
         )
-    n_segments = math.ceil(walltime_ask_sec / per_segment)
+    n_segments = math.ceil(walltime_ask_sec / per_segment_cap)
+    # Rebalance: rather than emit (n-1) full segments + a tail sliver,
+    # split the ask into n equally-sized segments. Each segment fits
+    # under per_segment_cap because rebalanced_size <= per_segment_cap
+    # (we only got here because ask > per_segment_cap; ceil(ask / n)
+    # with n = ceil(ask / per_segment_cap) is <= per_segment_cap by
+    # construction).
+    rebalanced_size = math.ceil(walltime_ask_sec / n_segments)
     return DaisyChainPlan(
         n_segments=n_segments,
-        segment_walltime_sec=per_segment,
+        segment_walltime_sec=rebalanced_size,
         total_walltime_sec=walltime_ask_sec,
     )
 

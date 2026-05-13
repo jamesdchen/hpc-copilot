@@ -345,13 +345,24 @@ def register(name: str) -> Callable[[type[HPCBackend]], type[HPCBackend]]:
     return decorator
 
 
+def _populate_registry() -> None:
+    """Import every backend module so its ``@register`` decorator fires.
+
+    Both ``get_backend`` and ``get_backend_class`` populate the registry on
+    every call (the modules are cached in ``sys.modules`` after the first
+    import, so this is cheap). The two helpers previously had divergent
+    import lists, and the backend rename to ``{sge, slurm}`` (which moved
+    the ``@register`` decorators onto the remote subclasses) silently broke
+    ``get_backend("slurm")`` when ``slurm_remote`` was missing here.
+    Sharing one populator removes that footgun.
+    """
+    from claude_hpc.infra.backends import sge_remote as _sge_remote  # noqa: F401
+    from claude_hpc.infra.backends import slurm_remote as _slurm_remote  # noqa: F401
+
+
 def get_backend(name: str = "slurm", **kwargs: object) -> HPCBackend:
     """Instantiate a backend by name.  *kwargs* are forwarded to the constructor."""
-    # Lazy imports to populate registry
-    from claude_hpc.infra.backends import sge as _sge  # noqa: F401
-    from claude_hpc.infra.backends import sge_remote as _sge_remote  # noqa: F401
-    from claude_hpc.infra.backends import slurm as _slurm  # noqa: F401
-
+    _populate_registry()
     if name not in _REGISTRY:
         raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")
     return _REGISTRY[name](**kwargs)
@@ -367,12 +378,7 @@ def get_backend_class(name: str) -> type[HPCBackend]:
     away from inline ``if scheduler == "slurm"`` ladders should use
     this when the script-path / SSH-target context is not available.
     """
-    # Lazy imports to populate registry — same pattern as get_backend.
-    from claude_hpc.infra.backends import sge as _sge  # noqa: F401
-    from claude_hpc.infra.backends import sge_remote as _sge_remote  # noqa: F401
-    from claude_hpc.infra.backends import slurm as _slurm  # noqa: F401
-    from claude_hpc.infra.backends import slurm_remote as _slurm_remote  # noqa: F401
-
+    _populate_registry()
     if name not in _REGISTRY:
         raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")
     return _REGISTRY[name]

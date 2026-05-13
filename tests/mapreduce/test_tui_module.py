@@ -107,10 +107,6 @@ def test_run_tui_errors_cleanly_when_rich_missing(monkeypatch, tmp_path, capsys)
     assert "rich" in err.lower()
 
 
-@pytest.mark.skipif(
-    "rich" not in sys.modules and not pytest.importorskip.__module__,
-    reason="never skip — the importorskip line handles it",
-)
 def test_render_returns_rich_group_when_rich_present(tmp_path):
     # If rich isn't available, skip rather than fail the whole suite.
     pytest.importorskip("rich")

@@ -17,11 +17,11 @@ class ClusterReduceResult(BaseModel):
     file.
     """
 
-    model_config = ConfigDict(title="cluster-reduce output")
+    model_config = ConfigDict(extra="forbid", title="cluster-reduce output")
 
     ok: bool
     run_id: RunIdLoose = Field(
-        description="Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>; loosely validated as filesystem-safe with no path separators.",
+        description="Run identifier — typically YYYYMMDD-HHMMSS-<short_sha>. Loose validation (bare ``str``); the strict-pattern check belongs on input specs, not on outputs that may surface legacy or migrated sidecars.",
     )
     output_path_remote: str = Field(
         description="Path on the cluster where the reducer wrote its output (relative to remote_path or absolute).",

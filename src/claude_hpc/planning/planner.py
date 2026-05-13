@@ -289,6 +289,7 @@ def plan_submit(
     # backfill shadows the round-number ask doesn't reach. The lattice
     # path supersedes this when priors exist.
     walltime_arbitraged_from: int | None = None
+    walltime_arbitraged_to: int | None = None
     # The lattice probe "wins" only when at least one candidate produced
     # a non-None predicted_eta_sec — that's the signal that priors exist
     # and the scheduler actually scored the right-sized resource tuple.
@@ -303,12 +304,19 @@ def plan_submit(
         trimmed = arbitrage_walltime(int(walltime_user_ask_sec))
         if trimmed != walltime_user_ask_sec:
             walltime_arbitraged_from = int(walltime_user_ask_sec)
+            walltime_arbitraged_to = int(trimmed)
 
     # Auto-daisy-chain decision. Survives the cluster's hard walltime
     # ceiling by splitting the ask into N segments where each segment
     # N+1 holds on segment N (afterany on SLURM, hold_jid on SGE) so
     # preempted segment N (exit 130 from PR-A) still triggers N+1.
     daisy_chain_segments: int | None = None
+    # ``compute_daisy_chain_plan`` returns the rebalanced per-segment
+    # walltime (post-v1 BUG-4-6 fix). Previously the planner discarded
+    # this and callers had to recompute via ``max - 1h``, defeating the
+    # rebalance.
+    daisy_chain_segment_walltime_sec: int | None = None
+    daisy_chain_total_walltime_sec: int | None = None
     if walltime_user_ask_sec is not None:
         from claude_hpc.planning.daisy_chain import (
             compute_daisy_chain_plan,
@@ -340,6 +348,8 @@ def plan_submit(
             if chain_decision:
                 plan = compute_daisy_chain_plan(int(walltime_user_ask_sec), max_walltime_sec=max_wt)
                 daisy_chain_segments = plan.n_segments
+                daisy_chain_segment_walltime_sec = plan.segment_walltime_sec
+                daisy_chain_total_walltime_sec = plan.total_walltime_sec
 
     return {
         "profile": profile,
@@ -353,7 +363,10 @@ def plan_submit(
         "walltime_split": walltime_split,
         "walltime_drift": drift_report,
         "walltime_arbitraged_from": walltime_arbitraged_from,
+        "walltime_arbitraged_to": walltime_arbitraged_to,
         "daisy_chain_segments": daisy_chain_segments,
+        "daisy_chain_segment_walltime_sec": daisy_chain_segment_walltime_sec,
+        "daisy_chain_total_walltime_sec": daisy_chain_total_walltime_sec,
         # Filled at submit time once each segment's jobid is known. The
         # plan layer cannot know jobids ahead of qsub/sbatch, so this is
         # always null at plan_submit time and the caller (submit_flow)

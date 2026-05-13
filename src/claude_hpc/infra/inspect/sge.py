@@ -122,7 +122,7 @@ def _parse_qhost(text: str) -> list[NodeSnapshot]:
             current.cpu_load_frac = round(current.cpu_load / max(current.cpu_tot, 1), 4)
         current.real_mem_mb = _parse_mem_to_mb(cols[7])
         mem_used = _parse_mem_to_mb(cols[8])
-        if current.real_mem_mb and mem_used is not None and current.real_mem_mb > 0:
+        if current.real_mem_mb and mem_used is not None:
             current.alloc_mem_mb = mem_used
             current.alloc_mem_pct = round(mem_used / current.real_mem_mb, 4)
         nodes.append(current)
@@ -163,8 +163,12 @@ def _parse_qstat_full(text: str) -> dict[str, list[dict[str, Any]]]:
             user = cols[3] if len(cols) > 3 else ""
             state = cols[4] if len(cols) > 4 else ""
             cpus = 0
+            # cols layout for ``qstat -u '*' -F gpu``: jid, prio, name,
+            # user, state, date, time, queue, slots, [task_spec].
+            # ``cols[-1]`` picks up the task_spec (e.g. ``7-9:1``) when
+            # present and mis-reports it as slots — use the fixed index.
             if len(cols) > 8:
-                cpus = _to_int_or_none(cols[-1]) or 0
+                cpus = _to_int_or_none(cols[8]) or 0
             out.setdefault(current_host, []).append(
                 {
                     "user": user,

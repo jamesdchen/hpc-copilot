@@ -45,6 +45,12 @@ error_codes:
 - code: remote_command_failed
   category: cluster
   retry_safe: false
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]
   python: claude_hpc.atoms.logs.fetch_logs

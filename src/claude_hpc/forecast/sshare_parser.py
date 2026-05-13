@@ -56,7 +56,15 @@ def parse_sshare(text: str) -> dict[str, float]:
             fs_value = float(fs_text)
         except ValueError:
             continue
-        out[user] = fs_value
+        # Users appear in multiple (Account, User) rows when they belong
+        # to multiple accounts. The previous behaviour ``out[user] =
+        # fs_value`` silently kept whichever row came last; sshare's row
+        # order is not stable, so the cached fairshare flapped between
+        # accounts. Take the max so the user's "best" account wins —
+        # deterministic and conservative for under-throttling decisions.
+        prior = out.get(user)
+        if prior is None or fs_value > prior:
+            out[user] = fs_value
     return out
 
 

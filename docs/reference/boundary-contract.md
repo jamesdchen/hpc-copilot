@@ -36,9 +36,9 @@ bind both.
 - `_PACKAGE_ROOT` — absolute path to the **package directory**
   (`claude_hpc/`, where `__init__.py` lives). Used to resolve
   `claude_hpc/config/clusters.yaml`, the bundled job templates
-  under `claude_hpc/templates/<scheduler>/`, and starter templates
-  under `claude_hpc/templates/starters/`. Note: this points at the
-  package, **not** the repo root.
+  under `claude_hpc/mapreduce/templates/runtime/<scheduler>/`, and
+  starter scaffolds under `claude_hpc/mapreduce/templates/scaffolds/`.
+  Note: this points at the package, **not** the repo root.
 - `__version__` — package version string, resolved at import time from
   the installed distribution metadata. Falls back to
   `"0.0.0+unknown"` when running from a non-installed checkout.
@@ -244,7 +244,7 @@ Everything outside the framework's public API. Concretely:
 - **`.hpc/tasks.py`** — the user-written Python module exposing
   `total()` and `resolve(task_id)`. Authored once via `/submit`
   Step 6's scaffolding flow (adapting the canonical example at
-  `claude_hpc/templates/tasks_example.py`), git-tracked, and
+  `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`), git-tracked, and
   user-editable. The bridge between the framework's task-id contract
   and whatever parallelization axis the experiment needs.
 - **`.hpc/stages.py`** (optional) — the user-written Python module
@@ -285,10 +285,10 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    third-party deps listed in `pyproject.toml`** (currently just `pyyaml`).
    No other runtime deps.
 2. **`claude_hpc/**` MUST NOT import from
-   `claude_hpc/templates/`.** Templates are source files copied
-   into experiment repos; treating them as importable modules would
-   couple the framework to a fixed set of templates.
-3. **`claude_hpc/templates/**` MUST NOT import from
+   `claude_hpc/mapreduce/templates/`.** Templates are source files
+   copied into experiment repos; treating them as importable modules
+   would couple the framework to a fixed set of templates.
+3. **`claude_hpc/mapreduce/templates/**` MUST NOT import from
    `claude_hpc/**`** — with one narrow exception. Templates ship
    into experiment repos and run there, where `claude-hpc` is
    generally not installed. The exception: a small allowlist of
@@ -347,7 +347,7 @@ user.
   tasks. The task's `RESULT_DIR` is a per-task `_wip_<task_id>/`
   tempdir that atomically promotes to the final dir on exit-0.
 - **Deterministic env defaults.** The cluster preamble
-  (`templates/runtime/common/hpc_preamble.sh`) exports
+  (`claude_hpc/mapreduce/templates/runtime/common/hpc_preamble.sh`) exports
   `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
   `NUMEXPR_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`,
   `PYTHONUNBUFFERED=1`, `PYTHONHASHSEED=0`,

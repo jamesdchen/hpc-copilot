@@ -112,7 +112,7 @@
       "anyOf": [
         {
           "enum": [
-            "sge_remote",
+            "sge",
             "slurm"
           ],
           "type": "string"

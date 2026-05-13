@@ -86,12 +86,12 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [best-submit-window](best-submit-window.md) | yes | _none_ | `hpc-agent best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` |
-| [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-agent campaign-advance` |
-| [campaign-budget](campaign-budget.md) | yes | _none_ | `hpc-agent campaign-budget` |
-| [campaign-converged](campaign-converged.md) | yes | _none_ | `hpc-agent campaign-converged` |
+| [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-agent campaign advance --campaign-id <id>` |
+| [campaign-budget](campaign-budget.md) | yes | _none_ | `hpc-agent campaign budget --campaign-id <id>` |
+| [campaign-converged](campaign-converged.md) | yes | _none_ | `hpc-agent campaign converged --campaign-id <id>` |
 | [campaign-health](campaign-health.md) | yes | _none_ | `hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]` |
 | [campaign-list](campaign-list.md) | yes | _none_ | `hpc-agent campaign list [--experiment-dir <dir>]` |
-| [campaign-replay](campaign-replay.md) | yes | _none_ | `hpc-agent campaign-replay` |
+| [campaign-replay](campaign-replay.md) | yes | _none_ | `hpc-agent campaign replay --campaign-id <id> [--last-n <n>]` |
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]` |
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-agent capabilities` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name>` |
@@ -111,8 +111,8 @@ The verb partitions primitives into bands the reader can scan independently:
 | [predict-start-time](predict-start-time.md) | yes | _none_ | `hpc-agent predict-start-time --spec <path>` |
 | [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
 | [recall](recall.md) | yes | _none_ | `hpc-agent recall` |
-| [recommend-partition](recommend-partition.md) | yes | _none_ | `hpc-agent recommend-partition --spec <path>` |
-| [recommend-wait-alternative](recommend-wait-alternative.md) | yes | _none_ | `hpc-agent recommend-wait-alternative --spec <path>` |
+| [recommend-partition](recommend-partition.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [recommend-wait-alternative](recommend-wait-alternative.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-agent plan-submit --profile <name> --cluster <name> [...]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action --experiment-dir <path>` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
@@ -124,12 +124,12 @@ The verb partitions primitives into bands the reader can scan independently:
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [check-preflight](check-preflight.md) | yes | _none_ | `hpc-agent preflight [--cluster <name>]` |
-| [validate](validate.md) | yes | ssh: `<cluster>` | `hpc-agent validate --profile <p> --cluster <c> --walltime-sec <s> --mem-mb <m> --cpus <c>` |
-| [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `hpc-agent validate-executor-signatures --spec <path>` |
-| [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `hpc-agent validate-input-dataset --spec <path>` |
-| [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `hpc-agent validate-self-qos-limit --spec <path>` |
-| [validate-stochastic-marker](validate-stochastic-marker.md) | yes | _none_ | `hpc-agent validate-stochastic-marker --spec <path>` |
-| [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `hpc-agent validate-walltime-against-history --spec <path>` |
+| [validate](validate.md) | yes | ssh: `<cluster>` | `(none — Python-only primitive)` |
+| [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [validate-stochastic-marker](validate-stochastic-marker.md) | yes | _none_ | `(none — Python-only primitive)` |
+| [validate-walltime-against-history](validate-walltime-against-history.md) | yes | _none_ | `(none — Python-only primitive)` |
 
 ### `mutate` primitives
 
@@ -138,10 +138,10 @@ The verb partitions primitives into bands the reader can scan independently:
 | [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; rsync-pull: `<remote_path>/<output_rel>` | `hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` |
 | [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
-| [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `hpc-agent prune-orphan-sidecars` |
+| [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `(none — Python-only primitive)` |
 | [reconcile-journal](reconcile-journal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; ssh: `<cluster>` | `hpc-agent reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` |
 | [resubmit-failed](resubmit-failed.md) | yes | scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` |
-| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `hpc-agent update-run-constraints --spec <path>` |
+| [update-run-constraints](update-run-constraints.md) | yes | ssh: `<cluster>` | `(none — Python-only primitive)` |
 
 ### `submit` primitives
 
@@ -157,7 +157,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
 | [build-submit-spec](build-submit-spec.md) | yes | _none_ | `hpc-agent build-submit-spec --spec <path>` |
 | [build-tasks-py](build-tasks-py.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py` | `hpc-agent build-tasks-py --spec <path>` |
-| [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `hpc-agent campaign-init` |
+| [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `hpc-agent campaign init --campaign-id <id> --strategy <s>` |
 | [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `hpc-agent interview` |
 
 ### `workflow` primitives

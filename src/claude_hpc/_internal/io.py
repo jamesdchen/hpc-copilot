@@ -18,11 +18,16 @@ the helper agnostic to per-domain schema fields (``schema_version``,
 On systems without ``fcntl`` (e.g. native Windows), the helper falls
 back to a no-lock atomic write — same behaviour as the original
 ``_with_locked_doc`` copies.
+
+Also exposes :func:`atomic_write_json` — the canonical
+crash-durable JSON writer (tempfile + fsync + replace + parent-dir
+fsync). v2 audit found six modules with subtly different inline
+copies; this is the one all of them should call.
 """
 
 from __future__ import annotations
 
-__all__ = ["atomic_locked_update", "advisory_flock"]
+__all__ = ["atomic_locked_update", "advisory_flock", "atomic_write_json"]
 
 import contextlib
 import json
@@ -33,6 +38,55 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
+
+
+def atomic_write_json(path: Path, payload: Any) -> None:
+    """Write *payload* as JSON to *path* atomically and durably.
+
+    Recipe: serialize to a ``tempfile.mkstemp``-allocated sibling,
+    ``flush()`` + ``fsync(fd)`` the data, ``os.replace`` to swap, then
+    ``fsync`` the parent directory so the rename is durable across a
+    kernel panic / power loss.
+
+    Tempfile name is randomised by ``mkstemp`` so concurrent writers
+    don't collide. Parent-dir fsync is best-effort: NFS and some other
+    network filesystems don't support it; we suppress the OSError.
+
+    Used by:
+      * ``_internal/session/run_record._atomic_write_json`` (forwarder
+        below — back-compat for callers that still import it).
+      * ``state/runs.py`` for per-run sidecars.
+      * ``runner/update_constraints.py`` for the journal hand-off.
+      * ``infra/inspect/_persist.py`` for the cluster-history file.
+      * ``mapreduce/metrics_io.py`` for per-task metrics JSONs.
+      * ``mapreduce/combiner.py`` and ``mapreduce/dispatch.py`` keep
+        inline copies because they're deployed cluster-side without
+        the rest of the package — but their recipes mirror this one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                with contextlib.suppress(OSError):
+                    os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            # Some filesystems (notably NFS) don't allow opening a dir
+            # for fsync; best-effort.
+            pass
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def _read_json_doc(path: Path) -> dict[str, Any] | None:

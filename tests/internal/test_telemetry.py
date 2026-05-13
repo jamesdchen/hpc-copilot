@@ -23,11 +23,10 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_default_sink_is_silent(capsys, tmp_path: Path) -> None:
-    # Unset the env var explicitly to defend against test-runner pollution.
-    import os
-
-    os.environ.pop("HPC_TELEMETRY_SINK", None)
+def test_default_sink_is_silent(capsys, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Unset the env var via monkeypatch so the deletion is rolled back
+    # at teardown and can't pollute sibling tests in the same session.
+    monkeypatch.delenv("HPC_TELEMETRY_SINK", raising=False)
     telemetry.record("tick", {"run_id": "x", "n": 1})
     out = capsys.readouterr()
     assert out.err == ""

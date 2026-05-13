@@ -226,21 +226,19 @@ def test_invalid_run_id_format_rejected_at_path_resolution(tmp_path: Path) -> No
 
 
 def test_find_existing_runs_returns_newest_first(tmp_path: Path) -> None:
-    """Three sidecars written at distinct times; ``find_existing_runs``
+    """Two sidecars with explicitly distinct mtimes; ``find_existing_runs``
     returns them ordered newest-first by mtime. Callers
     (``find_run_by_cmd_sha``) rely on this order to pick the most
     recent matching run during resume detection."""
     import os
-    import time
 
     for run_id in ("20260101-000000-aaaaaaa", "20260102-000000-bbbbbbb"):
         write_run_sidecar(tmp_path, **{**_required_kwargs(), "run_id": run_id})
-        # Force distinct mtimes — most filesystems have ~1ms resolution
-        # but tests should not depend on it.
-        time.sleep(0.01)
-    # Touch the older sidecar to make it newest by mtime.
-    older = run_sidecar_path(tmp_path, "20260101-000000-aaaaaaa")
-    os.utime(older, None)
+    # Pin mtimes so the older-by-name sidecar is newer-by-mtime. This
+    # asserts the sort key is mtime, not run_id lexicographic order.
+    t0 = 1_700_000_000.0
+    os.utime(run_sidecar_path(tmp_path, "20260102-000000-bbbbbbb"), (t0, t0))
+    os.utime(run_sidecar_path(tmp_path, "20260101-000000-aaaaaaa"), (t0 + 1, t0 + 1))
 
     paths = find_existing_runs(tmp_path)
     assert len(paths) == 2

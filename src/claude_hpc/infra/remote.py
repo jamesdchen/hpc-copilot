@@ -44,6 +44,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
+from claude_hpc import errors
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -83,6 +85,38 @@ RSYNC_TIMEOUT_SEC = _env_int("HPC_RSYNC_TIMEOUT_SEC", 1800)
 # value can't escape into argv as a separate token or into the shell.
 _DISALLOWED_TARGET_CHARS = " \t\n\r;|&`$<>\"'\\"
 
+# Characters that must never appear in a remote path. Mirrors the
+# ssh_target set with the addition of ``*`` and ``?`` (glob), ``(``/``)``
+# (subshell), and ``!`` (history); excludes ``/`` (legitimate in paths).
+# Whitespace is also rejected so rsync/ssh don't see two tokens.
+_DISALLOWED_REMOTE_PATH_CHARS = " \t\n\r;|&`$<>\"'\\*?!()"
+
+
+def validate_remote_path(remote_path: str) -> str:
+    """Return *remote_path* unchanged after a strict shape check.
+
+    Reject empty strings, leading-dash arguments (an ssh / rsync
+    argument-injection vector), and shell metachars / whitespace. The
+    contract is "validate up front, then trust the value verbatim on the
+    wire" — both :func:`rsync_push` and :func:`rsync_pull` rely on the
+    string passing through to the remote shell unquoted.
+
+    Permissive enough for HPC paths (``/u/home/user``, ``/scratch/$USER``-
+    style names are NOT allowed — interpolate before calling), strict
+    enough that a tampered campaign manifest can't push a payload like
+    ``/tmp; rm -rf /``.
+
+    Raises :class:`ValueError`.
+    """
+    if not isinstance(remote_path, str) or not remote_path:
+        raise ValueError(f"remote_path must be a non-empty string, got {remote_path!r}")
+    if remote_path.startswith("-"):
+        raise ValueError(f"remote_path must not start with '-': {remote_path!r}")
+    bad = sorted({c for c in _DISALLOWED_REMOTE_PATH_CHARS if c in remote_path})
+    if bad:
+        raise ValueError(f"remote_path contains disallowed characters {bad!r}: {remote_path!r}")
+    return remote_path
+
 
 def validate_ssh_target(ssh_target: str) -> str:
     """Return *ssh_target* unchanged after a permissive shape check.
@@ -101,6 +135,11 @@ def validate_ssh_target(ssh_target: str) -> str:
     """
     if not isinstance(ssh_target, str) or not ssh_target:
         raise ValueError(f"ssh_target must be a non-empty string, got {ssh_target!r}")
+    if ssh_target.startswith("-"):
+        # OpenSSH interprets ``-oProxyCommand=...`` etc. as option flags
+        # when they appear as the destination arg. Reject any
+        # leading-dash target to close the argument-injection vector.
+        raise ValueError(f"ssh_target must not start with '-': {ssh_target!r}")
     bad = [c for c in _DISALLOWED_TARGET_CHARS if c in ssh_target]
     if bad:
         raise ValueError(f"ssh_target contains disallowed characters {bad!r}: {ssh_target!r}")
@@ -325,6 +364,7 @@ def _tar_ssh_push(
     remote_path: str,
     local_path: str | Path,
     exclude: list[str],
+    delete: bool = False,
     timeout: float | None,
 ) -> subprocess.CompletedProcess[str]:
     """Push *local_path* to *remote_path* via ``tar c | ssh tar x``.
@@ -335,11 +375,21 @@ def _tar_ssh_push(
     same fields (returncode, stderr) they would for rsync.
 
     Implementation: spawn ``tar c`` and ``ssh tar x`` as two Popens
-    connected by a pipe; both must exit zero for success. ``--delete``
-    semantics are not preserved — the remote dir is left as-is and tar
-    overlays files on top, so stale files persist. Callers needing a
-    clean slate should ssh-rm the remote dir first.
+    connected by a pipe; both must exit zero for success.
+
+    ``delete=True`` is unsupported on this fallback — tar has no
+    equivalent of rsync's ``--delete`` and silently dropping it would
+    leave stale remote files (a reproducibility bug). When the caller
+    asks for delete semantics, fail loudly so they can either install
+    rsync on the host or invoke without delete.
     """
+    if delete:
+        raise errors.RemoteCommandFailed(
+            "rsync_push(delete=True) requires the rsync binary on PATH; "
+            "the tar/ssh fallback cannot enforce delete semantics and "
+            "would silently leave stale files on the remote. Install "
+            "rsync on this host or invoke rsync_push with delete=False."
+        )
     src_dir = str(local_path).rstrip("/\\")
 
     # tar excludes mirror rsync's pattern shape (relative paths under src).
@@ -461,12 +511,19 @@ def rsync_push(
         exclude = DEFAULT_RSYNC_EXCLUDES
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
+    # Validate the remote path up front so push and pull share one
+    # rule. After validation the value flows verbatim through the
+    # remote shell that rsync invokes — same posture as the rest of
+    # the module.
+    validate_remote_path(remote_path.rstrip("/"))
+
     if not _have_rsync():
         return _tar_ssh_push(
             ssh_target=ssh_target,
             remote_path=remote_path,
             local_path=local_path,
             exclude=exclude,
+            delete=delete,
             timeout=effective_timeout,
         )
 
@@ -737,11 +794,15 @@ def rsync_pull(
     TimeoutError
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
-    src = (
-        f"{ssh_target}:"
-        f"{shlex.quote(remote_path.rstrip('/'))}/"
-        f"{shlex.quote(remote_subdir.strip('/'))}/"
-    )
+    # ``validate_remote_path`` rejects whitespace + shell-metachars up
+    # front so the value can flow verbatim through the remote shell that
+    # rsync invokes. (The earlier ``shlex.quote`` form was inconsistent
+    # with ``rsync_push`` and produced literal single quotes that some
+    # rsync builds passed straight to the remote shell.)
+    validate_remote_path(remote_path.rstrip("/"))
+    if remote_subdir.strip("/"):
+        validate_remote_path(remote_subdir.strip("/"))
+    src = f"{ssh_target}:{remote_path.rstrip('/')}/{remote_subdir.strip('/')}/"
 
     dst_path = Path(local_dir)
     dst_path.mkdir(parents=True, exist_ok=True)

@@ -25,7 +25,12 @@ if TYPE_CHECKING:
     name="logs",
     verb="query",
     side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.SshUnreachable, errors.RemoteCommandFailed],
+    error_codes=[
+        errors.SshUnreachable,
+        errors.RemoteCommandFailed,
+        errors.JournalCorrupt,
+        errors.SpecInvalid,
+    ],
     idempotent=True,
     cli="hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]",
     agent_facing=True,

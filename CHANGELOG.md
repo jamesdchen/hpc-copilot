@@ -163,6 +163,9 @@ tests pass.
 - `lint_primitive_modules.py` warns on stale `_PRIMITIVE_MODULES`
   entries that have no `@primitive` decorator.
 
+**Dead-code removal**
+- Removed unused `claude_hpc._internal.idempotency` resolver module (was never wired into production; only exercised by tests).
+
 ### Determinism — fidelity guardrails for parallel-vs-serial executor parity
 
 The framework's value is "parallelize without changing what computes." This

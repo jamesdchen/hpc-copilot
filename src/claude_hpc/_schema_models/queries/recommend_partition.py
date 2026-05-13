@@ -47,6 +47,13 @@ class RecommendPartitionResult(BaseModel):
         "debug_overrun_refused",
         "default_long_walltime",
         "no_debug_partition_available",
+        # Emitted by ``recommend_partition`` when the cluster declares
+        # zero partitions or when only a debug partition exists but the
+        # requested walltime exceeds its ceiling. Previously absent from
+        # the Literal — mypy now flags those two early-return branches
+        # as Literal-mismatches.
+        "no_partitions_declared",
+        "only_debug_available_walltime_too_long",
     ]
     message: str
     leverage_estimate: float = Field(

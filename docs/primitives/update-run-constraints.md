@@ -16,7 +16,7 @@ error_codes:
   category: cluster
   retry_safe: false
 backed_by:
-  cli: hpc-agent update-run-constraints --spec <path>
+  cli: (none — Python-only primitive)
   python: claude_hpc.runner.update_constraints.update_run_constraints
 ---
 # update-run-constraints

@@ -21,8 +21,12 @@ _FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
     ("system_oom", re.compile(r"\boom-killer\b|\bMemoryError\b|killed.*signal 9", re.I)),
     (
+        # Narrowed to scheduler-specific markers — bare ``walltime`` or
+        # ``signal SIGTERM 15`` collide with preemption (which the
+        # scheduler also delivers via SIGTERM). The exit-code 130/143
+        # override below routes confirmed SIGTERM cases to ``preempted``.
         "walltime",
-        re.compile(r"\bDUE TO TIME LIMIT\b|wall.?time.*exceeded|signal SIGTERM.*15", re.I),
+        re.compile(r"\bDUE TO TIME LIMIT\b|wall.?time.*exceeded|h_rt.*exceeded", re.I),
     ),
     (
         "node_failure",
@@ -198,7 +202,15 @@ def cluster_failures_by_fingerprint(
         # Also overrides ``walltime`` because the SLURM/SGE preempt
         # notification contains "signal SIGTERM 15" which the walltime
         # regex would otherwise claim.
-        if entry.get("exit_code") == 130 and category in ("unknown", "walltime"):
+        # Exit 130 is the dispatcher's own SIGTERM-trap signal. Exit 143
+        # (128 + SIGTERM=15) is what the scheduler reports when the
+        # dispatcher was killed directly before it could re-emit 130 —
+        # so both indicate preemption.
+        preempted_override = entry.get("exit_code") in (130, 143) and category in (
+            "unknown",
+            "walltime",
+        )
+        if preempted_override:
             category = "preempted"
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so MARs can auto-resubmit with adjusted resources rather
@@ -207,6 +219,17 @@ def cluster_failures_by_fingerprint(
         from claude_hpc.runner.failure_signatures import classify
 
         sig = classify(content, entry.get("exit_code"))
+        # The category fallback above also needs to override sig — otherwise
+        # the cluster carries ``category=preempted`` but
+        # ``suggested_fix=increase-walltime`` (or ``unknown``) from the catalog,
+        # which would auto-bump h_rt on every preempted job and burn the budget
+        # (v3 BUG-6V3-3).
+        if preempted_override:
+            sig = {
+                "error_class": "preempted",
+                "suggested_fix": {"action": "resubmit-preempted"},
+                "matched_pattern": "exit_code_fallback",
+            }
         key = (category, fp)
         bucket = by_fp.setdefault(
             key,

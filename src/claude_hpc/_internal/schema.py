@@ -89,17 +89,47 @@ def _output_validation_enabled() -> bool:
 
 @functools.lru_cache(maxsize=128)
 def _output_schema_for(primitive_name: str) -> dict | None:
-    """Load ``<primitive_name>.output.json`` (kebab → snake), or None if absent."""
-    fname = f"{primitive_name.replace('-', '_')}.output.json"
+    """Load the output JSON schema for *primitive_name*, or None if absent.
+
+    Uses the same 3-candidate ladder as
+    :func:`claude_hpc._internal.operations.schema_for` so the runtime
+    validator never disagrees with the docs/catalog about which file
+    backs a given primitive — pre-v3 this only looked up
+    ``<name>.output.json`` and silently no-op'd on every primitive
+    whose schema is keyed off the CLI subcommand name (preflight,
+    discover, plan_submit, status, submit, reconcile, runtime_prior;
+    v3 BUG-1V3-1).
+    """
+    candidates = [
+        f"{primitive_name.replace('-', '_')}.output.json",
+        f"{primitive_name}.output.json",
+    ]
+    # Add the CLI-derived candidate from the primitive registry so
+    # CLI-renamed primitives (e.g. ``check-preflight`` →
+    # ``preflight.output.json``) resolve too.
     try:
-        text = (_resource_files("claude_hpc.schemas") / fname).read_text(encoding="utf-8")
-    except (FileNotFoundError, ModuleNotFoundError, OSError):
-        return None
-    try:
-        loaded: dict = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return loaded
+        from claude_hpc._internal.operations import _cli_subcommand
+        from claude_hpc._internal.primitive import get_registry
+
+        meta = get_registry().get(primitive_name)
+        if meta is not None and meta.cli:
+            cli_name = _cli_subcommand({"cli": meta.cli})
+            if cli_name:
+                candidates.append(f"{cli_name.replace('-', '_')}.output.json")
+    except Exception:  # noqa: BLE001 — fallback ladder; never crash validation
+        pass
+
+    for fname in candidates:
+        try:
+            text = (_resource_files("claude_hpc.schemas") / fname).read_text(encoding="utf-8")
+        except (FileNotFoundError, ModuleNotFoundError, OSError):
+            continue
+        try:
+            loaded: dict = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        return loaded
+    return None
 
 
 def validate_output(data: Any, primitive_name: str) -> None:

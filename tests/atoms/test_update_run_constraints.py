@@ -157,9 +157,15 @@ def test_both_set_and_add_features_rejected(tmp_path: Path) -> None:
 
 
 def test_neither_set_nor_add_features_rejected(tmp_path: Path) -> None:
+    # Validation is now enforced at the model boundary (Pydantic
+    # validator) instead of only inside the runner — the surrounding
+    # contract docs claim "validate before the runner sees it", so a
+    # no-op spec must fail at model construction.
+    from pydantic import ValidationError
+
     _seed_sidecar(tmp_path, job_ids=["1"])
-    with pytest.raises(errors.SpecInvalid, match="at least one"):
-        update_run_constraints(tmp_path, spec=UpdateRunConstraintsSpec(run_id=_RUN_ID))
+    with pytest.raises(ValidationError, match="at least one"):
+        UpdateRunConstraintsSpec(run_id=_RUN_ID)
 
 
 def test_no_job_ids_in_sidecar_rejected(tmp_path: Path) -> None:

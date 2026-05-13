@@ -37,7 +37,6 @@ _VALIDATOR = "validate-stochastic-marker"
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent validate-stochastic-marker --spec <path>",
     agent_facing=True,
 )
 def validate_stochastic_marker(
@@ -58,6 +57,8 @@ def validate_stochastic_marker(
     ``cmd_sha`` differs even when the strategy re-picks the same
     params.
     """
+    import json
+
     from claude_hpc.state.runs import find_existing_runs, read_run_sidecar
 
     matched_prior_run_ids: list[str] = []
@@ -68,8 +69,12 @@ def validate_stochastic_marker(
         run_id = sidecar_path.stem
         try:
             sidecar = read_run_sidecar(experiment_dir, run_id)
-        except FileNotFoundError:
-            # Race: sidecar pruned between listing and read. Skip.
+        except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
+            # A single unreadable sidecar — pruned mid-scan, corrupted,
+            # named off the run-id regex, permission-denied, or
+            # schema-version mismatched — must NOT crash the validator.
+            # The contract is "always return findings"; skip the bad
+            # entry and continue (v3 BUG-2V3-3).
             continue
         if sidecar.get("campaign_id") != spec.campaign_id:
             continue

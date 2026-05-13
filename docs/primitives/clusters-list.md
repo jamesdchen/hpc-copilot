@@ -5,7 +5,10 @@ inputs: []
 side_effects: []
 idempotent: true
 idempotency_key: none
-error_codes: []
+error_codes:
+- code: config_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent clusters list
   python: claude_hpc.atoms.clusters.list_clusters

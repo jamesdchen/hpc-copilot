@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 __all__ = ["QueueFeatures", "compute_features"]
 
 
-_PENDING_STATES = {"PD", "PENDING", "QUEUED", "qw"}
+_PENDING_STATES = {"PD", "PENDING", "QUEUED", "QW"}
 
 
 @dataclass(frozen=True)
@@ -141,7 +141,7 @@ def _node_partitions(node: NodeSnapshot) -> list[str]:
 def _is_pending_state(state: str) -> bool:
     if not state:
         return False
-    return state.upper() in _PENDING_STATES or state in _PENDING_STATES
+    return state.upper() in _PENDING_STATES
 
 
 def compute_features(

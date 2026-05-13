@@ -16,7 +16,7 @@ Both write the same journal `last_status` and the same `.monitor.jsonl` tick log
 1. **If `run_id` is unknown**, invoke [list-in-flight](../../docs/primitives/list-in-flight.md) first; pick the matching `data.runs[].run_id` (filter by `profile`, `cluster`, or `submitted_at`).
 
 2. **Pick the surface** based on the caller's need:
-   - Snapshot: `hpc-agent status --run-id <id>`. Returns immediately.
+   - Snapshot: `hpc-agent status --run-id <id>`. Returns immediately. (The `status` subcommand is the CLI alias for the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive.)
    - Wait-until-terminal: `hpc-agent monitor-flow --spec foo.json` (with `run_id` + `wall_clock_budget_seconds`). Blocks until terminal/budget.
 
 3. **Parse the envelope** per the chosen primitive's `outputs:` contract: both expose `lifecycle_state`, `last_status`, `combined_waves`, `failed_waves`. `monitor-flow` adds `ticks`, `elapsed_seconds`, `escalation_reason`.
@@ -47,7 +47,7 @@ The cadence parameters live on the spec's `wall_clock_budget_seconds` + the per-
 When `lifecycle_state == "failed"` with `failed_task_ids` non-empty:
 
 1. Read the failed tasks' stderr tails via `poll-run-status` (the cluster-side reporter surfaces them in `data.tasks[<id>].err_log_path` for any task in `failed`/`unknown`).
-2. Classify the failure via [classify-failure](../../docs/primitives/classify-failure.md). Recoverable categories (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the matching category. Non-recoverable (`spec_invalid`, `executor_crash`) → surface to caller.
+2. Classify the failure via [failures](../../docs/primitives/failures.md). Recoverable categories (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the matching category. Non-recoverable (`spec_invalid`, `executor_crash`) → surface to caller.
 3. The auto-retry resolver in [resubmit-failed](../../docs/primitives/resubmit-failed.md) reads the run sidecar's `auto_retry` block to decide whether the resubmit is allowed (per-category `max_attempts`).
 
 ## Polling cadence (poll-run-status, manual loops)

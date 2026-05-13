@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -61,11 +61,11 @@ include = ["claude_hpc*", "slash_commands*"]
 claude_hpc = [
     "config/*.yaml",
     "schemas/*.json",
-    "mapreduce/templates/*.py",   # tasks_example.py, cli_dispatcher.py
-    "mapreduce/templates/common/*.sh",
-    "mapreduce/templates/sge/*",
-    "mapreduce/templates/slurm/*",
-    "mapreduce/templates/starters/*.py",
+    "operations.json",
+    "mapreduce/templates/scaffolds/*.py",
+    "mapreduce/templates/runtime/common/*.sh",
+    "mapreduce/templates/runtime/sge/*",
+    "mapreduce/templates/runtime/slurm/*",
     "py.typed",
 ]
 slash_commands = [

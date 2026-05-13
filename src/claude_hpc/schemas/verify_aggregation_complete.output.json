@@ -18,6 +18,7 @@
     "expected_task_count",
     "pulled_task_count"
   ],
+  "additionalProperties": false,
   "properties": {
     "ok": {
       "title": "Ok",

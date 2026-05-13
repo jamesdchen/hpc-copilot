@@ -159,8 +159,8 @@ def test_walltime_rules_default_severity_is_warning(tmp_path: Path) -> None:
     assert pb.walltime_rules[0].severity == "warning"
 
 
-@pytest.mark.parametrize("bad_q", [0.0, 1.0, -0.1, 1.5, 99.0])
-def test_walltime_rules_quantile_must_be_in_open_unit_interval(
+@pytest.mark.parametrize("bad_q", [-0.1, 1.5, 99.0])
+def test_walltime_rules_quantile_must_be_in_closed_unit_interval(
     tmp_path: Path, bad_q: float
 ) -> None:
     _write(
@@ -173,6 +173,22 @@ def test_walltime_rules_quantile_must_be_in_open_unit_interval(
     )
     with pytest.raises(ValueError, match="must be in"):
         load_playbook(tmp_path)
+
+
+@pytest.mark.parametrize("ok_q", [0.0, 0.5, 1.0])
+def test_walltime_rules_quantile_endpoints_are_allowed(tmp_path: Path, ok_q: float) -> None:
+    # BUG-1-12: 0.0 and 1.0 are now accepted (closed interval). Edge
+    # cases historically rejected by the (0, 1)-open check.
+    _write(
+        tmp_path,
+        f"""
+        walltime_rules:
+          - below_quantile: {ok_q}
+            message: x
+        """,
+    )
+    pb = load_playbook(tmp_path)
+    assert pb.walltime_rules[0].below_quantile == ok_q
 
 
 # ─── malformed YAML ────────────────────────────────────────────────────

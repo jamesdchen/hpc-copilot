@@ -210,11 +210,14 @@ if [ -n "${HPC_NFS_DATA_DIR:-}" ]; then
         (
             flock -x 9
             if [ ! -f "$LOCAL_DATA_DIR/.staged_ok" ]; then
-                # Capture rsync's exit code with `if !` so $? isn't
-                # clobbered by the echo trash before we read it (echo
-                # always succeeds, overwriting $? to 0).
-                if ! rsync -a "$HPC_NFS_DATA_DIR/" "$LOCAL_DATA_DIR/"; then
-                    rc=$?
+                # Capture rsync's exit code BEFORE any other command so
+                # `$?` reflects rsync's status. The previous form
+                # `if ! rsync ...; then rc=$?` inverted the status via
+                # `!`, so `rc` was always 0 inside the failure branch
+                # and the operator only ever saw "rsync exit 0".
+                rsync -a "$HPC_NFS_DATA_DIR/" "$LOCAL_DATA_DIR/"
+                rc=$?
+                if [ "$rc" -ne 0 ]; then
                     echo "[claude-hpc] NFS staging from \$HPC_NFS_DATA_DIR=$HPC_NFS_DATA_DIR" >&2
                     echo "[claude-hpc]   to \$LOCAL_DATA_DIR=$LOCAL_DATA_DIR failed (rsync exit $rc)." >&2
                     echo "[claude-hpc]   Check the source path exists, the destination has space," >&2

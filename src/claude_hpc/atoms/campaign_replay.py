@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from claude_hpc import errors
 from claude_hpc._internal.primitive import primitive
 
 if TYPE_CHECKING:
@@ -19,8 +20,9 @@ if TYPE_CHECKING:
     name="campaign-replay",
     verb="query",
     side_effects=[],
+    error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent campaign-replay",
+    cli="hpc-agent campaign replay --campaign-id <id> [--last-n <n>]",
 )
 def campaign_replay(
     *,
@@ -38,12 +40,21 @@ def campaign_replay(
     """
     from claude_hpc.mapreduce.reduce.history import find_sidecars_by_campaign, prior
 
+    n = int(last_n)
+    if n < 0:
+        raise errors.SpecInvalid("last_n must be >= 0")
     sidecars = find_sidecars_by_campaign(experiment_dir, campaign_id)
+    iterations: list[dict[str, Any]] = []
+    if n == 0:
+        return {
+            "campaign_id": campaign_id,
+            "total_iterations": len(sidecars),
+            "returned": 0,
+            "iterations": iterations,
+        }
     history = prior(experiment_dir, campaign_id)
-    n = max(1, int(last_n))
     sliced_sidecars = sidecars[-n:]
     sliced_history = history[-n:]
-    iterations: list[dict[str, Any]] = []
     for sidecar, metrics in zip(sliced_sidecars, sliced_history, strict=False):
         iterations.append(
             {

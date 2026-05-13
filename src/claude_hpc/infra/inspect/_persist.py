@@ -163,7 +163,7 @@ def read_cluster_history(
             continue
         if since_dt is not None:
             ts = parse_iso_utc_or_none(doc.get("now_iso"))
-            if ts is not None and ts < since_dt:
+            if ts is None or ts < since_dt:
                 continue
         try:
             snap = _snapshot_from_dict(doc)

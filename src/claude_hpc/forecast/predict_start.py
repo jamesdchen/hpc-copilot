@@ -98,7 +98,17 @@ class BestSubmitForecast:
 
 
 def _to_dt(iso: str) -> datetime:
-    return datetime.fromisoformat(iso)
+    """Parse an ISO timestamp and force tz-aware UTC.
+
+    Comparing a tz-naive and a tz-aware datetime raises ``TypeError``, so
+    any pair of timestamps that flow through the predictor (some naive,
+    some explicitly UTC-tagged by upstream helpers) needs a single
+    normalization point. Naive inputs are treated as already-UTC.
+    """
+    dt = datetime.fromisoformat(iso)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _add_hours(iso: str, hours: float) -> str:
@@ -151,7 +161,16 @@ def predict_start_time(
         pending_walltime_default_sec=pending_walltime_default_sec,
         enable_backfill=True,
     )
-    floor_pess = pessimistic.hypothetical_starts_at_iso or now_iso
+    # The pessimistic (FIFO no-backfill) sim returns ``None`` when the
+    # running set blocks the queue indefinitely. Falling back to ``now_iso``
+    # would invert the documented ``pess_floor >= opt_floor`` invariant and
+    # feed garbage ``floor_gap_sec`` to the LGBM. When pess is unknown,
+    # treat the optimistic floor (or, last resort, ``now_iso``) as the
+    # shared floor so the invariant survives and the LGBM sees a sane
+    # zero gap rather than a negative one.
+    floor_pess = (
+        pessimistic.hypothetical_starts_at_iso or optimistic.hypothetical_starts_at_iso or now_iso
+    )
     floor_opt = optimistic.hypothetical_starts_at_iso or floor_pess
 
     pess_dt = _to_dt(floor_pess)
