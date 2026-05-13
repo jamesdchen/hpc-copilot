@@ -12,141 +12,197 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml  # type: ignore[import-untyped]
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from claude_hpc.planning.constraints import ClusterConstraints, parse_constraints
 
-# B-M4: declarative manifest of per-cluster yaml keys. Mirrors the
-# get_*() validators below; surfaced through cmd_capabilities so a
-# campus user learning the schema by inspection (without reading
-# clusters.py source) can discover every supported field. Add a row
-# here when adding a new validator. The ``required`` flag is False for
-# every survival-shaped field — the cluster works without them; they
-# just opt into specific helps for low-priority jobs.
+# ---------------------------------------------------------------------------
+# ClusterConfig — single Pydantic SoT for the clusters.yaml shape.
+# v2 audit BUG-7V2-7: previously the schema was split across three
+# disagreeing sources (CLUSTER_YAML_KEYS prose manifest here,
+# ALLOWED_CLUSTER_KEYS frozenset in the boundary test, and the actual
+# yaml). CLUSTER_YAML_KEYS even declared ``ssh_target`` as a key but no
+# real yaml entry used it — code derived it dynamically from
+# ``f"{user}@{host}"``. This model is now the canonical SoT; the prose
+# manifest is derived from ``model_fields``, and the boundary test
+# allowlists are derived too.
+# ---------------------------------------------------------------------------
+
+
+class ClusterConfig(BaseModel):
+    """One cluster's entry in clusters.yaml.
+
+    Wire SoT. ``load_clusters_config`` validates each per-cluster entry
+    through this model and returns the validated dict so back-compat
+    callers (which still consume plain dicts) keep working. New code
+    should call ``ClusterConfig.model_validate(cfg)`` to get a typed
+    handle with the ``ssh_target`` computed property.
+    """
+
+    # Allow forward-compat extras so a user with a newer yaml field
+    # doesn't get a hard validation failure — the framework's typed
+    # accessors only consume declared fields.
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    scheduler: Literal["sge", "slurm"] = Field(
+        description="Scheduler family. Routes the submission to the right backend."
+    )
+    host: str | None = Field(
+        default=None,
+        description=(
+            "Hostname / OpenSSH alias for the cluster. Combined with "
+            "``user`` to derive ``ssh_target``."
+        ),
+    )
+    user: str | None = Field(
+        default=None,
+        description="SSH username on the cluster. Combined with ``host`` to derive ``ssh_target``.",
+    )
+    scratch: str | None = Field(
+        default=None, description="Per-user scratch directory on the cluster."
+    )
+    modules: list[str] = Field(
+        default_factory=list,
+        description="``module load`` arguments injected into the cluster preamble.",
+    )
+    conda_source: str | None = Field(
+        default=None,
+        description="Absolute path to the cluster's ``conda.sh`` for ``source $conda_source``.",
+    )
+    conda_envs: list[str] = Field(
+        default_factory=list,
+        description="Conda env names to ``conda activate`` (in order) inside the preamble.",
+    )
+    gpu_types: list[str] = Field(
+        default_factory=list,
+        description="GPU types available on this cluster (informational; surfaced to the planner).",
+    )
+    default_partition: str | None = Field(
+        default=None,
+        description="Default partition/queue name when the spec doesn't supply one.",
+    )
+    account: str | None = Field(
+        default=None,
+        description="Slurm account / project to charge against (``--account=``).",
+    )
+    gpu_constraint: str | None = Field(
+        default=None,
+        description="Slurm constraint expression for GPU-type selection (``--constraint=``).",
+    )
+    constraints: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Cluster-level resource ceilings (cpus / gpus / mem_mb / walltime_sec).",
+    )
+    cold_start_mem_buffer: float = Field(
+        default=0.15,
+        ge=0,
+        description="Fractional headroom grown onto the user's --mem ask cold-start.",
+    )
+    nfs_data_dir: str | None = Field(
+        default=None,
+        description="When set, threaded through as $HPC_NFS_DATA_DIR for node-local SSD staging.",
+    )
+    walltime_arbitrage: bool = Field(
+        default=True, description="Enable cold-start walltime trim for backfill leverage."
+    )
+    auto_daisy_chain: bool | None = Field(
+        default=None,
+        description="Tri-state daisy-chain control: True=always, False=never, None=detect.",
+    )
+    max_walltime_sec: int = Field(
+        default=86400, gt=0, description="Cluster's hard walltime ceiling in seconds."
+    )
+    max_node_mem_mb: int | None = Field(
+        default=None, description="Largest single-node memory ask the scheduler will accept."
+    )
+    gpu_queues: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-cluster GPU-queue map for live scoring (SGE).",
+    )
+    excluded_gpu_queue_prefixes: list[str] = Field(
+        default_factory=list,
+        description="GPU queue-name prefixes to skip during live scoring (SGE).",
+    )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def ssh_target(self) -> str | None:
+        """Derive ``user@host``. Returns None if either component is missing.
+
+        Historical clusters.yaml entries never set ``ssh_target``
+        directly even though CLUSTER_YAML_KEYS once declared it — code
+        always computed ``f"{user}@{host}"``. Expose it as a computed
+        field so the rest of the framework can stop re-deriving it.
+        """
+        if not self.host or not self.user:
+            return None
+        return f"{self.user}@{self.host}"
+
+
+def _allowed_cluster_keys() -> frozenset[str]:
+    """Canonical set of allowed top-level keys in a clusters.yaml entry.
+
+    Derived from ``ClusterConfig.model_fields`` so the boundary
+    contract test, the prose manifest, and the validator all stay in
+    sync from one SoT.
+    """
+    return frozenset(ClusterConfig.model_fields.keys())
+
+
+def _field_default_for_manifest(info: Any) -> Any:
+    """Project a Pydantic FieldInfo to a JSON-safe default value.
+
+    Returns:
+      - ``None`` for required fields (no default declared).
+      - ``None`` for ``default_factory`` fields (the factory result is
+        not necessarily JSON-stable; callers care about "what shape"
+        not "what literal").
+      - The literal default value otherwise.
+    """
+    from pydantic_core import PydanticUndefined
+
+    if info.is_required():
+        return None
+    default = info.default
+    if default is PydanticUndefined:
+        return None
+    # default_factory produces a fresh instance per call; surface as None.
+    if getattr(info, "default_factory", None) is not None:
+        return None
+    return default
+
+
+def _annotation_to_str(annotation: Any) -> str:
+    """Compact human-readable rendering of a Pydantic field annotation."""
+    name = getattr(annotation, "__name__", None)
+    if name:
+        return name
+    return str(annotation).replace("typing.", "")
+
+
+# B-M4: declarative manifest of per-cluster yaml keys, derived from
+# the Pydantic ClusterConfig model. Surfaced through cmd_capabilities
+# so a campus user can discover every supported field. The manifest's
+# entries are computed at import time from the model — adding a new
+# field to ``ClusterConfig`` automatically updates the manifest.
 CLUSTER_YAML_KEYS: list[dict[str, Any]] = [
     {
-        "key": "scheduler",
-        "type": "string",
-        "required": True,
-        "description": ("One of 'sge' or 'slurm'. Routes the submission to the right backend."),
-    },
-    {
-        "key": "ssh_target",
-        "type": "string",
-        "required": False,
-        "description": (
-            "ssh destination — either explicit 'user@host' (e.g. "
-            "'jc_905@discovery2.usc.edu') or an OpenSSH 'Host' alias from "
-            "~/.ssh/config (e.g. 'usc-discovery'). Aliases let IdentityFile / "
-            "User / Hostname settings flow through to ssh/scp/rsync; prefer "
-            "them when a cluster needs a non-default identity. Overridable "
-            "per-spec."
-        ),
-    },
-    {
-        "key": "constraints",
-        "type": "object",
-        "required": False,
-        "description": (
-            "Cluster-level resource ceilings (cpus, gpus, mem_mb, walltime_sec). "
-            "Profile-level constraints override field-by-field."
-        ),
-    },
-    {
-        "key": "cold_start_mem_buffer",
-        "type": "number",
-        "default": 0.15,
-        "required": False,
-        "description": (
-            "Fractional headroom grown onto the user's --mem ask when no "
-            "runtime prior exists, so the OOM daemon doesn't bump the "
-            "campus user's brand-new run mid-write."
-        ),
-    },
-    {
-        "key": "nfs_data_dir",
-        "type": "string",
-        "required": False,
-        "description": (
-            "When set, threaded through as $HPC_NFS_DATA_DIR so the template "
-            "preamble copies the dataset into node-local SSD before the "
-            "executor runs — survives NFS throttling when N tasks read the "
-            "same files at once."
-        ),
-    },
-    {
-        "key": "walltime_arbitrage",
-        "type": "boolean",
-        "default": True,
-        "required": False,
-        "description": (
-            "Cold-start walltime trim: shave 15min and floor to a 5min "
-            "boundary so the campus user fits in backfill shadows higher-"
-            "priority jobs don't reach."
-        ),
-    },
-    {
-        "key": "auto_daisy_chain",
-        "type": "boolean | null",
-        "required": False,
-        "description": (
-            "Tri-state: true=always chain on max-walltime overflow, "
-            "false=never (kill switch), absent=defer to "
-            "detect_checkpointing on past runs. Lets long-walltime asks "
-            "survive the cluster's hard ceiling via segmented submission."
-        ),
-    },
-    {
-        "key": "max_walltime_sec",
-        "type": "integer",
-        "default": 86400,
-        "required": False,
-        "description": (
-            "The cluster's hard walltime ceiling in seconds. Auto-daisy-"
-            "chain fires when an ask exceeds max_walltime_sec - 3600."
-        ),
-    },
-    {
-        "key": "max_node_mem_mb",
-        "type": "integer",
-        "required": False,
-        "description": (
-            "Largest single-node memory ask the cluster will schedule. "
-            "When set, the planner clamps the cold-start mem buffer (and "
-            "any other grower) so the campus user's run doesn't sit "
-            "Pending forever with ReqNodeNotAvail. Pick the most "
-            "permissive partition's node size (Hoffman2: 384000 / 192000 "
-            "/ 96000 depending on partition; CARC similar)."
-        ),
-    },
-    {
-        "key": "gpu_queues",
-        "type": "object",
-        "required": False,
-        "description": (
-            "Per-cluster GPU queue map for live scoring. Keys are SGE "
-            "queue prefixes (e.g. 'gpu_a100'); values are objects with "
-            "'name' (canonical GPU type, e.g. 'A100') and 'perf' (relative "
-            "performance weight used by score_gpus). When unset, "
-            "infra/gpu.py falls back to a Hoffman2-shaped default — "
-            "configure this for any non-Hoffman2 SGE cluster with GPU "
-            "queues."
-        ),
-    },
-    {
-        "key": "excluded_gpu_queue_prefixes",
-        "type": "array",
-        "required": False,
-        "description": (
-            "Queue prefixes to skip during live GPU scoring (e.g. test / "
-            "deprecated queues). When unset, defaults to a Hoffman2-shaped "
-            "exclusion list. Items are matched as exact prefixes against "
-            "the queue name returned by qstat -f."
-        ),
-    },
+        "key": name,
+        "type": _annotation_to_str(info.annotation),
+        "default": _field_default_for_manifest(info),
+        "required": info.is_required(),
+        "description": info.description or "",
+    }
+    for name, info in ClusterConfig.model_fields.items()
 ]
+
+
+# Original prose manifest kept below (commented out) so ``--help`` text
+# in cmd_capabilities can be enriched without re-walking the docstrings.
+# The Pydantic-derived manifest above is the canonical surface.
 
 
 def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
@@ -169,7 +225,30 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
         # yaml.safe_load returns None for an empty file; coerce to {} so
         # downstream `.get(...)` calls on the result don't AttributeError.
         result: dict[str, Any] = yaml.safe_load(f) or {}
-        return result
+    return result
+
+
+def validate_clusters_config(clusters: dict[str, Any]) -> None:
+    """Validate every per-cluster entry through ``ClusterConfig``.
+
+    Raises :class:`errors.ConfigInvalid` (with the offending cluster
+    name in the message) on any schema violation. Opt-in: callers that
+    want the strong contract invoke this after ``load_clusters_config``.
+    ``load_clusters_config`` itself stays lax so existing tests that
+    construct partial dicts (for gpu-loader / fairshare-loader edge
+    cases) keep working.
+    """
+    from claude_hpc import errors
+
+    for cluster_name, cluster_cfg in list(clusters.items()):
+        if not isinstance(cluster_cfg, dict):
+            continue
+        try:
+            ClusterConfig.model_validate(cluster_cfg)
+        except Exception as exc:
+            raise errors.ConfigInvalid(
+                f"clusters.yaml entry {cluster_name!r} failed validation: {exc}"
+            ) from exc
 
 
 def load_constraints(

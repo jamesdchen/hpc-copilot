@@ -127,44 +127,13 @@ RESERVED_FILES = frozenset(
 # ``.hpc/`` with framework artifacts.
 RESERVED_DIRS = frozenset({".hpc"})
 
-ALLOWED_CLUSTER_KEYS = frozenset(
-    {
-        "host",
-        "user",
-        "scheduler",
-        "scratch",
-        "modules",
-        "conda_source",
-        "conda_envs",
-        "gpu_types",
-        "constraints",
-        "default_partition",
-        # Present in current config/clusters.yaml; infra-shaped, so allow.
-        "account",
-        "gpu_constraint",
-        # Survival-defense knobs (PR-B): cold-start mem headroom and
-        # the optional NFS dataset path the templates rsync into local
-        # node SSD before the executor runs. Both are infra-shaped —
-        # they describe how the cluster is configured, not what work
-        # the user wants to run.
-        "cold_start_mem_buffer",
-        "nfs_data_dir",
-        # Survival-defense knobs (PR-C): cold-start walltime trim
-        # (fits in backfill shadows the round-number jobs don't reach)
-        # and auto-daisy-chain controls (survives the cluster's hard
-        # walltime ceiling, default-off when checkpointing isn't
-        # detected so we don't silently waste compute).
-        "walltime_arbitrage",
-        "auto_daisy_chain",
-        "max_walltime_sec",
-        # Survival-defense knob (prab-fix B-M5): per-node memory
-        # ceiling. When set, the planner clamps the cold-start buffer
-        # so a campus user's run doesn't sit Pending forever with
-        # ReqNodeNotAvail when buffer × ask exceeds the largest node.
-        # Infra-shaped: describes the cluster's hardware, not the work.
-        "max_node_mem_mb",
-    }
-)
+# Derive the allowlist from the ClusterConfig Pydantic model so the
+# boundary test, the prose manifest, and the validator all stay in sync
+# from one SoT. v2 audit BUG-7V2-7 reported the three sources had
+# drifted; the model is now the canonical surface.
+from claude_hpc.infra.clusters import _allowed_cluster_keys  # noqa: E402
+
+ALLOWED_CLUSTER_KEYS = _allowed_cluster_keys()
 
 
 # ---------------------------------------------------------------------------
