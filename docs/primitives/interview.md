@@ -86,3 +86,41 @@ enforced downstream by `compute_cmd_sha` (kwargs get
 JSON-serializable). The `task_generator` field is opt-in; an
 exotic campaign that doesn't fit the five recipes drops it from
 intent and the agent writes `tasks.py` by hand.
+
+### When to use this vs your caller's own memory model
+
+Integrators frequently already maintain their own experiment journal
+(an LLM-orchestrator's `experiments/<id>/meta.json`, a campaign-loop
+runner's per-campaign log, etc.). `interview` / `recall` are
+scoped specifically at the *interview-time* leak: the conversation
+that produced one `tasks.py`, frozen alongside the file that
+materialized from it.
+
+Use this primitive when the calling agent wants:
+
+- A structured persistence of the *why* (goal, range, budget, abort
+  criterion) next to the `tasks.py` it produced, so subsequent
+  campaigns can ground in observed envelopes.
+- Cross-campaign queryability without re-deriving from chat logs
+  (the calling agent's session context is transient; `recall`'s
+  filesystem walk is durable).
+- A `cmd_sha` fingerprint of the materialized task list at interview
+  time, captured before submit, so drift is visible the next time the
+  campaign re-runs.
+
+Stick with the caller's own journal when:
+
+- The artifact you want to preserve is broader than one
+  campaign (cross-experiment provenance, paper-level metadata,
+  cross-agent project state). `interview.json` is per-campaign by
+  construction; layering experiment-level context on top is the
+  caller's job.
+- The calling agent maintains a richer wire schema (typed metric
+  histories, vector embeddings, structured rejection reasons). The
+  interview primitive's schema is bare-bones on purpose — five
+  recipe shapes for `task_generator` and free-text `goal` /
+  `transcript`. It doesn't replace a domain-specific store.
+
+The two layers coexist: an integrator's experiment-level journal
+keys on `experiment_id`; claude-hpc's interview keys on
+`campaign_dir`. Different scopes, no overlap.

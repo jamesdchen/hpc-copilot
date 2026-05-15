@@ -498,8 +498,13 @@ def submit_flow_batch(
     # cluster's sshd. The lock is advisory (other code paths don't take
     # it) and per-repo (`<journal_home>/.submit_lock`); cross-cluster
     # parallelism is still allowed when each cluster has its own
-    # experiment_dir. Disable via ``HPC_SUBMIT_NO_LOCK=1`` (tests, or
-    # users who deliberately want concurrent submits).
+    # experiment_dir. Disable via ``HPC_SUBMIT_NO_LOCK=1`` — kept
+    # narrowly for (a) the test suite, which exercises submit_flow in
+    # parallel with mocked subprocess so there's no real qsub to race,
+    # and (b) operators who deliberately want concurrent submits and
+    # have confirmed the cluster's sshd / scheduler tolerates the
+    # burst. Disabling outside those two cases risks a scheduler-
+    # throttling stampede; see ``docs/reference/env-vars.md``.
     import os
 
     from claude_hpc._internal import io, session

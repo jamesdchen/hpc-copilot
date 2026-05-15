@@ -74,3 +74,41 @@ cold start into a warm one.
 Tier 2 and Tier 3 rollups are opt-in because they walk additional
 files (per-task runtime ledgers and per-recipe params); the
 default Tier-1 path is cheap (one read per `interview.json`).
+
+### When to use this vs your caller's own memory model
+
+`recall` is scoped to *interview-time grounding*: surfacing what
+prior campaigns of the same task family already explored, so the
+next interview's range / budget / abort decisions start informed.
+It's deliberately a thin filesystem index — recency-sorted matches
+plus pre-computed aggregations — not a metric store.
+
+Use `recall` when the calling agent wants:
+
+- A pre-interview lookup that's identical under Claude Code, cron,
+  or any external orchestrator (filesystem is the index; no
+  long-lived process or external DB).
+- Observed parameter envelopes across past campaigns of one
+  `task_kind`, without the calling agent re-reading every
+  `interview.json` itself.
+- Walltime and failure-rate baselines (Tier 2) for resource
+  sizing, sourced from the same per-task runtime ledgers
+  `runtime-prior` reads.
+
+Stick with the caller's own memory model when:
+
+- The calling agent already maintains a richer experiment-level
+  store (research-paper-scale provenance, vector embeddings,
+  cross-agent project state). `recall` does not replace it; it
+  complements it at the interview seam.
+- You need to *reason* over the ranges, not just retrieve them.
+  `recall` reports observed envelopes only; recommending whether
+  to tighten, widen, or pivot is the calling agent's call.
+- You need per-task `metrics.json` aggregated across campaigns.
+  `recall` deliberately doesn't fold metric content because every
+  experiment emits different keys; metric inspection stays a
+  per-campaign concern.
+
+The two layers coexist: an integrator's experiment-level journal
+keys on `experiment_id`; claude-hpc's interview / recall surface
+keys on `campaign_dir`. Different scopes, no overlap.

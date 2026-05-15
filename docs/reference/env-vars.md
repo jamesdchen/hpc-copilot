@@ -23,7 +23,7 @@ preamble).
 | `HPC_RSYNC_TIMEOUT_SEC` | `1800` | Per-call subprocess timeout for `rsync` push / pull. Raise when transferring large repos over slow links. |
 | `HPC_NO_SSH_MULTIPLEX` | (unset) | Set to `1` to disable OpenSSH connection multiplexing. Some clusters disallow it (e.g. PAM session limits). Without multiplexing, every status poll pays a full SSH handshake. |
 | `HPC_SSH_NO_BACKOFF` | (unset) | Set to `1` to disable transient-failure exponential backoff. Used by the test suite when mocking subprocess; production callers should leave this alone. |
-| `HPC_SUBMIT_NO_LOCK` | (unset) | Set to `1` to disable the per-cluster submit-flow flock. Allows parallel `submit-flow` calls from different shells against the same cluster — only safe when the operator confirms races are tolerable. |
+| `HPC_SUBMIT_NO_LOCK` | (unset) | Set to `1` to disable the per-repo submit-flow advisory flock. The lock serializes concurrent `submit-flow` / `submit-flow-batch` calls against the same experiment dir so two shells don't both fan out N qsubs at the cluster's sshd. Retained for two narrow callers: (a) the test suite, where `submit_flow` is exercised in parallel with mocked subprocess (no real qsub to race), and (b) operators who deliberately want concurrent submits (different specs, different shells) and have confirmed the cluster can absorb the burst. Disabling outside those two cases risks a scheduler-throttling stampede. |
 
 ## Validation thresholds
 
