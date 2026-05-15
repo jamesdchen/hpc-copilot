@@ -15,7 +15,7 @@ and the JSON files are a build artifact, the same posture
 `docs/generated/operations.md` and `docs/primitives/<name>.md` frontmatter use
 relative to the `@primitive` registry.
 
-External consumers (MARs, future agent harnesses, the in-process
+External consumers (agent harnesses, the in-process
 `validate_output` boundary check) read the JSON. Framework
 contributors edit the Pydantic. Pre-commit's `build-schemas`
 `--check` gate fails CI when the two diverge.
@@ -109,7 +109,7 @@ CLI ↔ primitive mapping:
 | `hpc-agent capabilities` | [capabilities](primitives/capabilities.md) |
 | `hpc-agent preflight` | [check-preflight](primitives/check-preflight.md) |
 | `hpc-agent clusters list` | [clusters-list](primitives/clusters-list.md) |
-| `hpc-agent clusters describe <name>` | [clusters-describe](primitives/clusters-describe.md) |
+| `hpc-agent clusters describe <name> [--strict]` | [clusters-describe](primitives/clusters-describe.md) |
 | `hpc-agent discover` | [discover-executors](primitives/discover-executors.md) |
 | `hpc-agent list-in-flight` | [list-in-flight](primitives/list-in-flight.md) |
 | `hpc-agent campaign status` | [campaign-status](primitives/campaign-status.md) |
@@ -123,5 +123,68 @@ CLI ↔ primitive mapping:
 | `hpc-agent inspect-cluster --cluster <name>` | [inspect-cluster](primitives/inspect-cluster.md) |
 | `hpc-agent runtime-prior --profile <p> --cluster <c>` | [read-runtime-prior](primitives/read-runtime-prior.md) |
 | `hpc-agent plan-submit --profile <p> --cluster <c>` | [score-submit-plan](primitives/score-submit-plan.md) |
+| `hpc-agent summarize-submit-plan --spec <path>` | [summarize-submit-plan](primitives/summarize-submit-plan.md) |
+| `hpc-agent decide-monitor-arm --spec <path>` | [decide-monitor-arm](primitives/decide-monitor-arm.md) |
+| `hpc-agent walltime-drift --profile <p> --cluster <c>` | [walltime-drift](primitives/walltime-drift.md) |
+| `hpc-agent house-edge --profile <p> --cluster <c>` | [house-edge](primitives/house-edge.md) |
+| `hpc-agent predict-queue-wait --profile <p> --cluster <c>` | [predict-queue-wait](primitives/predict-queue-wait.md) |
+| `hpc-agent predict-start-time --spec <path>` | [predict-start-time](primitives/predict-start-time.md) |
+| `hpc-agent best-submit-window --profile <p> --cluster <c>` | [best-submit-window](primitives/best-submit-window.md) |
 
-This table is hand-maintained until `scripts/build_primitive_index.py` learns to render it; the catalog at `docs/primitives/README.md` is auto-generated and is the canonical view.
+The CLI subcommand name and the primitive name sometimes differ:
+`plan-submit` is backed by `score-submit-plan`, `runtime-prior` by
+`read-runtime-prior`. The primitive name is the canonical identifier
+used in `hpc-agent capabilities` output and in the
+`docs/primitives/<name>.md` filenames; the CLI subcommand name is what
+you type. When in doubt, the auto-generated catalog at
+[`docs/generated/operations.md`](../generated/operations.md) and
+[`docs/primitives/README.md`](../primitives/README.md) is the canonical view.
+
+This table is hand-maintained until `scripts/build_primitive_index.py` learns to render it.
+
+## `capabilities` output for runtime feature gating
+
+`hpc-agent capabilities` (no flag) emits the standard JSON envelope.
+Use it to discover what a particular install supports. Stable `data`
+shape:
+
+```json
+{
+  "version": "<package version, e.g. 0.3.0>",
+  "subcommands": ["aggregate", "campaign", ..., "walltime-drift"],
+  "supported_schedulers": ["sge", "slurm"],
+  "schemas_dir": "<absolute path to claude_hpc/schemas/>",
+  "journal_dir": "<absolute path to $HPC_JOURNAL_DIR or default>",
+  "ssh_multiplexing": true,
+  "mars_skill_paths": {"hpc-submit": "<path>/skills/hpc-submit/SKILL.md", ...},
+  "required_env": ["SSH_AUTH_SOCK", "HPC_JOURNAL_DIR", "HPC_CLUSTERS_CONFIG"],
+  "cluster_yaml_keys": [{"key": "scheduler", "type": "Literal", "required": true, "description": "..."}, ...],
+  "operations": [{"name": "<primitive>", "verb": "...", "idempotent": true, "side_effects": [...], "cli": "...", "input_schema": "<file>", "output_schema": "<file>", "agent_facing": true}, ...]
+}
+```
+
+Full schema: `claude_hpc/schemas/capabilities.output.json`.
+
+- `subcommands` is the authoritative list of available CLI verbs
+  (derived from the live argparse tree). New installs that ship
+  additional subcommands surface them here automatically.
+- `mars_skill_paths` maps each slash-command skill bundle's basename
+  to its `SKILL.md` path. Empty on wheel-only installs. The field
+  name is wire-compat; the values are the package's
+  `skills/hpc-*/SKILL.md` paths.
+- `cluster_yaml_keys` is the canonical declarative manifest of
+  per-cluster YAML fields. Use it to introspect what's recognized
+  without parsing source.
+
+### `capabilities --full`
+
+`hpc-agent capabilities --full` is a documented exception to the
+stdout-is-JSON contract. It writes a multi-section plain-text dump
+modeled on Modal's `llms-full.txt` pattern: the catalog table,
+followed by the full body and input/output JSON schemas for every
+`agent_facing=true` primitive. Intended for one-shot LLM context
+loading, analogous to `--help`. Do not parse it as JSON.
+
+If you need both the structured catalog (for feature gating) and the
+prose (for context loading), call `capabilities` first and
+`capabilities --full` second; they are cheap and side-effect-free.

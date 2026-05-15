@@ -1,7 +1,7 @@
 """Command-line interface — the agent surface.
 
-Designed to be invoked by automation (MARs orchestrator agents via the
-Bash tool, cron, scripts). Conventions:
+Designed to be invoked by automation (external orchestrator agents via
+a Bash-style tool, cron, scripts). Conventions:
 
 - Stdout is exclusively a single-line JSON envelope. Exception:
   ``capabilities --full`` emits a plain-text ``llms-full`` dump (one-shot
@@ -33,11 +33,7 @@ from typing import Any
 import claude_hpc
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc.state.discover import (
-    detect_mars_tier,
-    discover_executors,
-    read_meta_json,
-)
+from claude_hpc.state.discover import discover_executors
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
@@ -157,8 +153,9 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
 
 def _require_ssh_agent() -> int | None:
     # Cluster-touching subcommands hang silently when SSH_AUTH_SOCK is
-    # missing — the most common Bun.spawn failure mode for orchestrators
-    # like MARs. Fail fast with a typed error instead of stalling on auth.
+    # missing — the most common default-empty-spawn-env failure mode
+    # for external orchestrators. Fail fast with a typed error instead
+    # of stalling on auth.
     if os.environ.get("SSH_AUTH_SOCK"):
         return None
     return _err_from_hpc(
@@ -167,7 +164,7 @@ def _require_ssh_agent() -> int | None:
             remediation=(
                 "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
                 "environment, then run `hpc-agent preflight` to verify. "
-                "See docs/workflows/mars-integration.md for the Bun.spawn env block."
+                "See docs/integrations/CONTRACT.md for the spawn env block."
             ),
         )
     )
@@ -318,7 +315,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
 # tests that import the constant directly from agent_cli.
 # back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 —
 # update tests to import from claude_hpc.atoms.capabilities directly.
-from claude_hpc.atoms.capabilities import _MARS_SKILL_NAMES  # noqa: E402,F401
+from claude_hpc.atoms.capabilities import _SKILL_NAMES  # noqa: E402,F401
 
 
 def _live_subcommands() -> list[str]:
@@ -513,9 +510,6 @@ def cmd_discover(args: argparse.Namespace) -> int:
             for i in infos
         ]
     }
-    meta = _build_mars_meta_block(Path(args.experiment_dir))
-    if meta is not None:
-        data["meta"] = meta
     _ok(data, name="discover-executors")
     return EXIT_OK
 
@@ -549,24 +543,6 @@ def cmd_discover_reducers(args: argparse.Namespace) -> int:
     }
     _ok(data, name="discover-reducers")
     return EXIT_OK
-
-
-def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
-    """Assemble the ``meta`` block for the discover envelope.
-
-    Returns ``None`` when *experiment_dir* is not a MARs experiment
-    (no ``meta.json`` present). Otherwise extracts the fields claude-hpc
-    knows about and adds a path-derived ``tier``.
-    """
-    raw = read_meta_json(experiment_dir)
-    if raw is None:
-        return None
-    block: dict[str, Any] = {}
-    for key in ("experiment_id", "seed", "purpose"):
-        if key in raw:
-            block[key] = raw[key]
-    block["tier"] = detect_mars_tier(experiment_dir)
-    return block
 
 
 # ─── subcommand: clusters ──────────────────────────────────────────────────
@@ -760,7 +736,10 @@ def cmd_clusters_describe(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.clusters."""
     from claude_hpc.atoms.clusters import describe_cluster
 
-    _ok(describe_cluster(name=args.name), name="clusters-describe")
+    _ok(
+        describe_cluster(name=args.name, strict=bool(getattr(args, "strict", False))),
+        name="clusters-describe",
+    )
     return EXIT_OK
 
 
@@ -1246,34 +1225,11 @@ def _preempted_summary_from_sidecar(
     return len(preempted_ids), sorted(preempted_ids)
 
 
-def _overlay_meta_on_spec(spec: dict[str, Any], experiment_dir: Path) -> dict[str, Any]:
-    """Overlay missing ``profile`` / ``job_name`` from ``meta.json``.
-
-    Uses ``setdefault`` semantics — never overwrites a caller-supplied
-    value, silent no-op when ``meta.json`` is absent or has no
-    ``experiment_id``. Mutates and returns *spec* for clarity.
-    """
-    meta = read_meta_json(experiment_dir)
-    if meta is None:
-        return spec
-    experiment_id = meta.get("experiment_id")
-    if not experiment_id:
-        return spec
-    spec.setdefault("profile", experiment_id)
-    spec.setdefault("job_name", experiment_id)
-    return spec
-
-
 # ─── subcommand: submit ────────────────────────────────────────────────────
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
-    # Load without schema validation so ``--from-meta`` can fill missing
-    # required fields (profile/job_name) before the schema check rejects
-    # an otherwise-partial spec.
     spec = _load_spec(args.spec, schema_name=None)
-    if getattr(args, "from_meta", False):
-        spec = _overlay_meta_on_spec(spec, args.experiment_dir)
     _validate_against_schema(spec, "submit")
     required = (
         "profile",
@@ -1920,9 +1876,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_hook = sub.add_parser(
         "hook-install",
         help=(
-            "Install claude-hpc Stop hooks into ~/.claude/settings.json so "
-            "the agent is held to slash-command exit contracts (e.g. "
-            "/monitor-hpc must emit an `armed:` line)."
+            "Install claude-hpc Stop hooks into the user-global "
+            "~/.claude/settings.json so the agent is held to slash-command "
+            "exit contracts (e.g. /monitor-hpc must emit an `armed:` line). "
+            "Writes to the user-global settings file unless --settings "
+            "overrides; there is no automatic project-scoped install path "
+            "today — point --settings at .claude/settings.json inside a "
+            "repo to install per-project."
         ),
     )
     p_hook.add_argument(
@@ -1934,7 +1894,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--settings",
         type=str,
         default=None,
-        help="Override the target settings path (default: ~/.claude/settings.json).",
+        help=(
+            "Override the target settings path. Defaults to "
+            "~/.claude/settings.json (user-global). Pass "
+            "<repo>/.claude/settings.json to scope the install to a "
+            "single project instead."
+        ),
     )
     p_hook.set_defaults(func=cmd_hook_install)
 
@@ -2575,6 +2540,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_cl_list.set_defaults(func=cmd_clusters_list)
     p_cl_desc = p_cl_sub.add_parser("describe", help="Print one cluster's config.")
     p_cl_desc.add_argument("name")
+    p_cl_desc.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Surface yaml keys not recognized by ClusterConfig under "
+            "data.unknown_keys. Useful for catching typos that the "
+            "default extra='ignore' validation would silently drop."
+        ),
+    )
     p_cl_desc.set_defaults(func=cmd_clusters_describe)
 
     # list-in-flight
@@ -2713,16 +2687,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Validate the spec and report what would be launched; no SSH/qsub.",
-    )
-    p_sub.add_argument(
-        "--from-meta",
-        action="store_true",
-        help=(
-            "Overlay missing 'profile' and 'job_name' on the spec from "
-            "<experiment-dir>/meta.json `experiment_id`. setdefault "
-            "semantics — never overwrites caller-supplied values; silent "
-            "no-op when meta.json is absent."
-        ),
     )
     p_sub.set_defaults(func=cmd_submit)
 

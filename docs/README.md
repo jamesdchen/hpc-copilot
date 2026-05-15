@@ -5,7 +5,7 @@ Navigation map for the docs tree.
 ## Where to start
 
 - **New here?** Read the root [`README.md`](../README.md) first; it covers the overall architecture and the human / agent quick starts.
-- **Integrating with MARs?** [`workflows/mars-integration.md`](workflows/mars-integration.md).
+- **Integrating from another agent harness?** [`integrations/CONTRACT.md`](integrations/CONTRACT.md).
 - **Building a campaign loop?** [`workflows/campaign.md`](workflows/campaign.md).
 - **Want the wire contract?** [`reference/cli-spec.md`](reference/cli-spec.md).
 - **Looking up a specific primitive?** [`primitives/`](primitives/) — one file per primitive, indexed at [`primitives/README.md`](primitives/README.md).
@@ -15,13 +15,12 @@ Navigation map for the docs tree.
 ```
 docs/
 ├── README.md                  (this file)
+├── integrations/              integrator-facing contract
+│   └── CONTRACT.md                  wire surface external harnesses compose against
 ├── workflows/                 multi-primitive flows + integration patterns
 │   ├── memory-across-campaigns.md   interview → recall feedback loop
 │   ├── campaign.md                  closed-loop iteration
-│   ├── mars-integration.md          MARs harness integration
-│   ├── migration-from-hpc-yaml.md   one-time migration recipe
-│   └── mars/
-│       └── experiment-runner.snippet.md
+│   └── migration-from-hpc-yaml.md   one-time migration recipe
 ├── reference/                 wire contracts; agent-facing
 │   ├── cli-spec.md                  envelope shape, exit codes, error_codes
 │   ├── python-api-contract.md       Python API + sidecar schema

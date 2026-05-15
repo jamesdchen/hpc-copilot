@@ -30,13 +30,19 @@ Required:
 - `task_count` (int ≥ 1) — expected `tasks.total()`. Mismatch
   raises `spec_invalid` *before* any disk write — catches off-by-one
   bugs at the interview stage instead of after burning compute.
-- `produced_by` (`{kind: "mars" | "human", session_sha?, at?, operator?}`).
+- `produced_by` (`{kind: "mars" | "human", session_sha?, at?, operator?}`). Use `"mars"` for any non-human orchestrator (Claude Code, external harness, cron job); the value is a wire-compat literal kept for integrators that already write it.
 
 Optional:
 
-- `task_kind` — free-text family tag (`ml-hparam-sweep`,
-  `rl-rollout`, `llm-prompt-eval`). No enum; `recall` groups by
-  this tag.
+- `task_kind` — opaque free-text tag the caller picks to group
+  related campaigns. claude-hpc has no taxonomy here: no enum, no
+  canonical set, no validation beyond "it's a string". Examples
+  callers use (`ml-hparam-sweep`, `rl-rollout`, `llm-prompt-eval`,
+  `benchmark-perf`, `data-shard`) are illustrative, not prescriptive
+  — write whatever string fits. `recall` groups by exact-match on
+  whatever was written, so a stable caller-side vocabulary makes
+  the rollup more useful, but it's a caller convention, not a
+  framework requirement.
 - `budget` — opaque dict; units chosen by the interviewer
   (gpu_hours, cpu_hours, credits). `campaign-flow` surfaces these
   in its progress envelope; never enforces them.
@@ -46,8 +52,8 @@ Optional:
   present, `submit-flow` uses these directly; otherwise the
   planner is invoked.
 - `transcript` — Q/A turns (role + text + at). Strongly recommended
-  for human interviews; for MARs interviews this is typically the
-  agent's tool-call trace.
+  for human interviews; for agent-driven interviews this is typically
+  the agent's tool-call trace.
 - `task_generator` — discriminated union over five recipe shapes
   (`enumerated`, `cartesian_product`, `items_x_seeds`,
   `numeric_logspace`, `numeric_linspace`). When present, the
@@ -86,3 +92,41 @@ enforced downstream by `compute_cmd_sha` (kwargs get
 JSON-serializable). The `task_generator` field is opt-in; an
 exotic campaign that doesn't fit the five recipes drops it from
 intent and the agent writes `tasks.py` by hand.
+
+### When to use this vs your caller's own memory model
+
+Integrators frequently already maintain their own experiment journal
+(an LLM-orchestrator's `experiments/<id>/meta.json`, a campaign-loop
+runner's per-campaign log, etc.). `interview` / `recall` are
+scoped specifically at the *interview-time* leak: the conversation
+that produced one `tasks.py`, frozen alongside the file that
+materialized from it.
+
+Use this primitive when the calling agent wants:
+
+- A structured persistence of the *why* (goal, range, budget, abort
+  criterion) next to the `tasks.py` it produced, so subsequent
+  campaigns can ground in observed envelopes.
+- Cross-campaign queryability without re-deriving from chat logs
+  (the calling agent's session context is transient; `recall`'s
+  filesystem walk is durable).
+- A `cmd_sha` fingerprint of the materialized task list at interview
+  time, captured before submit, so drift is visible the next time the
+  campaign re-runs.
+
+Stick with the caller's own journal when:
+
+- The artifact you want to preserve is broader than one
+  campaign (cross-experiment provenance, paper-level metadata,
+  cross-agent project state). `interview.json` is per-campaign by
+  construction; layering experiment-level context on top is the
+  caller's job.
+- The calling agent maintains a richer wire schema (typed metric
+  histories, vector embeddings, structured rejection reasons). The
+  interview primitive's schema is bare-bones on purpose — five
+  recipe shapes for `task_generator` and free-text `goal` /
+  `transcript`. It doesn't replace a domain-specific store.
+
+The two layers coexist: an integrator's experiment-level journal
+keys on `experiment_id`; claude-hpc's interview keys on
+`campaign_dir`. Different scopes, no overlap.

@@ -25,7 +25,7 @@ error_codes:
   description: Scheduler rate limit hit. Wait ≥1s, retry the same spec (idempotency
     protects against double-submit).
 backed_by:
-  cli: hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]
+  cli: hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]
   python: claude_hpc.runner.submit.submit_and_record
 exit_codes:
 - 0: ok

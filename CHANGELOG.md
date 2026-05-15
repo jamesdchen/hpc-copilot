@@ -1,6 +1,128 @@
 # Changelog
 
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+on the wire surface enumerated in
+[`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
+
 ## Unreleased
+
+### Removed (experiment-shaped surface that moved out to the caller)
+
+Per the cleavage: claude-hpc owns the parallelization scaffolding;
+the caller owns the experiment-specific layout, the experiment-type
+vocabulary, and any meta-file enrichment. Net effect: claude-hpc no
+longer reads or enriches anyone else's experiment-context file.
+
+- `claude_hpc.state.discover.detect_experiment_tier()` — inferred
+  Tier-1 (`probes/probe-*/probe.py`) vs Tier-2 (`runs/run-*/scripts/`)
+  from path layout. Integrators that adopt that convention now
+  detect the tier themselves and dispatch accordingly.
+- `claude_hpc.state.discover.read_meta_json()` — read
+  `<experiment-dir>/meta.json` as a dict. Two-line stdlib helper;
+  callers reproduce it on their side.
+- `agent_cli._build_meta_block()` and the `data.meta` field on the
+  `hpc-agent discover` envelope — claude-hpc no longer enriches the
+  discover envelope with `experiment_id` / `seed` / `purpose` /
+  `tier` from `meta.json`. The envelope now returns just
+  `data.executors`. Callers that want experiment context add it
+  client-side.
+- `agent_cli._overlay_meta_on_spec()` and the `hpc-agent submit
+  --from-meta` flag — claude-hpc no longer overlays missing
+  `profile` / `job_name` on the submit spec from
+  `meta.json::experiment_id`. Callers populate the spec themselves
+  before calling `submit`.
+- The auto-narrow-to-`scripts/`-when-meta.json-present heuristic in
+  `discover_executors`. The scanner now always walks
+  `executors/` / `scripts/` / `src/` by default; callers that want a
+  tighter scan pass `search_dirs=("scripts",)` explicitly.
+- `tests/state/test_meta_json_layout.py` — covered the removed
+  behavior.
+- `TestSubmitFromMeta` class in `tests/cli/test_submit.py`.
+
+Wire-level impact: MARs at the pinned re-pin commit (`ec041c6`) is
+unaffected — `hpc-agent discover` is not in its listed dep-surface
+subcommand set, and the `--from-meta` flag was never in MARs's listed
+flag set. Other integrators that happened to consume these surfaces
+need to reproduce the (small) logic on their side; see the migration
+notes below.
+
+### Added
+
+- **`docs/integrations/CONTRACT.md`** — integrator-agnostic reference
+  for the wire surface external agent harnesses compose against. Covers
+  the spawn env block, the
+  `find-prior-run` → `submit` → `monitor-summary` →
+  `verify-aggregation-complete` workflow, the `error_code` → retry
+  policy table, the `.hpc/tasks.py` boundary, the executor import
+  allowlist, the dispatcher-side env vars, and the `lifecycle_state`
+  values.
+- **`claude_hpc.integration` constants module** — `RESULT_DIR_ENV`,
+  `HPC_KW_PREFIX`, `LOCAL_DATA_DIR_ENV`, `JOURNAL_DIR_ENV`,
+  `CLUSTERS_CONFIG_ENV`, `LIFECYCLE_STATES`, `ERROR_CODES`.
+  Integrators import these instead of carrying string literals that
+  drift.
+- **`hpc-agent clusters describe <name> --strict`** — surfaces
+  `clusters.yaml` keys not recognized by `ClusterConfig` under
+  `data.unknown_keys`. Opt-in only — `ClusterConfig` itself stays
+  `extra="ignore"` for back-compat (flipping the default would break
+  every existing user's `clusters.yaml`).
+- **Executor import-boundary allowlist** now includes
+  `claude_hpc.executor_cli` alongside `claude_hpc.mapreduce.metrics_io`.
+  The canonical `tasks_example.py` template already required this; the
+  doc and lint test had drifted.
+
+### Changed
+
+- **README quick-start** is now explicit that the six slash commands
+  (`/preflight`, `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`,
+  `/campaign-hpc`, `/hpc-axes-init`) are installed by `/setup_hpc` from
+  templates under `src/slash_commands/commands/`. Previously the
+  README implied they were available out of the box.
+- **`docs/reference/python-api-contract.md`** corrected:
+  `claude_hpc.state.runtime_prior.summarize` was a phantom — the real
+  symbol is `roll_up_quantiles`.
+- **Narrative docs and schema descriptions** genericized: references
+  to a specific integrator are replaced with integrator-agnostic
+  language.
+- **Python identifier renames** to lift the legacy integrator name
+  out of the Python API. None of these are imported by MARs at the
+  re-pin commit (`ec041c6`); the rename is doc-only at the wire
+  level:
+
+  | Old name | New name | Surface |
+  |---|---|---|
+  | `claude_hpc.state.discover.detect_mars_tier` | `detect_experiment_tier` | Python (`__all__`) |
+  | `_MARS_SKILL_NAMES` | `_SKILL_NAMES` | private constant in `atoms/capabilities.py`; back-compat re-export from `agent_cli.py` follows the renamed name |
+  | `_mars_skill_paths()` | `_resolve_skill_paths()` | private helper |
+  | `_MARS_CANDIDATE_DIRS` | `_META_CANDIDATE_DIRS` | private |
+  | `_build_mars_meta_block()` | `_build_meta_block()` | private |
+
+  The wire surface is deliberately NOT renamed: the
+  `data.mars_skill_paths` field on the `capabilities` envelope and the
+  `produced_by.kind == "mars"` literal on `interview` / `recall` stay
+  as-is so v1 integrates perfectly with MARs at the pinned commit.
+  The two are intentional wire-compat retentions; new integrators are
+  free to write `kind: "mars"` to mean "any non-human agent".
+
+### Removed
+
+- `docs/workflows/mars-integration.md` and
+  `docs/workflows/mars/experiment-runner.snippet.md`. The
+  integrator-facing content lives in
+  `docs/integrations/CONTRACT.md`; references in `README.md`,
+  `docs/README.md`, and `docs/internals/sync-checklist.md` point at
+  the new file.
+- `tests/contracts/test_docs_links.py`. Its sole job was guarding the
+  deleted integration proposal docs.
+- Every narrative-text "mars" mention from docs, comments, and
+  docstrings — replaced with integrator-agnostic language. The file
+  `tests/state/test_mars_layout.py` was renamed to
+  `test_meta_json_layout.py`; its test-class names
+  (`TestMarsLayoutFilter`, `TestDetectMarsTier`) became
+  `TestMetaJsonLayoutFilter`, `TestDetectExperimentTier`. Two wire
+  surfaces (`data.mars_skill_paths` and `kind: "mars"`) are
+  intentionally retained — see Changed.
 
 ### Audit pass — bug fixes across CLI, planning, flows, runner, mapreduce, forecast, schema, infra
 

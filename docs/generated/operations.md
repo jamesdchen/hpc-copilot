@@ -29,7 +29,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`campaign-replay`](primitives/campaign-replay.md) | ✓ | _none_ | `hpc-agent campaign replay --campaign-id <id> [--last-n <n>]` | `claude_hpc.atoms.campaign_replay.campaign_replay` | — | `claude_hpc/schemas/campaign.output.json` |
 | [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]` | `claude_hpc.atoms.campaign_status.campaign_status` | — | — |
 | [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-agent capabilities` | `claude_hpc.atoms.capabilities.capabilities` | — | `claude_hpc/schemas/capabilities.output.json` |
-| [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name>` | `claude_hpc.atoms.clusters.describe_cluster` | — | `claude_hpc/schemas/clusters_describe.output.json` |
+| [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `claude_hpc.atoms.clusters.describe_cluster` | — | `claude_hpc/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `claude_hpc.atoms.clusters.list_clusters` | — | `claude_hpc/schemas/clusters_list.output.json` |
 | [`decide-monitor-arm`](primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `claude_hpc.atoms.monitor_arm.decide_monitor_arm` | `claude_hpc/schemas/decide_monitor_arm.input.json` | `claude_hpc/schemas/decide_monitor_arm.output.json` |
 | [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover --experiment-dir <path>` | `claude_hpc.state.discover.discover_executors` | — | `claude_hpc/schemas/discover.output.json` |
@@ -88,7 +88,7 @@ Records a new submission (sidecar write + journal entry).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `claude_hpc.runner.submit.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
+| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `claude_hpc.runner.submit.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
 
 ## `scaffold` (6)
 

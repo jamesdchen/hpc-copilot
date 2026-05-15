@@ -33,4 +33,4 @@ The agent's job collapses to: read the run state, call this primitive, copy `dat
 - **Stop hook contract**: `data.armed_line` matches the regex the `monitor_armed_check` Stop hook enforces. Hand-authoring the line is the failure mode this primitive exists to eliminate; the hook's block message points users back to this primitive.
 - **Terminal detection**: `arm == "none"` when (a) `complete == total_tasks` or (b) `failed > 0 and running == 0 and pending == 0`. The slash command must `CronDelete` any prior cron for the run_id when arm is none.
 - **`/loop` invocation**: when `user_invoked_via_loop=True`, returns `arm == "loop"` with `cadence_sec=0` and `cron_create_args=null`. The user is driving the cadence; the primitive's only job is the `armed:` line.
-- **Side-effect-free**: pure function. Safe to call from anywhere (slash command, MARs orchestrator, debug shell). Run multiple times to compare cadence picks across hypothetical states.
+- **Side-effect-free**: pure function. Safe to call from anywhere (slash command, external orchestrator, debug shell). Run multiple times to compare cadence picks across hypothetical states.

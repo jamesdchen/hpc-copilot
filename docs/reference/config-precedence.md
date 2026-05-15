@@ -25,9 +25,9 @@ Notes:
   so subsequent commands rebuild full context without an external config
   file. Conversational generation only — there is no user-authored
   experiment-config yaml.
-- Layer 4 (env vars) is *operator* config. Used by MARs and CI to point
-  the framework at non-default state directories or alternate cluster
-  catalogs.
+- Layer 4 (env vars) is *operator* config. Used by integrators and CI
+  to point the framework at non-default state directories or alternate
+  cluster catalogs.
 - Layer 5 (`claude_hpc/config/clusters.yaml`) is the *package
   default*. Ships inside the wheel; only edited via PR.
 
@@ -41,8 +41,8 @@ Notes:
   re-exported as `claude_hpc.load_clusters_config`.
 - **Override path**: set `HPC_CLUSTERS_CONFIG=/path/to/clusters.yaml`
   to redirect the loader at an alternate file. (CLI flag override is
-  not currently exposed; an MAR running against a fork drops a sibling
-  YAML in place and points the env var at it.)
+  not currently exposed; integrators running against a fork drop a
+  sibling YAML in place and point the env var at it.)
 - **Schema**: documented in `docs/reference/boundary-contract.md` under "Config
   split"; the lint test `test_clusters_yaml_is_infra_only` enforces
   infra-only keys.
@@ -51,8 +51,8 @@ Notes:
 
 - **Default**: `~/.claude/hpc/`
 - **Override**: env var `HPC_JOURNAL_DIR=/some/dir`. Read at import
-  time in `claude_hpc/_internal/session.py:HPC_HOMEDIR`. MARs that want
-  isolated state per agent set this to a per-agent path.
+  time in `claude_hpc/_internal/session.py:HPC_HOMEDIR`. Integrators
+  that want isolated state per agent set this to a per-agent path.
 - **No CLI flag, no sidecar field** — journal location is operator
   config, not experiment config.
 

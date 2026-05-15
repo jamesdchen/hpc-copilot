@@ -289,7 +289,7 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    copied into experiment repos; treating them as importable modules
    would couple the framework to a fixed set of templates.
 3. **`claude_hpc/mapreduce/templates/**` MUST NOT import from
-   `claude_hpc/**`** — with one narrow exception. Templates ship
+   `claude_hpc/**`** — with narrow exceptions. Templates ship
    into experiment repos and run there, where `claude-hpc` is
    generally not installed. The exception: a small allowlist of
    "runtime modules" that `deploy_runtime`
@@ -297,11 +297,18 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    compute node alongside the executor. Templates may import from those
    because they are guaranteed to be present at execution time. The current
    allowlist (kept in sync with `RUNTIME_MODULES_ALLOWED_IN_TEMPLATES` in
-   `tests/test_boundary_contract.py`) is:
-   - `claude_hpc.mapreduce.metrics_io` — the `write_metrics` sidecar writer.
-     Stdlib-only, deployed alongside `combiner.py`. Templates use a lazy
-     import gated on `$RESULT_DIR` so smoke tests still run without
+   `tests/contracts/test_boundary_contract.py`) is:
+   - `claude_hpc.mapreduce.metrics_io` — the `write_metrics` sidecar
+     writer plus the `read_kw_env` kwargs-from-env helper. Stdlib-only,
+     deployed alongside `combiner.py`. Templates use a lazy import
+     gated on `$RESULT_DIR` so smoke tests still run without
      `claude-hpc` installed.
+   - `claude_hpc.executor_cli` — the `flag`, `generic_args`,
+     `gpu_args`, and `build_parser_from_flags` helpers used by the
+     canonical `tasks.py` template (see
+     `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`) and
+     the auto-generated `.hpc/cli.py` dispatcher. Stdlib-only,
+     deployed alongside `metrics_io.py` by `deploy_runtime`.
 
    To add a new entry, the module must (a) be deployed by `deploy_runtime`,
    (b) be stdlib-only or self-contained, and (c) be added to both the

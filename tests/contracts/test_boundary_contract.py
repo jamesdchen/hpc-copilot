@@ -240,6 +240,7 @@ def test_core_does_not_import_templates() -> None:
 RUNTIME_MODULES_ALLOWED_IN_TEMPLATES = frozenset(
     {
         "claude_hpc.mapreduce.metrics_io",
+        "claude_hpc.executor_cli",
     }
 )
 

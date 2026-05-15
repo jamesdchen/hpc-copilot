@@ -16,7 +16,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent clusters describe <name>
+  cli: hpc-agent clusters describe <name> [--strict]
   python: claude_hpc.atoms.clusters.describe_cluster
 exit_codes:
 - 0: ok

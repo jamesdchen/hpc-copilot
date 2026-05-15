@@ -17,7 +17,7 @@ from claude_hpc import __version__
 # (substring, relative_module, remove_in, hint)
 _FORWARDERS: list[tuple[str, str, str, str]] = [
     (
-        "_MARS_SKILL_NAMES",
+        "_SKILL_NAMES",
         "agent_cli.py",
         "0.4.0",
         "drop the back-compat re-export; tests should import "

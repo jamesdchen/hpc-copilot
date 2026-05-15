@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/interview.input.json",
   "title": "interview intent",
-  "description": "Structured campaign intent produced by an interview between the hpc agent and either MARs or a human.\n\nDeliberately bare-bones: captures *why* (goal, transcript,\nprovenance), *how big* (task_count), *what tags* (task_kind),\nand *what limits* (budget, abort_if). Does NOT typed-encode the\nsearch space — that would narrow the existing\nexperiment-agnostic tasks.py contract.",
+  "description": "Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.\n\nDeliberately bare-bones: captures *why* (goal, transcript,\nprovenance), *how big* (task_count), *what tags* (task_kind),\nand *what limits* (budget, abort_if). Does NOT typed-encode the\nsearch space — that would narrow the existing\nexperiment-agnostic tasks.py contract.",
   "type": "object",
   "required": [
     "goal",
@@ -33,7 +33,7 @@
         }
       ],
       "default": null,
-      "description": "Free-text tag identifying the campaign family for recall queries ('ml-hparam-sweep', 'rl-rollout', 'llm-prompt-eval', 'benchmark-perf', 'data-shard'). No enum — new families are encouraged. cmd_recall groups by this tag.",
+      "description": "Free-text tag the caller picks to group related campaigns for recall queries. claude-hpc does not own this vocabulary — there is no enum, no canonical set, and the framework treats it as an opaque string. Common shapes callers use today (purely as examples; you are not required to match them): 'ml-hparam-sweep', 'rl-rollout', 'llm-prompt-eval', 'benchmark-perf', 'data-shard'. recall groups by exact-match on whatever string the caller wrote, so sticking with a stable vocabulary within one project makes the rollup more useful — but that's a caller-side convention, not a framework requirement.",
       "title": "Task Kind"
     },
     "budget": {
@@ -89,7 +89,7 @@
         }
       ],
       "default": null,
-      "description": "Interview Q/A turns. Optional but strongly recommended for human interviews — the value of being able to explain 'why did this campaign target cluster X' three months later vastly outweighs the few KB of storage. For MARs interviews this is typically the agent's tool-call trace.",
+      "description": "Interview Q/A turns. Optional but strongly recommended for human interviews — the value of being able to explain 'why did this campaign target cluster X' three months later vastly outweighs the few KB of storage. For agent-driven interviews this is typically the agent's tool-call trace.",
       "title": "Transcript"
     },
     "notes": {
@@ -474,7 +474,7 @@
             }
           ],
           "default": null,
-          "description": "MARs session identifier. Required when kind=mars; null otherwise.",
+          "description": "External-orchestrator session identifier. Required when kind=mars; null otherwise. The `mars` value is a wire literal kept for compatibility with existing integrators that already write it; new integrators may use the same value to mean 'any non-human agent'.",
           "title": "Session Sha"
         },
         "at": {
@@ -500,7 +500,7 @@
             }
           ],
           "default": null,
-          "description": "Human operator name/handle when kind=human; null for MARs.",
+          "description": "Human operator name/handle when kind=human; null when kind=mars.",
           "title": "Operator"
         }
       },

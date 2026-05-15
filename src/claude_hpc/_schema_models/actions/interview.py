@@ -19,12 +19,18 @@ class _Provenance(BaseModel):
     kind: Literal["mars", "human"]
     session_sha: str | None = Field(
         default=None,
-        description="MARs session identifier. Required when kind=mars; null otherwise.",
+        description=(
+            "External-orchestrator session identifier. Required when "
+            "kind=mars; null otherwise. The `mars` value is a wire "
+            "literal kept for compatibility with existing integrators "
+            "that already write it; new integrators may use the same "
+            "value to mean 'any non-human agent'."
+        ),
     )
     at: str | None = Field(default=None, description="ISO-8601 timestamp.")
     operator: str | None = Field(
         default=None,
-        description="Human operator name/handle when kind=human; null for MARs.",
+        description="Human operator name/handle when kind=human; null when kind=mars.",
     )
 
 
@@ -169,7 +175,7 @@ _TaskGenerator = Annotated[
 
 
 class InterviewSpec(BaseModel):
-    """Structured campaign intent produced by an interview between the hpc agent and either MARs or a human.
+    """Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.
 
     Deliberately bare-bones: captures *why* (goal, transcript,
     provenance), *how big* (task_count), *what tags* (task_kind),
@@ -193,11 +199,17 @@ class InterviewSpec(BaseModel):
     task_kind: str | None = Field(
         default=None,
         description=(
-            "Free-text tag identifying the campaign family for "
-            "recall queries ('ml-hparam-sweep', 'rl-rollout', "
-            "'llm-prompt-eval', 'benchmark-perf', 'data-shard'). No "
-            "enum — new families are encouraged. cmd_recall groups "
-            "by this tag."
+            "Free-text tag the caller picks to group related campaigns "
+            "for recall queries. claude-hpc does not own this "
+            "vocabulary — there is no enum, no canonical set, and the "
+            "framework treats it as an opaque string. Common shapes "
+            "callers use today (purely as examples; you are not "
+            "required to match them): 'ml-hparam-sweep', 'rl-rollout', "
+            "'llm-prompt-eval', 'benchmark-perf', 'data-shard'. recall "
+            "groups by exact-match on whatever string the caller wrote, "
+            "so sticking with a stable vocabulary within one project "
+            "makes the rollup more useful — but that's a caller-side "
+            "convention, not a framework requirement."
         ),
     )
     budget: _BudgetSpec | None = Field(
@@ -222,7 +234,7 @@ class InterviewSpec(BaseModel):
             "for human interviews — the value of being able to "
             "explain 'why did this campaign target cluster X' three "
             "months later vastly outweighs the few KB of storage. "
-            "For MARs interviews this is typically the agent's "
+            "For agent-driven interviews this is typically the agent's "
             "tool-call trace."
         ),
     )
