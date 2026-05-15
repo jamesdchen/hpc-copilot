@@ -121,7 +121,7 @@ def is_executor_source(source: str) -> bool:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent discover --experiment-dir <path>",
+    cli="hpc-agent discover --experiment-dir <path> [--search-dirs <a,b,c>]",
     agent_facing=True,
 )
 def discover_executors(
