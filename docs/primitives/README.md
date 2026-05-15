@@ -94,7 +94,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [campaign-replay](campaign-replay.md) | yes | _none_ | `hpc-agent campaign replay --campaign-id <id> [--last-n <n>]` |
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]` |
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-agent capabilities` |
-| [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name>` |
+| [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name> [--strict]` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-agent clusters list` |
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
 | [discover-executors](discover-executors.md) | yes | _none_ | `hpc-agent discover --experiment-dir <path>` |

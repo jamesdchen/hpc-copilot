@@ -72,6 +72,6 @@ def describe_cluster(*, name: str, strict: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {"name": name, "config": cfg}
     if strict:
         allowed = set(ClusterConfig.model_fields.keys())
-        unknown = sorted(k for k in cfg.keys() if k not in allowed) if isinstance(cfg, dict) else []
+        unknown = sorted(k for k in cfg if k not in allowed) if isinstance(cfg, dict) else []
         out["unknown_keys"] = unknown
     return out
