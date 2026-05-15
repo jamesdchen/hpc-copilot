@@ -199,11 +199,17 @@ class InterviewSpec(BaseModel):
     task_kind: str | None = Field(
         default=None,
         description=(
-            "Free-text tag identifying the campaign family for "
-            "recall queries ('ml-hparam-sweep', 'rl-rollout', "
-            "'llm-prompt-eval', 'benchmark-perf', 'data-shard'). No "
-            "enum — new families are encouraged. cmd_recall groups "
-            "by this tag."
+            "Free-text tag the caller picks to group related campaigns "
+            "for recall queries. claude-hpc does not own this "
+            "vocabulary — there is no enum, no canonical set, and the "
+            "framework treats it as an opaque string. Common shapes "
+            "callers use today (purely as examples; you are not "
+            "required to match them): 'ml-hparam-sweep', 'rl-rollout', "
+            "'llm-prompt-eval', 'benchmark-perf', 'data-shard'. recall "
+            "groups by exact-match on whatever string the caller wrote, "
+            "so sticking with a stable vocabulary within one project "
+            "makes the rollup more useful — but that's a caller-side "
+            "convention, not a framework requirement."
         ),
     )
     budget: _BudgetSpec | None = Field(
