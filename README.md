@@ -14,7 +14,17 @@ Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markd
 ```bash
 pip install -e .
 ```
-Open the repo in Claude Code, then:
+Open the repo in Claude Code and run `/setup_hpc` once — it installs
+the slash commands listed below into `~/.claude/commands/` (and
+optionally wires up the bundled Stop hooks). Only `/setup_hpc` ships
+in this repo's `.claude/commands/`; the others (`/preflight`,
+`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`,
+`/hpc-axes-init`) live as templates under
+`src/slash_commands/commands/` and become available globally after
+`/setup_hpc` copies them.
+
+Once installed:
+
 - `/preflight` (optional) — verify SSH agent + cluster reachability. `/submit-hpc` auto-runs this as a cached gate, so you only need it for ad-hoc diagnostics.
 - `/submit-hpc` — answer prompts about cluster, executor, grid params. Scaffolds the executor inline if none exists.
 - `/monitor-hpc` to monitor, `/aggregate-hpc` to collect results.
