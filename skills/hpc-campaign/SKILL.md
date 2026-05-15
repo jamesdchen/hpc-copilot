@@ -47,7 +47,7 @@ Per iteration, three workflow-atom invocations:
 3. **Aggregate** (optional, when the strategy needs cross-wave reduced metrics): invoke [aggregate-flow](../../docs/primitives/aggregate-flow.md). For per-trial-QLIKE-style strategies, this is where the metric the strategy will `tell()` comes from; for simpler strategies that read per-task reduce JSONs directly, skip this step.
 4. **Decide**: re-import `tasks.py` and check `tasks.total()`. If `> 0`, go to Step 1. Else done.
 
-Three CLI calls per iteration, all emitting the same JSON envelope shape. The same loop runs identically under Claude Code, cron, or external orchestrators (MARs) because composition is at the CLI-atom level.
+Three CLI calls per iteration, all emitting the same JSON envelope shape. The same loop runs identically under Claude Code, cron, or any external orchestrator because composition is at the CLI-atom level.
 
 Concurrency is opt-in: invoke `submit-flow` again before the previous iteration's `monitor-flow` returns if you want K iterations in flight (Optuna's `constant_liar=True` is built for this). Default to sequential when in doubt.
 

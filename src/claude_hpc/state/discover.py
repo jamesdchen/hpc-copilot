@@ -2,7 +2,7 @@
 
 Shared helpers used by ``/submit-hpc`` Step 1 (scanning the repo for
 runnable executors) and the ``hpc-agent build-executor`` CLI
-subcommand (used by MARs orchestrators that scaffold experiments
+subcommand (used by external orchestrators that scaffold experiments
 programmatically). The contract is intentionally minimal — an
 **executor** is a ``.py`` file matching either of two patterns:
 
@@ -43,22 +43,22 @@ from pathlib import Path
 _CLI_FRAMEWORKS = frozenset({"argparse", "click", "typer", "fire"})
 
 # Directory names we scan when the caller does not pass an explicit path.
-# Used when no MARs ``meta.json`` marker is present at *root*.
+# Used when no ``meta.json`` marker is present at *root*.
 _DEFAULT_CANDIDATE_DIRS = ("executors", "scripts", "src")
 
-# When *root* looks like a MARs experiment (``meta.json`` present), MARs's
-# layout contract is ``scripts/`` = entrypoints, ``src/`` = modules. We must
-# not mis-detect modules under ``src/`` as executors.
+# When *root* carries the integrator-side ``meta.json`` marker, the
+# layout contract is ``scripts/`` = entrypoints, ``src/`` = modules. We
+# must not mis-detect modules under ``src/`` as executors.
 _MARS_CANDIDATE_DIRS = ("scripts",)
 
 
 def _default_candidate_dirs(root: Path) -> tuple[str, ...]:
     """Return the default search-dir tuple for *root*.
 
-    Detects MARs Tier-2 / Tier-1 experiments by the presence of a
-    ``meta.json`` file at the experiment-dir root and narrows the scan to
-    ``scripts/`` (Tier-2 entrypoints) — Tier-1 ``probe.py`` lives at the
-    root and is picked up by the existing root-level fallback path.
+    When the integrator-side ``meta.json`` marker is present at the
+    experiment-dir root, narrows the scan to ``scripts/`` (Tier-2
+    entrypoints) — Tier-1 ``probe.py`` lives at the root and is picked
+    up by the existing root-level fallback path.
     """
     if (root / "meta.json").is_file():
         return _MARS_CANDIDATE_DIRS
@@ -128,14 +128,15 @@ class ExecutorInfo:
 def read_meta_json(experiment_dir: Path | str) -> dict | None:
     """Return the parsed ``meta.json`` of *experiment_dir* if present and valid.
 
-    MARs's ``meta.json`` is the authoritative experiment-context marker
-    (``experiment_id``, ``seed``, ``purpose``, …). This helper lets every
-    surface — CLI, slash command, future MARs adapters — read it through one
-    seam.
+    ``meta.json`` is an optional integrator-supplied experiment-context
+    marker (``experiment_id``, ``seed``, ``purpose``, …). This helper
+    lets every surface — CLI, slash command, future integrator adapters
+    — read it through one seam.
 
     Returns ``None`` when the file is missing, unreadable, or not a JSON
-    object. Never raises; claude-hpc is not the place to validate MARs's
-    schema beyond extracting the fields it knows about.
+    object. Never raises; claude-hpc is not the place to validate the
+    integrator's full schema beyond extracting the fields it knows
+    about.
     """
     p = Path(experiment_dir) / "meta.json"
     if not p.is_file():
@@ -148,9 +149,10 @@ def read_meta_json(experiment_dir: Path | str) -> dict | None:
 
 
 def detect_mars_tier(experiment_dir: Path | str) -> int | None:
-    """Infer the MARs tier of *experiment_dir* from path layout.
+    """Infer the experiment tier of *experiment_dir* from path layout.
 
-    MARs's directory contract:
+    Recognizes the directory contract used by integrators that adopt
+    the probes/runs convention:
 
     - Tier-1 probes live under ``probes/probe-*`` with ``probe.py`` at the
       root of the probe directory.

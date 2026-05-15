@@ -1,8 +1,11 @@
-"""MARs-layout integration for executor discovery.
+"""Integrator-layout tests for executor discovery.
 
-Covers:
+Covers the optional integrator-side directory contract: when
+``meta.json`` is present at the experiment-dir root, ``src/`` is
+treated as modules-only and only ``scripts/`` is scanned for
+entrypoints.
 
-* ``discover_executors`` honors MARs's modules-only ``src/`` contract when
+* ``discover_executors`` honors the modules-only ``src/`` contract when
   ``meta.json`` is present at the experiment-dir root — modules under
   ``src/`` must NOT be reported as executors.
 * The Tier-1 ``probe.py`` at experiment-dir root is still discoverable.

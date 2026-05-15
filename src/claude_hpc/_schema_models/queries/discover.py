@@ -17,7 +17,7 @@ class _ExecutorEntry(BaseModel):
 
 
 class _DiscoverMeta(BaseModel):
-    """MARs experiment context, extracted from meta.json."""
+    """Integrator-supplied experiment context, extracted from meta.json."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -33,5 +33,5 @@ class DiscoverResult(BaseModel):
     executors: list[_ExecutorEntry]
     meta: _DiscoverMeta | None = Field(
         default=None,
-        description="MARs experiment context, extracted from meta.json. Present only when meta.json exists at the experiment-dir root.",
+        description="Integrator-supplied experiment context, extracted from meta.json. Present only when meta.json exists at the experiment-dir root.",
     )

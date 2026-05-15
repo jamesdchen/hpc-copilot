@@ -1,9 +1,10 @@
 """Catalog of (stderr pattern, exit code) -> (error_class, suggested_fix).
 
-Pattern adapted from VASPilot's failure-signatures table. MARs branch
-on ``classify()`` to auto-resubmit with adjusted resources rather than
-asking the user --- e.g. a CUDA OOM gets an ``increase-mem-per-gpu``
-fix suggestion that the campaign loop can apply automatically.
+Pattern adapted from VASPilot's failure-signatures table. Integrating
+agents branch on ``classify()`` to auto-resubmit with adjusted
+resources rather than asking the user --- e.g. a CUDA OOM gets an
+``increase-mem-per-gpu`` fix suggestion that the campaign loop can
+apply automatically.
 
 The catalog is ordered by ``priority`` (descending). The first matching
 entry wins. ``priority=100`` are the high-confidence resource-error

@@ -19,12 +19,12 @@ class _Provenance(BaseModel):
     kind: Literal["mars", "human"]
     session_sha: str | None = Field(
         default=None,
-        description="MARs session identifier. Required when kind=mars; null otherwise.",
+        description="External-orchestrator session identifier. Required when kind=mars; null otherwise.",
     )
     at: str | None = Field(default=None, description="ISO-8601 timestamp.")
     operator: str | None = Field(
         default=None,
-        description="Human operator name/handle when kind=human; null for MARs.",
+        description="Human operator name/handle when kind=human; null when kind=mars.",
     )
 
 
@@ -169,7 +169,7 @@ _TaskGenerator = Annotated[
 
 
 class InterviewSpec(BaseModel):
-    """Structured campaign intent produced by an interview between the hpc agent and either MARs or a human.
+    """Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.
 
     Deliberately bare-bones: captures *why* (goal, transcript,
     provenance), *how big* (task_count), *what tags* (task_kind),
@@ -222,7 +222,7 @@ class InterviewSpec(BaseModel):
             "for human interviews — the value of being able to "
             "explain 'why did this campaign target cluster X' three "
             "months later vastly outweighs the few KB of storage. "
-            "For MARs interviews this is typically the agent's "
+            "For agent-driven interviews this is typically the agent's "
             "tool-call trace."
         ),
     )

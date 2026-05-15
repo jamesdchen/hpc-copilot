@@ -2,8 +2,8 @@
 
 Pure-dispatch primitive: builds the capabilities envelope from
 package metadata, the operations catalog, the journal home dir, and
-the resolved MARs skill paths. No SSH, no scheduler, no filesystem
-mutations.
+the resolved slash-command skill paths. No SSH, no scheduler, no
+filesystem mutations.
 """
 
 from __future__ import annotations
@@ -15,10 +15,11 @@ import claude_hpc
 from claude_hpc._internal import session
 from claude_hpc._internal.primitive import primitive
 
-# Names of the MARs-shipped slash-command skill bundles. Capabilities
-# reports the absolute path to each present ``SKILL.md`` so an
-# orchestrator can load the skill content without re-deriving the
-# layout.
+# Names of the slash-command skill bundles shipped in the source tree.
+# Capabilities reports the absolute path to each present ``SKILL.md``
+# so an orchestrator can load the skill content without re-deriving
+# the layout. The ``_MARS_*`` / ``mars_skill_paths`` naming is retained
+# for wire-compat with existing integrators.
 _MARS_SKILL_NAMES = (
     "hpc-submit",
     "hpc-status",
@@ -58,8 +59,8 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     (passed in by the CLI adapter so the atom doesn't reach back into
     the dispatcher to walk argparse internals). Everything else —
     version, supported schedulers, schemas dir, journal dir, ssh
-    multiplexing flag, MARs skill paths, required env vars, and the
-    operations catalog — is computed here.
+    multiplexing flag, slash-command skill paths, required env vars,
+    and the operations catalog — is computed here.
     """
     from claude_hpc._internal.operations import operations_catalog
     from claude_hpc.infra.clusters import CLUSTER_YAML_KEYS

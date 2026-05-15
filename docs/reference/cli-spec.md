@@ -15,7 +15,7 @@ and the JSON files are a build artifact, the same posture
 `docs/generated/operations.md` and `docs/primitives/<name>.md` frontmatter use
 relative to the `@primitive` registry.
 
-External consumers (MARs, future agent harnesses, the in-process
+External consumers (agent harnesses, the in-process
 `validate_output` boundary check) read the JSON. Framework
 contributors edit the Pydantic. Pre-commit's `build-schemas`
 `--check` gate fails CI when the two diverge.

@@ -6,9 +6,9 @@ underlying primitives this file tests are still load-bearing:
 
 * ``discover_executors`` — used by ``/submit-hpc`` Step 1 and the
   ``hpc-agent build-executor`` CLI subcommand (still exposed for
-  MARs orchestrators) to enumerate runnable executors in an experiment
-  repo. Recognizes both contracts: new (``compute(args)`` exported)
-  and old (``__main__`` + argparse).
+  external orchestrators) to enumerate runnable executors in an
+  experiment repo. Recognizes both contracts: new (``compute(args)``
+  exported) and old (``__main__`` + argparse).
 * Template parseability — ``templates/scaffolds/executor_template.py``
   must remain importable Python so the post-copy smoke test can
   succeed.

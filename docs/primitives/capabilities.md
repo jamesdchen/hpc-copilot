@@ -14,7 +14,7 @@ exit_codes:
 
 ## Purpose
 
-Machine-readable feature flags. Lets MARs orchestrators or other agents discover what subcommands this `hpc-agent` install supports, where its schemas live, which env vars it needs, and where its skill files are on disk. Pure introspection; no side effects.
+Machine-readable feature flags. Lets external orchestrators discover what subcommands this `hpc-agent` install supports, where its schemas live, which env vars it needs, and where its skill files are on disk. Pure introspection; no side effects.
 
 ## Compose with
 
@@ -23,5 +23,5 @@ Machine-readable feature flags. Lets MARs orchestrators or other agents discover
 
 ## Notes
 
-- `mars_skill_paths` returns absolute paths to the SKILL.md files for source-tree installs; wheel-only installs may return an empty dict (skills aren't shipped in the wheel).
+- `mars_skill_paths` (legacy field name, retained for wire-compat) returns absolute paths to the SKILL.md files for source-tree installs; wheel-only installs may return an empty dict (skills aren't shipped in the wheel).
 - `required_env` lists env vars the framework expects to be set in the calling shell — agents can use this to validate their environment before invoking other primitives.

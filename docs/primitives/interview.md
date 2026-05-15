@@ -30,7 +30,7 @@ Required:
 - `task_count` (int ≥ 1) — expected `tasks.total()`. Mismatch
   raises `spec_invalid` *before* any disk write — catches off-by-one
   bugs at the interview stage instead of after burning compute.
-- `produced_by` (`{kind: "mars" | "human", session_sha?, at?, operator?}`).
+- `produced_by` (`{kind: "mars" | "human", session_sha?, at?, operator?}`). The `"mars"` value is a wire-compat enum literal recognized by external-orchestrator integrations; agents may use either value.
 
 Optional:
 
@@ -46,8 +46,8 @@ Optional:
   present, `submit-flow` uses these directly; otherwise the
   planner is invoked.
 - `transcript` — Q/A turns (role + text + at). Strongly recommended
-  for human interviews; for MARs interviews this is typically the
-  agent's tool-call trace.
+  for human interviews; for agent-driven interviews this is typically
+  the agent's tool-call trace.
 - `task_generator` — discriminated union over five recipe shapes
   (`enumerated`, `cartesian_product`, `items_x_seeds`,
   `numeric_logspace`, `numeric_linspace`). When present, the

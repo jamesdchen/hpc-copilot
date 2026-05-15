@@ -213,8 +213,8 @@ def cluster_failures_by_fingerprint(
         if preempted_override:
             category = "preempted"
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
-        # class so MARs can auto-resubmit with adjusted resources rather
-        # than asking the user. Importable as
+        # class so integrating agents can auto-resubmit with adjusted
+        # resources rather than asking the user. Importable as
         # ``claude_hpc.runner.failure_signatures.classify``.
         from claude_hpc.runner.failure_signatures import classify
 
