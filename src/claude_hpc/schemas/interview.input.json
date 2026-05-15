@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/claude-hpc/schemas/interview.input.json",
   "title": "interview intent",
-  "description": "Structured campaign intent produced by an interview between the hpc agent and either MARs or a human.\n\nDeliberately bare-bones: captures *why* (goal, transcript,\nprovenance), *how big* (task_count), *what tags* (task_kind),\nand *what limits* (budget, abort_if). Does NOT typed-encode the\nsearch space — that would narrow the existing\nexperiment-agnostic tasks.py contract.",
+  "description": "Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.\n\nDeliberately bare-bones: captures *why* (goal, transcript,\nprovenance), *how big* (task_count), *what tags* (task_kind),\nand *what limits* (budget, abort_if). Does NOT typed-encode the\nsearch space — that would narrow the existing\nexperiment-agnostic tasks.py contract.",
   "type": "object",
   "required": [
     "goal",
@@ -89,7 +89,7 @@
         }
       ],
       "default": null,
-      "description": "Interview Q/A turns. Optional but strongly recommended for human interviews — the value of being able to explain 'why did this campaign target cluster X' three months later vastly outweighs the few KB of storage. For MARs interviews this is typically the agent's tool-call trace.",
+      "description": "Interview Q/A turns. Optional but strongly recommended for human interviews — the value of being able to explain 'why did this campaign target cluster X' three months later vastly outweighs the few KB of storage. For agent-driven interviews this is typically the agent's tool-call trace.",
       "title": "Transcript"
     },
     "notes": {
@@ -474,7 +474,7 @@
             }
           ],
           "default": null,
-          "description": "MARs session identifier. Required when kind=mars; null otherwise.",
+          "description": "External-orchestrator session identifier. Required when kind=mars; null otherwise.",
           "title": "Session Sha"
         },
         "at": {
@@ -500,7 +500,7 @@
             }
           ],
           "default": null,
-          "description": "Human operator name/handle when kind=human; null for MARs.",
+          "description": "Human operator name/handle when kind=human; null when kind=mars.",
           "title": "Operator"
         }
       },

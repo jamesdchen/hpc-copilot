@@ -11,7 +11,7 @@ phrasing of "complete" vs "done"). With this primitive, every tick's
 report is byte-identical for the same input state.
 
 Pure read-only function over the journal + tick log. Safe to call
-from anywhere (slash command, MARs orchestrator, debug shell).
+from anywhere (slash command, external orchestrator, debug shell).
 """
 
 from __future__ import annotations

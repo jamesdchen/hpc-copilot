@@ -1,7 +1,7 @@
 """``validate``: pre-submit timing probe for a resource ask.
 
 Promotes the internal ``--test-only`` probe (used by the planner's score
-endpoint) to a first-class CLI primitive. MARs and other agents can
+endpoint) to a first-class CLI primitive. Integrating agents can
 branch on submission timing — *fits in the 30-minute backfill window?*
 *queue is 6 hours deep, postpone?* — without committing to an actual
 submit. Pattern borrowed from LARA-HPC's "validation-first" submit flow.
@@ -43,8 +43,8 @@ def validate_submission(experiment_dir: Path, *, spec: ValidateSpec) -> Validate
     * ``predicted_eta_sec``: seconds from now until predicted start, or
       ``None``.
     * ``fits_backfill``: True when ``predicted_eta_sec`` is under
-      ``spec.backfill_window_sec``. MARs key off this to decide whether
-      to submit now or hold back.
+      ``spec.backfill_window_sec``. Integrating agents key off this
+      to decide whether to submit now or hold back.
     * ``reason``: human-readable summary.
     * ``scheduler_response``: raw probe stdout (clamped) for debugging.
 

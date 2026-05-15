@@ -15,9 +15,9 @@ backed_by:
 
 **Validation-first** primitive (LARA-HPC pattern). Probe the scheduler\'s
 `--test-only` mode for a resource ask; return the predicted start time
-without submitting anything. MARs branch on the result — *fits the
-30-minute backfill window?* *queue is hours deep, postpone?* — instead
-of committing to a blind submit.
+without submitting anything. Integrating agents branch on the result —
+*fits the 30-minute backfill window?* *queue is hours deep, postpone?* —
+instead of committing to a blind submit.
 
 Distinct from [score-submit-plan](score-submit-plan.md): that primitive
 sweeps the full `(constraint × walltime)` lattice and picks an optimum;

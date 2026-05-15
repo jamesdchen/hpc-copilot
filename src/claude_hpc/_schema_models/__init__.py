@@ -1,8 +1,9 @@
 """Pydantic models that author the wire schemas under ``claude_hpc/schemas/``.
 
 The hand-authored JSON files are the *wire SoT* — that's what
-external agents (MARs, the LLM reading ``capabilities --full``, the
-in-process ``validate_output()`` boundary check) actually read. The
+external agents (integrator harnesses, the LLM reading
+``capabilities --full``, the in-process ``validate_output()`` boundary
+check) actually read. The
 models in this package are the *authoring SoT* — the human edits
 Python with mypy/IDE support, and ``scripts/build_schemas.py`` emits
 the JSON via ``model_json_schema()``. Same arrow direction as the

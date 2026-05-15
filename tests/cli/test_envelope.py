@@ -19,10 +19,10 @@ from ._helpers import run_cli as _run_cli
 
 """Smoke tests for the hpc-agent CLI.
 
-The CLI is a public surface MARs depends on — these tests pin the JSON
-envelope shape, exit codes, and the error-classification path. They do NOT
-exercise actual SSH/cluster operations; the atomic-ops tests in
-test_runner.py cover that.
+The CLI is a public surface external agent harnesses depend on — these
+tests pin the JSON envelope shape, exit codes, and the
+error-classification path. They do NOT exercise actual SSH/cluster
+operations; the atomic-ops tests in test_runner.py cover that.
 """
 
 
@@ -80,7 +80,7 @@ def test_capabilities_envelope_shape() -> None:
 
 
 def test_capabilities_exposes_mars_skill_paths_and_required_env() -> None:
-    """Programmatic introspection for MARs: skill paths + required env."""
+    """Programmatic introspection for integrators: skill paths + required env."""
     rc, out, _ = _run_cli("capabilities")
     assert rc == 0
     data = _parse_envelope(out)["data"]

@@ -1,7 +1,7 @@
 """Command-line interface — the agent surface.
 
-Designed to be invoked by automation (MARs orchestrator agents via the
-Bash tool, cron, scripts). Conventions:
+Designed to be invoked by automation (external orchestrator agents via
+a Bash-style tool, cron, scripts). Conventions:
 
 - Stdout is exclusively a single-line JSON envelope. Exception:
   ``capabilities --full`` emits a plain-text ``llms-full`` dump (one-shot
@@ -157,8 +157,9 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
 
 def _require_ssh_agent() -> int | None:
     # Cluster-touching subcommands hang silently when SSH_AUTH_SOCK is
-    # missing — the most common Bun.spawn failure mode for orchestrators
-    # like MARs. Fail fast with a typed error instead of stalling on auth.
+    # missing — the most common default-empty-spawn-env failure mode
+    # for external orchestrators. Fail fast with a typed error instead
+    # of stalling on auth.
     if os.environ.get("SSH_AUTH_SOCK"):
         return None
     return _err_from_hpc(
@@ -167,7 +168,7 @@ def _require_ssh_agent() -> int | None:
             remediation=(
                 "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
                 "environment, then run `hpc-agent preflight` to verify. "
-                "See docs/workflows/mars-integration.md for the Bun.spawn env block."
+                "See docs/integrations/CONTRACT.md for the spawn env block."
             ),
         )
     )
@@ -554,9 +555,10 @@ def cmd_discover_reducers(args: argparse.Namespace) -> int:
 def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
     """Assemble the ``meta`` block for the discover envelope.
 
-    Returns ``None`` when *experiment_dir* is not a MARs experiment
-    (no ``meta.json`` present). Otherwise extracts the fields claude-hpc
-    knows about and adds a path-derived ``tier``.
+    Returns ``None`` when *experiment_dir* has no ``meta.json`` marker
+    (the integrator-supplied experiment-context file). Otherwise
+    extracts the fields claude-hpc knows about and adds a path-derived
+    ``tier``.
     """
     raw = read_meta_json(experiment_dir)
     if raw is None:
