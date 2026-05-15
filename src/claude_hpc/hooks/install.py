@@ -3,6 +3,14 @@
 The CLI surface is ``hpc-agent hook-install`` and lives in
 ``agent_cli.py``; this module provides the merge logic so it can also
 be invoked programmatically (from setup_hpc skill, tests, etc.).
+
+The default target is the **user-global** settings file at
+``~/.claude/settings.json``. To install at project scope instead, pass
+``--settings <repo>/.claude/settings.json`` on the CLI (or
+``settings_path=<repo>/.claude/settings.json`` to :func:`install_hooks`).
+There is no automatic project-scope install path: the framework can't
+tell which project you mean if you happen to be running from a
+sub-directory, so the scoping is explicit.
 """
 
 from __future__ import annotations

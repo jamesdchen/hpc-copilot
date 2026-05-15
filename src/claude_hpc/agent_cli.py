@@ -1925,9 +1925,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_hook = sub.add_parser(
         "hook-install",
         help=(
-            "Install claude-hpc Stop hooks into ~/.claude/settings.json so "
-            "the agent is held to slash-command exit contracts (e.g. "
-            "/monitor-hpc must emit an `armed:` line)."
+            "Install claude-hpc Stop hooks into the user-global "
+            "~/.claude/settings.json so the agent is held to slash-command "
+            "exit contracts (e.g. /monitor-hpc must emit an `armed:` line). "
+            "Writes to the user-global settings file unless --settings "
+            "overrides; there is no automatic project-scoped install path "
+            "today — point --settings at .claude/settings.json inside a "
+            "repo to install per-project."
         ),
     )
     p_hook.add_argument(
@@ -1939,7 +1943,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--settings",
         type=str,
         default=None,
-        help="Override the target settings path (default: ~/.claude/settings.json).",
+        help=(
+            "Override the target settings path. Defaults to "
+            "~/.claude/settings.json (user-global). Pass "
+            "<repo>/.claude/settings.json to scope the install to a "
+            "single project instead."
+        ),
     )
     p_hook.set_defaults(func=cmd_hook_install)
 
