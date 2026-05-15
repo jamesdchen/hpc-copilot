@@ -197,7 +197,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent clusters describe <name>",
+    "cli": "hpc-agent clusters describe <name> [--strict]",
     "idempotent": true,
     "input_schema": null,
     "name": "clusters-describe",
