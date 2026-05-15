@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent discover --experiment-dir <path>
+  cli: hpc-agent discover --experiment-dir <path> [--search-dirs <a,b,c>]
   python: claude_hpc.state.discover.discover_executors
 exit_codes:
 - 0: ok
@@ -28,6 +28,6 @@ List every Python file under `experiment_dir` that looks like a CLI executor (ha
   - `has_compute_function == true` → **new contract**. The executor exports `compute(args) -> None`. CLI dispatch lives in the auto-generated `.hpc/cli.py`; the executor file itself is pure compute. Per-executor flag list lives in `.hpc/tasks.py` `FLAGS[<module>]`, not in the executor file.
   - `has_compute_function == false and has_main_guard == true` → **old (transitional) contract**. The executor self-dispatches via `if __name__ == "__main__":` plus a recognized CLI framework (`cli_framework` in `argparse | click | typer | fire`). Run `python3 <info.path> --help` to map the CLI interface.
   - Both false → not an executor (utility module, `__init__.py`, etc.); the primitive filters these out.
-- The scanner walks `executors/`, `scripts/`, and `src/` by default and falls back to the experiment-dir root when none of those exist. Callers that know their directory convention (e.g. an integrator that treats `src/` as modules-only) should pass `search_dirs=("scripts",)` explicitly; claude-hpc does not auto-detect layout markers.
+- The scanner walks `executors/`, `scripts/`, and `src/` by default and falls back to the experiment-dir root when none of those exist. Callers that know their directory convention (e.g. an integrator that treats `src/` as modules-only) should pass `--search-dirs scripts` on the CLI (or `search_dirs=("scripts",)` to the Python API); claude-hpc does not auto-detect layout markers.
 - A repo with zero discovered executors is a valid result; the slash command's flow is to scaffold one (via [build-executor](build-executor.md)) inline before continuing.
 - Pure local filesystem walk; no SSH, no cluster contact.
