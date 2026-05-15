@@ -762,7 +762,10 @@ def cmd_clusters_describe(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at claude_hpc.atoms.clusters."""
     from claude_hpc.atoms.clusters import describe_cluster
 
-    _ok(describe_cluster(name=args.name), name="clusters-describe")
+    _ok(
+        describe_cluster(name=args.name, strict=bool(getattr(args, "strict", False))),
+        name="clusters-describe",
+    )
     return EXIT_OK
 
 
@@ -2577,6 +2580,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_cl_list.set_defaults(func=cmd_clusters_list)
     p_cl_desc = p_cl_sub.add_parser("describe", help="Print one cluster's config.")
     p_cl_desc.add_argument("name")
+    p_cl_desc.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Surface yaml keys not recognized by ClusterConfig under "
+            "data.unknown_keys. Useful for catching typos that the "
+            "default extra='ignore' validation would silently drop."
+        ),
+    )
     p_cl_desc.set_defaults(func=cmd_clusters_describe)
 
     # list-in-flight

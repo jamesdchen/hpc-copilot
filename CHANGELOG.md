@@ -1,6 +1,66 @@
 # Changelog
 
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+on the wire surface enumerated in
+[`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
+
 ## Unreleased
+
+### Added
+
+- **`docs/integrations/CONTRACT.md`** — integrator-agnostic reference
+  for the wire surface external agent harnesses compose against. Covers
+  the spawn env block, the
+  `find-prior-run` → `submit` → `monitor-summary` →
+  `verify-aggregation-complete` workflow, the `error_code` → retry
+  policy table, the `.hpc/tasks.py` boundary, the executor import
+  allowlist, the dispatcher-side env vars, and the `lifecycle_state`
+  values.
+- **`claude_hpc.integration` constants module** — `RESULT_DIR_ENV`,
+  `HPC_KW_PREFIX`, `LOCAL_DATA_DIR_ENV`, `JOURNAL_DIR_ENV`,
+  `CLUSTERS_CONFIG_ENV`, `LIFECYCLE_STATES`, `ERROR_CODES`.
+  Integrators import these instead of carrying string literals that
+  drift.
+- **`hpc-agent clusters describe <name> --strict`** — surfaces
+  `clusters.yaml` keys not recognized by `ClusterConfig` under
+  `data.unknown_keys`. Opt-in only — `ClusterConfig` itself stays
+  `extra="ignore"` for back-compat (flipping the default would break
+  every existing user's `clusters.yaml`).
+- **Executor import-boundary allowlist** now includes
+  `claude_hpc.executor_cli` alongside `claude_hpc.mapreduce.metrics_io`.
+  The canonical `tasks_example.py` template already required this; the
+  doc and lint test had drifted.
+
+### Changed
+
+- **README quick-start** is now explicit that the six slash commands
+  (`/preflight`, `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`,
+  `/campaign-hpc`, `/hpc-axes-init`) are installed by `/setup_hpc` from
+  templates under `src/slash_commands/commands/`. Previously the
+  README implied they were available out of the box.
+- **`docs/reference/python-api-contract.md`** corrected:
+  `claude_hpc.state.runtime_prior.summarize` was a phantom — the real
+  symbol is `roll_up_quantiles`.
+- **Narrative docs and schema descriptions** genericized: references
+  to a specific integrator are replaced with integrator-agnostic
+  language. Identifiers that still carry the legacy name
+  (`detect_mars_tier`, `_MARS_SKILL_NAMES`, the `mars_skill_paths`
+  capabilities field, the `{kind: "mars"}` provenance literal) are
+  retained as wire-compat surfaces; renaming them would be a wire
+  change with non-zero blast radius and is out of scope for this
+  cleanup.
+
+### Removed
+
+- `docs/workflows/mars-integration.md` and
+  `docs/workflows/mars/experiment-runner.snippet.md`. The
+  integrator-facing content lives in
+  `docs/integrations/CONTRACT.md`; references in `README.md`,
+  `docs/README.md`, and `docs/internals/sync-checklist.md` point at
+  the new file.
+- `tests/contracts/test_docs_links.py`. Its sole job was guarding the
+  deleted integration proposal docs.
 
 ### Audit pass — bug fixes across CLI, planning, flows, runner, mapreduce, forecast, schema, infra
 
