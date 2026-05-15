@@ -27,7 +27,10 @@ fields optional:
   `~/.claude-hpc/config.json:experiment_roots`. Both empty raises
   `spec_invalid`.
 - `task_kind` (str) — exact-match filter against
-  `intent.task_kind` (`"ml-hparam-sweep"`, `"rl-rollout"`).
+  `intent.task_kind`. The values are whatever the caller wrote at
+  interview time; claude-hpc does not maintain a taxonomy.
+  Strings like `"ml-hparam-sweep"` or `"rl-rollout"` are common
+  examples but not a canonical set.
 - `operator` (str) — exact-match filter against
   `intent.produced_by.operator` (for human-driven campaigns).
 - `since` (ISO-8601) — only return campaigns whose

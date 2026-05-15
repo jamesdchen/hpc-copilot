@@ -34,9 +34,15 @@ Required:
 
 Optional:
 
-- `task_kind` — free-text family tag (`ml-hparam-sweep`,
-  `rl-rollout`, `llm-prompt-eval`). No enum; `recall` groups by
-  this tag.
+- `task_kind` — opaque free-text tag the caller picks to group
+  related campaigns. claude-hpc has no taxonomy here: no enum, no
+  canonical set, no validation beyond "it's a string". Examples
+  callers use (`ml-hparam-sweep`, `rl-rollout`, `llm-prompt-eval`,
+  `benchmark-perf`, `data-shard`) are illustrative, not prescriptive
+  — write whatever string fits. `recall` groups by exact-match on
+  whatever was written, so a stable caller-side vocabulary makes
+  the rollup more useful, but it's a caller convention, not a
+  framework requirement.
 - `budget` — opaque dict; units chosen by the interviewer
   (gpu_hours, cpu_hours, credits). `campaign-flow` surfaces these
   in its progress envelope; never enforces them.

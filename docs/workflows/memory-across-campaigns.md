@@ -115,6 +115,8 @@ Returns up to 10 most-recent matching campaigns plus a `rollup` block. Three rol
 - `task_count` quantiles (linear-interp `p50` / `p95` / `min` / `max`)
 - `materialized_at` envelope (`earliest` / `latest`)
 
+`task_kind` is whatever opaque string the caller wrote at interview time; the histogram counts what's there. The example values used throughout this doc (`ml-hparam-sweep` etc.) aren't a canonical taxonomy — pick whatever vocabulary makes sense for your project and reuse it across campaigns so the rollup stays useful.
+
 **Tier 2 (`--include-runtime`)** — walks each matched campaign's `.hpc/runtimes/*.json` and aggregates per-task observations:
 - `walltime_per_task_sec` quantiles
 - `failure_rate` (from `exit_code != 0`)
