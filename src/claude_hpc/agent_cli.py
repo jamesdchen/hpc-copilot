@@ -498,7 +498,17 @@ def cmd_recall(args: argparse.Namespace) -> int:
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
-    infos = discover_executors(args.experiment_dir)
+    search_dirs: tuple[str, ...] | None = None
+    raw = getattr(args, "search_dirs", None)
+    if raw:
+        # Comma-separated on the CLI; convert to the tuple the Python API
+        # expects. Empty entries (e.g. trailing comma) are dropped so a
+        # user typing ``--search-dirs scripts,`` doesn't accidentally
+        # scan an unnamed subdir.
+        parts = tuple(p.strip() for p in raw.split(",") if p.strip())
+        if parts:
+            search_dirs = parts
+    infos = discover_executors(args.experiment_dir, search_dirs=search_dirs)
     data: dict[str, Any] = {
         "executors": [
             {
@@ -2329,6 +2339,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="List executor scripts in --experiment-dir (CLIs with __main__).",
     )
     _add_experiment_dir(p_disc)
+    p_disc.add_argument(
+        "--search-dirs",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated subdirectory names to scan under "
+            "--experiment-dir (e.g. 'scripts' or 'scripts,executors'). "
+            "Default: 'executors,scripts,src' with a fallback to the "
+            "experiment-dir root. Pass this when the caller knows its "
+            "own layout convention — e.g. an integrator with a "
+            "modules-only 'src/' should pass --search-dirs scripts."
+        ),
+    )
     p_disc.set_defaults(func=cmd_discover)
 
     # discover-reducers

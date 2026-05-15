@@ -230,7 +230,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent discover --experiment-dir <path>",
+    "cli": "hpc-agent discover --experiment-dir <path> [--search-dirs <a,b,c>]",
     "idempotent": true,
     "input_schema": null,
     "name": "discover-executors",
