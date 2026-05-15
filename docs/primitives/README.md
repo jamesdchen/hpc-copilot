@@ -147,7 +147,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [submit-spec](submit-spec.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; scheduler-submit: `<cluster>` | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` |
+| [submit-spec](submit-spec.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json`; scheduler-submit: `<cluster>` | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` |
 
 ### `scaffold` primitives
 

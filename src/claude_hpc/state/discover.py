@@ -2,9 +2,8 @@
 
 Shared helpers used by ``/submit-hpc`` Step 1 (scanning the repo for
 runnable executors) and the ``hpc-agent build-executor`` CLI
-subcommand (used by external orchestrators that scaffold experiments
-programmatically). The contract is intentionally minimal — an
-**executor** is a ``.py`` file matching either of two patterns:
+subcommand. The contract is intentionally minimal — an **executor**
+is a ``.py`` file matching either of two patterns:
 
 - **New contract (preferred):** exports ``compute(args) -> None``. CLI
   dispatch lives in the auto-generated ``.hpc/cli.py``; the executor is
@@ -26,15 +25,12 @@ from claude_hpc._internal.primitive import primitive
 __all__ = [
     "ExecutorInfo",
     "ReducerInfo",
-    "detect_experiment_tier",
     "discover_executors",
     "discover_reducers",
     "is_executor_source",
-    "read_meta_json",
 ]
 
 import ast
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -43,26 +39,11 @@ from pathlib import Path
 _CLI_FRAMEWORKS = frozenset({"argparse", "click", "typer", "fire"})
 
 # Directory names we scan when the caller does not pass an explicit path.
-# Used when no ``meta.json`` marker is present at *root*.
+# Callers that want a tighter scan (e.g. an integrator that knows
+# ``src/`` is modules-only) pass ``search_dirs=("scripts",)``
+# explicitly. claude-hpc deliberately does not auto-detect
+# directory-layout conventions — that's caller knowledge.
 _DEFAULT_CANDIDATE_DIRS = ("executors", "scripts", "src")
-
-# When *root* carries the integrator-side ``meta.json`` marker, the
-# layout contract is ``scripts/`` = entrypoints, ``src/`` = modules. We
-# must not mis-detect modules under ``src/`` as executors.
-_META_CANDIDATE_DIRS = ("scripts",)
-
-
-def _default_candidate_dirs(root: Path) -> tuple[str, ...]:
-    """Return the default search-dir tuple for *root*.
-
-    When the integrator-side ``meta.json`` marker is present at the
-    experiment-dir root, narrows the scan to ``scripts/`` (Tier-2
-    entrypoints) — Tier-1 ``probe.py`` lives at the root and is picked
-    up by the existing root-level fallback path.
-    """
-    if (root / "meta.json").is_file():
-        return _META_CANDIDATE_DIRS
-    return _DEFAULT_CANDIDATE_DIRS
 
 
 # Files we always skip — only ``__init__.py`` is interesting now that all
@@ -125,53 +106,6 @@ class ExecutorInfo:
         return self.has_main_guard and self.cli_framework is not None
 
 
-def read_meta_json(experiment_dir: Path | str) -> dict | None:
-    """Return the parsed ``meta.json`` of *experiment_dir* if present and valid.
-
-    ``meta.json`` is an optional integrator-supplied experiment-context
-    marker (``experiment_id``, ``seed``, ``purpose``, …). This helper
-    lets every surface — CLI, slash command, future integrator adapters
-    — read it through one seam.
-
-    Returns ``None`` when the file is missing, unreadable, or not a JSON
-    object. Never raises; claude-hpc is not the place to validate the
-    integrator's full schema beyond extracting the fields it knows
-    about.
-    """
-    p = Path(experiment_dir) / "meta.json"
-    if not p.is_file():
-        return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def detect_experiment_tier(experiment_dir: Path | str) -> int | None:
-    """Infer the experiment tier of *experiment_dir* from path layout.
-
-    Recognizes the directory contract used by integrators that adopt
-    the probes/runs convention:
-
-    - Tier-1 probes live under ``probes/probe-*`` with ``probe.py`` at the
-      root of the probe directory.
-    - Tier-2 runs live under ``runs/run-*`` with ``scripts/`` for entrypoints.
-
-    Returns the tier as ``1`` or ``2`` when both the path pattern and the
-    expected marker file are present, otherwise ``None``. Pure path
-    inspection — does not parse ``meta.json``.
-    """
-    p = Path(experiment_dir).resolve()
-    name = p.name
-    parent = p.parent.name
-    if parent == "probes" and name.startswith("probe-") and (p / "probe.py").is_file():
-        return 1
-    if parent == "runs" and name.startswith("run-") and (p / "scripts").is_dir():
-        return 2
-    return None
-
-
 def is_executor_source(source: str) -> bool:
     """Quick check on raw Python source text.
 
@@ -223,8 +157,7 @@ def discover_executors(
         return []
 
     if search_dirs is None:
-        candidates = _default_candidate_dirs(root)
-        dirs = [root / d for d in candidates if (root / d).is_dir()]
+        dirs = [root / d for d in _DEFAULT_CANDIDATE_DIRS if (root / d).is_dir()]
         if not dirs:
             dirs = [root]
     else:

@@ -88,7 +88,7 @@ Records a new submission (sidecar write + journal entry).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]` | `claude_hpc.runner.submit.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
+| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `claude_hpc.runner.submit.submit_and_record` | `claude_hpc/schemas/submit.input.json` | `claude_hpc/schemas/submit.output.json` |
 
 ## `scaffold` (6)
 
