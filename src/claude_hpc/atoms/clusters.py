@@ -47,16 +47,31 @@ def list_clusters() -> dict[str, Any]:
     side_effects=[],
     error_codes=[errors.ClusterUnknown, errors.ConfigInvalid],
     idempotent=True,
-    cli="hpc-agent clusters describe <name>",
+    cli="hpc-agent clusters describe <name> [--strict]",
     agent_facing=True,
 )
-def describe_cluster(*, name: str) -> dict[str, Any]:
+def describe_cluster(*, name: str, strict: bool = False) -> dict[str, Any]:
     """Return the full config for a single cluster.
 
     Raises :class:`errors.ClusterUnknown` if the name is not present in
     ``clusters.yaml``.
+
+    When *strict* is ``True``, surface every yaml key that
+    ``ClusterConfig`` does not recognize under ``unknown_keys``.
+    ``ClusterConfig`` itself stays ``extra="ignore"`` for back-compat
+    (flipping the default would break every existing user's
+    ``clusters.yaml`` that carries a typo or a stale field), so the
+    strict pass is opt-in.
     """
+    from claude_hpc.infra.clusters import ClusterConfig
+
     clusters = load_clusters_config()
     if name not in clusters:
         raise errors.ClusterUnknown(f"unknown cluster {name!r}; run `hpc-agent clusters list`")
-    return {"name": name, "config": clusters[name]}
+    cfg = clusters[name]
+    out: dict[str, Any] = {"name": name, "config": cfg}
+    if strict:
+        allowed = set(ClusterConfig.model_fields.keys())
+        unknown = sorted(k for k in cfg if k not in allowed) if isinstance(cfg, dict) else []
+        out["unknown_keys"] = unknown
+    return out

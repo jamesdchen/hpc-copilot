@@ -2,8 +2,8 @@
 
 Pure-dispatch primitive: builds the capabilities envelope from
 package metadata, the operations catalog, the journal home dir, and
-the resolved MARs skill paths. No SSH, no scheduler, no filesystem
-mutations.
+the resolved slash-command skill paths. No SSH, no scheduler, no
+filesystem mutations.
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ import claude_hpc
 from claude_hpc._internal import session
 from claude_hpc._internal.primitive import primitive
 
-# Names of the MARs-shipped slash-command skill bundles. Capabilities
-# reports the absolute path to each present ``SKILL.md`` so an
-# orchestrator can load the skill content without re-deriving the
-# layout.
-_MARS_SKILL_NAMES = (
+# Names of the slash-command skill bundles shipped in the source tree.
+# Capabilities reports the absolute path to each present ``SKILL.md``
+# so an orchestrator can load the skill content without re-deriving
+# the layout.
+_SKILL_NAMES = (
     "hpc-submit",
     "hpc-status",
     "hpc-preflight",
@@ -29,14 +29,14 @@ _MARS_SKILL_NAMES = (
 )
 
 
-def _mars_skill_paths() -> dict[str, str]:
+def _resolve_skill_paths() -> dict[str, str]:
     # Skills live at the repo root (skills/ is a sibling of src/ in the
     # source tree, two levels up from the package). Wheel-only deploys
     # won't ship them — return only entries that resolve to an existing
     # file so a consumer can rely on every value being a real path.
     skills_root = claude_hpc._PACKAGE_ROOT.parent.parent / "skills"
     out: dict[str, str] = {}
-    for name in _MARS_SKILL_NAMES:
+    for name in _SKILL_NAMES:
         path = skills_root / name / "SKILL.md"
         if path.is_file():
             out[name] = str(path.resolve())
@@ -58,8 +58,8 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     (passed in by the CLI adapter so the atom doesn't reach back into
     the dispatcher to walk argparse internals). Everything else —
     version, supported schedulers, schemas dir, journal dir, ssh
-    multiplexing flag, MARs skill paths, required env vars, and the
-    operations catalog — is computed here.
+    multiplexing flag, slash-command skill paths, required env vars,
+    and the operations catalog — is computed here.
     """
     from claude_hpc._internal.operations import operations_catalog
     from claude_hpc.infra.clusters import CLUSTER_YAML_KEYS
@@ -71,7 +71,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
         "schemas_dir": str(claude_hpc._PACKAGE_ROOT / "schemas"),
         "journal_dir": str(session.HPC_HOMEDIR),
         "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
-        "mars_skill_paths": _mars_skill_paths(),
+        "mars_skill_paths": _resolve_skill_paths(),
         "required_env": [
             "SSH_AUTH_SOCK",
             "HPC_JOURNAL_DIR",

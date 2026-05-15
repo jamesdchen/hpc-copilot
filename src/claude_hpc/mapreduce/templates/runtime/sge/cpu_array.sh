@@ -22,7 +22,7 @@ set -eo pipefail
 #   $REPO_DIR      — repository root to cd into
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
 #   $HPC_RUNTIME   — optional, "uv" runs ``uv sync`` in $REPO_DIR before
-#                    dispatch (honors MARs's #1 invariant: never bare pip)
+#                    dispatch (honors the "no bare pip" invariant common to uv-first integrators)
 #
 # Submit with:
 #   qsub -t 1-100 -v TASK_OFFSET=0,CONDA_SOURCE=...,CONDA_ENV=...,EXECUTOR=...,... cpu_array.sh

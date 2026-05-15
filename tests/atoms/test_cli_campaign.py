@@ -1,7 +1,7 @@
 """Tests for the ``campaign`` CLI subcommand (status, list).
 
-End-to-end via subprocess to pin the JSON envelope shape that MARs and
-other consumers will depend on.
+End-to-end via subprocess to pin the JSON envelope shape that external
+agent harnesses and other consumers will depend on.
 """
 
 from __future__ import annotations

@@ -40,8 +40,8 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
 ## What this enables
 
 - **Any harness**: bash, Python (`subprocess.run`), TypeScript (`Bun.spawn`),
-  Rust (`std::process::Command`), Go, anything with a JSON parser. MARs uses
-  Bun. Future harnesses don't need to import a Python package.
+  Rust (`std::process::Command`), Go, anything with a JSON parser.
+  Harnesses don't need to import a Python package.
 - **Honest error semantics**: `retry_safe: false` means "do not retry"; the
   category tells the harness whether to escalate to user, retry on network,
   or treat as bug. The agent doesn't have to interpret natural language to

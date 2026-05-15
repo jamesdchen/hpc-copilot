@@ -22,7 +22,7 @@ set -eo pipefail
 #   $GPU_COUNT     — number of GPUs per task (default: 2)
 #   $EXTRA_ARGS    — additional arguments passed through to $EXECUTOR
 #   $HPC_RUNTIME   — optional, "uv" runs ``uv sync`` in $REPO_DIR before
-#                    dispatch (honors MARs's #1 invariant: never bare pip)
+#                    dispatch (honors the "no bare pip" invariant common to uv-first integrators)
 #
 # Submit with:
 #   sbatch --array=1-10 --export=CONDA_SOURCE=...,CONDA_ENV=...,... gpu_array.slurm

@@ -1,9 +1,10 @@
 """``interview`` primitive — persist campaign intent alongside an agent-written tasks.py.
 
 The interview-time leak today is that the chat between hpc-agent and
-either MARs or a human produces *only* a tasks.py; the *why* (goal,
-budget, abort criterion, transcript, who decided) lives in transient
-session context and is gone after the campaign starts.
+either an external orchestrator or a human produces *only* a
+tasks.py; the *why* (goal, budget, abort criterion, transcript, who
+decided) lives in transient session context and is gone after the
+campaign starts.
 
 This primitive reads a ``interview.input.json`` payload and an
 already-existing ``tasks.py`` in the campaign workdir, validates that
@@ -14,9 +15,9 @@ materialization timestamp — to ``<campaign_dir>/interview.json``.
 The primitive is deliberately small. It does NOT generate tasks.py;
 that would require typing the search space (``logspace``, ``grid``,
 ``items_x_seeds``, …) which narrows the otherwise experiment-agnostic
-``total() + resolve(i) -> Any`` contract. The interview agent (MARs or
-claude-the-interviewer) writes tasks.py themselves, and this primitive
-records the intent alongside.
+``total() + resolve(i) -> Any`` contract. The interview agent (the
+external orchestrator or claude-the-interviewer) writes tasks.py
+themselves, and this primitive records the intent alongside.
 
 A future opt-in field — ``intent.task_generator`` — is reserved in the
 schema for the case where the operator *does* want a typed recipe to

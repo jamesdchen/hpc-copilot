@@ -14,84 +14,9 @@
       },
       "title": "Executors",
       "type": "array"
-    },
-    "meta": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/_DiscoverMeta"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "MARs experiment context, extracted from meta.json. Present only when meta.json exists at the experiment-dir root."
     }
   },
   "$defs": {
-    "_DiscoverMeta": {
-      "additionalProperties": true,
-      "description": "MARs experiment context, extracted from meta.json.",
-      "properties": {
-        "experiment_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Experiment Id"
-        },
-        "seed": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Seed"
-        },
-        "purpose": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Purpose"
-        },
-        "tier": {
-          "anyOf": [
-            {
-              "enum": [
-                1,
-                2
-              ],
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Tier"
-        }
-      },
-      "title": "_DiscoverMeta",
-      "type": "object"
-    },
     "_ExecutorEntry": {
       "additionalProperties": false,
       "properties": {

@@ -21,7 +21,7 @@ update both surfaces and bump the version.
   sidecars sorted chronologically by mtime ↔ filename.
 - **Defined in**: `claude_hpc/runner/:submit_and_record` —
   `run_id` is a required keyword.
-- **Public contract**: MARs and orchestrator agents may key state on
+- **Public contract**: external orchestrators may key state on
   this. Renaming the format breaks every downstream consumer.
 
 ### `error_code` enum

@@ -4,7 +4,7 @@
 
 ## The problem
 
-The conversation between Claude Code (or MARs) and the human that produces a campaign — *what's being optimized, what range, what's the budget, what's the abort criterion* — used to be transient session context. Once `tasks.py` was submitted, the *why* behind every decision was gone.
+The conversation between Claude Code (or an external orchestrator) and the human that produces a campaign — *what's being optimized, what range, what's the budget, what's the abort criterion* — used to be transient session context. Once `tasks.py` was submitted, the *why* behind every decision was gone.
 
 Net effect: every interview re-derived "the useful LR range" or "your typical task count" from scratch. The system had no memory across campaigns.
 
@@ -14,8 +14,9 @@ Every campaign now ends with a structured intent file persisted next to the task
 
 ```
                       ┌─────────────────────────────┐
-                      │  Claude Code (or MARs)      │
-                      │  interviews the operator    │
+                      │  Claude Code or external    │
+                      │  orchestrator interviews    │
+                      │  the operator               │
                       └──────────────┬──────────────┘
                                      │
                                      │ produces tasks.py
@@ -113,6 +114,8 @@ Returns up to 10 most-recent matching campaigns plus a `rollup` block. Three rol
 - histograms over `task_kind` / `operator` / `produced_by_kind` / `task_generator.kind` / `cluster`
 - `task_count` quantiles (linear-interp `p50` / `p95` / `min` / `max`)
 - `materialized_at` envelope (`earliest` / `latest`)
+
+`task_kind` is whatever opaque string the caller wrote at interview time; the histogram counts what's there. The example values used throughout this doc (`ml-hparam-sweep` etc.) aren't a canonical taxonomy — pick whatever vocabulary makes sense for your project and reuse it across campaigns so the rollup stays useful.
 
 **Tier 2 (`--include-runtime`)** — walks each matched campaign's `.hpc/runtimes/*.json` and aggregates per-task observations:
 - `walltime_per_task_sec` quantiles

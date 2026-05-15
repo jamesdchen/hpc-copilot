@@ -39,3 +39,11 @@ class ClustersDescribeResult(BaseModel):
             "the framework recognizes."
         ),
     )
+    unknown_keys: list[str] | None = Field(
+        default=None,
+        description=(
+            "Yaml keys present in this cluster's entry that ClusterConfig "
+            "does not recognize. Populated only when --strict is passed. "
+            "Empty list = clean entry; null = strict mode was not requested."
+        ),
+    )
