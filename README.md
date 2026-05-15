@@ -54,6 +54,13 @@ for the full contract: the spawn env block,
 `monitor-summary` → `verify-aggregation-complete` workflow, the
 `.hpc/tasks.py` boundary, and the executor import allowlist.
 
+The canonical reference for `.hpc/tasks.py` is shipped inside the
+package at
+[`src/claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`](src/claude_hpc/mapreduce/templates/scaffolds/tasks_example.py).
+It demonstrates three patterns (Cartesian product, chunking by row
+count, date-window backtests) inline. Integrators locate it at runtime
+via `from claude_hpc import _PACKAGE_ROOT` or `rglob("tasks_example.py")`.
+
 The most common first-time failure is the harness's default-empty
 spawn env dropping `SSH_AUTH_SOCK`. `hpc-agent
 status`/`aggregate`/`reconcile` fail fast with `error_code:
