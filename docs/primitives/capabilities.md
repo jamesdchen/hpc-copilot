@@ -23,5 +23,5 @@ Machine-readable feature flags. Lets external orchestrators discover what subcom
 
 ## Notes
 
-- `mars_skill_paths` (legacy field name, retained for wire-compat) returns absolute paths to the SKILL.md files for source-tree installs; wheel-only installs may return an empty dict (skills aren't shipped in the wheel).
+- `skill_paths` returns absolute paths to the SKILL.md files for source-tree installs; wheel-only installs may return an empty dict (skills aren't shipped in the wheel).
 - `required_env` lists env vars the framework expects to be set in the calling shell — agents can use this to validate their environment before invoking other primitives.

@@ -10,7 +10,7 @@
     "schemas_dir",
     "journal_dir",
     "ssh_multiplexing",
-    "mars_skill_paths",
+    "skill_paths",
     "required_env"
   ],
   "additionalProperties": false,
@@ -49,11 +49,11 @@
       "title": "Ssh Multiplexing",
       "type": "boolean"
     },
-    "mars_skill_paths": {
+    "skill_paths": {
       "additionalProperties": {
         "type": "string"
       },
-      "title": "Mars Skill Paths",
+      "title": "Skill Paths",
       "type": "object"
     },
     "required_env": {

@@ -26,7 +26,7 @@ from claude_hpc._internal.primitive import primitive
 __all__ = [
     "ExecutorInfo",
     "ReducerInfo",
-    "detect_mars_tier",
+    "detect_experiment_tier",
     "discover_executors",
     "discover_reducers",
     "is_executor_source",
@@ -49,7 +49,7 @@ _DEFAULT_CANDIDATE_DIRS = ("executors", "scripts", "src")
 # When *root* carries the integrator-side ``meta.json`` marker, the
 # layout contract is ``scripts/`` = entrypoints, ``src/`` = modules. We
 # must not mis-detect modules under ``src/`` as executors.
-_MARS_CANDIDATE_DIRS = ("scripts",)
+_META_CANDIDATE_DIRS = ("scripts",)
 
 
 def _default_candidate_dirs(root: Path) -> tuple[str, ...]:
@@ -61,7 +61,7 @@ def _default_candidate_dirs(root: Path) -> tuple[str, ...]:
     up by the existing root-level fallback path.
     """
     if (root / "meta.json").is_file():
-        return _MARS_CANDIDATE_DIRS
+        return _META_CANDIDATE_DIRS
     return _DEFAULT_CANDIDATE_DIRS
 
 
@@ -148,7 +148,7 @@ def read_meta_json(experiment_dir: Path | str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def detect_mars_tier(experiment_dir: Path | str) -> int | None:
+def detect_experiment_tier(experiment_dir: Path | str) -> int | None:
     """Infer the experiment tier of *experiment_dir* from path layout.
 
     Recognizes the directory contract used by integrators that adopt
