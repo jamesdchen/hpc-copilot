@@ -34,7 +34,7 @@ import claude_hpc
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
 from claude_hpc.state.discover import (
-    detect_mars_tier,
+    detect_experiment_tier,
     discover_executors,
     read_meta_json,
 )
@@ -319,7 +319,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
 # tests that import the constant directly from agent_cli.
 # back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 —
 # update tests to import from claude_hpc.atoms.capabilities directly.
-from claude_hpc.atoms.capabilities import _MARS_SKILL_NAMES  # noqa: E402,F401
+from claude_hpc.atoms.capabilities import _SKILL_NAMES  # noqa: E402,F401
 
 
 def _live_subcommands() -> list[str]:
@@ -514,7 +514,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
             for i in infos
         ]
     }
-    meta = _build_mars_meta_block(Path(args.experiment_dir))
+    meta = _build_meta_block(Path(args.experiment_dir))
     if meta is not None:
         data["meta"] = meta
     _ok(data, name="discover-executors")
@@ -552,7 +552,7 @@ def cmd_discover_reducers(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
+def _build_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
     """Assemble the ``meta`` block for the discover envelope.
 
     Returns ``None`` when *experiment_dir* has no ``meta.json`` marker
@@ -567,7 +567,7 @@ def _build_mars_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
     for key in ("experiment_id", "seed", "purpose"):
         if key in raw:
             block[key] = raw[key]
-    block["tier"] = detect_mars_tier(experiment_dir)
+    block["tier"] = detect_experiment_tier(experiment_dir)
     return block
 
 

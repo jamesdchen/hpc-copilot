@@ -79,13 +79,13 @@ def test_capabilities_envelope_shape() -> None:
     assert isinstance(data["ssh_multiplexing"], bool)
 
 
-def test_capabilities_exposes_mars_skill_paths_and_required_env() -> None:
+def test_capabilities_exposes_skill_paths_and_required_env() -> None:
     """Programmatic introspection for integrators: skill paths + required env."""
     rc, out, _ = _run_cli("capabilities")
     assert rc == 0
     data = _parse_envelope(out)["data"]
 
-    skill_paths = data["mars_skill_paths"]
+    skill_paths = data["skill_paths"]
     assert isinstance(skill_paths, dict)
     # Source-tree installs ship five skills; wheel-only installs may ship
     # zero. Either is acceptable, but every value must point to a real file.

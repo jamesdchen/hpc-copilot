@@ -30,7 +30,7 @@ Required:
 - `task_count` (int ≥ 1) — expected `tasks.total()`. Mismatch
   raises `spec_invalid` *before* any disk write — catches off-by-one
   bugs at the interview stage instead of after burning compute.
-- `produced_by` (`{kind: "mars" | "human", session_sha?, at?, operator?}`). The `"mars"` value is a wire-compat enum literal recognized by external-orchestrator integrations; agents may use either value.
+- `produced_by` (`{kind: "agent" | "human", session_sha?, at?, operator?}`). Use `"agent"` for any non-human orchestrator (Claude Code, external harness, cron job).
 
 Optional:
 

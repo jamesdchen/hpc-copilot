@@ -55,7 +55,7 @@ class CapabilitiesResult(BaseModel):
     schemas_dir: str
     journal_dir: str
     ssh_multiplexing: bool
-    mars_skill_paths: dict[str, str]
+    skill_paths: dict[str, str]
     required_env: list[str]
     cluster_yaml_keys: list[_ClusterYamlKey] | None = Field(
         default=None,
