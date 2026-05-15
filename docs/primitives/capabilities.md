@@ -23,5 +23,5 @@ Machine-readable feature flags. Lets external orchestrators discover what subcom
 
 ## Notes
 
-- `skill_paths` returns absolute paths to the SKILL.md files for source-tree installs; wheel-only installs may return an empty dict (skills aren't shipped in the wheel).
+- `mars_skill_paths` returns absolute paths to the SKILL.md files for source-tree installs; wheel-only installs may return an empty dict (skills aren't shipped in the wheel). The field name is a wire-compat constant carried by existing integrators; the values are the package's `skills/hpc-*/SKILL.md` paths.
 - `required_env` lists env vars the framework expects to be set in the calling shell — agents can use this to validate their environment before invoking other primitives.

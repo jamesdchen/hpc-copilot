@@ -55,7 +55,15 @@ class CapabilitiesResult(BaseModel):
     schemas_dir: str
     journal_dir: str
     ssh_multiplexing: bool
-    skill_paths: dict[str, str]
+    mars_skill_paths: dict[str, str] = Field(
+        description=(
+            "Map of slash-command skill bundle basename → absolute path "
+            "to its SKILL.md, for the bundles shipped in the source "
+            "tree (`skills/hpc-*/SKILL.md`). Empty on wheel-only "
+            "installs. The field name is part of the wire contract; "
+            "renaming it would break consumers that read it by key."
+        ),
+    )
     required_env: list[str]
     cluster_yaml_keys: list[_ClusterYamlKey] | None = Field(
         default=None,
