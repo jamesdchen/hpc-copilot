@@ -71,7 +71,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
         "schemas_dir": str(claude_hpc._PACKAGE_ROOT / "schemas"),
         "journal_dir": str(session.HPC_HOMEDIR),
         "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
-        "skill_paths": _resolve_skill_paths(),
+        "mars_skill_paths": _resolve_skill_paths(),
         "required_env": [
             "SSH_AUTH_SOCK",
             "HPC_JOURNAL_DIR",

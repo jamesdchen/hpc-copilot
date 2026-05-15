@@ -156,7 +156,7 @@ shape:
   "schemas_dir": "<absolute path to claude_hpc/schemas/>",
   "journal_dir": "<absolute path to $HPC_JOURNAL_DIR or default>",
   "ssh_multiplexing": true,
-  "skill_paths": {"hpc-submit": "<path>/skills/hpc-submit/SKILL.md", ...},
+  "mars_skill_paths": {"hpc-submit": "<path>/skills/hpc-submit/SKILL.md", ...},
   "required_env": ["SSH_AUTH_SOCK", "HPC_JOURNAL_DIR", "HPC_CLUSTERS_CONFIG"],
   "cluster_yaml_keys": [{"key": "scheduler", "type": "Literal", "required": true, "description": "..."}, ...],
   "operations": [{"name": "<primitive>", "verb": "...", "idempotent": true, "side_effects": [...], "cli": "...", "input_schema": "<file>", "output_schema": "<file>", "agent_facing": true}, ...]
@@ -168,8 +168,10 @@ Full schema: `claude_hpc/schemas/capabilities.output.json`.
 - `subcommands` is the authoritative list of available CLI verbs
   (derived from the live argparse tree). New installs that ship
   additional subcommands surface them here automatically.
-- `skill_paths` maps each slash-command skill bundle's basename to
-  its `SKILL.md` path. Empty on wheel-only installs.
+- `mars_skill_paths` maps each slash-command skill bundle's basename
+  to its `SKILL.md` path. Empty on wheel-only installs. The field
+  name is wire-compat; the values are the package's
+  `skills/hpc-*/SKILL.md` paths.
 - `cluster_yaml_keys` is the canonical declarative manifest of
   per-cluster YAML fields. Use it to introspect what's recognized
   without parsing source.

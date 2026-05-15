@@ -92,7 +92,7 @@
           "anyOf": [
             {
               "enum": [
-                "agent",
+                "mars",
                 "human"
               ],
               "type": "string"

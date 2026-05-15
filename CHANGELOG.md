@@ -45,10 +45,10 @@ on the wire surface enumerated in
 - **Narrative docs and schema descriptions** genericized: references
   to a specific integrator are replaced with integrator-agnostic
   language.
-- **Identifier renames to remove the legacy integrator name from every
-  surface.** These are not on the explicit dep-surface list pinned at
-  the MARs re-pin commit (`ec041c6`), but consumers that happened to
-  read them by string need to re-pin:
+- **Python identifier renames** to lift the legacy integrator name
+  out of the Python API. None of these are imported by MARs at the
+  re-pin commit (`ec041c6`); the rename is doc-only at the wire
+  level:
 
   | Old name | New name | Surface |
   |---|---|---|
@@ -57,16 +57,13 @@ on the wire surface enumerated in
   | `_mars_skill_paths()` | `_resolve_skill_paths()` | private helper |
   | `_MARS_CANDIDATE_DIRS` | `_META_CANDIDATE_DIRS` | private |
   | `_build_mars_meta_block()` | `_build_meta_block()` | private |
-  | `data.mars_skill_paths` | `data.skill_paths` | capabilities envelope wire field |
-  | `produced_by.kind == "mars"` | `produced_by.kind == "agent"` | interview / recall enum literal |
 
-  The `mars_skill_paths` field and the `"mars"` enum literal are NOT
-  retained as aliases — the goal here is a clean wire surface, not a
-  long deprecation cycle. Pre-1.0 the project does not guarantee
-  zero-touch upgrades; integrators on the pinned MARs commit are
-  unaffected because none of these names appear in MARs's listed
-  dep-surface table. Consumers that read them by string should
-  re-pin to this release or earlier.
+  The wire surface is deliberately NOT renamed: the
+  `data.mars_skill_paths` field on the `capabilities` envelope and the
+  `produced_by.kind == "mars"` literal on `interview` / `recall` stay
+  as-is so v1 integrates perfectly with MARs at the pinned commit.
+  The two are intentional wire-compat retentions; new integrators are
+  free to write `kind: "mars"` to mean "any non-human agent".
 
 ### Removed
 
@@ -78,13 +75,14 @@ on the wire surface enumerated in
   the new file.
 - `tests/contracts/test_docs_links.py`. Its sole job was guarding the
   deleted integration proposal docs.
-- Every "mars" mention from the repo source. `git grep -i 'mars' --
-  ':!CHANGELOG*'` returns zero matches. The file
+- Every narrative-text "mars" mention from docs, comments, and
+  docstrings — replaced with integrator-agnostic language. The file
   `tests/state/test_mars_layout.py` was renamed to
   `test_meta_json_layout.py`; its test-class names
   (`TestMarsLayoutFilter`, `TestDetectMarsTier`) became
-  `TestMetaJsonLayoutFilter`, `TestDetectExperimentTier`. Schema
-  files and operations.json were regenerated from the Pydantic SoT.
+  `TestMetaJsonLayoutFilter`, `TestDetectExperimentTier`. Two wire
+  surfaces (`data.mars_skill_paths` and `kind: "mars"`) are
+  intentionally retained — see Changed.
 
 ### Audit pass — bug fixes across CLI, planning, flows, runner, mapreduce, forecast, schema, infra
 
