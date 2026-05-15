@@ -7,6 +7,46 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Removed (experiment-shaped surface that moved out to the caller)
+
+Per the cleavage: claude-hpc owns the parallelization scaffolding;
+the caller owns the experiment-specific layout, the experiment-type
+vocabulary, and any meta-file enrichment. Net effect: claude-hpc no
+longer reads or enriches anyone else's experiment-context file.
+
+- `claude_hpc.state.discover.detect_experiment_tier()` — inferred
+  Tier-1 (`probes/probe-*/probe.py`) vs Tier-2 (`runs/run-*/scripts/`)
+  from path layout. Integrators that adopt that convention now
+  detect the tier themselves and dispatch accordingly.
+- `claude_hpc.state.discover.read_meta_json()` — read
+  `<experiment-dir>/meta.json` as a dict. Two-line stdlib helper;
+  callers reproduce it on their side.
+- `agent_cli._build_meta_block()` and the `data.meta` field on the
+  `hpc-agent discover` envelope — claude-hpc no longer enriches the
+  discover envelope with `experiment_id` / `seed` / `purpose` /
+  `tier` from `meta.json`. The envelope now returns just
+  `data.executors`. Callers that want experiment context add it
+  client-side.
+- `agent_cli._overlay_meta_on_spec()` and the `hpc-agent submit
+  --from-meta` flag — claude-hpc no longer overlays missing
+  `profile` / `job_name` on the submit spec from
+  `meta.json::experiment_id`. Callers populate the spec themselves
+  before calling `submit`.
+- The auto-narrow-to-`scripts/`-when-meta.json-present heuristic in
+  `discover_executors`. The scanner now always walks
+  `executors/` / `scripts/` / `src/` by default; callers that want a
+  tighter scan pass `search_dirs=("scripts",)` explicitly.
+- `tests/state/test_meta_json_layout.py` — covered the removed
+  behavior.
+- `TestSubmitFromMeta` class in `tests/cli/test_submit.py`.
+
+Wire-level impact: MARs at the pinned re-pin commit (`ec041c6`) is
+unaffected — `hpc-agent discover` is not in its listed dep-surface
+subcommand set, and the `--from-meta` flag was never in MARs's listed
+flag set. Other integrators that happened to consume these surfaces
+need to reproduce the (small) logic on their side; see the migration
+notes below.
+
 ### Added
 
 - **`docs/integrations/CONTRACT.md`** — integrator-agnostic reference

@@ -548,7 +548,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run] [--from-meta]",
+    "cli": "hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]",
     "idempotent": true,
     "input_schema": "submit.input.json",
     "name": "submit-spec",

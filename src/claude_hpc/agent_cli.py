@@ -33,11 +33,7 @@ from typing import Any
 import claude_hpc
 from claude_hpc import errors, runner
 from claude_hpc._internal import session
-from claude_hpc.state.discover import (
-    detect_experiment_tier,
-    discover_executors,
-    read_meta_json,
-)
+from claude_hpc.state.discover import discover_executors
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
@@ -514,9 +510,6 @@ def cmd_discover(args: argparse.Namespace) -> int:
             for i in infos
         ]
     }
-    meta = _build_meta_block(Path(args.experiment_dir))
-    if meta is not None:
-        data["meta"] = meta
     _ok(data, name="discover-executors")
     return EXIT_OK
 
@@ -550,25 +543,6 @@ def cmd_discover_reducers(args: argparse.Namespace) -> int:
     }
     _ok(data, name="discover-reducers")
     return EXIT_OK
-
-
-def _build_meta_block(experiment_dir: Path) -> dict[str, Any] | None:
-    """Assemble the ``meta`` block for the discover envelope.
-
-    Returns ``None`` when *experiment_dir* has no ``meta.json`` marker
-    (the integrator-supplied experiment-context file). Otherwise
-    extracts the fields claude-hpc knows about and adds a path-derived
-    ``tier``.
-    """
-    raw = read_meta_json(experiment_dir)
-    if raw is None:
-        return None
-    block: dict[str, Any] = {}
-    for key in ("experiment_id", "seed", "purpose"):
-        if key in raw:
-            block[key] = raw[key]
-    block["tier"] = detect_experiment_tier(experiment_dir)
-    return block
 
 
 # ─── subcommand: clusters ──────────────────────────────────────────────────
@@ -1251,34 +1225,11 @@ def _preempted_summary_from_sidecar(
     return len(preempted_ids), sorted(preempted_ids)
 
 
-def _overlay_meta_on_spec(spec: dict[str, Any], experiment_dir: Path) -> dict[str, Any]:
-    """Overlay missing ``profile`` / ``job_name`` from ``meta.json``.
-
-    Uses ``setdefault`` semantics — never overwrites a caller-supplied
-    value, silent no-op when ``meta.json`` is absent or has no
-    ``experiment_id``. Mutates and returns *spec* for clarity.
-    """
-    meta = read_meta_json(experiment_dir)
-    if meta is None:
-        return spec
-    experiment_id = meta.get("experiment_id")
-    if not experiment_id:
-        return spec
-    spec.setdefault("profile", experiment_id)
-    spec.setdefault("job_name", experiment_id)
-    return spec
-
-
 # ─── subcommand: submit ────────────────────────────────────────────────────
 
 
 def cmd_submit(args: argparse.Namespace) -> int:
-    # Load without schema validation so ``--from-meta`` can fill missing
-    # required fields (profile/job_name) before the schema check rejects
-    # an otherwise-partial spec.
     spec = _load_spec(args.spec, schema_name=None)
-    if getattr(args, "from_meta", False):
-        spec = _overlay_meta_on_spec(spec, args.experiment_dir)
     _validate_against_schema(spec, "submit")
     required = (
         "profile",
@@ -2736,16 +2687,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Validate the spec and report what would be launched; no SSH/qsub.",
-    )
-    p_sub.add_argument(
-        "--from-meta",
-        action="store_true",
-        help=(
-            "Overlay missing 'profile' and 'job_name' on the spec from "
-            "<experiment-dir>/meta.json `experiment_id`. setdefault "
-            "semantics — never overwrites caller-supplied values; silent "
-            "no-op when meta.json is absent."
-        ),
     )
     p_sub.set_defaults(func=cmd_submit)
 
