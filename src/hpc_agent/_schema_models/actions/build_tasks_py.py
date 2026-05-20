@@ -44,7 +44,19 @@ class _DataAxisSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["independent", "associative", "bounded_halo", "sequential"] = Field(
-        description="DataAxis classification of the series axis — see hpc_agent.template.axis.",
+        description=(
+            "How the series axis is safe to split (classify by reading the experiment's "
+            "loop and its call graph). 'independent': the loop body is a pure function of "
+            "its row, no accumulator. 'associative': it accumulates an associative summary "
+            "(sum / count / min-max / sufficient statistics) — also set `monoid`. "
+            "'bounded_halo': it refits or re-reads a trailing window of bounded length "
+            "(a rolling statistic, a `train_window` look-back) — also set `halo_expr`. "
+            "'sequential': unbounded or order-dependent state — not splittable, and the "
+            "fail-safe default whenever the dependency structure is not unambiguous. The "
+            "classification must be verified with the serial-elision gate "
+            "(hpc_agent.template.check_elision) before submitting — a misclassified axis "
+            "returns plausible-but-wrong numbers."
+        ),
     )
     chunks: int = Field(
         default=1, ge=1, description="Chunks per sweep point. Ignored for kind='sequential'."
