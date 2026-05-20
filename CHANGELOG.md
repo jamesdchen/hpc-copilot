@@ -16,16 +16,21 @@ is on the default code path. Stdlib-only throughout.
 
 Layer 1 — notebook / CLI helpers:
 
-- `register_run` — decorator that marks an experiment entry point,
-  synthesises its `Flag` list from the function signature, and injects
-  a `compute(args)` wrapper (satisfying the executor contract) plus a
-  module-level `_RUNS` registry.
+- `register_run` — decorator that marks an experiment entry point and
+  injects a `compute(args)` wrapper (satisfying the executor contract)
+  plus a module-level `_RUNS` registry. The cluster-runtime surface it
+  needs (`register_run`, `compute`, `load_series`, `save_artifact`)
+  lives in one self-contained, stdlib-only module, `_runtime`.
 - `save_artifact(name, obj)` — write a large artifact under the
   per-task output directory (CWD fallback for local smoke tests).
 - `export_notebook(ipynb, out_py)` — lift the importable surface of a
   `.ipynb` into a `.py` executor via a strict AST allowlist (imports,
   defs, classes, UPPERCASE-target assignments; everything else
-  dropped).
+  dropped). A `@register_run` notebook exports to a *self-contained*
+  executor: the `hpc_agent.template` import is dropped and the
+  stdlib-only `_runtime` source inlined verbatim, so the executor runs
+  on a stdlib-only cluster with no `hpc-agent` install — the same
+  inlining `.hpc/cli.py` does for `Flag`.
 - `discover_runs(src_dir)` — find `@register_run` functions by AST
   walk, resolving bare / aliased / attribute decorator forms without
   importing the experiment's heavy dependencies.

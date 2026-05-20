@@ -3,8 +3,12 @@
 The agent-facing counterpart to :func:`hpc_agent.template.register_run`.
 A repo's executors may import ``torch`` / ``pandas`` / a private CUDA
 build; importing them just to enumerate experiment entry points is slow
-and fragile. :func:`discover_runs` instead walks each ``.py`` file with
-:mod:`ast`, so it runs in a stdlib-only environment.
+and fragile. :func:`discover_runs` instead walks each ``.py`` file —
+and each ``.ipynb`` notebook — with :mod:`ast`, so it runs in a
+stdlib-only environment. Notebooks are scanned natively because an
+*exported* executor inlines the runtime and no longer carries the
+``hpc_agent.template`` import the decorator-alias resolver keys off; the
+notebook is the source of truth for "what experiments exist".
 
 It resolves every spelling of the decorator:
 
@@ -19,6 +23,7 @@ and the parameterised call form ``@register_run(gpu=True)``.
 from __future__ import annotations
 
 import ast
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,15 +70,21 @@ def discover_runs(src_dir: str | Path) -> list[RunInfo]:
     skipping ``.hpc`` / VCS / cache directories.
     """
     root = Path(src_dir)
-    files = [root] if root.is_file() else sorted(root.rglob("*.py")) if root.is_dir() else []
+    if root.is_file():
+        files = [root]
+    elif root.is_dir():
+        files = sorted([*root.rglob("*.py"), *root.rglob("*.ipynb")])
+    else:
+        files = []
 
     found: list[RunInfo] = []
     for path in files:
         if any(part in _SKIP_DIRS for part in path.parts):
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError):
+            tree = ast.parse(_read_source(path))
+        except (OSError, SyntaxError, ValueError):
+            # ValueError covers json.JSONDecodeError for a malformed .ipynb.
             continue
         bare, modules = _decorator_aliases(tree)
         for node in tree.body:
@@ -94,6 +105,27 @@ def discover_runs(src_dir: str | Path) -> list[RunInfo]:
                 break
 
     return sorted(found, key=lambda r: (str(r.path), r.name))
+
+
+def _read_source(path: Path) -> str:
+    """Return Python source for *path* — a ``.py`` file or ``.ipynb`` notebook.
+
+    For a notebook the code cells are concatenated in order, so the
+    ``@register_run`` decorator and its ``hpc_agent.template`` import
+    appear as ordinary top-level nodes for the AST walk.
+    """
+    if path.suffix == ".ipynb":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        parts: list[str] = []
+        for cell in data.get("cells", []):
+            if cell.get("cell_type") != "code":
+                continue
+            src = cell.get("source", "")
+            if isinstance(src, list):
+                src = "".join(src)
+            parts.append(src)
+        return "\n".join(parts)
+    return path.read_text(encoding="utf-8")
 
 
 def _decorator_aliases(tree: ast.Module) -> tuple[set[str], set[str]]:
