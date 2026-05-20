@@ -10,7 +10,7 @@
     "schemas_dir",
     "journal_dir",
     "ssh_multiplexing",
-    "mars_skill_paths",
+    "skill_paths",
     "required_env"
   ],
   "additionalProperties": false,
@@ -49,12 +49,12 @@
       "title": "Ssh Multiplexing",
       "type": "boolean"
     },
-    "mars_skill_paths": {
+    "skill_paths": {
       "additionalProperties": {
         "type": "string"
       },
-      "description": "Map of slash-command skill bundle basename → absolute path to its SKILL.md, for the bundles shipped in the source tree (`skills/hpc-*/SKILL.md`). Empty on wheel-only installs. The field name is part of the wire contract; renaming it would break consumers that read it by key.",
-      "title": "Mars Skill Paths",
+      "description": "Map of slash-command skill bundle basename → absolute path to its SKILL.md, for the bundles shipped in the source tree (`skills/hpc-*/SKILL.md`). Empty on wheel-only installs.",
+      "title": "Skill Paths",
       "type": "object"
     },
     "required_env": {

@@ -61,7 +61,7 @@ class _CampaignSummary(BaseModel):
     task_kind: str | None = None
     task_count: int | None = Field(default=None, ge=0)
     operator: str | None = None
-    produced_by_kind: Literal["mars", "human"] | None = None
+    produced_by_kind: Literal["agent", "human"] | None = None
     cmd_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{8,64}$")
     budget: dict[str, Any] | None = None
     abort_if: dict[str, Any] | None = None

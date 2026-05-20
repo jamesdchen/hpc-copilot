@@ -16,21 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class _Provenance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["mars", "human"]
+    kind: Literal["agent", "human"]
     session_sha: str | None = Field(
         default=None,
-        description=(
-            "External-orchestrator session identifier. Required when "
-            "kind=mars; null otherwise. The `mars` value is a wire "
-            "literal kept for compatibility with existing integrators "
-            "that already write it; new integrators may use the same "
-            "value to mean 'any non-human agent'."
-        ),
+        description="Agent/orchestrator session identifier. Required when kind=agent; null otherwise.",
     )
     at: str | None = Field(default=None, description="ISO-8601 timestamp.")
     operator: str | None = Field(
         default=None,
-        description="Human operator name/handle when kind=human; null when kind=mars.",
+        description="Human operator name/handle when kind=human; null when kind=agent.",
     )
 
 
