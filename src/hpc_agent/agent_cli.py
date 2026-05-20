@@ -735,6 +735,21 @@ def cmd_plan_submit(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: plan-throughput ───────────────────────────────────────────
+
+
+def cmd_plan_throughput(args: argparse.Namespace) -> int:
+    from hpc_agent.atoms.plan_throughput import plan_throughput
+
+    data = plan_throughput(
+        cluster=args.cluster,
+        total_tasks=args.total_tasks,
+        est_task_duration_s=args.est_task_duration_s,
+    )
+    _ok(data, name="plan-throughput")
+    return EXIT_OK
+
+
 def cmd_clusters_list(_args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.clusters."""
     from hpc_agent.atoms.clusters import list_clusters
@@ -2489,6 +2504,37 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_ps.set_defaults(func=cmd_plan_submit)
+
+    # plan-throughput
+    p_pt = sub.add_parser(
+        "plan-throughput",
+        help=(
+            "Pack a task grid into batched submission waves. Pure-local: "
+            "reads the cluster's constraints from clusters.yaml and returns "
+            "the wave plan + wave_map for the per-run sidecar."
+        ),
+    )
+    p_pt.add_argument(
+        "--cluster",
+        required=True,
+        help="Cluster name; its constraints block in clusters.yaml supplies the limits.",
+    )
+    p_pt.add_argument(
+        "--total-tasks",
+        type=int,
+        required=True,
+        help="Total task count to pack into waves.",
+    )
+    p_pt.add_argument(
+        "--est-task-duration-s",
+        type=int,
+        default=None,
+        help=(
+            "Estimated per-task wall seconds. When given, enables the "
+            "walltime-feasibility check and the total-time estimate."
+        ),
+    )
+    p_pt.set_defaults(func=cmd_plan_throughput)
 
     # runtime-prior
     p_rp = sub.add_parser(

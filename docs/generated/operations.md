@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**60 operations total**: 54 primitive atoms + 6 workflow atoms.
+**61 operations total**: 55 primitive atoms + 6 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (33)
+## `query` (34)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -41,6 +41,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` | `hpc_agent.atoms.list_in_flight.list_in_flight` | — | `hpc_agent/schemas/list_in_flight.output.json` |
 | [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` | `hpc_agent.atoms.logs.fetch_logs` | — | — |
 | [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` | `hpc_agent.atoms.monitor_summary.monitor_summary` | — | `hpc_agent/schemas/monitor_summary.output.json` |
+| [`plan-throughput`](primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]` | `hpc_agent.atoms.plan_throughput.plan_throughput` | — | — |
 | [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status --run-id <id> [--experiment-dir <dir>]` | `hpc_agent.runner.status.record_status` | — | `hpc_agent/schemas/status.output.json` |
 | [`predict-queue-wait`](primitives/predict-queue-wait.md) | ✓ | _none_ | `hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` | `hpc_agent.forecast.queue_wait_baseline.predict_queue_wait` | `hpc_agent/schemas/predict_queue_wait.input.json` | `hpc_agent/schemas/predict_queue_wait.output.json` |
 | [`predict-start-time`](primitives/predict-start-time.md) | ✓ | _none_ | `hpc-agent predict-start-time --spec <path>` | `hpc_agent.atoms.predict_start_time.predict_start_time_primitive` | `hpc_agent/schemas/predict_start_time.input.json` | `hpc_agent/schemas/predict_start_time.output.json` |
