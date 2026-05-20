@@ -55,7 +55,11 @@ def build_executor(
     src = template_map[type]
     if not src.exists():
         raise errors.ConfigInvalid(f"template missing on disk: {src}")
-    dest = (output_dir / name).with_suffix(".py")
+    # Build the destination as <name>.py without with_suffix(): a name
+    # with a dot in the stem (e.g. "run_v1.2") would otherwise have its
+    # last segment truncated. Tolerate a name that already ends in ".py".
+    stem = name[:-3] if name.endswith(".py") else name
+    dest = output_dir / f"{stem}.py"
     if dest.exists() and not force:
         raise errors.SpecInvalid(f"refusing to overwrite {dest}; pass --force to overwrite")
     output_dir.mkdir(parents=True, exist_ok=True)
