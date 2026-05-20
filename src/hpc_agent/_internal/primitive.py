@@ -336,6 +336,13 @@ def register_primitives() -> None:
         return
     for modname in _PRIMITIVE_MODULES:
         importlib.import_module(modname)
+    # Optional plugin distributions contribute extra primitive modules
+    # via the ``hpc_agent.plugins`` entry-point group. With none
+    # installed this is an empty loop and registration is unchanged.
+    from hpc_agent._internal.plugins import plugin_primitive_modules
+
+    for modname in plugin_primitive_modules():
+        importlib.import_module(modname)
     _REGISTRATION_DONE = True
 
 

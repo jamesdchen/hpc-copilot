@@ -3113,6 +3113,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_bt.set_defaults(func=cmd_build_template)
 
+    # Optional plugin distributions add their own subcommands here. With
+    # none installed this is a no-op and the parser is unchanged.
+    from hpc_agent._internal.plugins import register_plugin_cli
+
+    register_plugin_cli(sub)
+
     return parser
 
 
