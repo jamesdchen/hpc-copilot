@@ -13,17 +13,16 @@ Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markd
 
 ```bash
 pip install hpc-agent          # or `pip install -e .` from a checkout
-hpc-agent install-commands     # copy slash commands + skills into ~/.claude/
+hpc-agent setup                # copy commands + skills, wire the Stop hooks
 ```
-`install-commands` copies the bundled slash commands into
-`~/.claude/commands/` and the skills into `~/.claude/skills/` — both
-ship inside the package, so this works the same from a wheel install
-or an editable checkout. Inside Claude Code you can instead run
-`/setup-hpc`, which does the same copy and (with consent) wires up the
-bundled Stop hooks. Only `/setup-hpc` ships in this repo's
-`.claude/commands/`; every other command (`/preflight`, `/submit-hpc`,
-`/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/hpc-axes-init`)
-and skill ships inside the package.
+`hpc-agent setup` copies the bundled slash commands into
+`~/.claude/commands/` and the skills into `~/.claude/skills/`, then
+installs hpc-agent's Stop hooks — all idempotent, so re-running is
+safe. Both asset trees ship inside the package, so this works the same
+from a wheel install or an editable checkout. Pass `--no-hooks` to
+skip the hook step or `--dry-run` to preview. Every command
+(`/preflight`, `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`,
+`/campaign-hpc`, `/hpc-axes-init`) and skill ships inside the package.
 
 Once installed:
 
