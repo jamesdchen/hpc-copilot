@@ -71,9 +71,11 @@ class Flag:
             kwargs["required"] = True
         if self.default is not None:
             kwargs["default"] = self.default
-        elif not self.required:
-            # Explicit None default for optional flags; lets executors
-            # do `if args.foo is not None:` reliably.
+        elif not self.required and self.action is None:
+            # Explicit None default for optional value-flags; lets executors
+            # do `if args.foo is not None:` reliably. Skipped when an
+            # ``action`` is set — a ``store_true`` flag must keep its
+            # natural ``False`` default, not become ``None`` when absent.
             kwargs["default"] = None
         if self.choices is not None:
             kwargs["choices"] = list(self.choices)

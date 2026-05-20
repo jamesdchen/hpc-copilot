@@ -180,7 +180,7 @@ def discover_executors(
             seen.add(resolved)
             try:
                 info = _parse_source(py.read_text(encoding="utf-8"), path=resolved)
-            except (OSError, SyntaxError):
+            except (OSError, SyntaxError, UnicodeDecodeError):
                 continue
             if info.is_executor:
                 found.append(info)
@@ -471,7 +471,7 @@ def discover_reducers(
             seen.add(resolved)
             try:
                 info = _classify_reducer(py.read_text(encoding="utf-8"), path=resolved)
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
             if info is not None:
                 found.append(info)
