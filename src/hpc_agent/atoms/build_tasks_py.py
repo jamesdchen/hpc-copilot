@@ -14,6 +14,7 @@ re-deriving the framework contract from prose.
 
 from __future__ import annotations
 
+import ast
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -159,12 +160,21 @@ def _render_flag(flag: dict[str, Any]) -> str:
     return f"flag({name!r}, {type_token})"
 
 
-def _render_flags_block(flags_by_executor: dict[str, list[dict[str, Any]]]) -> str:
-    """Render the FLAGS dict assignment as multi-line Python source."""
+def _render_flags_block(
+    flags_by_executor: dict[str, list[dict[str, Any]]], *, planner: bool = False
+) -> str:
+    """Render the FLAGS dict assignment as multi-line Python source.
+
+    In *planner* mode each executor additionally gets a ``halo`` flag —
+    the planner sets it per task alongside ``generic_args()``'s
+    ``start`` / ``end``.
+    """
     lines = ["FLAGS: dict[str, list] = {"]
     for module_path, flag_list in flags_by_executor.items():
         lines.append(f"    {module_path!r}: [")
         lines.append("        *generic_args(),")
+        if planner:
+            lines.append('        flag("halo", int, default=0),')
         for f in flag_list:
             lines.append(f"        {_render_flag(f)},")
         lines.append("    ],")
@@ -172,13 +182,14 @@ def _render_flags_block(flags_by_executor: dict[str, list[dict[str, Any]]]) -> s
     return "\n".join(lines)
 
 
-def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
-    """Render the cartesian-product _TASKS list comprehension.
+def _render_tasks_block(axes: list[dict[str, Any]], *, var_name: str = "_TASKS") -> str:
+    """Render a cartesian-product list comprehension bound to *var_name*.
 
     *axes* is ``[{"name": ..., "values": [...]}, ...]``. We emit a list
     comprehension that mirrors the canonical Pattern 1 from
     ``tasks_example.py``. Single-axis sweeps render as a simple list
-    comprehension; multi-axis as ``itertools.product``.
+    comprehension; multi-axis as ``itertools.product``. *var_name* is
+    ``_TASKS`` for cartesian mode and ``_SWEEP`` for planner mode.
     """
     from hpc_agent import errors
 
@@ -189,7 +200,9 @@ def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
     if len(axes) == 1:
         ax = axes[0]
         return (
-            f"_TASKS: list[dict] = [\n    {{{ax['name']!r}: v}}\n    for v in {ax['values']!r}\n]"
+            f"{var_name}: list[dict] = [\n"
+            f"    {{{ax['name']!r}: v}}\n"
+            f"    for v in {ax['values']!r}\n]"
         )
     names = [ax["name"] for ax in axes]
     values = [ax["values"] for ax in axes]
@@ -197,11 +210,72 @@ def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
     dict_body = ", ".join(f"{n!r}: {n}" for n in names)
     args = ", ".join(repr(v) for v in values)
     return (
-        f"_TASKS: list[dict] = [\n"
+        f"{var_name}: list[dict] = [\n"
         f"    {{{dict_body}}}\n"
         f"    for {var_tuple} in itertools.product({args})\n"
         f"]"
     )
+
+
+# Halo expressions are rendered verbatim into ``lambda params: <expr>``;
+# constrain them to arithmetic over the ``params`` dict so a spec cannot
+# smuggle a call / import into the generated tasks.py (same threat the
+# ``_FlagSpec.type`` Literal hardening closed for flag type tokens).
+_HALO_ALLOWED_NODES: tuple[type[ast.AST], ...] = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Constant,
+    ast.Name,
+    ast.Load,
+    ast.Subscript,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
+    ast.USub,
+    ast.UAdd,
+)
+
+
+def _validate_halo_expr(expr: str) -> None:
+    """Raise :class:`errors.SpecInvalid` unless *expr* is arithmetic-only."""
+    from hpc_agent import errors
+
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as exc:
+        raise errors.SpecInvalid(f"halo_expr is not a valid Python expression: {expr!r}") from exc
+    for node in ast.walk(tree):
+        if not isinstance(node, _HALO_ALLOWED_NODES):
+            raise errors.SpecInvalid(
+                f"halo_expr must be plain arithmetic over the `params` dict "
+                f"(no {type(node).__name__}); got {expr!r}"
+            )
+
+
+def _render_axis_expr(data_axis: dict[str, Any]) -> str:
+    """Render the ``DataAxis`` constructor expression for planner mode."""
+    from hpc_agent import errors
+
+    kind = data_axis["kind"]
+    if kind == "independent":
+        return "Independent()"
+    if kind == "sequential":
+        return "Sequential()"
+    if kind == "associative":
+        monoid = (data_axis.get("monoid") or "moments").upper()
+        return f"Associative({monoid})"
+    if kind == "bounded_halo":
+        halo = data_axis.get("halo_expr")
+        if not halo:
+            raise errors.SpecInvalid("data_axis kind 'bounded_halo' requires 'halo_expr'")
+        _validate_halo_expr(halo)
+        return f"BoundedHalo(lambda params: {halo})"
+    raise errors.SpecInvalid(f"unknown data_axis kind {kind!r}")
 
 
 _TEMPLATE = '''"""Per-experiment task list — cartesian product over the configured axes.
@@ -229,6 +303,54 @@ def total() -> int:
 
 def resolve(task_id: int) -> dict:
     return _TASKS[task_id]
+'''
+
+
+_PLANNER_TEMPLATE = '''"""Per-experiment task list — parallelization-planner variant.
+
+Generated by ``hpc-agent build-tasks-py`` from a classified DataAxis —
+the deterministic materialisation of the /submit-hpc Step 3 inference.
+The cartesian axes below are the *sweep*; the series axis is partitioned
+by ``hpc_agent.template.plan_tasks``. Each resolved task carries the
+sweep point plus the ``start`` / ``end`` / ``halo`` slice keys that
+``hpc_agent.template.load_series`` consumes.
+
+Before submitting, the parallelization must pass the serial-elision
+gate — see ``hpc_agent.template.check_elision``. A misclassified axis
+runs fine and returns plausible-but-wrong numbers; the gate is the
+only thing that catches it.
+"""
+
+from __future__ import annotations
+
+import itertools  # noqa: F401 — used by the multi-axis _SWEEP render
+
+from hpc_agent.executor_cli import flag, generic_args  # noqa: F401
+from hpc_agent.template import (  # noqa: F401
+    MOMENTS,
+    SUM,
+    Associative,
+    BoundedHalo,
+    Independent,
+    Sequential,
+    plan_tasks,
+)
+
+{flags_block}
+
+{sweep_block}
+
+_DATA_AXIS = {axis_expr}
+
+_PLAN = plan_tasks(_SWEEP, _DATA_AXIS, chunks={chunks}, series_length={series_length})
+
+
+def total() -> int:
+    return _PLAN.total()
+
+
+def resolve(task_id: int) -> dict:
+    return _PLAN.resolve(task_id)
 '''
 
 
@@ -276,12 +398,19 @@ def build_tasks_py(
         refuse-without-force — same semantics as ``axes-init``,
         because the user may have hand-edited the generated file
         (Pattern 2 / Pattern 3 conversions).
+    data_axis:
+        Optional. When present, ``axes`` is treated as the *sweep* and
+        the series axis is partitioned by
+        :func:`hpc_agent.template.plan_tasks` per the classified
+        ``DataAxis`` — the deterministic materialisation of the
+        ``/submit-hpc`` Step 3 inference. When omitted, the cartesian
+        Pattern-1 file is emitted as before.
 
     Returns
     -------
-    ``{path, wrote, reason, n_tasks}``. ``n_tasks`` is the
-    cartesian-product cardinality the rendered file will report
-    via ``total()``.
+    ``{path, wrote, reason, n_tasks}``. ``n_tasks`` is the task count
+    the rendered file reports via ``total()`` — the cartesian-product
+    cardinality, or ``sweep × chunks`` in planner mode.
     """
     axes = [a.model_dump() for a in spec.axes]
     # Reject axis names that would shadow real env vars when the
@@ -297,6 +426,11 @@ def build_tasks_py(
         k: [f.model_dump(exclude_none=True) for f in v] for k, v in spec.flags_by_executor.items()
     }
     force = bool(spec.force)
+    # When ``data_axis`` is set the agent classified a series axis at
+    # /submit-hpc Step 3; emit a planner-driven tasks.py instead of a
+    # cartesian one. The classification is rendered deterministically —
+    # the agent never hand-writes tasks.py.
+    data_axis = spec.data_axis.model_dump() if spec.data_axis is not None else None
 
     target = experiment_dir / ".hpc" / "tasks.py"
     if target.exists() and not force:
@@ -311,18 +445,37 @@ def build_tasks_py(
             "n_tasks": 0,
         }
 
-    flags_block = _render_flags_block(flags_by_executor)
-    tasks_block = _render_tasks_block(axes)
-    source = _TEMPLATE.format(flags_block=flags_block, tasks_block=tasks_block)
+    sweep_card = 1
+    for ax in axes:
+        sweep_card *= len(ax["values"])
+
+    if data_axis is not None:
+        source = _PLANNER_TEMPLATE.format(
+            flags_block=_render_flags_block(flags_by_executor, planner=True),
+            sweep_block=_render_tasks_block(axes, var_name="_SWEEP"),
+            axis_expr=_render_axis_expr(data_axis),
+            chunks=int(data_axis["chunks"]),
+            series_length=int(data_axis["series_length"]),
+        )
+        series_length = int(data_axis["series_length"])
+        if data_axis["kind"] == "sequential":
+            chunks_used = 1
+        elif series_length > 0:
+            chunks_used = max(1, min(int(data_axis["chunks"]), series_length))
+        else:
+            chunks_used = 1
+        n_tasks = sweep_card * chunks_used
+    else:
+        source = _TEMPLATE.format(
+            flags_block=_render_flags_block(flags_by_executor),
+            tasks_block=_render_tasks_block(axes),
+        )
+        n_tasks = sweep_card
 
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(source, encoding="utf-8")
     tmp.replace(target)
-
-    n_tasks = 1
-    for ax in axes:
-        n_tasks *= len(ax["values"])
 
     return {
         "path": str(target),

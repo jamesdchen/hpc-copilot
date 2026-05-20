@@ -56,6 +56,29 @@ Layer 2 — parallelization planner:
 field (e.g. `store_true`) so boolean flags map cleanly; the inlined
 copy in `cli_dispatcher.py` is kept in lock-step.
 
+### Added — agent inference + `build-template` scaffold injection
+
+- `/submit-hpc` (`skills/hpc-submit/SKILL.md`) — Step 3 now classifies
+  an experiment's series axis as a `DataAxis` from a read of `run()`
+  and its call graph: detect a series loop, classify it, gate on the
+  serial-elision check. Default to `Sequential` on any uncertainty,
+  bias halos large.
+- `build-tasks-py` gains a planner mode — a `data_axis` field on the
+  spec (`{kind, chunks, series_length, halo_expr?, monoid?}`) makes the
+  primitive emit a deterministic `plan_tasks`-driven `.hpc/tasks.py`,
+  the materialisation of the Step 3 inference. The agent classifies; it
+  never hand-writes `tasks.py`. `halo_expr` is validated to
+  arithmetic-only over `params` before it is rendered.
+- `build-template` — a new scaffold primitive that injects the
+  experiment-template into a repo: `.hpc/template.mk` and
+  `.hpc/scaffold.py` (framework-owned, re-injected every run,
+  self-healing) plus the root files `Makefile`,
+  `.pre-commit-config.yaml`, `.github/workflows/ci.yml`, `conftest.py`,
+  and `pyproject.toml` (refuse-without-`--force`, with non-destructive
+  `Makefile` / `pyproject.toml` handling). The scaffold lives inside
+  hpc-agent — there is no separate template repo to clone. CLI:
+  `hpc-agent build-template [--repo-dir <dir>] [--force]`.
+
 ### Removed (experiment-shaped surface that moved out to the caller)
 
 Per the cleavage: hpc-agent owns the parallelization scaffolding;

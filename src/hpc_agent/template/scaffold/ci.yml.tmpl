@@ -1,0 +1,28 @@
+# Experiment CI — injected by `hpc-agent build-template`.
+#
+# Three gates: the exported .py matches its notebook, every notebook
+# exposes a @register_run, and the test suite (which carries the
+# mandatory serial-elision gate) passes.
+
+name: experiments
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  experiments:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e . || pip install hpc-agent
+      - name: Notebook-sync — exported .py matches its .ipynb
+        run: python .hpc/scaffold.py check-sync
+      - name: Discovery — every notebook exposes a @register_run
+        run: python .hpc/scaffold.py discover
+      - name: Serial-elision gate + experiment tests
+        run: pytest -q

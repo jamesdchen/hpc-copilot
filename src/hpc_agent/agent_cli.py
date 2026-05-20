@@ -1848,6 +1848,17 @@ def cmd_build_executor(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: build-template ────────────────────────────────────────────
+
+
+def cmd_build_template(args: argparse.Namespace) -> int:
+    from hpc_agent.atoms.build_template import build_template
+
+    data = build_template(repo_dir=args.repo_dir, force=args.force)
+    _ok(data, name="build-template")
+    return EXIT_OK
+
+
 # ─── parser ────────────────────────────────────────────────────────────────
 
 
@@ -2945,6 +2956,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_be.set_defaults(func=cmd_build_executor)
 
+    # build-template
+    p_bt = sub.add_parser(
+        "build-template",
+        help="Inject the experiment-template scaffold into a repo.",
+    )
+    p_bt.add_argument(
+        "--repo-dir",
+        type=Path,
+        default=Path.cwd(),
+        help="Target repository root (default: CWD).",
+    )
+    p_bt.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Overwrite repo-root files that already exist. The "
+            "framework-owned .hpc/ assets are re-injected regardless."
+        ),
+    )
+    p_bt.set_defaults(func=cmd_build_template)
+
     return parser
 
 
@@ -2987,6 +3019,7 @@ _VERB_GROUPS: dict[str, frozenset[str]] = {
             "build-executor",
             "build-submit-spec",
             "build-tasks-py",
+            "build-template",
         }
     ),
 }
