@@ -191,6 +191,13 @@ def test_hook_tolerates_malformed_stdin(
 # ─── installer ──────────────────────────────────────────────────────────────
 
 
+def _commands(entry: dict[str, Any]) -> list[str]:
+    """Command strings in a ``hooks.Stop`` entry — group shape or legacy flat."""
+    if "hooks" in entry:
+        return [h["command"] for h in entry["hooks"]]
+    return [entry["command"]]
+
+
 def test_install_creates_settings_when_missing(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     summary = install_mod.install_hooks(settings_path=settings)
@@ -199,7 +206,10 @@ def test_install_creates_settings_when_missing(tmp_path: Path) -> None:
     on_disk = json.loads(settings.read_text())
     assert "Stop" in on_disk["hooks"]
     entry = on_disk["hooks"]["Stop"][0]
-    assert "claude_hpc.hooks.monitor_armed_check" in entry["command"]
+    # Each Stop element must be a group object wrapping a `hooks` array;
+    # a bare command hook here is rejected by Claude Code.
+    assert "hooks" in entry
+    assert "claude_hpc.hooks.monitor_armed_check" in entry["hooks"][0]["command"]
 
 
 def test_install_is_idempotent(tmp_path: Path) -> None:
@@ -227,9 +237,35 @@ def test_install_preserves_existing_hooks(tmp_path: Path) -> None:
     on_disk = json.loads(settings.read_text())
     stop_entries = on_disk["hooks"]["Stop"]
     assert len(stop_entries) == 2
-    assert any("echo unrelated" in e["command"] for e in stop_entries)
-    assert any("monitor_armed_check" in e["command"] for e in stop_entries)
+    all_cmds = [c for e in stop_entries for c in _commands(e)]
+    assert any("echo unrelated" in c for c in all_cmds)
+    assert any("monitor_armed_check" in c for c in all_cmds)
     assert "PreToolUse" in on_disk["hooks"]
+
+
+def test_install_heals_legacy_flat_entry(tmp_path: Path) -> None:
+    """A flat command hook from the old buggy installer is rewritten in place.
+
+    Pre-fix, ``settings_entry`` returned a bare ``{"type": "command",
+    ...}`` hook and the installer appended it straight into ``hooks.Stop``
+    — a shape Claude Code rejects. Re-running the fixed installer must
+    heal that entry into the group shape, not duplicate it.
+    """
+    settings = tmp_path / "settings.json"
+    command = "python -m claude_hpc.hooks.monitor_armed_check"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"type": "command", "command": command}]}}))
+    summary = install_mod.install_hooks(settings_path=settings)
+    assert summary["wrote"] is True
+    assert summary["added"] == ["monitor-armed"]
+    stop_entries = json.loads(settings.read_text())["hooks"]["Stop"]
+    # Healed in place — exactly one entry, now in the group shape.
+    assert len(stop_entries) == 1
+    assert "hooks" in stop_entries[0]
+    assert _commands(stop_entries[0]) == [command]
+    # And healing is idempotent.
+    again = install_mod.install_hooks(settings_path=settings)
+    assert again["wrote"] is False
+    assert again["added"] == []
 
 
 def test_install_preserves_other_top_level_keys(tmp_path: Path) -> None:

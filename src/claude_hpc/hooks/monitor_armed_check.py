@@ -146,11 +146,18 @@ def settings_entry(
 ) -> dict[str, Any]:
     """Return the JSON entry for ~/.claude/settings.json's ``hooks.Stop`` array.
 
-    Stable shape so :func:`hook_install` can detect prior installs and
-    avoid duplicates. Override *command* to point at a custom interpreter
-    (e.g. when the global ``python`` doesn't have claude-hpc installed).
+    Each element of a hook-event array is a *group* object — ``{"hooks":
+    [<command hook>, ...]}`` — not a bare command hook. Returning the
+    group shape directly is what makes the installed entry valid; an
+    older version of this function returned the bare ``{"type":
+    "command", ...}`` hook, which Claude Code rejects with
+    ``hooks.Stop.0.hooks: Expected array, but received undefined`` and
+    then skips the entire settings file.
+
+    Override *command* to point at a custom interpreter (e.g. when the
+    global ``python`` doesn't have claude-hpc installed).
     """
-    return {"type": "command", "command": command}
+    return {"hooks": [{"type": "command", "command": command}]}
 
 
 def main() -> int:
