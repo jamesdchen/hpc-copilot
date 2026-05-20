@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/campaign_health.output.json",
+  "title": "campaign-health output (data block)",
+  "description": "Structured run-history aggregation.\n\nThe ``suggested_prompt`` field is ready-to-feed-LLM (callers\nappend no preamble; pass it directly).",
+  "type": "object",
+  "required": [
+    "campaign_id",
+    "since_iso",
+    "n_runs",
+    "n_complete",
+    "n_failed",
+    "walltime_cliff_rate",
+    "queue_wait_quantiles",
+    "failure_breakdown",
+    "gpu_utilization",
+    "suggested_prompt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Campaign Id"
+    },
+    "since_iso": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Since Iso"
+    },
+    "n_runs": {
+      "minimum": 0,
+      "title": "N Runs",
+      "type": "integer"
+    },
+    "n_complete": {
+      "minimum": 0,
+      "title": "N Complete",
+      "type": "integer"
+    },
+    "n_failed": {
+      "minimum": 0,
+      "title": "N Failed",
+      "type": "integer"
+    },
+    "walltime_cliff_rate": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Per-bucket cliff-rate fractions in [0, 1].",
+      "title": "Walltime Cliff Rate",
+      "type": "object"
+    },
+    "queue_wait_quantiles": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Queue Wait Quantiles",
+      "type": "object"
+    },
+    "failure_breakdown": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "title": "Failure Breakdown",
+      "type": "object"
+    },
+    "gpu_utilization": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Gpu Utilization",
+      "type": "object"
+    },
+    "suggested_prompt": {
+      "title": "Suggested Prompt",
+      "type": "string"
+    }
+  }
+}

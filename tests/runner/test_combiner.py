@@ -13,8 +13,8 @@ import math
 import random
 from typing import TYPE_CHECKING
 
-from claude_hpc.mapreduce import combiner as combiner_mod
-from claude_hpc.mapreduce.combiner import _grid_key, _neumaier_sum, _weighted_mean, main
+from hpc_agent.mapreduce import combiner as combiner_mod
+from hpc_agent.mapreduce.combiner import _grid_key, _neumaier_sum, _weighted_mean, main
 
 if TYPE_CHECKING:
     from pathlib import Path

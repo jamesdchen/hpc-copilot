@@ -1,4 +1,4 @@
-"""Producer-side output validation in claude_hpc._internal.schema.
+"""Producer-side output validation in hpc_agent._internal.schema.
 
 Asserts that ``validate_output``:
 
@@ -11,7 +11,7 @@ Asserts that ``validate_output``:
 
 from __future__ import annotations
 
-from claude_hpc._internal.schema import (
+from hpc_agent._internal.schema import (
     OutputSchemaDrift,
     _output_validation_enabled,
     validate_output,

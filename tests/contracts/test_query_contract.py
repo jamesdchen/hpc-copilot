@@ -10,7 +10,7 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
-from claude_hpc.infra.backends import query as qmod
+from hpc_agent.infra.backends import query as qmod
 
 
 def _cp(stdout="", stderr="", returncode=0):

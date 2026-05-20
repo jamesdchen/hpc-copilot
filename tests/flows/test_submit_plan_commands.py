@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from claude_hpc.infra.backends.sge import SGEBackend
-from claude_hpc.infra.backends.slurm import SlurmBackend
-from claude_hpc.planning.throughput import JobBatch, SubmissionPlan
+from hpc_agent.infra.backends.sge import SGEBackend
+from hpc_agent.infra.backends.slurm import SlurmBackend
+from hpc_agent.planning.throughput import JobBatch, SubmissionPlan
 
 # ---------------------------------------------------------------------------
 # fixtures / helpers
@@ -87,7 +87,7 @@ class TestSubmitPlanSlurm:
 
         recorder = _Recorder(responder)
         # Patch subprocess.run at the source used by HPCBackend._execute_command.
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", recorder)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", recorder)
 
         backend = SlurmBackend(script=str(tmp_path / "job.slurm"), log_dir=str(tmp_path / "logs"))
 
@@ -165,7 +165,7 @@ class TestSubmitPlanSge:
             )
 
         recorder = _Recorder(responder)
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", recorder)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", recorder)
 
         backend = SGEBackend(script=str(tmp_path / "job.sh"), log_dir=str(tmp_path / "logs"))
 

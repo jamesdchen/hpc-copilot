@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/list_in_flight.output.json",
+  "title": "list-in-flight output data",
+  "description": "Recovery path for a fresh agent / Claude Code session.\n\nDiscover what's still running before deciding whether to launch\nnew work or resume monitoring.",
+  "type": "object",
+  "required": [
+    "runs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "runs": {
+      "items": {
+        "$ref": "#/$defs/_InFlightRun"
+      },
+      "title": "Runs",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "_InFlightRun": {
+      "additionalProperties": true,
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "profile": {
+          "title": "Profile",
+          "type": "string"
+        },
+        "cluster": {
+          "title": "Cluster",
+          "type": "string"
+        },
+        "job_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Job Ids",
+          "type": "array"
+        },
+        "total_tasks": {
+          "minimum": 1,
+          "title": "Total Tasks",
+          "type": "integer"
+        },
+        "submitted_at": {
+          "title": "Submitted At",
+          "type": "string"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Id"
+        },
+        "last_status": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Status"
+        }
+      },
+      "required": [
+        "run_id",
+        "profile",
+        "cluster",
+        "job_ids",
+        "total_tasks",
+        "submitted_at"
+      ],
+      "title": "_InFlightRun",
+      "type": "object"
+    }
+  }
+}

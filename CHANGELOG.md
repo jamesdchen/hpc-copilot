@@ -9,26 +9,26 @@ on the wire surface enumerated in
 
 ### Removed (experiment-shaped surface that moved out to the caller)
 
-Per the cleavage: claude-hpc owns the parallelization scaffolding;
+Per the cleavage: hpc-agent owns the parallelization scaffolding;
 the caller owns the experiment-specific layout, the experiment-type
-vocabulary, and any meta-file enrichment. Net effect: claude-hpc no
+vocabulary, and any meta-file enrichment. Net effect: hpc-agent no
 longer reads or enriches anyone else's experiment-context file.
 
-- `claude_hpc.state.discover.detect_experiment_tier()` — inferred
+- `hpc_agent.state.discover.detect_experiment_tier()` — inferred
   Tier-1 (`probes/probe-*/probe.py`) vs Tier-2 (`runs/run-*/scripts/`)
   from path layout. Integrators that adopt that convention now
   detect the tier themselves and dispatch accordingly.
-- `claude_hpc.state.discover.read_meta_json()` — read
+- `hpc_agent.state.discover.read_meta_json()` — read
   `<experiment-dir>/meta.json` as a dict. Two-line stdlib helper;
   callers reproduce it on their side.
 - `agent_cli._build_meta_block()` and the `data.meta` field on the
-  `hpc-agent discover` envelope — claude-hpc no longer enriches the
+  `hpc-agent discover` envelope — hpc-agent no longer enriches the
   discover envelope with `experiment_id` / `seed` / `purpose` /
   `tier` from `meta.json`. The envelope now returns just
   `data.executors`. Callers that want experiment context add it
   client-side.
 - `agent_cli._overlay_meta_on_spec()` and the `hpc-agent submit
-  --from-meta` flag — claude-hpc no longer overlays missing
+  --from-meta` flag — hpc-agent no longer overlays missing
   `profile` / `job_name` on the submit spec from
   `meta.json::experiment_id`. Callers populate the spec themselves
   before calling `submit`.
@@ -57,7 +57,7 @@ notes below.
   policy table, the `.hpc/tasks.py` boundary, the executor import
   allowlist, the dispatcher-side env vars, and the `lifecycle_state`
   values.
-- **`claude_hpc.integration` constants module** — `RESULT_DIR_ENV`,
+- **`hpc_agent.integration` constants module** — `RESULT_DIR_ENV`,
   `HPC_KW_PREFIX`, `LOCAL_DATA_DIR_ENV`, `JOURNAL_DIR_ENV`,
   `CLUSTERS_CONFIG_ENV`, `LIFECYCLE_STATES`, `ERROR_CODES`.
   Integrators import these instead of carrying string literals that
@@ -68,7 +68,7 @@ notes below.
   `extra="ignore"` for back-compat (flipping the default would break
   every existing user's `clusters.yaml`).
 - **Executor import-boundary allowlist** now includes
-  `claude_hpc.executor_cli` alongside `claude_hpc.mapreduce.metrics_io`.
+  `hpc_agent.executor_cli` alongside `hpc_agent.mapreduce.metrics_io`.
   The canonical `tasks_example.py` template already required this; the
   doc and lint test had drifted.
 
@@ -80,7 +80,7 @@ notes below.
   templates under `src/slash_commands/commands/`. Previously the
   README implied they were available out of the box.
 - **`docs/reference/python-api-contract.md`** corrected:
-  `claude_hpc.state.runtime_prior.summarize` was a phantom — the real
+  `hpc_agent.state.runtime_prior.summarize` was a phantom — the real
   symbol is `roll_up_quantiles`.
 - **Narrative docs and schema descriptions** genericized: references
   to a specific integrator are replaced with integrator-agnostic
@@ -92,7 +92,7 @@ notes below.
 
   | Old name | New name | Surface |
   |---|---|---|
-  | `claude_hpc.state.discover.detect_mars_tier` | `detect_experiment_tier` | Python (`__all__`) |
+  | `hpc_agent.state.discover.detect_mars_tier` | `detect_experiment_tier` | Python (`__all__`) |
   | `_MARS_SKILL_NAMES` | `_SKILL_NAMES` | private constant in `atoms/capabilities.py`; back-compat re-export from `agent_cli.py` follows the renamed name |
   | `_mars_skill_paths()` | `_resolve_skill_paths()` | private helper |
   | `_MARS_CANDIDATE_DIRS` | `_META_CANDIDATE_DIRS` | private |
@@ -286,7 +286,7 @@ tests pass.
   entries that have no `@primitive` decorator.
 
 **Dead-code removal**
-- Removed unused `claude_hpc._internal.idempotency` resolver module (was never wired into production; only exercised by tests).
+- Removed unused `hpc_agent._internal.idempotency` resolver module (was never wired into production; only exercised by tests).
 
 ### Determinism — fidelity guardrails for parallel-vs-serial executor parity
 
@@ -400,7 +400,7 @@ survival atoms out of `forecast/`; splitting `settings.json`. The
 audit recommendation to add eager re-exports in `flows/state/forecast/planning/__init__.py`
 was rejected on testing — those packages share load-time edges with
 `infra/clusters.py` and eager imports close a cycle on first
-`import claude_hpc`. Each `__init__.py` now carries a docstring
+`import hpc_agent`. Each `__init__.py` now carries a docstring
 explaining why submodule-explicit imports are intentional.
 
 ### Added — `cluster-reduce` primitive: stop bulk-pulling raw chunks
@@ -539,14 +539,14 @@ lookup), and tabulates which files / sections are auto-generated.
 `interview` → `recall` feedback loop end-to-end: what `interview.json`
 captures, the two-mode (validate / generator) operation of the interview
 primitive, the five typed `task_generator` shapes, the three rollup tiers
-recall returns, and the `~/.claude-hpc/config.json:experiment_roots`
+recall returns, and the `~/.hpc-agent/config.json:experiment_roots`
 default-root config.
 
 Root `README.md` updated:
 - Agent CLI block adds `interview` and `recall`
 - New "Memory across campaigns" subsection under "How It Works" linking
   to the workflow doc
-- Configuration section adds `~/.claude-hpc/config.json` entry
+- Configuration section adds `~/.hpc-agent/config.json` entry
 
 Touch-points: 47 files updated for path rewrites (skills, slash commands,
 build scripts, tests, schemas, source comments). Build scripts updated:
@@ -593,7 +593,7 @@ reasoning over the ranges stays in the calling agent.
 
 **Config-driven default `--root`** (Fix C) — `--root` is now optional.
 When omitted, the primitive falls back to
-`~/.claude-hpc/config.json:experiment_roots` (a JSON file with an
+`~/.hpc-agent/config.json:experiment_roots` (a JSON file with an
 `experiment_roots: [path, …]` field). Both empty raises `spec_invalid`
 with a clear message — no implicit cwd default. Multi-root support
 (`recall_campaigns(roots: list[Path], ...)`) means the config can list
@@ -663,24 +663,24 @@ chat-context that's gone the moment the campaign starts.
   fingerprint, so future "show me my last 5 LR sweeps" queries can index
   past campaigns by `task_kind` and surface their typed parameters.
 
-### Changed — folded slash_commands Python runtime into claude_hpc
+### Changed — folded slash_commands Python runtime into hpc_agent
 
 The atomic-ops layer (runner.py), journal storage (session.py), and
 typed exception hierarchy (errors.py) moved out of `slash_commands/`
-into `claude_hpc/`:
+into `hpc_agent/`:
 
-- `slash_commands/runner.py`  → `claude_hpc/orchestrator/runner.py`
-- `slash_commands/errors.py`  → `claude_hpc/errors.py`
-- `slash_commands/session.py` → `claude_hpc/_internal/session.py`
+- `slash_commands/runner.py`  → `hpc_agent/orchestrator/runner.py`
+- `slash_commands/errors.py`  → `hpc_agent/errors.py`
+- `slash_commands/session.py` → `hpc_agent/_internal/session.py`
 
 Plus:
 
-- `claude_hpc/operations.py`  → `claude_hpc/_internal/operations.py`
+- `hpc_agent/operations.py`  → `hpc_agent/_internal/operations.py`
   (framework-internal plumbing, not user-facing)
 
-The motivation is layering: `claude_hpc/` is the framework, `slash_commands/`
+The motivation is layering: `hpc_agent/` is the framework, `slash_commands/`
 is the human-UX surface. Pre-fold, 7 framework files imported FROM
-`slash_commands/`, which is upside-down. Post-fold, `claude_hpc/`
+`slash_commands/`, which is upside-down. Post-fold, `hpc_agent/`
 is self-contained.
 
 `slash_commands/` retains its directory and `__init__.py` so the
@@ -697,10 +697,10 @@ behavior changes — purely a rearrangement.
 
 Both top-level Python packages now live under `src/`:
 
-- `claude_hpc/` → `src/claude_hpc/`
+- `hpc_agent/` → `src/hpc_agent/`
 - `slash_commands/` → `src/slash_commands/`
 
-Import names are unchanged (`import claude_hpc`,
+Import names are unchanged (`import hpc_agent`,
 `import slash_commands.runner`); only the on-disk layout moved.
 `pyproject.toml` declares `[tool.setuptools.packages.find].where =
 ["src"]` and `[tool.mypy].mypy_path = ["src"]` so the editable install
@@ -712,12 +712,12 @@ The src layout prevents the "import works from cwd without
 ### Removed (BREAKING) — `hpc_mapreduce` deprecation shim
 
 The `hpc_mapreduce` shim package, added when the package was renamed
-to `claude_hpc` in the previous release, has been removed. Any code
-still importing `hpc_mapreduce.X` must update to `claude_hpc.X`.
+to `hpc_agent` in the previous release, has been removed. Any code
+still importing `hpc_mapreduce.X` must update to `hpc_agent.X`.
 
 The CLI binary `hpc-agent <subcommand>` is unchanged — it was
 always provided via `[project.scripts]` pointing at
-`claude_hpc.agent_cli:main`, not via the shim. MARs and any other
+`hpc_agent.agent_cli:main`, not via the shim. MARs and any other
 agent harness that shells out to the binary needs no changes.
 
 The shim's job was to give one release of grace for downstream
@@ -739,7 +739,7 @@ collides with every other 4:00:00 ask — the round numbers every
 well-funded job requests are also the slots backfill schedulers
 reserve. Asking 3:45:00 instead fits in backfill shadows the
 4:00:00 jobs don't reach. The new helper
-`claude_hpc.forecast.walltime_arbitrage.arbitrage_walltime`
+`hpc_agent.forecast.walltime_arbitrage.arbitrage_walltime`
 subtracts 15min and floors to a 5min boundary; below a 1h floor the
 ask passes through unchanged so short tasks aren't cliff-killed.
 The planner (`plan_submit`) applies the trim only when the
@@ -762,7 +762,7 @@ only by checkpointing actually working.
 
 The chain is **default-off when checkpointing isn't detected** so we
 don't silently waste compute. The new
-`claude_hpc.planning.checkpoint_detect.detect_checkpointing`
+`hpc_agent.planning.checkpoint_detect.detect_checkpointing`
 helper walks past run output dirs (`<exp>/.hpc/runs/*/result_dirs`)
 for files matching `checkpoint*`, `*.ckpt`, `state*.pkl`, `last*.pt`,
 `latest*.pt`, `model*.{joblib,pkl,pt}`, `epoch_*.{pt,pkl}`. Returns
@@ -787,7 +787,7 @@ null` (segment count when chained) and `daisy_chain_dep_jobids:
 <list[str]> | null` (the actual scheduler dep jobids; populated
 post-submit by `submit_flow`, null at plan time).
 
-New typed validator helpers in `claude_hpc.infra.clusters`:
+New typed validator helpers in `hpc_agent.infra.clusters`:
 `get_walltime_arbitrage`, `get_auto_daisy_chain`,
 `get_max_walltime_sec`. Each rejects wrong-typed yaml values
 (`walltime_arbitrage: "yes"` is a string, not a bool — fails loudly
@@ -800,8 +800,8 @@ hostile shared HPC environment, where higher-priority work routinely
 preempts the user's tasks. None of these change framework-internal
 behaviour for non-preempted runs.
 
-* `claude_hpc/mapreduce/dispatch.py` now traps `SIGTERM` from the
-  scheduler. The handler logs `[claude-hpc] SIGTERM received;
+* `hpc_agent/mapreduce/dispatch.py` now traps `SIGTERM` from the
+  scheduler. The handler logs `[hpc-agent] SIGTERM received;
   cluster preemption imminent` to stderr, writes
   `preempt: {at: <utcnow_iso>, grace_sec: <int>}` to the per-task
   entry of `<exp>/.hpc/runs/<run_id>.json`, forwards `SIGINT` to the
@@ -811,16 +811,16 @@ behaviour for non-preempted runs.
   (not failed) so the agent harness can resubmit cleanly without
   surfacing a real failure to the user. Stays cluster-side
   stdlib-only.
-* `claude_hpc/mapreduce/dispatch.py` skips invoking the executor on
+* `hpc_agent/mapreduce/dispatch.py` skips invoking the executor on
   resubmit if `result_dir/metrics.json` already exists with non-zero
   size — the campus user resubmits a preempted task without redoing
   already-completed work. Convention: executors that don't call
-  `claude_hpc.mapreduce.metrics_io.write_metrics` won't get
+  `hpc_agent.mapreduce.metrics_io.write_metrics` won't get
   free skip-on-resubmit.
 * `slash_commands/errors.Preempted` is the new typed exception
   (`error_code: preempted`, `category: cluster`, `retry_safe: True`).
   Wired through the agent envelope (`error_code` enum in
-  `claude_hpc/schemas/envelope.json`), the failure-signatures catalog
+  `hpc_agent/schemas/envelope.json`), the failure-signatures catalog
   (exit-code 130 → `error_class: preempted`, `suggested_fix: {action:
   resubmit-preempted}`), and `cmd_failures` (`preempted_count` /
   `preempted_task_ids` surfaced at the data top level). Also added to
@@ -836,7 +836,7 @@ efficient — they help the campus user's *own* jobs survive structural
 disadvantage.
 
 **Thread caps in the shared template preamble.** All four templates
-(SGE/SLURM × CPU/GPU) now source `claude_hpc/mapreduce/templates/common/hpc_preamble.sh`,
+(SGE/SLURM × CPU/GPU) now source `hpc_agent/mapreduce/templates/common/hpc_preamble.sh`,
 which exports `OMP_NUM_THREADS=1` plus the four sibling caps for MKL,
 OpenBLAS, NumExpr and vecLib. Without this, a campus user running
 NumPy on a 1-core allocation gets BLAS spawning 16 threads, blows past
@@ -879,44 +879,44 @@ safety margin via `walltime_drift` calibration).
 `clusters.yaml` gains an optional `cold_start_mem_buffer:` field per
 cluster (default `0.15` = 15%). Set to `0.0` to opt out and preserve
 the legacy "kept user default" behavior on cold start. New helpers
-`claude_hpc.infra.clusters.get_cold_start_mem_buffer` and
+`hpc_agent.infra.clusters.get_cold_start_mem_buffer` and
 `get_nfs_data_dir` parse and validate the new fields. Both new keys
 are added to the boundary-contract allowlist as infra-shaped (they
 describe how the cluster is configured, not what work the user wants
 to run).
 
-### Changed (deprecation) — `hpc_mapreduce` → `claude_hpc` package rename
+### Changed (deprecation) — `hpc_mapreduce` → `hpc_agent` package rename
 
-The package import path has been renamed `hpc_mapreduce` → `claude_hpc`,
+The package import path has been renamed `hpc_mapreduce` → `hpc_agent`,
 matching the distribution name in `pyproject.toml`. The package was
 also split into 4 sub-packages reflecting their domains:
 
-- `claude_hpc.mapreduce` — the actual mapreduce tool (dispatch, combine, reduce, templates)
-- `claude_hpc.infra` — cluster communications (backends, ssh, inspect)
-- `claude_hpc.orchestrator` — job submission orchestration (flow primitives, planner, runs, runtime priors)
-- `claude_hpc.forecast` — predictive scheduling (queue-wait baseline, DES simulator, microstructure features)
-- `claude_hpc._internal` — shared utilities (_io, _time, _version, _primitive, idempotency, layout, lifecycle, telemetry)
-- `claude_hpc.atoms` — CLI-only primitive dispatchers
+- `hpc_agent.mapreduce` — the actual mapreduce tool (dispatch, combine, reduce, templates)
+- `hpc_agent.infra` — cluster communications (backends, ssh, inspect)
+- `hpc_agent.orchestrator` — job submission orchestration (flow primitives, planner, runs, runtime priors)
+- `hpc_agent.forecast` — predictive scheduling (queue-wait baseline, DES simulator, microstructure features)
+- `hpc_agent._internal` — shared utilities (_io, _time, _version, _primitive, idempotency, layout, lifecycle, telemetry)
+- `hpc_agent.atoms` — CLI-only primitive dispatchers
 
 `hpc_mapreduce` continues to work as a deprecation shim for one release
 — it emits a `DeprecationWarning` on import and forwards `*` from
-`claude_hpc`. Update your imports to `claude_hpc` directly; the shim
+`hpc_agent`. Update your imports to `hpc_agent` directly; the shim
 will be removed in a future release.
 
 The user-facing CLI binary `hpc-agent` is unchanged. Slash commands,
 JSON envelope contracts, the `.hpc/tasks.py` user contract, JSON Schema
-shapes (now under `claude_hpc/schemas/`), and the cluster-side
+shapes (now under `hpc_agent/schemas/`), and the cluster-side
 stdlib-only constraint on `dispatch.py` and `combiner.py` are all
 preserved exactly.
 
 The `cmd_capabilities` output's `python` field now reflects the new
-module paths (e.g. `claude_hpc.flows.submit_flow.submit_flow`
+module paths (e.g. `hpc_agent.flows.submit_flow.submit_flow`
 instead of `hpc_mapreduce.job.submit_flow.submit_flow`); agents that
 shell out by `cli` are unaffected.
 
 ### Removed (breaking) — SEGV blacklist feature
 
-The SEGV blacklist (`claude_hpc.orchestrator.blacklist`, the
+The SEGV blacklist (`hpc_agent.orchestrator.blacklist`, the
 `record-segv-blacklist` primitive, the `record_segv` /
 `get_active_blacklist` exports) has been removed. The smart planner no
 longer consumes a blacklist signal; callers should drop any reference to
@@ -1002,7 +1002,7 @@ the feature.
   concurrent writers could interleave bytes mid-line. Best-effort no-op
   on platforms without `fcntl`.
 - **A10** `read_run_sidecar` now warns once per
-  `(run_id, sidecar_version)` when the sidecar's `claude_hpc_version`
+  `(run_id, sidecar_version)` when the sidecar's `hpc_agent_version`
   differs from the running package's `__version__`. Closes the loop on
   a previously-dead sidecar field; readers can find old sidecars in the
   wild.
@@ -1012,7 +1012,7 @@ the feature.
   `errors.ClusterUnknown` so the typed exception flows through
   `_err_from_hpc` to produce the documented `error_code: cluster_unknown`.
 
-### Removed — `claude_hpc.campaign.run_campaign` asyncio loop and `defaults` callbacks
+### Removed — `hpc_agent.campaign.run_campaign` asyncio loop and `defaults` callbacks
 
 The closed-loop driver is now the slash-command surface itself: the
 assistant repeatedly invokes `/submit-hpc campaign_id=<slug>` until
@@ -1042,9 +1042,9 @@ Removed:
 Kept (the small surface that actually mattered):
 - `campaign_id` field on submit specs and per-run sidecars.
 - `HPC_CAMPAIGN_ID` env var threaded through scheduler templates.
-- `claude_hpc.mapreduce.reduce.history.prior(...)` for reading per-iteration
+- `hpc_agent.mapreduce.reduce.history.prior(...)` for reading per-iteration
   reduced metrics back inside `tasks.py`.
-- `claude_hpc.campaign.campaign_dir(...)` for strategy-state
+- `hpc_agent.campaign.campaign_dir(...)` for strategy-state
   placement (Optuna SQLite, PBT checkpoints).
 - `hpc-agent campaign list / status` CLI inspection.
 
@@ -1087,18 +1087,18 @@ into a single `plan-submit` CLI subcommand:
   or `CPULoad/CPUTot >= 0.80` (both tunable). 60s in-process cache so a
   single submit cycle pays the SSH cost once. Both SLURM and SGE are
   supported.
-- **`claude_hpc.orchestrator.blacklist`** — append-only SEGV journal at
+- **`hpc_agent.orchestrator.blacklist`** — append-only SEGV journal at
   `<repo>/.hpc/bad_nodes.<cluster>.json`. 7-day TTL, refreshed on
   repeat SEGVs. Atomic write under `fcntl.flock`. Evidence list capped
   at 5 most-recent entries per node. `record_segv()` is called by
   `/hpc-monitor` on `NODE_FAIL` / `exit -11`; `get_active()` is called
   by the planner with TTL filtering.
-- **`claude_hpc.state.runtime_prior`** — append-only sample log at
+- **`hpc_agent.state.runtime_prior`** — append-only sample log at
   `<repo>/.hpc/runtimes/<profile>.<cluster>.json`. `roll_up_quantiles()`
   groups by `gpu_type` and computes p50 / p95 / p99 / mean / n_samples,
   with optional `cmd_sha` filter so a `.hpc/tasks.py` change can
   invalidate stale priors.
-- **`claude_hpc.planning.planner`** — `plan-submit --profile <p>
+- **`hpc_agent.planning.planner`** — `plan-submit --profile <p>
   --cluster <c>` combines all three into the scorecard JSON the slash
   command hands to Claude. When no priors exist, `needs_canary: true`
   and `canary_plan` describes the 1-task probe to seed the priors.
@@ -1139,12 +1139,12 @@ end-to-end Optuna recipe in `docs/workflows/campaign.md`. None bind the framewor
 to a specific tuning library; they collapse boilerplate the previous
 shape made every user write themselves.
 
-- **`claude_hpc.campaign.campaign_dir(experiment_dir, campaign_id)`** —
+- **`hpc_agent.campaign.campaign_dir(experiment_dir, campaign_id)`** —
   canonical scratch directory `.hpc/campaigns/<cid>/`. Created
   idempotently. Reserved for strategy libraries to put state files
   (Optuna SQLite, PBT checkpoints, walk-forward cursor); the framework
   writes nothing inside.
-- **`claude_hpc.campaign.defaults`** — three curried-function defaults
+- **`hpc_agent.campaign.defaults`** — three curried-function defaults
   for `run_campaign`'s callbacks:
   - `tasks_py_total_predicate(experiment_dir)` — re-imports `tasks.py`
     each call and returns `total() > 0`.
@@ -1161,7 +1161,7 @@ shape made every user write themselves.
   without polling externally. Optional; the framework computes
   `raw_metrics` via the v2 sidecar pipeline when `experiment_dir` is
   provided. Empty dict for failed iterations.
-- **`claude_hpc.mapreduce.metrics_io.read_kw_env()`** — executor-side helper
+- **`hpc_agent.mapreduce.metrics_io.read_kw_env()`** — executor-side helper
   that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env
   var the dispatcher exported. Stdlib-only; deployed alongside the
   executor.
@@ -1176,7 +1176,7 @@ shape made every user write themselves.
 The framework gains a small new primitive for adaptive iteration: a
 **campaign** is a sequence of `/submit` invocations sharing a
 `campaign_id` tag. The user's `.hpc/tasks.py` reads
-`claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
+`hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at
 module load to learn what prior iterations of the same campaign produced
 and decide what to run next. Strategies (Optuna, RandomSearch,
 walk-forward, PBT, …) live as Python libraries the user imports inside
@@ -1190,13 +1190,13 @@ Surface area:
 - **`HPC_CAMPAIGN_ID`** — env var forwarded by every scheduler template
   (SGE/SLURM × CPU/GPU). Read by the user's `tasks.py` and executor on
   the cluster.
-- **`claude_hpc.mapreduce.reduce.history`** — read-only accessor:
+- **`hpc_agent.mapreduce.reduce.history`** — read-only accessor:
   - `prior(experiment_dir, campaign_id)` returns per-iteration reduced
     metric dicts, oldest-first. Pending iterations contribute `{}`.
   - `find_sidecars_by_campaign` and `result_dirs_for_sidecar` for
     callers that need the underlying primitives. None of these import
     `.hpc/tasks.py` (the loop's calling module), so no recursion.
-- **`claude_hpc.campaign.run_campaign`** — asyncio in-flight queue.
+- **`hpc_agent.campaign.run_campaign`** — asyncio in-flight queue.
   Maintains *concurrency* live submits, awaits the next-finished one
   (FIRST_COMPLETED), repeats until the user's `should_submit` predicate
   flips to False or a wall-clock budget elapses. Fully IO-injected
@@ -1282,7 +1282,7 @@ All future work.
   `waves` rollup keyed by wave id with `{complete, running, pending,
   failed, unknown, total}` buckets. `record_status` and `reconcile`
   carry it into the persisted `last_status`. New `rollup_by_wave`
-  helper in `claude_hpc.mapreduce.reduce.status`.
+  helper in `hpc_agent.mapreduce.reduce.status`.
 - **`hpc-agent logs` subcommand.** Fetches per-task stderr from the
   cluster: `--task-id 7,12,42` for explicit ids or `--all-failed` for
   every failed task. Falls back through earlier `job_ids` when the
@@ -1316,7 +1316,7 @@ All future work.
     failure mode, journal-coexistence rules.
   - `docs/workflows/mars/experiment-runner.snippet.md` — paste-ready section for
     MARs's `agents/experiment-runner.md` covering preflight → submit →
-    status → aggregate, decision rule for delegating to claude-hpc, and
+    status → aggregate, decision rule for delegating to hpc-agent, and
     the full retry table.
   - `tests/test_docs_links.py` — drift guard ensuring every `error_code`
     and required env var mentioned in the proposal docs matches the
@@ -1356,7 +1356,7 @@ All future work.
   block with `experiment_id`, `seed`, `purpose`, and `tier` whenever a
   `meta.json` file exists at the experiment-dir root. Callers stop reparsing
   the file themselves. New helper `read_meta_json(experiment_dir)` is the
-  single seam — silent on parse failures, since claude-hpc is not the place
+  single seam — silent on parse failures, since hpc-agent is not the place
   to validate MARs's schema beyond the fields it surfaces.
 - **Tier detection**. `discover` surfaces `tier: 1 | 2 | null` derived from
   path layout: `probes/probe-*` + `probe.py` → 1, `runs/run-*` + `scripts/`
@@ -1400,7 +1400,7 @@ All future work.
     immediately instead of producing a silent "successful" aggregate.
   - **Provenance** — the success envelope's `data` block always carries
     a `provenance` object: `{run_id, wave, profile, cluster,
-    combined_at}`. When `--expect-output` is set, claude-hpc also
+    combined_at}`. When `--expect-output` is set, hpc-agent also
     writes a `_provenance.json` sidecar next to the output on the
     cluster (best-effort; envelope is the source of truth).
 - **`hpc.yaml` defaults for the new aggregate flags.** Set
@@ -1496,7 +1496,7 @@ commands. Both surfaces share the same atomic-ops layer at
 - **No cancel/abort subcommand.** `settings.json` denies `scancel`/`qdel`.
   If you decide an experiment is bad, stop waiting on it; cluster jobs run
   to walltime.
-- **No local-execution backend.** claude-hpc is the HPC-on-cluster path;
+- **No local-execution backend.** hpc-agent is the HPC-on-cluster path;
   MARs already iterates locally via uv/Docker.
 - **No deprecation shim for old `agent.*` imports.** Standalone users invoke
   the package via slash commands (which we update atomically) or the new CLI;
@@ -1505,7 +1505,7 @@ commands. Both surfaces share the same atomic-ops layer at
 
 ### Migration notes for current standalone users
 
-A user who pulls 0.2.0 and continues using claude-hpc as a Claude Code plugin
+A user who pulls 0.2.0 and continues using hpc-agent as a Claude Code plugin
 will see:
 
 - **All four legacy slash commands work identically** modulo the verb rename:

@@ -11,7 +11,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent axes-init
-  python: claude_hpc.atoms.axes_init.axes_init
+  python: hpc_agent.atoms.axes_init.axes_init
 ---
 # axes-init
 
@@ -28,7 +28,7 @@ instead and the file becomes a fallback.
   cartesian-product convention by which `task_id` maps to axis
   values (last axis varies fastest, numpy/row-major). Required for
   `submit-flow`'s `wave_map` building. The full input schema lives
-  at `claude_hpc/schemas/axes.json` (Pydantic-emitted from
+  at `hpc_agent/schemas/axes.json` (Pydantic-emitted from
   `_schema_models/axes.py:AxesConfig`).
 - `homogeneous_axes` (list of str, optional) — names the deployer
   believes have low runtime-cost variance. The cold-start picker

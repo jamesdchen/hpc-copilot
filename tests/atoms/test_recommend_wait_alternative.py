@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc._schema_models.queries.recommend_wait_alternative import (
+from hpc_agent._schema_models.queries.recommend_wait_alternative import (
     RecommendWaitAlternativeSpec,
     _PrioritySampleSpec,
 )
-from claude_hpc.atoms.recommend_wait_alternative import recommend_wait_alternative
+from hpc_agent.atoms.recommend_wait_alternative import recommend_wait_alternative
 
 if TYPE_CHECKING:
     from pathlib import Path

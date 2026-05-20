@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.canary_verify``.
+"""Tests for ``hpc_agent.atoms.canary_verify``.
 
 verify_canary is a workflow atom that wraps a polling SSH loop, so we
 mock ``_ssh_status_report`` / ``fetch_task_logs`` /
@@ -12,9 +12,9 @@ from unittest import mock
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord, run_record
+from hpc_agent import errors
+from hpc_agent._internal import session
+from hpc_agent._internal.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,7 +31,7 @@ def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch: pytest.MonkeyPatch):
     """Skip time.sleep so the polling loop runs at memory speed."""
-    monkeypatch.setattr("claude_hpc.atoms.canary_verify.time.sleep", lambda _: None)
+    monkeypatch.setattr("hpc_agent.atoms.canary_verify.time.sleep", lambda _: None)
 
 
 def _seed_canary(experiment: Path, run_id: str = "r1-canary") -> RunRecord:
@@ -52,16 +52,16 @@ def _seed_canary(experiment: Path, run_id: str = "r1-canary") -> RunRecord:
 
 
 def test_happy_path_no_failure_markers(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "claude_hpc.runner.status.ssh_status_report",
+            "hpc_agent.runner.status.ssh_status_report",
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "claude_hpc.runner.fetch_task_logs",
+            "hpc_agent.runner.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
         ),
     ):
@@ -71,16 +71,16 @@ def test_happy_path_no_failure_markers(tmp_path: Path, journal_home: Path) -> No
 
 
 def test_dispatcher_failed_marker(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "claude_hpc.runner.status.ssh_status_report",
+            "hpc_agent.runner.status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "claude_hpc.runner.fetch_task_logs",
+            "hpc_agent.runner.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "[dispatch] FAILED (exit 1)\n"}],
         ),
     ):
@@ -91,16 +91,16 @@ def test_dispatcher_failed_marker(tmp_path: Path, journal_home: Path) -> None:
 
 
 def test_traceback_marker(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "claude_hpc.runner.status.ssh_status_report",
+            "hpc_agent.runner.status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "claude_hpc.runner.fetch_task_logs",
+            "hpc_agent.runner.fetch_task_logs",
             return_value=[
                 {"task_id": 0, "content": 'Traceback (most recent call last):\n  File "..."\n'}
             ],
@@ -112,16 +112,16 @@ def test_traceback_marker(tmp_path: Path, journal_home: Path) -> None:
 
 def test_import_error_more_specific_than_traceback(tmp_path: Path, journal_home: Path) -> None:
     """ImportError should be reported as import_error, not generic traceback."""
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "claude_hpc.runner.status.ssh_status_report",
+            "hpc_agent.runner.status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "claude_hpc.runner.fetch_task_logs",
+            "hpc_agent.runner.fetch_task_logs",
             return_value=[
                 {
                     "task_id": 0,
@@ -135,16 +135,16 @@ def test_import_error_more_specific_than_traceback(tmp_path: Path, journal_home:
 
 
 def test_oom_killed(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "claude_hpc.runner.status.ssh_status_report",
+            "hpc_agent.runner.status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "claude_hpc.runner.fetch_task_logs",
+            "hpc_agent.runner.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "Out of memory: kill process\n"}],
         ),
     ):
@@ -153,20 +153,20 @@ def test_oom_killed(tmp_path: Path, journal_home: Path) -> None:
 
 
 def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "claude_hpc.runner.status.ssh_status_report",
+            "hpc_agent.runner.status.ssh_status_report",
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "claude_hpc.runner.fetch_task_logs",
+            "hpc_agent.runner.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "[dispatch] OK\n"}],
         ),
         mock.patch(
-            "claude_hpc.runner.aggregate.verify_combiner_artifact",
+            "hpc_agent.runner.aggregate.verify_combiner_artifact",
             return_value=(False, "is missing at /x/results/seed_42/metrics.json"),
         ),
     ):
@@ -181,14 +181,14 @@ def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_h
 
 
 def test_no_journal_record_raises(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     with pytest.raises(errors.SpecInvalid, match="no journal record"):
         verify_canary(tmp_path, canary_run_id="missing")
 
 
 def test_empty_canary_run_id_raises(tmp_path: Path) -> None:
-    from claude_hpc.atoms.canary_verify import verify_canary
+    from hpc_agent.atoms.canary_verify import verify_canary
 
     with pytest.raises(errors.SpecInvalid, match="canary_run_id"):
         verify_canary(tmp_path, canary_run_id="")

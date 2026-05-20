@@ -10,7 +10,7 @@ Writes a column-projected, gzipped squeue snapshot to
 ``<experiment_dir>/.hpc/squeue_snapshots/<YYYYMMDDTHHMMSS>.tsv.gz``.
 
 The columns ingested match exactly what the parser
-:func:`claude_hpc.forecast.squeue_priority_field.parse_squeue_priority_field`
+:func:`hpc_agent.forecast.squeue_priority_field.parse_squeue_priority_field`
 expects, so historical snapshots and live ones are interchangeable.
 
 Storage cost: ~30 KB per snapshot for a ~500-job cluster, ~3 KB
@@ -76,7 +76,7 @@ def _main(argv: list[str] | None = None) -> int:
     else:
         if not args.ssh_target:
             p.error("--ssh-target required when --from-stdin is not set")
-        from claude_hpc.infra.remote import ssh_run
+        from hpc_agent.infra.remote import ssh_run
 
         cmd = _build_squeue_command()
         cp = ssh_run(cmd, ssh_target=args.ssh_target)

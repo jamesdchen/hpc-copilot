@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.validate_executor_signatures``.
+"""Tests for ``hpc_agent.atoms.validate_executor_signatures``.
 
 Pattern: write a fake executor module to ``tmp_path/executor_pkg``
 and add it to ``sys.path``; write a ``tasks.py`` to
@@ -16,10 +16,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.validators.validate_executor_signatures import (
+from hpc_agent._schema_models.validators.validate_executor_signatures import (
     ValidateExecutorSignaturesSpec,
 )
-from claude_hpc.atoms.validate_executor_signatures import (
+from hpc_agent.atoms.validate_executor_signatures import (
     validate_executor_signatures,
 )
 

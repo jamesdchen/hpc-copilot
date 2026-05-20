@@ -1,9 +1,9 @@
-"""Bake the operations catalog to ``claude_hpc/operations.json``.
+"""Bake the operations catalog to ``hpc_agent/operations.json``.
 
-:func:`claude_hpc._internal.operations.operations_catalog` projects the
+:func:`hpc_agent._internal.operations.operations_catalog` projects the
 live ``@primitive`` registry into the catalog dict; the registry is
 the only runtime source of truth. This script writes a redundant
-on-disk snapshot at ``src/claude_hpc/operations.json`` so the catalog
+on-disk snapshot at ``src/hpc_agent/operations.json`` so the catalog
 is greppable / diff-able without booting Python, and CI can fail when
 a ``@primitive`` decorator drifts from the committed snapshot.
 
@@ -33,11 +33,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from claude_hpc._internal.operations import operations_catalog  # noqa: E402
-from claude_hpc._internal.primitive import register_primitives  # noqa: E402
+from hpc_agent._internal.operations import operations_catalog  # noqa: E402
+from hpc_agent._internal.primitive import register_primitives  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PACKAGE_ROOT = REPO_ROOT / "src" / "claude_hpc"
+PACKAGE_ROOT = REPO_ROOT / "src" / "hpc_agent"
 OUTPUT_PATH = PACKAGE_ROOT / "operations.json"
 
 

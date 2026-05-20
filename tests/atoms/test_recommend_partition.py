@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc._schema_models.queries.recommend_partition import (
+from hpc_agent._schema_models.queries.recommend_partition import (
     PartitionInfo,
     RecommendPartitionSpec,
 )
-from claude_hpc.atoms.recommend_partition import recommend_partition
+from hpc_agent.atoms.recommend_partition import recommend_partition
 
 if TYPE_CHECKING:
     from pathlib import Path

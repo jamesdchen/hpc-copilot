@@ -1,11 +1,11 @@
-"""Tests for ``claude_hpc.forecast.squeue_priority_field`` — fixture-driven."""
+"""Tests for ``hpc_agent.forecast.squeue_priority_field`` — fixture-driven."""
 
 from __future__ import annotations
 
 import textwrap
 
 # ruff: noqa: E501 — fixture lines reproduce verbatim cluster output
-from claude_hpc.forecast.squeue_priority_field import (
+from hpc_agent.forecast.squeue_priority_field import (
     QueuedJob,
     estimate_rank,
     parse_squeue_priority_field,

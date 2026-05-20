@@ -15,12 +15,12 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._schema_models.actions.update_run_constraints import (
+from hpc_agent import errors
+from hpc_agent._schema_models.actions.update_run_constraints import (
     UpdateRunConstraintsSpec,
 )
-from claude_hpc.runner.update_constraints import update_run_constraints
-from claude_hpc.state.runs import write_run_sidecar
+from hpc_agent.runner.update_constraints import update_run_constraints
+from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,7 +34,7 @@ def _seed_sidecar(tmp_path: Path, *, job_ids: list[str], features: list[str] | N
         tmp_path,
         run_id=_RUN_ID,
         cmd_sha="a" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 .hpc/_hpc_dispatch.py",
         result_dir_template="results/{task_id}",
@@ -64,7 +64,7 @@ def _ok_cp(returncode: int = 0, stdout: str = "", stderr: str = "") -> subproces
 def test_set_features_runs_scontrol_for_each_job(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path, job_ids=["12345", "12346"])
     with patch(
-        "claude_hpc.infra.remote.ssh_run",
+        "hpc_agent.infra.remote.ssh_run",
         return_value=_ok_cp(),
     ) as mock_ssh:
         out = update_run_constraints(
@@ -84,7 +84,7 @@ def test_set_features_runs_scontrol_for_each_job(tmp_path: Path) -> None:
 
 def test_add_features_extends_existing_set(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path, job_ids=["1"], features=["a100"])
-    with patch("claude_hpc.infra.remote.ssh_run", return_value=_ok_cp()):
+    with patch("hpc_agent.infra.remote.ssh_run", return_value=_ok_cp()):
         out = update_run_constraints(
             tmp_path,
             spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, add_features=["l40s"]),
@@ -96,7 +96,7 @@ def test_add_features_dedupes(tmp_path: Path) -> None:
     """add_features=['a100'] when a100 already exists is a no-op (no
     duplicate in the new set), but the scontrol still runs."""
     _seed_sidecar(tmp_path, job_ids=["1"], features=["a100"])
-    with patch("claude_hpc.infra.remote.ssh_run", return_value=_ok_cp()):
+    with patch("hpc_agent.infra.remote.ssh_run", return_value=_ok_cp()):
         out = update_run_constraints(
             tmp_path,
             spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, add_features=["a100"]),
@@ -106,7 +106,7 @@ def test_add_features_dedupes(tmp_path: Path) -> None:
 
 def test_sidecar_features_persisted_on_success(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path, job_ids=["1"], features=["a100"])
-    with patch("claude_hpc.infra.remote.ssh_run", return_value=_ok_cp()):
+    with patch("hpc_agent.infra.remote.ssh_run", return_value=_ok_cp()):
         update_run_constraints(
             tmp_path,
             spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["v100"]),
@@ -123,7 +123,7 @@ def test_partial_failure_reports_per_job(tmp_path: Path) -> None:
     sidecar is updated when at least one job succeeded."""
     _seed_sidecar(tmp_path, job_ids=["1", "2"])
     responses = [_ok_cp(), _ok_cp(returncode=1, stderr="invalid feature")]
-    with patch("claude_hpc.infra.remote.ssh_run", side_effect=responses):
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=responses):
         out = update_run_constraints(
             tmp_path,
             spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a100"]),
@@ -134,7 +134,7 @@ def test_partial_failure_reports_per_job(tmp_path: Path) -> None:
 
 def test_ssh_unreachable_marks_job_failed(tmp_path: Path) -> None:
     _seed_sidecar(tmp_path, job_ids=["1"])
-    with patch("claude_hpc.infra.remote.ssh_run", side_effect=errors.SshUnreachable("nope")):
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=errors.SshUnreachable("nope")):
         out = update_run_constraints(
             tmp_path,
             spec=UpdateRunConstraintsSpec(run_id=_RUN_ID, set_features=["a100"]),

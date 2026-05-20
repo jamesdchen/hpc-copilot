@@ -1,4 +1,4 @@
-"""Tests for batched scheduler polling in claude_hpc.infra.backends.query.
+"""Tests for batched scheduler polling in hpc_agent.infra.backends.query.
 
 Verify that polling N job IDs issues exactly ONE subprocess call per
 scheduler tool (sacct / qstat), that the argv carries the full job list,
@@ -12,7 +12,7 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
-from claude_hpc.infra.backends import query as qmod
+from hpc_agent.infra.backends import query as qmod
 
 # ---------------------------------------------------------------------------
 # helpers

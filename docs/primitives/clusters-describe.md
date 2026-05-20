@@ -17,7 +17,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent clusters describe <name> [--strict]
-  python: claude_hpc.atoms.clusters.describe_cluster
+  python: hpc_agent.atoms.clusters.describe_cluster
 exit_codes:
 - 0: ok
 - 1: cluster_unknown / config_invalid

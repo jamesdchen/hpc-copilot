@@ -80,7 +80,7 @@ Persisted by `hpc-agent interview`:
 Required: `goal`, `task_count`, `produced_by`. Everything else is optional.
 The interview primitive writes `_materialized` itself; the rest is the intent payload verbatim.
 
-For the full schema see [`src/claude_hpc/schemas/interview.input.json`](../../src/claude_hpc/schemas/interview.input.json).
+For the full schema see [`src/hpc_agent/schemas/interview.input.json`](../../src/hpc_agent/schemas/interview.input.json).
 
 ## Two ways to produce `tasks.py`
 
@@ -135,7 +135,7 @@ Returns up to 10 most-recent matching campaigns plus a `rollup` block. Three rol
 Recall walks one or more directories. To avoid passing `--root` every call, drop a config file:
 
 ```json
-// ~/.claude-hpc/config.json
+// ~/.hpc-agent/config.json
 {
   "experiment_roots": [
     "/home/user/experiments",

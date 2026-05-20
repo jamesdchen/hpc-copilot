@@ -35,7 +35,7 @@ wheels = [
 ]
 
 [[package]]
-name = "claude-hpc"
+name = "hpc-agent"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [

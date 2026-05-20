@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc._internal.primitive import (
+from hpc_agent._internal.primitive import (
     PrimitiveMeta,
     get_registry,
 )
@@ -106,7 +106,7 @@ def test_register_primitives_is_idempotent() -> None:
         [
             sys.executable,
             "-c",
-            "import claude_hpc as hp\n"
+            "import hpc_agent as hp\n"
             "hp.register_primitives()\n"
             "first = dict(hp.get_registry())\n"
             "hp.register_primitives()\n"
@@ -200,7 +200,7 @@ def test_error_codes_subclass_hpc_error(registry: dict[str, PrimitiveMeta]) -> N
     passes a non-HpcError class (e.g. ValueError) to the decorator, which
     typing tools won't catch at all call sites.
     """
-    from claude_hpc.errors import HpcError
+    from hpc_agent.errors import HpcError
 
     failures: list[str] = []
     for name, meta in registry.items():
@@ -269,7 +269,7 @@ def test_idempotency_key_names_input_schema_property(
     import json
     import re
 
-    schemas_dir = Path(__file__).resolve().parent.parent.parent / "src" / "claude_hpc" / "schemas"
+    schemas_dir = Path(__file__).resolve().parent.parent.parent / "src" / "hpc_agent" / "schemas"
 
     def _input_schema_for(name: str) -> dict | None:
         for fname in (

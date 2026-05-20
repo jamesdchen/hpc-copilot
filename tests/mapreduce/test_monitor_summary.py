@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.monitor_summary.monitor_summary``.
+"""Tests for ``hpc_agent.atoms.monitor_summary.monitor_summary``.
 
 The primitive renders the canonical user-facing tick summary by reading
 the journal record + the most recent line of
@@ -18,10 +18,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord, run_record
-from claude_hpc.atoms.monitor_summary import monitor_summary
+from hpc_agent import errors
+from hpc_agent._internal import session
+from hpc_agent._internal.session import RunRecord, run_record
+from hpc_agent.atoms.monitor_summary import monitor_summary
 
 if TYPE_CHECKING:
     from pathlib import Path

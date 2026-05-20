@@ -2,7 +2,7 @@
 
 Covers two seams:
 
-1. ``claude_hpc.infra.clusters.get_cold_start_mem_buffer`` — schema
+1. ``hpc_agent.infra.clusters.get_cold_start_mem_buffer`` — schema
    parser for the new ``cold_start_mem_buffer`` field in clusters.yaml,
    and the symmetric ``get_nfs_data_dir`` helper for the optional NFS
    staging path.
@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import pytest
 
-from claude_hpc.forecast.backfill import recommend_mem_mb
-from claude_hpc.infra.clusters import get_cold_start_mem_buffer, get_nfs_data_dir
+from hpc_agent.forecast.backfill import recommend_mem_mb
+from hpc_agent.infra.clusters import get_cold_start_mem_buffer, get_nfs_data_dir
 
 # ─── get_cold_start_mem_buffer schema ──────────────────────────────────────
 
@@ -255,7 +255,7 @@ class TestBundledClustersYamlRoundTrip:
     int expected, etc.) before it lands on a campus user's cluster."""
 
     def test_bundled_yaml_round_trips(self):
-        from claude_hpc.infra.clusters import (
+        from hpc_agent.infra.clusters import (
             get_auto_daisy_chain,
             get_max_node_mem_mb,
             get_max_walltime_sec,

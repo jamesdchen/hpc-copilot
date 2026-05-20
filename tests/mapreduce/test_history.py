@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.mapreduce.reduce.history``: per-campaign sidecar
+"""Tests for ``hpc_agent.mapreduce.reduce.history``: per-campaign sidecar
 filtering, result-dir resolution, and per-iteration reduce."""
 
 from __future__ import annotations
@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc.mapreduce.reduce.history import (
+from hpc_agent.mapreduce.reduce.history import (
     find_sidecars_by_campaign,
     prior,
     result_dirs_for_sidecar,
 )
-from claude_hpc.state.runs import run_sidecar_path, write_run_sidecar
+from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,7 +24,7 @@ def _common_required_kwargs(run_id: str, task_count: int = 1) -> dict:
     return dict(
         run_id=run_id,
         cmd_sha="0" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 src/run.py",
         result_dir_template="results/{run_id}/task_{task_id}",

@@ -1,4 +1,4 @@
-"""Tests for :mod:`claude_hpc._internal.telemetry`.
+"""Tests for :mod:`hpc_agent._internal.telemetry`.
 
 Focused on the two behaviours that matter cross-process:
 
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._internal import telemetry
+from hpc_agent._internal import telemetry
 
 if TYPE_CHECKING:
     from pathlib import Path

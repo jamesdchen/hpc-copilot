@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent campaign advance --campaign-id <id>
-  python: claude_hpc.atoms.campaign_advance.campaign_advance
+  python: hpc_agent.atoms.campaign_advance.campaign_advance
 ---
 # campaign-advance
 

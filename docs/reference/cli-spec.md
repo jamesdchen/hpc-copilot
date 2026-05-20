@@ -1,16 +1,16 @@
 # `hpc-agent` CLI Specification
 
-Cross-cutting contract for the shell CLI shipped at `claude_hpc/agent_cli.py` (entry point `hpc-agent`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
+Cross-cutting contract for the shell CLI shipped at `hpc_agent/agent_cli.py` (entry point `hpc-agent`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
 
 The slash-command surface in `slash_commands/commands/` is documented elsewhere; both surfaces compose from the primitive layer.
 
 ## Schemas (machine-readable contracts)
 
-The JSON Schemas under `claude_hpc/schemas/` are the **wire contract** — agents
+The JSON Schemas under `hpc_agent/schemas/` are the **wire contract** — agents
 constructing or validating envelopes validate against those files, not this
 markdown. Internally they are **regenerated** by
 `scripts/build_schemas.py` from Pydantic models under
-`src/claude_hpc/_schema_models/`; the Python models are the *authoring* SoT
+`src/hpc_agent/_schema_models/`; the Python models are the *authoring* SoT
 and the JSON files are a build artifact, the same posture
 `docs/generated/operations.md` and `docs/primitives/<name>.md` frontmatter use
 relative to the `@primitive` registry.
@@ -81,11 +81,11 @@ some subcommands keep for back-compat. Consumers should prefer
 }
 ```
 
-Source of truth: `claude_hpc/schemas/envelope.json` and the `HpcError` hierarchy in `claude_hpc/errors.py`.
+Source of truth: `hpc_agent/schemas/envelope.json` and the `HpcError` hierarchy in `hpc_agent/errors.py`.
 
 ## Exit code → error_code mapping
 
-Wired in `claude_hpc/agent_cli.py` (`_EXIT_CODE_BY_CATEGORY`).
+Wired in `hpc_agent/agent_cli.py` (`_EXIT_CODE_BY_CATEGORY`).
 
 | Exit | Category | Meaning | error_codes that map here |
 |---|---|---|---|
@@ -153,7 +153,7 @@ shape:
   "version": "<package version, e.g. 0.3.0>",
   "subcommands": ["aggregate", "campaign", ..., "walltime-drift"],
   "supported_schedulers": ["sge", "slurm"],
-  "schemas_dir": "<absolute path to claude_hpc/schemas/>",
+  "schemas_dir": "<absolute path to hpc_agent/schemas/>",
   "journal_dir": "<absolute path to $HPC_JOURNAL_DIR or default>",
   "ssh_multiplexing": true,
   "mars_skill_paths": {"hpc-submit": "<path>/skills/hpc-submit/SKILL.md", ...},
@@ -163,7 +163,7 @@ shape:
 }
 ```
 
-Full schema: `claude_hpc/schemas/capabilities.output.json`.
+Full schema: `hpc_agent/schemas/capabilities.output.json`.
 
 - `subcommands` is the authoritative list of available CLI verbs
   (derived from the live argparse tree). New installs that ship

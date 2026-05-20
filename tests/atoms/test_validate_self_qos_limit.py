@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.validators.validate_self_qos_limit import (
+from hpc_agent._schema_models.validators.validate_self_qos_limit import (
     ValidateSelfQosLimitSpec,
 )
-from claude_hpc.atoms.validate_self_qos_limit import validate_self_qos_limit
+from hpc_agent.atoms.validate_self_qos_limit import validate_self_qos_limit
 
 if TYPE_CHECKING:
     from pathlib import Path

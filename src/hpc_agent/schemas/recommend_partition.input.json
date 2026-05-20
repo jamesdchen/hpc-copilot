@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/recommend_partition.input.json",
+  "title": "RecommendPartitionSpec",
+  "type": "object",
+  "required": [
+    "requested_walltime_sec",
+    "partitions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "requested_walltime_sec": {
+      "minimum": 1,
+      "title": "Requested Walltime Sec",
+      "type": "integer"
+    },
+    "partitions": {
+      "items": {
+        "$ref": "#/$defs/PartitionInfo"
+      },
+      "minItems": 1,
+      "title": "Partitions",
+      "type": "array"
+    },
+    "user_preferred_partition": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "User Preferred Partition"
+    }
+  },
+  "$defs": {
+    "PartitionInfo": {
+      "additionalProperties": false,
+      "description": "One partition the cluster exposes, with its scheduling shape.",
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "priority_tier": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Priority Tier",
+          "type": "integer"
+        },
+        "walltime_cap_sec": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walltime Cap Sec"
+        },
+        "is_debug": {
+          "default": false,
+          "title": "Is Debug",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "PartitionInfo",
+      "type": "object"
+    }
+  }
+}

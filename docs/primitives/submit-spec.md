@@ -26,7 +26,7 @@ error_codes:
     protects against double-submit).
 backed_by:
   cli: hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]
-  python: claude_hpc.runner.submit.submit_and_record
+  python: hpc_agent.runner.submit.submit_and_record
 exit_codes:
 - 0: ok
 - 1: user error (spec_invalid / cluster_unknown)
@@ -48,7 +48,7 @@ This separation exists because the qsub call itself is scheduler-specific (and t
 
 ## Idempotency
 
-Replays with the same `run_id` are no-ops: the call returns `deduped=true` and does not re-issue qsub. The wrapper `claude_hpc.runner.submit_and_record` is keyed on `run_id` (which is itself derived from `cmd_sha`, so a re-run of an unchanged `.hpc/tasks.py` produces the same `run_id`). Callers who see `deduped=true` should switch to `poll-run-status` rather than re-running the upstream qsub.
+Replays with the same `run_id` are no-ops: the call returns `deduped=true` and does not re-issue qsub. The wrapper `hpc_agent.runner.submit_and_record` is keyed on `run_id` (which is itself derived from `cmd_sha`, so a re-run of an unchanged `.hpc/tasks.py` produces the same `run_id`). Callers who see `deduped=true` should switch to `poll-run-status` rather than re-running the upstream qsub.
 
 ## Compose with
 
@@ -86,5 +86,5 @@ Both surfaces invoke the same CLI / Python entry point. The contract above is th
 
 - **SSH env passthrough**: any caller (slash command, skill, or downstream primitive) must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or the qsub-side hangs on auth. `check-preflight` catches this upfront.
 - **Scheduler rate limits**: serialize submits to a single cluster; most schedulers cap at ~1/sec. Multiple back-to-back invocations of this primitive should sleep 1s between, or expect `scheduler_throttled`.
-- **No cancel/abort**: claude-hpc has no kill primitive. If the caller decides an experiment is bad, stop monitoring; cluster jobs run to walltime.
+- **No cancel/abort**: hpc-agent has no kill primitive. If the caller decides an experiment is bad, stop monitoring; cluster jobs run to walltime.
 - `--dry-run` never touches the cluster and never writes to the journal — safe to invoke repeatedly during spec construction.

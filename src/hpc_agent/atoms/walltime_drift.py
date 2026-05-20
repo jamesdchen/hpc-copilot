@@ -1,0 +1,68 @@
+"""``walltime-drift`` primitive — recommend a safety-mult adjustment.
+
+Pure-dispatch primitive: reads runtime samples from the local journal,
+runs the calibration analysis, and projects the result onto the
+envelope shape. No SSH, no scheduler.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from hpc_agent import errors
+from hpc_agent._internal.primitive import primitive
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+@primitive(
+    name="walltime-drift",
+    verb="query",
+    side_effects=[],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+    cli="hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]",  # noqa: E501
+)
+def walltime_drift(
+    *,
+    experiment_dir: Path,
+    profile: str,
+    cluster: str,
+    cmd_sha: str | None = None,
+    base_safety_mult: float,
+) -> dict[str, Any]:
+    """Return the walltime-drift summary + recommended safety_mult.
+
+    Reads recent samples (successful and failed) for the given profile,
+    cluster, and optional cmd_sha; computes drift signals (cliff rate,
+    near-miss count, median utilisation) and recommends an adjustment
+    to ``base_safety_mult``.
+    """
+    from hpc_agent.forecast.calibration import (
+        compute_walltime_drift,
+        recommend_safety_mult_adjustment,
+    )
+    from hpc_agent.state.runtime_prior import read_samples
+
+    samples = read_samples(
+        experiment_dir,
+        profile=profile,
+        cluster=cluster,
+        cmd_sha=cmd_sha,
+        only_successful=False,
+    )
+    drift = compute_walltime_drift(samples)
+    adjusted, rationale = recommend_safety_mult_adjustment(
+        drift, base_safety_mult=float(base_safety_mult)
+    )
+    return {
+        "n_recent": drift.n_recent,
+        "n_cliff_events": drift.n_cliff_events,
+        "n_near_misses": drift.n_near_misses,
+        "weighted_cliff_rate": drift.weighted_cliff_rate,
+        "median_utilization": drift.median_utilization,
+        "base_safety_mult": float(base_safety_mult),
+        "adjusted_safety_mult": adjusted,
+        "rationale": rationale,
+    }

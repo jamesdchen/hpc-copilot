@@ -8,7 +8,7 @@ list + a summary of training quality to
 ``<experiment_dir>/.hpc/wait_predictor/``.
 
 Run periodically (e.g. nightly cron). The model file is loaded by
-:func:`claude_hpc.forecast.predict_start.predict_start_time` at
+:func:`hpc_agent.forecast.predict_start.predict_start_time` at
 inference time; updates to the model take effect on the next
 forecast call.
 
@@ -30,9 +30,9 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from claude_hpc.forecast.drain_simulator import simulate_drain  # noqa: E402
-from claude_hpc.forecast.squeue_priority_field import parse_squeue_priority_field  # noqa: E402
-from claude_hpc.forecast.wait_features import extract_features  # noqa: E402
+from hpc_agent.forecast.drain_simulator import simulate_drain  # noqa: E402
+from hpc_agent.forecast.squeue_priority_field import parse_squeue_priority_field  # noqa: E402
+from hpc_agent.forecast.wait_features import extract_features  # noqa: E402
 
 
 def _read_snapshot(path: Path) -> str:
@@ -289,7 +289,7 @@ def fit_and_persist(
     (out_dir / "training_summary.json").write_text(json.dumps(summary, indent=2))
 
     # Append to drift-detection history.
-    from claude_hpc.forecast.drift_detector import append_run
+    from hpc_agent.forecast.drift_detector import append_run
 
     append_run(experiment_dir, summary=summary)
 

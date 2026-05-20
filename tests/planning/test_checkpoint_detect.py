@@ -1,4 +1,4 @@
-"""Tests for :func:`claude_hpc.planning.checkpoint_detect.detect_checkpointing`.
+"""Tests for :func:`hpc_agent.planning.checkpoint_detect.detect_checkpointing`.
 
 The detector gates auto-daisy-chain. A false positive silently wastes
 compute (chained job whose stage-1 doesn't checkpoint dies on
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from claude_hpc.planning.checkpoint_detect import detect_checkpointing
+from hpc_agent.planning.checkpoint_detect import detect_checkpointing
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,7 +36,7 @@ def _write_sidecar(
                 "sidecar_schema_version": 2,
                 "run_id": run_id,
                 "cmd_sha": "f" * 64,
-                "claude_hpc_version": "0.0.1",
+                "hpc_agent_version": "0.0.1",
                 "submitted_at": "2026-01-01T00:00:00+00:00",
                 "executor": "exec.py",
                 "result_dir_template": result_dir_template,

@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.atoms.validate_walltime_against_history.validate_walltime_against_history
+  python: hpc_agent.atoms.validate_walltime_against_history.validate_walltime_against_history
 ---
 # validate-walltime-against-history
 
@@ -53,4 +53,4 @@ The validator reads runtime priors and the playbook; calling twice with the same
 - **Cold-start handling**: On the first submission for a (profile, cluster, gpu) tuple, the validator emits an info-level finding so the agent is aware data is sparse. The submission proceeds; subsequent runs populate the prior.
 - **Known-bad combos**: Entries in playbook.yaml can carry severity `"error"` or `"warning"` per-rule; the finding inherits that severity.
 
-**Schemas:** [`validate_walltime_against_history.input.json`](../../src/claude_hpc/schemas/validate_walltime_against_history.input.json), [`validate_walltime_against_history.output.json`](../../src/claude_hpc/schemas/validate_walltime_against_history.output.json).
+**Schemas:** [`validate_walltime_against_history.input.json`](../../src/hpc_agent/schemas/validate_walltime_against_history.input.json), [`validate_walltime_against_history.output.json`](../../src/hpc_agent/schemas/validate_walltime_against_history.output.json).

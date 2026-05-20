@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord, run_record
-from claude_hpc.flows.resubmit_flow import (
+from hpc_agent import errors
+from hpc_agent._internal import session
+from hpc_agent._internal.session import RunRecord, run_record
+from hpc_agent.flows.resubmit_flow import (
     render_overrides_to_extra_flags,
     resubmit_flow,
 )

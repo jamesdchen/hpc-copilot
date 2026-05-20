@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit.input.json",
+  "title": "submit input spec",
+  "description": "Spec passed to ``hpc-agent submit --spec <file>``.",
+  "type": "object",
+  "required": [
+    "profile",
+    "cluster",
+    "ssh_target",
+    "remote_path",
+    "job_name",
+    "run_id",
+    "job_ids",
+    "total_tasks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
+    },
+    "ssh_target": {
+      "pattern": "^[^@]+@[^@]+$",
+      "title": "Ssh Target",
+      "type": "string"
+    },
+    "remote_path": {
+      "minLength": 1,
+      "title": "Remote Path",
+      "type": "string"
+    },
+    "job_name": {
+      "minLength": 1,
+      "title": "Job Name",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "job_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Job Ids",
+      "type": "array"
+    },
+    "total_tasks": {
+      "minimum": 1,
+      "title": "Total Tasks",
+      "type": "integer"
+    },
+    "runtime": {
+      "anyOf": [
+        {
+          "const": "uv",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Campaign Id"
+    }
+  }
+}

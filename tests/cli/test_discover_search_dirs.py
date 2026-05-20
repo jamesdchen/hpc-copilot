@@ -1,6 +1,6 @@
 """Tests for the ``hpc-agent discover --search-dirs`` CLI flag.
 
-The Python API (`claude_hpc.state.discover.discover_executors`) has long
+The Python API (`hpc_agent.state.discover.discover_executors`) has long
 accepted a `search_dirs` override. This file exercises the matching CLI
 flag so integrators that want a tighter scan (e.g. modules-only `src/`)
 can stay on a pure CLI call without importing the Python package.
@@ -35,7 +35,7 @@ def _run_discover(experiment_dir: Path, *extra: str) -> dict:
         [
             sys.executable,
             "-m",
-            "claude_hpc",
+            "hpc_agent",
             "discover",
             "--experiment-dir",
             str(experiment_dir),

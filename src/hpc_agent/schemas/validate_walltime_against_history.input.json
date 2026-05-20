@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/validate_walltime_against_history.input.json",
+  "title": "ValidateWalltimeAgainstHistorySpec",
+  "type": "object",
+  "required": [
+    "profile",
+    "cluster",
+    "requested_walltime_sec"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
+    },
+    "requested_walltime_sec": {
+      "minimum": 1,
+      "title": "Requested Walltime Sec",
+      "type": "integer"
+    },
+    "gpu_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gpu Type"
+    },
+    "workload_tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Workload Tags",
+      "type": "array"
+    }
+  }
+}

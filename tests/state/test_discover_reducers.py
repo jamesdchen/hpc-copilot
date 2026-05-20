@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.state.discover.discover_reducers``.
+"""Tests for ``hpc_agent.state.discover.discover_reducers``.
 
 Motivating failure mode: at /aggregate-hpc time the agent writes a
 fresh QLIKE / RMSE / etc. aggregator instead of finding the one
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc.state.discover import ReducerInfo, discover_reducers
+from hpc_agent.state.discover import ReducerInfo, discover_reducers
 
 if TYPE_CHECKING:
     from pathlib import Path

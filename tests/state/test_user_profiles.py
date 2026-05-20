@@ -1,8 +1,8 @@
-"""Tests for ``claude_hpc.state.user_profiles``."""
+"""Tests for ``hpc_agent.state.user_profiles``."""
 
 from __future__ import annotations
 
-from claude_hpc.state import user_profiles as up
+from hpc_agent.state import user_profiles as up
 
 
 class TestUpdateAndRead:

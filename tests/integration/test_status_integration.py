@@ -1,9 +1,9 @@
-"""Integration tests for ``claude_hpc.mapreduce.reduce.status``.
+"""Integration tests for ``hpc_agent.mapreduce.reduce.status``.
 
 Layered approach:
 
 * **Layer 1 — CLI integration.** Exercise the ``python -m
-  claude_hpc.mapreduce.reduce.status`` entry point against a real
+  hpc_agent.mapreduce.reduce.status`` entry point against a real
   ``.hpc/`` tree under ``tmp_path``. Catches envelope-shape drift and
   the four documented error envelopes (sidecar_not_found,
   sidecar_parse_error, tasks_py_not_found, tasks_py_import_error).
@@ -36,7 +36,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from claude_hpc.mapreduce.reduce.status import (
+from hpc_agent.mapreduce.reduce.status import (
     _categorize,
     _empty_summary,
     _grid_point_key,
@@ -72,7 +72,7 @@ def _make_run(
         "sidecar_schema_version": 2,
         "run_id": run_id,
         "cmd_sha": "a" * 64,
-        "claude_hpc_version": "0.2.0",
+        "hpc_agent_version": "0.2.0",
         "submitted_at": "2026-01-01T00:00:00Z",
         "executor": "python3 src/run.py",
         "result_dir_template": str(tmp_path / "results" / "{task_id}"),
@@ -101,7 +101,7 @@ def _write_complete_csv(tmp_path: Path, task_id: int) -> None:
 
 def _run_cli(experiment_dir: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, "-m", "claude_hpc.mapreduce.reduce.status", *args],
+        [sys.executable, "-m", "hpc_agent.mapreduce.reduce.status", *args],
         cwd=str(experiment_dir),
         capture_output=True,
         text=True,
@@ -171,7 +171,7 @@ def test_cli_tasks_py_missing_emits_documented_error(tmp_path: Path) -> None:
         "sidecar_schema_version": 2,
         "run_id": "20260101-000000-aaaaaaa",
         "cmd_sha": "a" * 64,
-        "claude_hpc_version": "0.2.0",
+        "hpc_agent_version": "0.2.0",
         "submitted_at": "2026-01-01T00:00:00Z",
         "executor": "python3 run.py",
         "result_dir_template": str(tmp_path / "results" / "{task_id}"),
@@ -278,11 +278,11 @@ def test_summary_counts_sum_to_total_tasks(
     fake_query = {"tasks": job_info, "errors": []}
     with (
         patch(
-            "claude_hpc.mapreduce.reduce.status.detect_scheduler",
+            "hpc_agent.mapreduce.reduce.status.detect_scheduler",
             return_value="slurm",
         ),
         patch(
-            "claude_hpc.infra.backends.slurm.SlurmBackend.query_jobs",
+            "hpc_agent.infra.backends.slurm.SlurmBackend.query_jobs",
             return_value=fake_query,
         ),
     ):

@@ -1,5 +1,5 @@
 """Unit tests for the cluster-config / NFS-staging resolution branch in
-``claude_hpc.flows.submit_flow``.
+``hpc_agent.flows.submit_flow``.
 
 These don't exercise the full submit pipeline (which needs a live
 cluster). They isolate the small bit of logic that decides whether
@@ -17,7 +17,7 @@ from unittest import mock
 
 import pytest
 
-from claude_hpc.infra.clusters import get_nfs_data_dir
+from hpc_agent.infra.clusters import get_nfs_data_dir
 
 
 def _resolve_nfs_dir_for_cluster(cluster: str, full_clusters: dict[str, Any]):
@@ -101,7 +101,7 @@ class TestLoadClustersConfigBubblesUp:
         # loader must raise FileNotFoundError, NOT swallow it.
         bogus = tmp_path / "does_not_exist.yaml"
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(bogus))
-        from claude_hpc.infra.clusters import load_clusters_config
+        from hpc_agent.infra.clusters import load_clusters_config
 
         with pytest.raises(FileNotFoundError):
             load_clusters_config()
@@ -121,7 +121,7 @@ class TestLoadClustersConfigBubblesUp:
 
 def _spec(run_id: str, **overrides: Any):
     """Build a :class:`SubmitFlowSpec` with sensible defaults; overrides win."""
-    from claude_hpc._schema_models.workflows.submit_flow import SubmitFlowSpec
+    from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
 
     base = dict(
         profile="p",
@@ -146,7 +146,7 @@ def _batch(specs, **overrides: Any):
     The pipeline only consumes ``SubmitFlowBatchSpec`` now; this keeps
     the per-test boilerplate small.
     """
-    from claude_hpc._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec
+    from hpc_agent._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec
 
     return SubmitFlowBatchSpec(specs=specs, **overrides)
 
@@ -154,8 +154,8 @@ def _batch(specs, **overrides: Any):
 @pytest.fixture
 def _journal_home(tmp_path, monkeypatch):
     """Redirect ~/.claude/hpc/ to tmp_path so journal writes don't pollute home."""
-    from claude_hpc._internal import session
-    from claude_hpc._internal.session import run_record
+    from hpc_agent._internal import session
+    from hpc_agent._internal.session import run_record
 
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
@@ -166,8 +166,8 @@ class TestSubmitFlowBatch:
     def test_heterogeneous_targets_raise_spec_invalid(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
-        from claude_hpc import errors
-        from claude_hpc.flows.submit_flow import submit_flow_batch
+        from hpc_agent import errors
+        from hpc_agent.flows.submit_flow import submit_flow_batch
 
         a = _spec("r1", ssh_target="u@a", remote_path="/p")
         b = _spec("r2", ssh_target="u@b", remote_path="/p")
@@ -178,8 +178,8 @@ class TestSubmitFlowBatch:
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
         """The whole point of the batch: rsync + deploy fire once, qsub fires N."""
-        from claude_hpc.flows import submit_flow as sf_module
-        from claude_hpc.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent.flows import submit_flow as sf_module
+        from hpc_agent.flows.submit_flow import SubmitFlowResult, submit_flow_batch
 
         specs = [_spec(f"r{i}") for i in range(5)]
         with (
@@ -206,10 +206,10 @@ class TestSubmitFlowBatch:
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
         """If every spec is already on the journal, NO ssh / rsync runs."""
-        from claude_hpc._internal import session
-        from claude_hpc._internal.session import RunRecord
-        from claude_hpc.flows import submit_flow as sf_module
-        from claude_hpc.flows.submit_flow import submit_flow_batch
+        from hpc_agent._internal import session
+        from hpc_agent._internal.session import RunRecord
+        from hpc_agent.flows import submit_flow as sf_module
+        from hpc_agent.flows.submit_flow import submit_flow_batch
 
         # Seed the journal with both run_ids.
         for rid in ("r0", "r1"):
@@ -244,9 +244,9 @@ class TestSubmitFlowBatch:
     def test_auto_prunes_orphan_sidecars_at_start(self, tmp_path: Any, _journal_home: Any) -> None:
         """Half-baked sidecars from a prior failed batch are silently swept
         before the next batch starts — no manual /prune-orphan-sidecars call."""
-        from claude_hpc.flows import submit_flow as sf_module
-        from claude_hpc.flows.submit_flow import SubmitFlowResult, submit_flow_batch
-        from claude_hpc.state.runs import run_sidecar_path, write_run_sidecar
+        from hpc_agent.flows import submit_flow as sf_module
+        from hpc_agent.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 
         # Seed a half-baked sidecar (no job_ids, no journal record).
         orphan_id = "20260101-000000-orphan01"
@@ -254,7 +254,7 @@ class TestSubmitFlowBatch:
             tmp_path,
             run_id=orphan_id,
             cmd_sha="0" * 64,
-            claude_hpc_version="0.2.0",
+            hpc_agent_version="0.2.0",
             submitted_at="2026-01-01T00:00:00Z",
             executor="python3 src/run.py",
             result_dir_template="results/{seed}",
@@ -283,10 +283,10 @@ class TestSubmitFlowBatch:
 
     def test_partial_dedup_only_fresh_specs_run(self, tmp_path: Any, _journal_home: Any) -> None:
         """Half the specs are already journaled — only the fresh ones get qsubbed."""
-        from claude_hpc._internal import session
-        from claude_hpc._internal.session import RunRecord
-        from claude_hpc.flows import submit_flow as sf_module
-        from claude_hpc.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent._internal import session
+        from hpc_agent._internal.session import RunRecord
+        from hpc_agent.flows import submit_flow as sf_module
+        from hpc_agent.flows.submit_flow import SubmitFlowResult, submit_flow_batch
 
         session.upsert_run(
             tmp_path,

@@ -34,7 +34,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent plan-submit --profile <name> --cluster <name> [...]
-  python: claude_hpc.planning.planner.plan_submit
+  python: hpc_agent.planning.planner.plan_submit
 exit_codes:
 - 0: ok
 - 1: spec_invalid / cluster_unknown

@@ -22,7 +22,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]
-  python: claude_hpc.state.runtime_prior.roll_up_quantiles
+  python: hpc_agent.state.runtime_prior.roll_up_quantiles
 exit_codes:
 - 0: ok
 - 1: spec_invalid

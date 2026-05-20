@@ -1,12 +1,12 @@
-"""Tests for claude_hpc.forecast.queue_simulator_inputs (DES sampling helpers)."""
+"""Tests for hpc_agent.forecast.queue_simulator_inputs (DES sampling helpers)."""
 
 from __future__ import annotations
 
-from claude_hpc.forecast.queue_simulator_inputs import (
+from hpc_agent.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 class TestArrivalStream:

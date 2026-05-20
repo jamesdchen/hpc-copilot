@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.validate_input_dataset``.
+"""Tests for ``hpc_agent.atoms.validate_input_dataset``.
 
 Pattern: write a tiny dataset to ``tmp_path`` (csv or jsonl —
 parquet path is exercised separately when pyarrow is available),
@@ -17,10 +17,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.validators.validate_input_dataset import (
+from hpc_agent._schema_models.validators.validate_input_dataset import (
     ValidateInputDatasetSpec,
 )
-from claude_hpc.atoms.validate_input_dataset import validate_input_dataset
+from hpc_agent.atoms.validate_input_dataset import validate_input_dataset
 
 if TYPE_CHECKING:
     from pathlib import Path

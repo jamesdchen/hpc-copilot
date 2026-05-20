@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from claude_hpc.forecast.drain_simulator import simulate_drain
-from claude_hpc.forecast.squeue_priority_field import QueuedJob
+from hpc_agent.forecast.drain_simulator import simulate_drain
+from hpc_agent.forecast.squeue_priority_field import QueuedJob
 
 _NOW = "2026-04-15T10:00:00+00:00"
 _NOW_DT = datetime(2026, 4, 15, 10, 0, 0, tzinfo=timezone.utc)

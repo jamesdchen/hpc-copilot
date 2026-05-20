@@ -1,9 +1,9 @@
-# Boundary Contract: claude-hpc ↔ experiment repos
+# Boundary Contract: hpc-agent ↔ experiment repos
 
 ## Purpose
 
 This document is the single source of truth for the boundary between the
-`claude-hpc` framework and the experiment repos it orchestrates. It enumerates
+`hpc-agent` framework and the experiment repos it orchestrates. It enumerates
 (a) the public Python API the framework offers, (b) the filenames the framework
 reserves inside experiment repos, (c) the allowed import directions, and (d)
 the split between cluster-infrastructure config and per-experiment config. The
@@ -12,32 +12,32 @@ allowlist-style lint test in
 enforces these lists; any drift fails CI with an actionable diff pointing back
 here.
 
-## What claude-hpc owns (public API allowlist)
+## What hpc-agent owns (public API allowlist)
 
-The exports below are the entire public surface of the `claude_hpc`
+The exports below are the entire public surface of the `hpc_agent`
 package. Groupings mirror those in
-[`claude_hpc/__init__.py`](../src/claude_hpc/__init__.py).
+[`hpc_agent/__init__.py`](../src/hpc_agent/__init__.py).
 
 The public boundary also now includes the **shell CLI** at
-`claude_hpc/agent_cli.py` (entry point `hpc-agent`). Its envelope
+`hpc_agent/agent_cli.py` (entry point `hpc-agent`). Its envelope
 shape, subcommand list, and exit-code contract are documented in
 [`docs/reference/cli-spec.md`](cli-spec.md) and the JSON Schemas under
-`claude_hpc/schemas/`. The JSON Schemas are themselves a build
+`hpc_agent/schemas/`. The JSON Schemas are themselves a build
 artifact — they're regenerated from Pydantic models under
-`src/claude_hpc/_schema_models/` by `scripts/build_schemas.py`.
+`src/hpc_agent/_schema_models/` by `scripts/build_schemas.py`.
 External consumers read the JSON files (that's the wire contract);
 internal contributors edit the Pydantic. The CLI calls into the same
-atomic-ops layer (`claude_hpc/runner/`) that the slash commands use,
+atomic-ops layer (`hpc_agent/runner/`) that the slash commands use,
 so the invariants in [`docs/internals/sync-checklist.md`](../internals/sync-checklist.md)
 bind both.
 
 ### Package root
 
 - `_PACKAGE_ROOT` — absolute path to the **package directory**
-  (`claude_hpc/`, where `__init__.py` lives). Used to resolve
-  `claude_hpc/config/clusters.yaml`, the bundled job templates
-  under `claude_hpc/mapreduce/templates/runtime/<scheduler>/`, and
-  starter scaffolds under `claude_hpc/mapreduce/templates/scaffolds/`.
+  (`hpc_agent/`, where `__init__.py` lives). Used to resolve
+  `hpc_agent/config/clusters.yaml`, the bundled job templates
+  under `hpc_agent/mapreduce/templates/runtime/<scheduler>/`, and
+  starter scaffolds under `hpc_agent/mapreduce/templates/scaffolds/`.
   Note: this points at the package, **not** the repo root.
 - `__version__` — package version string, resolved at import time from
   the installed distribution metadata. Falls back to
@@ -45,7 +45,7 @@ bind both.
 
 ### Config & discovery
 
-- `load_clusters_config` — parse and return `claude_hpc/config/clusters.yaml`.
+- `load_clusters_config` — parse and return `hpc_agent/config/clusters.yaml`.
 - `get_template_path` — resolve a bundled job template by `(scheduler, name)`.
 
 ### Remote execution
@@ -86,7 +86,7 @@ gitignored.
 ### Per-run sidecars
 
 A sidecar `.hpc/runs/<run_id>.json` carries per-run state for one
-submission. Identity fields: `run_id`, `cmd_sha`, `claude_hpc_version`,
+submission. Identity fields: `run_id`, `cmd_sha`, `hpc_agent_version`,
 `submitted_at`, `executor`, `result_dir_template`, `task_count`,
 `tasks_py_sha`, optional `wave_map`. Plus the v2 config snapshot
 (populated by `/submit`; absent v2 fields default to `None` on read):
@@ -138,12 +138,12 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 
 ### Closed-loop campaigns
 
-- `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` —
+- `hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` —
   read-only per-iteration reduced metrics for a campaign, oldest-first.
   Pure local filesystem walk. Does not import `.hpc/tasks.py`.
-- `claude_hpc.mapreduce.reduce.history.find_sidecars_by_campaign` /
+- `hpc_agent.mapreduce.reduce.history.find_sidecars_by_campaign` /
   `result_dirs_for_sidecar` — underlying primitives.
-- `claude_hpc.campaign.campaign_dir(experiment_dir, campaign_id)` —
+- `hpc_agent.campaign.campaign_dir(experiment_dir, campaign_id)` —
   return `experiment_dir/.hpc/campaigns/<campaign_id>/`, creating it
   idempotently. Reserved for strategy libraries to drop their own state
   files (Optuna SQLite, PBT checkpoints). The framework writes nothing
@@ -244,12 +244,12 @@ Everything outside the framework's public API. Concretely:
 - **`.hpc/tasks.py`** — the user-written Python module exposing
   `total()` and `resolve(task_id)`. Authored once via `/submit`
   Step 6's scaffolding flow (adapting the canonical example at
-  `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`), git-tracked, and
+  `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`), git-tracked, and
   user-editable. The bridge between the framework's task-id contract
   and whatever parallelization axis the experiment needs.
 - **`.hpc/stages.py`** (optional) — the user-written Python module
   exposing `stages() -> list[dict]` for multi-stage DAG submissions.
-  Validated against `claude_hpc/schemas/stages.input.json` at load
+  Validated against `hpc_agent/schemas/stages.input.json` at load
   time. Same conversational-generation pattern as `.hpc/tasks.py`.
 - **Domain-specific aggregation** — any `aggregate_cmd` the experiment
   defines for fan-in.
@@ -271,7 +271,7 @@ directory `.hpc/`**:
 The framework reserves the **`.hpc/` directory** inside experiment
 repos. The discovery scanner skips this directory wholesale via
 `_SKIP_DIRS` in
-[`claude_hpc/state/discover.py`](../src/claude_hpc/state/discover.py), so
+[`hpc_agent/state/discover.py`](../src/hpc_agent/state/discover.py), so
 nothing inside it is misclassified as an executor. Experiment authors
 must not place user-code files (executors, libraries) under `.hpc/`.
 
@@ -281,32 +281,32 @@ a framework reservation; experiment repos may use `__init__.py` freely.
 
 ## Import directions (allowed)
 
-1. **`claude_hpc/**` may import the standard library plus the
+1. **`hpc_agent/**` may import the standard library plus the
    third-party deps listed in `pyproject.toml`** (currently just `pyyaml`).
    No other runtime deps.
-2. **`claude_hpc/**` MUST NOT import from
-   `claude_hpc/mapreduce/templates/`.** Templates are source files
+2. **`hpc_agent/**` MUST NOT import from
+   `hpc_agent/mapreduce/templates/`.** Templates are source files
    copied into experiment repos; treating them as importable modules
    would couple the framework to a fixed set of templates.
-3. **`claude_hpc/mapreduce/templates/**` MUST NOT import from
-   `claude_hpc/**`** — with narrow exceptions. Templates ship
-   into experiment repos and run there, where `claude-hpc` is
+3. **`hpc_agent/mapreduce/templates/**` MUST NOT import from
+   `hpc_agent/**`** — with narrow exceptions. Templates ship
+   into experiment repos and run there, where `hpc-agent` is
    generally not installed. The exception: a small allowlist of
    "runtime modules" that `deploy_runtime`
-   (`claude_hpc/infra/remote.py`) explicitly copies onto the cluster
+   (`hpc_agent/infra/remote.py`) explicitly copies onto the cluster
    compute node alongside the executor. Templates may import from those
    because they are guaranteed to be present at execution time. The current
    allowlist (kept in sync with `RUNTIME_MODULES_ALLOWED_IN_TEMPLATES` in
    `tests/contracts/test_boundary_contract.py`) is:
-   - `claude_hpc.mapreduce.metrics_io` — the `write_metrics` sidecar
+   - `hpc_agent.mapreduce.metrics_io` — the `write_metrics` sidecar
      writer plus the `read_kw_env` kwargs-from-env helper. Stdlib-only,
      deployed alongside `combiner.py`. Templates use a lazy import
      gated on `$RESULT_DIR` so smoke tests still run without
-     `claude-hpc` installed.
-   - `claude_hpc.executor_cli` — the `flag`, `generic_args`,
+     `hpc-agent` installed.
+   - `hpc_agent.executor_cli` — the `flag`, `generic_args`,
      `gpu_args`, and `build_parser_from_flags` helpers used by the
      canonical `tasks.py` template (see
-     `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`) and
+     `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`) and
      the auto-generated `.hpc/cli.py` dispatcher. Stdlib-only,
      deployed alongside `metrics_io.py` by `deploy_runtime`.
 
@@ -322,9 +322,9 @@ Cluster-infrastructure config and per-experiment config are deliberately
 separated, so that adding a new experiment never requires editing the
 framework, and adding a new cluster never requires touching any experiment.
 
-- **`claude_hpc/config/clusters.yaml`** — cluster infrastructure
+- **`hpc_agent/config/clusters.yaml`** — cluster infrastructure
   (host, scheduler, scratch path, modules, conda envs, GPU types,
-  throughput constraints). Ships with `claude-hpc`. See
+  throughput constraints). Ships with `hpc-agent`. See
   [`README.md`](../README.md).
 - **Per-run sidecars at `.hpc/runs/<run_id>.json`** — the v2 schema
   captures the full per-experiment config snapshot (resources, env,
@@ -334,7 +334,7 @@ framework, and adding a new cluster never requires touching any experiment.
   there is no user-authored experiment-config yaml.
 
 The lint test `test_clusters_yaml_is_infra_only` enforces that
-`claude_hpc/config/clusters.yaml` only contains infrastructure-shaped
+`hpc_agent/config/clusters.yaml` only contains infrastructure-shaped
 keys; any experiment-shaped field (e.g. `grid`, `executors`) leaking
 into a cluster entry will fail it.
 
@@ -354,7 +354,7 @@ user.
   tasks. The task's `RESULT_DIR` is a per-task `_wip_<task_id>/`
   tempdir that atomically promotes to the final dir on exit-0.
 - **Deterministic env defaults.** The cluster preamble
-  (`claude_hpc/mapreduce/templates/runtime/common/hpc_preamble.sh`) exports
+  (`hpc_agent/mapreduce/templates/runtime/common/hpc_preamble.sh`) exports
   `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
   `NUMEXPR_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`,
   `PYTHONUNBUFFERED=1`, `PYTHONHASHSEED=0`,
@@ -432,10 +432,10 @@ fail with a diff that points back here.
 Specifically:
 
 - New public export → add it to `__all__` in
-  `claude_hpc/__init__.py`, list it in the appropriate section above,
+  `hpc_agent/__init__.py`, list it in the appropriate section above,
   and add it to `ALLOWED_EXPORTS` in the test.
 - New reserved filename → add it to `_SKIP_BASENAMES` in
-  `claude_hpc/state/discover.py`, list it under "Reserved filenames"
+  `hpc_agent/state/discover.py`, list it under "Reserved filenames"
   above, and add it to `RESERVED_FILES` in the test.
 - New cluster-config key → add it to `ALLOWED_CLUSTER_KEYS` in the test
   and document it under "Config split" (and in `docs/schema.md` if

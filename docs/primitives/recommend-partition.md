@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.atoms.recommend_partition.recommend_partition
+  python: hpc_agent.atoms.recommend_partition.recommend_partition
 ---
 # recommend-partition
 
@@ -48,4 +48,4 @@ Pure local routing logic — calling twice with the same inputs produces the sam
 - Rule 4 (Fallback): If no debug partition exists, recommend the highest-priority partition.
 - The `leverage_estimate` is the ratio `debug.priority_tier / fallback.priority_tier` when recommending debug; otherwise 1.0. This helps the agent understand whether the routing difference is meaningful.
 
-**Schemas:** [`recommend_partition.input.json`](../../src/claude_hpc/schemas/recommend_partition.input.json), [`recommend_partition.output.json`](../../src/claude_hpc/schemas/recommend_partition.output.json).
+**Schemas:** [`recommend_partition.input.json`](../../src/hpc_agent/schemas/recommend_partition.input.json), [`recommend_partition.output.json`](../../src/hpc_agent/schemas/recommend_partition.output.json).

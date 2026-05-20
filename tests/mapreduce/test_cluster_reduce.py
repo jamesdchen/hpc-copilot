@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.cluster_reduce``.
+"""Tests for ``hpc_agent.atoms.cluster_reduce``.
 
 The atom SSHes into the cluster, runs the user's reducer, and pulls
 just its single output. We mock ``ssh_run`` and ``rsync_pull`` to
@@ -15,9 +15,9 @@ from unittest import mock
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord, run_record
+from hpc_agent import errors
+from hpc_agent._internal import session
+from hpc_agent._internal.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -53,13 +53,13 @@ def _seed_sidecar(
     run_id: str = "r1",
     aggregate_cmd: str | None = None,
 ) -> None:
-    from claude_hpc.state.runs import write_run_sidecar
+    from hpc_agent.state.runs import write_run_sidecar
 
     write_run_sidecar(
         experiment,
         run_id=run_id,
         cmd_sha="0" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 src/run.py",
         result_dir_template="results/{seed}",
@@ -85,7 +85,7 @@ def _stage_pulled_output(local_dir: Path, basename: str, payload: dict) -> None:
 def test_happy_path_runs_reducer_and_returns_parsed_json(
     tmp_path: Path, journal_home: Path
 ) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -96,8 +96,8 @@ def test_happy_path_runs_reducer_and_returns_parsed_json(
         return _completed(returncode=0)
 
     with (
-        mock.patch("claude_hpc.infra.remote.ssh_run", return_value=_completed(returncode=0)),
-        mock.patch("claude_hpc.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
+        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
     ):
         out = cluster_reduce(
             tmp_path,
@@ -113,7 +113,7 @@ def test_happy_path_runs_reducer_and_returns_parsed_json(
 def test_aggregate_cmd_falls_back_to_sidecar(tmp_path: Path, journal_home: Path) -> None:
     """When aggregate_cmd is None, the primitive reads aggregate_defaults
     from the sidecar."""
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     _seed_sidecar(tmp_path, aggregate_cmd="python -m sidecar.reducer")
@@ -130,8 +130,8 @@ def test_aggregate_cmd_falls_back_to_sidecar(tmp_path: Path, journal_home: Path)
         return _completed(returncode=0)
 
     with (
-        mock.patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh),
-        mock.patch("claude_hpc.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh),
+        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
     ):
         out = cluster_reduce(tmp_path, run_id="r1")
     assert out["ok"] is True
@@ -139,7 +139,7 @@ def test_aggregate_cmd_falls_back_to_sidecar(tmp_path: Path, journal_home: Path)
 
 
 def test_no_aggregate_cmd_anywhere_raises(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     with pytest.raises(errors.SpecInvalid, match="no aggregate_cmd"):
@@ -149,12 +149,12 @@ def test_no_aggregate_cmd_anywhere_raises(tmp_path: Path, journal_home: Path) ->
 def test_reducer_nonzero_exit_raises_remote_command_failed(
     tmp_path: Path, journal_home: Path
 ) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     with (
         mock.patch(
-            "claude_hpc.infra.remote.ssh_run",
+            "hpc_agent.infra.remote.ssh_run",
             return_value=_completed(returncode=2, stderr="ImportError: no qlike module\n"),
         ),
         pytest.raises(errors.RemoteCommandFailed, match="exited 2"),
@@ -163,13 +163,13 @@ def test_reducer_nonzero_exit_raises_remote_command_failed(
 
 
 def test_rsync_pull_failure_raises(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     with (
-        mock.patch("claude_hpc.infra.remote.ssh_run", return_value=_completed(returncode=0)),
+        mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
         mock.patch(
-            "claude_hpc.infra.remote.rsync_pull",
+            "hpc_agent.infra.remote.rsync_pull",
             return_value=_completed(
                 returncode=23, stderr="rsync: connection unexpectedly closed\n"
             ),
@@ -180,7 +180,7 @@ def test_rsync_pull_failure_raises(tmp_path: Path, journal_home: Path) -> None:
 
 
 def test_invalid_json_output_raises(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -191,15 +191,15 @@ def test_invalid_json_output_raises(tmp_path: Path, journal_home: Path) -> None:
         return _completed(returncode=0)
 
     with (
-        mock.patch("claude_hpc.infra.remote.ssh_run", return_value=_completed(returncode=0)),
-        mock.patch("claude_hpc.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
+        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
         pytest.raises(errors.RemoteCommandFailed, match="not valid JSON"),
     ):
         cluster_reduce(tmp_path, run_id="r1", aggregate_cmd="python -m my.reducer")
 
 
 def test_extra_env_threaded_into_remote_cmd(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -215,8 +215,8 @@ def test_extra_env_threaded_into_remote_cmd(tmp_path: Path, journal_home: Path) 
         return _completed(returncode=0)
 
     with (
-        mock.patch("claude_hpc.infra.remote.ssh_run", side_effect=fake_ssh),
-        mock.patch("claude_hpc.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh),
+        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
     ):
         cluster_reduce(
             tmp_path,
@@ -230,7 +230,7 @@ def test_extra_env_threaded_into_remote_cmd(tmp_path: Path, journal_home: Path) 
 
 
 def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -240,8 +240,8 @@ def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_
         return _completed(returncode=0)
 
     with (
-        mock.patch("claude_hpc.infra.remote.ssh_run", return_value=_completed(returncode=0)),
-        mock.patch("claude_hpc.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
+        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
     ):
         out = cluster_reduce(
             tmp_path,
@@ -253,14 +253,14 @@ def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_
 
 
 def test_no_journal_record_raises(tmp_path: Path, journal_home: Path) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     with pytest.raises(errors.SpecInvalid, match="no journal record"):
         cluster_reduce(tmp_path, run_id="missing", aggregate_cmd="x")
 
 
 def test_empty_run_id_raises(tmp_path: Path) -> None:
-    from claude_hpc.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.atoms.cluster_reduce import cluster_reduce
 
     with pytest.raises(errors.SpecInvalid, match="run_id"):
         cluster_reduce(tmp_path, run_id="", aggregate_cmd="x")

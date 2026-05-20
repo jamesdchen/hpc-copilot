@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.infra.slurm_reservations``.
+"""Tests for ``hpc_agent.infra.slurm_reservations``.
 
 Pure parsers, fixture-driven (real ``scontrol show res`` and
 ``sacctmgr show qos`` output samples). Hypothesis is the wrong tool
@@ -10,7 +10,7 @@ from __future__ import annotations
 import textwrap
 
 # ruff: noqa: E501 — fixture lines reproduce verbatim cluster output
-from claude_hpc.infra.slurm_reservations import (
+from hpc_agent.infra.slurm_reservations import (
     QosLimit,
     ReservationHold,
     held_node_set,

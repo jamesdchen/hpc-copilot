@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/build_submit_spec.input.json",
+  "title": "build-submit-spec input",
+  "description": "Resolved interview values fed to ``hpc_agent.atoms.build_submit_spec``.\n\nThe primitive synthesizes the framework-required job_env keys\nand emits a validated submit_flow.input.json spec ready for\nsubmit-flow.",
+  "type": "object",
+  "required": [
+    "profile",
+    "cluster",
+    "ssh_target",
+    "remote_path",
+    "run_id",
+    "cmd_sha",
+    "total_tasks",
+    "backend"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
+    },
+    "ssh_target": {
+      "pattern": "^[^@]+@[^@]+$",
+      "title": "Ssh Target",
+      "type": "string"
+    },
+    "remote_path": {
+      "minLength": 1,
+      "title": "Remote Path",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "cmd_sha": {
+      "pattern": "^[0-9a-f]{8,64}$",
+      "title": "Cmd Sha",
+      "type": "string"
+    },
+    "total_tasks": {
+      "minimum": 1,
+      "title": "Total Tasks",
+      "type": "integer"
+    },
+    "backend": {
+      "enum": [
+        "sge",
+        "slurm"
+      ],
+      "title": "Backend",
+      "type": "string"
+    },
+    "is_gpu": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Is Gpu"
+    },
+    "job_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Job Name"
+    },
+    "script": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Script"
+    },
+    "modules": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Modules"
+    },
+    "conda_source": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conda Source"
+    },
+    "conda_env": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conda Env"
+    },
+    "runtime": {
+      "anyOf": [
+        {
+          "const": "uv",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Campaign Id"
+    },
+    "canary": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Canary"
+    },
+    "partial_ok": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Partial Ok"
+    },
+    "skip_preflight": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Skip Preflight"
+    },
+    "pass_env_keys": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pass Env Keys"
+    },
+    "rsync_excludes": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rsync Excludes"
+    },
+    "slurm_account": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Slurm Account"
+    },
+    "slurm_cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Slurm Cluster"
+    },
+    "extra_env": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Extra Env"
+    }
+  }
+}

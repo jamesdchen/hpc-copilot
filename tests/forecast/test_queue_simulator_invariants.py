@@ -19,13 +19,13 @@ import dataclasses
 
 import pytest
 
-from claude_hpc.forecast.queue_simulator import (
+from hpc_agent.forecast.queue_simulator import (
     SimJob,
     available_resources,
     simulate_distribution,
     simulate_one_pass,
 )
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 def _snap(cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100"):

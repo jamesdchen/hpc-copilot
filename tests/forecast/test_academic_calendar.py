@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc.forecast.academic_calendar import (
+from hpc_agent.forecast.academic_calendar import (
     Deadline,
     features_at,
     load_project_deadlines,

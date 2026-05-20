@@ -11,7 +11,7 @@ matched campaigns into a tiered rollup. The tests pin:
 - Tier 2 rollup (opt-in; walks .hpc/runtimes/*.json for walltime +
   failure-rate aggregation).
 - Tier 3 rollup (opt-in; per-generator-kind parameter envelopes).
-- Multi-root support and ``~/.claude-hpc/config.json:experiment_roots``
+- Multi-root support and ``~/.hpc-agent/config.json:experiment_roots``
   fallback when --root is omitted.
 - Filter semantics and CLI envelope shape.
 """
@@ -25,9 +25,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from claude_hpc._schema_models.queries.recall import RecallSpec
-from claude_hpc.atoms import recall as recall_mod
-from claude_hpc.atoms.recall import recall_campaigns, resolve_roots
+from hpc_agent._schema_models.queries.recall import RecallSpec
+from hpc_agent.atoms import recall as recall_mod
+from hpc_agent.atoms.recall import recall_campaigns, resolve_roots
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -449,7 +449,7 @@ def test_resolve_roots_expands_tilde(tmp_path: Path, monkeypatch) -> None:
 
 def _run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
     proc = subprocess.run(
-        [sys.executable, "-m", "claude_hpc", *args],
+        [sys.executable, "-m", "hpc_agent", *args],
         capture_output=True,
         text=True,
         env=env,

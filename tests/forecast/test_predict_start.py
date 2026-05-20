@@ -12,11 +12,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from claude_hpc.forecast.predict_start import (
+from hpc_agent.forecast.predict_start import (
     predict_start_time,
     recommend_best_submit_time,
 )
-from claude_hpc.forecast.squeue_priority_field import QueuedJob
+from hpc_agent.forecast.squeue_priority_field import QueuedJob
 
 if TYPE_CHECKING:
     from pathlib import Path

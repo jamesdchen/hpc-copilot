@@ -1,12 +1,12 @@
-"""Tests for ``claude_hpc.forecast.residual_lifetime.predict_residual_lifetime``."""
+"""Tests for ``hpc_agent.forecast.residual_lifetime.predict_residual_lifetime``."""
 
 from __future__ import annotations
 
-from claude_hpc.forecast.residual_lifetime import (
+from hpc_agent.forecast.residual_lifetime import (
     MIN_OBSERVATIONS_FOR_PROFILE,
     predict_residual_lifetime,
 )
-from claude_hpc.state.user_profiles import UserProfile
+from hpc_agent.state.user_profiles import UserProfile
 
 
 def _profile(*, n: int, ratio: float = 0.85) -> UserProfile:

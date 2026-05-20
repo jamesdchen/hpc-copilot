@@ -21,9 +21,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc import runner
-from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord, run_record
+from hpc_agent import runner
+from hpc_agent._internal import session
+from hpc_agent._internal.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -44,7 +44,7 @@ class TestCategorizeRecognisesPreemption:
         stderr = (
             "starting task 0\n"
             "running executor\n"
-            "[claude-hpc] SIGTERM received; cluster preemption imminent\n"
+            "[hpc-agent] SIGTERM received; cluster preemption imminent\n"
         )
         assert runner._categorize(stderr) == "preempted"
 
@@ -67,7 +67,7 @@ class TestClusterFailuresByFingerprintGroupsPreempted:
     def test_multiple_preempted_tasks_collapse_into_one_cluster(self) -> None:
         """Three tasks all bumped by the same SIGTERM stderr land in a
         single 'preempted' cluster, with all three task ids surfaced."""
-        sigterm_line = "[claude-hpc] SIGTERM received; cluster preemption imminent"
+        sigterm_line = "[hpc-agent] SIGTERM received; cluster preemption imminent"
         logs = [
             _log_entry(0, content=f"trace line\n{sigterm_line}\n"),
             _log_entry(1, content=f"trace line\n{sigterm_line}\n"),
@@ -83,7 +83,7 @@ class TestClusterFailuresByFingerprintGroupsPreempted:
     def test_mixed_real_failures_and_preempted_separate(self) -> None:
         """A real OOM and two preempted tasks must NOT collapse — the
         campus user needs the diagnostic to stay legible."""
-        sigterm_line = "[claude-hpc] SIGTERM received; cluster preemption imminent"
+        sigterm_line = "[hpc-agent] SIGTERM received; cluster preemption imminent"
         logs = [
             _log_entry(0, content="torch.cuda.OutOfMemoryError: CUDA out of memory."),
             _log_entry(1, content=f"work\n{sigterm_line}\n"),
@@ -110,7 +110,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         This is the inverse of the previous tautological test, which
         re-implemented the production loop in the test body and never
         called the atom under test."""
-        from claude_hpc.atoms import failures as failures_atom
+        from hpc_agent.atoms import failures as failures_atom
 
         # Redirect HPC_HOMEDIR for the journal write (both bindings —
         # see tests/internal/test_session.py for the rationale).
@@ -146,7 +146,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
                 }
             },
         )
-        sigterm_line = "[claude-hpc] SIGTERM received; cluster preemption imminent"
+        sigterm_line = "[hpc-agent] SIGTERM received; cluster preemption imminent"
         monkeypatch.setattr(
             failures_atom.runner,
             "fetch_task_logs",

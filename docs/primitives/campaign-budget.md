@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent campaign budget --campaign-id <id>
-  python: claude_hpc.atoms.campaign_budget.campaign_budget
+  python: hpc_agent.atoms.campaign_budget.campaign_budget
 ---
 # campaign-budget
 

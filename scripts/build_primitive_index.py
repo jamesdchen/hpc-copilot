@@ -108,7 +108,7 @@ def primitives_from_registry() -> list[dict]:
     migration window where some primitives might not be decorated yet.
     """
     sys.path.insert(0, str(REPO_ROOT / "src"))
-    from claude_hpc._internal.primitive import get_registry, register_primitives
+    from hpc_agent._internal.primitive import get_registry, register_primitives
 
     # The registry is now explicit: callers must register primitives
     # before querying. Without this call, get_registry() raises

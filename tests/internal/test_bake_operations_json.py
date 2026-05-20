@@ -23,12 +23,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-import claude_hpc
-from claude_hpc._internal.operations import operations_catalog
-from claude_hpc._internal.primitive import get_registry, register_primitives
+import hpc_agent
+from hpc_agent._internal.operations import operations_catalog
+from hpc_agent._internal.primitive import get_registry, register_primitives
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-PACKAGE_ROOT = Path(claude_hpc.__file__).parent
+PACKAGE_ROOT = Path(hpc_agent.__file__).parent
 BAKED = PACKAGE_ROOT / "operations.json"
 BAKE_SCRIPT = REPO_ROOT / "scripts" / "bake_operations_json.py"
 

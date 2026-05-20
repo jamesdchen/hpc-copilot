@@ -36,7 +36,7 @@ error_codes:
 backed_by:
   cli: hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma]
     [--n-replications N] [--at-iso <iso>] [--seed N]
-  python: claude_hpc.forecast.queue_wait_baseline.predict_queue_wait
+  python: hpc_agent.forecast.queue_wait_baseline.predict_queue_wait
 exit_codes:
 - 0: ok
 - 2: spec_invalid

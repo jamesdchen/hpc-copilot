@@ -2,16 +2,16 @@
 
 The resolver combines a per-run sidecar override (populated at /submit
 time when the user supplies a custom policy) with framework defaults
-defined in ``claude_hpc.runner.DEFAULT_AUTO_RETRY_POLICY``.
+defined in ``hpc_agent.runner.DEFAULT_AUTO_RETRY_POLICY``.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc.agent_cli import _resolve_auto_retry
-from claude_hpc.runner import DEFAULT_AUTO_RETRY_POLICY
-from claude_hpc.state.runs import write_run_sidecar
+from hpc_agent.agent_cli import _resolve_auto_retry
+from hpc_agent.runner import DEFAULT_AUTO_RETRY_POLICY
+from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -21,7 +21,7 @@ def _common_required_kwargs(run_id: str = "20260101-000000-resolve") -> dict:
     return dict(
         run_id=run_id,
         cmd_sha="0" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 src/run.py",
         result_dir_template="results/{seed}",

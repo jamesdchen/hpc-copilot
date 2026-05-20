@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/validate_campaign.input.json",
+  "title": "ValidateCampaignSpec",
+  "description": "Input spec for the ``validate-campaign`` workflow primitive.\n\nMost fields are optional — every atomic validator is independently\nskippable. A workflow with all atoms disabled returns a passing\nreport with no findings (still useful as a smoke test of the\ncomposer wiring).",
+  "type": "object",
+  "required": [
+    "profile",
+    "cluster"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "minLength": 1,
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "minLength": 1,
+      "title": "Cluster",
+      "type": "string"
+    },
+    "executor_module": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Dotted Python import path of the user's executor module (e.g. 'src.train'). When set, validate-executor-signatures runs against ``tasks.py.resolve(0)``'s kwargs.",
+      "title": "Executor Module"
+    },
+    "executor_function": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Function name in ``executor_module`` whose signature is checked.",
+      "title": "Executor Function"
+    },
+    "dataset_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path to the input dataset (parquet / csv / jsonl).",
+      "title": "Dataset Path"
+    },
+    "dataset_loader": {
+      "anyOf": [
+        {
+          "enum": [
+            "parquet",
+            "csv",
+            "jsonl"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dataset Loader"
+    },
+    "dataset_row_indices": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Indices that ``tasks.py`` references; validated against actual length + non-null cols.",
+      "title": "Dataset Row Indices"
+    },
+    "dataset_required_non_null_cols": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Dataset Required Non Null Cols",
+      "type": "array"
+    },
+    "requested_walltime_sec": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Requested Walltime Sec"
+    },
+    "gpu_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gpu Type"
+    },
+    "workload_tags": {
+      "description": "Project-specific tags (e.g. 'attn-fp32', 'mixed-precision') looked up against ``.hpc/playbook.yaml`` known-bad combos. Empty list disables the playbook lookup.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Workload Tags",
+      "type": "array"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Closed-loop campaign slug. When set together with ``expected_cmd_sha``, the workflow invokes validate-stochastic-marker to detect cmd_sha collisions against prior iterations of this campaign — catches the Optuna / random-search / PBT silent-dedup bug class.",
+      "title": "Campaign Id"
+    },
+    "expected_cmd_sha": {
+      "anyOf": [
+        {
+          "minLength": 8,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The cmd_sha the about-to-submit run will have. Required alongside ``campaign_id`` to enable the stochastic-marker check; ignored otherwise. Minimum 8 hex chars (matches the inner stochastic-marker validator's constraint).",
+      "title": "Expected Cmd Sha"
+    }
+  }
+}

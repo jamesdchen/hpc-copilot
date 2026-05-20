@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc import agent_cli as cli
+from hpc_agent import agent_cli as cli
 
 from ._helpers import SUBMIT_SPEC
 from ._helpers import parse_envelope as _parse_envelope
@@ -106,7 +106,7 @@ def test_capabilities_exposes_cluster_yaml_keys() -> None:
     recognised per-cluster yaml key so a campus user learning the
     schema by inspection sees the new survival fields (nfs_data_dir,
     cold_start_mem_buffer, max_walltime_sec, ...) without reading
-    claude_hpc/infra/clusters.py source."""
+    hpc_agent/infra/clusters.py source."""
     rc, out, _ = _run_cli("capabilities")
     assert rc == 0
     data = _parse_envelope(out)["data"]

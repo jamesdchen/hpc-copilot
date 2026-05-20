@@ -30,7 +30,7 @@ error_codes:
 backed_by:
   cli: hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain]
     [--force]
-  python: claude_hpc.atoms.build_executor.build_executor
+  python: hpc_agent.atoms.build_executor.build_executor
 exit_codes:
 - 0: ok
 - 1: spec_invalid / config_invalid
@@ -38,7 +38,7 @@ exit_codes:
 
 ## Purpose
 
-Scaffold a new executor `.py` file from a starter template under `claude_hpc/templates/starters/`. The framework's only file-creation primitive — every other primitive is read-only or mutates only journal/sidecar files.
+Scaffold a new executor `.py` file from a starter template under `hpc_agent/templates/starters/`. The framework's only file-creation primitive — every other primitive is read-only or mutates only journal/sidecar files.
 
 ## Compose with
 

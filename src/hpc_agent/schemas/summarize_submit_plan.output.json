@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/summarize_submit_plan.output.json",
+  "title": "summarize-submit-plan output",
+  "description": "Canonical pre-submit confirmation summary.\n\nSlash-command Step 5 prints headline + body verbatim and asks\nconfirm_prompt. Byte-stable for the same input.",
+  "type": "object",
+  "required": [
+    "headline",
+    "body",
+    "confirm_prompt"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "headline": {
+      "title": "Headline",
+      "type": "string"
+    },
+    "body": {
+      "title": "Body",
+      "type": "string"
+    },
+    "confirm_prompt": {
+      "description": "Literal 'Confirm? [y/N]' or magnitude-warning variant when total_tasks > 1000.",
+      "title": "Confirm Prompt",
+      "type": "string"
+    }
+  }
+}

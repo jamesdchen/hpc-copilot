@@ -61,7 +61,7 @@ def test_every_registered_primitive_has_a_doc() -> None:
     --write`` auto-scaffolds missing docs; this test fails CI when the
     scaffold step was skipped.
     """
-    from claude_hpc._internal.primitive import get_registry, register_primitives
+    from hpc_agent._internal.primitive import get_registry, register_primitives
 
     register_primitives()
     docs = {p.stem for p in _primitive_files()}

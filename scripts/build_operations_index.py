@@ -60,8 +60,8 @@ def render_row(op: dict) -> str:
     name = op["name"]
     cli = op.get("cli") or "_(Python-only)_"
     py = op.get("python") or "_(none)_"
-    inp = f"`claude_hpc/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
-    out = f"`claude_hpc/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
+    inp = f"`hpc_agent/schemas/{op['input_schema']}`" if op.get("input_schema") else "—"
+    out = f"`hpc_agent/schemas/{op['output_schema']}`" if op.get("output_schema") else "—"
     idem = "✓" if op.get("idempotent") else "✗"
     # Use the shared renderer so structured {verb: target} side-effect
     # entries from primitive frontmatter survive — the previous inline
@@ -105,7 +105,7 @@ def build_index(operations: list[dict]) -> str:
         f"**{len(operations)} operations total**: {primitive_count} primitive atoms + "
         f"{workflow_count} workflow atoms.\n\n"
         "## How to read this page\n\n"
-        "Every operation in `claude-hpc` is a CLI atom or a Python-only primitive that emits "
+        "Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emits "
         "the same `{ok, data, error_code}` envelope shape "
         "(see `docs/reference/cli-spec.md`). Workflow "
         "atoms compose primitive atoms but are externally indistinguishable from primitives — "

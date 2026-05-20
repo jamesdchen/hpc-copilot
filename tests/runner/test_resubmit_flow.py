@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.flows.resubmit_flow.resubmit_flow``.
+"""Tests for ``hpc_agent.flows.resubmit_flow.resubmit_flow``.
 
 Covers the macro layer composing preempted-detection, planner, advisor,
 and journal-update. The constituent atoms have their own focused
@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._internal import session
-from claude_hpc._internal.session import RunRecord, run_record
-from claude_hpc.flows.resubmit_flow import (
+from hpc_agent import errors
+from hpc_agent._internal import session
+from hpc_agent._internal.session import RunRecord, run_record
+from hpc_agent.flows.resubmit_flow import (
     ResubmitFlowResult,
     resubmit_flow,
 )
-from claude_hpc.forecast import best_submit_window as bsw
-from claude_hpc.forecast import queue_wait_baseline as qwb
+from hpc_agent.forecast import best_submit_window as bsw
+from hpc_agent.forecast import queue_wait_baseline as qwb
 from tests.conftest import make_sidecar_json, seed_diurnal_dip
 
 if TYPE_CHECKING:

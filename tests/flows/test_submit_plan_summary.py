@@ -1,11 +1,11 @@
-"""Tests for ``claude_hpc.atoms.submit_plan_summary``."""
+"""Tests for ``hpc_agent.atoms.submit_plan_summary``."""
 
 from __future__ import annotations
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc.atoms.submit_plan_summary import summarize_submit_plan
+from hpc_agent import errors
+from hpc_agent.atoms.submit_plan_summary import summarize_submit_plan
 
 
 def _spec(**overrides) -> dict:

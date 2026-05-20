@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_hpc.infra.backends.slurm import SlurmBackend
+from hpc_agent.infra.backends.slurm import SlurmBackend
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:
@@ -136,7 +136,7 @@ class TestSubmitArrayTracked:
         def fake_run(cmd, *args, **kwargs):
             return _cp(stdout="", stderr="sbatch: bad", returncode=1)
 
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", fake_run)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
 
         backend = SlurmBackend(
             script=str(tmp_path / "job.slurm"),
@@ -180,7 +180,7 @@ class TestJobIdParsingAnchored:
         def fake_run(cmd, *args, **kwargs):
             return _cp(stdout=warning_stdout, returncode=0)
 
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", fake_run)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
         backend = SlurmBackend(
             script=str(tmp_path / "j.sh"),
             log_dir=str(tmp_path / "logs"),
@@ -198,7 +198,7 @@ class TestJobIdParsingAnchored:
         def fake_run(cmd, *args, **kwargs):
             return _cp(stdout="Submitted batch job 99999\n", returncode=0)
 
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", fake_run)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
         backend = SlurmBackend(
             script=str(tmp_path / "j.sh"),
             log_dir=str(tmp_path / "logs"),
@@ -230,7 +230,7 @@ class TestSubmitTimeout:
             assert "timeout" in kwargs, "backend submit subprocess must enforce a timeout"
             raise sp.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
 
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", fake_run)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
         backend = SlurmBackend(
             script=str(tmp_path / "j.sh"),
             log_dir=str(tmp_path / "logs"),

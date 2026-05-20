@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/predict_start_time.output.json",
+  "title": "PredictStartTimeResult",
+  "type": "object",
+  "required": [
+    "best_submit_offset_hours",
+    "best_predicted_start_iso",
+    "best_total_time_sec",
+    "candidates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "best_submit_offset_hours": {
+      "title": "Best Submit Offset Hours",
+      "type": "number"
+    },
+    "best_predicted_start_iso": {
+      "title": "Best Predicted Start Iso",
+      "type": "string"
+    },
+    "best_total_time_sec": {
+      "title": "Best Total Time Sec",
+      "type": "integer"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/_CandidateOut"
+      },
+      "title": "Candidates",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "_CandidateOut": {
+      "additionalProperties": false,
+      "properties": {
+        "offset_hours": {
+          "title": "Offset Hours",
+          "type": "number"
+        },
+        "predicted_iso": {
+          "title": "Predicted Iso",
+          "type": "string"
+        },
+        "floor_pessimistic_iso": {
+          "title": "Floor Pessimistic Iso",
+          "type": "string"
+        },
+        "floor_optimistic_iso": {
+          "title": "Floor Optimistic Iso",
+          "type": "string"
+        },
+        "overhead_sec": {
+          "title": "Overhead Sec",
+          "type": "integer"
+        },
+        "total_time_sec": {
+          "title": "Total Time Sec",
+          "type": "integer"
+        },
+        "method": {
+          "title": "Method",
+          "type": "string"
+        }
+      },
+      "required": [
+        "offset_hours",
+        "predicted_iso",
+        "floor_pessimistic_iso",
+        "floor_optimistic_iso",
+        "overhead_sec",
+        "total_time_sec",
+        "method"
+      ],
+      "title": "_CandidateOut",
+      "type": "object"
+    }
+  }
+}

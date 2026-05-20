@@ -3,9 +3,9 @@
 Covers behaviour added by the audit pass that previously had no
 coverage:
 
-* :func:`claude_hpc.infra.remote._env_int` — env-var override parser.
-* :func:`claude_hpc.infra.gpu.load_gpu_config_for_cluster` and
-  :func:`claude_hpc.infra.gpu._excluded_prefixes_for_cluster` —
+* :func:`hpc_agent.infra.remote._env_int` — env-var override parser.
+* :func:`hpc_agent.infra.gpu.load_gpu_config_for_cluster` and
+  :func:`hpc_agent.infra.gpu._excluded_prefixes_for_cluster` —
   YAML-driven GPU queue / exclusion override.
 * :mod:`scripts.check_no_pending_primitive_docs` — fails on stub.
 * :mod:`scripts.lint_skill_command_sync` — fails on missing pair.
@@ -21,8 +21,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from claude_hpc.infra import gpu as gpu_module
-from claude_hpc.infra import remote as remote_module
+from hpc_agent.infra import gpu as gpu_module
+from hpc_agent.infra import remote as remote_module
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPTS = REPO_ROOT / "scripts"

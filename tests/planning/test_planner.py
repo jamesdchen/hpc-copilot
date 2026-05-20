@@ -1,4 +1,4 @@
-"""Tests for claude_hpc.planning.planner — integration via mocked snapshot."""
+"""Tests for hpc_agent.planning.planner — integration via mocked snapshot."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from claude_hpc.infra import inspect as ins
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from claude_hpc.planning import planner
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent.infra import inspect as ins
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+from hpc_agent.planning import planner
+from hpc_agent.state import runtime_prior as rp
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +85,7 @@ class TestPlanSubmit:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -103,7 +103,7 @@ class TestPlanSubmit:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(tmp_path, profile="x", cluster="discovery", adversarial=False)
@@ -117,7 +117,7 @@ class TestPlanSubmit:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -150,7 +150,7 @@ class TestPlanSubmit:
                 elapsed_sec=1000 + tid * 100,
             )
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -198,14 +198,14 @@ class TestNodesForConstraint:
         # `a10` must not match a node whose Gres advertises `a100`. The
         # naive substring-in approach would silently include this node;
         # the token-aware match correctly excludes it.
-        from claude_hpc.infra.inspect import NodeSnapshot
+        from hpc_agent.infra.inspect import NodeSnapshot
 
         a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
         out = planner._nodes_for_constraint([a100_node], gpu_types=["a10"])
         assert out == []
 
     def test_exact_match_still_works(self):
-        from claude_hpc.infra.inspect import NodeSnapshot
+        from hpc_agent.infra.inspect import NodeSnapshot
 
         a100_node = NodeSnapshot(name="d11-07", gres="gpu:a100:2", active_features=["a100"])
         out = planner._nodes_for_constraint([a100_node], gpu_types=["a100"])
@@ -213,7 +213,7 @@ class TestNodesForConstraint:
 
     def test_active_features_fallback(self):
         # Some clusters expose the GPU type as a feature, not a GRES type.
-        from claude_hpc.infra.inspect import NodeSnapshot
+        from hpc_agent.infra.inspect import NodeSnapshot
 
         node = NodeSnapshot(name="d11-08", gres="gpu:1", active_features=["v100"])
         out = planner._nodes_for_constraint([node], gpu_types=["v100"])
@@ -254,7 +254,7 @@ class TestAdversarialPath:
         return f"sbatch: Job 1 to start at {future} using 1 ..."
 
     def test_recommended_tuple_picks_smallest_walltime(self, tmp_path, monkeypatch):
-        from claude_hpc.forecast import backfill as bf
+        from hpc_agent.forecast import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -280,11 +280,11 @@ class TestAdversarialPath:
 
         with (
             patch(
-                "claude_hpc.planning.planner.inspect_cluster",
+                "hpc_agent.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             patch(
-                "claude_hpc.planning.planner._eta_via_test_only_with_resources",
+                "hpc_agent.planning.planner._eta_via_test_only_with_resources",
                 side_effect=fake_probe,
             ),
         ):
@@ -311,7 +311,7 @@ class TestAdversarialPath:
         assert sorted(adversarial_calls) == [1300, 1950, 2600]
 
     def test_falls_back_when_no_priors(self, tmp_path, monkeypatch):
-        from claude_hpc.forecast import backfill as bf
+        from hpc_agent.forecast import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -322,11 +322,11 @@ class TestAdversarialPath:
 
         with (
             patch(
-                "claude_hpc.planning.planner.inspect_cluster",
+                "hpc_agent.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             patch(
-                "claude_hpc.planning.planner._eta_via_test_only_with_resources",
+                "hpc_agent.planning.planner._eta_via_test_only_with_resources",
                 side_effect=fake_probe,
             ),
         ):
@@ -363,7 +363,7 @@ class TestColdStartWalltimeArbitrage:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -380,7 +380,7 @@ class TestColdStartWalltimeArbitrage:
     def test_arbitrage_does_not_fire_when_priors_pin_a_winner(self, tmp_path, monkeypatch):
         # Priors exist AND lattice probe returns a real ETA → the
         # lattice path supersedes arbitrage; we do NOT trim.
-        from claude_hpc.forecast import backfill as bf
+        from hpc_agent.forecast import backfill as bf
 
         bf.clear_probe_cache()
         cfg = _write_clusters(tmp_path)
@@ -409,11 +409,11 @@ class TestColdStartWalltimeArbitrage:
 
         with (
             patch(
-                "claude_hpc.planning.planner.inspect_cluster",
+                "hpc_agent.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             patch(
-                "claude_hpc.planning.planner._eta_via_test_only_with_resources",
+                "hpc_agent.planning.planner._eta_via_test_only_with_resources",
                 side_effect=fake_probe,
             ),
         ):
@@ -441,7 +441,7 @@ class TestColdStartWalltimeArbitrage:
         )
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg_path))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -459,7 +459,7 @@ class TestColdStartWalltimeArbitrage:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -478,7 +478,7 @@ class TestColdStartWalltimeArbitrage:
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -499,19 +499,19 @@ class TestColdStartWalltimeArbitrage:
 
 class TestEtaViaDES:
     def test_returns_none_without_snapshot_or_profiles(self, tmp_path):
-        from claude_hpc.planning.planner import _eta_via_des
+        from hpc_agent.planning.planner import _eta_via_des
 
         # Empty experiment dir → no DES inputs.
         assert _eta_via_des(tmp_path, "ml_ridge", "discovery") is None
 
     def test_returns_int_when_des_eligible(self, tmp_path):
         # Persist an idle snapshot — DES runs and returns 0.
-        from claude_hpc.infra.inspect import (
+        from hpc_agent.infra.inspect import (
             ClusterSnapshot,
             NodeSnapshot,
             persist_snapshot,
         )
-        from claude_hpc.planning.planner import _eta_via_des
+        from hpc_agent.planning.planner import _eta_via_des
 
         snap = ClusterSnapshot(
             cluster="discovery",

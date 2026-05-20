@@ -1,11 +1,11 @@
-"""Tests for ``claude_hpc.forecast.state_forecast.forecast_state_at``."""
+"""Tests for ``hpc_agent.forecast.state_forecast.forecast_state_at``."""
 
 from __future__ import annotations
 
-from claude_hpc._internal.time import utcnow_iso
-from claude_hpc.forecast.state_forecast import forecast_state_at
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from claude_hpc.state.user_profiles import UserProfile
+from hpc_agent._internal.time import utcnow_iso
+from hpc_agent.forecast.state_forecast import forecast_state_at
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+from hpc_agent.state.user_profiles import UserProfile
 
 
 def _node(

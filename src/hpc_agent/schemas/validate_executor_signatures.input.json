@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/validate_executor_signatures.input.json",
+  "title": "ValidateExecutorSignaturesSpec",
+  "description": "Input spec.\n\n*executor_module* is a dotted import path; *executor_function* is\nthe public function name on that module to introspect. When the\nmodule cannot be imported (project-side import-time side effects,\nmissing optional deps), the validator falls back to AST parsing\nand emits an ``info`` finding describing the degradation.",
+  "type": "object",
+  "required": [
+    "executor_module",
+    "executor_function"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "executor_module": {
+      "minLength": 1,
+      "title": "Executor Module",
+      "type": "string"
+    },
+    "executor_function": {
+      "minLength": 1,
+      "title": "Executor Function",
+      "type": "string"
+    },
+    "tasks_py_path": {
+      "default": ".hpc/tasks.py",
+      "description": "Path to the campaign's tasks.py (relative to experiment_dir).",
+      "title": "Tasks Py Path",
+      "type": "string"
+    },
+    "sample_n_tasks": {
+      "default": 8,
+      "description": "Number of tasks to sample from ``tasks.py.resolve(i)`` for the signature cross-check. The first failing task surfaces a finding; sampling instead of exhaustive walk keeps the validator fast for large campaigns without losing the bug class.",
+      "minimum": 1,
+      "title": "Sample N Tasks",
+      "type": "integer"
+    }
+  }
+}

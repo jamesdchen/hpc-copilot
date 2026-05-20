@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>
-  python: claude_hpc.atoms.setup_actions.find_prior_run
+  python: hpc_agent.atoms.setup_actions.find_prior_run
 exit_codes:
 - 0: ok
 - 1: user-error

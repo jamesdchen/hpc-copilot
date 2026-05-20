@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.workflows.validate_campaign import ValidateCampaignSpec
-from claude_hpc.flows.validate_campaign import validate_campaign
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent._schema_models.workflows.validate_campaign import ValidateCampaignSpec
+from hpc_agent.flows.validate_campaign import validate_campaign
+from hpc_agent.state import runtime_prior as rp
 
 if TYPE_CHECKING:
     from pathlib import Path

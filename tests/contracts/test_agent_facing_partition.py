@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_hpc._internal.primitive import PrimitiveMeta, get_registry, register_primitives
+from hpc_agent._internal.primitive import PrimitiveMeta, get_registry, register_primitives
 
 
 @pytest.fixture(scope="module")

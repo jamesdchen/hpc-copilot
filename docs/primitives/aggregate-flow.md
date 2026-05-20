@@ -22,7 +22,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent aggregate-flow --spec <path>
-  python: claude_hpc.flows.aggregate_flow.aggregate_flow
+  python: hpc_agent.flows.aggregate_flow.aggregate_flow
 ---
 
 ## Purpose

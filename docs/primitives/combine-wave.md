@@ -38,7 +38,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]
-  python: claude_hpc.runner.combine.combine_wave
+  python: hpc_agent.runner.combine.combine_wave
 exit_codes:
 - 0: combined successfully
 - 1: spec_invalid

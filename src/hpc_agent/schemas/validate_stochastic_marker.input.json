@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/validate_stochastic_marker.input.json",
+  "title": "ValidateStochasticMarkerSpec",
+  "type": "object",
+  "required": [
+    "campaign_id",
+    "expected_cmd_sha"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "campaign_id": {
+      "description": "Slug identifying the closed-loop campaign. Must match the slug threaded through submit-flow's spec.",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Campaign Id",
+      "type": "string"
+    },
+    "expected_cmd_sha": {
+      "description": "The cmd_sha the about-to-submit run will have, computed via ``compute_cmd_sha(load_tasks_module(.hpc/tasks.py))`` BEFORE invoking submit-flow. The validator checks whether any prior sidecar tagged with the same campaign_id already carries this cmd_sha — if so, the submit would dedupe silently.",
+      "minLength": 8,
+      "title": "Expected Cmd Sha",
+      "type": "string"
+    }
+  }
+}

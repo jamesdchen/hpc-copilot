@@ -5,7 +5,7 @@ from __future__ import annotations
 import textwrap
 
 # ruff: noqa: E501 — fixture lines reproduce verbatim cluster output
-from claude_hpc.forecast.sshare_parser import parse_sshare
+from hpc_agent.forecast.sshare_parser import parse_sshare
 
 
 def test_round_trip_standard_sshare_output() -> None:

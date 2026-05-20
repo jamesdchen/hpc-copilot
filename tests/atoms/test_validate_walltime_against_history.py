@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.validate_walltime_against_history``.
+"""Tests for ``hpc_agent.atoms.validate_walltime_against_history``.
 
 Pattern: seed runtime_prior with samples via the public
 ``append_sample`` API (real I/O via tmp_path), optionally write a
@@ -10,13 +10,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc._schema_models.validators.validate_walltime_against_history import (
+from hpc_agent._schema_models.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistorySpec,
 )
-from claude_hpc.atoms.validate_walltime_against_history import (
+from hpc_agent.atoms.validate_walltime_against_history import (
     validate_walltime_against_history,
 )
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent.state import runtime_prior as rp
 
 if TYPE_CHECKING:
     from pathlib import Path

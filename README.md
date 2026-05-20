@@ -1,11 +1,11 @@
-# claude-hpc
+# hpc-agent
 
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
 - **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/preflight`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1; preflight is folded into `/submit-hpc` Step 6b as an idempotent gate (with `/preflight` still available as a standalone diagnostic).
 - **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via a `Bash`-style tool by external orchestrators. This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md). For integrators: [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (`claude_hpc.runner`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
+Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (`hpc_agent.runner`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
 
 ## Quick Start
 
@@ -32,7 +32,7 @@ Once installed:
 ### For agents and automation
 
 ```bash
-pip install claude-hpc
+pip install hpc-agent
 hpc-agent preflight --cluster hoffman2                    # health check
 hpc-agent interview --spec intent.json --campaign-dir <d> # persist campaign intent next to tasks.py
 hpc-agent recall --root ~/experiments --task-kind <kind>  # query past interviews for next-interview grounding
@@ -43,11 +43,11 @@ hpc-agent inspect-cluster --cluster <c>                    # per-node alloc/load
 hpc-agent runtime-prior --profile <p> --cluster <c>        # quantile rollup of past task runtimes
 hpc-agent plan-submit --profile <p> --cluster <c>          # constraint scorecard for /submit-hpc
 ```
-Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/reference/cli-spec.md`](docs/reference/cli-spec.md); JSON Schema files for runtime validation under `claude_hpc/schemas/`.
+Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/reference/cli-spec.md`](docs/reference/cli-spec.md); JSON Schema files for runtime validation under `hpc_agent/schemas/`.
 
 ### For integrators
 
-claude-hpc is `Bash`-invokable from any agent harness with a JSON
+hpc-agent is `Bash`-invokable from any agent harness with a JSON
 parser. See **[`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md)**
 for the full contract: the spawn env block,
 `error_code` → retry policy table, the `find-prior-run` → `submit` →
@@ -56,16 +56,16 @@ for the full contract: the spawn env block,
 
 The canonical reference for `.hpc/tasks.py` is shipped inside the
 package at
-[`src/claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`](src/claude_hpc/mapreduce/templates/scaffolds/tasks_example.py).
+[`src/hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`](src/hpc_agent/mapreduce/templates/scaffolds/tasks_example.py).
 It demonstrates three patterns (Cartesian product, chunking by row
 count, date-window backtests) inline. Integrators locate it at runtime
-via `from claude_hpc import _PACKAGE_ROOT` or `rglob("tasks_example.py")`.
+via `from hpc_agent import _PACKAGE_ROOT` or `rglob("tasks_example.py")`.
 
 The most common first-time failure is the harness's default-empty
 spawn env dropping `SSH_AUTH_SOCK`. `hpc-agent
 status`/`aggregate`/`reconcile` fail fast with `error_code:
 "ssh_unreachable"` (exit 2) instead of hanging on auth — run
-`hpc-agent preflight` first to verify the spawn env. claude-hpc does
+`hpc-agent preflight` first to verify the spawn env. hpc-agent does
 not kill cluster jobs by design (`settings.json` denies
 `scancel`/`qdel`); if the integrator decides a run is bad, stop
 polling and let it expire.
@@ -126,7 +126,7 @@ No config files required. Claude discovers your executors by reading their sourc
 
 ## How It Works
 
-The boundary between claude-hpc and your experiment repo is documented in [`docs/reference/boundary-contract.md`](docs/reference/boundary-contract.md) and enforced by `tests/test_boundary_contract.py`.
+The boundary between hpc-agent and your experiment repo is documented in [`docs/reference/boundary-contract.md`](docs/reference/boundary-contract.md) and enforced by `tests/test_boundary_contract.py`.
 
 1. Claude reads your executor scripts and their `--help` output.
 2. You describe what to run in natural language — Claude walks you through writing `.hpc/tasks.py` once: a small Python module exposing `total()` and `resolve(task_id)` that returns the per-task kwargs. The file is committed to git and reused on every subsequent submit.
@@ -137,17 +137,17 @@ The boundary between claude-hpc and your experiment repo is documented in [`docs
 
 ### Parallelism Model
 
-The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
+The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
 
 ### Memory across campaigns
 
 Two primitives — `interview` and `recall` — close the loop between consecutive campaigns. The interview agent (Claude Code or any external orchestrator) persists structured intent (`goal`, `task_count`, `budget`, `abort_if`, `task_generator`, `cluster_target`, `transcript`, provenance) into `<campaign_dir>/interview.json` next to the materialized `tasks.py`. The next interview calls `recall --root <experiments-dir>` to query past intents, returning recency-sorted summaries plus a 3-tier rollup (counts/histograms/quantiles, optional walltime aggregation, optional per-generator parameter envelopes). Observed ranges only — reasoning over them stays in the calling agent.
 
-See [`docs/workflows/memory-across-campaigns.md`](docs/workflows/memory-across-campaigns.md) for the full flow, including the `task_generator` typed materializer (5 shapes: `enumerated`, `cartesian_product`, `items_x_seeds`, `numeric_logspace`, `numeric_linspace`) and the `~/.claude-hpc/config.json:experiment_roots` default-root config.
+See [`docs/workflows/memory-across-campaigns.md`](docs/workflows/memory-across-campaigns.md) for the full flow, including the `task_generator` typed materializer (5 shapes: `enumerated`, `cartesian_product`, `items_x_seeds`, `numeric_logspace`, `numeric_linspace`) and the `~/.hpc-agent/config.json:experiment_roots` default-root config.
 
 ### Throughput Optimization
 
-claude-hpc automatically optimizes job submissions for cluster constraints. When constraints are configured (max array size, walltime, concurrent job limits), the optimizer packs tasks into batched waves:
+hpc-agent automatically optimizes job submissions for cluster constraints. When constraints are configured (max array size, walltime, concurrent job limits), the optimizer packs tasks into batched waves:
 
 - Tasks are split into arrays of ≤max_array_size
 - Arrays are grouped into waves of ≤max_concurrent_jobs
@@ -193,7 +193,7 @@ The slash commands above compose ~50 primitives exposed as `hpc-agent <name>`. F
 
 ### `clusters.yaml` (required)
 
-Cluster infrastructure definitions. Ships inside the package at `claude_hpc/config/clusters.yaml`. Override the active path with `HPC_CLUSTERS_CONFIG=/your/clusters.yaml` (useful for integrators who want to keep their cluster definitions outside the package):
+Cluster infrastructure definitions. Ships inside the package at `hpc_agent/config/clusters.yaml`. Override the active path with `HPC_CLUSTERS_CONFIG=/your/clusters.yaml` (useful for integrators who want to keep their cluster definitions outside the package):
 
 ```yaml
 hoffman2:
@@ -207,7 +207,7 @@ hoffman2:
   gpu_types: [a100, h200, a6000]
 ```
 
-### `~/.claude-hpc/config.json` (optional)
+### `~/.hpc-agent/config.json` (optional)
 
 Per-user config for the `recall` primitive's default `--root`. List one or more directories under `experiment_roots` and `recall` walks them all when `--root` is omitted:
 
@@ -230,10 +230,10 @@ Claude remembers your preferences (cluster, executor directory, environment, res
 
 | Template | SGE | SLURM |
 |----------|-----|-------|
-| CPU array | `claude_hpc/mapreduce/templates/runtime/sge/cpu_array.sh` | `claude_hpc/mapreduce/templates/runtime/slurm/cpu_array.slurm` |
-| GPU array | `claude_hpc/mapreduce/templates/runtime/sge/gpu_array.sh` | `claude_hpc/mapreduce/templates/runtime/slurm/gpu_array.slurm` |
+| CPU array | `hpc_agent/mapreduce/templates/runtime/sge/cpu_array.sh` | `hpc_agent/mapreduce/templates/runtime/slurm/cpu_array.slurm` |
+| GPU array | `hpc_agent/mapreduce/templates/runtime/sge/gpu_array.sh` | `hpc_agent/mapreduce/templates/runtime/slurm/gpu_array.slurm` |
 
-Templates are parameterized via environment variables injected at submission time. Resolve paths via `claude_hpc.get_template_path(scheduler, template)`. The GPU template is used when the configured resources include `gpus`; otherwise the CPU template is used.
+Templates are parameterized via environment variables injected at submission time. Resolve paths via `hpc_agent.get_template_path(scheduler, template)`. The GPU template is used when the configured resources include `gpus`; otherwise the CPU template is used.
 
 ## Supported Clusters
 
@@ -242,12 +242,12 @@ Templates are parameterized via environment variables injected at submission tim
 | Hoffman2 | UCLA IDRE | SGE |
 | Discovery | USC CARC | SLURM |
 
-Cluster connection details are in `claude_hpc/config/clusters.yaml` (or whatever `HPC_CLUSTERS_CONFIG` points at).
+Cluster connection details are in `hpc_agent/config/clusters.yaml` (or whatever `HPC_CLUSTERS_CONFIG` points at).
 
 ## Python API
 
 ```python
-from claude_hpc import (
+from hpc_agent import (
     # Framework subdirectory layout
     framework_subdir, runs_subdir, tasks_path, load_tasks_module,
     # Per-run sidecars
@@ -260,7 +260,7 @@ from claude_hpc import (
     WorkloadSpec, compute_submission_plan, build_wave_map,
     deploy_runtime, run_combiner_checked,
 )
-from claude_hpc.infra.backends import get_backend
+from hpc_agent.infra.backends import get_backend
 ```
 
 ## Development

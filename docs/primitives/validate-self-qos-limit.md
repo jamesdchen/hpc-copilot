@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.atoms.validate_self_qos_limit.validate_self_qos_limit
+  python: hpc_agent.atoms.validate_self_qos_limit.validate_self_qos_limit
 ---
 # validate-self-qos-limit
 
@@ -52,4 +52,4 @@ Pure local arithmetic — calling twice with the same inputs produces the same r
 - **Safe regime**: When `predicted_total < cap * warn_at_pct`, no findings are returned (pass).
 - The suggested fix for errors recommends splitting into arrays of size `<= (cap - current_pending - 1)`, ensuring at least one slot remains for the new submission.
 
-**Schemas:** [`validate_self_qos_limit.input.json`](../../src/claude_hpc/schemas/validate_self_qos_limit.input.json), [`validate_self_qos_limit.output.json`](../../src/claude_hpc/schemas/validate_self_qos_limit.output.json).
+**Schemas:** [`validate_self_qos_limit.input.json`](../../src/hpc_agent/schemas/validate_self_qos_limit.input.json), [`validate_self_qos_limit.output.json`](../../src/hpc_agent/schemas/validate_self_qos_limit.output.json).

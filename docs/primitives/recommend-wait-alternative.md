@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.atoms.recommend_wait_alternative.recommend_wait_alternative
+  python: hpc_agent.atoms.recommend_wait_alternative.recommend_wait_alternative
 ---
 # recommend-wait-alternative
 
@@ -48,4 +48,4 @@ Pure local fitting — calling twice with the same samples produces the same res
 - The forecasts are linear: `forecast_priority(h) = current_priority + rate_priority_per_hour * h`. Non-linear effects (e.g., fairshare decay) are not modeled.
 - For large samples (3+ observations), OLS regression is used; for exactly 2, a single segment is fitted; for <2, the rate is zero and method signals the limitation.
 
-**Schemas:** [`recommend_wait_alternative.input.json`](../../src/claude_hpc/schemas/recommend_wait_alternative.input.json), [`recommend_wait_alternative.output.json`](../../src/claude_hpc/schemas/recommend_wait_alternative.output.json).
+**Schemas:** [`recommend_wait_alternative.input.json`](../../src/hpc_agent/schemas/recommend_wait_alternative.input.json), [`recommend_wait_alternative.output.json`](../../src/hpc_agent/schemas/recommend_wait_alternative.output.json).

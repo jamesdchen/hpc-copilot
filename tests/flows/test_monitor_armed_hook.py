@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from claude_hpc.hooks import install as install_mod
-from claude_hpc.hooks import monitor_armed_check as hook
+from hpc_agent.hooks import install as install_mod
+from hpc_agent.hooks import monitor_armed_check as hook
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -209,7 +209,7 @@ def test_install_creates_settings_when_missing(tmp_path: Path) -> None:
     # Each Stop element must be a group object wrapping a `hooks` array;
     # a bare command hook here is rejected by Claude Code.
     assert "hooks" in entry
-    assert "claude_hpc.hooks.monitor_armed_check" in entry["hooks"][0]["command"]
+    assert "hpc_agent.hooks.monitor_armed_check" in entry["hooks"][0]["command"]
 
 
 def test_install_is_idempotent(tmp_path: Path) -> None:
@@ -252,7 +252,7 @@ def test_install_heals_legacy_flat_entry(tmp_path: Path) -> None:
     heal that entry into the group shape, not duplicate it.
     """
     settings = tmp_path / "settings.json"
-    command = "python -m claude_hpc.hooks.monitor_armed_check"
+    command = "python -m hpc_agent.hooks.monitor_armed_check"
     settings.write_text(json.dumps({"hooks": {"Stop": [{"type": "command", "command": command}]}}))
     summary = install_mod.install_hooks(settings_path=settings)
     assert summary["wrote"] is True

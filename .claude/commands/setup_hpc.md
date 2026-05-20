@@ -1,4 +1,4 @@
-# /setup_hpc — Install claude-hpc commands and package globally
+# /setup_hpc — Install hpc-agent commands and package globally
 
 Copy all slash commands from this repo into the global Claude commands directory, install the Python package in editable mode, and (with explicit consent) wire up bundled Stop hooks that enforce slash-command exit contracts.
 
@@ -36,7 +36,7 @@ Copy all slash commands from this repo into the global Claude commands directory
 
    - **On Y**: install the cron line idempotently. First check whether an entry already exists; if so, report and skip.
 
-     Resolve `$CLAUDE_HPC_REPO` to the absolute path of the claude-hpc checkout (e.g. `git rev-parse --show-toplevel` from inside the repo, or hardcode the path you used for `pip install -e`). The cron job runs from `$EXPERIMENT_DIR` but invokes the scripts via their absolute path inside the claude-hpc repo so the user's experiment directory doesn't need a copy of `scripts/`.
+     Resolve `$CLAUDE_HPC_REPO` to the absolute path of the hpc-agent checkout (e.g. `git rev-parse --show-toplevel` from inside the repo, or hardcode the path you used for `pip install -e`). The cron job runs from `$EXPERIMENT_DIR` but invokes the scripts via their absolute path inside the hpc-agent repo so the user's experiment directory doesn't need a copy of `scripts/`.
 
      ```bash
      CRON_LINE="*/5 * * * * cd \"$EXPERIMENT_DIR\" && \"$CLAUDE_HPC_REPO/.venv/bin/python\" \"$CLAUDE_HPC_REPO/scripts/snapshot_squeue.py\" --ssh-target \"$SSH_TARGET\" --experiment-dir \"$EXPERIMENT_DIR\" >> .hpc/snapshot_squeue.log 2>&1"
@@ -52,7 +52,7 @@ Copy all slash commands from this repo into the global Claude commands directory
 
      > Also install the nightly trainer (refits the LightGBM model from accumulated snapshots + sacct history)? [Y/n]
 
-     On Y, append a daily cron entry. Same `$CLAUDE_HPC_REPO` resolution applies — point at the absolute path of the claude-hpc checkout (e.g. `git rev-parse --show-toplevel` from inside the repo, or hardcode the path you used for `pip install -e`):
+     On Y, append a daily cron entry. Same `$CLAUDE_HPC_REPO` resolution applies — point at the absolute path of the hpc-agent checkout (e.g. `git rev-parse --show-toplevel` from inside the repo, or hardcode the path you used for `pip install -e`):
 
      ```bash
      TRAIN_LINE="0 3 * * * cd \"$EXPERIMENT_DIR\" && \"$CLAUDE_HPC_REPO/.venv/bin/python\" \"$CLAUDE_HPC_REPO/scripts/extract_sacct_history.py\" --ssh-target \"$SSH_TARGET\" --since-days 30 --out completed_jobs.json && \"$CLAUDE_HPC_REPO/.venv/bin/python\" \"$CLAUDE_HPC_REPO/scripts/train_wait_predictor.py\" --completed-jobs completed_jobs.json --slot-counts slot_counts.json --experiment-dir \"$EXPERIMENT_DIR\" >> .hpc/train_wait_predictor.log 2>&1"
@@ -68,4 +68,4 @@ Copy all slash commands from this repo into the global Claude commands directory
 
    This step is idempotent — re-running `/setup_hpc` after a successful cron install detects the existing entries and skips. To remove either cron, run `crontab -e` and delete the matching line.
 
-7. List the installed commands and confirm the `claude_hpc` package is importable.
+7. List the installed commands and confirm the `hpc_agent` package is importable.

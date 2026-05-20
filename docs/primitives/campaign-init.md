@@ -11,7 +11,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent campaign init --campaign-id <id> --strategy <s>
-  python: claude_hpc.atoms.campaign_init.campaign_init
+  python: hpc_agent.atoms.campaign_init.campaign_init
 ---
 # campaign-init
 
@@ -39,7 +39,7 @@ opaque round-tripped context.
   string, optional) — opaque to the framework, displayed for
   humans/agents only. Validates as JSON if supplied.
 
-The full schema is at `claude_hpc/schemas/campaign_manifest.json`
+The full schema is at `hpc_agent/schemas/campaign_manifest.json`
 (Pydantic-emitted from `_schema_models/campaign_manifest.py:CampaignManifest`).
 
 ## Outputs

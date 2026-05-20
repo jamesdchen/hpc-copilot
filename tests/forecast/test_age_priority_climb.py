@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.forecast.age_priority_climb``.
+"""Tests for ``hpc_agent.forecast.age_priority_climb``.
 
 Pure helper — exhaustive over the regression / two-point / reset
 cases. No I/O.
@@ -6,7 +6,7 @@ cases. No I/O.
 
 from __future__ import annotations
 
-from claude_hpc.forecast.age_priority_climb import (
+from hpc_agent.forecast.age_priority_climb import (
     PrioritySample,
     estimate_climb_rate,
     forecast_priority_after,

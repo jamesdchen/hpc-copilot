@@ -18,7 +18,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent monitor-flow --spec <path>
-  python: claude_hpc.flows.monitor_flow.monitor_flow
+  python: hpc_agent.flows.monitor_flow.monitor_flow
 ---
 
 ## Purpose

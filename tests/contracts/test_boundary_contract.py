@@ -1,4 +1,4 @@
-"""Allowlist-style enforcement of the claude-hpc boundary contract.
+"""Allowlist-style enforcement of the hpc-agent boundary contract.
 
 Each test below declares what IS permitted (an allowlist) and asserts that
 reality matches in both directions. Failures print actionable diffs that
@@ -16,8 +16,8 @@ from pathlib import Path
 
 import yaml
 
-import claude_hpc
-from claude_hpc.state.discover import _SKIP_BASENAMES, _SKIP_DIRS
+import hpc_agent
+from hpc_agent.state.discover import _SKIP_BASENAMES, _SKIP_DIRS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONTRACT_DOC = "docs/reference/boundary-contract.md"
@@ -131,7 +131,7 @@ RESERVED_DIRS = frozenset({".hpc"})
 # boundary test, the prose manifest, and the validator all stay in sync
 # from one SoT. v2 audit BUG-7V2-7 reported the three sources had
 # drifted; the model is now the canonical surface.
-from claude_hpc.infra.clusters import _allowed_cluster_keys  # noqa: E402
+from hpc_agent.infra.clusters import _allowed_cluster_keys  # noqa: E402
 
 ALLOWED_CLUSTER_KEYS = _allowed_cluster_keys()
 
@@ -188,10 +188,10 @@ def _imported_top_level_modules(path: Path) -> set[str]:
 
 
 def test_public_api_matches_contract() -> None:
-    """``claude_hpc.__all__`` must match the allowlist exactly."""
-    actual = set(claude_hpc.__all__)
+    """``hpc_agent.__all__`` must match the allowlist exactly."""
+    actual = set(hpc_agent.__all__)
     expected = set(ALLOWED_EXPORTS)
-    assert actual == expected, _diff_message("claude_hpc public API", actual, expected)
+    assert actual == expected, _diff_message("hpc_agent public API", actual, expected)
 
 
 def test_reserved_filenames_match_contract() -> None:
@@ -214,33 +214,33 @@ def test_reserved_dirs_match_contract() -> None:
 
 
 def test_core_does_not_import_templates() -> None:
-    """No file under ``claude_hpc/`` may import from ``templates``."""
-    core_root = REPO_ROOT / "src" / "claude_hpc"
+    """No file under ``hpc_agent/`` may import from ``templates``."""
+    core_root = REPO_ROOT / "src" / "hpc_agent"
     offenders: list[str] = []
     for path in _walk_python_files(core_root):
         # Skip the templates directory itself — it lives inside the
-        # claude_hpc package now (claude_hpc/mapreduce/templates/) but
+        # hpc_agent package now (hpc_agent/mapreduce/templates/) but
         # is data, not framework code.
         if "mapreduce/templates" in str(path):
             continue
         if "templates" in _imported_top_level_modules(path):
             offenders.append(str(path.relative_to(REPO_ROOT)))
     assert not offenders, (
-        f"claude_hpc/** must not import from templates/. See {CONTRACT_DOC}.\n"
+        f"hpc_agent/** must not import from templates/. See {CONTRACT_DOC}.\n"
         f"  Offending files: {offenders}"
     )
 
 
-# Submodules of ``claude_hpc`` that are intentionally deployed alongside
+# Submodules of ``hpc_agent`` that are intentionally deployed alongside
 # user executors on the cluster by ``deploy_runtime`` (see
-# ``claude_hpc/infra/remote.py``). Templates may import from these because
+# ``hpc_agent/infra/remote.py``). Templates may import from these because
 # they are guaranteed to be present at execution time on the compute node.
 # Keep this list narrow; new entries require a matching update to
 # ``docs/reference/boundary-contract.md``.
 RUNTIME_MODULES_ALLOWED_IN_TEMPLATES = frozenset(
     {
-        "claude_hpc.mapreduce.metrics_io",
-        "claude_hpc.executor_cli",
+        "hpc_agent.mapreduce.metrics_io",
+        "hpc_agent.executor_cli",
     }
 )
 
@@ -249,8 +249,8 @@ def _imported_dotted_modules(path: Path) -> set[str]:
     """Return the set of fully-qualified imported module names in ``path``.
 
     Like :func:`_imported_top_level_modules` but returns the full dotted name
-    so callers can distinguish ``claude_hpc.mapreduce.metrics_io`` (a deployed
-    runtime module) from ``claude_hpc.state.runs`` (framework-internal).
+    so callers can distinguish ``hpc_agent.mapreduce.metrics_io`` (a deployed
+    runtime module) from ``hpc_agent.state.runs`` (framework-internal).
     """
     source = path.read_text(encoding="utf-8")
     try:
@@ -269,7 +269,7 @@ def _imported_dotted_modules(path: Path) -> set[str]:
 
 
 def test_templates_do_not_import_core() -> None:
-    """No deployed file under ``claude_hpc/mapreduce/templates/`` may import from ``claude_hpc``.
+    """No deployed file under ``hpc_agent/mapreduce/templates/`` may import from ``hpc_agent``.
 
     Exception: a small allowlist of runtime modules deployed alongside the
     executor by ``deploy_runtime`` (see
@@ -281,7 +281,7 @@ def test_templates_do_not_import_core() -> None:
     are user-facing reference files copied by the user and never pushed
     to the cluster, so the boundary applies on the deployed subset.
     """
-    templates_root = REPO_ROOT / "src" / "claude_hpc" / "mapreduce" / "templates"
+    templates_root = REPO_ROOT / "src" / "hpc_agent" / "mapreduce" / "templates"
     deployed_subdirs = ("sge", "slurm", "common", "starters")
     offenders: list[tuple[str, list[str]]] = []
     for subdir in deployed_subdirs:
@@ -290,21 +290,21 @@ def test_templates_do_not_import_core() -> None:
             bad = sorted(
                 m
                 for m in imported
-                if (m == "claude_hpc" or m.startswith("claude_hpc."))
+                if (m == "hpc_agent" or m.startswith("hpc_agent."))
                 and m not in RUNTIME_MODULES_ALLOWED_IN_TEMPLATES
             )
             if bad:
                 offenders.append((str(path.relative_to(REPO_ROOT)), bad))
     assert not offenders, (
-        f"templates/** must not import from claude_hpc (except deployed "
+        f"templates/** must not import from hpc_agent (except deployed "
         f"runtime modules). See {CONTRACT_DOC}.\n"
         + "\n".join(f"  {p}: {mods}" for p, mods in offenders)
     )
 
 
 def test_clusters_yaml_is_infra_only() -> None:
-    """Each cluster entry in ``claude_hpc/config/clusters.yaml`` must use only infra keys."""
-    clusters_path = REPO_ROOT / "src" / "claude_hpc" / "config" / "clusters.yaml"
+    """Each cluster entry in ``hpc_agent/config/clusters.yaml`` must use only infra keys."""
+    clusters_path = REPO_ROOT / "src" / "hpc_agent" / "config" / "clusters.yaml"
     with clusters_path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
 

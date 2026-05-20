@@ -1,0 +1,725 @@
+[
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "cluster-reduce",
+    "output_schema": "cluster_reduce.output.json",
+    "python": "hpc_agent.atoms.cluster_reduce.cluster_reduce",
+    "side_effects": [
+      "ssh",
+      "sync-pull"
+    ],
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "combine-wave",
+    "output_schema": "combine_wave.output.json",
+    "python": "hpc_agent.runner.combine.combine_wave",
+    "side_effects": [
+      "runs",
+      "ssh",
+      "writes-cluster",
+      "writes-journal"
+    ],
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": false,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": null,
+    "name": "mark-run-terminal",
+    "output_schema": null,
+    "python": "hpc_agent.runner.reconcile.mark_terminal",
+    "side_effects": [
+      "writes-journal"
+    ],
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": null,
+    "name": "prune-orphan-sidecars",
+    "output_schema": null,
+    "python": "hpc_agent.state.runs.prune_orphan_sidecars",
+    "side_effects": [
+      "removes-files"
+    ],
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "reconcile-journal",
+    "output_schema": "reconcile.output.json",
+    "python": "hpc_agent.runner.reconcile.reconcile",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "resubmit.input.json",
+    "name": "resubmit-failed",
+    "output_schema": null,
+    "python": "hpc_agent.runner.resubmit.resubmit_failed",
+    "side_effects": [
+      "scheduler-submit",
+      "writes-journal"
+    ],
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "update_run_constraints.input.json",
+    "name": "update-run-constraints",
+    "output_schema": "update_run_constraints.output.json",
+    "python": "hpc_agent.runner.update_constraints.update_run_constraints",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "mutate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]",
+    "idempotent": true,
+    "input_schema": "best_submit_window.input.json",
+    "name": "best-submit-window",
+    "output_schema": "best_submit_window.output.json",
+    "python": "hpc_agent.forecast.best_submit_window.best_submit_windows",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent campaign advance --campaign-id <id>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-advance",
+    "output_schema": "campaign.output.json",
+    "python": "hpc_agent.atoms.campaign_advance.campaign_advance",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent campaign budget --campaign-id <id>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-budget",
+    "output_schema": "campaign.output.json",
+    "python": "hpc_agent.atoms.campaign_budget.campaign_budget",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent campaign converged --campaign-id <id>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-converged",
+    "output_schema": "campaign.output.json",
+    "python": "hpc_agent.atoms.campaign_converged.campaign_converged",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]",
+    "idempotent": true,
+    "input_schema": "campaign_health.input.json",
+    "name": "campaign-health",
+    "output_schema": "campaign_health.output.json",
+    "python": "hpc_agent.atoms.campaign_health.campaign_health",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent campaign list [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-list",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.campaign_list.campaign_list",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent campaign replay --campaign-id <id> [--last-n <n>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-replay",
+    "output_schema": "campaign.output.json",
+    "python": "hpc_agent.atoms.campaign_replay.campaign_replay",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-status",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.campaign_status.campaign_status",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent capabilities",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "capabilities",
+    "output_schema": "capabilities.output.json",
+    "python": "hpc_agent.atoms.capabilities.capabilities",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent clusters describe <name> [--strict]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "clusters-describe",
+    "output_schema": "clusters_describe.output.json",
+    "python": "hpc_agent.atoms.clusters.describe_cluster",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent clusters list",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "clusters-list",
+    "output_schema": "clusters_list.output.json",
+    "python": "hpc_agent.atoms.clusters.list_clusters",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent decide-monitor-arm --spec <path>",
+    "idempotent": true,
+    "input_schema": "decide_monitor_arm.input.json",
+    "name": "decide-monitor-arm",
+    "output_schema": "decide_monitor_arm.output.json",
+    "python": "hpc_agent.atoms.monitor_arm.decide_monitor_arm",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent discover --experiment-dir <path> [--search-dirs <a,b,c>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "discover-executors",
+    "output_schema": "discover.output.json",
+    "python": "hpc_agent.state.discover.discover_executors",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent discover-reducers --experiment-dir <path>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "discover-reducers",
+    "output_schema": null,
+    "python": "hpc_agent.state.discover.discover_reducers",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent failures --run-id <id> [--lines <n>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "failures",
+    "output_schema": "failures.output.json",
+    "python": "hpc_agent.atoms.failures.fetch_failures",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "find-prior-run",
+    "output_schema": "find_prior_run.output.json",
+    "python": "hpc_agent.atoms.setup_actions.find_prior_run",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "house-edge",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.house_edge.house_edge",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent inspect-cluster --cluster <name> [...]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "inspect-cluster",
+    "output_schema": "inspect_cluster.output.json",
+    "python": "hpc_agent.infra.inspect.inspect_cluster",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent list-in-flight --experiment-dir <path>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "list-in-flight",
+    "output_schema": "list_in_flight.output.json",
+    "python": "hpc_agent.atoms.list_in_flight.list_in_flight",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "logs",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.logs.fetch_logs",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent monitor-summary --experiment-dir <path> --run-id <id>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "monitor-summary",
+    "output_schema": "monitor_summary.output.json",
+    "python": "hpc_agent.atoms.monitor_summary.monitor_summary",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent status --run-id <id> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "poll-run-status",
+    "output_schema": "status.output.json",
+    "python": "hpc_agent.runner.status.record_status",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]",
+    "idempotent": true,
+    "input_schema": "predict_queue_wait.input.json",
+    "name": "predict-queue-wait",
+    "output_schema": "predict_queue_wait.output.json",
+    "python": "hpc_agent.forecast.queue_wait_baseline.predict_queue_wait",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent predict-start-time --spec <path>",
+    "idempotent": true,
+    "input_schema": "predict_start_time.input.json",
+    "name": "predict-start-time",
+    "output_schema": "predict_start_time.output.json",
+    "python": "hpc_agent.atoms.predict_start_time.predict_start_time_primitive",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "read-runtime-prior",
+    "output_schema": "runtime_prior.output.json",
+    "python": "hpc_agent.state.runtime_prior.roll_up_quantiles",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent recall",
+    "idempotent": true,
+    "input_schema": "recall.input.json",
+    "name": "recall",
+    "output_schema": "recall.output.json",
+    "python": "hpc_agent.atoms.recall.recall_campaigns",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "recommend_partition.input.json",
+    "name": "recommend-partition",
+    "output_schema": "recommend_partition.output.json",
+    "python": "hpc_agent.atoms.recommend_partition.recommend_partition",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "recommend_wait_alternative.input.json",
+    "name": "recommend-wait-alternative",
+    "output_schema": "recommend_wait_alternative.output.json",
+    "python": "hpc_agent.atoms.recommend_wait_alternative.recommend_wait_alternative",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent plan-submit --profile <name> --cluster <name> [...]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "score-submit-plan",
+    "output_schema": "plan_submit.output.json",
+    "python": "hpc_agent.planning.planner.plan_submit",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent suggest-setup-action --experiment-dir <path>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "suggest-setup-action",
+    "output_schema": "suggest_setup_action.output.json",
+    "python": "hpc_agent.atoms.setup_actions.suggest_setup_action",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent summarize-submit-plan --spec <path>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "summarize-submit-plan",
+    "output_schema": "summarize_submit_plan.output.json",
+    "python": "hpc_agent.atoms.submit_plan_summary.summarize_submit_plan",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "verify-aggregation-complete",
+    "output_schema": "verify_aggregation_complete.output.json",
+    "python": "hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": false,
+    "cli": "hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "walltime-drift",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.walltime_drift.walltime_drift",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent axes-init",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "axes-init",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.axes_init.axes_init",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]",
+    "idempotent": false,
+    "input_schema": null,
+    "name": "build-executor",
+    "output_schema": "build_executor.output.json",
+    "python": "hpc_agent.atoms.build_executor.build_executor",
+    "side_effects": [
+      "writes-file"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent build-submit-spec --spec <path>",
+    "idempotent": true,
+    "input_schema": "build_submit_spec.input.json",
+    "name": "build-submit-spec",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.build_submit_spec.build_submit_spec",
+    "side_effects": [],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent build-tasks-py --spec <path>",
+    "idempotent": true,
+    "input_schema": "build_tasks_py.input.json",
+    "name": "build-tasks-py",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.build_tasks_py.build_tasks_py",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent campaign init --campaign-id <id> --strategy <s>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "campaign-init",
+    "output_schema": "campaign.output.json",
+    "python": "hpc_agent.atoms.campaign_init.campaign_init",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent interview",
+    "idempotent": true,
+    "input_schema": "interview.input.json",
+    "name": "interview",
+    "output_schema": "interview.output.json",
+    "python": "hpc_agent.atoms.interview.record_interview",
+    "side_effects": [
+      "file_write"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]",
+    "idempotent": true,
+    "input_schema": "submit.input.json",
+    "name": "submit-spec",
+    "output_schema": "submit.output.json",
+    "python": "hpc_agent.runner.submit.submit_and_record",
+    "side_effects": [
+      "scheduler-submit",
+      "writes-journal"
+    ],
+    "verb": "submit"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent preflight [--cluster <name>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "check-preflight",
+    "output_schema": "preflight.output.json",
+    "python": "hpc_agent.atoms.preflight.check_preflight",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "validate.input.json",
+    "name": "validate",
+    "output_schema": "validate.output.json",
+    "python": "hpc_agent.planning.validate.validate_submission",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "validate_executor_signatures.input.json",
+    "name": "validate-executor-signatures",
+    "output_schema": "validate_executor_signatures.output.json",
+    "python": "hpc_agent.atoms.validate_executor_signatures.validate_executor_signatures",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "validate_input_dataset.input.json",
+    "name": "validate-input-dataset",
+    "output_schema": "validate_input_dataset.output.json",
+    "python": "hpc_agent.atoms.validate_input_dataset.validate_input_dataset",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "validate_self_qos_limit.input.json",
+    "name": "validate-self-qos-limit",
+    "output_schema": "validate_self_qos_limit.output.json",
+    "python": "hpc_agent.atoms.validate_self_qos_limit.validate_self_qos_limit",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "validate_stochastic_marker.input.json",
+    "name": "validate-stochastic-marker",
+    "output_schema": "validate_stochastic_marker.output.json",
+    "python": "hpc_agent.atoms.validate_stochastic_marker.validate_stochastic_marker",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": null,
+    "idempotent": true,
+    "input_schema": "validate_walltime_against_history.input.json",
+    "name": "validate-walltime-against-history",
+    "output_schema": "validate_walltime_against_history.output.json",
+    "python": "hpc_agent.atoms.validate_walltime_against_history.validate_walltime_against_history",
+    "side_effects": [],
+    "verb": "validate"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent aggregate-flow --spec <path>",
+    "idempotent": true,
+    "input_schema": "aggregate_flow.input.json",
+    "name": "aggregate-flow",
+    "output_schema": "aggregate_flow.output.json",
+    "python": "hpc_agent.flows.aggregate_flow.aggregate_flow",
+    "side_effects": [
+      "ssh",
+      "sync-pull",
+      "writes-journal"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent monitor-flow --spec <path>",
+    "idempotent": true,
+    "input_schema": "monitor_flow.input.json",
+    "name": "monitor-flow",
+    "output_schema": "monitor_flow.output.json",
+    "python": "hpc_agent.flows.monitor_flow.monitor_flow",
+    "side_effects": [
+      "ssh",
+      "writes-journal"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-flow --spec <path>",
+    "idempotent": true,
+    "input_schema": "submit_flow.input.json",
+    "name": "submit-flow",
+    "output_schema": "submit_flow.output.json",
+    "python": "hpc_agent.flows.submit_flow.submit_flow",
+    "side_effects": [
+      "scheduler-submit",
+      "sync-push",
+      "writes-journal"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent submit-flow-batch --spec <path>",
+    "idempotent": true,
+    "input_schema": "submit_flow_batch.input.json",
+    "name": "submit-flow-batch",
+    "output_schema": "submit_flow_batch.output.json",
+    "python": "hpc_agent.flows.submit_flow.submit_flow_batch",
+    "side_effects": [
+      "scheduler-submit",
+      "sync-push",
+      "writes-journal"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent validate-campaign --spec <path>",
+    "idempotent": true,
+    "input_schema": "validate_campaign.input.json",
+    "name": "validate-campaign",
+    "output_schema": "validate_campaign.output.json",
+    "python": "hpc_agent.flows.validate_campaign.validate_campaign",
+    "side_effects": [],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "verify-canary",
+    "output_schema": "verify_canary.output.json",
+    "python": "hpc_agent.atoms.canary_verify.verify_canary",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "workflow"
+  }
+]

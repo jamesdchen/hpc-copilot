@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent recall
-  python: claude_hpc.atoms.recall.recall_campaigns
+  python: hpc_agent.atoms.recall.recall_campaigns
 ---
 # recall
 
@@ -18,17 +18,17 @@ context for a fresh interview agent.
 
 ## Inputs
 
-The full input schema is at `claude_hpc/schemas/recall.input.json`
+The full input schema is at `hpc_agent/schemas/recall.input.json`
 (Pydantic-emitted from `_schema_models/recall.py:RecallSpec`). All
 fields optional:
 
 - `root` (str) — filesystem directory to walk recursively. When
   omitted, falls back to
-  `~/.claude-hpc/config.json:experiment_roots`. Both empty raises
+  `~/.hpc-agent/config.json:experiment_roots`. Both empty raises
   `spec_invalid`.
 - `task_kind` (str) — exact-match filter against
   `intent.task_kind`. The values are whatever the caller wrote at
-  interview time; claude-hpc does not maintain a taxonomy.
+  interview time; hpc-agent does not maintain a taxonomy.
   Strings like `"ml-hparam-sweep"` or `"rl-rollout"` are common
   examples but not a canonical set.
 - `operator` (str) — exact-match filter against
@@ -60,7 +60,7 @@ respective opt-in flags are set.
 ## Errors
 
 - `spec_invalid` — `root` is empty and
-  `~/.claude-hpc/config.json:experiment_roots` is also empty.
+  `~/.hpc-agent/config.json:experiment_roots` is also empty.
 
 ## Idempotency
 
@@ -113,5 +113,5 @@ Stick with the caller's own memory model when:
   per-campaign concern.
 
 The two layers coexist: an integrator's experiment-level journal
-keys on `experiment_id`; claude-hpc's interview / recall surface
+keys on `experiment_id`; hpc-agent's interview / recall surface
 keys on `campaign_dir`. Different scopes, no overlap.

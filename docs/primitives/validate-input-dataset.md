@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.atoms.validate_input_dataset.validate_input_dataset
+  python: hpc_agent.atoms.validate_input_dataset.validate_input_dataset
 ---
 # validate-input-dataset
 
@@ -54,4 +54,4 @@ The validator reads the dataset file; calling twice with the same file and spec 
 - The validator uses `pyarrow.parquet.take()` for efficient row extraction, so it scales well even for large datasets with many columns.
 - `wc -l` is never used — it counts newlines, not records, and lies on multi-line CSV cells or JSONL with embedded newlines. The validator uses proper parsers.
 
-**Schemas:** [`validate_input_dataset.input.json`](../../src/claude_hpc/schemas/validate_input_dataset.input.json), [`validate_input_dataset.output.json`](../../src/claude_hpc/schemas/validate_input_dataset.output.json).
+**Schemas:** [`validate_input_dataset.input.json`](../../src/hpc_agent/schemas/validate_input_dataset.input.json), [`validate_input_dataset.output.json`](../../src/hpc_agent/schemas/validate_input_dataset.output.json).

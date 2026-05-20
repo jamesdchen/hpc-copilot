@@ -1,7 +1,7 @@
 # Adding a new primitive
 
 Recipe for adding a wire-surface primitive (atom or workflow) to
-claude-hpc. Mirrors the patterns the existing 50 primitives follow;
+hpc-agent. Mirrors the patterns the existing 50 primitives follow;
 once you know the recipe the per-primitive work is mechanical.
 
 ## Decide first
@@ -23,7 +23,7 @@ Two questions, both load-bearing:
 ### 1. Pydantic spec models
 
 If the primitive takes a wire `--spec` payload, create
-`src/claude_hpc/_schema_models/<name>.py`:
+`src/hpc_agent/_schema_models/<name>.py`:
 
 ```python
 from pydantic import BaseModel, ConfigDict, Field
@@ -52,7 +52,7 @@ Add `(<Name>Spec, "<name>.input.json")` and/or
 uv run python scripts/build_schemas.py --write
 ```
 
-The JSON file lands under `claude_hpc/schemas/`. You don't edit it
+The JSON file lands under `hpc_agent/schemas/`. You don't edit it
 by hand again — the Pydantic model is the SoT, the JSON is
 regenerated.
 
@@ -84,13 +84,13 @@ the `capabilities` envelope plus `docs/generated/operations.md`.
 ### 4. Add to `_PRIMITIVE_MODULES`
 
 If your atom's module is new, add it to `_PRIMITIVE_MODULES` in
-`src/claude_hpc/_internal/_primitive.py` (the explicit registration
+`src/hpc_agent/_internal/_primitive.py` (the explicit registration
 ordering). `lint_primitive_modules.py` greps `@primitive(` and
 catches missing entries.
 
 ### 5. CLI handler (only if exposing a new subcommand)
 
-In `src/claude_hpc/agent_cli.py`:
+In `src/hpc_agent/agent_cli.py`:
 
 ```python
 def cmd_<name>(args: argparse.Namespace) -> int:

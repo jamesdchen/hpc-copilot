@@ -3,13 +3,13 @@
 The wire surface external orchestrators (any agent harness that calls
 `hpc-agent` via a shell tool) compose against. This document is
 integrator-agnostic: nothing here names a specific consumer. If you're
-building a new harness on top of claude-hpc, read this file plus
+building a new harness on top of hpc-agent, read this file plus
 [`docs/reference/cli-spec.md`](../reference/cli-spec.md) and you have
 the full surface.
 
 ## Spawn environment
 
-claude-hpc is invoked as a subprocess. The integrator forwards a small
+hpc-agent is invoked as a subprocess. The integrator forwards a small
 set of env vars from its own shell:
 
 | Caller-side env var | What it does |
@@ -54,7 +54,7 @@ Exit codes: `0` ok, `1` user error, `2` cluster/network, `3`
 internal. Dispatch on exit code BEFORE parsing JSON if you want a
 cheap pre-check; the envelope is the full story.
 
-Full schema: `claude_hpc/schemas/envelope.json`. JSON Schema 2020-12.
+Full schema: `hpc_agent/schemas/envelope.json`. JSON Schema 2020-12.
 
 ## Workflow: submit → monitor → aggregate → verify
 
@@ -100,7 +100,7 @@ required for the basic loop:
 
 ## `error_code` → retry policy
 
-Source of truth: `src/claude_hpc/errors.py`. Full list also in
+Source of truth: `src/hpc_agent/errors.py`. Full list also in
 [`docs/reference/cli-spec.md`](../reference/cli-spec.md).
 
 | `error_code` | `category` | `retry_safe` | Recommended action |
@@ -118,19 +118,19 @@ Source of truth: `src/claude_hpc/errors.py`. Full list also in
 | `config_invalid` | user | false | Surface; clusters.yaml is malformed. |
 | `outputs_missing` | user | false | Surface; the executor produced no per-task outputs. Inspect logs. |
 | `journal_corrupt` | internal | false | Surface; investigate `$HPC_JOURNAL_DIR`. |
-| `schema_incompat` | internal | false | Surface; the sidecar / runtime-prior schema version isn't supported by this claude-hpc. Pin claude-hpc and the cluster runtime to compatible versions. |
+| `schema_incompat` | internal | false | Surface; the sidecar / runtime-prior schema version isn't supported by this hpc-agent. Pin hpc-agent and the cluster runtime to compatible versions. |
 
 ## The `.hpc/tasks.py` boundary
 
-The integrator writes the task definition. claude-hpc owns the
+The integrator writes the task definition. hpc-agent owns the
 *protocol* (interface, sidecar schema, SSH plumbing, dispatcher);
 the integrator owns the *content* (which experiment, what parameter
 axes, what kwargs each task receives). The bridge is a single
 user-written file in the experiment repo:
 
 ```
-<experiment-dir>/.hpc/tasks.py        # integrator writes this; claude-hpc imports it
-<experiment-dir>/.hpc/runs/<id>.json  # claude-hpc writes this each submit
+<experiment-dir>/.hpc/tasks.py        # integrator writes this; hpc-agent imports it
+<experiment-dir>/.hpc/runs/<id>.json  # hpc-agent writes this each submit
 ```
 
 `.hpc/tasks.py` exposes exactly two callables:
@@ -148,13 +148,13 @@ The **eager-materialization convention** —
 `resolve(i)` indexes — gives free `cmd_sha` derivation, submit-time
 error catching, and laptop-side inspectability. The canonical
 reference at
-[`tasks_example.py`](../../src/claude_hpc/mapreduce/templates/scaffolds/tasks_example.py)
+[`tasks_example.py`](../../src/hpc_agent/mapreduce/templates/scaffolds/tasks_example.py)
 shows three usage patterns inline (Cartesian product, chunking by row
 count, date-window backtests). Pick whichever matches your sweep.
 
-claude-hpc is experiment-agnostic by design. Only the agent that
+hpc-agent is experiment-agnostic by design. Only the agent that
 proposed the experiment knows what its parameter sweep should look
-like; pushing the parameter-shape decision into claude-hpc would force
+like; pushing the parameter-shape decision into hpc-agent would force
 every new experiment kind into a framework upgrade. The integrator
 owns it.
 
@@ -164,20 +164,20 @@ Templates copied into experiment repos may import from a narrow
 allowlist of "runtime modules" that `deploy_runtime` stages on the
 compute node alongside the executor. The current allowlist:
 
-- `claude_hpc.mapreduce.metrics_io.write_metrics` — per-task sidecar
+- `hpc_agent.mapreduce.metrics_io.write_metrics` — per-task sidecar
   writer. Stdlib-only.
-- `claude_hpc.mapreduce.metrics_io.read_kw_env` — kwargs-from-env
+- `hpc_agent.mapreduce.metrics_io.read_kw_env` — kwargs-from-env
   helper for executors that consume the dispatcher's `HPC_KW_*`
   exports.
-- `claude_hpc.executor_cli.flag` — single-flag declaration helper for
+- `hpc_agent.executor_cli.flag` — single-flag declaration helper for
   the new pure-`compute(args)` contract.
-- `claude_hpc.executor_cli.generic_args` /
-  `claude_hpc.executor_cli.gpu_args` — common arg-group bundles.
-- `claude_hpc.executor_cli.build_parser_from_flags` — argparse
+- `hpc_agent.executor_cli.generic_args` /
+  `hpc_agent.executor_cli.gpu_args` — common arg-group bundles.
+- `hpc_agent.executor_cli.build_parser_from_flags` — argparse
   builder for the auto-generated `.hpc/cli.py`.
 
-Nothing else from `claude_hpc` is importable from
-`claude_hpc/mapreduce/templates/**`. The boundary is enforced by
+Nothing else from `hpc_agent` is importable from
+`hpc_agent/mapreduce/templates/**`. The boundary is enforced by
 `tests/test_boundary_contract.py`. To extend it, the new module must
 (a) be deployed by `deploy_runtime`, (b) be stdlib-only or
 self-contained, and (c) be added to both the allowlist constant in
@@ -196,14 +196,14 @@ must not change across releases:
 | `LOCAL_DATA_DIR` | Optional cluster-side data root. Templates honor it when set; executors that read data files key off it. |
 | `HPC_TASK_ID` | 0-based task index. |
 | `HPC_RUN_ID` | The current run_id. Locates `.hpc/runs/<run_id>.json`. |
-| `HPC_CAMPAIGN_ID` | Optional. When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` can read this to call `claude_hpc.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` for prior iterations. |
+| `HPC_CAMPAIGN_ID` | Optional. When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` can read this to call `hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` for prior iterations. |
 | `HPC_RUNTIME` | Optional. When `uv`, the template runs `uv sync` before dispatch. |
 
 Constants are also exposed as Python attributes under
-`claude_hpc.integration`:
+`hpc_agent.integration`:
 
 ```python
-from claude_hpc.integration import (
+from hpc_agent.integration import (
     RESULT_DIR_ENV,
     HPC_KW_PREFIX,
     LOCAL_DATA_DIR_ENV,
@@ -228,13 +228,13 @@ The terminal/observable values returned by status / monitor / reconcile:
 | `timeout` | Terminal. Wall-clock budget exceeded; cluster jobs may still be running. |
 | `abandoned` | Terminal. Recorded `job_ids` no longer known to the scheduler. |
 
-claude-hpc deliberately does not kill cluster jobs (`settings.json`
+hpc-agent deliberately does not kill cluster jobs (`settings.json`
 denies `scancel`/`qdel`). If the integrator decides a run is bad,
 stop polling and let it expire.
 
 ## Cancel / abort: out of scope
 
-claude-hpc has no cancel primitive. Cluster jobs run to walltime.
+hpc-agent has no cancel primitive. Cluster jobs run to walltime.
 This is a permanent design choice — do not work around it. If your
 loop needs to abandon a run, simply stop polling; the journal records
 mark themselves `abandoned` on reconcile when the scheduler no longer
@@ -256,6 +256,6 @@ list.
 
 - [`docs/reference/cli-spec.md`](../reference/cli-spec.md) — envelope shape and exit-code contract.
 - [`docs/reference/agent-surface.md`](../reference/agent-surface.md) — design rationale for the POSIX-native surface.
-- [`docs/reference/boundary-contract.md`](../reference/boundary-contract.md) — what claude-hpc owns vs. what experiment repos own.
+- [`docs/reference/boundary-contract.md`](../reference/boundary-contract.md) — what hpc-agent owns vs. what experiment repos own.
 - [`docs/reference/env-vars.md`](../reference/env-vars.md) — every `HPC_*` env var the framework reads.
 - [`docs/primitives/`](../primitives/) — one file per subcommand.
