@@ -85,10 +85,11 @@ notes below.
 - **Narrative docs and schema descriptions** genericized: references
   to a specific integrator are replaced with integrator-agnostic
   language.
-- **Python identifier renames** to lift the legacy integrator name
-  out of the Python API. None of these are imported by MARs at the
-  re-pin commit (`ec041c6`); the rename is doc-only at the wire
-  level:
+- **Identifier and wire-field renames** to lift the legacy integrator
+  name out of every surface. The private Python renames landed first;
+  the wire fields followed once MARs migrated to the post-cleavage
+  shape (its `mars_hpc.py` adapter no longer reads
+  `data.mars_skill_paths` or writes `produced_by.kind == "mars"`):
 
   | Old name | New name | Surface |
   |---|---|---|
@@ -97,13 +98,10 @@ notes below.
   | `_mars_skill_paths()` | `_resolve_skill_paths()` | private helper |
   | `_MARS_CANDIDATE_DIRS` | `_META_CANDIDATE_DIRS` | private |
   | `_build_mars_meta_block()` | `_build_meta_block()` | private |
+  | `data.mars_skill_paths` | `data.skill_paths` | `capabilities` envelope wire field |
+  | `produced_by.kind == "mars"` | `produced_by.kind == "agent"` | `interview` input + `recall` output enum literal |
 
-  The wire surface is deliberately NOT renamed: the
-  `data.mars_skill_paths` field on the `capabilities` envelope and the
-  `produced_by.kind == "mars"` literal on `interview` / `recall` stay
-  as-is so v1 integrates perfectly with MARs at the pinned commit.
-  The two are intentional wire-compat retentions; new integrators are
-  free to write `kind: "mars"` to mean "any non-human agent".
+  `git grep -i 'mars' -- ':!CHANGELOG*'` now returns zero matches.
 
 ### Removed
 
@@ -120,9 +118,7 @@ notes below.
   `tests/state/test_mars_layout.py` was renamed to
   `test_meta_json_layout.py`; its test-class names
   (`TestMarsLayoutFilter`, `TestDetectMarsTier`) became
-  `TestMetaJsonLayoutFilter`, `TestDetectExperimentTier`. Two wire
-  surfaces (`data.mars_skill_paths` and `kind: "mars"`) are
-  intentionally retained — see Changed.
+  `TestMetaJsonLayoutFilter`, `TestDetectExperimentTier`.
 
 ### Audit pass — bug fixes across CLI, planning, flows, runner, mapreduce, forecast, schema, infra
 

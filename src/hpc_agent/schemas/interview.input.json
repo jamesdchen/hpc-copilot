@@ -458,7 +458,7 @@
       "properties": {
         "kind": {
           "enum": [
-            "mars",
+            "agent",
             "human"
           ],
           "title": "Kind",
@@ -474,7 +474,7 @@
             }
           ],
           "default": null,
-          "description": "External-orchestrator session identifier. Required when kind=mars; null otherwise. The `mars` value is a wire literal kept for compatibility with existing integrators that already write it; new integrators may use the same value to mean 'any non-human agent'.",
+          "description": "Agent/orchestrator session identifier. Required when kind=agent; null otherwise.",
           "title": "Session Sha"
         },
         "at": {
@@ -500,7 +500,7 @@
             }
           ],
           "default": null,
-          "description": "Human operator name/handle when kind=human; null when kind=mars.",
+          "description": "Human operator name/handle when kind=human; null when kind=agent.",
           "title": "Operator"
         }
       },
