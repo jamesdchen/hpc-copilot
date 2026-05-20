@@ -6,7 +6,7 @@ case::
     axes_schema_version: 1
     homogeneous_axes: [window]
 
-The agent writes this once at deploy time (during ``setup_hpc`` or
+The agent writes this once at deploy time (during ``setup-hpc`` or
 ``hpc-build-executor``); the framework reads it at submit time to
 decide which axis becomes the task array. Field-mirror discipline:
 the framework only stores fields it can independently act on, so

@@ -599,7 +599,7 @@ def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:
     would otherwise show up to :func:`find_run_by_cmd_sha` and the
     runtime-prior aggregator without a corresponding cluster job. Run
     this primitive after the batch finishes (or as part of `/resume-hpc`
-    or `/setup_hpc`) to clean them up.
+    or `/setup-hpc`) to clean them up.
     """
     deleted: list[str] = []
     for path in find_existing_runs(experiment_dir):

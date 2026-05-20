@@ -1,4 +1,4 @@
-# /setup_hpc — Install hpc-agent commands and package globally
+# /setup-hpc — Install hpc-agent commands and package globally
 
 Copy all slash commands from this repo into the global Claude commands directory, install the Python package in editable mode, and (with explicit consent) wire up bundled Stop hooks that enforce slash-command exit contracts.
 
@@ -66,6 +66,6 @@ Copy all slash commands from this repo into the global Claude commands directory
 
    - **On N**: note that the user can install manually by editing crontab themselves; the predictor still works in floor-only mode (no LightGBM residual) when no model has been trained.
 
-   This step is idempotent — re-running `/setup_hpc` after a successful cron install detects the existing entries and skips. To remove either cron, run `crontab -e` and delete the matching line.
+   This step is idempotent — re-running `/setup-hpc` after a successful cron install detects the existing entries and skips. To remove either cron, run `crontab -e` and delete the matching line.
 
 7. List the installed commands and confirm the `hpc_agent` package is importable.

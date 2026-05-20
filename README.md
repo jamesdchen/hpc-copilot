@@ -14,14 +14,14 @@ Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markd
 ```bash
 pip install -e .
 ```
-Open the repo in Claude Code and run `/setup_hpc` once — it installs
+Open the repo in Claude Code and run `/setup-hpc` once — it installs
 the slash commands listed below into `~/.claude/commands/` (and
-optionally wires up the bundled Stop hooks). Only `/setup_hpc` ships
+optionally wires up the bundled Stop hooks). Only `/setup-hpc` ships
 in this repo's `.claude/commands/`; the others (`/preflight`,
 `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`,
 `/hpc-axes-init`) live as templates under
 `src/slash_commands/commands/` and become available globally after
-`/setup_hpc` copies them.
+`/setup-hpc` copies them.
 
 Once installed:
 
