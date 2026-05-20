@@ -7,6 +7,89 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — `hpc_agent.template`: experiment + parallelization layer
+
+A new opt-in subpackage so a researcher can bring a notebook (or a
+plain `run()` function) and have hpc-agent — not the experiment repo —
+own parallelization. The core stays experiment-agnostic; nothing here
+is on the default code path. Stdlib-only throughout.
+
+Layer 1 — notebook / CLI helpers:
+
+- `register_run` — decorator that marks an experiment entry point and
+  injects a `compute(args)` wrapper (satisfying the executor contract)
+  plus a module-level `_RUNS` registry. The cluster-runtime surface it
+  needs (`register_run`, `compute`, `load_series`, `save_artifact`)
+  lives in one self-contained, stdlib-only module, `_runtime`.
+- `save_artifact(name, obj)` — write a large artifact under the
+  per-task output directory (CWD fallback for local smoke tests).
+- `export_notebook(ipynb, out_py)` — lift the importable surface of a
+  `.ipynb` into a `.py` executor via a strict AST allowlist (imports,
+  defs, classes, UPPERCASE-target assignments; everything else
+  dropped). A `@register_run` notebook exports to a *self-contained*
+  executor: the `hpc_agent.template` import is dropped and the
+  stdlib-only `_runtime` source inlined verbatim, so the executor runs
+  on a stdlib-only cluster with no `hpc-agent` install — the same
+  inlining `.hpc/cli.py` does for `Flag`.
+- `discover_runs(src_dir)` — find `@register_run` functions by AST
+  walk, resolving bare / aliased / attribute decorator forms without
+  importing the experiment's heavy dependencies.
+- `flags_from_signature` / `flags_from_ast` / `flags_for_run` — the
+  type → `Flag` mapping (`bool` → store-true, `X | None` → optional,
+  `list[T]` → `nargs="+"`, `Literal[...]` → `choices`).
+
+Layer 2 — parallelization planner:
+
+- `DataAxis` cases — `Independent`, `Associative(monoid)`,
+  `BoundedHalo(halo_fn)`, `Sequential` — classifying a series axis by
+  whether it carries state and whether that state is associative.
+- `plan_tasks(sweep, data_axis, chunks=, series_length=)` — applies
+  the strategy and returns a `total()` / `resolve()` object for
+  `.hpc/tasks.py`.
+- `load_series(name)` — the halo-aware loader: the single seam that
+  hands each task its slice without the experiment knowing it was
+  chunked. `set_series_loader` / `current_slice` / `trim_emission`.
+- `Monoid` / `Moments` / `SUM` / `MOMENTS` and `reduce_monoid` —
+  monoid-reduce glue; non-associative aggregates (variance, Sharpe,
+  QLIKE) reduce via sufficient statistics.
+- `check_elision` / `assert_elision_equivalent` — the serial-elision
+  harness: run an experiment whole and split N ways, assert equality.
+  The backstop that makes automated `DataAxis` inference safe — wire
+  it as a required CI gate.
+
+`hpc_agent.executor_cli.Flag` / `flag()` gain an optional `action`
+field (e.g. `store_true`) so boolean flags map cleanly; the inlined
+copy in `cli_dispatcher.py` is kept in lock-step.
+
+### Added — agent inference + `build-template` scaffold injection
+
+- `/submit-hpc` (`skills/hpc-submit/SKILL.md`) — Step 3 now classifies
+  an experiment's series axis as a `DataAxis` from a read of `run()`
+  and its call graph: detect a series loop, classify it, gate on the
+  serial-elision check. Default to `Sequential` on any uncertainty,
+  bias halos large.
+- `build-tasks-py` gains a planner mode — a `data_axis` field on the
+  spec (`{kind, chunks, series_length, halo_expr?, monoid?}`) makes the
+  primitive run `plan_tasks` at scaffold time and bake the resolved task
+  list into a `_TASKS` literal. The generated `.hpc/tasks.py` imports
+  only `executor_cli` — the same footprint as a cartesian one, so it
+  loads inside the stdlib-only cluster dispatcher. The agent
+  classifies; it never hand-writes `tasks.py`. `halo_expr` is validated
+  to arithmetic-only over `params`.
+- `build-template` — a new human-facing CLI command
+  (`hpc-agent build-template [--repo-dir <dir>] [--force]`) that injects
+  the experiment-template into a repo: `.hpc/template.mk` and
+  `.hpc/scaffold.py` (framework-owned, re-injected every run,
+  self-healing) plus the root files `Makefile`,
+  `.pre-commit-config.yaml`, `.github/workflows/ci.yml`, `conftest.py`,
+  and `pyproject.toml` (refuse-without-`--force`, with non-destructive
+  `Makefile` / `pyproject.toml` handling). The scaffold lives inside
+  hpc-agent — there is no separate template repo to clone. It is
+  deliberately *not* a wire primitive: the experiment-template flow is
+  built around researcher-authored notebooks, so it is exclusive to the
+  human CLI entry point and absent from the integrator-agnostic
+  primitive catalog headless orchestrators compose against.
+
 ### Removed (experiment-shaped surface that moved out to the caller)
 
 Per the cleavage: hpc-agent owns the parallelization scaffolding;

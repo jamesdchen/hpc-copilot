@@ -42,13 +42,38 @@ If `discover_executors` returns empty, the slash command surfaces a scaffolding 
 
 The slash command parses the user's natural-language request into a list of `(executor_id, axis_shape)` tuples. This skill receives the result; flags `--no-canary` and `campaign_id=<slug>` thread through verbatim.
 
-For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **batch spec**: `{"specs": [<per-spec>...], "rsync_excludes": [...], "skip_preflight": ...}`. `submit-flow` auto-routes to `submit-flow-batch` internally — ONE rsync + ONE deploy + N qsubs over the multiplexed ssh ControlMaster. Heterogeneous batches raise `spec_invalid`. The motivation: N parallel single-spec submits send ~13×N ssh handshakes at the cluster's sshd and trip `MaxStartups`.
+For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **batch spec** — `{"specs": [<per-spec>...], "rsync_excludes": [...], "skip_preflight": ...}`; `submit-flow` auto-routes it to the batched path (one rsync + one deploy + N qsubs). Heterogeneous batches raise `spec_invalid`. Why batch rather than N parallel submits: see [submit-flow.md](../../docs/primitives/submit-flow.md).
 
 ## Step 3: Plan the parallelization axis
 
-The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 walks the user through writing it once per experiment, adapting from `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`. From then on the file is committed and reused on every submit.
+The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 scaffolds it once per experiment; from then on it is committed and reused on every submit. There are two shapes, and Step 3 decides which:
 
-Step 3's job is to gather enough context for Step 6 to write a sensible first draft: axis shape, kwargs `resolve(task_id)` returns, expected task count.
+- **Cartesian grid** — each task is one independent cell of a parameter grid. `tasks_example.py` Pattern 1; scaffolded deterministically by [build-tasks-py](../../docs/primitives/build-tasks-py.md) at Step 6b. The 80% case.
+- **Planner-driven** — the executor iterates a *totally-ordered series* (a walk-forward backtest, an online-learning scan) and you want to fan that series out. Splitting a *stateful* series computation is only correct if each chunk replays the right warm-up; hpc-agent owns that via `hpc_agent.template.plan_tasks`. Emitted by [build-tasks-py](../../docs/primitives/build-tasks-py.md) when the spec carries a `data_axis` (Step 3b's classification).
+
+### 3a: Detect a series axis
+
+Read `compute()` / the `@register_run` function and its call graph — the same code-analysis pass that classifies hardware from `info.imports` at Step 4. A series axis is present when the executor loops over an ordered series (a time index, a date range, rows of a sorted frame) and you intend to parallelize *that loop*. If there is no series loop, it is a cartesian grid — skip to Step 4.
+
+### 3b: Classify the `DataAxis`
+
+The experiment declares nothing about parallelism — you classify it. The one question: **does the loop carry state, and is the state transition associative?** (Full model: `hpc_agent/template/axis.py`. The same classification reference lives in [build-tasks-py.md](../../docs/primitives/build-tasks-py.md) so an integrator driving `build-tasks-py` directly — without this skill — gets the identical guidance.)
+
+| Observation in `run()` | `DataAxis` | Halo |
+|---|---|---|
+| Loop body is a pure function of its row (no accumulator) | `Independent()` | none |
+| Accumulates an *associative* summary (sum, count, min/max, sufficient statistics) | `Associative(monoid)` | none |
+| Refits / re-reads a *trailing window* of bounded length (rolling stat, `train_window` lookback) | `BoundedHalo(halo_fn)` | ≈ the window length |
+| Unbounded or order-dependent dependency (running state with no fixed horizon; trial *n* depends on `0..n-1`) | `Sequential()` | — |
+
+Inference is **never trusted unverified** — classifying data dependencies is real program analysis and you will sometimes get it wrong. Two rules:
+
+- **Default to `Sequential()` on any uncertainty.** A serial run is slow, not wrong. Narrow to a splittable axis only when the code makes the dependency structure unambiguous.
+- **Bias halos large.** An over-wide halo wastes compute; a too-small halo is silent corruption. For a `train_window`-based refit, set `halo_fn` to the full window (e.g. `train_window` days × the intraday bar count), never a guess below it.
+
+### 3c: Serial-elision gate (mandatory for a non-`Sequential` axis)
+
+Before scaffolding a planner-driven `tasks.py`, prove the classification on a fixture: `hpc_agent.template.check_elision` (or `assert_elision_equivalent`) runs the experiment once whole and once split N ways and asserts the results agree. If it fails, the axis is misclassified — widen the halo or fall back to `Sequential()`. This gate is what makes the inference safe: a misclassified axis produces a job that runs fine and returns plausible-but-wrong numbers, and nothing else catches it. Do not skip it, and recommend the experiment repo wire `assert_elision_equivalent` into its CI as a required check.
 
 If the projected task count exceeds `constraints.max_tasks` or ~1000, the slash command surfaces a confirm prompt before proceeding.
 
@@ -64,7 +89,7 @@ Resolve in order: cluster (interactive or `--cluster`); `SSH_TARGET` + `REMOTE_P
 
 For DL executors with `conda_envs` listed in `clusters.yaml` → present the options; without → ask. Resource defaults: CPU/ML 1×16G×4h; GPU/DL 4×16G×6h×2gpu (gpu_type=first in cluster's `gpu_types`).
 
-Build rsync excludes from `.gitignore` patterns + standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories. **`.hpc/` rides rsync** — the cluster needs `tasks.py` and the in-flight `runs/<run_id>.json`. The framework files inside cluster-side `.hpc/` (`_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are placed by `deploy_runtime` and protected from `--delete` via `DEFAULT_RSYNC_EXCLUDES` in `hpc_agent.infra.remote`.
+Build rsync excludes from `.gitignore` patterns + the standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories. `.hpc/` rides rsync — the cluster needs `tasks.py` and the in-flight `runs/<run_id>.json`; `submit-flow` protects the framework-deployed `.hpc/` files from `--delete` itself (see [submit-flow.md](../../docs/primitives/submit-flow.md)).
 
 ## Step 4b: Compute Throughput Plan
 
@@ -93,19 +118,15 @@ After a *successful* canary, re-invoke score-submit-plan and proceed to 4c-B.
 
 ### 4c-B: `needs_canary: false` (priors exist)
 
-Score per the rubric in [score-submit-plan.md](../../docs/primitives/score-submit-plan.md). **Adversarial backfill mode** is default-on:
+`score-submit-plan` scores the candidates and runs its adversarial-backfill mode — walltime / footprint shrink recommendations, a probed `(walltime × mem × constraint)` lattice, and the closed-loop `walltime_drift` calibration. The full rubric and what each output field means are in [score-submit-plan.md](../../docs/primitives/score-submit-plan.md). The skill's job is to act on its envelope:
 
-1. **Walltime shrink** — recommend p95 × 1.30 from `runtime_prior.elapsed_sec` (≥5 samples per GPU type).
-2. **Footprint shrink** — recommend `--mem` from `peak_host_mem_mb` (p95 × 1.50, ≥10 samples) and `--cpus-per-task` from `cpu_seconds_used / elapsed_sec`. Both axes only **shrink below** the user's defaults — never grow — to avoid silent OOM/cliff kills.
-3. **Probe lattice** — sweep `(walltime × mem × constraint)` via `sbatch --test-only` and pick the variant SLURM predicts will start earliest.
+**Auto-pick rule** (per-candidate): when `recommended_tuple.predicted_eta_sec is not None`, use the tuple's walltime/mem/cpus/constraint automatically — SLURM has confirmed a fitting backfill window. Surface `rationale` to the audit file so the choice is replayable.
 
-**Auto-pick rule** (per-candidate): when `recommended_tuple.predicted_eta_sec is not None`, use the tuple's walltime/mem/cpus/constraint automatically. SLURM has confirmed a fitting backfill window; we take it. Surface `rationale` to the audit file so the choice is replayable.
+**Auto-apply rule** (cluster-wide): apply `array_reshape.recommended_max_array_size` automatically when present. Do NOT auto-apply `walltime_split` — confirm with the user that the executor checkpoints before chaining (`requires_checkpointing: true` would otherwise kill work at every segment boundary).
 
-**Auto-apply rule** (cluster-wide): apply `array_reshape.recommended_max_array_size` automatically when present. Do NOT auto-apply `walltime_split` — confirm with user that the executor checkpoints before chaining (split's `requires_checkpointing: true` would otherwise kill work at every segment boundary).
+After submission, write a prediction sidecar via `hpc_agent.forecast.calibration.record_prediction_sidecar` so post-completion ingestion can validate the calibration.
 
-**Closed-loop calibration**: `plan-submit` reads recent samples and tunes the walltime safety multiplier. Top-level `walltime_drift` field reports `{base_safety_mult, adjusted_safety_mult, rationale}`. After submission, write a prediction sidecar via `hpc_agent.forecast.calibration.record_prediction_sidecar` so post-completion ingestion can validate calibration.
-
-For each chosen candidate's `stressed_nodes`, the SLASH command (not the skill) decides per-node whether to soft-exclude using `co_tenants` context — that's the human-judgment moment that no static threshold captures cleanly. The skill receives the resulting `--exclude=<node1>,...` flag and adds it to the sbatch invocation.
+For each chosen candidate's `stressed_nodes`, the SLASH command (not the skill) decides per-node whether to soft-exclude using `co_tenants` context. The skill receives the resulting `--exclude=<node1>,...` flag and adds it to the sbatch invocation.
 
 ### 4c-C: planner errors
 
@@ -162,7 +183,9 @@ If `tp.exists()`, read it as-is — never regenerate. To change the axis, the us
 
 If `tp.exists()` is False, walk through `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
 
-**Axis naming (fidelity vs. serial)**: when the user proposes axis names, prefer experiment-prefixed forms (`exp_horizon`, `ridge_alpha`) over bare names (`horizon`, `alpha`). The dispatcher exports each kwarg as both `HPC_KW_<KEY>` and bare `<KEY>` (uppercased), and the bare form silently shadows real env vars when names collide — an axis named `home` becomes `$HOME` for the executor, breaking everything that uses the home directory. `build-tasks-py` rejects names that match a reserved set (`HOME`, `PATH`, `USER`, `LD_LIBRARY_PATH`, `OMP_NUM_THREADS`, the framework's own `HPC_*`, scheduler-injected `SLURM_*`/`SGE_*`/`PBS_*`, etc.) so the failure surfaces at scaffold time, but the safest pattern is to prefix all experiment kwargs and avoid the question. Setting `HPC_KW_NAMESPACE_ONLY=1` in the spec's `job_env` disables the bare-uppercase export entirely (executor reads `HPC_KW_<KEY>` only) and is the recommended default for new campaigns.
+**Planner-driven axis (Step 3b).** When Step 3 classified a non-trivial `DataAxis`, pass it to [build-tasks-py](../../docs/primitives/build-tasks-py.md) in the spec's `data_axis` field: `{kind, chunks, series_length, halo_expr?, monoid?}`. The primitive then emits a `plan_tasks`-driven `tasks.py` deterministically — the `axes` become the sweep, the series axis is partitioned per the classification. The agent classifies; it never hand-writes `tasks.py`. `series_length` is the integer you probed at Step 3a; `halo_expr` (for `bounded_halo`) is a plain arithmetic expression over `params`, e.g. `params['train_window'] * 48`. The serial-elision gate (Step 3c) must have passed before the file is committed.
+
+**Axis naming**: prefer experiment-prefixed axis names (`exp_horizon`, `ridge_alpha`) over bare ones (`horizon`, `alpha`) — a bare name whose uppercase form is a real env var (an axis `home` → `$HOME`) corrupts the executor's environment. `build-tasks-py` rejects names that collide with a reserved set at scaffold time; the mechanism and the recommended `HPC_KW_NAMESPACE_ONLY=1` default are in [build-tasks-py.md](../../docs/primitives/build-tasks-py.md).
 
 Copy the dispatcher:
 ```python
@@ -274,11 +297,9 @@ ssh $SSH_TARGET 'squeue -j '"$JOB_IDS"' -h -o "%i %T %r"; sacct -j '"$JOB_IDS"' 
 ssh $SSH_TARGET 'qstat -j '"$JOB_IDS"' 2>&1 | head -40; qstat -u '"$USER"' | awk "NR>2"'
 ```
 
-**Healthy** (proceed): SLURM `PENDING`/`RUNNING`/`CONFIGURING`/`COMPLETING`; SGE `qw`/`hqw`/`r`/`t`/`Rq`/`Rr`. Wave-2+ jobs `PENDING Reason=Dependency` (SLURM) / `hqw` (SGE) are healthy.
+Classify each job ID as **healthy** (proceed) or **failed** (abort) per the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md). A wave-2+ job pending on a dependency is healthy.
 
-**Failed** (abort): SLURM `BOOT_FAIL`/`FAILED`/`NODE_FAIL`/`OUT_OF_MEMORY`/`TIMEOUT`/`DEADLINE`/`REVOKED`/`SPECIAL_EXIT`, or `CANCELLED` within seconds of submit. SGE state starting with `E` or `d`. Job ID absent from both `squeue`/`qstat` and `sacct`/`qacct` after one retry: scheduler never registered it.
-
-On failure: surface scheduler reason verbatim, tell user which job ID is bad, stop. Do not run Step 9 or Step 10.
+On a failed state: surface the scheduler reason verbatim, tell the user which job ID is bad, stop. Do not run Step 9 or Step 10.
 
 ## Step 9-10: Cache + report
 

@@ -23,7 +23,17 @@ The skill calls `suggest-setup-action` and gets back `{action, candidates, ...}`
 
 For `reuse`: list distinct `(profile, cluster)` pairs from recent run sidecars so the user can pick "same as last `ml_ridge` submission" without re-answering interview questions. Each sidecar carries the full v2 config snapshot — resources, env, constraints, runtime — so reuse is a one-line copy.
 
-## 3. Scaffolding sub-interview (when no executors exist)
+## 3. Scaffolding sub-interview (when nothing exists yet)
+
+### 3a. Whole-repo scaffolding — `build-template`
+
+Before scaffolding individual executors, check whether the repo is set up as an experiment repo at all. If there is no experiment-template scaffold — no `.hpc/`, no `Makefile` that does `include .hpc/template.mk` — and the user is starting from a notebook (or wants the notebook → executor workflow), offer to bootstrap the whole repo first:
+
+> "This repo isn't set up for hpc-agent experiments yet. Want me to scaffold it? `hpc-agent build-template` drops in a `Makefile`, a CI workflow (notebook-sync + serial-elision gates), a pre-commit re-export hook, a `pyproject.toml`, and the `.hpc/` experiment tooling. Existing root files are never overwritten without `--force`; the framework-owned `.hpc/` assets self-heal on every run."
+
+`build-template` is a human-facing CLI command — `hpc-agent build-template [--repo-dir <dir>] [--force]` — deliberately *not* a wire primitive: the experiment-template flow is built around researcher-authored notebooks, so it is exclusive to this human entry point and absent from the integrator primitive catalog. After it runs: `make new-experiment NAME=<name>` scaffolds `experiments/<name>.ipynb`, the researcher fills in the `@register_run` function, `make export` produces the executor `.py`. Then re-run `discover-executors` and continue. Surface `data.needs_manual_merge` verbatim — when the repo already had a `pyproject.toml` the template fragment is dropped at `.hpc/pyproject-fragment.toml` for a hand-merge rather than clobbering theirs.
+
+### 3b. Executor scaffolding sub-interview
 
 When the skill's `discover-executors` step returns an empty list, pivot to a scaffolding sub-interview right here (this absorbs what `/build-executor-hpc` used to be):
 
