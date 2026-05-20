@@ -1,9 +1,16 @@
 """``check-preflight`` primitive — sanity-check the local environment.
 
-Pure-dispatch primitive: probes ``SSH_AUTH_SOCK``, the ``ssh`` and
-``rsync`` binaries on PATH, the parseability of ``clusters.yaml``,
-and (optionally) TCP reachability of a named cluster's port 22. No
-SSH session is opened — the cluster check is a bare TCP probe.
+Pure-dispatch primitive: probes ``SSH_AUTH_SOCK``, the ``ssh`` binary
+and a file-transfer transport on PATH, the parseability of
+``clusters.yaml``, and (optionally) TCP reachability of a named
+cluster's port 22. No SSH session is opened — the cluster check is a
+bare TCP probe.
+
+File transfer is satisfied by ``rsync`` *or* the ``scp``+``tar`` pair
+(``infra.remote`` falls back to a ``tar c | ssh tar x`` push / ``scp
+-r`` pull pipeline when rsync is absent — typically Windows hosts
+without WSL/MSYS rsync), so a missing ``rsync`` alone does not fail
+preflight.
 """
 
 from __future__ import annotations
@@ -61,10 +68,34 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             checks.append(_check("ssh_auth_sock", False, f"ssh-add failed: {exc}"))
 
-    # Binaries on PATH
-    for binary in ("ssh", "rsync"):
-        path = shutil.which(binary)
-        checks.append(_check(f"{binary}_on_path", path is not None, path or "not found"))
+    # ssh is mandatory for every remote operation.
+    ssh_path = shutil.which("ssh")
+    checks.append(_check("ssh_on_path", ssh_path is not None, ssh_path or "not found"))
+
+    # File transfer: rsync is preferred, but infra.remote falls back to a
+    # ``tar c | ssh tar x`` push + ``scp -r`` pull pipeline when rsync is
+    # absent (typically Windows without WSL/MSYS rsync). The capability is
+    # satisfied by rsync OR the scp+tar pair — don't fail preflight just
+    # because rsync is missing when the fallback transport is available.
+    rsync_path = shutil.which("rsync")
+    scp_path = shutil.which("scp")
+    tar_path = shutil.which("tar")
+    fallback_ok = scp_path is not None and tar_path is not None
+    transfer_ok = rsync_path is not None or fallback_ok
+    if rsync_path is not None:
+        transfer_detail = f"rsync at {rsync_path}"
+    elif fallback_ok:
+        transfer_detail = f"rsync not found; scp/tar fallback available ({scp_path}, {tar_path})"
+    else:
+        missing = [
+            name
+            for name, found in (("rsync", rsync_path), ("scp", scp_path), ("tar", tar_path))
+            if found is None
+        ]
+        transfer_detail = (
+            f"no file-transfer transport — need rsync, or scp+tar (missing: {', '.join(missing)})"
+        )
+    checks.append(_check("file_transfer_on_path", transfer_ok, transfer_detail))
 
     # Clusters config parseable
     try:

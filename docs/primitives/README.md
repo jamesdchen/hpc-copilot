@@ -135,7 +135,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; rsync-pull: `<remote_path>/<output_rel>` | `hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` |
+| [cluster-reduce](cluster-reduce.md) | yes | ssh: `<cluster>`; sync-pull: `<remote_path>/<output_rel>` | `hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` |
 | [combine-wave](combine-wave.md) | yes | ssh: `<cluster>`; runs: `cluster-side`; writes-cluster: `<output_dir>/_combiner/wave_<N>.json`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` |
 | [mark-run-terminal](mark-run-terminal.md) | yes | writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `(none — Python-only primitive)` |
 | [prune-orphan-sidecars](prune-orphan-sidecars.md) | yes | removes-files: `<experiment>/.hpc/runs/*.json` | `(none — Python-only primitive)` |
@@ -164,10 +164,10 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; rsync: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate-flow --spec <path>` |
+| [aggregate-flow](aggregate-flow.md) | yes | ssh: `<cluster>`; sync-pull: `<ssh_target>:<remote_path>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent aggregate-flow --spec <path>` |
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path>` |
-| [submit-flow](submit-flow.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow --spec <path>` |
-| [submit-flow-batch](submit-flow-batch.md) | yes | rsync: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow-batch --spec <path>` |
+| [submit-flow](submit-flow.md) | yes | sync-push: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow --spec <path>` |
+| [submit-flow-batch](submit-flow-batch.md) | yes | sync-push: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow-batch --spec <path>` |
 | [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-agent validate-campaign --spec <path>` |
 | [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]` |
 <!-- END PRIMITIVE CATALOG -->

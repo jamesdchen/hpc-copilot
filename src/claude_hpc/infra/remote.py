@@ -44,8 +44,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
-from claude_hpc import errors
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -358,6 +356,45 @@ def _have_rsync() -> bool:
     return shutil.which("rsync") is not None
 
 
+def _remote_clean_cmd(remote_path: str, exclude: list[str]) -> str:
+    """Build the remote shell command that deletes everything under
+    *remote_path* except paths the *exclude* set protects.
+
+    Gives the tar fallback rsync's ``--delete --exclude=...`` semantics:
+    anything in the remote tree not protected by an exclude is removed
+    before the fresh ``tar x`` extract, so a re-push cannot leave stale
+    files behind. Anchoring mirrors rsync — a pattern containing an
+    internal ``/`` is anchored to *remote_path* (``find -path``); a bare
+    name matches at any depth (``find -name``).
+
+    Safety: ``find -mindepth 1`` guarantees *remote_path* itself is
+    never removed, and ``xargs -r`` skips ``rm`` entirely when nothing
+    matched (a fresh remote dir). The caller (:func:`rsync_push`) has
+    already run :func:`validate_remote_path`, so *remote_path* carries
+    no shell metacharacters; every interpolated value is still
+    ``shlex.quote``-d for defence in depth.
+    """
+    quoted_remote = shlex.quote(remote_path)
+    root = remote_path.rstrip("/")
+    prune_terms: list[str] = []
+    for raw in exclude:
+        pattern = raw.rstrip("/")
+        if not pattern:
+            continue
+        if "/" in pattern:
+            prune_terms.append(f"-path {shlex.quote(f'{root}/{pattern}')}")
+        else:
+            prune_terms.append(f"-name {shlex.quote(pattern)}")
+    find_cmd = f"find {quoted_remote} -mindepth 1"
+    if prune_terms:
+        find_cmd += " \\( " + " -o ".join(prune_terms) + " \\) -prune -o"
+    # -print0 / xargs -0 keep paths with spaces intact; -r skips rm on
+    # empty input; -- stops rm treating a dash-led name as a flag. The
+    # pipeline's exit status is rm's, which is 0 even if find races a
+    # just-deleted subtree (rm -f ignores missing operands).
+    return f"{find_cmd} -print0 | xargs -0 -r rm -rf --"
+
+
 def _tar_ssh_push(
     *,
     ssh_target: str,
@@ -377,19 +414,12 @@ def _tar_ssh_push(
     Implementation: spawn ``tar c`` and ``ssh tar x`` as two Popens
     connected by a pipe; both must exit zero for success.
 
-    ``delete=True`` is unsupported on this fallback — tar has no
-    equivalent of rsync's ``--delete`` and silently dropping it would
-    leave stale remote files (a reproducibility bug). When the caller
-    asks for delete semantics, fail loudly so they can either install
-    rsync on the host or invoke without delete.
+    ``delete=True`` mirrors rsync's ``--delete``: a remote pre-clean
+    step (see :func:`_remote_clean_cmd`) removes everything under
+    *remote_path* that the *exclude* set does not protect, before the
+    fresh ``tar x`` extract — so stale files cannot survive a re-push.
+    The pre-clean and the extract run in a single ssh invocation.
     """
-    if delete:
-        raise errors.RemoteCommandFailed(
-            "rsync_push(delete=True) requires the rsync binary on PATH; "
-            "the tar/ssh fallback cannot enforce delete semantics and "
-            "would silently leave stale files on the remote. Install "
-            "rsync on this host or invoke rsync_push with delete=False."
-        )
     src_dir = str(local_path).rstrip("/\\")
 
     # tar excludes mirror rsync's pattern shape (relative paths under src).
@@ -398,7 +428,16 @@ def _tar_ssh_push(
         tar_excludes += [f"--exclude={pattern.rstrip('/')}"]
 
     tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
-    ssh_remote_cmd = f"mkdir -p {shlex.quote(remote_path)} && tar x -C {shlex.quote(remote_path)}"
+    # mkdir -> [pre-clean] -> extract, in one ssh invocation. ``tar x``
+    # consumes the archive piped into ssh's stdin; the optional
+    # pre-clean (delete=True) runs first and gives the fallback the
+    # same --delete semantics rsync would apply.
+    quoted_remote = shlex.quote(remote_path)
+    remote_steps = [f"mkdir -p {quoted_remote}"]
+    if delete:
+        remote_steps.append(_remote_clean_cmd(remote_path, exclude))
+    remote_steps.append(f"tar x -C {quoted_remote}")
+    ssh_remote_cmd = " && ".join(remote_steps)
     ssh_cmd = ["ssh", "-o", "BatchMode=yes", ssh_target, ssh_remote_cmd]
 
     tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -479,8 +518,9 @@ def rsync_push(
 
     On hosts where the ``rsync`` binary is not on PATH (typically
     Windows without WSL / MSYS rsync), automatically falls back to a
-    ``tar c | ssh tar x`` pipeline. The fallback honors *exclude* but
-    silently drops *delete* — stale files on the remote persist.
+    ``tar c | ssh tar x`` pipeline. The fallback honors both *exclude*
+    and *delete* — ``delete=True`` runs a remote pre-clean step before
+    the tar extract so stale remote files do not survive a re-push.
 
     Parameters
     ----------
@@ -495,7 +535,8 @@ def rsync_push(
         if *None*.
     delete:
         If True (default), pass ``--delete`` so removed local files are
-        also removed on the remote. Ignored on the tar/ssh fallback.
+        also removed on the remote. On the tar/ssh fallback this is
+        emulated by a remote pre-clean step (see :func:`_tar_ssh_push`).
     timeout:
         Per-call subprocess timeout in seconds.  When omitted, the module
         default :data:`RSYNC_TIMEOUT_SEC` is applied.  Pass ``timeout=None``

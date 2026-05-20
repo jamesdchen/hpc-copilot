@@ -3,7 +3,7 @@ name: cluster-reduce
 verb: mutate
 side_effects:
 - ssh: <cluster> (run reducer)
-- rsync-pull: <remote_path>/<output_rel> → <local_dir>
+- sync-pull: <remote_path>/<output_rel> → <local_dir>
 idempotent: true
 idempotency_key: run_id
 error_codes:

@@ -139,7 +139,7 @@ def _combine_missing(
     composes=[combine_wave, record_status],
     side_effects=[
         SideEffect("ssh", "<cluster>"),
-        SideEffect("rsync", "<ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/"),
+        SideEffect("sync-pull", "<ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
     ],
     error_codes=[

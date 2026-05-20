@@ -2,7 +2,7 @@
 name: submit-flow-batch
 verb: workflow
 side_effects:
-- rsync: <ssh_target>:<remote_path>
+- sync-push: <ssh_target>:<remote_path>
 - scheduler-submit: <cluster> (one qsub per spec)
 - writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per spec)
 idempotent: true

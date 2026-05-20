@@ -21,6 +21,7 @@ and shipped as JSON Schema files under ``claude_hpc/schemas/``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import json
 import os
@@ -3025,6 +3026,18 @@ def _strip_verb_group(argv: list[str]) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows consoles default to a legacy code page (cp1252) whose codec
+    # cannot encode the ``→`` and box-drawing characters in our --help
+    # text and catalog tables, raising UnicodeEncodeError on print_help().
+    # Force UTF-8 on the std streams up front. ``reconfigure`` exists on
+    # io.TextIOWrapper (CPython 3.7+); guard for exotic stream
+    # replacements (pytest capture, pipes) that lack it.
+    for _stream in (sys.stdout, sys.stderr):
+        _reconfigure = getattr(_stream, "reconfigure", None)
+        if _reconfigure is not None:
+            with contextlib.suppress(ValueError, OSError):
+                _reconfigure(encoding="utf-8")
+
     # Populate the primitive registry once before any subcommand
     # dispatch — without this, get_registry() raises RuntimeError
     # (the previous auto-import path silently swallowed ImportError

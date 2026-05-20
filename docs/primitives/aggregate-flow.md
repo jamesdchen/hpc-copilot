@@ -3,7 +3,7 @@ name: aggregate-flow
 verb: workflow
 side_effects:
 - ssh: <cluster>
-- rsync: <ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/
+- sync-pull: <ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/
 - writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
 idempotent: true
 idempotency_key: run_id

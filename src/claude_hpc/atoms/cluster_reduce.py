@@ -123,7 +123,7 @@ def _parse_local_output(local_output: Path, *, run_id: str) -> dict:
     verb="mutate",
     side_effects=[
         SideEffect("ssh", "<cluster> (run reducer)"),
-        SideEffect("rsync-pull", "<remote_path>/<output_rel> → <local_dir>"),
+        SideEffect("sync-pull", "<remote_path>/<output_rel> → <local_dir>"),
     ],
     error_codes=[
         errors.SpecInvalid,
