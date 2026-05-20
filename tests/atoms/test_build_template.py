@@ -108,11 +108,17 @@ def test_injected_assets_parse(tmp_path: Path) -> None:
     yaml.safe_load((tmp_path / ".pre-commit-config.yaml").read_text())
 
 
-def test_notebook_skeleton_exports_to_a_register_run(tmp_path: Path) -> None:
+def test_notebook_skeleton_is_a_discoverable_register_run(tmp_path: Path) -> None:
     skeleton = hpc_agent._PACKAGE_ROOT / "template" / "scaffold" / "experiment.ipynb.tmpl"
     nb = tmp_path / "experiment.ipynb"
     nb.write_text(skeleton.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # discover_runs scans the notebook natively (the exported .py inlines
+    # the runtime and no longer carries the hpc_agent.template import).
+    runs = discover_runs(nb)
+    assert [r.name for r in runs] == ["run"]
+
+    # And it exports to a self-contained executor.
     out = tmp_path / "experiment.py"
     export_notebook(nb, out)
-    runs = discover_runs(out)
-    assert [r.name for r in runs] == ["run"]
+    assert "def register_run(" in out.read_text()

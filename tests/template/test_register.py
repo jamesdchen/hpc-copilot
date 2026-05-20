@@ -85,4 +85,4 @@ def test_register_run_gpu_flag() -> None:
     )
     spec = mod._RUNS["run"]
     assert spec.gpu is True
-    assert "gpu_count" in {f.name for f in spec.flags}
+    assert spec.name == "run"

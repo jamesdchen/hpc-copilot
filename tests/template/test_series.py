@@ -67,9 +67,10 @@ def test_trim_emission_drops_warmup_prefix() -> None:
 
 
 def test_missing_loader_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    import hpc_agent.template.series as series_mod
+    # The loader global lives in the self-contained _runtime module.
+    import hpc_agent.template._runtime as runtime_mod
 
-    monkeypatch.setattr(series_mod, "_series_loader", None)
+    monkeypatch.setattr(runtime_mod, "_series_loader", None)
     monkeypatch.delenv("LOCAL_DATA_DIR", raising=False)
     with pytest.raises(SeriesNotConfigured, match="set_series_loader"):
         load_series("nonexistent_series_xyz_abc")

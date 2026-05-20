@@ -47,7 +47,18 @@ def test_notebook_exports_to_a_dispatchable_executor(tmp_path: Path) -> None:
     export_notebook(nb, out)
 
     # The exploratory cell was dropped; the surface is importable.
-    assert "run(scale=3.0)" not in out.read_text()
+    exported = out.read_text()
+    assert "run(scale=3.0)" not in exported
+
+    # Inline mode: the executor is self-contained — imports nothing from
+    # hpc_agent, so it runs on a stdlib-only cluster with no install.
+    import ast as _ast
+
+    for node in _ast.walk(_ast.parse(exported)):
+        if isinstance(node, _ast.ImportFrom) and node.module:
+            assert not node.module.startswith("hpc_agent")
+        elif isinstance(node, _ast.Import):
+            assert not any(a.name.startswith("hpc_agent") for a in node.names)
 
     # Import the generated module the way the dispatcher would.
     mod_name = "hpc_tmpl_integration_experiment"

@@ -18,7 +18,7 @@ def _notebook(*code_cells: str, markdown: str = "intro") -> dict:
     return {"cells": cells, "metadata": {}, "nbformat": 4, "nbformat_minor": 5}
 
 
-def test_keeps_imports_defs_classes_and_upper_assignments(tmp_path: Path) -> None:
+def test_keeps_surface_and_inlines_the_runtime(tmp_path: Path) -> None:
     nb = tmp_path / "experiment.ipynb"
     nb.write_text(
         json.dumps(
@@ -38,23 +38,34 @@ def test_keeps_imports_defs_classes_and_upper_assignments(tmp_path: Path) -> Non
     export_notebook(nb, out)
     text = out.read_text()
 
-    # Kept.
+    # Strict-AST surface kept.
     assert "import numpy as np" in text
-    assert "from hpc_agent.template import register_run" in text
     assert "WINDOW = 48" in text
     assert "TRAIN_DAYS = 30" in text
     assert "class Model:" in text
     assert "def run(alpha: float = 1.0):" in text
     assert "@register_run" in text
 
-    # Dropped.
+    # Exploratory scratch dropped.
     assert "df = np.zeros" not in text
     assert "print(df)" not in text
     assert "df.mean()" not in text
     assert "run(alpha=2.0)" not in text
 
-    # The result is valid Python.
-    ast.parse(text)
+    # Inline mode: the hpc_agent.template import is replaced by the
+    # verbatim runtime source, so the executor is self-contained.
+    assert "from hpc_agent.template import register_run" not in text
+    assert "def register_run(" in text  # provided by the inlined runtime
+    assert "def load_series(" in text
+
+    # Valid Python that imports nothing from hpc_agent.
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert not any(m == "hpc_agent" or m.startswith("hpc_agent.") for m in imported)
 
 
 def test_skips_non_code_and_unparseable_cells(tmp_path: Path) -> None:
