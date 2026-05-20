@@ -113,8 +113,8 @@ def test_planner_bounded_halo_requires_halo_expr(tmp_path: Path) -> None:
 
 
 def test_planner_rejects_non_arithmetic_halo_expr(tmp_path: Path) -> None:
-    # A halo_expr is rendered verbatim into the generated tasks.py; a
-    # call / import must be rejected at the spec boundary.
+    # A halo_expr is evaluated at scaffold time and the result baked in;
+    # a call / import must be rejected at the spec boundary.
     with pytest.raises(errors.SpecInvalid, match="arithmetic"):
         build_tasks_py(
             tmp_path,
@@ -129,3 +129,36 @@ def test_planner_rejects_non_arithmetic_halo_expr(tmp_path: Path) -> None:
                 },
             ),
         )
+
+
+def test_planner_tasks_py_carries_no_template_import(tmp_path: Path) -> None:
+    # The generated tasks.py is imported cluster-side by the stdlib-only
+    # dispatcher; it must NOT import hpc_agent.template (not a deployed
+    # runtime module). The plan is materialised, not re-computed.
+    import ast
+
+    build_tasks_py(
+        tmp_path,
+        spec=BuildTasksPyInput(
+            axes=[{"name": "w", "values": [4]}],
+            flags_by_executor={"src.exp": [{"name": "w", "type": "int"}]},
+            data_axis={
+                "kind": "bounded_halo",
+                "chunks": 3,
+                "series_length": 30,
+                "halo_expr": "params['w']",
+            },
+        ),
+    )
+    source = (tmp_path / ".hpc" / "tasks.py").read_text()
+
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    # Same runtime footprint as a cartesian tasks.py — no
+    # hpc_agent.template import (the docstring may mention it as prose,
+    # but nothing is imported beyond executor_cli).
+    assert imported <= {"__future__", "hpc_agent.executor_cli"}

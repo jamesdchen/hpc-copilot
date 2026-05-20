@@ -99,6 +99,18 @@ def test_flags_for_run_dedupes_against_generic_args() -> None:
     assert seed_flag.default == 7  # the signature's default, not generic_args' 42
 
 
+def test_string_annotations_are_classified_not_degraded() -> None:
+    # When `eval_str=True` cannot resolve an annotation it arrives as a
+    # string; it must still be classified, not silently become `str`.
+    from hpc_agent.template.signature import _runtime_flag
+
+    assert _runtime_flag("x", "int", False, None).type is int
+    assert _runtime_flag("xs", "list[int]", False, None).nargs == "+"
+    opt = _runtime_flag("y", "int | None", True, None)
+    assert opt.type is int and opt.required is False
+    assert _runtime_flag("v", "bool", True, False).action == "store_true"
+
+
 def test_flags_for_run_gpu_adds_gpu_args() -> None:
     def run(epochs: int = 10) -> dict:
         return {}

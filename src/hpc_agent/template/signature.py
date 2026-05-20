@@ -95,6 +95,19 @@ def flags_for_run(func: Any, *, gpu: bool = False) -> list[Flag]:
 
 
 def _runtime_flag(name: str, annotation: Any, has_default: bool, default: Any) -> Flag:
+    if isinstance(annotation, str):
+        # A string annotation: ``eval_str=True`` could not resolve it
+        # (e.g. it references a name only imported under TYPE_CHECKING),
+        # or it was authored as a string. Route through the AST
+        # classifier rather than silently degrading to ``str`` — it
+        # reads int / bool / list[T] / X | None / Literal[...] from the
+        # annotation text just as well.
+        try:
+            node: ast.expr | None = ast.parse(annotation, mode="eval").body
+        except SyntaxError:
+            node = None
+        return _ast_flag(name, node, has_default, default)
+
     required = not has_default
     ftype: type | None = str
     nargs: str | None = None
