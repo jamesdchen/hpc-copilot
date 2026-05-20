@@ -285,6 +285,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_agent.atoms.logs",
     "hpc_agent.atoms.monitor_arm",
     "hpc_agent.atoms.monitor_summary",
+    "hpc_agent.atoms.plan_throughput",
     "hpc_agent.atoms.predict_start_time",
     "hpc_agent.atoms.preflight",
     "hpc_agent.atoms.recall",
