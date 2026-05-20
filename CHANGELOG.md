@@ -65,10 +65,12 @@ copy in `cli_dispatcher.py` is kept in lock-step.
   bias halos large.
 - `build-tasks-py` gains a planner mode — a `data_axis` field on the
   spec (`{kind, chunks, series_length, halo_expr?, monoid?}`) makes the
-  primitive emit a deterministic `plan_tasks`-driven `.hpc/tasks.py`,
-  the materialisation of the Step 3 inference. The agent classifies; it
-  never hand-writes `tasks.py`. `halo_expr` is validated to
-  arithmetic-only over `params` before it is rendered.
+  primitive run `plan_tasks` at scaffold time and bake the resolved task
+  list into a `_TASKS` literal. The generated `.hpc/tasks.py` imports
+  only `executor_cli` — the same footprint as a cartesian one, so it
+  loads inside the stdlib-only cluster dispatcher. The agent
+  classifies; it never hand-writes `tasks.py`. `halo_expr` is validated
+  to arithmetic-only over `params`.
 - `build-template` — a new scaffold primitive that injects the
   experiment-template into a repo: `.hpc/template.mk` and
   `.hpc/scaffold.py` (framework-owned, re-injected every run,

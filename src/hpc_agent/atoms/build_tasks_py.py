@@ -182,14 +182,13 @@ def _render_flags_block(
     return "\n".join(lines)
 
 
-def _render_tasks_block(axes: list[dict[str, Any]], *, var_name: str = "_TASKS") -> str:
-    """Render a cartesian-product list comprehension bound to *var_name*.
+def _render_tasks_block(axes: list[dict[str, Any]]) -> str:
+    """Render the cartesian-product ``_TASKS`` list comprehension.
 
     *axes* is ``[{"name": ..., "values": [...]}, ...]``. We emit a list
     comprehension that mirrors the canonical Pattern 1 from
     ``tasks_example.py``. Single-axis sweeps render as a simple list
-    comprehension; multi-axis as ``itertools.product``. *var_name* is
-    ``_TASKS`` for cartesian mode and ``_SWEEP`` for planner mode.
+    comprehension; multi-axis as ``itertools.product``.
     """
     from hpc_agent import errors
 
@@ -200,9 +199,7 @@ def _render_tasks_block(axes: list[dict[str, Any]], *, var_name: str = "_TASKS")
     if len(axes) == 1:
         ax = axes[0]
         return (
-            f"{var_name}: list[dict] = [\n"
-            f"    {{{ax['name']!r}: v}}\n"
-            f"    for v in {ax['values']!r}\n]"
+            f"_TASKS: list[dict] = [\n    {{{ax['name']!r}: v}}\n    for v in {ax['values']!r}\n]"
         )
     names = [ax["name"] for ax in axes]
     values = [ax["values"] for ax in axes]
@@ -210,11 +207,38 @@ def _render_tasks_block(axes: list[dict[str, Any]], *, var_name: str = "_TASKS")
     dict_body = ", ".join(f"{n!r}: {n}" for n in names)
     args = ", ".join(repr(v) for v in values)
     return (
-        f"{var_name}: list[dict] = [\n"
+        f"_TASKS: list[dict] = [\n"
         f"    {{{dict_body}}}\n"
         f"    for {var_tuple} in itertools.product({args})\n"
         f"]"
     )
+
+
+def _cartesian_sweep(axes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Materialise the cartesian product of *axes* as a list of dicts."""
+    import itertools
+
+    if not axes:
+        raise errors.SpecInvalid("build-tasks-py requires at least one axis")
+    names = [ax["name"] for ax in axes]
+    value_lists = [ax["values"] for ax in axes]
+    return [dict(zip(names, combo, strict=True)) for combo in itertools.product(*value_lists)]
+
+
+def _render_literal_tasks(tasks: list[dict[str, Any]]) -> str:
+    """Render the materialised task list as a ``_TASKS`` literal.
+
+    Planner-mode ``tasks.py`` bakes the resolved task list — exactly the
+    eager-materialisation convention the cartesian Pattern 1 uses —
+    rather than calling ``plan_tasks`` at runtime. The generated file
+    then carries no ``hpc_agent.template`` import, so it imports cleanly
+    inside the stdlib-only cluster dispatcher just like a cartesian one.
+    """
+    lines = ["_TASKS: list[dict] = ["]
+    for task in tasks:
+        lines.append(f"    {task!r},")
+    lines.append("]")
+    return "\n".join(lines)
 
 
 # Halo expressions are rendered verbatim into ``lambda params: <expr>``;
@@ -257,25 +281,65 @@ def _validate_halo_expr(expr: str) -> None:
             )
 
 
-def _render_axis_expr(data_axis: dict[str, Any]) -> str:
-    """Render the ``DataAxis`` constructor expression for planner mode."""
-    from hpc_agent import errors
+def _build_data_axis(data_axis: dict[str, Any]) -> Any:
+    """Construct the live ``DataAxis`` object for a classified series axis.
+
+    Used at scaffold time (on the laptop, where ``hpc_agent.template`` is
+    importable) to drive ``plan_tasks``; the resolved task list is then
+    baked into the generated file, so the *generated* ``tasks.py`` never
+    imports ``hpc_agent.template``.
+    """
+    from hpc_agent.template import (
+        MOMENTS,
+        SUM,
+        Associative,
+        BoundedHalo,
+        Independent,
+        Sequential,
+    )
 
     kind = data_axis["kind"]
     if kind == "independent":
-        return "Independent()"
+        return Independent()
     if kind == "sequential":
-        return "Sequential()"
+        return Sequential()
     if kind == "associative":
-        monoid = (data_axis.get("monoid") or "moments").upper()
-        return f"Associative({monoid})"
+        return Associative(SUM if data_axis.get("monoid") == "sum" else MOMENTS)
     if kind == "bounded_halo":
-        halo = data_axis.get("halo_expr")
-        if not halo:
+        halo_expr = data_axis.get("halo_expr")
+        if not halo_expr:
             raise errors.SpecInvalid("data_axis kind 'bounded_halo' requires 'halo_expr'")
-        _validate_halo_expr(halo)
-        return f"BoundedHalo(lambda params: {halo})"
+        _validate_halo_expr(halo_expr)
+        # ``halo_expr`` is AST-validated to arithmetic over ``params``;
+        # eval it with no builtins so it cannot reach anything else.
+        code = compile(halo_expr, "<halo_expr>", "eval")
+
+        def _halo_fn(params: dict[str, Any]) -> int:
+            try:
+                return int(eval(code, {"__builtins__": {}}, {"params": params}))
+            except Exception as exc:  # missing sweep key, bare name, /0, ...
+                raise errors.SpecInvalid(
+                    f"halo_expr {halo_expr!r} failed to evaluate for sweep "
+                    f"point {params!r}: {type(exc).__name__}: {exc}. "
+                    "Its `params[...]` keys must be sweep-axis names."
+                ) from exc
+
+        return BoundedHalo(_halo_fn)
     raise errors.SpecInvalid(f"unknown data_axis kind {kind!r}")
+
+
+def _provenance(data_axis: dict[str, Any]) -> str:
+    """One-line human-readable record of the classification, baked as a comment."""
+    kind = data_axis["kind"]
+    bits = [f"DataAxis={kind}"]
+    if kind == "bounded_halo":
+        bits.append(f"halo_expr={data_axis['halo_expr']!r}")
+    if kind == "associative":
+        bits.append(f"monoid={data_axis.get('monoid') or 'moments'}")
+    if kind != "sequential":
+        bits.append(f"chunks={data_axis['chunks']}")
+    bits.append(f"series_length={data_axis['series_length']}")
+    return "; ".join(bits)
 
 
 _TEMPLATE = '''"""Per-experiment task list — cartesian product over the configured axes.
@@ -308,12 +372,18 @@ def resolve(task_id: int) -> dict:
 
 _PLANNER_TEMPLATE = '''"""Per-experiment task list — parallelization-planner variant.
 
-Generated by ``hpc-agent build-tasks-py`` from a classified DataAxis —
-the deterministic materialisation of the /submit-hpc Step 3 inference.
-The cartesian axes below are the *sweep*; the series axis is partitioned
-by ``hpc_agent.template.plan_tasks``. Each resolved task carries the
-sweep point plus the ``start`` / ``end`` / ``halo`` slice keys that
-``hpc_agent.template.load_series`` consumes.
+Generated by ``hpc-agent build-tasks-py`` from a classified DataAxis
+(the deterministic materialisation of the /submit-hpc Step 3 inference).
+The series axis was partitioned by ``hpc_agent.template.plan_tasks`` at
+scaffold time and the resolved task list baked below — each task carries
+its sweep point plus the ``start`` / ``end`` / ``halo`` slice keys that
+``hpc_agent.template.load_series`` consumes in the executor.
+
+Eager-materialised exactly like the cartesian Pattern 1: free
+``cmd_sha``, laptop-inspectable, and — importantly — no framework import
+beyond ``executor_cli``, so this file loads cleanly inside the
+stdlib-only cluster dispatcher. To re-plan (different chunks / a
+re-classified axis), re-run ``hpc-agent build-tasks-py --force``.
 
 Before submitting, the parallelization must pass the serial-elision
 gate — see ``hpc_agent.template.check_elision``. A misclassified axis
@@ -323,34 +393,20 @@ only thing that catches it.
 
 from __future__ import annotations
 
-import itertools  # noqa: F401 — used by the multi-axis _SWEEP render
-
 from hpc_agent.executor_cli import flag, generic_args  # noqa: F401
-from hpc_agent.template import (  # noqa: F401
-    MOMENTS,
-    SUM,
-    Associative,
-    BoundedHalo,
-    Independent,
-    Sequential,
-    plan_tasks,
-)
 
 {flags_block}
 
-{sweep_block}
-
-_DATA_AXIS = {axis_expr}
-
-_PLAN = plan_tasks(_SWEEP, _DATA_AXIS, chunks={chunks}, series_length={series_length})
+# parallelization plan: {provenance}
+{tasks_block}
 
 
 def total() -> int:
-    return _PLAN.total()
+    return len(_TASKS)
 
 
 def resolve(task_id: int) -> dict:
-    return _PLAN.resolve(task_id)
+    return _TASKS[task_id]
 '''
 
 
@@ -445,32 +501,34 @@ def build_tasks_py(
             "n_tasks": 0,
         }
 
-    sweep_card = 1
-    for ax in axes:
-        sweep_card *= len(ax["values"])
-
     if data_axis is not None:
-        source = _PLANNER_TEMPLATE.format(
-            flags_block=_render_flags_block(flags_by_executor, planner=True),
-            sweep_block=_render_tasks_block(axes, var_name="_SWEEP"),
-            axis_expr=_render_axis_expr(data_axis),
+        # Planner mode: classify -> plan_tasks (here, on the laptop) ->
+        # bake the resolved task list. plan_tasks is NOT called in the
+        # generated file, so it carries no hpc_agent.template import.
+        from hpc_agent.template import plan_tasks
+
+        sweep = _cartesian_sweep(axes)
+        plan = plan_tasks(
+            sweep,
+            _build_data_axis(data_axis),
             chunks=int(data_axis["chunks"]),
             series_length=int(data_axis["series_length"]),
         )
-        series_length = int(data_axis["series_length"])
-        if data_axis["kind"] == "sequential":
-            chunks_used = 1
-        elif series_length > 0:
-            chunks_used = max(1, min(int(data_axis["chunks"]), series_length))
-        else:
-            chunks_used = 1
-        n_tasks = sweep_card * chunks_used
+        materialised = [plan.resolve(i) for i in range(plan.total())]
+        source = _PLANNER_TEMPLATE.format(
+            flags_block=_render_flags_block(flags_by_executor, planner=True),
+            provenance=_provenance(data_axis),
+            tasks_block=_render_literal_tasks(materialised),
+        )
+        n_tasks = plan.total()
     else:
+        n_tasks = 1
+        for ax in axes:
+            n_tasks *= len(ax["values"])
         source = _TEMPLATE.format(
             flags_block=_render_flags_block(flags_by_executor),
             tasks_block=_render_tasks_block(axes),
         )
-        n_tasks = sweep_card
 
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
