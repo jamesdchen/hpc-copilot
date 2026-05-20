@@ -174,11 +174,9 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 
 ### Smart-submit data layer
 
-Resource-quality-aware constraint planning. These functions back the
-`hpc-agent inspect-cluster` / `runtime-prior` / `plan-submit` CLI
-subcommands and the `/hpc-submit` Step 4c smart-planning flow. State
-lives under the experiment's `.hpc/`:
-`runtimes/<profile>.<cluster>.json` (runtime samples).
+Resource-quality-aware data helpers. State lives under the
+experiment's `.hpc/`: `runtimes/<profile>.<cluster>.json` (runtime
+samples).
 
 - `inspect_cluster` — read-only per-node snapshot of a cluster
   (alloc-mem%, CPU load, GRES, co-tenants, drain). 60s in-process cache.
@@ -186,8 +184,6 @@ lives under the experiment's `.hpc/`:
   gpu_type to the runtime priors log; idempotent on `(run_id, task_id)`.
 - `roll_up_runtime_quantiles` — group samples by `gpu_type`, return
   p50/p95/p99/mean/n_samples plus a `needs_canary` flag.
-- `plan_submit` — emit the candidate-constraint scorecard JSON the
-  slash command hands to Claude for cost-model judgment.
 
 ### Resubmit
 

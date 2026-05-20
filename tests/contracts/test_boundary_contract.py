@@ -93,7 +93,6 @@ ALLOWED_EXPORTS = frozenset(
         "inspect_cluster",
         "append_runtime_sample",
         "roll_up_runtime_quantiles",
-        "plan_submit",
         # Resubmit
         "compact_task_ids",
         "ResubmitBatch",

@@ -97,17 +97,6 @@
     "verb": "mutate"
   },
   {
-    "agent_facing": true,
-    "cli": "hpc-agent best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]",
-    "idempotent": true,
-    "input_schema": "best_submit_window.input.json",
-    "name": "best-submit-window",
-    "output_schema": "best_submit_window.output.json",
-    "python": "hpc_agent.forecast.best_submit_window.best_submit_windows",
-    "side_effects": [],
-    "verb": "query"
-  },
-  {
     "agent_facing": false,
     "cli": "hpc-agent campaign advance --campaign-id <id>",
     "idempotent": true,
@@ -275,30 +264,6 @@
     "verb": "query"
   },
   {
-    "agent_facing": false,
-    "cli": "hpc-agent house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]",
-    "idempotent": true,
-    "input_schema": null,
-    "name": "house-edge",
-    "output_schema": null,
-    "python": "hpc_agent.atoms.house_edge.house_edge",
-    "side_effects": [],
-    "verb": "query"
-  },
-  {
-    "agent_facing": false,
-    "cli": "hpc-agent inspect-cluster --cluster <name> [...]",
-    "idempotent": true,
-    "input_schema": null,
-    "name": "inspect-cluster",
-    "output_schema": "inspect_cluster.output.json",
-    "python": "hpc_agent.infra.inspect.inspect_cluster",
-    "side_effects": [
-      "ssh"
-    ],
-    "verb": "query"
-  },
-  {
     "agent_facing": true,
     "cli": "hpc-agent list-in-flight --experiment-dir <path>",
     "idempotent": true,
@@ -360,39 +325,6 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]",
-    "idempotent": true,
-    "input_schema": "predict_queue_wait.input.json",
-    "name": "predict-queue-wait",
-    "output_schema": "predict_queue_wait.output.json",
-    "python": "hpc_agent.forecast.queue_wait_baseline.predict_queue_wait",
-    "side_effects": [],
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
-    "cli": "hpc-agent predict-start-time --spec <path>",
-    "idempotent": true,
-    "input_schema": "predict_start_time.input.json",
-    "name": "predict-start-time",
-    "output_schema": "predict_start_time.output.json",
-    "python": "hpc_agent.atoms.predict_start_time.predict_start_time_primitive",
-    "side_effects": [],
-    "verb": "query"
-  },
-  {
-    "agent_facing": false,
-    "cli": "hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]",
-    "idempotent": true,
-    "input_schema": null,
-    "name": "read-runtime-prior",
-    "output_schema": "runtime_prior.output.json",
-    "python": "hpc_agent.state.runtime_prior.roll_up_quantiles",
-    "side_effects": [],
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
     "cli": "hpc-agent recall",
     "idempotent": true,
     "input_schema": "recall.input.json",
@@ -411,30 +343,6 @@
     "output_schema": "recommend_partition.output.json",
     "python": "hpc_agent.atoms.recommend_partition.recommend_partition",
     "side_effects": [],
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
-    "cli": null,
-    "idempotent": true,
-    "input_schema": "recommend_wait_alternative.input.json",
-    "name": "recommend-wait-alternative",
-    "output_schema": "recommend_wait_alternative.output.json",
-    "python": "hpc_agent.atoms.recommend_wait_alternative.recommend_wait_alternative",
-    "side_effects": [],
-    "verb": "query"
-  },
-  {
-    "agent_facing": true,
-    "cli": "hpc-agent plan-submit --profile <name> --cluster <name> [...]",
-    "idempotent": true,
-    "input_schema": null,
-    "name": "score-submit-plan",
-    "output_schema": "plan_submit.output.json",
-    "python": "hpc_agent.planning.planner.plan_submit",
-    "side_effects": [
-      "ssh"
-    ],
     "verb": "query"
   },
   {
@@ -467,17 +375,6 @@
     "name": "verify-aggregation-complete",
     "output_schema": "verify_aggregation_complete.output.json",
     "python": "hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete",
-    "side_effects": [],
-    "verb": "query"
-  },
-  {
-    "agent_facing": false,
-    "cli": "hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]",
-    "idempotent": true,
-    "input_schema": null,
-    "name": "walltime-drift",
-    "output_schema": null,
-    "python": "hpc_agent.atoms.walltime_drift.walltime_drift",
     "side_effects": [],
     "verb": "query"
   },
@@ -580,19 +477,6 @@
     "output_schema": "preflight.output.json",
     "python": "hpc_agent.atoms.preflight.check_preflight",
     "side_effects": [],
-    "verb": "validate"
-  },
-  {
-    "agent_facing": true,
-    "cli": null,
-    "idempotent": true,
-    "input_schema": "validate.input.json",
-    "name": "validate",
-    "output_schema": "validate.output.json",
-    "python": "hpc_agent.planning.validate.validate_submission",
-    "side_effects": [
-      "ssh"
-    ],
     "verb": "validate"
   },
   {

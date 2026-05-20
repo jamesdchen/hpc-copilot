@@ -45,7 +45,6 @@ import contextlib
 from pathlib import Path
 
 from hpc_agent import errors
-from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent.infra.clusters import load_clusters_config
 
 from ._common import (
@@ -88,15 +87,6 @@ __all__ = [
 ]
 
 
-@primitive(
-    name="inspect-cluster",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.ClusterUnknown, errors.SshUnreachable],
-    idempotent=True,
-    idempotency_key="cluster",
-    cli="hpc-agent inspect-cluster --cluster <name> [...]",
-)
 def inspect_cluster(
     cluster_name: str,
     *,

@@ -54,17 +54,12 @@ from hpc_agent import errors, runner
 from hpc_agent._internal.lifecycle import FailureCategory  # noqa: F401 — re-export
 from hpc_agent._schema_models._shared import FailureCategoryResubmittable
 from hpc_agent.planning.resubmit_batching import resubmit_plan
-from hpc_agent.planning.resubmit_planner import (
-    PlannedResubmitOverrides,
-    plan_resubmit_overrides,
-)
 from hpc_agent.state.runs import read_run_sidecar
 
 if TYPE_CHECKING:
     import json as _json  # noqa: F401  # for type-checker symbol stability
     from pathlib import Path
 
-    from hpc_agent.forecast.resubmit_advisor import ResubmitRecommendation
     from hpc_agent.infra.backends import HPCBackend
 
 __all__ = [
@@ -89,11 +84,6 @@ _VALID_CATEGORIES = frozenset(_typing_get_args(FailureCategoryResubmittable))
 class ResubmitFlowResult:
     """Return shape of :func:`resubmit_flow`.
 
-    ``planner`` is ``None`` only when the run sidecar is missing or
-    its ``cluster``/``profile`` keys aren't strings — in that case
-    overrides flow through unmodified and the caller still gets the
-    journal update. ``forecast_recommendation`` is ``None`` whenever
-    ``consult_forecast`` was disabled or the sidecar wasn't readable.
     ``cluster_submitted`` reports whether the macro actually ran the
     qsub step (opt-in via ``submit_to_cluster``); ``new_job_ids``
     carries the job IDs returned by the scheduler when it did, or an
@@ -105,8 +95,6 @@ class ResubmitFlowResult:
     retries: dict[str, dict[str, Any]]
     request_id: str
     deduped: bool
-    planner: PlannedResubmitOverrides | None
-    forecast_recommendation: ResubmitRecommendation | None
     cluster_submitted: bool = False
     new_job_ids: list[str] = field(default_factory=list)
 
@@ -122,10 +110,6 @@ class ResubmitFlowResult:
         }
         if self.new_job_ids:
             out["new_job_ids"] = list(self.new_job_ids)
-        if self.planner is not None:
-            out["planner"] = self.planner.to_dict()
-        if self.forecast_recommendation is not None:
-            out["forecast_recommendation"] = self.forecast_recommendation.to_dict()
         return out
 
 
@@ -201,8 +185,6 @@ def resubmit_flow(
     overrides: dict[str, Any] | None = None,
     new_job_ids: list[str] | None = None,
     request_id: str | None = None,
-    consult_forecast: bool = True,
-    forecast_within_hours: int = 24,
     submit_to_cluster: bool = False,
     script: str | None = None,
     backend: str | None = None,
@@ -242,29 +224,7 @@ def resubmit_flow(
     if category == "preempted" and sidecar is not None:
         _raise_if_all_preempted(sidecar, failed_task_ids)
 
-    cluster, profile = _extract_cluster_profile(sidecar)
-
-    planner_result: PlannedResubmitOverrides | None = None
     effective_overrides = overrides
-    if cluster is not None and profile is not None:
-        planner_result = plan_resubmit_overrides(
-            experiment_dir,
-            profile=profile,
-            cluster=cluster,
-            base_overrides=overrides,
-        )
-        effective_overrides = planner_result.overrides
-
-    forecast_recommendation: ResubmitRecommendation | None = None
-    if consult_forecast and cluster is not None and profile is not None:
-        from hpc_agent.forecast.resubmit_advisor import recommend_resubmit_window
-
-        forecast_recommendation = recommend_resubmit_window(
-            experiment_dir,
-            profile=profile,
-            cluster=cluster,
-            within_hours=forecast_within_hours,
-        )
 
     cluster_submitted = False
     cluster_job_ids: list[str] = []
@@ -369,8 +329,6 @@ def resubmit_flow(
         retries=dict(record.retries),
         request_id=rid,
         deduped=deduped,
-        planner=planner_result,
-        forecast_recommendation=forecast_recommendation,
         cluster_submitted=cluster_submitted,
         new_job_ids=list(cluster_job_ids),
     )
@@ -554,19 +512,6 @@ def _safe_read_sidecar(experiment_dir: Path, run_id: str) -> dict | None:
         raise
     except OSError:
         return None
-
-
-def _extract_cluster_profile(
-    sidecar: dict | None,
-) -> tuple[str | None, str | None]:
-    if sidecar is None:
-        return None, None
-    cluster = sidecar.get("cluster")
-    profile = sidecar.get("profile")
-    return (
-        cluster if isinstance(cluster, str) else None,
-        profile if isinstance(profile, str) else None,
-    )
 
 
 def _raise_if_all_preempted(sidecar: dict, failed_task_ids: list[int]) -> None:
