@@ -7,6 +7,17 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — `plan-throughput` primitive
+
+`hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]`
+— a pure-local `query` primitive that packs a task grid into
+concurrency-bounded submission waves. It reads the cluster's scheduler
+constraints from `clusters.yaml`, and returns the wave plan plus the
+`wave_map` the per-run sidecar carries for the cluster-side combiner. It
+is the deterministic core that `/submit-hpc` Step 4b previously did as
+inline library calls (`compute_submission_plan` + `build_wave_map`);
+Step 4b is now a single `invoke plan-throughput` step.
+
 ### Added — `hpc_agent.template`: experiment + parallelization layer
 
 A new opt-in subpackage so a researcher can bring a notebook (or a
