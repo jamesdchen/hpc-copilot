@@ -30,17 +30,9 @@ Both write the same journal `last_status` and the same `.monitor.jsonl` tick log
 
 5. **On error envelopes**, branch by `error_code` per the chosen primitive's frontmatter table.
 
-## Cadence + escalation rules (monitor-flow)
+## Cadence + escalation (monitor-flow)
 
-`monitor-flow` adapts cadence internally based on the run's age and recent state changes:
-
-- Fresh runs (< 10 min since submit): poll every 30s.
-- Mid-life runs (< 1h): poll every 60s.
-- Long-running (> 1h): poll every 5 min, escalating to 15 min after 4h.
-- After any wave completes: re-poll within 30s to start the combiner promptly.
-- After 3 consecutive `unknown` task states: escalate via `escalation_reason: "n_unknown_runs_high"`.
-
-The cadence parameters live on the spec's `wall_clock_budget_seconds` + the per-tier defaults in `monitor-flow`'s `outputs:` documentation. Override with `tick_interval_sec` if the caller has specific cadence requirements (rare).
+`monitor-flow` adapts its poll cadence internally — by run age, on wave completion, and on repeated `unknown` task states — and surfaces `escalation_reason` when it escalates. The caller does not manage cadence; it just reads the returned `escalation_reason` and branches per the rules above. The tier table and the `tick_interval_sec` override are in [monitor-flow.md](../../docs/primitives/monitor-flow.md).
 
 ## Resubmit decision flow
 

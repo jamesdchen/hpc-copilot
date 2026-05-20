@@ -93,14 +93,13 @@ Build rsync excludes from `.gitignore` patterns + the standard set (`__pycache__
 
 ## Step 4b: Compute Throughput Plan
 
-After grid expansion produces `total_tasks`:
+After grid expansion produces `total_tasks`, invoke [plan-throughput](../../docs/primitives/plan-throughput.md):
 
-1. Load constraints: `from hpc_agent import ClusterConstraints, parse_constraints`; merge cluster + per-profile.
-2. Build workload: `from hpc_agent.planning.throughput import WorkloadSpec, compute_submission_plan`.
-3. `compute_submission_plan(constraints, workload)` returns a `SubmissionPlan` with batched waves.
-4. Embed `wave_map = build_wave_map(plan)` — passed to `write_run_sidecar(..., wave_map=wave_map)` at Step 6d. The cluster-side combiner reads it from there.
+```bash
+hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <s>]
+```
 
-If constraints are not configured for the cluster/profile, skip and submit as a single array.
+It reads the cluster's scheduler constraints from `clusters.yaml`, packs the grid into concurrency-bounded waves, and returns `{strategy, total_batches, n_waves, est_total_wall_s, wave_map, ...}`. Thread the returned `wave_map` into `write_run_sidecar(..., wave_map=wave_map)` at Step 6d — the cluster-side combiner reads it from the sidecar. A cluster with no `constraints:` block falls back to scheduler defaults (a single array for a grid under the default `max_array_size`).
 
 ## Step 4c: Smart constraint planner (resource-quality aware)
 
