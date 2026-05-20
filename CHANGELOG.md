@@ -7,6 +7,55 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — `hpc_agent.template`: experiment + parallelization layer
+
+A new opt-in subpackage so a researcher can bring a notebook (or a
+plain `run()` function) and have hpc-agent — not the experiment repo —
+own parallelization. The core stays experiment-agnostic; nothing here
+is on the default code path. Stdlib-only throughout.
+
+Layer 1 — notebook / CLI helpers:
+
+- `register_run` — decorator that marks an experiment entry point,
+  synthesises its `Flag` list from the function signature, and injects
+  a `compute(args)` wrapper (satisfying the executor contract) plus a
+  module-level `_RUNS` registry.
+- `save_artifact(name, obj)` — write a large artifact under the
+  per-task output directory (CWD fallback for local smoke tests).
+- `export_notebook(ipynb, out_py)` — lift the importable surface of a
+  `.ipynb` into a `.py` executor via a strict AST allowlist (imports,
+  defs, classes, UPPERCASE-target assignments; everything else
+  dropped).
+- `discover_runs(src_dir)` — find `@register_run` functions by AST
+  walk, resolving bare / aliased / attribute decorator forms without
+  importing the experiment's heavy dependencies.
+- `flags_from_signature` / `flags_from_ast` / `flags_for_run` — the
+  type → `Flag` mapping (`bool` → store-true, `X | None` → optional,
+  `list[T]` → `nargs="+"`, `Literal[...]` → `choices`).
+
+Layer 2 — parallelization planner:
+
+- `DataAxis` cases — `Independent`, `Associative(monoid)`,
+  `BoundedHalo(halo_fn)`, `Sequential` — classifying a series axis by
+  whether it carries state and whether that state is associative.
+- `plan_tasks(sweep, data_axis, chunks=, series_length=)` — applies
+  the strategy and returns a `total()` / `resolve()` object for
+  `.hpc/tasks.py`.
+- `load_series(name)` — the halo-aware loader: the single seam that
+  hands each task its slice without the experiment knowing it was
+  chunked. `set_series_loader` / `current_slice` / `trim_emission`.
+- `Monoid` / `Moments` / `SUM` / `MOMENTS` and `reduce_monoid` —
+  monoid-reduce glue; non-associative aggregates (variance, Sharpe,
+  QLIKE) reduce via sufficient statistics.
+- `check_elision` / `assert_elision_equivalent` — the serial-elision
+  harness: run an experiment whole and split N ways, assert equality.
+  The backstop that makes automated `DataAxis` inference safe — wire
+  it as a required CI gate.
+
+`hpc_agent.executor_cli.Flag` / `flag()` gain an optional `action`
+field (e.g. `store_true`) so boolean flags map cleanly; the inlined
+copy in `cli_dispatcher.py` is kept in lock-step.
+
 ### Removed (experiment-shaped surface that moved out to the caller)
 
 Per the cleavage: hpc-agent owns the parallelization scaffolding;

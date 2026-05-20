@@ -63,6 +63,7 @@ class Flag:
     choices: tuple[Any, ...] | None = None
     help: str = ""
     nargs: str | None = None
+    action: str | None = None
 
     def add_to(self, parser: argparse.ArgumentParser) -> None:
         kwargs: dict[str, Any] = {"help": self.help}
@@ -78,7 +79,11 @@ class Flag:
             kwargs["choices"] = list(self.choices)
         if self.nargs is not None:
             kwargs["nargs"] = self.nargs
-        if self.type is not None:
+        # ``action`` (e.g. ``store_true`` for boolean flags) is mutually
+        # exclusive with ``type`` in argparse; when set it wins.
+        if self.action is not None:
+            kwargs["action"] = self.action
+        elif self.type is not None:
             kwargs["type"] = self.type
         cli_flag = "--" + self.name.replace("_", "-")
         parser.add_argument(cli_flag, **kwargs)
@@ -93,6 +98,7 @@ def flag(
     choices: tuple[Any, ...] | list[Any] | None = None,
     help: str = "",
     nargs: str | None = None,
+    action: str | None = None,
 ) -> Flag:
     """Concise constructor for a :class:`Flag` declaration."""
     return Flag(
@@ -103,6 +109,7 @@ def flag(
         choices=tuple(choices) if choices is not None else None,
         help=help,
         nargs=nargs,
+        action=action,
     )
 
 
