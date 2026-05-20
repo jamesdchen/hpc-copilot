@@ -2714,13 +2714,13 @@ def build_parser() -> argparse.ArgumentParser:
 # know the surface struggle to discover the right one. Adding ``git
 # remote`` / ``kubectl get``-style verb groups gives a navigable
 # top-level. We don't want to refactor the entire argparse tree, so the
-# grouping is implemented as an argv pre-processor: ``hpc-agent forecast
-# predict-queue-wait <args>`` strips the ``forecast`` prefix before
-# argparse sees it. The flat form (``hpc-agent predict-queue-wait
+# grouping is implemented as an argv pre-processor: ``hpc-agent build
+# build-executor <args>`` strips the ``build`` prefix before
+# argparse sees it. The flat form (``hpc-agent build-executor
 # <args>``) keeps working — both routes hit the same handler.
 #
 # Add a primitive to a group: append it to the matching frozenset.
-# ``hpc-agent forecast`` (no further argv) prints the group's
+# ``hpc-agent build`` (no further argv) prints the group's
 # subcommand list.
 
 _VERB_GROUPS: dict[str, frozenset[str]] = {

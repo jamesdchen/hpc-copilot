@@ -17,27 +17,20 @@ composes:
 2. **Preempted detection** — raises :class:`~hpc_agent.errors.Preempted`
    when every failed task carries a preempt marker, before any
    cluster-side work.
-3. **Survival planner** —
-   :func:`~hpc_agent.planning.resubmit_planner.plan_resubmit_overrides`
-   applies the same atoms ``plan_submit`` runs, so a cold-start retry
-   gets the mem buffer + walltime arbitrage the initial submit would
-   have applied.
-4. **Queue-wait advisor** —
-   :func:`~hpc_agent.forecast.resubmit_advisor.recommend_resubmit_window`
-   surfaces an opt-out advisory of "submit now" vs "wait N hours" so
-   the agent can throttle into a cheaper diurnal window.
-5. **Cluster-side resubmission** (opt-in via ``submit_to_cluster=True``)
+3. **Cluster-side resubmission** (opt-in via ``submit_to_cluster=True``)
    — composes the *same* atoms submit_flow uses on the resubmit shape:
    :func:`~hpc_agent.planning.resubmit_batching.resubmit_plan`
    packs the failed IDs into compact array expressions, the scheduler
-   backend (Slurm/SGE) submits each batch with the planner-adjusted
+   backend (Slurm/SGE) submits each batch with the caller-supplied
    overrides rendered as ``extra_flags``, and the resulting job IDs
    flow into the journal alongside the retry counters.
-6. **Journal update** — :func:`runner.resubmit_failed` records the
-   retry with the *planner-adjusted* overrides so monitor / aggregate
-   downstream see the truth, not the raw 2× table. When the cluster-
-   side step ran, the new job IDs land in the same call so the
-   journal stays in sync.
+4. **Journal update** — :func:`runner.resubmit_failed` records the
+   retry with the caller-supplied overrides so monitor / aggregate
+   downstream see the truth. When the cluster-side step ran, the new
+   job IDs land in the same call so the journal stays in sync.
+
+Resource overrides are applied verbatim as the caller passes them —
+``resubmit_flow`` does no automatic right-sizing of its own.
 
 ``cmd_resubmit`` becomes a thin argparse → spec → flow adapter; future
 callers (auto-retry from monitor_flow, programmatic resubmit from a

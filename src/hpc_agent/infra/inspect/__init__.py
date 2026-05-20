@@ -10,8 +10,8 @@ the ingredients for resource-quality-aware submission decisions:
   resource shares and how long they've been running.
 - Drain / down state.
 
-The resulting JSON is fed into :mod:`hpc_agent.planning.planner` (Phase 4)
-which combines it with runtime priors to score candidate constraints.
+The resulting JSON is a read-only snapshot of per-node cluster state for
+callers that need to reason about current resource availability.
 It is also useful standalone for ad-hoc cluster
 debugging via ``hpc-agent inspect-cluster --cluster <c>``.
 
