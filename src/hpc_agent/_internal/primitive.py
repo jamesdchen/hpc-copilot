@@ -267,7 +267,6 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_agent.atoms.build_executor",
     "hpc_agent.atoms.build_submit_spec",
     "hpc_agent.atoms.build_tasks_py",
-    "hpc_agent.atoms.build_template",
     "hpc_agent.atoms.canary_verify",
     "hpc_agent.atoms.cluster_reduce",
     "hpc_agent.atoms.campaign_advance",
