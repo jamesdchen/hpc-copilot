@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/build_tasks_py.input.json",
   "title": "build-tasks-py input",
-  "description": "Cartesian-product axes spec + per-executor flag declarations.\n\nDrives ``hpc_agent.atoms.build_tasks_py`` to scaffold\n``<experiment>/.hpc/tasks.py``.",
+  "description": "Axes spec + per-executor flag declarations for the ``tasks.py`` scaffold.\n\nDrives ``hpc_agent.atoms.build_tasks_py`` to scaffold\n``<experiment>/.hpc/tasks.py``. Two modes:\n\n* **cartesian** (``data_axis`` omitted) — ``axes`` is a cartesian\n  product, one independent task per cell.\n* **planner** (``data_axis`` present) — ``axes`` is the *sweep* and\n  the series axis is partitioned by ``hpc_agent.template.plan_tasks``\n  per the classified ``DataAxis``.",
   "type": "object",
   "required": [
     "axes",
@@ -40,6 +40,18 @@
       ],
       "default": null,
       "title": "Force"
+    },
+    "data_axis": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_DataAxisSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When set, emit a planner-driven tasks.py instead of a cartesian one."
     }
   },
   "$defs": {
@@ -63,6 +75,72 @@
         "values"
       ],
       "title": "_AxisSpec",
+      "type": "object"
+    },
+    "_DataAxisSpec": {
+      "additionalProperties": false,
+      "description": "The classified series axis — drives planner-mode codegen.\n\nWhen present on :class:`BuildTasksPyInput`, ``build-tasks-py`` emits a\n``hpc_agent.template.plan_tasks``-based ``tasks.py`` (the deterministic\nmaterialisation of the ``/submit-hpc`` Step 3 ``DataAxis`` inference)\ninstead of a cartesian-product one. The cartesian ``axes`` become the\n*sweep* and the series axis is partitioned by the planner.",
+      "properties": {
+        "kind": {
+          "description": "How the series axis is safe to split (classify by reading the experiment's loop and its call graph). 'independent': the loop body is a pure function of its row, no accumulator. 'associative': it accumulates an associative summary (sum / count / min-max / sufficient statistics) — also set `monoid`. 'bounded_halo': it refits or re-reads a trailing window of bounded length (a rolling statistic, a `train_window` look-back) — also set `halo_expr`. 'sequential': unbounded or order-dependent state — not splittable, and the fail-safe default whenever the dependency structure is not unambiguous. The classification must be verified with the serial-elision gate (hpc_agent.template.check_elision) before submitting — a misclassified axis returns plausible-but-wrong numbers.",
+          "enum": [
+            "independent",
+            "associative",
+            "bounded_halo",
+            "sequential"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "chunks": {
+          "default": 1,
+          "description": "Chunks per sweep point. Ignored for kind='sequential'.",
+          "minimum": 1,
+          "title": "Chunks",
+          "type": "integer"
+        },
+        "series_length": {
+          "description": "Length of the series being partitioned (probed by the agent at Step 3).",
+          "minimum": 0,
+          "title": "Series Length",
+          "type": "integer"
+        },
+        "halo_expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for kind='bounded_halo': a Python ARITHMETIC expression over the `params` dict giving the warm-up row count, e.g. \"params['train_window'] * 48\". Validated to arithmetic-only (no calls/attributes) before it is rendered.",
+          "title": "Halo Expr"
+        },
+        "monoid": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "moments"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For kind='associative': which built-in monoid chunks reduce with (default: moments).",
+          "title": "Monoid"
+        }
+      },
+      "required": [
+        "kind",
+        "series_length"
+      ],
+      "title": "_DataAxisSpec",
       "type": "object"
     },
     "_FlagSpec": {

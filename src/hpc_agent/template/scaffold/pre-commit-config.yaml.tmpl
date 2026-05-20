@@ -1,0 +1,12 @@
+# Re-export experiment notebooks on commit so the committed .py never
+# drifts from its .ipynb. Injected by `hpc-agent build-template`.
+
+repos:
+  - repo: local
+    hooks:
+      - id: hpc-notebook-export
+        name: re-export experiment notebooks
+        entry: python .hpc/scaffold.py export
+        language: system
+        files: \.ipynb$
+        pass_filenames: false

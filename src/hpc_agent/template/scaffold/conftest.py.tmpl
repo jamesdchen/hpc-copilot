@@ -1,0 +1,25 @@
+"""Shared pytest fixtures for the experiment repo.
+
+Injected once by ``hpc-agent build-template``; project-owned thereafter
+(refused, not re-injected, over your edits).
+
+The serial-elision gate is the load-bearing test — wire one per
+experiment so a misclassified ``DataAxis`` fails CI instead of silently
+returning plausible-but-wrong numbers::
+
+    from hpc_agent.template import Independent, assert_elision_equivalent
+    from experiments.my_experiment import run
+
+    def test_my_experiment_elision() -> None:
+        assert_elision_equivalent(run, {}, Independent(), chunks=4, series_length=...)
+
+If your experiments call ``hpc_agent.template.load_series``, register a
+loader once here::
+
+    import pytest
+    from hpc_agent.template import set_series_loader
+
+    @pytest.fixture(autouse=True)
+    def _series_loader() -> None:
+        set_series_loader(lambda name: ...)
+"""
