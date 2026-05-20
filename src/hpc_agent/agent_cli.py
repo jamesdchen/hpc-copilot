@@ -364,6 +364,28 @@ def cmd_install_commands(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    """One-shot setup: install commands + skills, then wire the Stop hooks.
+
+    The single entry point a new user runs after ``pip install
+    hpc-agent``. Copies the bundled slash commands and skills into
+    ~/.claude/ and installs hpc-agent's Stop hooks. Both steps are
+    idempotent, so re-running is safe. ``--no-hooks`` skips the hook
+    step; ``--dry-run`` previews both without writing.
+    """
+    from hpc_agent.agent_assets import install_agent_assets
+    from hpc_agent.hooks.install import install_hooks
+
+    claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
+    assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
+    data: dict[str, Any] = {"assets": assets}
+    if not args.no_hooks:
+        settings_path = claude_dir / "settings.json" if claude_dir else None
+        data["hooks"] = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
+    _emit({"ok": True, "idempotent": True, "data": data})
+    return EXIT_OK
+
+
 def cmd_capabilities(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.capabilities."""
     from hpc_agent._internal.operations import render_llms_full
@@ -1979,6 +2001,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the target Claude config dir. Defaults to ~/.claude.",
     )
     p_install.set_defaults(func=cmd_install_commands)
+
+    # setup
+    p_setup = sub.add_parser(
+        "setup",
+        help=(
+            "One-shot setup: copy the bundled slash commands and skills "
+            "into ~/.claude/ and install hpc-agent's Stop hooks. Run this "
+            "once after `pip install hpc-agent`. Idempotent — safe to "
+            "re-run. Use --no-hooks to skip the hook step."
+        ),
+    )
+    p_setup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview both steps without writing.",
+    )
+    p_setup.add_argument(
+        "--no-hooks",
+        action="store_true",
+        help="Skip installing the Stop hooks (only copy commands + skills).",
+    )
+    p_setup.add_argument(
+        "--claude-dir",
+        type=str,
+        default=None,
+        help="Override the target Claude config dir. Defaults to ~/.claude.",
+    )
+    p_setup.set_defaults(func=cmd_setup)
 
     # axes-init
     p_axes = sub.add_parser(
