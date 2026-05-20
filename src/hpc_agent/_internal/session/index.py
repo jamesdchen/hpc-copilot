@@ -53,6 +53,21 @@ def _all_run_files(experiment_dir: Path) -> list[Path]:
     ]
 
 
+def _safe_mtime(p: Path) -> float:
+    """File mtime, or 0.0 if the file vanished.
+
+    A concurrent ``prune_terminal_runs`` (or another session's prune)
+    can ``unlink`` a run file between the directory glob and the
+    ``stat()`` here. An unguarded ``stat()`` would raise
+    ``FileNotFoundError`` and crash a routine ``find_in_flight_runs``
+    call, so a vanished file is treated as "oldest" instead.
+    """
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _read_index(experiment_dir: Path) -> dict:
     idx_path = journal_dir(experiment_dir) / "index.json"
     payload = _read_json(idx_path) or {}
@@ -64,7 +79,7 @@ def _index_is_stale(experiment_dir: Path) -> bool:
     if not idx_path.exists():
         return True
     idx_mtime = idx_path.stat().st_mtime
-    return any(p.stat().st_mtime > idx_mtime for p in _all_run_files(experiment_dir))
+    return any(_safe_mtime(p) > idx_mtime for p in _all_run_files(experiment_dir))
 
 
 def _rebuild_index(experiment_dir: Path) -> dict:
@@ -136,7 +151,7 @@ def find_in_flight_runs(experiment_dir: Path) -> list[RunRecord]:
         record = load_run(experiment_dir, rid)
         if record is None:
             continue
-        records.append((path.stat().st_mtime, record))
+        records.append((_safe_mtime(path), record))
     records.sort(key=lambda item: item[0], reverse=True)
     return [r for _, r in records]
 
@@ -161,7 +176,7 @@ def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRec
         record = load_run(experiment_dir, path.stem)
         if record is None or record.campaign_id != campaign_id:
             continue
-        matched.append((path.stat().st_mtime, record))
+        matched.append((_safe_mtime(path), record))
     matched.sort(key=lambda item: item[0])  # oldest-first
     return [r for _, r in matched]
 
@@ -178,7 +193,7 @@ def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
             continue
         if payload.get("status", "in_flight") == "in_flight":
             continue
-        terminal.append((path.stat().st_mtime, path, payload.get("run_id", path.stem)))
+        terminal.append((_safe_mtime(path), path, payload.get("run_id", path.stem)))
     if len(terminal) <= keep:
         return 0
     terminal.sort(key=lambda item: item[0], reverse=True)

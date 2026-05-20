@@ -261,7 +261,7 @@ def _tier1_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
         "task_generator_kinds": _histogram(
             (s.get("task_generator") or {}).get("kind") for s in summaries
         ),
-        "clusters": _histogram((s.get("cluster_target") or {}).get("cluster") for s in summaries),
+        "clusters": _histogram(_cluster_of(s) for s in summaries),
         "task_count": (
             {
                 "p50": _pctile(task_counts, 0.50),
@@ -420,6 +420,17 @@ def _tier3_generator_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────
+
+
+def _cluster_of(summary: dict[str, Any]) -> Any:
+    """Cluster name from a summary's ``cluster_target``, tolerating bad shapes.
+
+    ``cluster_target`` is copied verbatim from arbitrary interview.json
+    files, which recall is documented to tolerate — a hand-written or
+    legacy file may carry a string/list there instead of a dict.
+    """
+    ct = summary.get("cluster_target")
+    return ct.get("cluster") if isinstance(ct, dict) else None
 
 
 def _histogram(values: Iterable[Any]) -> dict[str, int]:
