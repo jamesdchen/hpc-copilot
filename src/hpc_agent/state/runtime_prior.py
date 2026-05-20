@@ -447,8 +447,7 @@ def roll_up_quantiles(
 def coerce_pos_int(x: Any) -> int | None:
     """Coerce *x* to a positive int or return None. Permissive on garbage.
 
-    Shared with :mod:`hpc_agent.forecast.calibration` so both modules
-    consume the runtime-prior sample dicts through a single coercion.
+    A single coercion shared across the runtime-prior sample readers.
     """
     if x is None:
         return None

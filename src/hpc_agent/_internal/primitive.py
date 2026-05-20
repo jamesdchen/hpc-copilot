@@ -10,7 +10,7 @@ Decoration convention
 
 Most primitives have a clean Python entry point — a public function in one
 of the engine subpackages (``runner/``, ``planning/``, ``state/``,
-``forecast/``, ``flows/``, or ``infra/``) that performs the operation.
+``flows/``, or ``infra/``) that performs the operation.
 Decorate that function directly with ``@primitive(...)``.
 
 Some primitives have no inner Python helper — their behavior lives in

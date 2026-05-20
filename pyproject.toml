@@ -54,13 +54,6 @@ dev = [
 tui = [
     "rich>=13.0",
 ]
-forecasting = [
-    # Used by ``scripts/train_wait_predictor.py`` to fit the queue-wait
-    # residual regression. Inference (``forecast/predict_start.py``)
-    # also imports it lazily; without lightgbm installed the predictor
-    # falls back to the deterministic floor only.
-    "lightgbm>=4.0",
-]
 
 [project.urls]
 Homepage = "https://github.com/jamesdchen/hpc-agent"
@@ -95,7 +88,7 @@ slash_commands = [
 testpaths = ["tests"]
 addopts = "-ra --strict-markers -n auto -m 'not slow'"
 markers = [
-    "slow: real-process / real-time tests (subprocess + signals, multi-hour forecast sweeps). Skipped by default. Opt in with `pytest -m slow`; run everything with `pytest -m ''`.",
+    "slow: real-process / real-time tests (subprocess + signals, multi-hour sweeps). Skipped by default. Opt in with `pytest -m slow`; run everything with `pytest -m ''`.",
 ]
 
 [tool.ruff]
