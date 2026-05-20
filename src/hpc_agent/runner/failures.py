@@ -24,7 +24,10 @@ _FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # disagree — a kernel ``oom-kill:`` line (no "oom-killer" token)
     # must not classify as ``unknown`` here while the catalog tags it
     # ``system_oom`` and recommends increase-mem.
-    ("system_oom", re.compile(r"oom-kill|out of memory.*killed|\bMemoryError\b|killed.*signal 9", re.I)),
+    (
+        "system_oom",
+        re.compile(r"oom-kill|out of memory.*killed|\bMemoryError\b|killed.*signal 9", re.I),
+    ),
     (
         # Narrowed to scheduler-specific markers — bare ``walltime`` or
         # ``signal SIGTERM 15`` collide with preemption (which the
