@@ -58,7 +58,19 @@ def load_run(experiment_dir: Path, run_id: str) -> RunRecord | None:
             stacklevel=2,
         )
         return None
-    return RunRecord.from_dict(payload)
+    try:
+        return RunRecord.from_dict(payload)
+    except TypeError:
+        # A structurally-incomplete v1 record (e.g. an older record
+        # written before a now-required field existed, or a truncated
+        # file) makes the dataclass constructor raise. ``load_run`` is
+        # documented to return None on an unusable record — skip it
+        # rather than letting the TypeError escape into callers.
+        warnings.warn(
+            f"session: run record {path.name} is structurally incomplete; skipping",
+            stacklevel=2,
+        )
+        return None
 
 
 def upsert_run(experiment_dir: Path, record: RunRecord) -> None:

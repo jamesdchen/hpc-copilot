@@ -19,14 +19,31 @@ _FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"\[hpc-agent\] SIGTERM received; cluster preemption imminent"),
     ),
     ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
-    ("system_oom", re.compile(r"\boom-killer\b|\bMemoryError\b|killed.*signal 9", re.I)),
+    # Pattern kept identical to the ``system_oom`` row of
+    # ``failure_signatures.CATALOG`` so the two classifiers cannot
+    # disagree — a kernel ``oom-kill:`` line (no "oom-killer" token)
+    # must not classify as ``unknown`` here while the catalog tags it
+    # ``system_oom`` and recommends increase-mem.
+    (
+        "system_oom",
+        re.compile(r"oom-kill|out of memory.*killed|\bMemoryError\b|killed.*signal 9", re.I),
+    ),
     (
         # Narrowed to scheduler-specific markers — bare ``walltime`` or
         # ``signal SIGTERM 15`` collide with preemption (which the
         # scheduler also delivers via SIGTERM). The exit-code 130/143
         # override below routes confirmed SIGTERM cases to ``preempted``.
         "walltime",
-        re.compile(r"\bDUE TO TIME LIMIT\b|wall.?time.*exceeded|h_rt.*exceeded", re.I),
+        # Kept in sync with the ``walltime`` row of
+        # ``failure_signatures.CATALOG`` (scheduler-specific markers
+        # only — no bare ``walltime`` token, which collides with
+        # preemption) so the two classifiers cannot disagree.
+        re.compile(
+            r"DUE TO TIME LIMIT|CANCELLED.*TIME LIMIT|"
+            r"wall.?time.*expired|wall.?time.*exceeded|"
+            r"Time limit exceeded|h_rt.*exceeded|qmaster enforced h_rt",
+            re.I,
+        ),
     ),
     (
         "node_failure",

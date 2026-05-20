@@ -179,7 +179,12 @@ def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_t
     meta_path = campaign_dir / "meta.json"
     existing: dict[str, Any] = {}
     if meta_path.exists():
-        existing = json.loads(meta_path.read_text())
+        try:
+            loaded = json.loads(meta_path.read_text())
+        except (OSError, ValueError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            existing = loaded
     merged = {**meta_updates, **existing}
     merged["total_tasks"] = total_tasks
     meta_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")

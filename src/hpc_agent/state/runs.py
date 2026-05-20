@@ -467,12 +467,22 @@ def find_existing_runs(experiment_dir: Path) -> list[Path]:
     runs = _runs_dir(experiment_dir)
     if not runs.exists():
         return []
-    hits = [p for p in runs.iterdir() if p.is_file() and p.suffix == ".json"]
     # Secondary key: run_id (path.stem) is ``YYYYMMDD-HHMMSS-<sha>`` — its ISO
     # prefix is monotonic, so it's a stable tiebreaker when two sidecars share
     # the same coarse-FS mtime (e.g. seconds-resolution filesystems).
-    hits.sort(key=lambda p: (p.stat().st_mtime, p.stem), reverse=True)
-    return hits
+    # stat() is guarded: a concurrent prune can unlink a sidecar between
+    # iterdir() and the sort, which would otherwise raise FileNotFoundError.
+    keyed: list[tuple[float, str, Path]] = []
+    for p in runs.iterdir():
+        if not (p.is_file() and p.suffix == ".json"):
+            continue
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        keyed.append((mtime, p.stem, p))
+    keyed.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [p for _, _, p in keyed]
 
 
 def find_run_by_cmd_sha(
