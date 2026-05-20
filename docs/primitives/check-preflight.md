@@ -15,7 +15,7 @@ exit_codes:
 
 ## Purpose
 
-Verify the local environment can submit HPC jobs: SSH agent reachable, `ssh` and `rsync` on PATH, `clusters.yaml` parses cleanly, optionally one cluster's TCP :22 reachable. Pure read; never mutates anything.
+Verify the local environment can submit HPC jobs: SSH agent reachable, `ssh` plus a file-transfer transport on PATH (`rsync`, or the `scp`+`tar` fallback the runtime uses when rsync is absent), `clusters.yaml` parses cleanly, optionally one cluster's TCP :22 reachable. Pure read; never mutates anything.
 
 ## Compose with
 

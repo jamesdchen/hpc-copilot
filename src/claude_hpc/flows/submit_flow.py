@@ -243,7 +243,7 @@ def _make_single_array_submission(
     # promise the workflow's dependency graph.
     composes=[submit_and_record],
     side_effects=[
-        SideEffect("rsync", "<ssh_target>:<remote_path>"),
+        SideEffect("sync-push", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster>"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
     ],
@@ -434,7 +434,7 @@ def _submit_one_spec(
     # promise the workflow's dependency graph.
     composes=[submit_and_record],
     side_effects=[
-        SideEffect("rsync", "<ssh_target>:<remote_path>"),
+        SideEffect("sync-push", "<ssh_target>:<remote_path>"),
         SideEffect("scheduler-submit", "<cluster> (one qsub per spec)"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per spec)"),
     ],

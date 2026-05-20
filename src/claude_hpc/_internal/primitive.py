@@ -79,7 +79,10 @@ F = TypeVar("F", bound="Callable[..., Any]")
 class SideEffect:
     """One declared side effect.
 
-    ``kind``: rsync, ssh, scheduler-submit, writes-sidecar, writes-journal, ...
+    ``kind``: sync-push, sync-pull, ssh, scheduler-submit, writes-sidecar,
+    writes-journal, ... The ``sync-*`` kinds are transport-agnostic: the
+    runtime uses rsync when available and falls back to a ``tar c | ssh
+    tar x`` push / ``scp -r`` pull pipeline otherwise (see infra.remote).
     ``target``: human-readable label (host, path template, ...).
     """
 

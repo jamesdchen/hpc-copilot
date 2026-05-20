@@ -74,7 +74,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`cluster-reduce`](primitives/cluster-reduce.md) | ✓ | rsync-pull; ssh | `hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` | `claude_hpc.atoms.cluster_reduce.cluster_reduce` | — | `claude_hpc/schemas/cluster_reduce.output.json` |
+| [`cluster-reduce`](primitives/cluster-reduce.md) | ✓ | ssh; sync-pull | `hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` | `claude_hpc.atoms.cluster_reduce.cluster_reduce` | — | `claude_hpc/schemas/cluster_reduce.output.json` |
 | [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `claude_hpc.runner.combine.combine_wave` | — | `claude_hpc/schemas/combine_wave.output.json` |
 | [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `claude_hpc.runner.reconcile.mark_terminal` | — | — |
 | [`prune-orphan-sidecars`](primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `claude_hpc.state.runs.prune_orphan_sidecars` | — | — |
@@ -109,10 +109,10 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | rsync; ssh; writes-journal | `hpc-agent aggregate-flow --spec <path>` | `claude_hpc.flows.aggregate_flow.aggregate_flow` | `claude_hpc/schemas/aggregate_flow.input.json` | `claude_hpc/schemas/aggregate_flow.output.json` |
+| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | ssh; sync-pull; writes-journal | `hpc-agent aggregate-flow --spec <path>` | `claude_hpc.flows.aggregate_flow.aggregate_flow` | `claude_hpc/schemas/aggregate_flow.input.json` | `claude_hpc/schemas/aggregate_flow.output.json` |
 | [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path>` | `claude_hpc.flows.monitor_flow.monitor_flow` | `claude_hpc/schemas/monitor_flow.input.json` | `claude_hpc/schemas/monitor_flow.output.json` |
-| [`submit-flow`](primitives/submit-flow.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-agent submit-flow --spec <path>` | `claude_hpc.flows.submit_flow.submit_flow` | `claude_hpc/schemas/submit_flow.input.json` | `claude_hpc/schemas/submit_flow.output.json` |
-| [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | rsync; scheduler-submit; writes-journal | `hpc-agent submit-flow-batch --spec <path>` | `claude_hpc.flows.submit_flow.submit_flow_batch` | `claude_hpc/schemas/submit_flow_batch.input.json` | `claude_hpc/schemas/submit_flow_batch.output.json` |
+| [`submit-flow`](primitives/submit-flow.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow --spec <path>` | `claude_hpc.flows.submit_flow.submit_flow` | `claude_hpc/schemas/submit_flow.input.json` | `claude_hpc/schemas/submit_flow.output.json` |
+| [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow-batch --spec <path>` | `claude_hpc.flows.submit_flow.submit_flow_batch` | `claude_hpc/schemas/submit_flow_batch.input.json` | `claude_hpc/schemas/submit_flow_batch.output.json` |
 | [`validate-campaign`](primitives/validate-campaign.md) | ✓ | _none_ | `hpc-agent validate-campaign --spec <path>` | `claude_hpc.flows.validate_campaign.validate_campaign` | `claude_hpc/schemas/validate_campaign.input.json` | `claude_hpc/schemas/validate_campaign.output.json` |
 | [`verify-canary`](primitives/verify-canary.md) | ✓ | ssh | `hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]` | `claude_hpc.atoms.canary_verify.verify_canary` | — | `claude_hpc/schemas/verify_canary.output.json` |
 

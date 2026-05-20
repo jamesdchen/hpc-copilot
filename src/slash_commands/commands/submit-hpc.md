@@ -60,7 +60,7 @@ If they decline, proceed anyway (the skill submits now). If they accept, schedul
 | Memory exceeded | Exceeded mem limit | Resubmit with higher memory |
 | Walltime exceeded | Exceeded time limit | Resubmit with longer walltime |
 | ModuleNotFoundError | Env not set up | Check modules and conda_env |
-| rsync failure | SSH key issue | Check `ssh $SSH_TARGET hostname` first |
+| file transfer failure (rsync/scp) | SSH key issue | Check `ssh $SSH_TARGET hostname` first |
 | `--features` not recognized | Executor doesn't support that arg | Check `--help`, update executor |
 
 When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in `--help`), flag it: "ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"

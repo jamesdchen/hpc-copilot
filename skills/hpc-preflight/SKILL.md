@@ -16,7 +16,8 @@ Agent-facing composition over the **[check-preflight](../../docs/primitives/chec
 
 4. **Parse `data.checks[]`** and remediate by check name (this is the agent-specific layer — the primitive surfaces failures as `checks[].ok = false` rather than error envelopes):
    - `ssh_auth_sock == false` — `SSH_AUTH_SOCK` is unset or the agent has no keys. Caller must add a key (`ssh-add ~/.ssh/<key>`) AND export `SSH_AUTH_SOCK` + `SSH_AGENT_PID` into the env passed to `hpc-agent`. **Stop**; do not proceed to submit.
-   - `ssh_on_path` / `rsync_on_path == false` — install via system package manager. Stop.
+   - `ssh_on_path == false` — install via system package manager. Stop.
+   - `file_transfer_on_path == false` — no file-transfer transport found. Install `rsync`, or ensure `scp` + `tar` are on PATH (the runtime falls back to a `tar`/`scp` pipeline when `rsync` is absent — e.g. Windows without WSL/MSYS rsync). Stop.
    - `clusters_yaml_parses == false` — surface `detail` (parse error) and stop.
    - `cluster_known == false` — wrong cluster name; re-invoke clusters-list.
    - `cluster_tcp_22 == false` — cluster offline or hostname wrong; do NOT submit.

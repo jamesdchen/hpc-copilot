@@ -8,8 +8,8 @@
     "output_schema": "cluster_reduce.output.json",
     "python": "claude_hpc.atoms.cluster_reduce.cluster_reduce",
     "side_effects": [
-      "rsync-pull",
-      "ssh"
+      "ssh",
+      "sync-pull"
     ],
     "verb": "mutate"
   },
@@ -648,8 +648,8 @@
     "output_schema": "aggregate_flow.output.json",
     "python": "claude_hpc.flows.aggregate_flow.aggregate_flow",
     "side_effects": [
-      "rsync",
       "ssh",
+      "sync-pull",
       "writes-journal"
     ],
     "verb": "workflow"
@@ -677,8 +677,8 @@
     "output_schema": "submit_flow.output.json",
     "python": "claude_hpc.flows.submit_flow.submit_flow",
     "side_effects": [
-      "rsync",
       "scheduler-submit",
+      "sync-push",
       "writes-journal"
     ],
     "verb": "workflow"
@@ -692,8 +692,8 @@
     "output_schema": "submit_flow_batch.output.json",
     "python": "claude_hpc.flows.submit_flow.submit_flow_batch",
     "side_effects": [
-      "rsync",
       "scheduler-submit",
+      "sync-push",
       "writes-journal"
     ],
     "verb": "workflow"
