@@ -16,7 +16,7 @@ of workflows stays in sync.
 Mapping rules
 -------------
 
-* ``skills/<id>/SKILL.md``  ↔  ``src/slash_commands/commands/<cmd>.md``
+* ``src/slash_commands/skills/<id>/SKILL.md``  ↔  ``src/slash_commands/commands/<cmd>.md``
 * The ``<id>`` and ``<cmd>`` may differ (e.g. ``hpc-submit`` vs
   ``submit-hpc``). The mapping below pins which pair represents the
   same workflow.
@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS_DIR = REPO_ROOT / "skills"
+SKILLS_DIR = REPO_ROOT / "src" / "slash_commands" / "skills"
 COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
 
 # Each tuple: (skill_id, slash_command_stem). Both files must exist.
