@@ -46,9 +46,27 @@ MANAGED_HOOKS: dict[str, dict[str, Any]] = {
 }
 
 
-def _hook_matches(entry: dict[str, Any], target: dict[str, Any]) -> bool:
-    """Cheap structural match: same type + same command string."""
-    return entry.get("type") == target.get("type") and entry.get("command") == target.get("command")
+def _command_strings(obj: Any) -> set[str]:
+    """Return the command strings reachable from a ``hooks.Stop`` array element.
+
+    Handles both the correct *group* shape (``{"hooks": [{"type":
+    "command", "command": ...}]}``) and the legacy *flat* shape
+    (``{"type": "command", "command": ...}``) that an older buggy
+    installer wrote directly into the array. This lets the installer
+    recognise — and heal — entries written before the shape fix.
+    """
+    if not isinstance(obj, dict):
+        return set()
+    inner = obj.get("hooks")
+    if isinstance(inner, list):
+        return {
+            h["command"]
+            for h in inner
+            if isinstance(h, dict) and h.get("type") == "command" and "command" in h
+        }
+    if obj.get("type") == "command" and "command" in obj:
+        return {obj["command"]}
+    return set()
 
 
 def build_planned_settings(existing: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -56,6 +74,12 @@ def build_planned_settings(existing: dict[str, Any]) -> tuple[dict[str, Any], li
 
     Idempotent: re-running with already-installed hooks returns the same
     settings dict and an empty ``added_ids`` list.
+
+    Self-healing: a legacy flat ``{"type": "command", ...}`` entry that
+    an older installer wrote straight into ``hooks.Stop`` (missing the
+    required group wrapper) is rewritten into the canonical group shape
+    rather than left in place or duplicated alongside a correct entry.
+    Healed ids are reported in ``added_ids``.
     """
     settings = json.loads(json.dumps(existing))  # deep copy via JSON round-trip
     hooks_block = settings.setdefault("hooks", {})
@@ -67,10 +91,24 @@ def build_planned_settings(existing: dict[str, Any]) -> tuple[dict[str, Any], li
         raise ValueError("hooks.Stop in settings.json is not an array; refusing to overwrite")
 
     added: list[str] = []
-    for hook_id, entry in MANAGED_HOOKS.items():
-        if any(_hook_matches(existing_entry, entry) for existing_entry in stop_entries):
+    for hook_id, group in MANAGED_HOOKS.items():
+        managed_cmds = _command_strings(group)
+        matching = [
+            e for e in stop_entries if isinstance(e, dict) and _command_strings(e) & managed_cmds
+        ]
+        if matching and all("hooks" in e for e in matching):
+            # Already present in the correct group shape.
             continue
-        stop_entries.append(entry)
+        # Either absent, or present only as a legacy flat entry (and/or
+        # duplicated). Drop every matching entry and append one
+        # canonical group; unrelated entries are left untouched.
+        stop_entries = [
+            e
+            for e in stop_entries
+            if not (isinstance(e, dict) and _command_strings(e) & managed_cmds)
+        ]
+        stop_entries.append(json.loads(json.dumps(group)))
+        hooks_block["Stop"] = stop_entries
         added.append(hook_id)
     return settings, added
 
