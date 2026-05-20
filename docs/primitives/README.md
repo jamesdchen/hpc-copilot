@@ -1,10 +1,10 @@
 # Primitives
 
-A **primitive** is the smallest agent-and-human-shareable operation: one verb, one input contract, one output contract, one set of error codes, one declared side-effect class. Both `slash_commands/commands/*.md` (human-facing, interactive) and `skills/hpc-*/SKILL.md` (agent-facing, terse) **compose** from this catalog instead of describing the same operations from scratch.
+A **primitive** is the smallest agent-and-human-shareable operation: one verb, one input contract, one output contract, one set of error codes, one declared side-effect class. Both `slash_commands/commands/*.md` (human-facing, interactive) and `slash_commands/skills/hpc-*/SKILL.md` (agent-facing, terse) **compose** from this catalog instead of describing the same operations from scratch.
 
 Why this layer exists:
 
-- **Single source of truth.** "How to submit a spec" lives in exactly one file. Today the same flow is described in `slash_commands/commands/submit-hpc.md` (770 lines, interactive) and `skills/hpc-submit/SKILL.md` (88 lines, terse) — and the two drift independently.
+- **Single source of truth.** "How to submit a spec" lives in exactly one file. Today the same flow is described in `slash_commands/commands/submit-hpc.md` (770 lines, interactive) and `slash_commands/skills/hpc-submit/SKILL.md` (88 lines, terse) — and the two drift independently.
 - **Composability.** A skill or slash command body becomes a short pipeline of primitive calls plus the surface-specific glue (interactive prompts for slash commands; defaults + envelope-parsing for skills). When a primitive's contract changes, only the primitive doc moves; consumers re-validate against the new contract.
 - **Discoverability.** One catalog the agent can scan to find "what produces a sidecar" / "what's idempotent" / "what's safe to retry" without grepping prose.
 

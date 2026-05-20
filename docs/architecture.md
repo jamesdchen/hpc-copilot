@@ -11,7 +11,7 @@ not the other way round. New code finds its destination by asking
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Surfaces (what the user / agent calls into)                        │
 │                                                                     │
-│  src/slash_commands/commands/   skills/                             │
+│  src/slash_commands/commands/   src/slash_commands/skills/          │
 │  user-typed entry points         agent-callable workflows           │
 │  (thin redirects to skills)      (one SKILL.md per workflow)        │
 │                                  ↓                                  │
@@ -188,7 +188,7 @@ on success, `{"ok": false, "error_code": str, "category": str,
 
 Two:
 
-1. **Skills** (`skills/<id>/SKILL.md`) — agent-canonical workflows
+1. **Skills** (`src/slash_commands/skills/<id>/SKILL.md`) — agent-canonical workflows
    invoked by Claude Code's `Skill` tool. Have richer metadata
    (model, tools, arguments).
 2. **Slash commands** (`src/slash_commands/commands/<stem>.md`) —

@@ -348,6 +348,22 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_install_commands(args: argparse.Namespace) -> int:
+    """Copy bundled slash commands + skills into ~/.claude/.
+
+    The pip-install entry point: after ``pip install hpc-agent`` this
+    wires the agent assets shipped in the wheel into Claude Code's
+    user-global config dir. Idempotent (overwrites in place). Use
+    ``--dry-run`` to preview without writing.
+    """
+    from hpc_agent.agent_assets import install_agent_assets
+
+    claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
+    summary = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
+    _emit({"ok": True, "idempotent": True, "data": summary})
+    return EXIT_OK
+
+
 def cmd_capabilities(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.capabilities."""
     from hpc_agent._internal.operations import render_llms_full
@@ -1939,6 +1955,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_hook.set_defaults(func=cmd_hook_install)
+
+    # install-commands
+    p_install = sub.add_parser(
+        "install-commands",
+        help=(
+            "Copy the bundled slash commands and skills into "
+            "~/.claude/commands/ and ~/.claude/skills/. The pip-install "
+            "entry point — run once after `pip install hpc-agent` to wire "
+            "the agent assets into Claude Code. Idempotent (overwrites in "
+            "place). Pass --claude-dir to target a non-default config dir."
+        ),
+    )
+    p_install.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview which commands/skills would be copied without writing.",
+    )
+    p_install.add_argument(
+        "--claude-dir",
+        type=str,
+        default=None,
+        help="Override the target Claude config dir. Defaults to ~/.claude.",
+    )
+    p_install.set_defaults(func=cmd_install_commands)
 
     # axes-init
     p_axes = sub.add_parser(

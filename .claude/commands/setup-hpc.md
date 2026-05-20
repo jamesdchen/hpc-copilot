@@ -1,12 +1,12 @@
 # /setup-hpc — Install hpc-agent commands and package globally
 
-Copy all slash commands from this repo into the global Claude commands directory, install the Python package in editable mode, and (with explicit consent) wire up bundled Stop hooks that enforce slash-command exit contracts.
+Install the Python package, copy the bundled slash commands and skills into the global Claude config directory, and (with explicit consent) wire up bundled Stop hooks that enforce slash-command exit contracts.
 
 ## Steps
 
-1. Copy each `.md` file from `src/slash_commands/commands/` into `~/.claude/commands/`, overwriting existing files.
+1. Install the package. From a repo checkout, run `pip install -e .` from the repo root (use `uv pip install -e .` if the venv is uv-managed). A pip-only user installs the published package with `pip install hpc-agent` instead.
 
-2. Run `pip install -e .` from the repo root (use `uv pip install -e .` if the venv is uv-managed).
+2. Run `hpc-agent install-commands` to copy the bundled slash commands and skills into `~/.claude/commands/` and `~/.claude/skills/`. The assets ship inside the package, so this works identically for an editable checkout and a wheel install. Pass `--dry-run` first to preview the file list.
 
 3. **Preview the bundled Stop hooks** by running `hpc-agent hook-install --dry-run`. Show the user the JSON envelope it would write — specifically the `added` list (e.g. `["monitor-armed"]`) and the `settings_path`. Explain in one sentence what each hook does:
 

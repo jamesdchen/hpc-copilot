@@ -169,8 +169,9 @@ Full schema: `hpc_agent/schemas/capabilities.output.json`.
   (derived from the live argparse tree). New installs that ship
   additional subcommands surface them here automatically.
 - `skill_paths` maps each slash-command skill bundle's basename
-  to its `SKILL.md` path. Empty on wheel-only installs. The values
-  are the package's `skills/hpc-*/SKILL.md` paths.
+  to its `SKILL.md` path. Skills ship as package data, so the
+  values are the package's `slash_commands/skills/hpc-*/SKILL.md`
+  paths for both wheel and source-tree installs.
 - `cluster_yaml_keys` is the canonical declarative manifest of
   per-cluster YAML fields. Use it to introspect what's recognized
   without parsing source.
