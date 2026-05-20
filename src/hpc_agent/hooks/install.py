@@ -42,6 +42,21 @@ def DEFAULT_SETTINGS_PATH() -> Path:
 # monitor_armed_check._default_command) and is upgraded in place rather
 # than duplicated. The matcher below is monitor-armed-specific; a second
 # managed hook would need its own identity predicate.
+#
+# FUTURE: PreToolUse / PostToolUse retry hooks. The result envelope
+# already carries error_code / category / retry_safe / remediation, and
+# capable models read those and retry on their own — so we deliberately
+# do NOT ship a generic "retry on ok:false" hook. Add one only after
+# observing a specific LLM misbehavior in real sessions (e.g. the agent
+# proceeds to /aggregate-hpc despite status returning ok:false, or gives
+# up after spec_invalid instead of regenerating). When that happens:
+# extend MANAGED_HOOKS with a new id + a module exposing settings_entry()
+# and an is_<hook>_command() identity predicate (mirroring
+# monitor_armed_check), and teach build_planned_settings to write into
+# the right hooks.<event> bucket (PreToolUse / PostToolUse) instead of
+# the hardcoded "Stop". Keep each hook narrow to one observed failure
+# mode — receive-side validation in agent_cli is the primary correctness
+# layer; hooks are a band-aid, not a replacement.
 MANAGED_HOOKS: dict[str, dict[str, Any]] = {
     "monitor-armed": monitor_armed_check.settings_entry(),
 }
