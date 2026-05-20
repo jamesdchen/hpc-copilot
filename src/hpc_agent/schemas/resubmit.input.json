@@ -75,20 +75,6 @@
       "description": "Optional dedupe key. When omitted, hpc-agent derives a deterministic id from (sorted failed_task_ids, category, sorted overrides). A second resubmit with the same request_id returns the existing record without incrementing retry counters.",
       "title": "Request Id"
     },
-    "consult_forecast": {
-      "default": true,
-      "description": "When true (the default), hpc-agent consults the queue-wait forecaster before resubmitting and attaches a ResubmitRecommendation envelope to the response. Advisory only — does not block the resubmit. Set to false to skip the forecast call (e.g. tight CI loops).",
-      "title": "Consult Forecast",
-      "type": "boolean"
-    },
-    "forecast_within_hours": {
-      "default": 24,
-      "description": "Horizon (hours) for the resubmit-window advisor. Ignored unless consult_forecast is true.",
-      "maximum": 168,
-      "minimum": 1,
-      "title": "Forecast Within Hours",
-      "type": "integer"
-    },
     "submit_to_cluster": {
       "default": false,
       "description": "When true, hpc-agent composes resubmit_plan + backend.submit_array to actually re-issue the failed tasks. When false (legacy default), the operation is journal-only. Requires script, backend, and job_name to be set when true.",

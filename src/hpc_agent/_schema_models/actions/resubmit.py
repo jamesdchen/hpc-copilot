@@ -35,22 +35,6 @@ class ResubmitSpec(BaseModel):
             "incrementing retry counters."
         ),
     )
-    consult_forecast: bool = Field(
-        default=True,
-        description=(
-            "When true (the default), hpc-agent consults the "
-            "queue-wait forecaster before resubmitting and attaches a "
-            "ResubmitRecommendation envelope to the response. "
-            "Advisory only — does not block the resubmit. Set to "
-            "false to skip the forecast call (e.g. tight CI loops)."
-        ),
-    )
-    forecast_within_hours: int = Field(
-        default=24,
-        ge=1,
-        le=168,
-        description="Horizon (hours) for the resubmit-window advisor. Ignored unless consult_forecast is true.",
-    )
     submit_to_cluster: bool = Field(
         default=False,
         description=(
