@@ -335,6 +335,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "plan-throughput",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.plan_throughput.plan_throughput",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent status --run-id <id> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": null,

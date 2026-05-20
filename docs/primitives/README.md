@@ -106,6 +106,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` |
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` |
+| [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status --run-id <id> [--experiment-dir <dir>]` |
 | [predict-queue-wait](predict-queue-wait.md) | yes | _none_ | `hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` |
 | [predict-start-time](predict-start-time.md) | yes | _none_ | `hpc-agent predict-start-time --spec <path>` |
