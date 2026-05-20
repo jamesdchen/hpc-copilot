@@ -1,0 +1,29 @@
+# hpc-agent experiment-template — make fragment.
+#
+# Framework-owned: re-injected verbatim by `hpc-agent build-template`
+# on every run (self-healing). Do NOT edit — put project-specific
+# targets in the root Makefile, below the `include` line.
+
+PYTHON ?= python3
+
+.PHONY: export repro new-experiment lint test
+
+## new-experiment: scaffold a new experiment notebook (make new-experiment NAME=foo)
+new-experiment:
+	$(PYTHON) .hpc/scaffold.py new $(NAME)
+
+## export: re-export every notebook to its sibling .py executor
+export:
+	$(PYTHON) .hpc/scaffold.py export
+
+## repro: re-export, then run the test suite (the serial-elision gate lives here)
+repro: export test
+
+## lint: ruff + the notebook-sync check (exported .py matches its .ipynb)
+lint:
+	ruff check .
+	$(PYTHON) .hpc/scaffold.py check-sync
+
+## test: run the experiment test suite
+test:
+	pytest -q

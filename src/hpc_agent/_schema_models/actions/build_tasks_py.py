@@ -31,11 +31,52 @@ class _FlagSpec(BaseModel):
     default: Any | None = None
 
 
+class _DataAxisSpec(BaseModel):
+    """The classified series axis — drives planner-mode codegen.
+
+    When present on :class:`BuildTasksPyInput`, ``build-tasks-py`` emits a
+    ``hpc_agent.template.plan_tasks``-based ``tasks.py`` (the deterministic
+    materialisation of the ``/submit-hpc`` Step 3 ``DataAxis`` inference)
+    instead of a cartesian-product one. The cartesian ``axes`` become the
+    *sweep* and the series axis is partitioned by the planner.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["independent", "associative", "bounded_halo", "sequential"] = Field(
+        description="DataAxis classification of the series axis — see hpc_agent.template.axis.",
+    )
+    chunks: int = Field(
+        default=1, ge=1, description="Chunks per sweep point. Ignored for kind='sequential'."
+    )
+    series_length: int = Field(
+        ge=0, description="Length of the series being partitioned (probed by the agent at Step 3)."
+    )
+    halo_expr: str | None = Field(
+        default=None,
+        description=(
+            "Required for kind='bounded_halo': a Python ARITHMETIC expression over the "
+            "`params` dict giving the warm-up row count, e.g. \"params['train_window'] * 48\". "
+            "Validated to arithmetic-only (no calls/attributes) before it is rendered."
+        ),
+    )
+    monoid: Literal["sum", "moments"] | None = Field(
+        default=None,
+        description="For kind='associative': which built-in monoid chunks reduce with (default: moments).",
+    )
+
+
 class BuildTasksPyInput(BaseModel):
-    """Cartesian-product axes spec + per-executor flag declarations.
+    """Axes spec + per-executor flag declarations for the ``tasks.py`` scaffold.
 
     Drives ``hpc_agent.atoms.build_tasks_py`` to scaffold
-    ``<experiment>/.hpc/tasks.py``.
+    ``<experiment>/.hpc/tasks.py``. Two modes:
+
+    * **cartesian** (``data_axis`` omitted) — ``axes`` is a cartesian
+      product, one independent task per cell.
+    * **planner** (``data_axis`` present) — ``axes`` is the *sweep* and
+      the series axis is partitioned by ``hpc_agent.template.plan_tasks``
+      per the classified ``DataAxis``.
     """
 
     model_config = ConfigDict(extra="forbid", title="build-tasks-py input")
@@ -43,3 +84,7 @@ class BuildTasksPyInput(BaseModel):
     axes: list[_AxisSpec] = Field(min_length=1)
     flags_by_executor: dict[str, list[_FlagSpec]] = Field(min_length=1)
     force: bool | None = None
+    data_axis: _DataAxisSpec | None = Field(
+        default=None,
+        description="When set, emit a planner-driven tasks.py instead of a cartesian one.",
+    )

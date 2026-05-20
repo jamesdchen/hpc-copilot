@@ -522,6 +522,19 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent build-template [--repo-dir <dir>] [--force]",
+    "idempotent": false,
+    "input_schema": null,
+    "name": "build-template",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.build_template.build_template",
+    "side_effects": [
+      "writes-file"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent campaign init --campaign-id <id> --strategy <s>",
     "idempotent": true,
     "input_schema": null,
