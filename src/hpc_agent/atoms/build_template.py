@@ -1,11 +1,18 @@
-"""``build-template`` primitive — inject the experiment-template scaffold.
+"""``build-template`` — inject the experiment-template scaffold.
 
 The experiment-template scaffold lives *inside* hpc-agent
 (``hpc_agent/template/scaffold/``); there is no separate template repo
 to clone. ``build-template`` injects it into a target repo — extending
 what hpc-agent already does with single files (``build-executor``,
 ``build-tasks-py``, the ``.hpc/cli.py`` copy) to a whole-project
-scaffold. Deterministic and template-based, like ``build-executor``.
+scaffold.
+
+Deliberately **not a wire primitive.** It is a human-facing CLI command
+(``hpc-agent build-template``), not part of the integrator-agnostic
+primitive catalog that headless orchestrators compose against. The
+experiment-template flow is built around researcher-authored notebooks;
+a headless agent does not write notebooks, so this scaffold step is
+exclusive to the human entry point.
 
 Two tiers, with different overwrite discipline:
 
@@ -31,7 +38,6 @@ from typing import TYPE_CHECKING, Any
 
 import hpc_agent
 from hpc_agent import errors
-from hpc_agent._internal.primitive import SideEffect, primitive
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -53,22 +59,6 @@ _ROOT_ASSETS: tuple[tuple[str, str], ...] = (
 _MAKEFILE_INCLUDE = "include .hpc/template.mk"
 
 
-@primitive(
-    name="build-template",
-    verb="scaffold",
-    side_effects=[
-        SideEffect("writes-file", "<repo>/.hpc/{template.mk,scaffold.py} (re-injected every run)"),
-        SideEffect(
-            "writes-file",
-            "<repo>/{Makefile,.pre-commit-config.yaml,.github/workflows/ci.yml,"
-            "conftest.py,pyproject.toml} (refuses to overwrite without --force)",
-        ),
-    ],
-    idempotent=False,
-    error_codes=[errors.SpecInvalid],
-    cli="hpc-agent build-template [--repo-dir <dir>] [--force]",
-    agent_facing=True,
-)
 def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
     """Inject the experiment-template scaffold into ``repo_dir``.
 

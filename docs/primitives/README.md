@@ -157,7 +157,6 @@ The verb partitions primitives into bands the reader can scan independently:
 | [build-executor](build-executor.md) | no | writes-file: `<output_dir>/<name>.py` | `hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` |
 | [build-submit-spec](build-submit-spec.md) | yes | _none_ | `hpc-agent build-submit-spec --spec <path>` |
 | [build-tasks-py](build-tasks-py.md) | yes | writes-sidecar: `<experiment>/.hpc/tasks.py` | `hpc-agent build-tasks-py --spec <path>` |
-| [build-template](build-template.md) | no | writes-file: `<repo>/.hpc/{template.mk,scaffold.py}`; writes-file: `<repo>/{Makefile,.pre-commit-config.yaml,.github/workflows/ci.yml,conftest.py,pyproject.toml}` | `hpc-agent build-template [--repo-dir <dir>] [--force]` |
 | [campaign-init](campaign-init.md) | yes | writes-sidecar: `<experiment>/.hpc/campaigns/<id>/manifest.json` | `hpc-agent campaign init --campaign-id <id> --strategy <s>` |
 | [interview](interview.md) | yes | file_write: `<campaign_dir>/{interview.json,meta.json}` | `hpc-agent interview` |
 

@@ -76,15 +76,19 @@ copy in `cli_dispatcher.py` is kept in lock-step.
   loads inside the stdlib-only cluster dispatcher. The agent
   classifies; it never hand-writes `tasks.py`. `halo_expr` is validated
   to arithmetic-only over `params`.
-- `build-template` — a new scaffold primitive that injects the
-  experiment-template into a repo: `.hpc/template.mk` and
+- `build-template` — a new human-facing CLI command
+  (`hpc-agent build-template [--repo-dir <dir>] [--force]`) that injects
+  the experiment-template into a repo: `.hpc/template.mk` and
   `.hpc/scaffold.py` (framework-owned, re-injected every run,
   self-healing) plus the root files `Makefile`,
   `.pre-commit-config.yaml`, `.github/workflows/ci.yml`, `conftest.py`,
   and `pyproject.toml` (refuse-without-`--force`, with non-destructive
   `Makefile` / `pyproject.toml` handling). The scaffold lives inside
-  hpc-agent — there is no separate template repo to clone. CLI:
-  `hpc-agent build-template [--repo-dir <dir>] [--force]`.
+  hpc-agent — there is no separate template repo to clone. It is
+  deliberately *not* a wire primitive: the experiment-template flow is
+  built around researcher-authored notebooks, so it is exclusive to the
+  human CLI entry point and absent from the integrator-agnostic
+  primitive catalog headless orchestrators compose against.
 
 ### Removed (experiment-shaped surface that moved out to the caller)
 
