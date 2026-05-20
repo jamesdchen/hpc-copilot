@@ -1,4 +1,4 @@
-"""Fixture-driven tests for ``claude_hpc.infra.inspect.sge``.
+"""Fixture-driven tests for ``hpc_agent.infra.inspect.sge``.
 
 The qhost / qstat parsers consume real cluster output. Hypothesis is
 the wrong tool here — the input space is "what SGE binaries actually
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import textwrap
 
-from claude_hpc.infra.inspect.sge import _parse_qhost, _parse_qstat_full
+from hpc_agent.infra.inspect.sge import _parse_qhost, _parse_qstat_full
 
 # ─── _parse_qhost ──────────────────────────────────────────────────────
 

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from claude_hpc.forecast.squeue_priority_field import QueuedJob
-from claude_hpc.forecast.wait_features import extract_features
+from hpc_agent.forecast.squeue_priority_field import QueuedJob
+from hpc_agent.forecast.wait_features import extract_features
 
 
 def _q(

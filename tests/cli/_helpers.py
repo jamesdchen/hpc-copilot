@@ -31,7 +31,7 @@ def env_without_ssh_agent() -> dict[str, str]:
 def run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """Invoke the CLI as a subprocess and return (exit_code, stdout, stderr)."""
     proc = subprocess.run(
-        [sys.executable, "-m", "claude_hpc", *args],
+        [sys.executable, "-m", "hpc_agent", *args],
         capture_output=True,
         text=True,
         env=env,

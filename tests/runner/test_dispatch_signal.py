@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc.mapreduce import dispatch
+from hpc_agent.mapreduce import dispatch
 from tests.conftest import make_sidecar_json, write_hpc_tasks
 
 
@@ -157,7 +157,7 @@ def _write_runner(
             f"""
             import sys
             sys.path.insert(0, {str(repo_root)!r})
-            from claude_hpc.mapreduce import dispatch
+            from hpc_agent.mapreduce import dispatch
             # Make dispatch.__file__ resolve sidecars relative to .hpc/
             dispatch.__file__ = {str(hpc_dir / "_hpc_dispatch.py")!r}
             dispatch.main()

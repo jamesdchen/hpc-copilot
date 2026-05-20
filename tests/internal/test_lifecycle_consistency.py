@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import typing
 
-from claude_hpc._internal.lifecycle import (
+from hpc_agent._internal.lifecycle import (
     TERMINAL_STATUSES,
     JournalStatus,
     LifecycleState,
 )
-from claude_hpc._schema_models._shared import (
+from hpc_agent._schema_models._shared import (
     LifecycleStateObservable,
     LifecycleStateObservableWithTimeout,
     LifecycleStateTerminal,

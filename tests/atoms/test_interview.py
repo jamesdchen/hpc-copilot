@@ -8,7 +8,7 @@ Spec scope:
   enumerate search-space shapes (logspace / grid / seeds_x / …) and any
   dict-shaped tasks.py — hyperparameter sweeps, eval matrices, RL
   rollouts, benchmark sweeps — round-trips equally. The dict requirement
-  is inherited from claude-hpc's pre-existing tasks.py contract
+  is inherited from hpc-agent's pre-existing tasks.py contract
   (compute_cmd_sha enforces it because kwargs get **-unpacked into the
   user's task function); the interview adds no further structure.
 - It is the spine for future cmd_recall queries (intent + provenance +
@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._schema_models.actions.interview import InterviewSpec
-from claude_hpc.atoms.interview import record_interview
+from hpc_agent._schema_models.actions.interview import InterviewSpec
+from hpc_agent.atoms.interview import record_interview
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -94,7 +94,7 @@ def test_round_trip_across_experiment_families(
     data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
 
     assert data["total_tasks"] == expected_count
-    # claude-hpc's tasks.py contract requires resolve(i) to return a dict
+    # hpc-agent's tasks.py contract requires resolve(i) to return a dict
     # (kwargs get **-unpacked into the user's task function and must be
     # JSON-serializable for cmd_sha). The interview inherits that constraint;
     # it does NOT add further structure (no `lr` field, no `n` field, etc.).
@@ -103,7 +103,7 @@ def test_round_trip_across_experiment_families(
 
 
 def test_non_dict_tasks_py_fails_with_existing_contract_error(tmp_path: Path) -> None:
-    """Sentinel: if tasks.py returns a non-dict (forbidden by claude-hpc's
+    """Sentinel: if tasks.py returns a non-dict (forbidden by hpc-agent's
     pre-existing contract), the failure happens at compute_cmd_sha — surfaced
     as a TypeError. Locking this so that loosening the dict requirement later
     is a deliberate, multi-place change rather than an accident."""
@@ -369,7 +369,7 @@ def test_re_running_with_same_intent_overwrites_byte_equivalently(tmp_path: Path
 
 def _run_cli(*args: str) -> tuple[int, str, str]:
     proc = subprocess.run(
-        [sys.executable, "-m", "claude_hpc", *args],
+        [sys.executable, "-m", "hpc_agent", *args],
         capture_output=True,
         text=True,
     )

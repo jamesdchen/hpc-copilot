@@ -17,7 +17,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.runner.update_constraints.update_run_constraints
+  python: hpc_agent.runner.update_constraints.update_run_constraints
 ---
 # update-run-constraints
 
@@ -56,4 +56,4 @@ Idempotency key: `run_id`. Re-running with the same target Features set produces
 - The sidecar's recorded Features are updated after the cluster-side operation succeeds (best-effort); if the sidecar write fails, the cluster-side update has already succeeded for the affected jobs.
 - `run_id` is a `RunIdStrict` (regex-validated against the canonical run-id pattern).
 
-**Schemas:** [`update_run_constraints.input.json`](../../src/claude_hpc/schemas/update_run_constraints.input.json), [`update_run_constraints.output.json`](../../src/claude_hpc/schemas/update_run_constraints.output.json).
+**Schemas:** [`update_run_constraints.input.json`](../../src/hpc_agent/schemas/update_run_constraints.input.json), [`update_run_constraints.output.json`](../../src/hpc_agent/schemas/update_run_constraints.output.json).

@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_flow_batch.output.json",
+  "title": "submit-flow-batch output data",
+  "description": "Shape of the ``data`` field on a successful ``submit-flow-batch`` envelope.\n\nWraps a list of per-spec result records (each matching\nsubmit_flow.output.json) plus a count for cheap iteration. Order\nof ``results`` matches the order of input ``specs``.",
+  "type": "object",
+  "required": [
+    "results",
+    "n_results"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "results": {
+      "description": "Per-spec submit-flow result, in input order. Each entry has the shape of submit_flow.output.json (run_id, job_ids, total_tasks, deduped, canary_done, canary_run_id, canary_job_ids).",
+      "items": {
+        "$ref": "#/$defs/_SubmitFlowResultEntry"
+      },
+      "minItems": 1,
+      "title": "Results",
+      "type": "array"
+    },
+    "n_results": {
+      "description": "Length of `results`. Equals the number of input specs (deduped specs still contribute one result entry with deduped=true).",
+      "minimum": 1,
+      "title": "N Results",
+      "type": "integer"
+    }
+  },
+  "$defs": {
+    "_SubmitFlowResultEntry": {
+      "additionalProperties": false,
+      "description": "One per-spec submit-flow result inside a batch envelope.\n\nMirrors submit_flow.output.json (same fields). Kept as a separate\nmodel so the batch wrapper schema doesn't reference\n``submit_flow.output.json#`` cross-file — single self-contained file.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "job_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Job Ids",
+          "type": "array"
+        },
+        "total_tasks": {
+          "minimum": 1,
+          "title": "Total Tasks",
+          "type": "integer"
+        },
+        "deduped": {
+          "title": "Deduped",
+          "type": "boolean"
+        },
+        "canary_done": {
+          "title": "Canary Done",
+          "type": "boolean"
+        },
+        "canary_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canary Run Id"
+        },
+        "canary_job_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canary Job Ids"
+        }
+      },
+      "required": [
+        "run_id",
+        "job_ids",
+        "total_tasks",
+        "deduped",
+        "canary_done"
+      ],
+      "title": "_SubmitFlowResultEntry",
+      "type": "object"
+    }
+  }
+}

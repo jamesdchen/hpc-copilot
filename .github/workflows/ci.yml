@@ -34,7 +34,7 @@ jobs:
       - name: Ruff format check
         run: ruff format --check .
       - name: Mypy
-        run: mypy src/claude_hpc
+        run: mypy src/hpc_agent
       - name: Lint primitive module list
         run: python scripts/lint_primitive_modules.py
       - name: Check primitive frontmatter is regenerated from registry
@@ -57,4 +57,4 @@ jobs:
         # Pass ``-m 'not slow'`` so we don't re-run the slow tier here
         # (it already ran above). Coverage only needs ONE pass through
         # the test set to measure executed-line coverage.
-        run: pytest -q -m 'not slow' --cov=src/claude_hpc --cov-report=term-missing
+        run: pytest -q -m 'not slow' --cov=src/hpc_agent --cov-report=term-missing

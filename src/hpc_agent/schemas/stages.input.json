@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/stages.input.json",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/StageEntry"
+  },
+  "minItems": 1,
+  "$defs": {
+    "StageEntry": {
+      "additionalProperties": false,
+      "description": "Each entry describes one stage in a multi-stage DAG.\n\nStage names must be unique within the list. ``depends_on``\nreferences must resolve to other entries in the same list.",
+      "properties": {
+        "name": {
+          "description": "Stage identifier; unique within the DAG.",
+          "pattern": "^[A-Za-z][A-Za-z0-9_\\-]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "run": {
+          "description": "Shell command (executor invocation) for this stage.",
+          "minLength": 1,
+          "title": "Run",
+          "type": "string"
+        },
+        "depends_on": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stage(s) that must complete before this one starts. String or list of strings.",
+          "title": "Depends On"
+        },
+        "resources": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_StageResources"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "env": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_StageEnv"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "env_group": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Env Group"
+        },
+        "constraints": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Constraints"
+        },
+        "results": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Results"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "const": "uv",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "max_retries": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Retries"
+        }
+      },
+      "required": [
+        "name",
+        "run"
+      ],
+      "title": "StageEntry",
+      "type": "object"
+    },
+    "_StageEnv": {
+      "additionalProperties": true,
+      "properties": {
+        "modules": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Modules"
+        },
+        "conda_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conda Env"
+        }
+      },
+      "title": "_StageEnv",
+      "type": "object"
+    },
+    "_StageResources": {
+      "additionalProperties": true,
+      "properties": {
+        "cpus": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpus"
+        },
+        "mem": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mem"
+        },
+        "walltime": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walltime"
+        },
+        "gpus": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpus"
+        },
+        "gpu_type": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gpu Type"
+        }
+      },
+      "title": "_StageResources",
+      "type": "object"
+    }
+  }
+}

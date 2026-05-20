@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_canary.output.json",
+  "title": "verify-canary output",
+  "description": "Result of the wait + grep + output-check protocol for a 1-task canary.\n\nCaller branches on ``ok``: True → main array submit; False →\nsurface stderr_tail to the user verbatim.",
+  "type": "object",
+  "required": [
+    "ok",
+    "details",
+    "stderr_tail"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "failure_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "dispatcher_failed",
+            "import_error",
+            "module_not_found",
+            "traceback",
+            "oom_killed",
+            "segfault",
+            "missing_output",
+            "timeout",
+            "abandoned"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Failure Kind"
+    },
+    "details": {
+      "description": "One-line human-readable summary the slash command surfaces above the raw stderr_tail.",
+      "title": "Details",
+      "type": "string"
+    },
+    "stderr_tail": {
+      "description": "Last ~50 lines of the canary's stderr log (or empty string when not retrievable).",
+      "title": "Stderr Tail",
+      "type": "string"
+    },
+    "metrics_fingerprint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional sha256 of the canary's expected output file when the caller asked for a fingerprint. None on every failure path and when fingerprinting is skipped or fails.",
+      "title": "Metrics Fingerprint"
+    }
+  }
+}

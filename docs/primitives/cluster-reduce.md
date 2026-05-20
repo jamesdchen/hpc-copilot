@@ -19,7 +19,7 @@ error_codes:
 backed_by:
   cli: hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd
     <cmd>]
-  python: claude_hpc.atoms.cluster_reduce.cluster_reduce
+  python: hpc_agent.atoms.cluster_reduce.cluster_reduce
 exit_codes:
 - 0: ok
 - 1: user-error

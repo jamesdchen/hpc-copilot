@@ -1,10 +1,10 @@
-"""Tests for claude_hpc.infra.inspect — pure parsers + injected runner."""
+"""Tests for hpc_agent.infra.inspect — pure parsers + injected runner."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from claude_hpc.infra import inspect as ins
+from hpc_agent.infra import inspect as ins
 
 # --- scontrol parser ------------------------------------------------------
 
@@ -237,7 +237,7 @@ class TestInspectClusterEntry:
         # the agent_cli envelope translator surfaced as `error_code:
         # internal`. The primitive doc declares `cluster_unknown` as the
         # correct code, so the raise is now typed.
-        from claude_hpc import errors
+        from hpc_agent import errors
 
         cfg = _write_clusters(tmp_path)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))

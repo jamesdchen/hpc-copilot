@@ -8,7 +8,7 @@ idempotency_key: campaign_dir
 error_codes: []
 backed_by:
   cli: hpc-agent interview
-  python: claude_hpc.atoms.interview.record_interview
+  python: hpc_agent.atoms.interview.record_interview
 ---
 # interview
 
@@ -21,7 +21,7 @@ recipe has drifted.
 
 ## Inputs
 
-The full input schema is at `claude_hpc/schemas/interview.input.json`
+The full input schema is at `hpc_agent/schemas/interview.input.json`
 (Pydantic-emitted from `_schema_models/interview.py:InterviewSpec`).
 Required:
 
@@ -35,7 +35,7 @@ Required:
 Optional:
 
 - `task_kind` — opaque free-text tag the caller picks to group
-  related campaigns. claude-hpc has no taxonomy here: no enum, no
+  related campaigns. hpc-agent has no taxonomy here: no enum, no
   canonical set, no validation beyond "it's a string". Examples
   callers use (`ml-hparam-sweep`, `rl-rollout`, `llm-prompt-eval`,
   `benchmark-perf`, `data-shard`) are illustrative, not prescriptive
@@ -128,5 +128,5 @@ Stick with the caller's own journal when:
   `transcript`. It doesn't replace a domain-specific store.
 
 The two layers coexist: an integrator's experiment-level journal
-keys on `experiment_id`; claude-hpc's interview keys on
+keys on `experiment_id`; hpc-agent's interview keys on
 `campaign_dir`. Different scopes, no overlap.

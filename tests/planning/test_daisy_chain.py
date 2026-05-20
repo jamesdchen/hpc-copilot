@@ -16,10 +16,10 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from claude_hpc.infra import inspect as ins
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
-from claude_hpc.planning import planner
-from claude_hpc.planning.daisy_chain import (
+from hpc_agent.infra import inspect as ins
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+from hpc_agent.planning import planner
+from hpc_agent.planning.daisy_chain import (
     QUEUE_WAIT_BUFFER_SEC,
     compute_daisy_chain_plan,
     format_dependency_flag,
@@ -95,7 +95,7 @@ def _seed_checkpoint(tmp_path: Path, *, profile: str, cluster: str, run_id: str)
                 "sidecar_schema_version": 2,
                 "run_id": run_id,
                 "cmd_sha": "f" * 64,
-                "claude_hpc_version": "0.0.1",
+                "hpc_agent_version": "0.0.1",
                 "submitted_at": "2026-01-01T00:00:00+00:00",
                 "executor": "exec.py",
                 "result_dir_template": str(result_root / "task_{task_id}"),
@@ -212,7 +212,7 @@ class TestPlanSubmitDaisyChain:
         cfg = _write_clusters(tmp_path, max_walltime_sec=86400)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -232,7 +232,7 @@ class TestPlanSubmitDaisyChain:
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         _seed_checkpoint(tmp_path, profile="p", cluster="discovery", run_id="r1")
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -254,7 +254,7 @@ class TestPlanSubmitDaisyChain:
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with (
             patch(
-                "claude_hpc.planning.planner.inspect_cluster",
+                "hpc_agent.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             pytest.raises(ValueError, match="no checkpoint files detected"),
@@ -275,7 +275,7 @@ class TestPlanSubmitDaisyChain:
         _seed_checkpoint(tmp_path, profile="p", cluster="discovery", run_id="r1")
         with (
             patch(
-                "claude_hpc.planning.planner.inspect_cluster",
+                "hpc_agent.planning.planner.inspect_cluster",
                 return_value=_fake_snapshot(),
             ),  # noqa: E501
             pytest.raises(ValueError, match="exceeds cluster max"),
@@ -294,7 +294,7 @@ class TestPlanSubmitDaisyChain:
         cfg = _write_clusters(tmp_path, max_walltime_sec=86400, auto_daisy_chain=True)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(
@@ -312,7 +312,7 @@ class TestPlanSubmitDaisyChain:
         cfg = _write_clusters(tmp_path, max_walltime_sec=86400)
         monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(cfg))
         with patch(
-            "claude_hpc.planning.planner.inspect_cluster",
+            "hpc_agent.planning.planner.inspect_cluster",
             return_value=_fake_snapshot(),  # noqa: E501
         ):
             out = planner.plan_submit(

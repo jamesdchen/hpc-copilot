@@ -1,18 +1,18 @@
-"""Tests for claude_hpc.forecast.queue_simulator (DES core).
+"""Tests for hpc_agent.forecast.queue_simulator (DES core).
 
 Covers the FIFO + EASY backfill scheduler invariants.
 """
 
 from __future__ import annotations
 
-from claude_hpc.forecast.queue_simulator import (
+from hpc_agent.forecast.queue_simulator import (
     SimJob,
     available_resources,
     extract_running_jobs,
     simulate_distribution,
     simulate_one_pass,
 )
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 def _empty_snapshot(nodes=1, cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100"):

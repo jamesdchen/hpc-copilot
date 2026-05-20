@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc.forecast.drift_detector import (
+from hpc_agent.forecast.drift_detector import (
     append_run,
     diagnose_drift,
     history_path,

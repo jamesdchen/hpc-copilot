@@ -1,6 +1,6 @@
 # Surface Sync Checklist
 
-Both surfaces share the atomic-ops layer (`claude_hpc/runner/`)
+Both surfaces share the atomic-ops layer (`hpc_agent/runner/`)
 for any mutating op. Anything below MUST stay aligned across the two
 surfaces; changing it is a breaking change requiring a version bump.
 
@@ -14,12 +14,12 @@ update both surfaces and bump the version.
 
 - **Recommended format**: `f"{profile}-{utc_ts}-{cmd_sha[:8]}"` where
   `utc_ts` is `YYYYMMDD-HHMMSS` and `cmd_sha` is computed by
-  `claude_hpc.state.runs.compute_cmd_sha(tasks_module)` over the
+  `hpc_agent.state.runs.compute_cmd_sha(tasks_module)` over the
   materialized `[tasks.resolve(i) for i in range(tasks.total())]`.
-- **Validation**: `claude_hpc.state.runs.run_sidecar_path` accepts any
+- **Validation**: `hpc_agent.state.runs.run_sidecar_path` accepts any
   string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
   sidecars sorted chronologically by mtime ↔ filename.
-- **Defined in**: `claude_hpc/runner/:submit_and_record` —
+- **Defined in**: `hpc_agent/runner/:submit_and_record` —
   `run_id` is a required keyword.
 - **Public contract**: external orchestrators may key state on
   this. Renaming the format breaks every downstream consumer.
@@ -28,7 +28,7 @@ update both surfaces and bump the version.
 
 The full set of 15 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
-`claude_hpc/errors.py`.
+`hpc_agent/errors.py`.
 
 | `error_code` | Class | `category` | `retry_safe` |
 |---|---|---|---|
@@ -48,17 +48,17 @@ The full set of 15 values that may appear in an error envelope's
 | `schema_incompat` | `SchemaIncompat` | internal | no |
 | `internal` | `HpcError` (base / catch-all) | internal | no |
 
-The same enum appears in `claude_hpc/schemas/envelope.json` —
+The same enum appears in `hpc_agent/schemas/envelope.json` —
 generated from `_schema_models/_shared.py:ErrorCode` so adding
 a value is a one-place edit (Python alias) followed by
 `scripts/build_schemas.py --write`.
 
 ### `failure_category` enum
 
-Values returned by `claude_hpc.mapreduce.reduce.classify.classify_failure`.
+Values returned by `hpc_agent.mapreduce.reduce.classify.classify_failure`.
 Used by `/monitor-hpc` (slash) and any agent that wants to drive auto-retry
 policy. The complete list (`CATEGORIES` constant in
-`claude_hpc/mapreduce/reduce/classify.py`):
+`hpc_agent/mapreduce/reduce/classify.py`):
 
 - `gpu_oom`
 - `system_oom`
@@ -84,7 +84,7 @@ Possible values of `RunRecord.status`:
 - `abandoned` — terminal, no `job_ids` are alive on the scheduler
   (set by `runner.reconcile`).
 
-Defined in `claude_hpc/_internal/session/` (`TERMINAL_STATUSES`
+Defined in `hpc_agent/_internal/session/` (`TERMINAL_STATUSES`
 frozenset lives in `run_record.py`; default `status="in_flight"` is
 set on `RunRecord` there too). Validated in `mark_run` (in
 `journal.py`).
@@ -92,15 +92,15 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 ### Journal `schema_version`
 
 - **Current value**: `1` (the constant `SCHEMA_VERSION` in
-  `claude_hpc/_internal/session/run_record.py`).
+  `hpc_agent/_internal/session/run_record.py`).
 - Records with a mismatched `schema_version` are skipped (warned, not
   raised) by `load_run`. Bumping requires a migration story.
 
 ### `clusters.yaml` schema
 
-- **Shipped at**: `claude_hpc/config/clusters.yaml`.
-- **Loader**: `claude_hpc.load_clusters_config` (re-exported from
-  `claude_hpc.infra.clusters`).
+- **Shipped at**: `hpc_agent/config/clusters.yaml`.
+- **Loader**: `hpc_agent.load_clusters_config` (re-exported from
+  `hpc_agent.infra.clusters`).
 - **Schema**: documented in `docs/reference/boundary-contract.md` under "Config
   split". Allowed keys enforced by
   `tests/test_boundary_contract.py:test_clusters_yaml_is_infra_only`.
@@ -108,11 +108,11 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 ### Per-run sidecar v2 schema
 
 - **Lives in**: `<experiment>/.hpc/runs/<run_id>.json`.
-- **Writer**: `claude_hpc.state.runs.write_run_sidecar`.
-- **Reader**: `claude_hpc.state.runs.read_run_sidecar` (backfills v1
+- **Writer**: `hpc_agent.state.runs.write_run_sidecar`.
+- **Reader**: `hpc_agent.state.runs.read_run_sidecar` (backfills v1
   records with v2 keys defaulted to None).
 - **Fields**: identity (`run_id`, `cmd_sha`, `tasks_py_sha`,
-  `submitted_at`, `claude_hpc_version`), executor (`executor`,
+  `submitted_at`, `hpc_agent_version`), executor (`executor`,
   `result_dir_template`, `task_count`), wave map, plus the v2
   config-snapshot block (`cluster`, `profile`, `campaign_id`, `project`,
   `remote_path`, `resources`, `env`, `env_group`, `constraints`,
@@ -123,20 +123,20 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 
 - **Lives in**: `<experiment>/.hpc/stages.py` (Python file exposing
   `def stages() -> list[dict]`).
-- **JSON Schema**: `claude_hpc/schemas/stages.input.json`.
-- **Loader**: `claude_hpc.planning.stages.load_stages` (validates against
+- **JSON Schema**: `hpc_agent/schemas/stages.input.json`.
+- **Loader**: `hpc_agent.planning.stages.load_stages` (validates against
   the schema and enforces unique names + resolved `depends_on`).
 
 ### Exit-code → error_code mapping
 
 - **Documented in**: `docs/reference/cli-spec.md` ("Exit code → error_code
   mapping" section).
-- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `claude_hpc/agent_cli.py`.
+- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `hpc_agent/agent_cli.py`.
 
 ### Last-status cache file
 
 - **Path**: `<HPC_JOURNAL_DIR>/<repo_hash>/runs/<run_id>.last_status.json`.
-- **Writer**: `claude_hpc/runner/:record_status` (best-effort;
+- **Writer**: `hpc_agent/runner/:record_status` (best-effort;
   a write failure does not roll back the journal update).
 - **Reader**: any consumer — agent, human, `jq` pipeline, file
   watcher. Mtime tells the caller how stale the snapshot is.
@@ -147,10 +147,10 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 
 - **Path**: `.hpc/runs/<run_id>.json` inside the experiment repo.
 - **Schema**: `sidecar_schema_version` (currently `1`), `run_id`,
-  `cmd_sha`, `claude_hpc_version`, `submitted_at`, `executor`,
+  `cmd_sha`, `hpc_agent_version`, `submitted_at`, `executor`,
   `result_dir_template`, `task_count`, `tasks_py_sha`, optional
   `wave_map` and `extra` pocket.
-- **Helpers**: `claude_hpc.state.runs.{write,read}_run_sidecar`,
+- **Helpers**: `hpc_agent.state.runs.{write,read}_run_sidecar`,
   `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`,
   `compute_cmd_sha`, `run_sidecar_path`. All re-exported at package
   root; see `docs/reference/boundary-contract.md`.
@@ -197,7 +197,7 @@ When you add a new invariant or change one of the above:
 
 ## Known discrepancies (v0.2.0)
 
-`CATEGORIES` in `claude_hpc/mapreduce/reduce/classify.py` is still
+`CATEGORIES` in `hpc_agent/mapreduce/reduce/classify.py` is still
 the hand-authored Python source for failure categories; the
 `ResubmitCategory` Literal in
 `_schema_models/resubmit.py` mirrors it manually. Adding a new

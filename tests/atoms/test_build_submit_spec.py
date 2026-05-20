@@ -1,13 +1,13 @@
-"""Tests for ``claude_hpc.atoms.build_submit_spec`` — slash-command Step 6d
+"""Tests for ``hpc_agent.atoms.build_submit_spec`` — slash-command Step 6d
 collapses to one primitive call."""
 
 from __future__ import annotations
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
-from claude_hpc.atoms.build_submit_spec import build_submit_spec
+from hpc_agent import errors
+from hpc_agent._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
+from hpc_agent.atoms.build_submit_spec import build_submit_spec
 
 
 def _required() -> dict:

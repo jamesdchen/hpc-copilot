@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/interview.output.json",
+  "title": "interview output envelope",
+  "description": "Envelope returned by ``hpc-agent interview``.\n\nReports the artifacts persisted (interview.json, optionally\nmeta.json) and a dry-resolve preview so the calling agent can\necho 'sweep starts here, midpoint here, ends here' back to the\noperator before submit.",
+  "type": "object",
+  "required": [
+    "ok",
+    "data"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "const": true,
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "data": {
+      "$ref": "#/$defs/_InterviewData"
+    }
+  },
+  "$defs": {
+    "_InterviewData": {
+      "additionalProperties": false,
+      "properties": {
+        "campaign_dir": {
+          "description": "Absolute path to the campaign workdir (where tasks.py and the persisted interview.json live).",
+          "title": "Campaign Dir",
+          "type": "string"
+        },
+        "artifacts": {
+          "description": "Relative paths (under campaign_dir) of every file the primitive wrote or updated. Always includes interview.json; includes meta.json when intent.cluster_target or intent.budget triggered an update.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "total_tasks": {
+          "description": "Result of calling tasks.total() against the campaign's tasks.py. Cross-checked against intent.task_count.",
+          "minimum": 1,
+          "title": "Total Tasks",
+          "type": "integer"
+        },
+        "cmd_sha": {
+          "description": "compute_cmd_sha() over the campaign's tasks.py. Embedded in interview.json so future cmd_recall queries can detect drift.",
+          "pattern": "^[0-9a-f]{8,64}$",
+          "title": "Cmd Sha",
+          "type": "string"
+        },
+        "preview": {
+          "$ref": "#/$defs/_InterviewPreview",
+          "description": "Three sample resolve() calls. Each is a dict per hpc-agent's pre-existing tasks.py contract."
+        }
+      },
+      "required": [
+        "campaign_dir",
+        "artifacts",
+        "total_tasks",
+        "cmd_sha",
+        "preview"
+      ],
+      "title": "_InterviewData",
+      "type": "object"
+    },
+    "_InterviewPreview": {
+      "additionalProperties": false,
+      "properties": {
+        "first": {
+          "description": "tasks.resolve(0) — opaque (whatever resolve returns).",
+          "title": "First"
+        },
+        "mid": {
+          "description": "tasks.resolve(total_tasks // 2)",
+          "title": "Mid"
+        },
+        "last": {
+          "description": "tasks.resolve(total_tasks - 1)",
+          "title": "Last"
+        }
+      },
+      "required": [
+        "first",
+        "mid",
+        "last"
+      ],
+      "title": "_InterviewPreview",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/clusters_describe.output.json",
+  "title": "clusters describe output data",
+  "description": "Shape of the ``data`` field on a successful ``clusters describe <name>`` envelope.",
+  "type": "object",
+  "required": [
+    "name",
+    "config"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "config": {
+      "additionalProperties": true,
+      "description": "Full cluster config block from clusters.yaml (host, scheduler, scratch, gpu_types, constraints, etc.). Shape varies per cluster; see config-precedence.md for fields the framework recognizes.",
+      "title": "Config",
+      "type": "object"
+    },
+    "unknown_keys": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Yaml keys present in this cluster's entry that ClusterConfig does not recognize. Populated only when --strict is passed. Empty list = clean entry; null = strict mode was not requested.",
+      "title": "Unknown Keys"
+    }
+  }
+}

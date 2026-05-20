@@ -1,4 +1,4 @@
-"""Tests for claude_hpc.forecast.calibration — drift + house-edge."""
+"""Tests for hpc_agent.forecast.calibration — drift + house-edge."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from claude_hpc.forecast import calibration as cal
+from hpc_agent.forecast import calibration as cal
 
 # ─── walltime drift ────────────────────────────────────────────────────────
 

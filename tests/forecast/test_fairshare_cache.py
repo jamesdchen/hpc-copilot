@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from claude_hpc.forecast.fairshare_cache import get_or_fetch, read_cache, write_cache
+from hpc_agent.forecast.fairshare_cache import get_or_fetch, read_cache, write_cache
 
 if TYPE_CHECKING:
     from pathlib import Path

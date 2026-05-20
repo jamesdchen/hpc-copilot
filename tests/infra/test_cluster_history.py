@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from claude_hpc._internal.layout import RepoLayout
-from claude_hpc.infra import inspect as ic
+from hpc_agent._internal.layout import RepoLayout
+from hpc_agent.infra import inspect as ic
 
 
 def _mk_snap(cluster: str, *, now_iso: str, nodes: int = 1) -> ic.ClusterSnapshot:
@@ -119,7 +119,7 @@ class TestEdgeCases:
     def test_persist_via_inspect_cluster_kwarg(self, tmp_path, monkeypatch):
         # inspect_cluster returns a synthetic snapshot when persist_dir
         # is set; we patch the SLURM path to short-circuit external IO.
-        from claude_hpc.infra import inspect as inspect_mod
+        from hpc_agent.infra import inspect as inspect_mod
 
         captured = {}
 

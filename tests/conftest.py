@@ -14,7 +14,7 @@ their own ``tmp_path`` and ``monkeypatch``.
 
 Both helpers default to the v1 sidecar shape — that is what the
 existing fixtures wrote, and the production read path
-(:func:`claude_hpc.state.runs.read_run_sidecar`) backfills v1 to v2
+(:func:`hpc_agent.state.runs.read_run_sidecar`) backfills v1 to v2
 on read.
 """
 
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 _DEFAULT_SIDECAR: dict[str, Any] = {
     "sidecar_schema_version": 1,
     "cmd_sha": "deadbeef" * 8,
-    "claude_hpc_version": "0.0.0+test",
+    "hpc_agent_version": "0.0.0+test",
     "submitted_at": "2026-01-01T00:00:00Z",
     "executor": "true",
     "task_count": 1,
@@ -109,7 +109,7 @@ def seed_diurnal_dip(
     """
     from datetime import datetime, timedelta, timezone
 
-    from claude_hpc.state import runtime_prior as rp
+    from hpc_agent.state import runtime_prior as rp
 
     base = datetime(2026, 4, 1, 0, 0, 0, tzinfo=timezone.utc)
     dip_set = frozenset(dip_hours)
@@ -141,6 +141,6 @@ def _register_primitives_once() -> None:
     explicitly. Tests that exercise ``get_registry`` / ``get_meta``
     would otherwise hit the new RuntimeError. Idempotent.
     """
-    from claude_hpc import register_primitives
+    from hpc_agent import register_primitives
 
     register_primitives()

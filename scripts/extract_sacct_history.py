@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from claude_hpc.infra.parsing import parse_sacct_pipe_row, parse_walltime_to_sec  # noqa: E402
+from hpc_agent.infra.parsing import parse_sacct_pipe_row, parse_walltime_to_sec  # noqa: E402
 
 _SACCT_FORMAT = "JobID,Submit,Start,Priority,Partition,User,TimeLimit"
 
@@ -127,7 +127,7 @@ def _main(argv: list[str] | None = None) -> int:
     else:
         if not args.ssh_target:
             p.error("--ssh-target required when --from-stdin is not set")
-        from claude_hpc.infra.remote import ssh_run
+        from hpc_agent.infra.remote import ssh_run
 
         cmd = _build_sacct_command(since_days=args.since_days)
         cp = ssh_run(cmd, ssh_target=args.ssh_target)

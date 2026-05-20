@@ -26,8 +26,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from claude_hpc import _PACKAGE_ROOT
-from claude_hpc.state.discover import (
+from hpc_agent import _PACKAGE_ROOT
+from hpc_agent.state.discover import (
     ExecutorInfo,
     discover_executors,
     is_executor_source,

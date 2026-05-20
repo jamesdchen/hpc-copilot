@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc._internal.session import RunRecord, upsert_run
-from claude_hpc._internal.session import run_record as session_run_record
-from claude_hpc._schema_models.validators.validate_stochastic_marker import (
+from hpc_agent._internal.session import RunRecord, upsert_run
+from hpc_agent._internal.session import run_record as session_run_record
+from hpc_agent._schema_models.validators.validate_stochastic_marker import (
     ValidateStochasticMarkerSpec,
 )
-from claude_hpc.atoms.validate_stochastic_marker import validate_stochastic_marker
+from hpc_agent.atoms.validate_stochastic_marker import validate_stochastic_marker
 
 
 def _seed_run_sidecar(
@@ -34,7 +34,7 @@ def _seed_run_sidecar(
         "sidecar_schema_version": 1,
         "run_id": run_id,
         "cmd_sha": cmd_sha,
-        "claude_hpc_version": "0.3.0",
+        "hpc_agent_version": "0.3.0",
         "submitted_at": "2026-05-07T12:00:00Z",
         "executor": "python3 src/test.py",
         "result_dir_template": "results/{run_id}",

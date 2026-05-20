@@ -1,8 +1,8 @@
-"""Tests for claude_hpc.runner.failure_signatures.classify."""
+"""Tests for hpc_agent.runner.failure_signatures.classify."""
 
 from __future__ import annotations
 
-from claude_hpc.runner.failure_signatures import CATALOG, classify
+from hpc_agent.runner.failure_signatures import CATALOG, classify
 
 
 def test_catalog_size() -> None:
@@ -16,7 +16,7 @@ def test_preempted_matches_exit_130() -> None:
     """Cluster-side dispatch.py exits 130 after trapping SIGTERM —
     classify() must surface this as ``preempted`` so the harness can
     resubmit cleanly without escalating to the user."""
-    out = classify("[claude-hpc] SIGTERM received; cluster preemption imminent\n", 130)
+    out = classify("[hpc-agent] SIGTERM received; cluster preemption imminent\n", 130)
     assert out["error_class"] == "preempted"
     assert out["suggested_fix"] == {"action": "resubmit-preempted"}
 

@@ -11,7 +11,7 @@ import gzip
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from claude_hpc.forecast.snapshot_aggregator import (
+from hpc_agent.forecast.snapshot_aggregator import (
     compute_arrival_rate_per_hour,
     load_recent_snapshots,
 )

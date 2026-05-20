@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_hpc.infra.backends.sge import SGEBackend
+from hpc_agent.infra.backends.sge import SGEBackend
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> SimpleNamespace:
@@ -121,7 +121,7 @@ class TestSubmitArrayTracked:
                 returncode=0,
             )
 
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", fake_run)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
 
         backend = SGEBackend(
             script=str(tmp_path / "job.sh"),
@@ -140,7 +140,7 @@ class TestSubmitArrayTracked:
         def fake_run(cmd, *args, **kwargs):
             return _cp(stdout="", stderr="qsub: bad thing", returncode=2)
 
-        monkeypatch.setattr("claude_hpc.infra.backends.subprocess.run", fake_run)
+        monkeypatch.setattr("hpc_agent.infra.backends.subprocess.run", fake_run)
 
         backend = SGEBackend(
             script=str(tmp_path / "job.sh"),

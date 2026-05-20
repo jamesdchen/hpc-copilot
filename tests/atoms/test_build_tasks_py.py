@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.build_tasks_py``.
+"""Tests for ``hpc_agent.atoms.build_tasks_py``.
 
 The primitive scaffolds ``.hpc/tasks.py`` from a cartesian-product
 axes spec. We test:
@@ -18,8 +18,8 @@ import importlib.util
 import sys
 from typing import TYPE_CHECKING, Any
 
-from claude_hpc._schema_models.actions.build_tasks_py import BuildTasksPyInput
-from claude_hpc.atoms.build_tasks_py import build_tasks_py
+from hpc_agent._schema_models.actions.build_tasks_py import BuildTasksPyInput
+from hpc_agent.atoms.build_tasks_py import build_tasks_py
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -200,7 +200,7 @@ def test_reserved_axis_name_rejected(tmp_path: Path) -> None:
     """Axis whose uppercase form would shadow $HOME must fail at scaffold time."""
     import pytest
 
-    from claude_hpc import errors
+    from hpc_agent import errors
 
     with pytest.raises(errors.SpecInvalid, match=r"would shadow the env var 'HOME'"):
         build_tasks_py(
@@ -231,7 +231,7 @@ def test_reserved_axis_name_scheduler_prefix_rejected(tmp_path: Path) -> None:
     """SLURM_*/SGE_*/PBS_* and HPC_KW_* prefixes are reserved."""
     import pytest
 
-    from claude_hpc import errors
+    from hpc_agent import errors
 
     for bad in ("slurm_job_id", "sge_task_id", "hpc_kw_horizon"):
         with pytest.raises(errors.SpecInvalid):
@@ -248,7 +248,7 @@ def test_reserved_axis_name_framework_keys_rejected(tmp_path: Path) -> None:
     """Framework-reserved keys (RESULT_DIR, HPC_TASK_ID, ...) are rejected."""
     import pytest
 
-    from claude_hpc import errors
+    from hpc_agent import errors
 
     for bad in ("result_dir", "hpc_task_id", "hpc_run_id"):
         with pytest.raises(errors.SpecInvalid):

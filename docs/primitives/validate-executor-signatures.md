@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.atoms.validate_executor_signatures.validate_executor_signatures
+  python: hpc_agent.atoms.validate_executor_signatures.validate_executor_signatures
 ---
 # validate-executor-signatures
 
@@ -54,4 +54,4 @@ The validator reads tasks.py and the executor module; calling twice with the sam
 - The validator uses `inspect.signature()` so it supports type annotations like `Literal`, `Union`, `Optional`, and standard type hints. If a parameter has no annotation, any value passes the check.
 - Sampling instead of exhaustive walk keeps the validator O(sample_n_tasks) rather than O(tasks); the first failing task surfaces a finding, so larger samples reduce statistical noise without linear cost scaling.
 
-**Schemas:** [`validate_executor_signatures.input.json`](../../src/claude_hpc/schemas/validate_executor_signatures.input.json), [`validate_executor_signatures.output.json`](../../src/claude_hpc/schemas/validate_executor_signatures.output.json).
+**Schemas:** [`validate_executor_signatures.input.json`](../../src/hpc_agent/schemas/validate_executor_signatures.input.json), [`validate_executor_signatures.output.json`](../../src/hpc_agent/schemas/validate_executor_signatures.output.json).

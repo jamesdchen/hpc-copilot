@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from claude_hpc import agent_cli as cli
+from hpc_agent import agent_cli as cli
 
 from ._helpers import SUBMIT_SPEC
 from ._helpers import env_without_ssh_agent as _env_without_ssh_agent
@@ -41,8 +41,8 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
     import argparse
     from unittest.mock import patch
 
-    from claude_hpc._internal import session as session_mod
-    from claude_hpc._internal.session import RunRecord
+    from hpc_agent._internal import session as session_mod
+    from hpc_agent._internal.session import RunRecord
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
@@ -75,7 +75,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
 
     with (
         patch(
-            "claude_hpc.runner.combine_wave",
+            "hpc_agent.runner.combine_wave",
             return_value=(False, "", "boom: missing metrics"),
         ),
         patch.object(cli, "_emit", side_effect=fake_emit),
@@ -154,8 +154,8 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
 
 def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
     """Helper: seed a journal record so cmd_aggregate gets past lookup."""
-    from claude_hpc._internal import session as session_mod
-    from claude_hpc._internal.session import RunRecord
+    from hpc_agent._internal import session as session_mod
+    from hpc_agent._internal.session import RunRecord
 
     rec = RunRecord(
         run_id=run_id,
@@ -295,7 +295,7 @@ def test_aggregate_reads_sidecar_defaults_for_require_and_expect(
     import argparse
     from unittest.mock import patch
 
-    from claude_hpc.state.runs import write_run_sidecar
+    from hpc_agent.state.runs import write_run_sidecar
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
@@ -305,7 +305,7 @@ def test_aggregate_reads_sidecar_defaults_for_require_and_expect(
         tmp_path,
         run_id="ml_abcd1234",
         cmd_sha="0" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-04-28T00:00:00+00:00",
         executor="python -m ml.train",
         result_dir_template="results/{seed}",

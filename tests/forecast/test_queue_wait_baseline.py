@@ -1,17 +1,17 @@
-"""Tests for claude_hpc.forecast.queue_wait_baseline.predict_queue_wait."""
+"""Tests for hpc_agent.forecast.queue_wait_baseline.predict_queue_wait."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from claude_hpc._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
-from claude_hpc.forecast import queue_wait_baseline as qwb
-from claude_hpc.infra.inspect import (
+from hpc_agent._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
+from hpc_agent.forecast import queue_wait_baseline as qwb
+from hpc_agent.infra.inspect import (
     ClusterSnapshot,
     NodeSnapshot,
     persist_snapshot,
 )
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent.state import runtime_prior as rp
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"

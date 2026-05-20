@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc._internal.layout``.
+"""Tests for ``hpc_agent._internal.layout``.
 
 The B1 refactor introduced ``RepoLayout`` and ``JournalLayout`` to
 replace eight scattered path helpers and to make the ``runs_dir``
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc._internal.layout import JournalLayout, RepoLayout
+from hpc_agent._internal.layout import JournalLayout, RepoLayout
 
 
 def test_repo_layout_root_is_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -12,7 +12,7 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING
 
-from claude_hpc.state.runs import run_sidecar_path, write_run_sidecar
+from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 def _run_cli(*args: str) -> tuple[int, str, str]:
     proc = subprocess.run(
-        [sys.executable, "-m", "claude_hpc", *args],
+        [sys.executable, "-m", "hpc_agent", *args],
         capture_output=True,
         text=True,
     )
@@ -37,7 +37,7 @@ def _common_required_kwargs(run_id: str, task_count: int = 1) -> dict:
     return dict(
         run_id=run_id,
         cmd_sha="0" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 src/run.py",
         result_dir_template="results/{run_id}/task_{task_id}",
@@ -137,7 +137,7 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
     """Pin the public contract — `data` block matches campaign.output.json."""
     from importlib.resources import files
 
-    schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
+    schema = json.loads((files("hpc_agent.schemas") / "campaign.output.json").read_text())
 
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
     rc, out, _ = _run_cli(
@@ -145,7 +145,7 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
     )
     assert rc == 0
     env = _parse_envelope(out)
-    from claude_hpc._internal.schema import validate as _validate
+    from hpc_agent._internal.schema import validate as _validate
 
     _validate(env["data"], schema)
 
@@ -153,12 +153,12 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
 def test_campaign_list_envelope_validates_against_schema(tmp_path: Path) -> None:
     from importlib.resources import files
 
-    schema = json.loads((files("claude_hpc.schemas") / "campaign.output.json").read_text())
+    schema = json.loads((files("hpc_agent.schemas") / "campaign.output.json").read_text())
 
     write_run_sidecar(tmp_path, **_common_required_kwargs("r1"), campaign_id="A")
     rc, out, _ = _run_cli("campaign", "list", "--experiment-dir", str(tmp_path))
     assert rc == 0
     env = _parse_envelope(out)
-    from claude_hpc._internal.schema import validate as _validate
+    from hpc_agent._internal.schema import validate as _validate
 
     _validate(env["data"], schema)

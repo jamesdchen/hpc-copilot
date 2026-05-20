@@ -1,4 +1,4 @@
-# claude-hpc as a POSIX-native agent surface
+# hpc-agent as a POSIX-native agent surface
 
 Most agentic HPC tools fall into one of three buckets:
 
@@ -13,7 +13,7 @@ Most agentic HPC tools fall into one of three buckets:
 3. **Heavy middleware** — Parsl + Globus Compute + ProxyStore. Production-grade
    but a lot of moving parts; assumes the cluster has those services.
 
-claude-hpc takes a fourth path: a **POSIX-native agent surface**.
+hpc-agent takes a fourth path: a **POSIX-native agent surface**.
 
 ## What that means
 
@@ -21,7 +21,7 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
 - **One stdout shape**: a single-line JSON envelope.
   - Success: `{"ok": true, "idempotent": <bool>, "data": {...}}`
   - Failure: `{"ok": false, "error_code": "...", "category": "...", "retry_safe": <bool>, "remediation": "..."}`
-  - See [`schemas/envelope.json`](../src/claude_hpc/schemas/envelope.json) and
+  - See [`schemas/envelope.json`](../src/hpc_agent/schemas/envelope.json) and
     [`docs/reference/cli-spec.md`](cli-spec.md).
 - **Stable exit codes**: 0 ok, 1 user error, 2 cluster/network, 3 internal.
   An agent harness can dispatch on the exit code BEFORE parsing JSON.
@@ -30,7 +30,7 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
 - **JSON Schema 2020-12** for input/output validation. Standards-track; not a
   custom format.
 - **Schemas are regenerated from Pydantic models** under
-  `src/claude_hpc/_schema_models/`. External consumers still read
+  `src/hpc_agent/_schema_models/`. External consumers still read
   the JSON files — that's the wire contract. The Python models are
   the framework's *authoring* surface; touching them and not
   regenerating is a CI failure
@@ -70,7 +70,7 @@ claude-hpc takes a fourth path: a **POSIX-native agent surface**.
 
 ## Comparison
 
-| | LLM-generates-shell | Python library | Heavy middleware | claude-hpc |
+| | LLM-generates-shell | Python library | Heavy middleware | hpc-agent |
 |---|---|---|---|---|
 | Harness language | any | Python | Python | any |
 | Schema-validated output | ❌ | partial | ❌ | ✅ |

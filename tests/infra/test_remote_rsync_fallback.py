@@ -1,4 +1,4 @@
-"""Tests for the rsync-absent fallback in claude_hpc.infra.remote.
+"""Tests for the rsync-absent fallback in hpc_agent.infra.remote.
 
 The transport layer detects rsync via ``shutil.which("rsync")``; when
 absent (typically Windows without WSL/MSYS), :func:`rsync_push` routes
@@ -13,7 +13,7 @@ import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-from claude_hpc.infra import remote
+from hpc_agent.infra import remote
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,20 +24,20 @@ def _ok(stdout: str = "") -> subprocess.CompletedProcess[str]:
 
 
 def test_have_rsync_reports_truthy_when_present() -> None:
-    with patch("claude_hpc.infra.remote.shutil.which", return_value="/usr/bin/rsync"):
+    with patch("hpc_agent.infra.remote.shutil.which", return_value="/usr/bin/rsync"):
         assert remote._have_rsync() is True
 
 
 def test_have_rsync_reports_false_when_absent() -> None:
-    with patch("claude_hpc.infra.remote.shutil.which", return_value=None):
+    with patch("hpc_agent.infra.remote.shutil.which", return_value=None):
         assert remote._have_rsync() is False
 
 
 def test_rsync_push_uses_rsync_when_available(tmp_path: Path) -> None:
     (tmp_path / "f.txt").write_text("hi")
     with (
-        patch("claude_hpc.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
-        patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
+        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
     ):
         remote.rsync_push(ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[])
     cmd = run_mock.call_args[0][0]
@@ -50,9 +50,9 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
     (tmp_path / "f.txt").write_text("hi")
     fake_run = _ok()
     with (
-        patch("claude_hpc.infra.remote.shutil.which", return_value=None),
-        patch("claude_hpc.infra.remote.subprocess.run", return_value=fake_run) as run_mock,
-        patch("claude_hpc.infra.remote.subprocess.Popen") as popen_mock,
+        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
+        patch("hpc_agent.infra.remote.subprocess.run", return_value=fake_run) as run_mock,
+        patch("hpc_agent.infra.remote.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
@@ -88,9 +88,9 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
     string handed to ssh (the last element of the ssh argv)."""
     (tmp_path / "f.txt").write_text("hi")
     with (
-        patch("claude_hpc.infra.remote.shutil.which", return_value=None),
-        patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
-        patch("claude_hpc.infra.remote.subprocess.Popen") as popen_mock,
+        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
+        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.remote.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
@@ -150,7 +150,7 @@ def test_remote_clean_cmd_protects_framework_files() -> None:
     cmd = remote._remote_clean_cmd("/r", remote.DEFAULT_RSYNC_EXCLUDES)
     assert "-path /r/.hpc/_hpc_dispatch.py" in cmd
     assert "-path /r/.hpc/_hpc_combiner.py" in cmd
-    assert "-name claude_hpc" in cmd  # deployed runtime stubs
+    assert "-name hpc_agent" in cmd  # deployed runtime stubs
     assert cmd.endswith("-print0 | xargs -0 -r rm -rf --")
 
 
@@ -163,8 +163,8 @@ def test_remote_clean_cmd_empty_exclude_deletes_whole_subtree() -> None:
 
 def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
     with (
-        patch("claude_hpc.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
-        patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
+        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
     ):
         remote.rsync_pull(
             ssh_target="u@h",
@@ -178,8 +178,8 @@ def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
 
 def test_rsync_pull_falls_back_to_scp_when_rsync_missing(tmp_path: Path) -> None:
     with (
-        patch("claude_hpc.infra.remote.shutil.which", return_value=None),
-        patch("claude_hpc.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
+        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
     ):
         remote.rsync_pull(
             ssh_target="u@h",
@@ -200,9 +200,9 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
         args=[], returncode=2, stdout="", stderr="ssh: connect refused"
     )
     with (
-        patch("claude_hpc.infra.remote.shutil.which", return_value=None),
-        patch("claude_hpc.infra.remote.subprocess.run", return_value=fail),
-        patch("claude_hpc.infra.remote.subprocess.Popen") as popen_mock,
+        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
+        patch("hpc_agent.infra.remote.subprocess.run", return_value=fail),
+        patch("hpc_agent.infra.remote.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()

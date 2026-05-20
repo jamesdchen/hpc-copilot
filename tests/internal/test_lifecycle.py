@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc._internal.lifecycle``.
+"""Tests for ``hpc_agent._internal.lifecycle``.
 
 The B2 refactor introduced four StrEnums to replace the four scattered,
 drifting string vocabularies. The cross-validation tests here exist
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from claude_hpc._internal.lifecycle import (
+from hpc_agent._internal.lifecycle import (
     TERMINAL_STATUSES,
     FailureCategory,
     JournalStatus,
@@ -21,7 +21,7 @@ from claude_hpc._internal.lifecycle import (
 )
 
 REPO = Path(__file__).resolve().parent.parent.parent
-SCHEMAS = REPO / "src" / "claude_hpc" / "schemas"
+SCHEMAS = REPO / "src" / "hpc_agent" / "schemas"
 
 
 def _load_lifecycle_enum(schema_name: str) -> set[str]:
@@ -78,7 +78,7 @@ def test_lifecycle_state_matches_reconcile_schema() -> None:
 
 def test_failure_category_includes_classifier_emissions() -> None:
     """Every category the classifier emits must round-trip through FailureCategory."""
-    from claude_hpc import runner
+    from hpc_agent import runner
 
     classifier_emits = {cat for cat, _ in runner._FAILURE_CATEGORY_PATTERNS}
     canonical = {fc.value for fc in FailureCategory}
@@ -88,7 +88,7 @@ def test_failure_category_includes_classifier_emissions() -> None:
 
 def test_failure_category_includes_resubmit_validation() -> None:
     """Every category the resubmit path accepts must round-trip through FailureCategory."""
-    from claude_hpc import agent_cli
+    from hpc_agent import agent_cli
 
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)
     canonical = {fc.value for fc in FailureCategory}
@@ -103,7 +103,7 @@ def test_classifier_emissions_subset_of_resubmit_accepted() -> None:
     unrepresentable. If the classifier ever emits a category the
     resubmit silently rejects, this fails.
     """
-    from claude_hpc import agent_cli, runner
+    from hpc_agent import agent_cli, runner
 
     classifier_emits = {cat for cat, _ in runner._FAILURE_CATEGORY_PATTERNS}
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)

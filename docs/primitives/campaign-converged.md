@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent campaign converged --campaign-id <id>
-  python: claude_hpc.atoms.campaign_converged.campaign_converged
+  python: hpc_agent.atoms.campaign_converged.campaign_converged
 ---
 # campaign-converged
 

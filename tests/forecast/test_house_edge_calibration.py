@@ -11,7 +11,7 @@ observed reality:
 
 from __future__ import annotations
 
-from claude_hpc.forecast.backfill import (
+from hpc_agent.forecast.backfill import (
     CALIBRATION_FACTOR_CEILING,
     CALIBRATION_FACTOR_FLOOR,
     BackfillProbe,
@@ -19,7 +19,7 @@ from claude_hpc.forecast.backfill import (
     calibrate_probes,
     pick_earliest_calibrated,
 )
-from claude_hpc.forecast.calibration import (
+from hpc_agent.forecast.calibration import (
     HouseEdge,
     compute_house_edge_by_gpu_type,
 )

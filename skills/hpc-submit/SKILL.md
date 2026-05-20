@@ -11,7 +11,7 @@ Throughout this skill, "invoke <primitive>" means call the primitive's `backed_b
 ## Setup
 
 Read cluster definitions:
-- `clusters.yaml`: resolve path via `python -c 'from claude_hpc import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
+- `clusters.yaml`: resolve path via `python -c 'from hpc_agent import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
 Call [suggest-setup-action](../../docs/primitives/suggest-setup-action.md) to figure out where in the priority ladder the experiment sits — it returns `{priority, action, run_id, candidates, reason}`:
 
@@ -36,7 +36,7 @@ Map flag set per contract:
 - **New-contract** (`info.has_compute_function == true`): if `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If first submit, capture intended flags during Step 6b interview.
 - **Old-contract** (`info.has_main_guard` only): run `python3 <info.path> --help` to map the CLI interface.
 
-If `discover_executors` returns empty, the slash command surfaces a scaffolding sub-interview to the user; that dialog is human UX (it lives in the slash) but the actual work it does — copy `claude_hpc/mapreduce/templates/scaffolds/executor_template.py` to a user-chosen path, then walk through `compute(args)` — is what `hpc-build-executor` skill encodes.
+If `discover_executors` returns empty, the slash command surfaces a scaffolding sub-interview to the user; that dialog is human UX (it lives in the slash) but the actual work it does — copy `hpc_agent/mapreduce/templates/scaffolds/executor_template.py` to a user-chosen path, then walk through `compute(args)` — is what `hpc-build-executor` skill encodes.
 
 ## Step 2: Parse user intent
 
@@ -46,7 +46,7 @@ For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **ba
 
 ## Step 3: Plan the parallelization axis
 
-The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 walks the user through writing it once per experiment, adapting from `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py`. From then on the file is committed and reused on every submit.
+The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 walks the user through writing it once per experiment, adapting from `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`. From then on the file is committed and reused on every submit.
 
 Step 3's job is to gather enough context for Step 6 to write a sensible first draft: axis shape, kwargs `resolve(task_id)` returns, expected task count.
 
@@ -64,14 +64,14 @@ Resolve in order: cluster (interactive or `--cluster`); `SSH_TARGET` + `REMOTE_P
 
 For DL executors with `conda_envs` listed in `clusters.yaml` → present the options; without → ask. Resource defaults: CPU/ML 1×16G×4h; GPU/DL 4×16G×6h×2gpu (gpu_type=first in cluster's `gpu_types`).
 
-Build rsync excludes from `.gitignore` patterns + standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories. **`.hpc/` rides rsync** — the cluster needs `tasks.py` and the in-flight `runs/<run_id>.json`. The framework files inside cluster-side `.hpc/` (`_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are placed by `deploy_runtime` and protected from `--delete` via `DEFAULT_RSYNC_EXCLUDES` in `claude_hpc.infra.remote`.
+Build rsync excludes from `.gitignore` patterns + standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories. **`.hpc/` rides rsync** — the cluster needs `tasks.py` and the in-flight `runs/<run_id>.json`. The framework files inside cluster-side `.hpc/` (`_hpc_dispatch.py`, `_hpc_combiner.py`, `templates/`) are placed by `deploy_runtime` and protected from `--delete` via `DEFAULT_RSYNC_EXCLUDES` in `hpc_agent.infra.remote`.
 
 ## Step 4b: Compute Throughput Plan
 
 After grid expansion produces `total_tasks`:
 
-1. Load constraints: `from claude_hpc import ClusterConstraints, parse_constraints`; merge cluster + per-profile.
-2. Build workload: `from claude_hpc.planning.throughput import WorkloadSpec, compute_submission_plan`.
+1. Load constraints: `from hpc_agent import ClusterConstraints, parse_constraints`; merge cluster + per-profile.
+2. Build workload: `from hpc_agent.planning.throughput import WorkloadSpec, compute_submission_plan`.
 3. `compute_submission_plan(constraints, workload)` returns a `SubmissionPlan` with batched waves.
 4. Embed `wave_map = build_wave_map(plan)` — passed to `write_run_sidecar(..., wave_map=wave_map)` at Step 6d. The cluster-side combiner reads it from there.
 
@@ -87,7 +87,7 @@ Three branches on `score-submit-plan`'s envelope:
 
 ### 4c-A: `needs_canary: true` (cold start)
 
-No runtime priors exist. Don't try to score — submit a 1-task canary first using `data.canary_plan.constraint`. Run through Steps 5–10 with `--no-canary` (we **are** the canary). Wait for terminal; capture `gpu_type`, `node`, `elapsed_sec`, `exit_code` from sacct/qacct. On success, append a sample via `claude_hpc.state.runtime_prior.append_sample`. On SEGV: STOP and surface to user (do NOT auto-retry on a different node — the failure is informative; re-running blindly may mask whether the workload itself is buggy). On timeout: bump walltime 2× and retry the canary ONCE. After two timeouts surface to user.
+No runtime priors exist. Don't try to score — submit a 1-task canary first using `data.canary_plan.constraint`. Run through Steps 5–10 with `--no-canary` (we **are** the canary). Wait for terminal; capture `gpu_type`, `node`, `elapsed_sec`, `exit_code` from sacct/qacct. On success, append a sample via `hpc_agent.state.runtime_prior.append_sample`. On SEGV: STOP and surface to user (do NOT auto-retry on a different node — the failure is informative; re-running blindly may mask whether the workload itself is buggy). On timeout: bump walltime 2× and retry the canary ONCE. After two timeouts surface to user.
 
 After a *successful* canary, re-invoke score-submit-plan and proceed to 4c-B.
 
@@ -103,7 +103,7 @@ Score per the rubric in [score-submit-plan.md](../../docs/primitives/score-submi
 
 **Auto-apply rule** (cluster-wide): apply `array_reshape.recommended_max_array_size` automatically when present. Do NOT auto-apply `walltime_split` — confirm with user that the executor checkpoints before chaining (split's `requires_checkpointing: true` would otherwise kill work at every segment boundary).
 
-**Closed-loop calibration**: `plan-submit` reads recent samples and tunes the walltime safety multiplier. Top-level `walltime_drift` field reports `{base_safety_mult, adjusted_safety_mult, rationale}`. After submission, write a prediction sidecar via `claude_hpc.forecast.calibration.record_prediction_sidecar` so post-completion ingestion can validate calibration.
+**Closed-loop calibration**: `plan-submit` reads recent samples and tunes the walltime safety multiplier. Top-level `walltime_drift` field reports `{base_safety_mult, adjusted_safety_mult, rationale}`. After submission, write a prediction sidecar via `hpc_agent.forecast.calibration.record_prediction_sidecar` so post-completion ingestion can validate calibration.
 
 For each chosen candidate's `stressed_nodes`, the SLASH command (not the skill) decides per-node whether to soft-exclude using `co_tenants` context — that's the human-judgment moment that no static threshold captures cleanly. The skill receives the resulting `--exclude=<node1>,...` flag and adds it to the sbatch invocation.
 
@@ -148,7 +148,7 @@ The envelope's `data` carries `{headline, body, confirm_prompt}`. Print `headlin
 
 ```python
 from pathlib import Path
-from claude_hpc import (
+from hpc_agent import (
     framework_subdir, tasks_path, load_tasks_module, compute_cmd_sha,
 )
 experiment_dir = Path.cwd()
@@ -160,14 +160,14 @@ If `tp.exists()`, read it as-is — never regenerate. To change the axis, the us
 
 ### 6b: Scaffold from canonical example (first submit only)
 
-If `tp.exists()` is False, walk through `claude_hpc/mapreduce/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
+If `tp.exists()` is False, walk through `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
 
 **Axis naming (fidelity vs. serial)**: when the user proposes axis names, prefer experiment-prefixed forms (`exp_horizon`, `ridge_alpha`) over bare names (`horizon`, `alpha`). The dispatcher exports each kwarg as both `HPC_KW_<KEY>` and bare `<KEY>` (uppercased), and the bare form silently shadows real env vars when names collide — an axis named `home` becomes `$HOME` for the executor, breaking everything that uses the home directory. `build-tasks-py` rejects names that match a reserved set (`HOME`, `PATH`, `USER`, `LD_LIBRARY_PATH`, `OMP_NUM_THREADS`, the framework's own `HPC_*`, scheduler-injected `SLURM_*`/`SGE_*`/`PBS_*`, etc.) so the failure surfaces at scaffold time, but the safest pattern is to prefix all experiment kwargs and avoid the question. Setting `HPC_KW_NAMESPACE_ONLY=1` in the spec's `job_env` disables the bare-uppercase export entirely (executor reads `HPC_KW_<KEY>` only) and is the recommended default for new campaigns.
 
 Copy the dispatcher:
 ```python
 import shutil
-from claude_hpc import _PACKAGE_ROOT
+from hpc_agent import _PACKAGE_ROOT
 shutil.copy(_PACKAGE_ROOT / "mapreduce" / "templates" / "scaffolds" / "cli_dispatcher.py", experiment_dir / ".hpc" / "cli.py")
 ```
 
@@ -176,7 +176,7 @@ Commit `.hpc/tasks.py` + `.hpc/cli.py`. No push — user controls upstream.
 ### 6c: Compute `cmd_sha`, check for resume
 
 ```python
-from claude_hpc import compute_cmd_sha, compute_tasks_py_sha
+from hpc_agent import compute_cmd_sha, compute_tasks_py_sha
 tasks = load_tasks_module(tp)
 cmd_sha = compute_cmd_sha(tasks)
 tasks_py_sha = compute_tasks_py_sha(tp)
@@ -293,6 +293,6 @@ The journal write happens inside `submit-flow` via `runner.submit_and_record`. F
 - **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` or every cluster call hangs on auth. Run `hpc-preflight` first.
 - **Scheduler rate limits**: serialize submits to a single cluster; most schedulers cap at ~1/sec. Sleep 1s between back-to-back calls or expect `scheduler_throttled`.
 - **Idempotency**: `submit-flow` is replay-safe on `run_id`. If `data.deduped: true`, original cluster jobs are running — do NOT re-invoke.
-- **No cancel/abort**: claude-hpc has no kill primitive. If you decide an experiment is bad, stop monitoring; cluster jobs run to walltime.
+- **No cancel/abort**: hpc-agent has no kill primitive. If you decide an experiment is bad, stop monitoring; cluster jobs run to walltime.
 - `--dry-run` never touches the cluster and never writes to the journal — safe to run repeatedly.
 - The cluster-side template translates the scheduler's per-task index (`SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`) into `HPC_TASK_ID` (0-based) before exec'ing `$EXECUTOR`, which then imports `.hpc/tasks.py`, calls `tasks.resolve(HPC_TASK_ID)`, and runs the executor command from the sidecar with kwargs merged into the env.

@@ -8,7 +8,7 @@ idempotency_key: experiment_dir
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.state.runs.prune_orphan_sidecars
+  python: hpc_agent.state.runs.prune_orphan_sidecars
 ---
 # prune-orphan-sidecars
 

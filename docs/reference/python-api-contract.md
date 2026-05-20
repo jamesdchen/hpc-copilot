@@ -1,6 +1,6 @@
 # Python-API Contract
 
-Cross-cutting reference for the Python helpers, on-cluster CLIs, and process-level entry points that slash commands and library callers invoke from inside the `claude-hpc` checkout. Per-operation contracts (input/output/error/idempotency) live in **[`docs/primitives/`](primitives/)** — this file documents only what's shared across operations: the per-run sidecar schema and the conventions the Python surface follows.
+Cross-cutting reference for the Python helpers, on-cluster CLIs, and process-level entry points that slash commands and library callers invoke from inside the `hpc-agent` checkout. Per-operation contracts (input/output/error/idempotency) live in **[`docs/primitives/`](primitives/)** — this file documents only what's shared across operations: the per-run sidecar schema and the conventions the Python surface follows.
 
 > **Looking for the shell `hpc-agent` CLI?** That is the agent-facing surface — see [`docs/reference/cli-spec.md`](cli-spec.md) and the per-subcommand primitives under `docs/primitives/`. This document covers the Python/library and on-cluster paths that `slash_commands/*.py` and the CLI both reach into.
 
@@ -19,7 +19,7 @@ Each `submit-spec` invocation writes a per-run sidecar to `.hpc/runs/<run_id>.js
   "sidecar_schema_version": 2,
   "run_id": "ml_ridge-20260429-153012-abc12345",
   "cmd_sha": "...",
-  "claude_hpc_version": "0.5.0",
+  "hpc_agent_version": "0.5.0",
   "submitted_at": "2026-04-29T15:30:12Z",
   "executor": "python3 src/ml_ridge.py",
   "result_dir_template": "results/{model}_{seed}",
@@ -47,13 +47,13 @@ Each `submit-spec` invocation writes a per-run sidecar to `.hpc/runs/<run_id>.js
 }
 ```
 
-- `cmd_sha` is computed by `claude_hpc.state.runs.compute_cmd_sha`: `SHA-256(join("\n", json.dumps(tasks.resolve(i), sort_keys=True) for i in range(tasks.total())))`. Stable across equivalent task lists; changes whenever `.hpc/tasks.py` changes the kwargs returned by `resolve`.
+- `cmd_sha` is computed by `hpc_agent.state.runs.compute_cmd_sha`: `SHA-256(join("\n", json.dumps(tasks.resolve(i), sort_keys=True) for i in range(tasks.total())))`. Stable across equivalent task lists; changes whenever `.hpc/tasks.py` changes the kwargs returned by `resolve`.
 - The user's task definition lives in `.hpc/tasks.py` (a Python module exposing `total()` and `resolve(task_id)`); the sidecar references it but does not duplicate per-task data.
 - The block from `cluster` through `aggregate_defaults` is the **v2 config snapshot**: every successful `submit-spec` captures the full config it ran under so subsequent primitives read context from the sidecar instead of an external config file. All v2 fields are optional at write time; `read_run_sidecar` backfills missing keys with `None` so callers see a uniform shape regardless of when the sidecar was written.
-- `campaign_id` tags the run as part of a closed-loop campaign. The `HPC_CAMPAIGN_ID` env var is forwarded to the cluster by every scheduler template; the user's `tasks.py` reads it back via `os.environ` to call `campaign-status`'s Python form (`claude_hpc.mapreduce.reduce.history.prior`) on prior iterations.
-- Retention: at most `claude_hpc.state.runs.MAX_RUNS` (default 500; override via `HPC_MAX_RUNS` env var) sidecars are kept per experiment directory. Oldest by mtime are evicted on every write.
+- `campaign_id` tags the run as part of a closed-loop campaign. The `HPC_CAMPAIGN_ID` env var is forwarded to the cluster by every scheduler template; the user's `tasks.py` reads it back via `os.environ` to call `campaign-status`'s Python form (`hpc_agent.mapreduce.reduce.history.prior`) on prior iterations.
+- Retention: at most `hpc_agent.state.runs.MAX_RUNS` (default 500; override via `HPC_MAX_RUNS` env var) sidecars are kept per experiment directory. Oldest by mtime are evicted on every write.
 
-When resuming a prior run, the slash command matches the recomputed `cmd_sha` against existing sidecars via `find_run_by_cmd_sha` and delegates to `claude_hpc.planning.resubmit_batching.resubmit_plan(task_count=, failed_task_ids=)` for the failing task IDs; see `slash_commands/commands/submit-hpc.md` for the interactive resume-vs-fresh prompt.
+When resuming a prior run, the slash command matches the recomputed `cmd_sha` against existing sidecars via `find_run_by_cmd_sha` and delegates to `hpc_agent.planning.resubmit_batching.resubmit_plan(task_count=, failed_task_ids=)` for the failing task IDs; see `slash_commands/commands/submit-hpc.md` for the interactive resume-vs-fresh prompt.
 
 ## Python entry points
 
@@ -61,25 +61,25 @@ The Python surface that slash commands and library callers invoke:
 
 | Operation | Primitive | Python entry point |
 |---|---|---|
-| Record a submission | [submit-spec](primitives/submit-spec.md) | `claude_hpc.runner.submit_and_record` |
-| Poll one run's status | [poll-run-status](primitives/poll-run-status.md) | `claude_hpc.runner.record_status` |
-| Combine one wave | [combine-wave](primitives/combine-wave.md) | `claude_hpc.runner.combine_wave` |
-| Record a resubmission | [resubmit-failed](primitives/resubmit-failed.md) | `claude_hpc.runner.resubmit_failed` |
-| Reconcile journal vs cluster | [reconcile-journal](primitives/reconcile-journal.md) | `claude_hpc.runner.reconcile` |
-| Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `claude_hpc.runner.mark_terminal` |
-| Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `claude_hpc.mapreduce.reduce.history.prior` |
-| List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `claude_hpc._internal.session.find_in_flight_runs` |
-| Discover executors | [discover-executors](primitives/discover-executors.md) | `claude_hpc.state.discover.discover_executors` |
-| Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `claude_hpc.infra.inspect.inspect_cluster` |
-| Score submit plan | [score-submit-plan](primitives/score-submit-plan.md) | `claude_hpc.planning.planner.plan_submit` |
-| Roll up runtime priors | [read-runtime-prior](primitives/read-runtime-prior.md) | `claude_hpc.state.runtime_prior.roll_up_quantiles` |
+| Record a submission | [submit-spec](primitives/submit-spec.md) | `hpc_agent.runner.submit_and_record` |
+| Poll one run's status | [poll-run-status](primitives/poll-run-status.md) | `hpc_agent.runner.record_status` |
+| Combine one wave | [combine-wave](primitives/combine-wave.md) | `hpc_agent.runner.combine_wave` |
+| Record a resubmission | [resubmit-failed](primitives/resubmit-failed.md) | `hpc_agent.runner.resubmit_failed` |
+| Reconcile journal vs cluster | [reconcile-journal](primitives/reconcile-journal.md) | `hpc_agent.runner.reconcile` |
+| Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `hpc_agent.runner.mark_terminal` |
+| Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `hpc_agent.mapreduce.reduce.history.prior` |
+| List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `hpc_agent._internal.session.find_in_flight_runs` |
+| Discover executors | [discover-executors](primitives/discover-executors.md) | `hpc_agent.state.discover.discover_executors` |
+| Inspect cluster nodes | [inspect-cluster](primitives/inspect-cluster.md) | `hpc_agent.infra.inspect.inspect_cluster` |
+| Score submit plan | [score-submit-plan](primitives/score-submit-plan.md) | `hpc_agent.planning.planner.plan_submit` |
+| Roll up runtime priors | [read-runtime-prior](primitives/read-runtime-prior.md) | `hpc_agent.state.runtime_prior.roll_up_quantiles` |
 
 ## Internal cluster-side scripts (not primitives)
 
 The framework also ships three cluster-side Python entry points that downstream primitives invoke over SSH. These are **internal implementation details**, not stable contracts — agents should compose with the primitives above rather than reaching directly into:
 
-- `python -m claude_hpc.mapreduce.reduce.status` — backs `poll-run-status`'s remote call. Reads sidecar + queries scheduler, emits per-task JSON.
+- `python -m hpc_agent.mapreduce.reduce.status` — backs `poll-run-status`'s remote call. Reads sidecar + queries scheduler, emits per-task JSON.
 - `python3 .hpc/_hpc_dispatch.py` — backs the array-job execution. Reads `.hpc/tasks.py`, dispatches one task per `SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`.
 - `python3 .hpc/_hpc_combiner.py` — backs `combine-wave`'s remote call. Aggregates per-task partial reduce JSONs into a wave-level partial.
 
-Implementation lives in `claude_hpc/mapreduce/reduce/`, `claude_hpc/runner/`, and `claude_hpc/runner/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.
+Implementation lives in `hpc_agent/mapreduce/reduce/`, `hpc_agent/runner/`, and `hpc_agent/runner/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.

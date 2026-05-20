@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/monitor_summary.output.json",
+  "title": "monitor-summary output",
+  "description": "Canonical user-facing tick summary.\n\nSlash-command Step 7 prints headline + body verbatim.\nlifecycle_state matches the canonical 'observable_with_timeout'\nset; the no-journal case is signaled via journal_missing rather\nthan a distinct lifecycle value.",
+  "type": "object",
+  "required": [
+    "lifecycle_state",
+    "headline",
+    "body",
+    "armed_hint",
+    "journal_missing"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "lifecycle_state": {
+      "description": "Lifecycle state set used when an observer also surfaces 'timeout' (e.g. status / reconcile reading sidecars previously marked timeout by monitor-flow). Superset of lifecycle_state_observable.",
+      "enum": [
+        "in_flight",
+        "complete",
+        "failed",
+        "abandoned",
+        "timeout"
+      ],
+      "title": "Lifecycle State",
+      "type": "string"
+    },
+    "headline": {
+      "title": "Headline",
+      "type": "string"
+    },
+    "body": {
+      "title": "Body",
+      "type": "string"
+    },
+    "armed_hint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "One-line note pointing the slash command at decide-monitor-arm; null when terminal.",
+      "title": "Armed Hint"
+    },
+    "journal_missing": {
+      "description": "True iff the journal record could not be loaded (e.g. ~/.claude/hpc/<repo_hash>/runs/<run_id>.json absent). When True, headline carries an explicit no-journal message and lifecycle_state defaults to 'abandoned' (the closest semantic match — record gone).",
+      "title": "Journal Missing",
+      "type": "boolean"
+    }
+  }
+}

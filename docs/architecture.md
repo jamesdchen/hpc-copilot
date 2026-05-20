@@ -1,6 +1,6 @@
 # Architecture
 
-claude-hpc is a primitive-based HPC orchestration framework. The package
+hpc-agent is a primitive-based HPC orchestration framework. The package
 is organised as a layered DAG: each layer depends on lower layers but
 not the other way round. New code finds its destination by asking
 "what layer am I writing in?" and following the layering rules.
@@ -171,7 +171,7 @@ fails CI. Editing a `@primitive(...)` decorator without re-running
 
 ## CLI surface
 
-`hpc-agent` (entry point: `claude_hpc.agent_cli:main`) exposes every
+`hpc-agent` (entry point: `hpc_agent.agent_cli:main`) exposes every
 primitive as a subcommand. Subcommands can be invoked flat
 (`hpc-agent predict-queue-wait ...`) or under a verb group
 (`hpc-agent forecast predict-queue-wait ...`); the verb groups

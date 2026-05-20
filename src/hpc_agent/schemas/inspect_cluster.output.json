@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/inspect_cluster.output.json",
+  "title": "inspect-cluster output data",
+  "type": "object",
+  "required": [
+    "cluster",
+    "scheduler_kind",
+    "now_iso",
+    "nodes",
+    "errors"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "cluster": {
+      "title": "Cluster",
+      "type": "string"
+    },
+    "scheduler_kind": {
+      "enum": [
+        "sge",
+        "slurm"
+      ],
+      "title": "Scheduler Kind",
+      "type": "string"
+    },
+    "now_iso": {
+      "description": "UTC ISO-8601 timestamp of the snapshot.",
+      "title": "Now Iso",
+      "type": "string"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/_NodeSnapshot"
+      },
+      "title": "Nodes",
+      "type": "array"
+    },
+    "errors": {
+      "description": "Non-fatal per-node errors (e.g. one node failed to report). Fatal cases raise ssh_unreachable instead.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Errors",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "_NodeSnapshot": {
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "alloc_mem_pct": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Alloc Mem Pct"
+        },
+        "cpu_load_frac": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cpu Load Frac"
+        },
+        "gres": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gres"
+        },
+        "gres_used": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gres Used"
+        },
+        "active_features": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active Features"
+        },
+        "co_tenants": {
+          "anyOf": [
+            {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Co Tenants"
+        },
+        "is_stressed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Stressed"
+        },
+        "is_drained": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Drained"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "_NodeSnapshot",
+      "type": "object"
+    }
+  }
+}

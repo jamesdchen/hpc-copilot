@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from claude_hpc.atoms.axes_init import axes_init
-from claude_hpc.planning.axes import axes_path, read_axes
+from hpc_agent.atoms.axes_init import axes_init
+from hpc_agent.planning.axes import axes_path, read_axes
 
 if TYPE_CHECKING:
     from pathlib import Path

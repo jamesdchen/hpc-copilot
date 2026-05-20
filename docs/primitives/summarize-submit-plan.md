@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent summarize-submit-plan --spec <path>
-  python: claude_hpc.atoms.submit_plan_summary.summarize_submit_plan
+  python: hpc_agent.atoms.submit_plan_summary.summarize_submit_plan
 exit_codes:
 - 0: ok
 - 1: user-error

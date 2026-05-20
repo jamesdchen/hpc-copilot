@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/aggregate_flow.output.json",
+  "title": "aggregate-flow output data",
+  "description": "Shape of the ``data`` field on a successful ``aggregate-flow`` envelope.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "combined_waves",
+    "failed_waves",
+    "waves_combined_this_call",
+    "combiner_dir_local",
+    "aggregated_metrics"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "combined_waves": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Combined Waves",
+      "type": "array"
+    },
+    "failed_waves": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Failed Waves",
+      "type": "array"
+    },
+    "waves_combined_this_call": {
+      "description": "Waves that combine-flow combined during this invocation (vs already-combined entering the call). Useful for caller logging.",
+      "items": {
+        "type": "integer"
+      },
+      "title": "Waves Combined This Call",
+      "type": "array"
+    },
+    "combiner_dir_local": {
+      "description": "Local path where the cluster's `_combiner/` directory was rsync'd.",
+      "title": "Combiner Dir Local",
+      "type": "string"
+    },
+    "aggregated_metrics": {
+      "additionalProperties": true,
+      "description": "Output of reduce_partials over the pulled combiner_dir_local. Mapping of run_id (or grid-point key) to aggregated metric dict. Empty when no waves combined successfully.",
+      "title": "Aggregated Metrics",
+      "type": "object"
+    },
+    "summaries_dir_local": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Local path where per-task summary files were pulled. Null when pull_summaries=false.",
+      "title": "Summaries Dir Local"
+    },
+    "escalation_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When non-null, indicates partial success — typically 'combiner_failed_max_retries:waves=...'. The caller may inspect failed_waves and decide whether the partial aggregation is acceptable. Null when every wave combined cleanly.",
+      "title": "Escalation Reason"
+    }
+  }
+}

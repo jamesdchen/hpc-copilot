@@ -10,7 +10,7 @@ Why this layer exists:
 
 ## Primitive contract (frontmatter)
 
-Every primitive file ships YAML frontmatter with **behavioral metadata only**. Field-level contracts (input/output shapes) live in JSON Schemas under `claude_hpc/schemas/`; the primitive's `backed_by` field points at the schema-validated CLI/Python entry point.
+Every primitive file ships YAML frontmatter with **behavioral metadata only**. Field-level contracts (input/output shapes) live in JSON Schemas under `hpc_agent/schemas/`; the primitive's `backed_by` field points at the schema-validated CLI/Python entry point.
 
 ```yaml
 ---
@@ -30,7 +30,7 @@ error_codes:                              # what callers should handle
     retry_safe: true
 backed_by:                                # implementation + field-level contract source
   cli: hpc-agent submit --spec <path>
-  python: claude_hpc.runner.submit_and_record
+  python: hpc_agent.runner.submit_and_record
 ---
 ```
 
@@ -184,7 +184,7 @@ When the same operation is needed from both surfaces, both files reference the p
 
 ## Adding a primitive
 
-1. Identify a single operation that maps cleanly to one CLI subcommand or one Python function in `claude_hpc.runner` / `claude_hpc`. If it doesn't, the operation is too large; split it.
+1. Identify a single operation that maps cleanly to one CLI subcommand or one Python function in `hpc_agent.runner` / `hpc_agent`. If it doesn't, the operation is too large; split it.
 2. Write `docs/primitives/<name>.md` with the frontmatter contract and a short body.
 3. Update consumers (slash commands, skills) to point at the primitive instead of restating its contract.
 4. Run `uv run python scripts/build_primitive_index.py` — the catalog table above regenerates from frontmatter; no hand-editing.

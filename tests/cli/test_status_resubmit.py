@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from claude_hpc import agent_cli as cli
+from hpc_agent import agent_cli as cli
 
 from ._helpers import SUBMIT_SPEC
 from ._helpers import env_without_ssh_agent as _env_without_ssh_agent
@@ -269,8 +269,8 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake.sock")
 
     # Seed a run.
-    from claude_hpc._internal import session as session_mod
-    from claude_hpc._internal.session import RunRecord
+    from hpc_agent._internal import session as session_mod
+    from hpc_agent._internal.session import RunRecord
 
     rec = RunRecord(
         run_id="ml_abcd1234",

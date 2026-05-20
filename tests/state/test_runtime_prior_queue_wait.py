@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent.state import runtime_prior as rp
 
 
 def _read_one(tmp_path):

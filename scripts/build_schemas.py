@@ -1,8 +1,8 @@
-"""Regenerate JSON Schemas under ``claude_hpc/schemas/`` from Pydantic models.
+"""Regenerate JSON Schemas under ``hpc_agent/schemas/`` from Pydantic models.
 
 The wire SoT is the JSON file (every external consumer reads it).
 The *authoring* SoT is the Pydantic model under
-``claude_hpc/_schema_models/``. This script bridges the two: it
+``hpc_agent/_schema_models/``. This script bridges the two: it
 calls ``model.model_json_schema()`` (or ``adapter.json_schema()``
 for root-array schemas) for every model auto-discovered under
 ``_schema_models/`` and writes / diffs the matching JSON file.
@@ -21,7 +21,7 @@ Usage::
 Discovery rules
 ---------------
 
-For each non-private submodule of ``claude_hpc._schema_models``:
+For each non-private submodule of ``hpc_agent._schema_models``:
 
 1. Hardcoded mapping (``_NON_SUFFIX_MAPPING``) handles cross-cutting
    shapes whose names don't fit the suffix convention — the three
@@ -59,12 +59,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
-import claude_hpc._schema_models  # noqa: E402
+import hpc_agent._schema_models  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCHEMAS_DIR = REPO_ROOT / "src" / "claude_hpc" / "schemas"
+SCHEMAS_DIR = REPO_ROOT / "src" / "hpc_agent" / "schemas"
 
-_ID_BASE = "https://github.com/jamesdchen/claude-hpc/schemas"
+_ID_BASE = "https://github.com/jamesdchen/hpc-agent/schemas"
 
 # Cross-cutting shapes whose names don't fit the *Spec/*Result suffix
 # convention. Anything in this map is discovered verbatim regardless
@@ -135,7 +135,7 @@ def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], s
     applies :func:`_filename_for`. Returned list is sorted by filename
     so callers see a stable order.
     """
-    pkg = claude_hpc._schema_models
+    pkg = hpc_agent._schema_models
 
     # Walk recursively so subpackages (workflows/, validators/,
     # fixtures/, queries/, actions/) are picked up alongside any

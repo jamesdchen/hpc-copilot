@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent predict-start-time --spec <path>
-  python: claude_hpc.atoms.predict_start_time.predict_start_time_primitive
+  python: hpc_agent.atoms.predict_start_time.predict_start_time_primitive
 ---
 # predict-start-time
 
@@ -55,4 +55,4 @@ The primitive is pure local — it reads the text you pass in and returns a dete
 - The sweep is transparent: returning the full `candidates` list lets the agent see the confidence across offsets (e.g., if multiple offsets score similarly, waiting has less downside risk).
 - The spec uses `extra="forbid"` — passing an unknown field raises `pydantic.ValidationError` rather than silently ignoring it.
 
-**Schemas:** [`predict_start_time.input.json`](../../src/claude_hpc/schemas/predict_start_time.input.json), [`predict_start_time.output.json`](../../src/claude_hpc/schemas/predict_start_time.output.json).
+**Schemas:** [`predict_start_time.input.json`](../../src/hpc_agent/schemas/predict_start_time.input.json), [`predict_start_time.output.json`](../../src/hpc_agent/schemas/predict_start_time.output.json).

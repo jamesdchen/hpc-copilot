@@ -1,10 +1,10 @@
-"""Tests for ``claude_hpc.forecast.queue_features.compute_features``."""
+"""Tests for ``hpc_agent.forecast.queue_features.compute_features``."""
 
 from __future__ import annotations
 
-from claude_hpc._internal.time import utcnow_iso
-from claude_hpc.forecast.queue_features import compute_features
-from claude_hpc.infra.inspect import ClusterSnapshot, NodeSnapshot
+from hpc_agent._internal.time import utcnow_iso
+from hpc_agent.forecast.queue_features import compute_features
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 def _node(

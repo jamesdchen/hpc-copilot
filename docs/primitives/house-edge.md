@@ -38,7 +38,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]
-  python: claude_hpc.atoms.house_edge.house_edge
+  python: hpc_agent.atoms.house_edge.house_edge
 exit_codes:
 - 0: ok
 - 1: spec_invalid

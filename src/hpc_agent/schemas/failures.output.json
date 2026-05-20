@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/failures.output.json",
+  "title": "failures output data",
+  "description": "Shape of the ``data`` field on a successful ``failures`` envelope.\n\nSource: ``hpc_agent.atoms.failures.fetch_failures``. The\n``preempted_count`` and ``preempted_task_ids`` fields are\npresent only when at least one task was preempted by the\nscheduler — they let an agent harness branch on 'campus user got\nbumped, resubmit cleanly' without parsing per-cluster\n``error_class`` strings.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "failed_count",
+    "clusters"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "failed_count": {
+      "description": "Total number of failed task ids in the current status report.",
+      "minimum": 0,
+      "title": "Failed Count",
+      "type": "integer"
+    },
+    "clusters": {
+      "description": "Failure-fingerprint clusters. Each item groups failed task ids by stderr signature.",
+      "items": {
+        "$ref": "#/$defs/_FailureCluster"
+      },
+      "title": "Clusters",
+      "type": "array"
+    },
+    "scheduler": {
+      "anyOf": [
+        {
+          "enum": [
+            "sge",
+            "slurm"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-cluster scheduler driver, surfaced for downstream resubmit shaping.",
+      "title": "Scheduler"
+    },
+    "preempted_count": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Number of task ids whose failure cluster has error_class='preempted'. Optional — present only when > 0.",
+      "title": "Preempted Count"
+    },
+    "preempted_task_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sorted, deduplicated list of preempted task ids. Optional — present only when at least one preempted task is in the cluster set.",
+      "title": "Preempted Task Ids"
+    },
+    "auto_retry_policy": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Resolved per-run + framework-default auto-retry policy. Present when annotation succeeded.",
+      "title": "Auto Retry Policy"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Diagnostic note (e.g. 'no failed tasks in current status report').",
+      "title": "Note"
+    }
+  },
+  "$defs": {
+    "_FailureCluster": {
+      "additionalProperties": true,
+      "properties": {
+        "error_class": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error Class"
+        },
+        "task_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Task Ids"
+        }
+      },
+      "title": "_FailureCluster",
+      "type": "object"
+    }
+  }
+}

@@ -11,7 +11,7 @@ error_codes:
 backed_by:
   cli: hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id>
     --combiner-dir <path>
-  python: claude_hpc.atoms.aggregation_invariants.verify_aggregation_complete
+  python: hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete
 exit_codes:
 - 0: ok
 - 1: user-error

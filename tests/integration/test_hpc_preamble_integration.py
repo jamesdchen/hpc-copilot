@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc import _PACKAGE_ROOT
+from hpc_agent import _PACKAGE_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -146,9 +146,9 @@ def test_preamble_exports_local_data_dir_and_rsyncs(tmp_path: Path) -> None:
     )
 
     assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
-    # The exported path should include the md5-suffixed claude_hpc_data tag.
+    # The exported path should include the md5-suffixed hpc_agent_data tag.
     last_line = proc.stdout.strip().splitlines()[-1]
-    assert "/claude_hpc_data_" in last_line, last_line
+    assert "/hpc_agent_data_" in last_line, last_line
 
 
 def test_preamble_set_e_propagates_rsync_failure(tmp_path: Path) -> None:
@@ -175,7 +175,7 @@ def test_preamble_md5_disambiguates_two_datasets(tmp_path: Path) -> None:
     """Two concurrent campaigns with different $HPC_NFS_DATA_DIR must
     stage into distinct $LOCAL_DATA_DIR paths so they don't step on
     each other's data — without the md5 suffix, both would land at
-    the same .../claude_hpc_data and silently corrupt each other."""
+    the same .../hpc_agent_data and silently corrupt each other."""
     src_a = tmp_path / "dataset_alpha"
     src_b = tmp_path / "dataset_beta"
     src_a.mkdir()
@@ -251,8 +251,8 @@ def test_preamble_warns_on_tmp_fallback(tmp_path: Path) -> None:
     assert "warning" in proc.stderr.lower()
     last_line = proc.stdout.strip().splitlines()[-1]
     try:
-        assert last_line.startswith("/tmp/claude_hpc_data_"), last_line
+        assert last_line.startswith("/tmp/hpc_agent_data_"), last_line
     finally:
         # Don't leak the /tmp staging dir between test runs.
-        if last_line.startswith("/tmp/claude_hpc_data_"):
+        if last_line.startswith("/tmp/hpc_agent_data_"):
             shutil.rmtree(last_line, ignore_errors=True)

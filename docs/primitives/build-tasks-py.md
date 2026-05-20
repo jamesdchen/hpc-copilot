@@ -11,7 +11,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent build-tasks-py --spec <path>
-  python: claude_hpc.atoms.build_tasks_py.build_tasks_py
+  python: hpc_agent.atoms.build_tasks_py.build_tasks_py
 exit_codes:
 - 0: ok
 - 1: user-error

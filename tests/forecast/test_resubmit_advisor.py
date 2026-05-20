@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.forecast.resubmit_advisor.recommend_resubmit_window``."""
+"""Tests for ``hpc_agent.forecast.resubmit_advisor.recommend_resubmit_window``."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_hpc.forecast import best_submit_window as bsw
-from claude_hpc.forecast import queue_wait_baseline as qwb
-from claude_hpc.forecast.resubmit_advisor import recommend_resubmit_window
+from hpc_agent.forecast import best_submit_window as bsw
+from hpc_agent.forecast import queue_wait_baseline as qwb
+from hpc_agent.forecast.resubmit_advisor import recommend_resubmit_window
 from tests.conftest import seed_diurnal_dip
 
 PROFILE = "ml_ridge"

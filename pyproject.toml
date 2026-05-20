@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-hpc"
+name = "hpc-agent"
 version = "0.3.0"
 description = "HPC orchestrator for Claude Code and external agent harnesses"
 requires-python = ">=3.10"
@@ -20,7 +20,7 @@ dependencies = [
     "jsonschema>=4.18",
     "referencing>=0.30",
     # Pydantic v2 for Spec / Result models. The hand-authored JSON
-    # schemas under ``claude_hpc/schemas/`` are still the wire SoT;
+    # schemas under ``hpc_agent/schemas/`` are still the wire SoT;
     # Pydantic models are the *authoring* surface and their
     # ``model_json_schema()`` output is regenerated into the JSON
     # files by ``scripts/build_schemas.py``. Switched on for the
@@ -51,14 +51,14 @@ forecasting = [
 ]
 
 [project.scripts]
-hpc-agent = "claude_hpc.agent_cli:main"
+hpc-agent = "hpc_agent.agent_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["claude_hpc*", "slash_commands*"]
+include = ["hpc_agent*", "slash_commands*"]
 
 [tool.setuptools.package-data]
-claude_hpc = [
+hpc_agent = [
     "config/*.yaml",
     "schemas/*.json",
     "operations.json",
@@ -97,7 +97,7 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 # ARE the wire-schema text — keeping them on one line preserves the
 # diff readability that matters when the schema actually changes.
 [tool.ruff.lint.per-file-ignores]
-"src/claude_hpc/_schema_models/*.py" = ["E501"]
+"src/hpc_agent/_schema_models/*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -107,16 +107,16 @@ ignore_missing_imports = true
 mypy_path = ["src"]
 
 # Coverage is a discovery tool, not a gate. Run with:
-#   pytest -m '' --cov=src/claude_hpc --cov-report=term-missing
+#   pytest -m '' --cov=src/hpc_agent --cov-report=term-missing
 # to surface untested files in the critical path. No fail-under
 # threshold — chasing % over behaviour-coverage is the anti-pattern.
 [tool.coverage.run]
-source = ["src/claude_hpc"]
+source = ["src/hpc_agent"]
 branch = true
 omit = [
-    "src/claude_hpc/schemas/*",  # generated JSON, not Python
-    "src/claude_hpc/_schema_models/*",  # schema models — covered via roundtrip
-    "src/claude_hpc/mapreduce/templates/*",  # user-facing template files
+    "src/hpc_agent/schemas/*",  # generated JSON, not Python
+    "src/hpc_agent/_schema_models/*",  # schema models — covered via roundtrip
+    "src/hpc_agent/mapreduce/templates/*",  # user-facing template files
 ]
 
 [tool.coverage.report]

@@ -1,5 +1,5 @@
 """CI lint: every Python file with @primitive(...) must be listed in
-claude_hpc._internal.primitive._PRIMITIVE_MODULES (so the registry sees it).
+hpc_agent._internal.primitive._PRIMITIVE_MODULES (so the registry sees it).
 
 Greps for the decorator literal, derives the module name from the
 file path, and asserts membership. ~30 LOC. No runtime cost.
@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parent.parent
 # After the src-layout migration, packages live under ``src/`` on disk
 # but their import names don't include the ``src`` prefix. Strip the
 # leading ``src/`` segment when converting paths to module names so
-# ``src/claude_hpc/foo.py`` becomes ``claude_hpc.foo``.
+# ``src/hpc_agent/foo.py`` becomes ``hpc_agent.foo``.
 _SRC_PREFIX = ("src",)
 
 
@@ -39,7 +39,7 @@ def main() -> int:
     # Import the canonical list at runtime so this script tracks the
     # source of truth without re-typing it.
     sys.path.insert(0, str(REPO / "src"))
-    from claude_hpc._internal.primitive import _PRIMITIVE_MODULES
+    from hpc_agent._internal.primitive import _PRIMITIVE_MODULES
 
     expected = set(_PRIMITIVE_MODULES)
 
@@ -47,7 +47,7 @@ def main() -> int:
     # which references @primitive(...) prose) is never a registration
     # site; skip explicitly so the regex doesn't pick up docstring
     # mentions.
-    self_path = (REPO / "src" / "claude_hpc" / "_internal" / "primitive.py").resolve()
+    self_path = (REPO / "src" / "hpc_agent" / "_internal" / "primitive.py").resolve()
 
     found: set[str] = set()
     for p in REPO.rglob("*.py"):
@@ -88,7 +88,7 @@ def main() -> int:
         print("ERROR: modules with @primitive(...) not in _PRIMITIVE_MODULES:")
         for m in sorted(missing):
             print(f"  {m}")
-        print("\nAdd them to _PRIMITIVE_MODULES in claude_hpc/_internal/primitive.py.")
+        print("\nAdd them to _PRIMITIVE_MODULES in hpc_agent/_internal/primitive.py.")
         return 1
     stale = expected - found
     if stale:

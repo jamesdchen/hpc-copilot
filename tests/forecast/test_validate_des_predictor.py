@@ -6,12 +6,12 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from claude_hpc.infra.inspect import (
+from hpc_agent.infra.inspect import (
     ClusterSnapshot,
     NodeSnapshot,
     persist_snapshot,
 )
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent.state import runtime_prior as rp
 
 
 def _load_script():

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from importlib.resources import files as _resource_files
 
-from claude_hpc import __version__
+from hpc_agent import __version__
 
 # (substring, relative_module, remove_in, hint)
 _FORWARDERS: list[tuple[str, str, str, str]] = [
@@ -21,14 +21,14 @@ _FORWARDERS: list[tuple[str, str, str, str]] = [
         "agent_cli.py",
         "0.4.0",
         "drop the back-compat re-export; tests should import "
-        "from claude_hpc.atoms.capabilities directly",
+        "from hpc_agent.atoms.capabilities directly",
     ),
     (
         "_resolve_auto_retry",
         "agent_cli.py",
         "0.4.0",
         "drop the back-compat re-export; tests should import "
-        "from claude_hpc.atoms.failures directly",
+        "from hpc_agent.atoms.failures directly",
     ),
     (
         "HPC_SUBDIR",
@@ -60,7 +60,7 @@ def test_backcompat_forwarders_removed_at_target_version() -> None:
         target = _version_tuple(remove_in)
         if current < target:
             continue
-        text = (_resource_files("claude_hpc") / rel_path).read_text()
+        text = (_resource_files("hpc_agent") / rel_path).read_text()
         if substring in text:
             overdue.append(
                 f"{rel_path}: substring {substring!r} should have been removed "

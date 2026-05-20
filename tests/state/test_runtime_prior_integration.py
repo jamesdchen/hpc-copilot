@@ -1,4 +1,4 @@
-"""Integration tests for ``claude_hpc.state.runtime_prior``.
+"""Integration tests for ``hpc_agent.state.runtime_prior``.
 
 The runtime-prior file at
 ``<exp>/.hpc/runtimes/<profile>.<cluster>.json`` is an append-only
@@ -25,7 +25,7 @@ import json
 import multiprocessing
 from typing import TYPE_CHECKING
 
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent.state import runtime_prior as rp
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -105,7 +105,7 @@ def _worker_append_batch(tmp_path: str, run_id: str, n: int) -> None:
     must be top-level."""
     from pathlib import Path as _Path
 
-    from claude_hpc.state import runtime_prior as _rp
+    from hpc_agent.state import runtime_prior as _rp
 
     for tid in range(n):
         _rp.append_sample(

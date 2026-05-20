@@ -32,19 +32,19 @@ from pathlib import Path
 from typing import Any
 
 # Allow ``python scripts/validate_des_predictor.py`` from a checkout.
-# After the src-layout migration, claude_hpc is importable only with
+# After the src-layout migration, hpc_agent is importable only with
 # repo_root/src on the path (editable installs handle this; standalone
 # invocations need the explicit insert).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from claude_hpc._internal.time import parse_iso_utc_or_none
-from claude_hpc.forecast.queue_simulator import SimJob, simulate_distribution
-from claude_hpc.forecast.queue_simulator_inputs import (
+from hpc_agent._internal.time import parse_iso_utc_or_none
+from hpc_agent.forecast.queue_simulator import SimJob, simulate_distribution
+from hpc_agent.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
-from claude_hpc.infra.inspect import read_cluster_history
-from claude_hpc.state.runtime_prior import read_samples
+from hpc_agent.infra.inspect import read_cluster_history
+from hpc_agent.state.runtime_prior import read_samples
 
 
 def _percentile(xs: list[float], p: float) -> float:

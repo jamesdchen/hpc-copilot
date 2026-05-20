@@ -22,14 +22,14 @@ repos:
         entry: python scripts/lint_primitive_modules.py
         language: system
         pass_filenames: false
-        files: '^src/claude_hpc/.*\.py$'
+        files: '^src/hpc_agent/.*\.py$'
 
       - id: build-primitive-frontmatter
         name: regenerate primitive frontmatter
         entry: python scripts/build_primitive_frontmatter.py --write
         language: system
         pass_filenames: false
-        files: '^(src/claude_hpc/atoms/.*\.py|docs/primitives/.*\.md|src/claude_hpc/_internal/primitive\.py)$'
+        files: '^(src/hpc_agent/atoms/.*\.py|docs/primitives/.*\.md|src/hpc_agent/_internal/primitive\.py)$'
 
       - id: build-primitive-index
         name: regenerate primitive catalog table
@@ -43,28 +43,28 @@ repos:
         entry: python scripts/build_operations_index.py
         language: system
         pass_filenames: false
-        files: '^(src/claude_hpc/.*\.py|src/claude_hpc/schemas/.*\.json)$'
+        files: '^(src/hpc_agent/.*\.py|src/hpc_agent/schemas/.*\.json)$'
 
       - id: build-schemas
         name: regenerate JSON schemas from Pydantic models
         entry: python scripts/build_schemas.py --write
         language: system
         pass_filenames: false
-        files: '^src/claude_hpc/_schema_models/.*\.py$'
+        files: '^src/hpc_agent/_schema_models/.*\.py$'
 
       - id: bake-operations-json
         name: regenerate baked operations.json (wheel-install fallback)
         entry: python scripts/bake_operations_json.py --write
         language: system
         pass_filenames: false
-        files: '^src/claude_hpc/.*\.py$'
+        files: '^src/hpc_agent/.*\.py$'
 
       - id: lint-primitive-doc-templates
         name: check primitive doc templates match agent_facing tier
         entry: python scripts/lint_primitive_doc_templates.py
         language: system
         pass_filenames: false
-        files: '^(docs/primitives/.*\.md|src/claude_hpc/.*\.py)$'
+        files: '^(docs/primitives/.*\.md|src/hpc_agent/.*\.py)$'
 
       - id: check-no-pending-primitive-docs
         name: fail on '_Documentation pending._' in primitive docs

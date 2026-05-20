@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/decide_monitor_arm.input.json",
+  "title": "decide-monitor-arm input",
+  "description": "Run-state inputs to ``hpc_agent.atoms.monitor_arm.decide_monitor_arm``.\n\nDrives the cron / loop / none arm decision + cadence + literal\narmed: line.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "summary",
+    "total_tasks",
+    "invocation_argv"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "summary": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "description": "last_status['summary'] from the run journal — {complete, running, pending, failed} integer counters. Missing keys default to 0.",
+      "title": "Summary",
+      "type": "object"
+    },
+    "total_tasks": {
+      "minimum": 0,
+      "title": "Total Tasks",
+      "type": "integer"
+    },
+    "invocation_argv": {
+      "description": "Exact /monitor-hpc <args> string the next tick should re-invoke. Stamped into cron_create_args.prompt.",
+      "title": "Invocation Argv",
+      "type": "string"
+    },
+    "user_invoked_via_loop": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "User Invoked Via Loop"
+    },
+    "eta_sec": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Eta Sec"
+    },
+    "pace_unstable": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Pace Unstable"
+    },
+    "queue_wait_sec": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Queue Wait Sec"
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.aggregation_invariants``."""
+"""Tests for ``hpc_agent.atoms.aggregation_invariants``."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc.atoms.aggregation_invariants import verify_aggregation_complete
-from claude_hpc.state.runs import write_run_sidecar
+from hpc_agent import errors
+from hpc_agent.atoms.aggregation_invariants import verify_aggregation_complete
+from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -20,7 +20,7 @@ def _seed_sidecar_with_wave_map(experiment: Path, run_id: str, wave_map: dict) -
         experiment,
         run_id=run_id,
         cmd_sha="0" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 src/run.py",
         result_dir_template="results/{seed}",

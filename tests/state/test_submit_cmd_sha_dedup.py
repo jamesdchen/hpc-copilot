@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from claude_hpc import runner
-from claude_hpc._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
+from hpc_agent import runner
+from hpc_agent._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,7 +26,7 @@ def _write_sidecar(experiment_dir: Path, run_id: str, **fields) -> Path:
         "sidecar_schema_version": 2,
         "run_id": run_id,
         "cmd_sha": fields.pop("cmd_sha", "a" * 64),
-        "claude_hpc_version": "0.2.0",
+        "hpc_agent_version": "0.2.0",
         "submitted_at": "2026-01-01T00:00:00Z",
         "executor": "python3 src/run.py",
         "result_dir_template": "results/{seed}",

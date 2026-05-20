@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.forecast.best_submit_window.best_submit_windows``."""
+"""Tests for ``hpc_agent.forecast.best_submit_window.best_submit_windows``."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_hpc._schema_models.queries.best_submit_window import BestSubmitWindowSpec
-from claude_hpc.forecast.best_submit_window import best_submit_windows
+from hpc_agent._schema_models.queries.best_submit_window import BestSubmitWindowSpec
+from hpc_agent.forecast.best_submit_window import best_submit_windows
 from tests.conftest import seed_diurnal_dip
 
 PROFILE = "ml_ridge"
@@ -29,7 +29,7 @@ class TestSweep:
         _seed_with_dip(tmp_path)
         # Pin "now" to a deterministic value (Mon 14:00 UTC, 2026-04-15).
         # Sweep within 24h → must include the 04:00-05:00 dip.
-        from claude_hpc.forecast import best_submit_window as bsw
+        from hpc_agent.forecast import best_submit_window as bsw
 
         fixed_now = datetime(2026, 4, 15, 14, 0, 0, tzinfo=timezone.utc)
         monkeypatch.setattr(bsw, "utcnow", lambda: fixed_now)
@@ -52,7 +52,7 @@ class TestSweep:
 
     def test_results_sorted_ascending(self, tmp_path, monkeypatch):
         _seed_with_dip(tmp_path)
-        from claude_hpc.forecast import best_submit_window as bsw
+        from hpc_agent.forecast import best_submit_window as bsw
 
         fixed_now = datetime(2026, 4, 15, 0, 0, 0, tzinfo=timezone.utc)
         monkeypatch.setattr(bsw, "utcnow", lambda: fixed_now)
@@ -63,7 +63,7 @@ class TestSweep:
 
     def test_to_dict_round_trip(self, tmp_path, monkeypatch):
         _seed_with_dip(tmp_path)
-        from claude_hpc.forecast import best_submit_window as bsw
+        from hpc_agent.forecast import best_submit_window as bsw
 
         fixed_now = datetime(2026, 4, 15, 0, 0, 0, tzinfo=timezone.utc)
         monkeypatch.setattr(bsw, "utcnow", lambda: fixed_now)

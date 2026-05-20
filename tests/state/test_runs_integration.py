@@ -1,4 +1,4 @@
-"""Integration tests for ``claude_hpc.state.runs`` — sidecar I/O.
+"""Integration tests for ``hpc_agent.state.runs`` — sidecar I/O.
 
 The sidecar at ``<exp>/.hpc/runs/<run_id>.json`` is the journal of a
 submitted run. Every downstream operation (status, dedup, resubmit,
@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc.state.runs import (
+from hpc_agent.state.runs import (
     SIDECAR_SCHEMA_VERSION,
     find_existing_runs,
     find_run_by_cmd_sha,
@@ -53,7 +53,7 @@ def _required_kwargs() -> dict:
     return dict(
         run_id=_RUN_ID,
         cmd_sha="a" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 .hpc/_hpc_dispatch.py",
         result_dir_template="results/{task_id}",
@@ -72,7 +72,7 @@ def test_write_read_roundtrips_minimum_required_fields(tmp_path: Path) -> None:
     data = read_run_sidecar(tmp_path, _RUN_ID)
     assert data["run_id"] == _RUN_ID
     assert data["cmd_sha"] == "a" * 64
-    assert data["claude_hpc_version"] == "0.2.0"
+    assert data["hpc_agent_version"] == "0.2.0"
     assert data["submitted_at"] == "2026-01-01T00:00:00Z"
     assert data["executor"] == "python3 .hpc/_hpc_dispatch.py"
     assert data["result_dir_template"] == "results/{task_id}"
@@ -163,7 +163,7 @@ def test_v1_sidecar_backfills_to_v2_shape_on_read(tmp_path: Path) -> None:
         "sidecar_schema_version": 1,
         "run_id": _RUN_ID,
         "cmd_sha": "a" * 64,
-        "claude_hpc_version": "0.1.0",
+        "hpc_agent_version": "0.1.0",
         "submitted_at": "2025-12-01T00:00:00Z",
         "executor": "python3 src/run.py",
         "result_dir_template": "results/{task_id}",

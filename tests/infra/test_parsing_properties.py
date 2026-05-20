@@ -1,4 +1,4 @@
-"""Property-based tests for ``claude_hpc.infra.parsing``.
+"""Property-based tests for ``hpc_agent.infra.parsing``.
 
 The module's design rules say it explicitly:
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from claude_hpc.infra import parsing
+from hpc_agent.infra import parsing
 
 # Hostile-input strategies: anything from an empty string to whatever
 # weird tokens scheduler binaries emit. ``st.text()`` covers unicode,

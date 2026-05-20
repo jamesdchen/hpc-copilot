@@ -1,5 +1,5 @@
 """Tests for the per-cluster validator helpers in
-:mod:`claude_hpc.infra.clusters` for the PR-C survival-defense knobs.
+:mod:`hpc_agent.infra.clusters` for the PR-C survival-defense knobs.
 
 Each helper applies a default and rejects wrong-typed yaml values so
 e.g. ``walltime_arbitrage: "yes"`` (a string) doesn't silently flip the
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_hpc.infra.clusters import (
+from hpc_agent.infra.clusters import (
     get_auto_daisy_chain,
     get_max_walltime_sec,
     get_walltime_arbitrage,

@@ -8,7 +8,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: claude_hpc.planning.validate.validate_submission
+  python: hpc_agent.planning.validate.validate_submission
 ---
 
 ## Purpose

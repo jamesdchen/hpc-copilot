@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent discover-reducers --experiment-dir <path>
-  python: claude_hpc.state.discover.discover_reducers
+  python: hpc_agent.state.discover.discover_reducers
 exit_codes:
 - 0: ok
 - 3: internal

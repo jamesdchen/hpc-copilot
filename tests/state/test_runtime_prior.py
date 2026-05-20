@@ -1,11 +1,11 @@
-"""Tests for claude_hpc.state.runtime_prior — quantile rollups + atomic appends."""
+"""Tests for hpc_agent.state.runtime_prior — quantile rollups + atomic appends."""
 
 from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
 
-from claude_hpc.state import runtime_prior as rp
+from hpc_agent.state import runtime_prior as rp
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -267,7 +267,7 @@ class TestDocFileShape:
 
 class TestIngestFromCombinerDir:
     def test_walks_wave_runtime_files_and_appends(self, tmp_path: Path) -> None:
-        from claude_hpc.state.runtime_prior import (
+        from hpc_agent.state.runtime_prior import (
             ingest_runtime_samples_from_combiner_dir,
             read_samples,
         )
@@ -324,7 +324,7 @@ class TestIngestFromCombinerDir:
 
     def test_idempotent_on_rerun(self, tmp_path: Path) -> None:
         """append_sample dedups (run_id, task_id), so re-ingest is safe."""
-        from claude_hpc.state.runtime_prior import (
+        from hpc_agent.state.runtime_prior import (
             ingest_runtime_samples_from_combiner_dir,
             read_samples,
         )
@@ -361,7 +361,7 @@ class TestIngestFromCombinerDir:
         assert len(samples) == 1  # not 2
 
     def test_missing_dir_returns_zero(self, tmp_path: Path) -> None:
-        from claude_hpc.state.runtime_prior import (
+        from hpc_agent.state.runtime_prior import (
             ingest_runtime_samples_from_combiner_dir,
         )
 
@@ -375,7 +375,7 @@ class TestIngestFromCombinerDir:
 
     def test_malformed_runtime_file_skipped(self, tmp_path: Path) -> None:
         """A bad JSON file shouldn't tank the whole ingest."""
-        from claude_hpc.state.runtime_prior import (
+        from hpc_agent.state.runtime_prior import (
             ingest_runtime_samples_from_combiner_dir,
             read_samples,
         )
@@ -411,11 +411,11 @@ class TestIngestFromCombinerDir:
 
     def test_warm_picker_picks_up_after_ingest(self, tmp_path: Path) -> None:
         """End-to-end: ingest → warm picker can rank axes by CV."""
-        from claude_hpc.planning.axes import (
+        from hpc_agent.planning.axes import (
             pick_array_axis_warm,
             write_axes,
         )
-        from claude_hpc.state.runtime_prior import (
+        from hpc_agent.state.runtime_prior import (
             ingest_runtime_samples_from_combiner_dir,
         )
 

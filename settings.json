@@ -1,5 +1,5 @@
 {
-  "_comment": "claude-hpc safety policy — committed to the repo. Editor / dream-mode / sandbox config lives in settings.local.json (gitignored). The split keeps destructive-op denials traceable in git history while letting per-developer ergonomics drift independently.",
+  "_comment": "hpc-agent safety policy — committed to the repo. Editor / dream-mode / sandbox config lives in settings.local.json (gitignored). The split keeps destructive-op denials traceable in git history while letting per-developer ergonomics drift independently.",
   "permissions": {
     "deny": [
       "Bash(scancel:*)",

@@ -1,9 +1,9 @@
 # Migrating from `hpc.yaml`
 
 `hpc.yaml` was the optional declarative experiment-config file in
-earlier versions of claude-hpc. It is **gone** in the current release —
+earlier versions of hpc-agent. It is **gone** in the current release —
 the agent never reads it, and no command writes one. If you have an
-`hpc.yaml` lying around, claude-hpc ignores it; behavior is identical
+`hpc.yaml` lying around, hpc-agent ignores it; behavior is identical
 whether the file is present or absent.
 
 This is a one-shot deletion, not a deprecation cycle. There is no
@@ -37,7 +37,7 @@ multi-stage DAGs.
 | top-level `remote_path` | sidecar `remote_path` (v2) | First-class field. |
 | top-level `metrics` (sort order) | hardcoded alphabetical default + CLI override | No persisted setting. |
 | top-level `cluster_envs` | `clusters.yaml` `conda_envs` | Already in `clusters.yaml`; remaining overrides should fold there. |
-| `stages:` (multi-stage DAG) | **`.hpc/stages.py`** exposing `def stages() -> list[dict]` | New file. JSON Schema at `claude_hpc/schemas/stages.input.json`. The only legacy field with no sidecar home. |
+| `stages:` (multi-stage DAG) | **`.hpc/stages.py`** exposing `def stages() -> list[dict]` | New file. JSON Schema at `hpc_agent/schemas/stages.input.json`. The only legacy field with no sidecar home. |
 
 ## Step-by-step migration
 
@@ -49,11 +49,11 @@ multi-stage DAGs.
    (`/aggregate`, `/monitor-hpc`, `/resubmit`, `/campaign`) read context from
    the sidecar rather than the yaml.
 3. **For multi-stage `stages:` DAGs, port to `.hpc/stages.py`.** The
-   helper `claude_hpc.planning.stages.from_yaml_dict` is *not* shipped —
+   helper `hpc_agent.planning.stages.from_yaml_dict` is *not* shipped —
    convert by hand. The shape is straightforward: the dict-of-stages
    `{name: {run, depends_on, resources, ...}}` becomes a list of dicts
    `[{"name": ..., "run": ..., "depends_on": ..., ...}]`. Validate via
-   `claude_hpc.planning.stages.load_stages(experiment_dir)` — schema
+   `hpc_agent.planning.stages.load_stages(experiment_dir)` — schema
    errors (missing `name`/`run`, unknown keys, broken `depends_on`)
    raise immediately.
 4. **Delete `hpc.yaml` from the repo.** It is not read; deleting it

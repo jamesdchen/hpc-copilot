@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/runtime_prior.output.json",
+  "title": "runtime-prior output data",
+  "description": "Shape of the ``data`` field on a successful ``runtime-prior`` envelope.",
+  "type": "object",
+  "required": [
+    "profile",
+    "cluster",
+    "now_iso",
+    "needs_canary",
+    "quantiles",
+    "total_samples"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "title": "Cluster",
+      "type": "string"
+    },
+    "now_iso": {
+      "title": "Now Iso",
+      "type": "string"
+    },
+    "needs_canary": {
+      "description": "True when no samples exist for this (profile, cluster) pair. Caller should submit a 1-task canary, ingest its result via runtime_prior.append_sample, then re-call.",
+      "title": "Needs Canary",
+      "type": "boolean"
+    },
+    "quantiles": {
+      "additionalProperties": {
+        "$ref": "#/$defs/_RuntimeQuantiles"
+      },
+      "description": "Per-gpu_type runtime quantile rollup. Empty dict when needs_canary is true.",
+      "title": "Quantiles",
+      "type": "object"
+    },
+    "mem_quantiles_mb": {
+      "additionalProperties": true,
+      "title": "Mem Quantiles Mb",
+      "type": "object"
+    },
+    "cpu_cores_quantiles": {
+      "additionalProperties": true,
+      "title": "Cpu Cores Quantiles",
+      "type": "object"
+    },
+    "total_samples": {
+      "minimum": 0,
+      "title": "Total Samples",
+      "type": "integer"
+    },
+    "filtered_by_cmd_sha": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Filtered By Cmd Sha"
+    }
+  },
+  "$defs": {
+    "_RuntimeQuantiles": {
+      "additionalProperties": false,
+      "properties": {
+        "p50": {
+          "minimum": 0,
+          "title": "P50",
+          "type": "number"
+        },
+        "p95": {
+          "minimum": 0,
+          "title": "P95",
+          "type": "number"
+        },
+        "p99": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P99"
+        },
+        "mean_sec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mean Sec"
+        },
+        "n_samples": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "N Samples"
+        },
+        "min_sec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min Sec"
+        },
+        "max_sec": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Sec"
+        }
+      },
+      "required": [
+        "p50",
+        "p95"
+      ],
+      "title": "_RuntimeQuantiles",
+      "type": "object"
+    }
+  }
+}

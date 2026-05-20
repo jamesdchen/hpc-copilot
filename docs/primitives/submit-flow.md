@@ -22,7 +22,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent submit-flow --spec <path>
-  python: claude_hpc.flows.submit_flow.submit_flow
+  python: hpc_agent.flows.submit_flow.submit_flow
 ---
 
 ## Purpose

@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]
-  python: claude_hpc.atoms.campaign_health.campaign_health
+  python: hpc_agent.atoms.campaign_health.campaign_health
 ---
 # campaign-health
 
@@ -19,7 +19,7 @@ samples) into a structured health payload. Surfaces patterns
 worth investigating: walltime cliff rate by GPU type, GPU
 utilization, failure breakdown by category. The payload includes
 a `suggested_prompt` string the calling LLM agent can feed
-verbatim to its model — claude-hpc itself never calls an LLM.
+verbatim to its model — hpc-agent itself never calls an LLM.
 
 ## Composers
 

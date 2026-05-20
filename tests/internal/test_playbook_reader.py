@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc._internal.playbook``.
+"""Tests for ``hpc_agent._internal.playbook``.
 
 Covers the four contracts:
 
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc._internal.playbook import (
+from hpc_agent._internal.playbook import (
     KnownBadCombination,
     Playbook,
     WalltimeRule,

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc.state.runs import (
+from hpc_agent.state.runs import (
     SIDECAR_SCHEMA_VERSION,
     read_run_sidecar,
     run_sidecar_path,
@@ -22,7 +22,7 @@ def _common_required_kwargs(run_id: str = "20260101-000000-deadbee") -> dict:
     return dict(
         run_id=run_id,
         cmd_sha="0" * 64,
-        claude_hpc_version="0.2.0",
+        hpc_agent_version="0.2.0",
         submitted_at="2026-01-01T00:00:00Z",
         executor="python3 src/run.py",
         result_dir_template="results/{seed}",
@@ -121,7 +121,7 @@ def test_v1_sidecar_reads_with_backfilled_v2_fields(tmp_path: Path) -> None:
         "sidecar_schema_version": 1,
         "run_id": run_id,
         "cmd_sha": "a" * 64,
-        "claude_hpc_version": "0.1.0",
+        "hpc_agent_version": "0.1.0",
         "submitted_at": "2024-01-01T00:00:00Z",
         "executor": "python3 old.py",
         "result_dir_template": "out/{seed}",
@@ -236,7 +236,7 @@ def test_v1_sidecar_without_wave_map_still_yields_empty_dict(tmp_path: Path) -> 
                 "sidecar_schema_version": 1,
                 "run_id": run_id,
                 "cmd_sha": "0" * 64,
-                "claude_hpc_version": "0.0.1",
+                "hpc_agent_version": "0.0.1",
                 "submitted_at": "2026-01-01T00:00:00Z",
                 "executor": "python3 old.py",
                 "result_dir_template": "results/{seed}",
@@ -254,7 +254,7 @@ def test_v1_sidecar_without_wave_map_still_yields_empty_dict(tmp_path: Path) -> 
 
 class TestVersionMismatchWarning:
     """A10: read_run_sidecar warns once per (run_id, sidecar_version) when
-    the sidecar's ``claude_hpc_version`` differs from the running
+    the sidecar's ``hpc_agent_version`` differs from the running
     package's ``__version__``. Reads always succeed regardless of the
     warning.
     """
@@ -262,7 +262,7 @@ class TestVersionMismatchWarning:
     def test_warning_fires_on_version_mismatch(self, tmp_path: Path) -> None:
         import warnings as _warnings
 
-        from claude_hpc.state import runs as _runs_mod
+        from hpc_agent.state import runs as _runs_mod
 
         # Reset module-level dedup set so this test is hermetic regardless
         # of test ordering.
@@ -277,7 +277,7 @@ class TestVersionMismatchWarning:
                     "sidecar_schema_version": 2,
                     "run_id": run_id,
                     "cmd_sha": "0" * 64,
-                    "claude_hpc_version": "9.9.9-from-the-future",
+                    "hpc_agent_version": "9.9.9-from-the-future",
                     "submitted_at": "2026-01-01T00:00:00Z",
                     "executor": "python3 src/run.py",
                     "result_dir_template": "results/{seed}",
@@ -300,7 +300,7 @@ class TestVersionMismatchWarning:
     def test_warning_dedupes_per_run_and_version(self, tmp_path: Path) -> None:
         import warnings as _warnings
 
-        from claude_hpc.state import runs as _runs_mod
+        from hpc_agent.state import runs as _runs_mod
 
         _runs_mod._warned_version_mismatch.clear()
         run_id = "20260101-000000-deadbee"
@@ -312,7 +312,7 @@ class TestVersionMismatchWarning:
                     "sidecar_schema_version": 2,
                     "run_id": run_id,
                     "cmd_sha": "0" * 64,
-                    "claude_hpc_version": "9.9.9-from-the-future",
+                    "hpc_agent_version": "9.9.9-from-the-future",
                     "submitted_at": "2026-01-01T00:00:00Z",
                     "executor": "python3 src/run.py",
                     "result_dir_template": "results/{seed}",
@@ -333,8 +333,8 @@ class TestVersionMismatchWarning:
     def test_no_warning_when_versions_match(self, tmp_path: Path) -> None:
         import warnings as _warnings
 
-        from claude_hpc import __version__ as pkg_version
-        from claude_hpc.state import runs as _runs_mod
+        from hpc_agent import __version__ as pkg_version
+        from hpc_agent.state import runs as _runs_mod
 
         _runs_mod._warned_version_mismatch.clear()
         run_id = "20260101-000000-cafebab"
@@ -346,7 +346,7 @@ class TestVersionMismatchWarning:
                     "sidecar_schema_version": 2,
                     "run_id": run_id,
                     "cmd_sha": "0" * 64,
-                    "claude_hpc_version": pkg_version,
+                    "hpc_agent_version": pkg_version,
                     "submitted_at": "2026-01-01T00:00:00Z",
                     "executor": "python3 src/run.py",
                     "result_dir_template": "results/{seed}",
@@ -359,7 +359,7 @@ class TestVersionMismatchWarning:
             _warnings.simplefilter("always")
             read_run_sidecar(tmp_path, run_id)
         assert not any(
-            "claude-hpc" in str(w.message) and "but reader is" in str(w.message) for w in caught
+            "hpc-agent" in str(w.message) and "but reader is" in str(w.message) for w in caught
         ), "matching versions should not warn"
 
 
@@ -370,7 +370,7 @@ class TestVersionMismatchWarning:
 
 def test_auto_derive_wave_map_from_axes_yaml(tmp_path: Path) -> None:
     """Caller omits wave_map; axes.yaml present → sidecar carries derived map."""
-    from claude_hpc.planning.axes import write_axes
+    from hpc_agent.planning.axes import write_axes
 
     write_axes(
         tmp_path,
@@ -396,7 +396,7 @@ def test_auto_derive_skipped_when_axes_yaml_lacks_enumeration(tmp_path: Path) ->
     """axes.yaml present but no axes list → no derivation, no warning."""
     import warnings as _warnings
 
-    from claude_hpc.planning.axes import write_axes
+    from hpc_agent.planning.axes import write_axes
 
     write_axes(tmp_path, homogeneous_axes=["window"])
     with _warnings.catch_warnings(record=True) as caught:
@@ -411,7 +411,7 @@ def test_auto_derive_warns_on_axes_product_mismatch(tmp_path: Path) -> None:
     """axes-product != task_count → UserWarning, no derived wave_map."""
     import warnings as _warnings
 
-    from claude_hpc.planning.axes import write_axes
+    from hpc_agent.planning.axes import write_axes
 
     write_axes(
         tmp_path,
@@ -431,7 +431,7 @@ def test_auto_derive_warns_on_axes_product_mismatch(tmp_path: Path) -> None:
 
 def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
     """Caller-supplied wave_map is preserved verbatim; no axes.yaml lookup."""
-    from claude_hpc.planning.axes import write_axes
+    from hpc_agent.planning.axes import write_axes
 
     write_axes(
         tmp_path,
@@ -452,8 +452,8 @@ def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
 
 @pytest.fixture
 def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from claude_hpc._internal import session
-    from claude_hpc._internal.session import run_record
+    from hpc_agent._internal import session
+    from hpc_agent._internal.session import run_record
 
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
@@ -463,8 +463,8 @@ def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
     """Write a journal RunRecord matching *run_id* with the given job_ids."""
-    from claude_hpc._internal import session
-    from claude_hpc._internal.session import RunRecord
+    from hpc_agent._internal import session
+    from hpc_agent._internal.session import RunRecord
 
     record = RunRecord(
         run_id=run_id,
@@ -482,14 +482,14 @@ def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
 
 
 def test_is_orphan_when_no_journal_record(_journal_home: Path, tmp_path: Path) -> None:
-    from claude_hpc.state.runs import is_orphan_sidecar
+    from hpc_agent.state.runs import is_orphan_sidecar
 
     write_run_sidecar(tmp_path, **_common_required_kwargs())
     assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is True
 
 
 def test_is_not_orphan_when_journal_has_job_ids(_journal_home: Path, tmp_path: Path) -> None:
-    from claude_hpc.state.runs import is_orphan_sidecar
+    from hpc_agent.state.runs import is_orphan_sidecar
 
     kwargs = _common_required_kwargs()
     write_run_sidecar(tmp_path, **kwargs)
@@ -498,7 +498,7 @@ def test_is_not_orphan_when_journal_has_job_ids(_journal_home: Path, tmp_path: P
 
 
 def test_is_orphan_when_journal_has_empty_job_ids(_journal_home: Path, tmp_path: Path) -> None:
-    from claude_hpc.state.runs import is_orphan_sidecar
+    from hpc_agent.state.runs import is_orphan_sidecar
 
     kwargs = _common_required_kwargs()
     write_run_sidecar(tmp_path, **kwargs)
@@ -507,7 +507,7 @@ def test_is_orphan_when_journal_has_empty_job_ids(_journal_home: Path, tmp_path:
 
 
 def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_path: Path) -> None:
-    from claude_hpc.state.runs import prune_orphan_sidecars, run_sidecar_path
+    from hpc_agent.state.runs import prune_orphan_sidecars, run_sidecar_path
 
     real_kwargs = _common_required_kwargs(run_id="20260101-000000-real0001")
     orphan_kwargs = _common_required_kwargs(run_id="20260101-000001-orphan02")
@@ -522,7 +522,7 @@ def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_pat
 
 
 def test_prune_orphan_sidecars_idempotent(_journal_home: Path, tmp_path: Path) -> None:
-    from claude_hpc.state.runs import prune_orphan_sidecars
+    from hpc_agent.state.runs import prune_orphan_sidecars
 
     write_run_sidecar(tmp_path, **_common_required_kwargs())
     first = prune_orphan_sidecars(tmp_path)
@@ -536,7 +536,7 @@ def test_find_run_by_cmd_sha_default_preserves_journal_wipe_recovery(
 ) -> None:
     """Default behaviour: a sidecar without a journal record IS findable
     so :func:`runner.submit_and_record` can reconstruct the journal."""
-    from claude_hpc.state.runs import find_run_by_cmd_sha
+    from hpc_agent.state.runs import find_run_by_cmd_sha
 
     cmd_sha = "f" * 64
     kwargs = _common_required_kwargs()
@@ -552,7 +552,7 @@ def test_find_run_by_cmd_sha_with_skip_orphans_drops_half_baked(
     _journal_home: Path, tmp_path: Path
 ) -> None:
     """Opt-in flag for callers that have already pruned the failed batch."""
-    from claude_hpc.state.runs import find_run_by_cmd_sha
+    from hpc_agent.state.runs import find_run_by_cmd_sha
 
     cmd_sha = "e" * 64
     kwargs = _common_required_kwargs()
@@ -572,7 +572,7 @@ def test_sidecar_with_job_ids_is_not_orphan_even_without_journal(
     """Journal-wipe recovery: a sidecar that finalize_run_sidecar_job_ids
     stamped is the canonical 'job ran on the cluster' signal — even if
     the journal at ~/.claude/hpc/<repo_hash>/ has since been wiped."""
-    from claude_hpc.state.runs import is_orphan_sidecar, write_run_sidecar
+    from hpc_agent.state.runs import is_orphan_sidecar, write_run_sidecar
 
     write_run_sidecar(tmp_path, **_common_required_kwargs(), job_ids=["12345"])
     assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is False
@@ -580,7 +580,7 @@ def test_sidecar_with_job_ids_is_not_orphan_even_without_journal(
 
 def test_sidecar_without_job_ids_or_journal_is_orphan(_journal_home: Path, tmp_path: Path) -> None:
     """The half-baked case: Step 6d wrote the sidecar but qsub never ran."""
-    from claude_hpc.state.runs import is_orphan_sidecar, write_run_sidecar
+    from hpc_agent.state.runs import is_orphan_sidecar, write_run_sidecar
 
     write_run_sidecar(tmp_path, **_common_required_kwargs())
     assert is_orphan_sidecar(tmp_path, "20260101-000000-deadbee") is True
@@ -590,7 +590,7 @@ def test_update_sidecar_job_ids_atomically_stamps_existing_sidecar(
     _journal_home: Path, tmp_path: Path
 ) -> None:
     """Post-qsub finalize: load + set + atomic rewrite, preserving v2 fields."""
-    from claude_hpc.state.runs import (
+    from hpc_agent.state.runs import (
         is_orphan_sidecar,
         read_run_sidecar,
         update_run_sidecar_job_ids,
@@ -623,7 +623,7 @@ def test_update_sidecar_job_ids_raises_when_sidecar_missing(
     _journal_home: Path, tmp_path: Path
 ) -> None:
     """Caller-side bug: finalize before write. Surface, don't synthesize."""
-    from claude_hpc.state.runs import update_run_sidecar_job_ids
+    from hpc_agent.state.runs import update_run_sidecar_job_ids
 
     with pytest.raises(FileNotFoundError):
         update_run_sidecar_job_ids(tmp_path, "20260101-000000-nope0000", ["12345"])

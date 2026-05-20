@@ -1,4 +1,4 @@
-# claude-hpc docs
+# hpc-agent docs
 
 Navigation map for the docs tree.
 

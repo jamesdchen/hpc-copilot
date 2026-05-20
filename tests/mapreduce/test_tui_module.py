@@ -1,4 +1,4 @@
-"""Smoke tests for claude_hpc.mapreduce.reduce.tui.
+"""Smoke tests for hpc_agent.mapreduce.reduce.tui.
 
 We don't exercise the interactive Live loop here — that requires rich and
 an interactive terminal.  Instead assert:
@@ -26,13 +26,13 @@ def test_module_imports_without_rich(monkeypatch):
     monkeypatch.setitem(sys.modules, "rich.live", None)
 
     # Force a fresh import of the tui module under the hidden-rich condition.
-    sys.modules.pop("claude_hpc.mapreduce.reduce.tui", None)
-    mod = importlib.import_module("claude_hpc.mapreduce.reduce.tui")
+    sys.modules.pop("hpc_agent.mapreduce.reduce.tui", None)
+    mod = importlib.import_module("hpc_agent.mapreduce.reduce.tui")
     assert hasattr(mod, "run_tui")
 
 
 def test_format_elapsed():
-    from claude_hpc.mapreduce.reduce.tui import _fmt_elapsed
+    from hpc_agent.mapreduce.reduce.tui import _fmt_elapsed
 
     assert _fmt_elapsed(0) == "0s"
     assert _fmt_elapsed(45) == "45s"
@@ -41,7 +41,7 @@ def test_format_elapsed():
 
 
 def test_failing_tail_builds_from_err_logs(tmp_path):
-    from claude_hpc.mapreduce.reduce.tui import _failing_tail
+    from hpc_agent.mapreduce.reduce.tui import _failing_tail
 
     log = tmp_path / "err.log"
     log.write_text("lots of output\nERROR: boom the final line\n")
@@ -64,7 +64,7 @@ def test_failing_tail_builds_from_err_logs(tmp_path):
 
 
 def test_classify_failures_buckets_logs(tmp_path):
-    from claude_hpc.mapreduce.reduce.tui import _classify_failures
+    from hpc_agent.mapreduce.reduce.tui import _classify_failures
 
     oom = tmp_path / "oom.err"
     oom.write_text("torch.cuda.OutOfMemoryError: CUDA out of memory\n")
@@ -99,7 +99,7 @@ def test_run_tui_errors_cleanly_when_rich_missing(monkeypatch, tmp_path, capsys)
     per_task_dict_path = tmp_path / "m.json"
     per_task_dict_path.write_text('{"total_tasks": 0, "tasks": {}}')
 
-    from claude_hpc.mapreduce.reduce import tui
+    from hpc_agent.mapreduce.reduce import tui
 
     rc = tui.run_tui(per_task_dict_path)
     assert rc == 2
@@ -110,7 +110,7 @@ def test_run_tui_errors_cleanly_when_rich_missing(monkeypatch, tmp_path, capsys)
 def test_render_returns_rich_group_when_rich_present(tmp_path):
     # If rich isn't available, skip rather than fail the whole suite.
     pytest.importorskip("rich")
-    from claude_hpc.mapreduce.reduce.tui import _render, _UiState
+    from hpc_agent.mapreduce.reduce.tui import _render, _UiState
 
     per_task_dict = {"run_id": "r1", "cluster": "c1", "wave_map": {"0": ["0", "1"]}, "tasks": {}}
     report = {

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from claude_hpc import _PACKAGE_ROOT
+from hpc_agent import _PACKAGE_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -219,7 +219,7 @@ def test_submit_input_schema_accepts_runtime() -> None:
     # runtime is optional — must not be in required list
     assert "runtime" not in schema.get("required", [])
 
-    from claude_hpc._internal.schema import validate as _validate
+    from hpc_agent._internal.schema import validate as _validate
 
     base = {
         "profile": "p",

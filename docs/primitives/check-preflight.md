@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent preflight [--cluster <name>]
-  python: claude_hpc.atoms.preflight.check_preflight
+  python: hpc_agent.atoms.preflight.check_preflight
 exit_codes:
 - 0: all checks passed
 - 2: one or more checks failed (envelope is still ok=true; failures live in checks[].ok)

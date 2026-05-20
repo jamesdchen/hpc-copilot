@@ -1,4 +1,4 @@
-"""Tests for :mod:`claude_hpc._internal.version`.
+"""Tests for :mod:`hpc_agent._internal.version`.
 
 The manifest is the cross-domain source of truth for supported schema
 versions. These tests check three things:
@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from claude_hpc import errors
-from claude_hpc._internal import version
+from hpc_agent import errors
+from hpc_agent._internal import version
 
 
 def test_compatibility_check_silent_on_supported() -> None:
@@ -56,13 +56,13 @@ def test_supported_versions_returns_tuple() -> None:
 # of (file, constant_name) pairs. We use one canonical writer per
 # domain even when readers exist in multiple files.
 _WRITER_CONSTANTS = {
-    "sidecar": [("src/claude_hpc/state/runs.py", "SIDECAR_SCHEMA_VERSION")],
-    "runtime_prior": [("src/claude_hpc/state/runtime_prior.py", "SCHEMA_VERSION")],
+    "sidecar": [("src/hpc_agent/state/runs.py", "SIDECAR_SCHEMA_VERSION")],
+    "runtime_prior": [("src/hpc_agent/state/runtime_prior.py", "SCHEMA_VERSION")],
     # calibration_prediction and status_rollup write their schemaversion
     # as inline literals (no module-level constant). Verified by other tests.
     "calibration_prediction": [],
     "status_rollup": [],
-    "session": [("src/claude_hpc/_internal/session/run_record.py", "SCHEMA_VERSION")],
+    "session": [("src/hpc_agent/_internal/session/run_record.py", "SCHEMA_VERSION")],
 }
 
 

@@ -1,4 +1,4 @@
-"""Tests for ``claude_hpc.atoms.monitor_arm.decide_monitor_arm``.
+"""Tests for ``hpc_agent.atoms.monitor_arm.decide_monitor_arm``.
 
 The primitive picks cron/loop/none + cadence + cron schedule + the
 literal ``armed:`` line. We test:
@@ -13,8 +13,8 @@ literal ``armed:`` line. We test:
 
 from __future__ import annotations
 
-from claude_hpc._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
-from claude_hpc.atoms.monitor_arm import decide_monitor_arm
+from hpc_agent._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
+from hpc_agent.atoms.monitor_arm import decide_monitor_arm
 
 
 def _summary(complete: int = 0, running: int = 0, pending: int = 0, failed: int = 0) -> dict:

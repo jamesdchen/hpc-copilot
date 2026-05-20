@@ -5,7 +5,7 @@ satisfy two invariants:
 
 1. **Emitted-JSON parity** — the JSON schema that
    ``model_json_schema()`` produces today matches the file checked
-   in at ``claude_hpc/schemas/<name>``. (Already enforced by the
+   in at ``hpc_agent/schemas/<name>``. (Already enforced by the
    pre-commit ``--check`` gate, but pinning it here means a stale
    checked-in schema also fails CI without needing the gate.)
 
@@ -41,7 +41,7 @@ from hypothesis import strategies as st
 from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-SCHEMAS_DIR = REPO_ROOT / "src" / "claude_hpc" / "schemas"
+SCHEMAS_DIR = REPO_ROOT / "src" / "hpc_agent" / "schemas"
 BUILD_SCRIPT = REPO_ROOT / "scripts" / "build_schemas.py"
 
 
@@ -295,8 +295,8 @@ def test_typeadapter_emits_self_consistent_schemas() -> None:
     but a 1-stage array passes; a discriminated envelope union
     accepts a minimal success envelope.
     """
-    from claude_hpc._schema_models.fixtures.envelope import EnvelopeAdapter, SuccessEnvelope
-    from claude_hpc._schema_models.fixtures.stages import StagesAdapter
+    from hpc_agent._schema_models.fixtures.envelope import EnvelopeAdapter, SuccessEnvelope
+    from hpc_agent._schema_models.fixtures.stages import StagesAdapter
 
     # stages: 1-element list passes
     one_stage = StagesAdapter.dump_python([{"name": "fit", "run": "python fit.py"}])
