@@ -2,7 +2,7 @@
 
 The CLI surface is ``hpc-agent hook-install`` and lives in
 ``agent_cli.py``; this module provides the merge logic so it can also
-be invoked programmatically (from setup_hpc skill, tests, etc.).
+be invoked programmatically (from setup-hpc skill, tests, etc.).
 
 The default target is the **user-global** settings file at
 ``~/.claude/settings.json``. To install at project scope instead, pass
@@ -36,11 +36,12 @@ def DEFAULT_SETTINGS_PATH() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
 
-# Stop-hook entries hpc-agent owns. Keyed by a stable "id" comment in the
-# command string so install_hooks can detect prior installs without
-# string-matching the whole entry. The id ("hpc-agent:monitor-armed") is
-# embedded in a leading comment via shell ``true`` so it's harmless if
-# Claude Code ever decides to forward the comment to a real shell.
+# Stop-hook entries hpc-agent owns, keyed by a stable id. install_hooks
+# recognises a prior install by the hook's *module* name, not the full
+# command string, so an entry survives an interpreter-path change (see
+# monitor_armed_check._default_command) and is upgraded in place rather
+# than duplicated. The matcher below is monitor-armed-specific; a second
+# managed hook would need its own identity predicate.
 MANAGED_HOOKS: dict[str, dict[str, Any]] = {
     "monitor-armed": monitor_armed_check.settings_entry(),
 }
@@ -69,6 +70,19 @@ def _command_strings(obj: Any) -> set[str]:
     return set()
 
 
+def _is_monitor_armed_entry(entry: Any) -> bool:
+    """True if *entry* is (or wraps) the monitor-armed Stop hook.
+
+    Identity is the hook's module name, not the full command string, so
+    an entry written by an older installer (bare ``python``) or one whose
+    venv path has since changed is still recognised — and re-pointed — on
+    re-install.
+    """
+    return isinstance(entry, dict) and any(
+        monitor_armed_check.is_monitor_armed_command(c) for c in _command_strings(entry)
+    )
+
+
 def build_planned_settings(existing: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     """Return ``(new_settings, added_ids)`` after merging managed hooks into *existing*.
 
@@ -92,21 +106,20 @@ def build_planned_settings(existing: dict[str, Any]) -> tuple[dict[str, Any], li
 
     added: list[str] = []
     for hook_id, group in MANAGED_HOOKS.items():
-        managed_cmds = _command_strings(group)
-        matching = [
-            e for e in stop_entries if isinstance(e, dict) and _command_strings(e) & managed_cmds
-        ]
-        if matching and all("hooks" in e for e in matching):
-            # Already present in the correct group shape.
+        desired_cmds = _command_strings(group)
+        matching = [e for e in stop_entries if _is_monitor_armed_entry(e)]
+        current = (
+            len(matching) == 1
+            and "hooks" in matching[0]
+            and _command_strings(matching[0]) == desired_cmds
+        )
+        if current:
+            # Exactly one entry, correct group shape, current command.
             continue
-        # Either absent, or present only as a legacy flat entry (and/or
-        # duplicated). Drop every matching entry and append one
-        # canonical group; unrelated entries are left untouched.
-        stop_entries = [
-            e
-            for e in stop_entries
-            if not (isinstance(e, dict) and _command_strings(e) & managed_cmds)
-        ]
+        # Absent, legacy flat shape, a stale interpreter path, or
+        # duplicated. Drop every matching entry and append one canonical
+        # group; unrelated Stop hooks are left untouched.
+        stop_entries = [e for e in stop_entries if not _is_monitor_armed_entry(e)]
         stop_entries.append(json.loads(json.dumps(group)))
         hooks_block["Stop"] = stop_entries
         added.append(hook_id)

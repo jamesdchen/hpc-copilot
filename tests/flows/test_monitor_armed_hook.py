@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import io
 import json
-from typing import TYPE_CHECKING, Any
+import sys
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from hpc_agent.hooks import install as install_mod
 from hpc_agent.hooks import monitor_armed_check as hook
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 # ─── transcript fixtures ────────────────────────────────────────────────────
 
@@ -243,29 +242,49 @@ def test_install_preserves_existing_hooks(tmp_path: Path) -> None:
     assert "PreToolUse" in on_disk["hooks"]
 
 
-def test_install_heals_legacy_flat_entry(tmp_path: Path) -> None:
-    """A flat command hook from the old buggy installer is rewritten in place.
+def test_install_upgrades_legacy_bare_python_entry(tmp_path: Path) -> None:
+    """A legacy entry is healed into the group shape AND re-pointed off ``python``.
 
-    Pre-fix, ``settings_entry`` returned a bare ``{"type": "command",
-    ...}`` hook and the installer appended it straight into ``hooks.Stop``
-    — a shape Claude Code rejects. Re-running the fixed installer must
-    heal that entry into the group shape, not duplicate it.
+    Pre-fix the installer (a) wrote a bare ``{"type": "command", ...}``
+    hook — a shape Claude Code rejects — and (b) hard-coded ``python``,
+    which on most machines isn't the venv that has ``hpc_agent``
+    installed, so the hook died with ModuleNotFoundError and silently
+    stopped enforcing. Re-running the fixed installer must rewrite that
+    entry into the canonical group shape pinned to the current
+    interpreter — not leave it broken, and not duplicate it.
     """
     settings = tmp_path / "settings.json"
-    command = "python -m hpc_agent.hooks.monitor_armed_check"
-    settings.write_text(json.dumps({"hooks": {"Stop": [{"type": "command", "command": command}]}}))
+    legacy = "python -m hpc_agent.hooks.monitor_armed_check"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"type": "command", "command": legacy}]}}))
     summary = install_mod.install_hooks(settings_path=settings)
     assert summary["wrote"] is True
     assert summary["added"] == ["monitor-armed"]
     stop_entries = json.loads(settings.read_text())["hooks"]["Stop"]
-    # Healed in place — exactly one entry, now in the group shape.
+    # Upgraded in place — exactly one entry, now in the group shape.
     assert len(stop_entries) == 1
     assert "hooks" in stop_entries[0]
-    assert _commands(stop_entries[0]) == [command]
-    # And healing is idempotent.
+    cmd = _commands(stop_entries[0])[0]
+    assert "hpc_agent.hooks.monitor_armed_check" in cmd
+    assert cmd != legacy  # interpreter is no longer a bare ``python``
+    assert cmd == hook.settings_entry()["hooks"][0]["command"]
+    # And the upgrade is idempotent.
     again = install_mod.install_hooks(settings_path=settings)
     assert again["wrote"] is False
     assert again["added"] == []
+
+
+def test_default_command_pins_current_interpreter() -> None:
+    """The default hook command runs the interpreter doing the install.
+
+    A bare ``python`` resolves via ``PATH`` at hook time, which routinely
+    isn't the venv ``hpc_agent`` lives in. Pinning ``sys.executable``
+    makes the Stop hook fire regardless of venv-activation state.
+    """
+    cmd = hook.settings_entry()["hooks"][0]["command"]
+    assert cmd.endswith("-m hpc_agent.hooks.monitor_armed_check")
+    assert not cmd.startswith("python ")
+    assert Path(sys.executable).as_posix() in cmd
+    assert hook.is_monitor_armed_command(cmd)
 
 
 def test_install_preserves_other_top_level_keys(tmp_path: Path) -> None:

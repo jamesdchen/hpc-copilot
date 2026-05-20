@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from typing import Any
 __all__ = [
     "ARMED_RE",
     "USER_INVOCATION_RE",
+    "is_monitor_armed_command",
     "main",
     "settings_entry",
 ]
@@ -141,9 +143,42 @@ def _find_paired_assistant_for_invocation(
     return last_match_text, last_assistant_text
 
 
-def settings_entry(
-    *, command: str = "python -m hpc_agent.hooks.monitor_armed_check"
-) -> dict[str, Any]:
+# The module the Stop hook runs. The *identity* of the hook is this
+# module name, not the full command string — the interpreter prefix
+# varies by install (see ``_default_command``), so the installer matches
+# on this token to recognise and upgrade entries from older versions.
+_HOOK_MODULE = "hpc_agent.hooks.monitor_armed_check"
+
+
+def _default_command() -> str:
+    """Return the Stop-hook command pinned to the *installing* interpreter.
+
+    Claude Code runs hook commands through a shell using the OS ``PATH``.
+    A bare ``python`` there is rarely the environment ``hpc_agent`` is
+    installed into — the venv may not be activated, or ``PATH`` may point
+    at the system Python — so the hook dies with ``ModuleNotFoundError``
+    and silently stops enforcing the /monitor-hpc contract.
+    ``sys.executable`` is the interpreter running the installer, which by
+    construction can import ``hpc_agent``; pinning to it makes the hook
+    fire regardless of ``PATH`` or venv-activation state.
+
+    The path is POSIX-formatted (forward slashes) and shell-quoted: hooks
+    run under a POSIX shell even on Windows, and the interpreter path
+    routinely contains spaces.
+    """
+    return f"{shlex.quote(Path(sys.executable).as_posix())} -m {_HOOK_MODULE}"
+
+
+def is_monitor_armed_command(command: str) -> bool:
+    """True if *command* invokes this Stop hook, ignoring the interpreter.
+
+    The installer uses this to recognise — and upgrade in place — entries
+    written by older versions that hard-coded a bare ``python``.
+    """
+    return _HOOK_MODULE in command
+
+
+def settings_entry(*, command: str | None = None) -> dict[str, Any]:
     """Return the JSON entry for ~/.claude/settings.json's ``hooks.Stop`` array.
 
     Each element of a hook-event array is a *group* object — ``{"hooks":
@@ -154,9 +189,12 @@ def settings_entry(
     ``hooks.Stop.0.hooks: Expected array, but received undefined`` and
     then skips the entire settings file.
 
-    Override *command* to point at a custom interpreter (e.g. when the
-    global ``python`` doesn't have hpc-agent installed).
+    With *command* omitted the hook is pinned to the current interpreter
+    via :func:`_default_command`, so it runs even when the venv isn't on
+    ``PATH``. Pass *command* to override (e.g. a wrapper script).
     """
+    if command is None:
+        command = _default_command()
     return {"hooks": [{"type": "command", "command": command}]}
 
 
