@@ -1,11 +1,11 @@
 hoffman2:
   host: hoffman2.idre.ucla.edu
-  user: jamesdc1
+  user: <your_user>
   scheduler: sge
-  scratch: /u/scratch/j/jamesdc1
+  scratch: <your_scratch>
   modules: [python/3.11.9]
   conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh
-  conda_envs: [harxhar-dl]
+  conda_envs: [<your_env>]
   gpu_types: [a100, h200, a6000, h100, v100, rtx2080ti]
   # Per-cluster GPU queue map for live scoring (infra/gpu.py).
   # Each key is the SGE queue prefix that qstat -f reports; each value
@@ -39,7 +39,7 @@ hoffman2:
   # ($SLURM_TMPDIR / $TMPDIR) at preamble time. Set to a per-user
   # dataset path (e.g., /u/scratch/.../shared_data) and the executor
   # reads from $LOCAL_DATA_DIR instead. Omit to disable.
-  # nfs_data_dir: /u/scratch/j/jamesdc1/datasets
+  # nfs_data_dir: <your_scratch>/datasets
   # Cold-start walltime trim: when no runtime prior exists to score
   # candidates the planner trims the nominal ask by 15min and floors
   # to a 5min boundary, so the campus user fits in backfill shadows
@@ -73,17 +73,17 @@ hoffman2:
 
 discovery:
   host: discovery2.usc.edu
-  user: jc_905
+  user: <your_user>
   scheduler: slurm
-  account: pollok_1603
-  scratch: /scratch1/jc_905
+  account: <your_account>
+  scratch: <your_scratch>
   modules: []
   conda_source: /apps/conda/miniforge3/25.3.0/etc/profile.d/conda.sh
-  conda_envs: [project-cucuringu]
+  conda_envs: [<your_env>]
   gpu_types: [a100, a40, v100, l40s]
   gpu_constraint: "a100|a40|v100|l40s"
   cold_start_mem_buffer: 0.15
-  # nfs_data_dir: /scratch1/jc_905/datasets
+  # nfs_data_dir: <your_scratch>/datasets
   # Cold-start walltime trim: when no runtime prior exists to score
   # candidates the planner trims the nominal ask by 15min and floors
   # to a 5min boundary, so the campus user fits in backfill shadows
