@@ -57,7 +57,7 @@ Read `compute()` / the `@register_run` function and its call graph — the same 
 
 ### 3b: Classify the `DataAxis`
 
-The experiment declares nothing about parallelism — you classify it. The one question: **does the loop carry state, and is the state transition associative?** (Full model: `hpc_agent/template/axis.py`.)
+The experiment declares nothing about parallelism — you classify it. The one question: **does the loop carry state, and is the state transition associative?** (Full model: `hpc_agent/template/axis.py`. The same classification reference lives in [build-tasks-py.md](../../docs/primitives/build-tasks-py.md) so an integrator driving `build-tasks-py` directly — without this skill — gets the identical guidance.)
 
 | Observation in `run()` | `DataAxis` | Halo |
 |---|---|---|
