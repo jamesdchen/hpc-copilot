@@ -69,6 +69,18 @@ Suggested walltime: `chosen.p95(c) * safety_margin` (default `1.3`). Covers the 
 
 **Empty-ETA edge case**: when `eta_sec_via_test_only` is `null` (sbatch `--test-only` failed or scheduler is SGE), substitute the cluster's typical queue depth or just `0` and continue — the runtime prior dominates the cost most of the time.
 
+## Adversarial backfill mode
+
+Default-on when priors exist. On top of the constraint scorecard the primitive returns resource-shrink recommendations and a probed launch tuple:
+
+1. **Walltime shrink** — `p95 × 1.30` from `runtime_prior.elapsed_sec` (≥5 samples per GPU type).
+2. **Footprint shrink** — `--mem` from `peak_host_mem_mb` (`p95 × 1.50`, ≥10 samples) and `--cpus-per-task` from `cpu_seconds_used / elapsed_sec`. Both axes only **shrink below** the caller's defaults — never grow — to avoid silent OOM / cliff kills.
+3. **Probe lattice** — sweep `(walltime × mem × constraint)` via `sbatch --test-only` and pick the variant SLURM predicts will start earliest. The winner is surfaced as `recommended_tuple` with `predicted_eta_sec` set when a fitting backfill window was confirmed.
+
+`array_reshape.recommended_max_array_size` is a cluster-wide reshape the caller can apply unconditionally; `walltime_split` requires `requires_checkpointing` confirmation before chaining.
+
+**Closed-loop calibration.** The planner reads recent runtime samples and tunes the walltime safety multiplier; the top-level `walltime_drift` field reports `{base_safety_mult, adjusted_safety_mult, rationale}`. Pair it with `hpc_agent.forecast.calibration.record_prediction_sidecar` post-submit so completion ingestion can validate the calibration.
+
 ## Notes
 
 - When `needs_canary=true`, `canary_plan` carries a 1-task probe spec — the caller submits the canary, ingests its result via `runtime_prior.append_sample`, then re-invokes this primitive to score normally.
