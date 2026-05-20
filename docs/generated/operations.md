@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**60 operations total**: 54 primitive atoms + 6 workflow atoms.
+**61 operations total**: 55 primitive atoms + 6 workflow atoms.
 
 ## How to read this page
 
@@ -90,7 +90,7 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.runner.submit.submit_and_record` | `hpc_agent/schemas/submit.input.json` | `hpc_agent/schemas/submit.output.json` |
 
-## `scaffold` (6)
+## `scaffold` (7)
 
 Creates new files (e.g. starter executor templates).
 
@@ -100,6 +100,7 @@ Creates new files (e.g. starter executor templates).
 | [`build-executor`](primitives/build-executor.md) | ✗ | writes-file | `hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` | `hpc_agent.atoms.build_executor.build_executor` | — | `hpc_agent/schemas/build_executor.output.json` |
 | [`build-submit-spec`](primitives/build-submit-spec.md) | ✓ | _none_ | `hpc-agent build-submit-spec --spec <path>` | `hpc_agent.atoms.build_submit_spec.build_submit_spec` | `hpc_agent/schemas/build_submit_spec.input.json` | — |
 | [`build-tasks-py`](primitives/build-tasks-py.md) | ✓ | writes-sidecar | `hpc-agent build-tasks-py --spec <path>` | `hpc_agent.atoms.build_tasks_py.build_tasks_py` | `hpc_agent/schemas/build_tasks_py.input.json` | — |
+| [`build-template`](primitives/build-template.md) | ✗ | writes-file | `hpc-agent build-template [--repo-dir <dir>] [--force]` | `hpc_agent.atoms.build_template.build_template` | — | — |
 | [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `hpc-agent campaign init --campaign-id <id> --strategy <s>` | `hpc_agent.atoms.campaign_init.campaign_init` | — | `hpc_agent/schemas/campaign.output.json` |
 | [`interview`](primitives/interview.md) | ✓ | file_write | `hpc-agent interview` | `hpc_agent.atoms.interview.record_interview` | `hpc_agent/schemas/interview.input.json` | `hpc_agent/schemas/interview.output.json` |
 
