@@ -55,6 +55,8 @@ def main() -> int:
         # Skip:
         # - .git/             — git's own files
         # - tests/, scripts/  — never registration sites
+        # - hpc-agent-pro/    — sibling plugin package; its primitives
+        #   register through the plugin seam, not _PRIMITIVE_MODULES
         # - .claude/worktrees/ — agent-isolated worktrees may shadow the
         #   real source tree with their own copies; treating those as
         #   first-class would double-count primitives
@@ -63,6 +65,7 @@ def main() -> int:
             "/.git/" in s
             or "/tests/" in s
             or "/scripts/" in s
+            or "/hpc-agent-pro/" in s
             or "/.claude/worktrees/" in s
             or "/.venv/" in s
             or "/venv/" in s
