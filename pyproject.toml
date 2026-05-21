@@ -145,3 +145,11 @@ skip_empty = true
 dev = [
     "pytest-xdist>=3.8.0",
 ]
+
+# hpc-agent-pro/ is a sibling package in this monorepo — built, tested,
+# and versioned independently (it depends on an unpublished local
+# hpc-agent). Excluding it keeps `uv run` here resolving only the
+# public package, so the public test env never has the plugin loaded.
+[tool.uv.workspace]
+members = []
+exclude = ["hpc-agent-pro"]

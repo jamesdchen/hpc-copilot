@@ -1,0 +1,245 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/plan_submit.output.json",
+  "title": "plan-submit (score-submit-plan) output data",
+  "description": "Shape of the ``data`` field on a successful ``plan-submit`` envelope.\n\nThe slash command applies the cost rubric (see\n``docs/primitives/score-submit-plan.md``) to the candidates list\nand picks one constraint.",
+  "type": "object",
+  "required": [
+    "profile",
+    "cluster",
+    "now_iso",
+    "scheduler_kind",
+    "needs_canary",
+    "canary_plan",
+    "candidates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "profile": {
+      "title": "Profile",
+      "type": "string"
+    },
+    "cluster": {
+      "title": "Cluster",
+      "type": "string"
+    },
+    "now_iso": {
+      "title": "Now Iso",
+      "type": "string"
+    },
+    "scheduler_kind": {
+      "enum": [
+        "sge",
+        "slurm"
+      ],
+      "title": "Scheduler Kind",
+      "type": "string"
+    },
+    "needs_canary": {
+      "title": "Needs Canary",
+      "type": "boolean"
+    },
+    "canary_plan": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "When needs_canary=true, a 1-task probe spec (constraint, walltime). Null when scoring is possible.",
+      "title": "Canary Plan"
+    },
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/_PlanSubmitCandidate"
+      },
+      "title": "Candidates",
+      "type": "array"
+    },
+    "walltime_arbitraged_from": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Original walltime ask in seconds before cold-start arbitrage trimmed it. Null when arbitrage didn't fire.",
+      "title": "Walltime Arbitraged From"
+    },
+    "walltime_arbitraged_to": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cold-start-trimmed walltime in seconds (the value callers should actually use). Null when arbitrage didn't fire.",
+      "title": "Walltime Arbitraged To"
+    },
+    "daisy_chain_segments": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Number of dependency-chained segments the task was split into. Null when no chaining.",
+      "title": "Daisy Chain Segments"
+    },
+    "daisy_chain_segment_walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-segment walltime (post-rebalance) callers should request for each chained segment. Null when no chaining.",
+      "title": "Daisy Chain Segment Walltime Sec"
+    },
+    "daisy_chain_total_walltime_sec": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sum of per-segment walltimes across the chain (==original ask after rebalance). Null when no chaining.",
+      "title": "Daisy Chain Total Walltime Sec"
+    },
+    "daisy_chain_dep_jobids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Scheduler job IDs of each prior segment. Always null at plan_submit time; submit_flow populates it.",
+      "title": "Daisy Chain Dep Jobids"
+    }
+  },
+  "$defs": {
+    "_PlanSubmitCandidate": {
+      "additionalProperties": true,
+      "properties": {
+        "constraint": {
+          "title": "Constraint",
+          "type": "string"
+        },
+        "pool_size": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pool Size"
+        },
+        "healthy_nodes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Healthy Nodes"
+        },
+        "stressed_nodes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stressed Nodes"
+        },
+        "eta_sec_via_test_only": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Eta Sec Via Test Only"
+        },
+        "runtime_prior_quantiles_sec": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-gpu_type quantiles from runtime-prior; empty when this candidate has no priors.",
+          "title": "Runtime Prior Quantiles Sec"
+        },
+        "p_fail_30d": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-gpu_type failure probability over the last 30 days.",
+          "title": "P Fail 30D"
+        }
+      },
+      "required": [
+        "constraint"
+      ],
+      "title": "_PlanSubmitCandidate",
+      "type": "object"
+    }
+  }
+}
