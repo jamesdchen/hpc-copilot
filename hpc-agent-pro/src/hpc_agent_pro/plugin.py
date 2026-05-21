@@ -19,6 +19,7 @@ the module, and ``getattr(module, "primitive_modules")`` /
 
 from __future__ import annotations
 
+from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -56,6 +57,14 @@ primitive_modules: tuple[str, ...] = (
     # validate — scheduler --test-only probe wrapper.
     "hpc_agent_pro.planning.validate",
 )
+
+
+# ─── slash-command assets ──────────────────────────────────────────────────
+#
+# The planner-aware /submit-hpc skill + command. ``hpc-agent
+# install-commands`` installs these over the core package's
+# execution-only copies once this plugin is present.
+slash_command_assets = files("hpc_agent_pro") / "slash_commands"
 
 
 # ─── CLI helpers (mirrored from hpc_agent.agent_cli) ───────────────────────

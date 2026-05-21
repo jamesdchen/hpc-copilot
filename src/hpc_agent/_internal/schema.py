@@ -97,7 +97,7 @@ def _output_schema_for(primitive_name: str) -> dict | None:
     backs a given primitive — pre-v3 this only looked up
     ``<name>.output.json`` and silently no-op'd on every primitive
     whose schema is keyed off the CLI subcommand name (preflight,
-    discover, plan_submit, status, submit, reconcile, runtime_prior;
+    discover, status, submit, reconcile, runtime_prior;
     v3 BUG-1V3-1).
     """
     candidates = [
