@@ -7,6 +7,24 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Removed — scheduling-strategy layer extracted to `hpc-agent-pro`
+
+The queue-wait forecasting and submit-planning layer is no longer part
+of the `hpc-agent` package. Gone from the CLI: `plan-submit`,
+`validate`, `inspect-cluster`, `runtime-prior`, `predict-start-time`,
+`predict-queue-wait`, `best-submit-window`, `walltime-drift`,
+`house-edge`, and `recommend-wait-alternative` — along with the
+`forecast/` package, the submit planner, walltime arbitrage, and the
+resubmit auto-right-sizer. `resubmit` now applies caller-supplied
+resource overrides verbatim instead of computing them.
+
+This is a breaking change to the CLI surface. The capability is
+repackaged as an optional plugin discovered through the new
+`hpc_agent.plugins` entry-point group; installing that plugin restores
+every command above. The public package keeps the job-execution
+surface (submit / monitor / aggregate / campaign / resubmit) and the
+`inspect_cluster` / `roll_up_runtime_quantiles` library functions.
+
 ### Added — `plan-throughput` primitive
 
 `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]`
