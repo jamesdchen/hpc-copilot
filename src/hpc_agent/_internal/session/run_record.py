@@ -100,6 +100,7 @@ _UPDATABLE_FIELDS = frozenset(
         "job_ids",
         "last_resubmit_request_id",
         "recent_resubmit_request_ids",
+        "pending_resubmit",
     }
 )
 
@@ -139,6 +140,13 @@ class RunRecord:
     # uses ``find_runs_by_campaign`` to discover its in-flight set on
     # resume.
     campaign_id: str = ""
+    # Resume marker for a multi-batch resubmit that failed partway. When
+    # non-empty: ``{"request_id": <rid>, "job_ids": [<ids landed so
+    # far>]}``. resubmit_flow uses it to continue from the next
+    # un-submitted batch instead of re-running the whole plan (double
+    # submit) or skipping the remainder. Cleared once the resubmit
+    # completes fully.
+    pending_resubmit: dict = dataclasses.field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
 
     def to_dict(self) -> dict:

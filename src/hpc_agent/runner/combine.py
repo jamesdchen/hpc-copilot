@@ -12,6 +12,8 @@ from hpc_agent.infra import remote
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from hpc_agent._internal.session import RunRecord
+
 
 @primitive(
     name="combine-wave",
@@ -56,20 +58,21 @@ def combine_wave(
         run_id=run_id,
         force=force,
     )
-    record = session.load_run(experiment_dir, run_id)
-    if record is None:
-        raise errors.JournalCorrupt(f"no run record for {run_id!r}")
-    if ok:
-        if wave not in record.combined_waves:
-            record.combined_waves = sorted({*record.combined_waves, wave})
-        record.failed_waves = [w for w in record.failed_waves if w != wave]
-    else:
-        if wave not in record.failed_waves:
+
+    def _apply(record: RunRecord) -> None:
+        # Mutate inside the journal's per-run lock: a concurrent
+        # combine_wave for a different wave re-reads the freshly-locked
+        # record, so neither call clobbers the other's wave with a list
+        # snapshot derived from a stale unlocked read.
+        if ok:
+            if wave not in record.combined_waves:
+                record.combined_waves = sorted({*record.combined_waves, wave})
+            record.failed_waves = [w for w in record.failed_waves if w != wave]
+        elif wave not in record.failed_waves:
             record.failed_waves = sorted({*record.failed_waves, wave})
-    session.update_run_status(
-        experiment_dir,
-        run_id,
-        combined_waves=record.combined_waves,
-        failed_waves=record.failed_waves,
-    )
+
+    try:
+        session.update_run_record(experiment_dir, run_id, _apply)
+    except FileNotFoundError as exc:
+        raise errors.JournalCorrupt(f"no run record for {run_id!r}") from exc
     return ok, stdout, stderr

@@ -35,6 +35,7 @@ from hpc_agent._internal.session.journal import (
     _refresh_index_entry,
     load_run,
     mark_run,
+    update_run_record,
     update_run_status,
     upsert_run,
 )
@@ -78,6 +79,7 @@ __all__ = [
     "prune_terminal_runs",
     "repo_hash",
     "runs_dir",
+    "update_run_record",
     "update_run_status",
     "upsert_run",
 ]

@@ -126,26 +126,24 @@ def check_results(
                 break  # one match per task is enough
 
     # Strategy 2: fall back to flat directory scan if no task subdirs found.
-    # Sort the glob output so task-id assignment is deterministic across
-    # OS / filesystem implementations (Linux glob order is not sorted by
-    # default; assigning ``tid = len(results) + 1`` over an unsorted list
-    # silently mis-correlates files to task ids).
+    # With no task_N/ subdirs the only signal for task identity is sorted
+    # position, so the glob is sorted for determinism across OS /
+    # filesystem implementations. Task ids are assigned by 1-based
+    # position (not ``len(results) + 1``): a file that fails the CSV
+    # check then leaves its task id absent rather than shifting every
+    # later file onto an earlier task's id. ``_wip_`` temp files are
+    # dropped first so they don't consume a position slot.
     if not results:
-        for path_str in sorted(glob.glob(str(rdir / file_glob))):
-            if "/_wip_" in path_str:
-                continue
+        candidates = [
+            p for p in sorted(glob.glob(str(rdir / file_glob))) if "/_wip_" not in p
+        ]
+        for tid, path_str in enumerate(candidates[:total_tasks], start=1):
             if validate and path_str.endswith(".csv"):
                 status = _accept_csv(path_str)
                 if status is None:
                     continue
-                tid = len(results) + 1
-                if tid > total_tasks:
-                    break
                 results[tid] = status
             else:
-                tid = len(results) + 1
-                if tid > total_tasks:
-                    break
                 results[tid] = {"status": "complete", "path": path_str}
 
     return results

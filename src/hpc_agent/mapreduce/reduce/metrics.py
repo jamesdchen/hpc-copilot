@@ -187,6 +187,35 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
     return {run_id: _weighted_mean(entries) for run_id, entries in partials.items()}
 
 
+def collect_wave_errors(combiner_dir: str | Path) -> dict[int, list[str]]:
+    """Map wave number → the per-task read errors the combiner recorded.
+
+    Each ``wave_<N>.json`` carries an ``errors`` list naming tasks whose
+    ``metrics.json`` could not be read. Those tasks are absent from the
+    wave's ``grid_points``, so :func:`reduce_partials` silently means
+    over the readable subset. A caller that presents the aggregate as
+    final should consult this to know the mean was computed over a
+    partial task set. Only waves with at least one error are included.
+    """
+    combiner_dir = Path(combiner_dir)
+    out: dict[int, list[str]] = {}
+    for wf in sorted(glob.glob(str(combiner_dir / "wave_*.json"))):
+        try:
+            with open(wf) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        errs = data.get("errors") or []
+        if not errs:
+            continue
+        try:
+            wave_num = int(Path(wf).stem.split("_", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        out[wave_num] = [str(e) for e in errs]
+    return out
+
+
 def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:
     """Sum per-task cpu_s / gpu_s / elapsed_s into a run-level cost rollup.
 
