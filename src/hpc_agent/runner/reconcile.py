@@ -28,7 +28,13 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     cmd = f"cd {shlex.quote(remote_path)} && ls _combiner/wave_*.json 2>/dev/null || true"
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
-        return []
+        # SSH transport failure (rc 255) — not "no waves combined yet",
+        # which returns rc 0 thanks to the trailing ``|| true``. Raise so
+        # reconcile keeps the journal's combined_waves instead of
+        # overwriting it with an empty list on a connectivity blip.
+        raise errors.RemoteCommandFailed(
+            f"combined-wave list failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
+        )
     waves: set[int] = set()
     for line in proc.stdout.splitlines():
         name = Path(line.strip()).name  # wave_<N>.json
@@ -64,6 +70,15 @@ def _ssh_alive_job_ids(
     backend_cls = get_backend_class(scheduler)
     cmd = backend_cls.build_alive_check_cmd(job_ids)
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
+    if proc.returncode != 0:
+        # SSH transport failure (rc 255), not "scheduler ran, found
+        # nothing alive" — the alive-check commands append ``|| true``
+        # so a reachable cluster always returns rc 0. Raise so
+        # reconcile's guard sets alive_check_failed and does NOT mark a
+        # healthy run abandoned on a connectivity blip.
+        raise errors.RemoteCommandFailed(
+            f"alive check failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
+        )
     return backend_cls.parse_alive_output(proc.stdout, job_ids)
 
 
