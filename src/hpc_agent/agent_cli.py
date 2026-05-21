@@ -571,8 +571,6 @@ def cmd_discover_reducers(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-
-
 # ─── subcommand: plan-throughput ───────────────────────────────────────────
 
 

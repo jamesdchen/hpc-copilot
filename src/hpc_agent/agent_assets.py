@@ -50,9 +50,7 @@ def install_agent_assets(
 
     commands_src = package / "commands"
     commands = sorted(
-        entry.name[:-3]
-        for entry in commands_src.iterdir()
-        if entry.name.endswith(".md")
+        entry.name[:-3] for entry in commands_src.iterdir() if entry.name.endswith(".md")
     )
 
     skills_src = package / "skills"

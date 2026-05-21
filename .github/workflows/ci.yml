@@ -58,3 +58,50 @@ jobs:
         # (it already ran above). Coverage only needs ONE pass through
         # the test set to measure executed-line coverage.
         run: pytest -q -m 'not slow' --cov=src/hpc_agent --cov-report=term-missing
+
+  pro:
+    # The hpc-agent-pro plugin package — built and tested independently
+    # of the public package it extends. Lives in the same repo so this
+    # runs on the same commit; that is what makes contract drift between
+    # the two packages impossible to merge unnoticed.
+    name: hpc-agent-pro
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install host + plugin with dev extras
+        # Install the host first so the plugin's hpc-agent>=0.3,<0.4
+        # requirement resolves against the local checkout rather than
+        # the package registry.
+        run: |
+          pip install -e .
+          pip install -e './hpc-agent-pro[dev]'
+      - name: Ruff lint
+        run: ruff check hpc-agent-pro
+      - name: Pytest
+        working-directory: hpc-agent-pro
+        run: pytest -q
+
+  integration:
+    # With both packages installed, the plugin must register its
+    # primitives and restore its CLI subcommands. A failure here means
+    # the contract surface between the packages has drifted.
+    name: integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install host + plugin
+        run: |
+          pip install -e .
+          pip install -e ./hpc-agent-pro
+      - name: Verify the plugin plugs into the host
+        run: python scripts/check_plugin_integration.py
