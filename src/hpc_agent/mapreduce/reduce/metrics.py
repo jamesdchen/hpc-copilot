@@ -76,7 +76,14 @@ def _weighted_mean(entries: list[dict]) -> dict:
         if key == "n_samples":
             agg["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
             continue
-        pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
+        # Skip non-numeric values: a metrics.json may carry string/list
+        # labels, and ``v * w`` on those would raise. Kept in sync with
+        # the combiner's copy of this helper.
+        pairs = [
+            (e[key], w)
+            for e, w in zip(entries, weights, strict=True)
+            if key in e and isinstance(e[key], (int, float))
+        ]
         if not pairs:
             continue
         w_total = _neumaier_sum(w for _, w in pairs)

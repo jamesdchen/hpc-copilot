@@ -354,33 +354,43 @@ def _submit_one_spec(
     canary_done = False
     if spec.canary:
         canary_run_id = f"{spec.run_id}-canary"
-        canary_env = dict(job_env_full)
-        canary_env["HPC_RUN_ID"] = canary_run_id
-        canary_env["HPC_TASK_COUNT"] = "1"
-        canary_job_ids = _make_single_array_submission(
-            backend_obj,
-            job_name=f"{spec.job_name}_canary",
-            total_tasks=1,
-            job_env=canary_env,
-            cwd=experiment_dir,
-        )
-        from hpc_agent._schema_models.actions.submit import SubmitSpec as _SubmitSpec
-
-        runner.submit_and_record(
-            experiment_dir,
-            spec=_SubmitSpec(
-                profile=spec.profile,
-                cluster=spec.cluster,
-                ssh_target=spec.ssh_target,
-                remote_path=spec.remote_path,
+        existing_canary = session.load_run(experiment_dir, canary_run_id)
+        if existing_canary is not None:
+            # Replay: a prior call landed the canary but failed before
+            # recording the main run, so the main-run dedup check (keyed
+            # on spec.run_id) misses it. Reuse the recorded canary
+            # job_ids instead of firing a duplicate canary qsub —
+            # submit_flow is documented idempotent on run_id.
+            canary_job_ids = list(existing_canary.job_ids)
+            canary_done = True
+        else:
+            canary_env = dict(job_env_full)
+            canary_env["HPC_RUN_ID"] = canary_run_id
+            canary_env["HPC_TASK_COUNT"] = "1"
+            canary_job_ids = _make_single_array_submission(
+                backend_obj,
                 job_name=f"{spec.job_name}_canary",
-                run_id=canary_run_id,
-                job_ids=canary_job_ids,
                 total_tasks=1,
-                campaign_id=spec.campaign_id or None,
-            ),
-        )
-        canary_done = True
+                job_env=canary_env,
+                cwd=experiment_dir,
+            )
+            from hpc_agent._schema_models.actions.submit import SubmitSpec as _SubmitSpec
+
+            runner.submit_and_record(
+                experiment_dir,
+                spec=_SubmitSpec(
+                    profile=spec.profile,
+                    cluster=spec.cluster,
+                    ssh_target=spec.ssh_target,
+                    remote_path=spec.remote_path,
+                    job_name=f"{spec.job_name}_canary",
+                    run_id=canary_run_id,
+                    job_ids=canary_job_ids,
+                    total_tasks=1,
+                    campaign_id=spec.campaign_id or None,
+                ),
+            )
+            canary_done = True
 
     job_ids = _make_single_array_submission(
         backend_obj,

@@ -462,11 +462,15 @@ def monitor_flow(
             "newly_failed": [],
             "newly_combined_waves": [],
         }
-        for key in ("complete", "failed"):
-            cur = int(last_status.get(key, 0))
-            prv = int(prev_summary.get(key, 0))
-            if cur > prv:
-                diff[f"newly_{key}"] = [cur - prv]  # delta count, not task IDs
+        # Tick 1 has no prior tick to diff against — leave the deltas
+        # empty rather than reporting the whole baseline count as a
+        # single-tick delta.
+        if state.ticks > 1:
+            for key in ("complete", "failed"):
+                cur = int(last_status.get(key, 0))
+                prv = int(prev_summary.get(key, 0))
+                if cur > prv:
+                    diff[f"newly_{key}"] = [cur - prv]  # delta count, not task IDs
         state.last_summary = last_status
 
         actions: list[dict[str, Any]] = []
