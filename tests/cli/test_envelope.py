@@ -144,7 +144,11 @@ def test_unknown_cluster_returns_user_error() -> None:
 
 
 def test_malformed_spec_returns_user_error(tmp_path: Path) -> None:
-    """An unparseable --spec file must surface as config_invalid, not crash."""
+    """An unparseable --spec file must surface as spec_invalid, not crash.
+
+    It is a problem with the spec the user passed, not with clusters.yaml,
+    so it shares the spec_invalid code with every other --spec failure.
+    """
     spec = tmp_path / "bad.json"
     spec.write_text("not json {")
     rc, out, _ = _run_cli(
@@ -158,7 +162,7 @@ def test_malformed_spec_returns_user_error(tmp_path: Path) -> None:
     assert rc == 1
     env = _parse_envelope(out)
     assert env["ok"] is False
-    assert env["error_code"] == "config_invalid"
+    assert env["error_code"] == "spec_invalid"
     assert env["category"] == "user"
 
 

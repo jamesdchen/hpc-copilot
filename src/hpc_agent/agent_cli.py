@@ -252,11 +252,11 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
     try:
         loaded = json.loads(spec_path.read_text())
     except FileNotFoundError as exc:
-        raise errors.ConfigInvalid(f"--spec file not found: {spec_path}") from exc
+        raise errors.SpecInvalid(f"--spec file not found: {spec_path}") from exc
     except json.JSONDecodeError as exc:
-        raise errors.ConfigInvalid(f"--spec is not valid JSON ({spec_path}): {exc}") from exc
+        raise errors.SpecInvalid(f"--spec is not valid JSON ({spec_path}): {exc}") from exc
     if not isinstance(loaded, dict):
-        raise errors.ConfigInvalid(f"--spec must be a JSON object; got {type(loaded).__name__}")
+        raise errors.SpecInvalid(f"--spec must be a JSON object; got {type(loaded).__name__}")
     if schema_name is not None:
         _validate_against_schema(loaded, schema_name)
     return loaded
