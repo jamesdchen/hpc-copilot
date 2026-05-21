@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+
 from hpc_agent_pro.forecast.queue_simulator_inputs import (
     sample_arrival_stream,
     sample_residual_lifetimes,
 )
-from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 class TestArrivalStream:

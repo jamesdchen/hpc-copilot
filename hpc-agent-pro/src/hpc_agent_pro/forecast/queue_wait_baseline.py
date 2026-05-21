@@ -56,8 +56,9 @@ from typing import TYPE_CHECKING, Any, Literal
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
 from hpc_agent._internal.time import parse_iso_utc_or_none, utcnow
-from hpc_agent_pro._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
 from hpc_agent.state.runtime_prior import read_samples
+
+from hpc_agent_pro._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path

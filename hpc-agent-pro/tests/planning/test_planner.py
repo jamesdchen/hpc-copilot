@@ -5,11 +5,11 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
 from hpc_agent.infra import inspect as ins
 from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
-from hpc_agent_pro.planning import planner
 from hpc_agent.state import runtime_prior as rp
+
+from hpc_agent_pro.planning import planner
 
 
 @pytest.fixture(autouse=True)
@@ -511,6 +511,7 @@ class TestEtaViaDES:
             NodeSnapshot,
             persist_snapshot,
         )
+
         from hpc_agent_pro.planning.planner import _eta_via_des
 
         snap = ClusterSnapshot(

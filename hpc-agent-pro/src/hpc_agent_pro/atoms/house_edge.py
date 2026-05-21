@@ -36,8 +36,9 @@ def house_edge(
     Reads only successful samples — the calibration we care about is
     over runs that finished, not failed/cancelled ones.
     """
-    from hpc_agent_pro.forecast.calibration import compute_house_edge
     from hpc_agent.state.runtime_prior import read_samples
+
+    from hpc_agent_pro.forecast.calibration import compute_house_edge
 
     samples = read_samples(
         experiment_dir,

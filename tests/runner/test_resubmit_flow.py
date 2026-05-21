@@ -202,9 +202,7 @@ class TestJournalUpdate:
 
 
 class TestEnvelopeShape:
-    def test_to_envelope_data_has_core_keys(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
+    def test_to_envelope_data_has_core_keys(self, journal_home, experiment, tmp_path, monkeypatch):
         _write_clusters_yaml(tmp_path, monkeypatch)
         _seed(experiment)
         result = resubmit_flow(

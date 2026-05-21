@@ -35,8 +35,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent_pro.forecast.residual_lifetime import predict_residual_lifetime
 from hpc_agent.state.user_profiles import UserProfile
+
+from hpc_agent_pro.forecast.residual_lifetime import predict_residual_lifetime
 
 if TYPE_CHECKING:
     from hpc_agent.infra.inspect import ClusterSnapshot

@@ -40,7 +40,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent_pro.atoms.walltime_arbitrage import arbitrage_walltime
 from hpc_agent.infra.clusters import (
     get_auto_daisy_chain,
     get_cold_start_mem_buffer,
@@ -49,8 +48,10 @@ from hpc_agent.infra.clusters import (
     get_walltime_arbitrage,
     load_clusters_config,
 )
-from hpc_agent_pro.planning.daisy_chain import should_daisy_chain
 from hpc_agent.state.runtime_prior import read_samples
+
+from hpc_agent_pro.atoms.walltime_arbitrage import arbitrage_walltime
+from hpc_agent_pro.planning.daisy_chain import should_daisy_chain
 
 if TYPE_CHECKING:
     from pathlib import Path

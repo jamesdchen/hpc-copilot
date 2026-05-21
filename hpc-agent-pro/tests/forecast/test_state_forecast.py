@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from hpc_agent._internal.time import utcnow_iso
-from hpc_agent_pro.forecast.state_forecast import forecast_state_at
 from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
 from hpc_agent.state.user_profiles import UserProfile
+
+from hpc_agent_pro.forecast.state_forecast import forecast_state_at
 
 
 def _node(

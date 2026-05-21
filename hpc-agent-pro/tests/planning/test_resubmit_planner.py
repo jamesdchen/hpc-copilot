@@ -5,12 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from hpc_agent.state import runtime_prior as rp
 
 from hpc_agent_pro.planning.resubmit_planner import (
     MIN_PRIOR_SAMPLES,
     plan_resubmit_overrides,
 )
-from hpc_agent.state import runtime_prior as rp
 
 PROFILE = "ml_ridge"
 CLUSTER = "test_cluster"

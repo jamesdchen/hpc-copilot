@@ -20,9 +20,9 @@ quantile-based prior takes over (≥5 samples per GPU type).
 from __future__ import annotations
 
 import pytest
+from hpc_agent.infra.clusters import get_cold_start_mem_buffer, get_nfs_data_dir
 
 from hpc_agent_pro.forecast.backfill import recommend_mem_mb
-from hpc_agent.infra.clusters import get_cold_start_mem_buffer, get_nfs_data_dir
 
 # ─── get_cold_start_mem_buffer schema ──────────────────────────────────────
 

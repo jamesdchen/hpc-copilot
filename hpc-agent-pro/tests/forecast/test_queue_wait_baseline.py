@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from hpc_agent_pro._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
-from hpc_agent_pro.forecast import queue_wait_baseline as qwb
 from hpc_agent.infra.inspect import (
     ClusterSnapshot,
     NodeSnapshot,
     persist_snapshot,
 )
 from hpc_agent.state import runtime_prior as rp
+
+from hpc_agent_pro._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
+from hpc_agent_pro.forecast import queue_wait_baseline as qwb
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from hpc_agent._schema_models._shared import Scheduler
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ValidateSpec(BaseModel):

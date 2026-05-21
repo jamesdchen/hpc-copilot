@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from hpc_agent._internal.time import utcnow_iso
-from hpc_agent_pro.forecast.queue_features import compute_features
 from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+
+from hpc_agent_pro.forecast.queue_features import compute_features
 
 
 def _node(

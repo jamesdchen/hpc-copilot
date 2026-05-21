@@ -5,6 +5,8 @@ Covers the FIFO + EASY backfill scheduler invariants.
 
 from __future__ import annotations
 
+from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+
 from hpc_agent_pro.forecast.queue_simulator import (
     SimJob,
     available_resources,
@@ -12,7 +14,6 @@ from hpc_agent_pro.forecast.queue_simulator import (
     simulate_distribution,
     simulate_one_pass,
 )
-from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
 
 
 def _empty_snapshot(nodes=1, cpus=8, mem_mb=64_000, gpus=0, gpu_type="a100"):

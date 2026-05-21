@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from hpc_agent.state import runtime_prior as rp
+
 from hpc_agent_pro._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
 from hpc_agent_pro.forecast import queue_wait_baseline as qwb
 from hpc_agent_pro.forecast.queue_features import QueueFeatures
-from hpc_agent.state import runtime_prior as rp
 
 PROFILE = "ml_ridge"
 CLUSTER = "discovery"

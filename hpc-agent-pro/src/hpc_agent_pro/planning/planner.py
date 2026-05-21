@@ -43,6 +43,15 @@ from hpc_agent._internal.time import utcnow_iso
 if TYPE_CHECKING:
     from pathlib import Path
 
+from hpc_agent.infra.clusters import (
+    get_auto_daisy_chain,
+    get_max_walltime_sec,
+    get_walltime_arbitrage,
+    load_clusters_config,
+)
+from hpc_agent.infra.inspect import NodeSnapshot, inspect_cluster
+from hpc_agent.state.runtime_prior import read_samples, roll_up_quantiles
+
 from hpc_agent_pro.forecast.backfill import (
     BackfillProbe,
     ResourceTuple,
@@ -63,14 +72,6 @@ from hpc_agent_pro.forecast.calibration import (
     compute_walltime_drift,
     recommend_safety_mult_adjustment,
 )
-from hpc_agent.infra.clusters import (
-    get_auto_daisy_chain,
-    get_max_walltime_sec,
-    get_walltime_arbitrage,
-    load_clusters_config,
-)
-from hpc_agent.infra.inspect import NodeSnapshot, inspect_cluster
-from hpc_agent.state.runtime_prior import read_samples, roll_up_quantiles
 
 
 @primitive(

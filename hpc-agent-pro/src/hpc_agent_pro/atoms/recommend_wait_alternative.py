@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from hpc_agent._internal.primitive import primitive
+
 from hpc_agent_pro._schema_models.queries.recommend_wait_alternative import (
     RecommendWaitAlternativeResult,
     RecommendWaitAlternativeSpec,

@@ -39,11 +39,12 @@ def walltime_drift(
     near-miss count, median utilisation) and recommends an adjustment
     to ``base_safety_mult``.
     """
+    from hpc_agent.state.runtime_prior import read_samples
+
     from hpc_agent_pro.forecast.calibration import (
         compute_walltime_drift,
         recommend_safety_mult_adjustment,
     )
-    from hpc_agent.state.runtime_prior import read_samples
 
     samples = read_samples(
         experiment_dir,

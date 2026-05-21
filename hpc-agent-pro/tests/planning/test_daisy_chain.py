@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from hpc_agent.infra import inspect as ins
 from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+
 from hpc_agent_pro.planning import planner
 from hpc_agent_pro.planning.daisy_chain import (
     QUEUE_WAIT_BUFFER_SEC,
