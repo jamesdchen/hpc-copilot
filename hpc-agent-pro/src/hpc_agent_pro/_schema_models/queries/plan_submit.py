@@ -14,7 +14,7 @@ class _PlanSubmitCandidate(BaseModel):
     constraint: str
     pool_size: int | None = Field(default=None, ge=0)
     healthy_nodes: list[str] | None = None
-    stressed_nodes: list[str] | None = None
+    stressed_nodes: list[dict[str, Any]] | None = None
     eta_sec_via_test_only: float | None = None
     runtime_prior_quantiles_sec: dict[str, Any] | None = Field(
         default=None,

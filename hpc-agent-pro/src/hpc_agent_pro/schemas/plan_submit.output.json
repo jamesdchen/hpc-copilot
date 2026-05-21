@@ -181,7 +181,7 @@
           "anyOf": [
             {
               "items": {
-                "type": "string"
+                "type": "object"
               },
               "type": "array"
             },
