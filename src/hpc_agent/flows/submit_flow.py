@@ -237,9 +237,9 @@ def _make_single_array_submission(
     name="submit-flow",
     verb="workflow",
     # ``submit_and_record`` is the only atom this workflow actually invokes
-    # at runtime. ``discover_executors`` and ``plan_submit`` are imported
+    # at runtime. ``discover_executors`` is imported
     # for type hints / pre-submit advisory paths but not in the composition
-    # itself; advertising them here previously made operations.json over-
+    # itself; advertising it here previously made operations.json over-
     # promise the workflow's dependency graph.
     composes=[submit_and_record],
     side_effects=[
@@ -438,9 +438,9 @@ def _submit_one_spec(
     name="submit-flow-batch",
     verb="workflow",
     # ``submit_and_record`` is the only atom this workflow actually invokes
-    # at runtime. ``discover_executors`` and ``plan_submit`` are imported
+    # at runtime. ``discover_executors`` is imported
     # for type hints / pre-submit advisory paths but not in the composition
-    # itself; advertising them here previously made operations.json over-
+    # itself; advertising it here previously made operations.json over-
     # promise the workflow's dependency graph.
     composes=[submit_and_record],
     side_effects=[

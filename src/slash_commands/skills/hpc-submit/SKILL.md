@@ -25,7 +25,7 @@ Branch on `action`:
 |---|---|---|---|
 | `monitor` | 0 | At least one in-flight run on the journal | Hand off to `hpc-status` skill with the candidate list. |
 | `reuse` | 1 | Per-experiment sidecars exist | Each sidecar carries the full v2 config snapshot — resources/env/constraints/runtime. Reuse keeps `tasks.py` byte-identical so `cmd_sha` matches. |
-| `interview` | 2 | `.hpc/tasks.py` exists, no run history | Skip executor-discovery + axes interview (tasks.py already encodes the axis); jump to Step 4b (planner). |
+| `interview` | 2 | `.hpc/tasks.py` exists, no run history | Skip executor-discovery + axes interview (tasks.py already encodes the axis); jump to Step 4b. |
 | `fresh` | 3 | Nothing exists | Full interview from Step 1. |
 
 ## Step 1: Discover Executors
@@ -100,57 +100,6 @@ hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duratio
 ```
 
 It reads the cluster's scheduler constraints from `clusters.yaml`, packs the grid into concurrency-bounded waves, and returns `{strategy, total_batches, n_waves, est_total_wall_s, wave_map, ...}`. Thread the returned `wave_map` into `write_run_sidecar(..., wave_map=wave_map)` at Step 6d — the cluster-side combiner reads it from the sidecar. A cluster with no `constraints:` block falls back to scheduler defaults (a single array for a grid under the default `max_array_size`).
-
-## Step 4c: Smart constraint planner (resource-quality aware)
-
-For GPU profiles, invoke [score-submit-plan](../../docs/primitives/score-submit-plan.md). For CPU-only, skip.
-
-Optional pre-check: [best-submit-window](../../docs/primitives/best-submit-window.md) (`hpc-agent best-submit-window --profile <p> --cluster <c> --within-hours 24 --top-k 5`) surfaces low-traffic windows. Advisory; the slash command decides whether to surface "submit now vs wait" to the user.
-
-Three branches on `score-submit-plan`'s envelope:
-
-### 4c-A: `needs_canary: true` (cold start)
-
-No runtime priors exist. Don't try to score — submit a 1-task canary first using `data.canary_plan.constraint`. Run through Steps 5–10 with `--no-canary` (we **are** the canary). Wait for terminal; capture `gpu_type`, `node`, `elapsed_sec`, `exit_code` from sacct/qacct. On success, append a sample via `hpc_agent.state.runtime_prior.append_sample`. On SEGV: STOP and surface to user (do NOT auto-retry on a different node — the failure is informative; re-running blindly may mask whether the workload itself is buggy). On timeout: bump walltime 2× and retry the canary ONCE. After two timeouts surface to user.
-
-After a *successful* canary, re-invoke score-submit-plan and proceed to 4c-B.
-
-### 4c-B: `needs_canary: false` (priors exist)
-
-`score-submit-plan` scores the candidates and runs its adversarial-backfill mode — walltime / footprint shrink recommendations, a probed `(walltime × mem × constraint)` lattice, and the closed-loop `walltime_drift` calibration. The full rubric and what each output field means are in [score-submit-plan.md](../../docs/primitives/score-submit-plan.md). The skill's job is to act on its envelope:
-
-**Auto-pick rule** (per-candidate): when `recommended_tuple.predicted_eta_sec is not None`, use the tuple's walltime/mem/cpus/constraint automatically — SLURM has confirmed a fitting backfill window. Surface `rationale` to the audit file so the choice is replayable.
-
-**Auto-apply rule** (cluster-wide): apply `array_reshape.recommended_max_array_size` automatically when present. Do NOT auto-apply `walltime_split` — confirm with the user that the executor checkpoints before chaining (`requires_checkpointing: true` would otherwise kill work at every segment boundary).
-
-After submission, write a prediction sidecar via `hpc_agent.forecast.calibration.record_prediction_sidecar` so post-completion ingestion can validate the calibration.
-
-For each chosen candidate's `stressed_nodes`, the SLASH command (not the skill) decides per-node whether to soft-exclude using `co_tenants` context. The skill receives the resulting `--exclude=<node1>,...` flag and adds it to the sbatch invocation.
-
-### 4c-C: planner errors
-
-If `plan-submit` envelope is `ok: false`, fall back to static-constraint flow: take `gpu_constraint` and `constraints.max_walltime` from `clusters.yaml`, proceed without exclude list. Surface the planner error verbatim — the user knows quality awareness is degraded.
-
-### Audit file
-
-After Step 8 returns job IDs, write the decision to `.hpc/runs/<run_id>.decision.json`:
-
-```python
-import json
-from pathlib import Path
-from datetime import datetime, timezone
-decision = {
-    "schema_version": 1,
-    "run_id": run_id,
-    "profile": profile,
-    "cluster": cluster,
-    "submitted_at": datetime.now(timezone.utc).isoformat(),
-    "candidates_considered": [...],
-    "chosen": {"constraint": ..., "walltime_sec": ..., "exclude_nodes": [...], "rationale": ...},
-    "job_ids": job_ids,
-}
-Path(f".hpc/runs/{run_id}.decision.json").write_text(json.dumps(decision, indent=2, sort_keys=True))
-```
 
 ## Step 5: Confirm Run Plan (via summarize-submit-plan)
 
@@ -237,14 +186,6 @@ Branch on `data.overall`:
 - `pass` → proceed.
 - `warn` → surface warnings; proceed unless user explicitly fixes first.
 - `fail` → do NOT proceed. List `error`-severity findings with `code`/`message`/`suggested_fix`, apply fixes, re-run. **No `--force` flag by design** — edit `.hpc/playbook.yaml` if a rule is wrong.
-
-## Step 6d: Predict start time
-
-Invoke [predict-start-time](../../docs/primitives/predict-start-time.md). Inputs: squeue + sshare snapshots (gather via SSH first), partition info, your priority/walltime/constraint, candidate offsets `[0,1,3,6,12,24]`. Surface result:
-- `best_submit_offset_hours == 0` → submit now is optimal.
-- `> 0` → suggest "wait N hours, predicted total time M minutes vs submit-now's M' minutes" — slash command renders the user prompt.
-
-Advisory, NOT a gate. The skill always proceeds; the predictor is decision support.
 
 ## Step 7-8: Invoke `submit-flow`
 

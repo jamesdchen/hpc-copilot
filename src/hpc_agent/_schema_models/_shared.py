@@ -72,7 +72,7 @@ LifecycleStateObservableWithTimeout = Literal[
 Scheduler = Literal["sge", "slurm"]
 
 # Cluster-specific GPU label (e.g. 'A100', 'H100', 'L40S'). Semantic checks
-# live in inspect-cluster; the schema only enforces non-empty.
+# live in inspect_cluster; the schema only enforces non-empty.
 GpuType = Annotated[str, Field(min_length=1)]
 
 # ── error envelope ───────────────────────────────────────────────────────────
