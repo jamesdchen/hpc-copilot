@@ -104,7 +104,8 @@ def _ok(
     wins so callers can opt out of the catalog lookup if needed.
 
     *partial_errors*: optional list of ``{code, detail}`` dicts surfaced
-    at the top level of the envelope — distinct from ``data.errors``.
+    at the top level of the envelope — distinct from any per-primitive
+    error list that lives inside the ``data`` block.
     Used by primitives like ``inspect-cluster`` whose underlying data
     source can be partially degraded (qhost timed out, sacct
     unavailable) without the operation as a whole failing.
@@ -288,13 +289,6 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
 
 
 # ─── subcommand: capabilities ──────────────────────────────────────────────
-
-
-# Re-exported from hpc_agent.atoms.capabilities for back-compat with
-# tests that import the constant directly from agent_cli.
-# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 —
-# update tests to import from hpc_agent.atoms.capabilities directly.
-from hpc_agent.atoms.capabilities import _SKILL_NAMES  # noqa: E402,F401
 
 
 def _live_subcommands() -> list[str]:
@@ -1364,13 +1358,6 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
 
 
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
-
-
-# Re-exported from hpc_agent.atoms.failures for back-compat with the
-# auto-retry resolver test suite, which imports the helper directly.
-# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 — update
-# tests/test_failures*.py to import from hpc_agent.atoms.failures.
-from hpc_agent.atoms.failures import _resolve_auto_retry  # noqa: E402,F401
 
 
 def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, str]:

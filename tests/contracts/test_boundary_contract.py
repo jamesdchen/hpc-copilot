@@ -36,7 +36,6 @@ ALLOWED_EXPORTS = frozenset(
         "load_clusters_config",
         "get_template_path",
         # Framework subdirectory layout (NEW: .hpc/tasks.py model)
-        "HPC_SUBDIR",
         "TASKS_FILENAME",
         "RUNS_SUBDIR",
         "framework_subdir",
