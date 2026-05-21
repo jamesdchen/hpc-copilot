@@ -601,6 +601,14 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_load_context(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at hpc_agent.atoms.load_context."""
+    from hpc_agent.atoms.load_context import load_context
+
+    _ok(load_context(experiment_dir=args.experiment_dir), name="load-context")
+    return EXIT_OK
+
+
 # ─── subcommand: campaign status / list ────────────────────────────────────
 
 
@@ -2291,6 +2299,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_lif)
     p_lif.set_defaults(func=cmd_list_in_flight)
+
+    # load-context
+    p_lctx = sub.add_parser(
+        "load-context",
+        help=(
+            "Reconstruct workflow context (latest run + config snapshot, "
+            "in-flight runs, campaigns) from on-disk state. Run this first "
+            "in any fresh-context step instead of relying on memory."
+        ),
+    )
+    _add_experiment_dir(p_lctx)
+    p_lctx.set_defaults(func=cmd_load_context)
 
     # campaign — closed-loop campaign read-only commands
     p_camp = sub.add_parser(

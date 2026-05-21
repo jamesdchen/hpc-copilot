@@ -275,6 +275,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_agent.atoms.failures",
     "hpc_agent.atoms.interview",
     "hpc_agent.atoms.list_in_flight",
+    "hpc_agent.atoms.load_context",
     "hpc_agent.atoms.logs",
     "hpc_agent.atoms.monitor_arm",
     "hpc_agent.atoms.monitor_summary",

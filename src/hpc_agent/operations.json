@@ -276,6 +276,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent load-context --experiment-dir <path>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "load-context",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.load_context.load_context",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]",
     "idempotent": true,
     "input_schema": null,
