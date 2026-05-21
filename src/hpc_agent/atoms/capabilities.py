@@ -30,16 +30,19 @@ _SKILL_NAMES = (
 
 
 def _resolve_skill_paths() -> dict[str, str]:
-    # Skills live at the repo root (skills/ is a sibling of src/ in the
-    # source tree, two levels up from the package). Wheel-only deploys
-    # won't ship them — return only entries that resolve to an existing
-    # file so a consumer can rely on every value being a real path.
-    skills_root = hpc_agent._PACKAGE_ROOT.parent.parent / "skills"
+    # Skills ship as package data inside the ``slash_commands`` package
+    # (``slash_commands/skills/<name>/SKILL.md``), so they resolve the
+    # same way whether installed from a wheel or run from a checkout.
+    # Return only entries that resolve to an existing file so a consumer
+    # can rely on every value being a real path.
+    from importlib.resources import files as _resource_files
+
+    skills_root = _resource_files("slash_commands") / "skills"
     out: dict[str, str] = {}
     for name in _SKILL_NAMES:
         path = skills_root / name / "SKILL.md"
         if path.is_file():
-            out[name] = str(path.resolve())
+            out[name] = str(path)
     return out
 
 

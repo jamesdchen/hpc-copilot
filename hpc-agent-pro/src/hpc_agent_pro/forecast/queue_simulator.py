@@ -1,0 +1,663 @@
+"""Thin discrete-event simulator for queue-wait prediction.
+
+Models FIFO + EASY backfill — the scheduler policy academic clusters
+typically run. Calibratable residual against observed waits is the
+validation target; perfect SLURM fidelity is not.
+
+Module surface:
+
+* :class:`SimJob` — one job inside the simulator's view (queued, running,
+  or candidate / hypothetical).
+* :class:`SimResult` — frozen output of a simulator run, including the
+  candidate's predicted start offset (the "wait" we forecast) and the
+  p10/p50/p90 distribution when ``simulate_distribution`` is used.
+* :func:`simulate_one_pass` — single-replication forward simulation.
+* :func:`simulate_distribution` — runs ``n_replications`` independent
+  passes with sampled arrivals + sampled per-job runtime variability,
+  returns the candidate's wait-time distribution.
+* :func:`extract_running_jobs` — pull the running jobs out of a
+  ``ClusterSnapshot`` (which surfaces them as per-node ``co_tenants``).
+* :func:`available_resources` — node-level free CPU / memory / GPU
+  capacity, derived from the snapshot.
+
+Implementation notes
+--------------------
+
+State: a heap of pending events ``(time, kind, seq, job_id)``. Events are
+``submit``, ``start``, and ``end``. When a job ends, its resources go
+back to the pool; the scheduler immediately re-runs the policy loop and
+tries to start queued jobs in priority order.
+
+Priority: FIFO by submit time, ties broken by job id (lex). Real
+schedulers use MULTIFACTOR; for v1 FIFO is enough — the validation loop
+tracks the residual and the predictor's ``method`` field reports DES vs
+diurnal-MA so we can layer MULTIFACTOR later only if calibration shows
+systematic favoritism.
+
+EASY backfill: when the head-of-queue (HoQ) job cannot start now, we
+compute the earliest time it CAN start ("HoQ reservation") by simulating
+each running job ending in order. Any backfill-eligible queued job that
+both fits in the currently-free pool AND finishes before the HoQ
+reservation may run immediately. Documented in any SLURM/Maui paper.
+
+Resource accounting: nodes are flat for v1 (no NUMA, no per-socket
+pinning). A job needs N CPUs, M MB, and optionally G GPUs of type T; it
+is placed on a single node that has the capacity. Heterogeneous GPU
+types are matched strictly. Multi-node placement is NOT modeled in v1
+— callers requesting a job larger than any single node will see the
+job sit forever (returned as ``predicted_start_offset_sec ==
+max_horizon_sec``).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import heapq
+import random
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from hpc_agent.infra.inspect import ClusterSnapshot, NodeSnapshot
+
+__all__ = [
+    "SimJob",
+    "SimResult",
+    "available_resources",
+    "extract_running_jobs",
+    "simulate_one_pass",
+    # ``simulate_distribution`` is lazy-loaded from queue_simulator_distribution
+    # via ``__getattr__`` (see bottom of file).
+]
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class SimJob:
+    """One job inside the simulator's view.
+
+    ``submit_time`` is in seconds-from-sim-start. Running jobs in the
+    initial snapshot have ``submit_time <= 0`` and ``state == "running"``
+    with ``start_time`` already set; their ``end_time`` is filled in
+    when the simulator schedules their completion.
+    """
+
+    job_id: str  # "real" id or "candidate-<n>" for hypotheticals
+    user: str
+    submit_time: float  # seconds from sim start
+    walltime_ask: float  # seconds the user requested (``--time=``)
+    cpus: int
+    mem_mb: int
+    gpus: int = 0  # total GPU count required
+    gpu_type: str = ""  # strict-match; "" means CPU-only
+    walltime_actual: float | None = None  # sampled actual runtime
+    state: str = "queued"  # queued | running | complete | failed
+    start_time: float | None = None
+    end_time: float | None = None
+    backfill_eligible: bool = True
+    # Internal: when ``gpu_type==""`` _consume sweeps multiple typed
+    # buckets — we record exactly which buckets were drained and by how
+    # much so _release can restore symmetrically (v3 BUG-5V3-1/-5). Set
+    # by _consume; consumed by _release. Not part of the public contract.
+    _consumed_gpu_buckets: dict[str, int] | None = None
+
+    def required_resources(self) -> tuple[int, int, int, str]:
+        return (self.cpus, self.mem_mb, self.gpus, self.gpu_type)
+
+
+@dataclasses.dataclass(frozen=True)
+class SimResult:
+    """Output of a simulator run.
+
+    ``predicted_start_offset_sec`` is the candidate's wait time. When the
+    candidate never runs within ``max_horizon_sec`` it is set to the
+    horizon (the caller treats this as "wait at least this long").
+
+    ``predicted_state_at_horizon`` is a small dict useful for debugging:
+    counts of jobs in each state at the end of the simulation, plus the
+    final cluster utilization fraction.
+
+    For ``simulate_one_pass``, ``n_replications == 1`` and
+    ``p10/p50/p90`` are all equal to ``predicted_start_offset_sec``.
+    """
+
+    candidate_job_id: str
+    predicted_start_offset_sec: float
+    predicted_state_at_horizon: dict[str, Any]
+    n_replications: int
+    p10_wait_sec: float
+    p50_wait_sec: float
+    p90_wait_sec: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+# ---------------------------------------------------------------------------
+# Snapshot adapters
+# ---------------------------------------------------------------------------
+
+
+def _parse_gres_total(gres: str) -> dict[str, int]:
+    """Parse a SLURM ``Gres=`` string into ``{type: count}``.
+
+    Examples:
+      "gpu:a100:2" -> {"a100": 2}
+      "gpu:a100:2,gpu:v100:1" -> {"a100": 2, "v100": 1}
+      "" / "(null)" -> {}
+    """
+    out: dict[str, int] = {}
+    if not gres or gres.strip() in {"(null)", "null"}:
+        return out
+    for chunk in gres.split(","):
+        parts = chunk.strip().split(":")
+        if len(parts) < 2:
+            continue
+        if parts[0].lower() != "gpu":
+            continue
+        if len(parts) == 2:
+            try:
+                out[""] = out.get("", 0) + int(_strip_paren(parts[1]))
+            except ValueError:
+                continue
+        else:
+            gpu_type = parts[1]
+            try:
+                cnt = int(_strip_paren(parts[2]))
+            except ValueError:
+                continue
+            out[gpu_type] = out.get(gpu_type, 0) + cnt
+    return out
+
+
+def _strip_paren(s: str) -> str:
+    head = s.split("(", 1)[0]
+    return head.strip()
+
+
+def extract_running_jobs(snapshot: ClusterSnapshot) -> list[SimJob]:
+    """Extract running jobs from the snapshot's per-node ``co_tenants``.
+
+    ``ClusterSnapshot`` does not carry a flat list of running jobs — they
+    are surfaced under each ``NodeSnapshot.co_tenants``. A job that spans
+    multiple nodes appears once per node; we de-dup by ``job_id`` keeping
+    the first occurrence's resource numbers, since the snapshot's per-row
+    ``cpus``/``mem_gb``/``gpus`` are already job-totals from sacct's
+    ``ReqCPUS``/``ReqMem``/``AllocTRES``.
+
+    Each running job's ``submit_time`` is derived from
+    ``-elapsed_s`` — i.e. it submitted ``elapsed_s`` ago (we treat
+    "submit" and "start" as coincident for active running jobs since the
+    snapshot doesn't carry the original submit time). ``walltime_ask``
+    is unknown from the snapshot, so we default it to ``elapsed_s``
+    plus a 1-hour cushion; the residual-lifetime sampler refines it.
+    """
+    seen: set[str] = set()
+    out: list[SimJob] = []
+    for node in snapshot.nodes:
+        for tenant in node.co_tenants or []:
+            jid = str(tenant.get("job_id", "")).strip()
+            if not jid or jid in seen:
+                continue
+            seen.add(jid)
+            cpus = int(tenant.get("cpus") or 0)
+            mem_gb = tenant.get("mem_gb")
+            mem_mb = int(round(float(mem_gb) * 1024)) if mem_gb else 0
+            gpus = int(tenant.get("gpus") or 0)
+            elapsed = float(tenant.get("elapsed_s") or 0.0)
+            walltime_ask = elapsed + 3600.0
+            sj = SimJob(
+                job_id=jid,
+                user=str(tenant.get("user") or ""),
+                submit_time=-elapsed,
+                walltime_ask=walltime_ask,
+                cpus=cpus,
+                mem_mb=mem_mb,
+                gpus=gpus,
+                gpu_type=_infer_gpu_type_from_node(node) if gpus else "",
+                state="running",
+                start_time=-elapsed,
+                end_time=None,
+            )
+            out.append(sj)
+    return out
+
+
+def _infer_gpu_type_from_node(node: NodeSnapshot) -> str:
+    """Infer the GPU type a job on this node is using from the node's gres.
+
+    A node typically advertises a single GPU type. When multiple types
+    are present we return the first (arbitrary but deterministic) — the
+    snapshot doesn't tell us which one a specific job allocated. This is
+    a known v1 limitation; documented in the deferrals list.
+    """
+    types = list(_parse_gres_total(node.gres).keys())
+    return types[0] if types else ""
+
+
+def available_resources(
+    snapshot: ClusterSnapshot,
+) -> dict[str, dict[str, Any]]:
+    """Compute per-node free CPUs / memory / GPU-by-type from the snapshot.
+
+    Returns ``{node_name: {"cpus_free": int, "mem_mb_free": int,
+    "gpus_free": {gpu_type: int}, "drained": bool}}``. A node in DRAIN
+    or DOWN state has ``drained=True`` and zero free resources.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for n in snapshot.nodes:
+        if n.is_drained:
+            out[n.name] = {
+                "cpus_free": 0,
+                "mem_mb_free": 0,
+                "gpus_free": {},
+                "drained": True,
+                "cpus_total": int(n.cpu_tot or 0),
+                "mem_mb_total": int(n.real_mem_mb or 0),
+                "gpus_total": _parse_gres_total(n.gres),
+            }
+            continue
+        cpus_total = int(n.cpu_tot or 0)
+        cpus_alloc = int(n.cpu_alloc or 0)
+        cpus_free = max(0, cpus_total - cpus_alloc)
+        mem_total = int(n.real_mem_mb or 0)
+        mem_alloc = int(n.alloc_mem_mb or 0)
+        mem_free = max(0, mem_total - mem_alloc)
+        gpus_total = _parse_gres_total(n.gres)
+        gpus_used = _parse_gres_total(n.gres_used)
+        gpus_free = {t: max(0, c - gpus_used.get(t, 0)) for t, c in gpus_total.items()}
+        out[n.name] = {
+            "cpus_free": cpus_free,
+            "mem_mb_free": mem_free,
+            "gpus_free": gpus_free,
+            "drained": False,
+            "cpus_total": cpus_total,
+            "mem_mb_total": mem_total,
+            "gpus_total": gpus_total,
+        }
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Simulator core
+# ---------------------------------------------------------------------------
+
+
+_EVT_END = 0
+_EVT_SUBMIT = 1
+_EVT_START = 2  # diagnostic only
+
+
+def _try_place(job: SimJob, free_by_node: dict[str, dict[str, Any]]) -> str | None:
+    """Return the node name a job fits on (first-fit), or None."""
+    for name, free in free_by_node.items():
+        if free["drained"]:
+            continue
+        if free["cpus_free"] < job.cpus:
+            continue
+        if free["mem_mb_free"] < job.mem_mb:
+            continue
+        if job.gpus > 0:
+            if not job.gpu_type:
+                total_avail = sum(free["gpus_free"].values())
+                if total_avail < job.gpus:
+                    continue
+            else:
+                if free["gpus_free"].get(job.gpu_type, 0) < job.gpus:
+                    continue
+        return name
+    return None
+
+
+def _consume(
+    node: str,
+    job: SimJob,
+    free_by_node: dict[str, dict[str, Any]],
+) -> None:
+    free = free_by_node[node]
+    free["cpus_free"] -= job.cpus
+    free["mem_mb_free"] -= job.mem_mb
+    if job.gpus > 0:
+        if job.gpu_type:
+            free["gpus_free"][job.gpu_type] -= job.gpus
+            job._consumed_gpu_buckets = {job.gpu_type: job.gpus}
+        else:
+            remaining = job.gpus
+            taken: dict[str, int] = {}
+            for t in sorted(free["gpus_free"]):
+                avail = free["gpus_free"][t]
+                take = min(avail, remaining)
+                if take > 0:
+                    free["gpus_free"][t] -= take
+                    taken[t] = take
+                remaining -= take
+                if remaining <= 0:
+                    break
+            # Whatever we couldn't satisfy goes to the "" bucket so
+            # conservation holds even when _try_place's untyped check
+            # over-allowed the placement.
+            if remaining > 0:
+                taken[""] = taken.get("", 0) + remaining
+            job._consumed_gpu_buckets = taken
+
+
+def _release(
+    node: str,
+    job: SimJob,
+    free_by_node: dict[str, dict[str, Any]],
+) -> None:
+    free = free_by_node[node]
+    free["cpus_free"] += job.cpus
+    free["mem_mb_free"] += job.mem_mb
+    if job.gpus > 0:
+        # Symmetric with _consume: restore to the exact buckets that
+        # were drained. Falls back to the typed bucket / "" only when
+        # this job was created without going through _consume (e.g. a
+        # snapshot-extracted running job whose initial occupation is
+        # encoded into ``free_by_node`` by ``available_resources``
+        # rather than by a _consume call) — v3 BUG-5V3-1/-5.
+        buckets = job._consumed_gpu_buckets
+        if buckets:
+            for t, n in buckets.items():
+                free["gpus_free"][t] = free["gpus_free"].get(t, 0) + n
+            job._consumed_gpu_buckets = None
+        elif job.gpu_type:
+            free["gpus_free"][job.gpu_type] = free["gpus_free"].get(job.gpu_type, 0) + job.gpus
+        else:
+            # Untyped snapshot job with no prior consume: route to "" so
+            # _hoq_reservation's virtual release agrees with us.
+            free["gpus_free"][""] = free["gpus_free"].get("", 0) + job.gpus
+
+
+def _hoq_reservation(
+    queued: list[SimJob],
+    running_endings: list[tuple[float, SimJob, str]],
+    free_by_node: dict[str, dict[str, Any]],
+    now: float,
+) -> tuple[float, SimJob | None]:
+    """Compute the earliest time the head-of-queue job can start.
+
+    Walks the running-job end times in chronological order, releasing
+    each job's resources virtually. As soon as the HoQ job fits, that's
+    the reservation time. Returns ``(reservation_time, hoq_job)`` or
+    ``(inf, None)`` if no HoQ exists or it can never start within the
+    sampled job ends.
+    """
+    if not queued:
+        return (float("inf"), None)
+    hoq = queued[0]
+    virt: dict[str, dict[str, Any]] = {
+        name: {
+            "cpus_free": f["cpus_free"],
+            "mem_mb_free": f["mem_mb_free"],
+            "gpus_free": dict(f["gpus_free"]),
+            "drained": f["drained"],
+        }
+        for name, f in free_by_node.items()
+    }
+    if _try_place(hoq, virt) is not None:
+        return (now, hoq)
+    for end_t, job, node in sorted(running_endings, key=lambda t: t[0]):
+        if node not in virt:
+            continue
+        f = virt[node]
+        f["cpus_free"] += job.cpus
+        f["mem_mb_free"] += job.mem_mb
+        if job.gpus > 0:
+            # Mirror _release's bucket selection so the virtual release
+            # agrees with the real one. Without ``_consumed_gpu_buckets``
+            # tracking, snapshot-extracted running jobs fall back to
+            # typed bucket / "" — same convention as _release above
+            # (v3 BUG-5V3-1/-5).
+            buckets = job._consumed_gpu_buckets
+            if buckets:
+                for t, n in buckets.items():
+                    f["gpus_free"][t] = f["gpus_free"].get(t, 0) + n
+            else:
+                bucket = job.gpu_type or ""
+                f["gpus_free"][bucket] = f["gpus_free"].get(bucket, 0) + job.gpus
+        if _try_place(hoq, virt) is not None:
+            return (max(end_t, now), hoq)
+    return (float("inf"), hoq)
+
+
+def _placement_for_running(
+    j: SimJob,
+    snapshot: ClusterSnapshot,
+    free_by_node: dict[str, dict[str, Any]],
+) -> str | None:
+    """Find which node a running job from the snapshot is on.
+
+    The snapshot's ``co_tenants`` list per node IS the ground truth.
+    We search for a node whose ``co_tenants`` includes this job_id.
+    Falls back to first-fit if no exact match (defensive — pre-snapshot
+    races can drop the row).
+    """
+    for n in snapshot.nodes:
+        for tenant in n.co_tenants or []:
+            if str(tenant.get("job_id", "")).strip() == j.job_id and n.name in free_by_node:
+                return n.name
+    return _try_place(j, free_by_node)
+
+
+DEFAULT_WALLTIME_ACTUAL_BAND: tuple[float, float] = (0.6, 1.0)
+"""Default ratio range for sampled actual walltime vs. requested.
+
+Empirical SLURM users routinely over-ask by 0–40%; this 60–100% band is
+a reasonable starting point for academic clusters but should be tuned
+per-cluster from sacct history. Pass ``walltime_actual_band`` to
+``simulate_one_pass`` to override.
+"""
+
+
+def simulate_one_pass(
+    snapshot: ClusterSnapshot,
+    *,
+    candidate: SimJob,
+    user_profiles: dict[str, Any] | None = None,
+    arrival_stream: list[SimJob] | None = None,
+    residual_lifetimes: dict[str, float] | None = None,
+    max_horizon_sec: float = 7 * 86400.0,
+    seed: int | None = None,
+    walltime_actual_band: tuple[float, float] = DEFAULT_WALLTIME_ACTUAL_BAND,
+) -> SimResult:
+    """Simulate the scheduler forward from ``snapshot``'s state.
+
+    Returns the predicted start offset for ``candidate``. If the
+    candidate never runs within ``max_horizon_sec``, the returned
+    ``predicted_start_offset_sec`` equals ``max_horizon_sec`` and the
+    state-at-horizon dict marks ``candidate_state == "queued"``.
+
+    ``arrival_stream``: optional list of ``SimJob`` representing future
+    submissions sampled from the per-user Hawkes/Poisson process. Each
+    must have ``submit_time > 0``. If None, no future arrivals.
+
+    ``residual_lifetimes``: optional ``{job_id: end_offset_sec}`` mapping
+    that overrides the default ``walltime_ask`` for running jobs in the
+    snapshot. Sampled by ``queue_simulator_inputs.sample_residual_lifetimes``.
+
+    ``walltime_actual_band``: ``(low, high)`` ratios applied to
+    ``walltime_ask`` when an arrival has no pre-set ``walltime_actual``.
+    Defaults to :data:`DEFAULT_WALLTIME_ACTUAL_BAND`.
+    """
+    lo, hi = walltime_actual_band
+    if not (0.0 < lo <= hi):
+        raise ValueError(f"walltime_actual_band must satisfy 0 < lo <= hi; got ({lo}, {hi})")
+    rng = random.Random(seed)
+    free_by_node = available_resources(snapshot)
+    running = extract_running_jobs(snapshot)
+
+    events: list[tuple[float, int, int, str]] = []
+    seq = 0
+    placed_node: dict[str, str] = {}
+    job_table: dict[str, SimJob] = {}
+
+    for j in running:
+        target = _placement_for_running(j, snapshot, free_by_node)
+        if target is None:
+            continue
+        # Resources were already deducted via cpu_alloc/mem_alloc/gres_used
+        # in available_resources(); we don't deduct again. We just need
+        # to know the node so _release puts them back when the job ends.
+        placed_node[j.job_id] = target
+        if residual_lifetimes and j.job_id in residual_lifetimes:
+            end_t = float(residual_lifetimes[j.job_id])
+        else:
+            elapsed = -j.submit_time
+            remaining = max(0.0, j.walltime_ask - elapsed)
+            end_t = remaining
+        end_t = max(0.0, end_t)
+        j.end_time = end_t
+        j.walltime_actual = end_t + (-j.submit_time)
+        seq += 1
+        heapq.heappush(events, (end_t, _EVT_END, seq, j.job_id))
+        job_table[j.job_id] = j
+
+    job_table[candidate.job_id] = candidate
+    seq += 1
+    heapq.heappush(events, (max(0.0, candidate.submit_time), _EVT_SUBMIT, seq, candidate.job_id))
+
+    if arrival_stream:
+        for arr in arrival_stream:
+            if arr.submit_time < 0 or arr.submit_time > max_horizon_sec:
+                continue
+            seq += 1
+            heapq.heappush(events, (arr.submit_time, _EVT_SUBMIT, seq, arr.job_id))
+            job_table[arr.job_id] = arr
+
+    queued: list[SimJob] = []
+    candidate_started = False
+    candidate_start: float | None = None
+    completed = 0
+    failed = 0
+
+    def _start_job(job: SimJob, target: str, now: float, actual: float) -> None:
+        """Move a job from ``queued`` state to ``running`` and emit its END event."""
+        nonlocal seq, candidate_started, candidate_start
+        _consume(target, job, free_by_node)
+        job.state = "running"
+        job.start_time = now
+        job.walltime_actual = actual
+        job.end_time = now + actual
+        placed_node[job.job_id] = target
+        seq += 1
+        heapq.heappush(events, (job.end_time, _EVT_END, seq, job.job_id))
+        if job.job_id == candidate.job_id and not candidate_started:
+            candidate_started = True
+            candidate_start = now
+
+    def _drain_hoq_eligible(now: float) -> None:
+        """Tier 1: start head-of-queue jobs in priority order while they fit."""
+        while queued:
+            head = queued[0]
+            target = _try_place(head, free_by_node)
+            if target is None:
+                return
+            queued.pop(0)
+            actual = head.walltime_actual if head.walltime_actual is not None else head.walltime_ask
+            _start_job(head, target, now, actual)
+
+    def _easy_backfill(now: float) -> None:
+        """Tier 2: backfill queued jobs that fit AND finish before HoQ reservation."""
+        running_endings = [
+            (job_table[jid].end_time or float("inf"), job_table[jid], placed_node.get(jid, ""))
+            for _, kind, _, jid in events
+            if kind == _EVT_END
+            and job_table.get(jid) is not None
+            and (job_table[jid].state == "running")
+        ]
+        hoq_resv, _hoq = _hoq_reservation(queued, running_endings, free_by_node, now)
+        i = 1
+        while i < len(queued):
+            cand = queued[i]
+            if not cand.backfill_eligible:
+                i += 1
+                continue
+            target = _try_place(cand, free_by_node)
+            if target is None:
+                i += 1
+                continue
+            actual = cand.walltime_actual if cand.walltime_actual is not None else cand.walltime_ask
+            if now + actual > hoq_resv:
+                i += 1
+                continue
+            queued.pop(i)
+            _start_job(cand, target, now, actual)
+
+    def _policy_loop(now: float) -> None:
+        """FIFO + EASY-backfill policy. Mutates queued + free_by_node + events."""
+        if not queued:
+            return
+        queued.sort(key=lambda j: (j.submit_time, j.job_id))
+        _drain_hoq_eligible(now)
+        if queued:
+            _easy_backfill(now)
+
+    while events:
+        time, kind, _seq, jid = heapq.heappop(events)
+        if time > max_horizon_sec:
+            break
+        if kind == _EVT_END:
+            ev_job = job_table.get(jid)
+            if ev_job is None:
+                continue
+            if ev_job.state != "running":
+                continue
+            node = placed_node.get(jid, "")
+            if node:
+                _release(node, ev_job, free_by_node)
+            ev_job.state = "complete"
+            completed += 1
+            _policy_loop(time)
+        elif kind == _EVT_SUBMIT:
+            ev_job = job_table.get(jid)
+            if ev_job is None:
+                continue
+            ev_job.state = "queued"
+            # Sample walltime_actual for the candidate too. The
+            # previous form excluded it, so the candidate's backfill-fit
+            # check used the FULL walltime_ask while every other job's
+            # check used a 60-100% shorter actual — the candidate was
+            # held to a strictly tighter shadow-fit criterion than the
+            # population it competed with, biasing predicted-wait HIGH.
+            if ev_job.walltime_actual is None:
+                ev_job.walltime_actual = max(1.0, ev_job.walltime_ask * rng.uniform(lo, hi))
+            queued.append(ev_job)
+            _policy_loop(time)
+
+    if candidate_started and candidate_start is not None:
+        wait = max(0.0, candidate_start - candidate.submit_time)
+    else:
+        wait = max_horizon_sec
+
+    state_at_horizon = {
+        "n_completed": completed,
+        "n_failed": failed,
+        "n_queued": len(queued),
+        "candidate_state": candidate.state,
+    }
+
+    return SimResult(
+        candidate_job_id=candidate.job_id,
+        predicted_start_offset_sec=wait,
+        predicted_state_at_horizon=state_at_horizon,
+        n_replications=1,
+        p10_wait_sec=wait,
+        p50_wait_sec=wait,
+        p90_wait_sec=wait,
+    )
+
+
+# Distribution simulation moved to queue_simulator_distribution.py;
+# lazy re-export so callers that imported simulate_distribution from
+# this module keep working without forcing the random / sampling
+# imports on the deterministic-only path.
+def __getattr__(name: str):  # noqa: ANN202
+    if name in ("simulate_distribution",):
+        from hpc_agent_pro.forecast import queue_simulator_distribution
+
+        return getattr(queue_simulator_distribution, name)
+    raise AttributeError(name)

@@ -74,8 +74,8 @@ repos:
         files: '^docs/primitives/.*\.md$'
 
       - id: lint-skill-command-sync
-        name: check skills/ <-> src/slash_commands/commands/ stay paired
+        name: check src/slash_commands/skills/ <-> src/slash_commands/commands/ stay paired
         entry: python scripts/lint_skill_command_sync.py
         language: system
         pass_filenames: false
-        files: '^(skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_skill_command_sync\.py)$'
+        files: '^(src/slash_commands/skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_skill_command_sync\.py)$'

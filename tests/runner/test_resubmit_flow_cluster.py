@@ -196,7 +196,6 @@ class TestSubmitToClusterRequiredKwargs:
                 RUN_ID,
                 failed_task_ids=[1, 2],
                 category="system_oom",
-                consult_forecast=False,
                 submit_to_cluster=True,
                 backend="slurm",
                 job_name="resub",
@@ -211,7 +210,6 @@ class TestSubmitToClusterRequiredKwargs:
                 RUN_ID,
                 failed_task_ids=[1, 2],
                 category="system_oom",
-                consult_forecast=False,
                 submit_to_cluster=True,
                 script="script.sh",
                 job_name="resub",
@@ -231,7 +229,6 @@ class TestClusterSubmission:
             failed_task_ids=[3, 7, 12, 13, 14],
             category="system_oom",
             overrides={"mem_mb": 32_000, "walltime_sec": 14400},
-            consult_forecast=False,
             submit_to_cluster=True,
             script="/cluster/path/run.sh",
             backend="slurm",
@@ -246,13 +243,10 @@ class TestClusterSubmission:
         # templates subtract 1 to recover the 0-based HPC_TASK_ID).
         build_calls = [c for c in stub.calls if c["step"] == "build_command"]
         assert build_calls[0]["task_range"] == "4,8,13-15"
-        # extra_flags carry the planner-adjusted overrides. Walltime
-        # gets cold-start arbitraged from 14400s (4h) → 13500s (3h45m)
-        # by the planner — the whole point of Phase 5 is that this
-        # adjustment now appears in the qsub flags rather than the
-        # static 4× table the slash command used to apply.
+        # extra_flags carry the caller-supplied overrides verbatim,
+        # rendered to scheduler flags: 14400s → --time=04:00:00.
         assert "--mem=32000M" in build_calls[0]["extra_flags"]
-        assert "--time=03:45:00" in build_calls[0]["extra_flags"]
+        assert "--time=04:00:00" in build_calls[0]["extra_flags"]
         # journal got the new job_id
         record = session.load_run(experiment, RUN_ID)
         assert result.new_job_ids[0] in record.job_ids
@@ -269,7 +263,6 @@ class TestClusterSubmission:
             category="system_oom",
             overrides={"mem_mb": 16_000},
             request_id="rs_explicit",
-            consult_forecast=False,
             submit_to_cluster=True,
             script="run.sh",
             backend="slurm",
@@ -287,7 +280,6 @@ class TestClusterSubmission:
             category="system_oom",
             overrides={"mem_mb": 16_000},
             request_id="rs_explicit",
-            consult_forecast=False,
             submit_to_cluster=True,
             script="run.sh",
             backend="slurm",
@@ -320,7 +312,6 @@ class TestClusterSubmission:
                 RUN_ID,
                 failed_task_ids=[1],
                 category="system_oom",
-                consult_forecast=False,
                 submit_to_cluster=True,
                 script="run.sh",
                 backend="slurm",
@@ -328,46 +319,6 @@ class TestClusterSubmission:
                 job_env={},
                 backend_factory=_make_factory(stub),
             )
-
-    def test_planner_overrides_flow_into_qsub_flags(
-        self, journal_home, experiment, tmp_path, monkeypatch
-    ):
-        """Cold-start mem buffer applied by planner appears in extra_flags."""
-        # Reuse the cold-start cluster (cold_start_mem_buffer=0.15).
-        import yaml
-
-        cfg = {
-            CLUSTER: {
-                "scheduler": "slurm",
-                "ssh_target": "user@cluster.example.edu",
-                "max_walltime_sec": 86400,
-                "cold_start_mem_buffer": 0.15,
-                "walltime_arbitrage": False,  # keep the test focused on mem
-            }
-        }
-        yaml_path = tmp_path / "clusters.yaml"
-        yaml_path.write_text(yaml.safe_dump(cfg))
-        monkeypatch.setenv("HPC_CLUSTERS_CONFIG", str(yaml_path))
-
-        _seed(experiment)
-        stub = _StubBackend()
-        resubmit_flow(
-            experiment,
-            RUN_ID,
-            failed_task_ids=[1],
-            category="system_oom",
-            overrides={"mem_mb": 16_000},  # planner grows to 18_400 on cold start
-            consult_forecast=False,
-            submit_to_cluster=True,
-            script="run.sh",
-            backend="slurm",
-            job_name="resub",
-            job_env={},
-            backend_factory=_make_factory(stub),
-        )
-        build_calls = [c for c in stub.calls if c["step"] == "build_command"]
-        # The planner-grown 18400 (not the raw 16000) should be in the flags.
-        assert "--mem=18400M" in build_calls[0]["extra_flags"]
 
 
 class TestEnvelopeShape:
@@ -382,7 +333,6 @@ class TestEnvelopeShape:
             RUN_ID,
             failed_task_ids=[1],
             category="system_oom",
-            consult_forecast=False,
             submit_to_cluster=True,
             script="run.sh",
             backend="slurm",
@@ -405,7 +355,6 @@ class TestEnvelopeShape:
             RUN_ID,
             failed_task_ids=[1],
             category="system_oom",
-            consult_forecast=False,
             submit_to_cluster=False,  # legacy default
         )
         env = result.to_envelope_data()

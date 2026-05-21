@@ -1,9 +1,8 @@
 """Per-user behavioral priors derived from squeue + sacct snapshots.
 
-Phase 2a of the queue-wait predictor plan: build a profile per user
-from observed jobs over time so the predictor can condition forecasts
-on "user X usually overshoots their walltime by 40%" or "user Y
-submits a fresh array every Tuesday morning".
+Builds a profile per user from observed jobs over time, capturing
+patterns like "user X usually overshoots their walltime by 40%" or
+"user Y submits a fresh array every Tuesday morning".
 
 Storage layout
 --------------
@@ -20,8 +19,7 @@ Profile fields
 ask-vs-actual ratios, job shape, reliability, and a rough
 follow-up-job conditional probability. All fields tolerate sparse
 input — a user with two observations gets a thin profile, but a
-profile nonetheless. Callers (e.g. the residual-lifetime estimator
-in :mod:`hpc_agent.forecast.residual_lifetime`) gate on
+profile nonetheless. Callers should gate on
 ``n_observations >= threshold`` before trusting the medians.
 
 The rolling aggregator does NOT store raw observations — that would

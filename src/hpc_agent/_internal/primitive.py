@@ -10,7 +10,7 @@ Decoration convention
 
 Most primitives have a clean Python entry point — a public function in one
 of the engine subpackages (``runner/``, ``planning/``, ``state/``,
-``forecast/``, ``flows/``, or ``infra/``) that performs the operation.
+``flows/``, or ``infra/``) that performs the operation.
 Decorate that function directly with ``@primitive(...)``.
 
 Some primitives have no inner Python helper — their behavior lives in
@@ -251,15 +251,9 @@ def primitive(
 _PRIMITIVE_MODULES: tuple[str, ...] = (
     # Atoms first.
     "hpc_agent.state.runs",
-    "hpc_agent.state.runtime_prior",
-    "hpc_agent.forecast.calibration",
-    "hpc_agent.forecast.best_submit_window",
-    "hpc_agent.forecast.queue_wait_baseline",
     "hpc_agent.state.discover",
     "hpc_agent.planning.resubmit_batching",
-    "hpc_agent.planning.planner",
     "hpc_agent.atoms.campaign_health",
-    "hpc_agent.infra.inspect",
     "hpc_agent.infra.clusters",
     "hpc_agent.agent_cli",
     "hpc_agent.atoms.axes_init",
@@ -279,18 +273,15 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_agent.atoms.capabilities",
     "hpc_agent.atoms.clusters",
     "hpc_agent.atoms.failures",
-    "hpc_agent.atoms.house_edge",
     "hpc_agent.atoms.interview",
     "hpc_agent.atoms.list_in_flight",
     "hpc_agent.atoms.logs",
     "hpc_agent.atoms.monitor_arm",
     "hpc_agent.atoms.monitor_summary",
     "hpc_agent.atoms.plan_throughput",
-    "hpc_agent.atoms.predict_start_time",
     "hpc_agent.atoms.preflight",
     "hpc_agent.atoms.recall",
     "hpc_agent.atoms.recommend_partition",
-    "hpc_agent.atoms.recommend_wait_alternative",
     "hpc_agent.atoms.setup_actions",
     "hpc_agent.atoms.submit_plan_summary",
     "hpc_agent.atoms.validate_executor_signatures",
@@ -298,14 +289,12 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_agent.atoms.validate_self_qos_limit",
     "hpc_agent.atoms.validate_stochastic_marker",
     "hpc_agent.atoms.validate_walltime_against_history",
-    "hpc_agent.atoms.walltime_drift",
     "hpc_agent.runner.submit",
     "hpc_agent.runner.status",
     "hpc_agent.runner.combine",
     "hpc_agent.runner.resubmit",
     "hpc_agent.runner.reconcile",
     "hpc_agent.runner.update_constraints",
-    "hpc_agent.planning.validate",
     # Composites — must come after every atom they reference.
     "hpc_agent.flows.submit_flow",
     "hpc_agent.flows.monitor_flow",
@@ -335,6 +324,13 @@ def register_primitives() -> None:
     if _REGISTRATION_DONE:
         return
     for modname in _PRIMITIVE_MODULES:
+        importlib.import_module(modname)
+    # Optional plugin distributions contribute extra primitive modules
+    # via the ``hpc_agent.plugins`` entry-point group. With none
+    # installed this is an empty loop and registration is unchanged.
+    from hpc_agent._internal.plugins import plugin_primitive_modules
+
+    for modname in plugin_primitive_modules():
         importlib.import_module(modname)
     _REGISTRATION_DONE = True
 

@@ -10,8 +10,8 @@ the ingredients for resource-quality-aware submission decisions:
   resource shares and how long they've been running.
 - Drain / down state.
 
-The resulting JSON is fed into :mod:`hpc_agent.planning.planner` (Phase 4)
-which combines it with runtime priors to score candidate constraints.
+The resulting JSON is a read-only snapshot of per-node cluster state for
+callers that need to reason about current resource availability.
 It is also useful standalone for ad-hoc cluster
 debugging via ``hpc-agent inspect-cluster --cluster <c>``.
 
@@ -45,7 +45,6 @@ import contextlib
 from pathlib import Path
 
 from hpc_agent import errors
-from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent.infra.clusters import load_clusters_config
 
 from ._common import (
@@ -88,15 +87,6 @@ __all__ = [
 ]
 
 
-@primitive(
-    name="inspect-cluster",
-    verb="query",
-    side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.ClusterUnknown, errors.SshUnreachable],
-    idempotent=True,
-    idempotency_key="cluster",
-    cli="hpc-agent inspect-cluster --cluster <name> [...]",
-)
 def inspect_cluster(
     cluster_name: str,
     *,
