@@ -105,7 +105,7 @@ def check_results(
                 row_count = sum(1 for _ in reader)
                 if row_count < min_rows:
                     return None
-            return {"status": "complete", "csv_rows": row_count}
+            return {"status": "complete", "path": path_str, "csv_rows": row_count}
         except OSError:
             return None
 
