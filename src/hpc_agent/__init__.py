@@ -79,7 +79,6 @@ __all__ = [
     "inspect_cluster",
     "append_runtime_sample",
     "roll_up_runtime_quantiles",
-    "plan_submit",
     # Resubmit
     "compact_task_ids",
     "ResubmitBatch",
@@ -140,7 +139,6 @@ from hpc_agent.mapreduce.reduce.status import (
     rollup_by_grid_point,
 )
 from hpc_agent.planning.constraints import ClusterConstraints, parse_constraints
-from hpc_agent.planning.planner import plan_submit
 from hpc_agent.planning.resubmit_batching import (
     ResubmitBatch,
     ResubmitPlan,

@@ -6,7 +6,7 @@ executed from a local machine without paramiko or other dependencies.
 All functions take a single opaque ``ssh_target`` plus ``remote_path``.
 ``ssh_target`` is whatever ``ssh``/``scp``/``rsync`` accept as a
 destination — either an explicit ``user@host`` (e.g.
-``jc_905@discovery2.usc.edu``) **or** an OpenSSH ``Host`` alias from
+``user@discovery2.usc.edu``) **or** an OpenSSH ``Host`` alias from
 ``~/.ssh/config`` (e.g. ``usc-discovery``). The alias form is preferred
 because it lets ``IdentityFile`` / ``User`` / ``Hostname`` settings in
 the user's ssh config flow through without us having to model them.

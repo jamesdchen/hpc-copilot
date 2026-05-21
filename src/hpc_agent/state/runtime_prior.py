@@ -51,9 +51,7 @@ import os
 import statistics
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors
 from hpc_agent._internal.io import atomic_locked_update
-from hpc_agent._internal.primitive import primitive
 from hpc_agent._internal.time import parse_iso_utc_or_none, utcnow_iso
 
 if TYPE_CHECKING:
@@ -359,14 +357,6 @@ def _quantile(values: list[int], q: float) -> int:
     return int(round(s[lo] * (1 - frac) + s[hi] * frac))
 
 
-@primitive(
-    name="read-runtime-prior",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.SpecInvalid],
-    idempotent=True,
-    cli="hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]",
-)
 def roll_up_quantiles(
     experiment_dir: Path,
     *,
@@ -457,8 +447,7 @@ def roll_up_quantiles(
 def coerce_pos_int(x: Any) -> int | None:
     """Coerce *x* to a positive int or return None. Permissive on garbage.
 
-    Shared with :mod:`hpc_agent.forecast.calibration` so both modules
-    consume the runtime-prior sample dicts through a single coercion.
+    A single coercion shared across the runtime-prior sample readers.
     """
     if x is None:
         return None

@@ -348,6 +348,44 @@ def cmd_hook_install(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_install_commands(args: argparse.Namespace) -> int:
+    """Copy bundled slash commands + skills into ~/.claude/.
+
+    The pip-install entry point: after ``pip install hpc-agent`` this
+    wires the agent assets shipped in the wheel into Claude Code's
+    user-global config dir. Idempotent (overwrites in place). Use
+    ``--dry-run`` to preview without writing.
+    """
+    from hpc_agent.agent_assets import install_agent_assets
+
+    claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
+    summary = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
+    _emit({"ok": True, "idempotent": True, "data": summary})
+    return EXIT_OK
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    """One-shot setup: install commands + skills, then wire the Stop hooks.
+
+    The single entry point a new user runs after ``pip install
+    hpc-agent``. Copies the bundled slash commands and skills into
+    ~/.claude/ and installs hpc-agent's Stop hooks. Both steps are
+    idempotent, so re-running is safe. ``--no-hooks`` skips the hook
+    step; ``--dry-run`` previews both without writing.
+    """
+    from hpc_agent.agent_assets import install_agent_assets
+    from hpc_agent.hooks.install import install_hooks
+
+    claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
+    assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
+    data: dict[str, Any] = {"assets": assets}
+    if not args.no_hooks:
+        settings_path = claude_dir / "settings.json" if claude_dir else None
+        data["hooks"] = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
+    _emit({"ok": True, "idempotent": True, "data": data})
+    return EXIT_OK
+
+
 def cmd_capabilities(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.capabilities."""
     from hpc_agent._internal.operations import render_llms_full
@@ -383,30 +421,7 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-# ─── subcommand: predict-start-time ───────────────────────────────────────
-
-
-def cmd_predict_start_time(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at
-    ``hpc_agent.atoms.predict_start_time``."""
-    from hpc_agent._schema_models.queries.predict_start_time import PredictStartTimeSpec
-    from hpc_agent.atoms.predict_start_time import predict_start_time_primitive
-
-    intent = _load_spec(args.spec, schema_name="predict_start_time")
-    if not intent:
-        raise errors.SpecInvalid("--spec is required for `predict-start-time`")
-    try:
-        spec = PredictStartTimeSpec.model_validate(intent)
-    except Exception as exc:
-        raise errors.SpecInvalid(str(exc)) from exc
-
-    experiment_dir = Path(args.experiment_dir).resolve()
-    result = predict_start_time_primitive(experiment_dir, spec=spec)
-    _ok(result.model_dump(mode="json"), name="predict-start-time")
-    return EXIT_OK
-
-
-# ─── subcommand: validate-campaign ────────────────────────────────────────
+# ─── subcommand: validate-campaign ───────────────────────────────────────
 
 
 def cmd_validate_campaign(args: argparse.Namespace) -> int:
@@ -553,185 +568,6 @@ def cmd_discover_reducers(args: argparse.Namespace) -> int:
         ]
     }
     _ok(data, name="discover-reducers")
-    return EXIT_OK
-
-
-# ─── subcommand: clusters ──────────────────────────────────────────────────
-
-
-# ─── subcommand: inspect-cluster ───────────────────────────────────────────
-
-
-def cmd_inspect_cluster(args: argparse.Namespace) -> int:
-    """Read-only snapshot of a cluster's node states.
-
-    Used by /hpc-submit Phase 4 (planner) to see allocation pressure,
-    co-tenants, and drain/down state. Useful standalone for ad-hoc
-    debugging when a job is queueing slowly or running on a hot node.
-    """
-    if (rc := _require_ssh_agent()) is not None:
-        return rc
-    from hpc_agent.infra.inspect import inspect_cluster
-
-    snap = inspect_cluster(
-        args.cluster,
-        sacct_window_hours=args.sacct_window_hours,
-        stress_alloc_mem_pct=args.stress_alloc_mem_pct,
-        stress_cpu_load_frac=args.stress_cpu_load_frac,
-        use_cache=not args.no_cache,
-    )
-    # B3: surface cluster-side soft failures (qhost timed out, scontrol
-    # parse error, sacct unavailable) at envelope-level ``partial_errors``
-    # rather than burying them inside ``data.errors`` where machine
-    # consumers tend to miss them. The legacy ``data.errors`` shape is
-    # kept (snap.to_dict() includes it) for one release as back-compat.
-    # back-compat: introduced 0.2.0 (B3 partial_errors split). Remove in
-    # 0.3.0 — strip ``errors`` from snap.to_dict() and update fixtures.
-    payload = snap.to_dict()
-    partial = list(payload.get("errors", []))
-    _ok(payload, name="inspect-cluster", partial_errors=partial or None)
-    return EXIT_OK
-
-
-# ─── subcommand: runtime-prior ─────────────────────────────────────────────
-
-
-def cmd_runtime_prior(args: argparse.Namespace) -> int:
-    from hpc_agent.state.runtime_prior import roll_up_quantiles
-
-    out = roll_up_quantiles(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        cmd_sha=args.cmd_sha,
-    )
-    _ok(out, name="read-runtime-prior")
-    return EXIT_OK
-
-
-# ─── subcommand: walltime-drift / house-edge (calibration) ────────────────
-
-
-def cmd_walltime_drift(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.walltime_drift."""
-    from hpc_agent.atoms.walltime_drift import walltime_drift
-
-    _ok(
-        walltime_drift(
-            experiment_dir=args.experiment_dir,
-            profile=args.profile,
-            cluster=args.cluster,
-            cmd_sha=args.cmd_sha,
-            base_safety_mult=float(args.base_safety_mult),
-        ),
-        name="walltime-drift",
-    )
-    return EXIT_OK
-
-
-def cmd_best_submit_window(args: argparse.Namespace) -> int:
-    """Surface the top_k lowest-wait submit windows in the next horizon.
-
-    Sweeps the diurnal queue-wait predictor at hourly offsets up to
-    ``--within-hours`` and returns the top ``--top-k`` candidates.
-    Cold-start hours are excluded from the ranking. The slash command
-    consumes the result to suggest "submit now" vs. "wait until
-    <hour>".
-    """
-    from hpc_agent._schema_models.queries.best_submit_window import BestSubmitWindowSpec
-    from hpc_agent.forecast.best_submit_window import best_submit_windows
-
-    raw = {
-        "profile": args.profile,
-        "cluster": args.cluster,
-        "within_hours": int(args.within_hours),
-        "top_k": int(args.top_k),
-    }
-    _validate_against_schema(raw, "best_submit_window")
-    spec = BestSubmitWindowSpec.model_validate(raw)
-    candidates = best_submit_windows(args.experiment_dir, spec=spec)
-    _ok(
-        {
-            "profile": spec.profile,
-            "cluster": spec.cluster,
-            "within_hours": spec.within_hours,
-            "top_k": spec.top_k,
-            "candidates": [c.to_dict() for c in candidates],
-        },
-        name="best-submit-window",
-    )
-    return EXIT_OK
-
-
-def cmd_predict_queue_wait(args: argparse.Namespace) -> int:
-    """Forecast queue-wait seconds for a hypothetical submit.
-
-    Dispatches to the discrete-event simulator (Phase 4 DES backend)
-    when a recent ClusterSnapshot + user_profiles coverage are present;
-    falls back to the diurnal moving-average baseline otherwise. The
-    result's ``method`` field reports which backend won.
-    """
-    from hpc_agent.forecast.queue_wait_baseline import predict_queue_wait
-
-    payload: dict[str, Any] = {
-        "profile": args.profile,
-        "cluster": args.cluster,
-        "backend": args.backend,
-        "n_replications": int(args.n_replications),
-    }
-    if args.at_iso is not None:
-        payload["at_iso"] = args.at_iso
-    if args.seed is not None:
-        payload["seed"] = int(args.seed)
-    _validate_against_schema(payload, "predict_queue_wait")
-    from hpc_agent._schema_models.queries.predict_queue_wait import PredictQueueWaitSpec
-
-    spec = PredictQueueWaitSpec.model_validate(payload)
-    out = predict_queue_wait(args.experiment_dir, spec=spec)
-    _ok(out.to_dict(), name="predict-queue-wait")
-    return EXIT_OK
-
-
-def cmd_house_edge(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.house_edge."""
-    from hpc_agent.atoms.house_edge import house_edge
-
-    _ok(
-        house_edge(
-            experiment_dir=args.experiment_dir,
-            profile=args.profile,
-            cluster=args.cluster,
-            cmd_sha=args.cmd_sha,
-        ),
-        name="house-edge",
-    )
-    return EXIT_OK
-
-
-# ─── subcommand: plan-submit ───────────────────────────────────────────────
-
-
-def cmd_plan_submit(args: argparse.Namespace) -> int:
-    if (rc := _require_ssh_agent()) is not None:
-        return rc
-    from hpc_agent.planning.planner import plan_submit
-
-    candidates: list[str] | None = None
-    if args.candidates:
-        candidates = [c.strip() for c in args.candidates.split(",") if c.strip()]
-    out = plan_submit(
-        args.experiment_dir,
-        profile=args.profile,
-        cluster=args.cluster,
-        candidates=candidates,
-        cmd_sha=args.cmd_sha,
-        adversarial=not bool(getattr(args, "no_adversarial", False)),
-        walltime_safety_mult=float(getattr(args, "walltime_safety_mult", 1.30)),
-        target_backfill_window_sec=getattr(args, "target_backfill_window_sec", None),
-        current_max_array_size=getattr(args, "current_max_array_size", None),
-        est_per_task_sec=getattr(args, "est_per_task_sec", None),
-    )
-    _ok(out, name="score-submit-plan")
     return EXIT_OK
 
 
@@ -1704,8 +1540,6 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
         overrides=spec.get("overrides"),
         new_job_ids=spec.get("new_job_ids"),
         request_id=spec.get("request_id"),
-        consult_forecast=bool(spec.get("consult_forecast", True)),
-        forecast_within_hours=int(spec.get("forecast_within_hours", 24)),
         submit_to_cluster=bool(spec.get("submit_to_cluster", False)),
         script=spec.get("script"),
         backend=spec.get("backend"),
@@ -1939,6 +1773,58 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_hook.set_defaults(func=cmd_hook_install)
+
+    # install-commands
+    p_install = sub.add_parser(
+        "install-commands",
+        help=(
+            "Copy the bundled slash commands and skills into "
+            "~/.claude/commands/ and ~/.claude/skills/. The pip-install "
+            "entry point — run once after `pip install hpc-agent` to wire "
+            "the agent assets into Claude Code. Idempotent (overwrites in "
+            "place). Pass --claude-dir to target a non-default config dir."
+        ),
+    )
+    p_install.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview which commands/skills would be copied without writing.",
+    )
+    p_install.add_argument(
+        "--claude-dir",
+        type=str,
+        default=None,
+        help="Override the target Claude config dir. Defaults to ~/.claude.",
+    )
+    p_install.set_defaults(func=cmd_install_commands)
+
+    # setup
+    p_setup = sub.add_parser(
+        "setup",
+        help=(
+            "One-shot setup: copy the bundled slash commands and skills "
+            "into ~/.claude/ and install hpc-agent's Stop hooks. Run this "
+            "once after `pip install hpc-agent`. Idempotent — safe to "
+            "re-run. Use --no-hooks to skip the hook step."
+        ),
+    )
+    p_setup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview both steps without writing.",
+    )
+    p_setup.add_argument(
+        "--no-hooks",
+        action="store_true",
+        help="Skip installing the Stop hooks (only copy commands + skills).",
+    )
+    p_setup.add_argument(
+        "--claude-dir",
+        type=str,
+        default=None,
+        help="Override the target Claude config dir. Defaults to ~/.claude.",
+    )
+    p_setup.set_defaults(func=cmd_setup)
 
     # axes-init
     p_axes = sub.add_parser(
@@ -2234,29 +2120,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_pre.add_argument("--cluster", help="Optional cluster name to TCP-probe on :22.")
     p_pre.set_defaults(func=cmd_preflight)
 
-    # predict-start-time
-    p_pst = sub.add_parser(
-        "predict-start-time",
-        help=(
-            "Floor + LightGBM-residual forecast for when a hypothetical job "
-            "would start. Sweeps candidate submit-at-T offsets and returns "
-            "the lowest-total-time-to-start option."
-        ),
-    )
-    p_pst.add_argument(
-        "--spec",
-        type=Path,
-        required=True,
-        help="Path to predict_start_time.input.json conforming to the schema.",
-    )
-    p_pst.add_argument(
-        "--experiment-dir",
-        type=Path,
-        default=Path("."),
-        help="Path to the experiment directory; defaults to cwd.",
-    )
-    p_pst.set_defaults(func=cmd_predict_start_time)
-
     # validate-campaign
     p_vc = sub.add_parser(
         "validate-campaign",
@@ -2394,117 +2257,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_dr)
     p_dr.set_defaults(func=cmd_discover_reducers)
 
-    # inspect-cluster
-    p_ic = sub.add_parser(
-        "inspect-cluster",
-        help=(
-            "Snapshot a cluster's per-node state (alloc mem, CPU load, "
-            "co-tenants, drain). Read-only; output is the planner's input."
-        ),
-    )
-    p_ic.add_argument("--cluster", required=True, help="Cluster name from clusters.yaml.")
-    p_ic.add_argument(
-        "--sacct-window-hours",
-        type=int,
-        default=24,
-        help="Look-back window for co-tenant attribution (default 24h).",
-    )
-    p_ic.add_argument(
-        "--stress-alloc-mem-pct",
-        type=float,
-        default=0.80,
-        help="AllocMem fraction above which a node is flagged is_stressed.",
-    )
-    p_ic.add_argument(
-        "--stress-cpu-load-frac",
-        type=float,
-        default=0.80,
-        help="CPULoad/CPUTot fraction above which a node is flagged is_stressed.",
-    )
-    p_ic.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="Bypass the 60s in-process cache and re-poll the cluster.",
-    )
-    p_ic.set_defaults(func=cmd_inspect_cluster)
-
-    # plan-submit
-    p_ps = sub.add_parser(
-        "plan-submit",
-        help=(
-            "Score candidate constraints for a submit. Combines inspect-cluster "
-            "and runtime priors. Output is JSON the slash command hands to "
-            "Claude for cost-model judgment."
-        ),
-    )
-    _add_experiment_dir(p_ps)
-    _add_profile_cluster_cmdsha(p_ps)
-    p_ps.add_argument(
-        "--candidates",
-        default=None,
-        help=(
-            "Optional comma-separated list of constraint expressions to evaluate "
-            "(e.g. 'a100,a40|a100,a40|a100|v100'). Defaults to single-GPU + "
-            "all-GPU-types from clusters.yaml."
-        ),
-    )
-    p_ps.add_argument(
-        "--no-adversarial",
-        action="store_true",
-        help=(
-            "Disable the default backfill-attack mode. By default, plan-submit "
-            "right-sizes the walltime ask from runtime priors and probes a "
-            "(walltime × constraint) lattice via `sbatch --test-only` to find "
-            "the variant SLURM predicts will start earliest. Pass this flag "
-            "for debugging or on clusters that throttle --test-only. With "
-            "<5 prior samples per GPU type the right-sizing falls back to "
-            "the default walltime regardless."
-        ),
-    )
-    p_ps.add_argument(
-        "--walltime-safety-mult",
-        type=float,
-        default=1.30,
-        help=(
-            "Multiplier applied to the runtime prior's p95 to derive the "
-            "right-sized walltime ask. Default 1.30 (30%% pad). Lower = more "
-            "aggressive backfill targeting at higher risk of cliff-kill."
-        ),
-    )
-    p_ps.add_argument(
-        "--target-backfill-window-sec",
-        type=int,
-        default=None,
-        help=(
-            "Adversarial knob: if you've observed a typical backfill gap size "
-            "on this cluster (e.g., 1800 for 30 minutes), pass it here. "
-            "Triggers array-reshape and walltime-split recommendations sized "
-            "to fit that window."
-        ),
-    )
-    p_ps.add_argument(
-        "--current-max-array-size",
-        type=int,
-        default=None,
-        help=(
-            "Adversarial array-reshape input: the cluster's currently "
-            "configured max array size. When supplied (with optionally "
-            "--target-backfill-window-sec and --est-per-task-sec), the "
-            "report includes a `array_reshape` recommendation."
-        ),
-    )
-    p_ps.add_argument(
-        "--est-per-task-sec",
-        type=int,
-        default=None,
-        help=(
-            "Adversarial knob: estimated per-task runtime (typically the "
-            "p95 from `runtime-prior`). Used by array-reshape and "
-            "walltime-split recommendations."
-        ),
-    )
-    p_ps.set_defaults(func=cmd_plan_submit)
-
     # plan-throughput
     p_pt = sub.add_parser(
         "plan-throughput",
@@ -2535,84 +2287,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_pt.set_defaults(func=cmd_plan_throughput)
-
-    # runtime-prior
-    p_rp = sub.add_parser(
-        "runtime-prior",
-        help="Quantile rollup of runtime samples for a (profile, cluster).",
-    )
-    _add_experiment_dir(p_rp)
-    _add_profile_cluster_cmdsha(
-        p_rp,
-        cmd_sha_help=("Filter samples to one cmd_sha (recommended after .hpc/tasks.py changes)."),
-    )
-    p_rp.set_defaults(func=cmd_runtime_prior)
-
-    # walltime-drift
-    p_wd = sub.add_parser(
-        "walltime-drift",
-        help=(
-            "Closed-loop calibration: measure cliff-kill rate from past "
-            "samples and recommend an adjusted safety_mult per cluster."
-        ),
-    )
-    _add_experiment_dir(p_wd)
-    _add_profile_cluster_cmdsha(p_wd)
-    p_wd.add_argument("--base-safety-mult", type=float, default=1.30)
-    p_wd.set_defaults(func=cmd_walltime_drift)
-
-    # house-edge
-    p_he = sub.add_parser(
-        "house-edge",
-        help=(
-            "Compare planner's --test-only predictions against observed "
-            "Submit→Start deltas. Validates that the lattice probe is "
-            "finding real backfill windows and surfaces miscalibration."
-        ),
-    )
-    _add_experiment_dir(p_he)
-    _add_profile_cluster_cmdsha(p_he)
-    p_he.set_defaults(func=cmd_house_edge)
-
-    # predict-queue-wait
-    p_pqw = sub.add_parser(
-        "predict-queue-wait",
-        help=(
-            "Forecast queue-wait seconds for a hypothetical submit. "
-            "Backend 'auto' picks DES when a snapshot + user-profiles "
-            "are available; falls back to the diurnal MA baseline."
-        ),
-    )
-    _add_experiment_dir(p_pqw)
-    p_pqw.add_argument("--profile", required=True)
-    p_pqw.add_argument("--cluster", required=True)
-    p_pqw.add_argument("--at-iso", default=None, help="reference timestamp (default: now)")
-    p_pqw.add_argument("--backend", choices=["auto", "diurnal_ma", "des"], default="auto")
-    p_pqw.add_argument(
-        "--n-replications",
-        type=int,
-        default=64,
-        help="DES replications (only used on the DES path)",
-    )
-    p_pqw.add_argument("--seed", type=int, default=None, help="seed for deterministic DES sampling")
-    p_pqw.set_defaults(func=cmd_predict_queue_wait)
-
-    # best-submit-window
-    p_bsw = sub.add_parser(
-        "best-submit-window",
-        help=(
-            "Sweep the diurnal queue-wait predictor over the next "
-            "--within-hours hours and surface the top_k lowest-wait "
-            "submit candidates. Used by /submit-hpc Step 4c to advise "
-            "submit-now vs. wait-for-window."
-        ),
-    )
-    _add_experiment_dir(p_bsw)
-    p_bsw.add_argument("--profile", required=True)
-    p_bsw.add_argument("--cluster", required=True)
-    p_bsw.add_argument("--within-hours", type=int, default=24)
-    p_bsw.add_argument("--top-k", type=int, default=5)
-    p_bsw.set_defaults(func=cmd_best_submit_window)
 
     # clusters
     p_cl = sub.add_parser("clusters", help="Introspect available cluster definitions.")
@@ -3023,6 +2697,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_bt.set_defaults(func=cmd_build_template)
 
+    # Optional plugin distributions add their own subcommands here. With
+    # none installed this is a no-op and the parser is unchanged.
+    from hpc_agent._internal.plugins import register_plugin_cli
+
+    register_plugin_cli(sub)
+
     return parser
 
 
@@ -3032,28 +2712,19 @@ def build_parser() -> argparse.ArgumentParser:
 # know the surface struggle to discover the right one. Adding ``git
 # remote`` / ``kubectl get``-style verb groups gives a navigable
 # top-level. We don't want to refactor the entire argparse tree, so the
-# grouping is implemented as an argv pre-processor: ``hpc-agent forecast
-# predict-queue-wait <args>`` strips the ``forecast`` prefix before
-# argparse sees it. The flat form (``hpc-agent predict-queue-wait
+# grouping is implemented as an argv pre-processor: ``hpc-agent build
+# build-executor <args>`` strips the ``build`` prefix before
+# argparse sees it. The flat form (``hpc-agent build-executor
 # <args>``) keeps working — both routes hit the same handler.
 #
 # Add a primitive to a group: append it to the matching frozenset.
-# ``hpc-agent forecast`` (no further argv) prints the group's
+# ``hpc-agent build`` (no further argv) prints the group's
 # subcommand list.
 
 _VERB_GROUPS: dict[str, frozenset[str]] = {
     # Only include subcommands that have parsers registered in
     # build_parser() — _strip_verb_group passes the verb through to
     # argparse, which raises "invalid choice" for unregistered names.
-    "forecast": frozenset(
-        {
-            "best-submit-window",
-            "house-edge",
-            "predict-queue-wait",
-            "predict-start-time",
-            "walltime-drift",
-        }
-    ),
     "validate": frozenset(
         {
             "validate-campaign",
