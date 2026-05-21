@@ -16,7 +16,7 @@ not the other way round. New code finds its destination by asking
 │  (thin redirects to skills)      (one SKILL.md per workflow)        │
 │                                  ↓                                  │
 │  agent_cli.py (`hpc-agent` console script)                          │
-│  argparse + verb groups (forecast/validate/build) + flat aliases    │
+│  argparse + verb groups (validate/build/clusters) + flat aliases    │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -36,7 +36,7 @@ not the other way round. New code finds its destination by asking
 │  submit / scaffold)                                                 │
 │                                                                     │
 │  atoms/         build-executor, build-tasks-py, recall, recommend-  │
-│                 partition, validate-*, walltime-arbitrage, ...      │
+│                 partition, validate-*, ...                         │
 │  runner/        SSH-bound mutate primitives: submit-spec,           │
 │                 record-status, combine-wave, mark-terminal,         │
 │                 update-run-constraints                              │
@@ -44,20 +44,22 @@ not the other way round. New code finds its destination by asking
 │  └ reduce/      tui (rich-based per-task summary)                   │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
-┌──────────────────────────────────────┬──────────────────────────────┐
-│  Forecast (predict)                  │  Planning (decide)           │
-│                                      │                              │
-│  forecast/                           │  planning/                   │
-│    ├ queue_wait_baseline.py          │    ├ planner.py              │
-│    ├ predict_start.py                │    ├ resubmit_planner.py     │
-│    ├ queue_simulator.py              │    ├ throughput.py           │
-│    ├ backfill.py + calibration       │    ├ daisy_chain.py          │
-│    └ residual_lifetime.py            │    └ stages.py               │
-│                                      │                              │
-│  Pure functions over inputs:         │  Pure functions over inputs: │
-│  squeue text + sshare text +         │  forecast outputs + cluster  │
-│  history → predicted ETA             │  config → ranked candidates  │
-└──────────────────────────────────────┴──────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  Planning (decide)                                                  │
+│                                                                     │
+│  planning/                                                          │
+│    ├ axes.py          ├ resubmit_batching.py                        │
+│    ├ constraints.py   ├ stages.py                                   │
+│    └ throughput.py                                                  │
+│                                                                     │
+│  Pure functions over inputs: spec / history / cluster config →      │
+│  resubmit batches, stage plans, throughput estimates. No SSH,       │
+│  no mutation.                                                       │
+│                                                                     │
+│  The advisory / forecasting layer (queue-wait prediction, submit-   │
+│  plan scoring) lives in the optional `hpc-agent-pro` plugin, which   │
+│  re-attaches through the `hpc_agent.plugins` entry-point seam.       │
+└──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Infra (transport + cluster introspection)                          │
@@ -97,25 +99,23 @@ Cross-cutting:
   auto-generated from the registry; bodies hand-written. The
   agent-context surface (`hpc-agent capabilities --full` projects them).
 
-## The predict / decide / act boundary
+## The decide / act boundary
 
-The single most important invariant: **forecast is pure prediction;
-planning is pure decision; runner is the only layer that mutates the
-cluster.**
+The single most important invariant: **planning is pure decision;
+runner is the only layer that mutates the cluster.**
 
 | Layer    | Reads                                  | Writes                  | Side effects |
 |----------|----------------------------------------|-------------------------|--------------|
-| forecast | squeue/sshare text, history snapshots  | nothing                 | none         |
-| planning | forecast output, cluster config        | nothing                 | none         |
+| planning | spec / history, cluster config         | nothing                 | none         |
 | atoms    | depends on the atom's verb             | sidecars / journal      | scoped       |
 | flows    | composes atoms                         | journal + cluster state | SSH / qsub   |
 | runner   | run_id + cluster                       | cluster state           | SSH / qsub   |
 
 If you find yourself adding a `subprocess.run("ssh ...")` in
-`forecast/` or `planning/`, stop. The convention is: the slash command
-runs the SSH; the framework primitive parses the text. This keeps
-forecasts replayable and unit-testable, and keeps audits of "what does
-this primitive touch?" trivial.
+`planning/`, stop. The convention is: the slash command runs the SSH;
+the framework primitive parses the text. This keeps planning
+replayable and unit-testable, and keeps audits of "what does this
+primitive touch?" trivial.
 
 ## The @primitive registry
 
@@ -123,15 +123,15 @@ Every wire-callable operation is decorated:
 
 ```python
 @primitive(
-    name="best-submit-window",
+    name="summarize-submit-plan",
     verb="query",
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent best-submit-window --profile <p> --cluster <c>",
+    cli="hpc-agent summarize-submit-plan --spec <path>",
     agent_facing=True,
 )
-def best_submit_window(...): ...
+def summarize_submit_plan(...): ...
 ```
 
 The decorator:
@@ -173,11 +173,10 @@ fails CI. Editing a `@primitive(...)` decorator without re-running
 
 `hpc-agent` (entry point: `hpc_agent.agent_cli:main`) exposes every
 primitive as a subcommand. Subcommands can be invoked flat
-(`hpc-agent predict-queue-wait ...`) or under a verb group
-(`hpc-agent forecast predict-queue-wait ...`); the verb groups
-(`forecast`, `validate`, `build`, plus the existing `clusters` /
-`campaign`) are argv pre-processors so flat-form invocations always
-keep working.
+(`hpc-agent validate-campaign ...`) or under a verb group
+(`hpc-agent validate validate-campaign ...`); the verb groups
+(`validate`, `build`, `clusters`, plus the existing `campaign`) are
+argv pre-processors so flat-form invocations always keep working.
 
 The agent-facing JSON envelope is uniform: `{"ok": bool, "data": {...}}`
 on success, `{"ok": false, "error_code": str, "category": str,

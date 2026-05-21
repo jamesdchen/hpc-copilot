@@ -40,9 +40,6 @@ hpc-agent recall --root ~/experiments --task-kind <kind>  # query past interview
 hpc-agent submit --spec spec.json                          # JSON envelope on stdout
 hpc-agent status --run-id <id>                             # one-shot snapshot; poll as needed
 hpc-agent aggregate --run-id <id> --wave 1                 # combiner + result pull
-hpc-agent inspect-cluster --cluster <c>                    # per-node alloc/load/co-tenant snapshot
-hpc-agent runtime-prior --profile <p> --cluster <c>        # quantile rollup of past task runtimes
-hpc-agent plan-submit --profile <p> --cluster <c>          # constraint scorecard for /submit-hpc
 ```
 Stdout is a single-line JSON envelope: `{"ok": true, "idempotent": ..., "data": {...}}` or `{"ok": false, "error_code": ..., "retry_safe": ..., "remediation": ...}`. Exit codes: 0 ok, 1 user error, 2 cluster/network, 3 internal. Full schema in [`docs/reference/cli-spec.md`](docs/reference/cli-spec.md); JSON Schema files for runtime validation under `hpc_agent/schemas/`.
 
