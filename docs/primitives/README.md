@@ -85,7 +85,6 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [best-submit-window](best-submit-window.md) | yes | _none_ | `hpc-agent best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` |
 | [campaign-advance](campaign-advance.md) | yes | _none_ | `hpc-agent campaign advance --campaign-id <id>` |
 | [campaign-budget](campaign-budget.md) | yes | _none_ | `hpc-agent campaign budget --campaign-id <id>` |
 | [campaign-converged](campaign-converged.md) | yes | _none_ | `hpc-agent campaign converged --campaign-id <id>` |
@@ -101,31 +100,22 @@ The verb partitions primitives into bands the reader can scan independently:
 | [discover-reducers](discover-reducers.md) | yes | _none_ | `hpc-agent discover-reducers --experiment-dir <path>` |
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-agent failures --run-id <id> [--lines <n>]` |
 | [find-prior-run](find-prior-run.md) | yes | _none_ | `hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>` |
-| [house-edge](house-edge.md) | yes | _none_ | `hpc-agent house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` |
-| [inspect-cluster](inspect-cluster.md) | yes | ssh: `<cluster>` | `hpc-agent inspect-cluster --cluster <name> [...]` |
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` |
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` |
 | [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]` |
 | [poll-run-status](poll-run-status.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent status --run-id <id> [--experiment-dir <dir>]` |
-| [predict-queue-wait](predict-queue-wait.md) | yes | _none_ | `hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` |
-| [predict-start-time](predict-start-time.md) | yes | _none_ | `hpc-agent predict-start-time --spec <path>` |
-| [read-runtime-prior](read-runtime-prior.md) | yes | _none_ | `hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` |
 | [recall](recall.md) | yes | _none_ | `hpc-agent recall` |
 | [recommend-partition](recommend-partition.md) | yes | _none_ | `(none — Python-only primitive)` |
-| [recommend-wait-alternative](recommend-wait-alternative.md) | yes | _none_ | `(none — Python-only primitive)` |
-| [score-submit-plan](score-submit-plan.md) | yes | ssh: `<cluster>` | `hpc-agent plan-submit --profile <name> --cluster <name> [...]` |
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action --experiment-dir <path>` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` |
-| [walltime-drift](walltime-drift.md) | yes | _none_ | `hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` |
 
 ### `validate` primitives
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
 | [check-preflight](check-preflight.md) | yes | _none_ | `hpc-agent preflight [--cluster <name>]` |
-| [validate](validate.md) | yes | ssh: `<cluster>` | `(none — Python-only primitive)` |
 | [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `(none — Python-only primitive)` |

@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**61 operations total**: 55 primitive atoms + 6 workflow atoms.
+**51 operations total**: 45 primitive atoms + 6 workflow atoms.
 
 ## How to read this page
 
@@ -14,13 +14,12 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (34)
+## `query` (25)
 
 Read-only, no side effects. Freely composable; cacheable.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`best-submit-window`](primitives/best-submit-window.md) | ✓ | _none_ | `hpc-agent best-submit-window --profile <p> --cluster <c> [--within-hours N] [--top-k K]` | `hpc_agent.forecast.best_submit_window.best_submit_windows` | `hpc_agent/schemas/best_submit_window.input.json` | `hpc_agent/schemas/best_submit_window.output.json` |
 | [`campaign-advance`](primitives/campaign-advance.md) | ✓ | _none_ | `hpc-agent campaign advance --campaign-id <id>` | `hpc_agent.atoms.campaign_advance.campaign_advance` | — | `hpc_agent/schemas/campaign.output.json` |
 | [`campaign-budget`](primitives/campaign-budget.md) | ✓ | _none_ | `hpc-agent campaign budget --campaign-id <id>` | `hpc_agent.atoms.campaign_budget.campaign_budget` | — | `hpc_agent/schemas/campaign.output.json` |
 | [`campaign-converged`](primitives/campaign-converged.md) | ✓ | _none_ | `hpc-agent campaign converged --campaign-id <id>` | `hpc_agent.atoms.campaign_converged.campaign_converged` | — | `hpc_agent/schemas/campaign.output.json` |
@@ -36,33 +35,24 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`discover-reducers`](primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers --experiment-dir <path>` | `hpc_agent.state.discover.discover_reducers` | — | — |
 | [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-agent failures --run-id <id> [--lines <n>]` | `hpc_agent.atoms.failures.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
 | [`find-prior-run`](primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>` | `hpc_agent.atoms.setup_actions.find_prior_run` | — | `hpc_agent/schemas/find_prior_run.output.json` |
-| [`house-edge`](primitives/house-edge.md) | ✓ | _none_ | `hpc-agent house-edge --profile <name> --cluster <name> [--cmd-sha <sha>]` | `hpc_agent.atoms.house_edge.house_edge` | — | — |
-| [`inspect-cluster`](primitives/inspect-cluster.md) | ✓ | ssh | `hpc-agent inspect-cluster --cluster <name> [...]` | `hpc_agent.infra.inspect.inspect_cluster` | — | `hpc_agent/schemas/inspect_cluster.output.json` |
 | [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` | `hpc_agent.atoms.list_in_flight.list_in_flight` | — | `hpc_agent/schemas/list_in_flight.output.json` |
 | [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` | `hpc_agent.atoms.logs.fetch_logs` | — | — |
 | [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` | `hpc_agent.atoms.monitor_summary.monitor_summary` | — | `hpc_agent/schemas/monitor_summary.output.json` |
 | [`plan-throughput`](primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]` | `hpc_agent.atoms.plan_throughput.plan_throughput` | — | — |
 | [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status --run-id <id> [--experiment-dir <dir>]` | `hpc_agent.runner.status.record_status` | — | `hpc_agent/schemas/status.output.json` |
-| [`predict-queue-wait`](primitives/predict-queue-wait.md) | ✓ | _none_ | `hpc-agent predict-queue-wait --profile <p> --cluster <c> [--backend auto|des|diurnal_ma] [--n-replications N] [--at-iso <iso>] [--seed N]` | `hpc_agent.forecast.queue_wait_baseline.predict_queue_wait` | `hpc_agent/schemas/predict_queue_wait.input.json` | `hpc_agent/schemas/predict_queue_wait.output.json` |
-| [`predict-start-time`](primitives/predict-start-time.md) | ✓ | _none_ | `hpc-agent predict-start-time --spec <path>` | `hpc_agent.atoms.predict_start_time.predict_start_time_primitive` | `hpc_agent/schemas/predict_start_time.input.json` | `hpc_agent/schemas/predict_start_time.output.json` |
-| [`read-runtime-prior`](primitives/read-runtime-prior.md) | ✓ | _none_ | `hpc-agent runtime-prior --profile <name> --cluster <name> [--cmd-sha <sha>]` | `hpc_agent.state.runtime_prior.roll_up_quantiles` | — | `hpc_agent/schemas/runtime_prior.output.json` |
 | [`recall`](primitives/recall.md) | ✓ | _none_ | `hpc-agent recall` | `hpc_agent.atoms.recall.recall_campaigns` | `hpc_agent/schemas/recall.input.json` | `hpc_agent/schemas/recall.output.json` |
 | [`recommend-partition`](primitives/recommend-partition.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.recommend_partition.recommend_partition` | `hpc_agent/schemas/recommend_partition.input.json` | `hpc_agent/schemas/recommend_partition.output.json` |
-| [`recommend-wait-alternative`](primitives/recommend-wait-alternative.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.recommend_wait_alternative.recommend_wait_alternative` | `hpc_agent/schemas/recommend_wait_alternative.input.json` | `hpc_agent/schemas/recommend_wait_alternative.output.json` |
-| [`score-submit-plan`](primitives/score-submit-plan.md) | ✓ | ssh | `hpc-agent plan-submit --profile <name> --cluster <name> [...]` | `hpc_agent.planning.planner.plan_submit` | — | `hpc_agent/schemas/plan_submit.output.json` |
 | [`suggest-setup-action`](primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action --experiment-dir <path>` | `hpc_agent.atoms.setup_actions.suggest_setup_action` | — | `hpc_agent/schemas/suggest_setup_action.output.json` |
 | [`summarize-submit-plan`](primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `hpc_agent.atoms.submit_plan_summary.summarize_submit_plan` | — | `hpc_agent/schemas/summarize_submit_plan.output.json` |
 | [`verify-aggregation-complete`](primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` | `hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete` | — | `hpc_agent/schemas/verify_aggregation_complete.output.json` |
-| [`walltime-drift`](primitives/walltime-drift.md) | ✓ | _none_ | `hpc-agent walltime-drift --profile <name> --cluster <name> [--cmd-sha <sha>] [--base-safety-mult <f>]` | `hpc_agent.atoms.walltime_drift.walltime_drift` | — | — |
 
-## `validate` (7)
+## `validate` (6)
 
 Read + binary health check. Same composability as `query`.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
 | [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-agent preflight [--cluster <name>]` | `hpc_agent.atoms.preflight.check_preflight` | — | `hpc_agent/schemas/preflight.output.json` |
-| [`validate`](primitives/validate.md) | ✓ | ssh | `_(Python-only)_` | `hpc_agent.planning.validate.validate_submission` | `hpc_agent/schemas/validate.input.json` | `hpc_agent/schemas/validate.output.json` |
 | [`validate-executor-signatures`](primitives/validate-executor-signatures.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.validate_executor_signatures.validate_executor_signatures` | `hpc_agent/schemas/validate_executor_signatures.input.json` | `hpc_agent/schemas/validate_executor_signatures.output.json` |
 | [`validate-input-dataset`](primitives/validate-input-dataset.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.validate_input_dataset.validate_input_dataset` | `hpc_agent/schemas/validate_input_dataset.input.json` | `hpc_agent/schemas/validate_input_dataset.output.json` |
 | [`validate-self-qos-limit`](primitives/validate-self-qos-limit.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.validate_self_qos_limit.validate_self_qos_limit` | `hpc_agent/schemas/validate_self_qos_limit.input.json` | `hpc_agent/schemas/validate_self_qos_limit.output.json` |
