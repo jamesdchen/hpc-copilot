@@ -357,8 +357,7 @@ def aggregate_flow(
     escalation_parts: list[str] = []
     if combiner_failures:
         escalation_parts.append(
-            "combiner_failed_max_retries:waves="
-            + ",".join(str(w) for w, _ in combiner_failures)
+            "combiner_failed_max_retries:waves=" + ",".join(str(w) for w, _ in combiner_failures)
         )
     if incomplete_waves:
         escalation_parts.append(

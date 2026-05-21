@@ -282,9 +282,7 @@ def resubmit_flow(
             # with a different set) must not shift the batch indexing
             # that ``start_batch`` relies on.
             if resuming:
-                plan_failed_ids = [
-                    int(t) for t in pending.get("failed_task_ids", failed_task_ids)
-                ]
+                plan_failed_ids = [int(t) for t in pending.get("failed_task_ids", failed_task_ids)]
                 plan_overrides = pending.get("overrides", effective_overrides)
                 prior_ids = list(pending.get("job_ids", []))
             else:
@@ -296,9 +294,15 @@ def resubmit_flow(
             partial_ids: list[str] = list(prior_ids)
 
             def _save_marker(ids: list[str]) -> None:
+                # Also write the top-level job_ids so a monitor session
+                # polling the run record between a partial failure and a
+                # resume sees the resubmit array jobs that already
+                # landed — they would otherwise live only inside
+                # pending_resubmit, which monitor does not read.
                 _session_mod.update_run_status(
                     experiment_dir,
                     run_id,
+                    job_ids=list(ids),
                     pending_resubmit={
                         "request_id": derived_rid,
                         "failed_task_ids": list(plan_failed_ids),
