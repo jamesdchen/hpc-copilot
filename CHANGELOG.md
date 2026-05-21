@@ -5,7 +5,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-## Unreleased
+## 0.3.0 — 2026-05-22
 
 ### Removed — scheduling-strategy layer extracted to `hpc-agent-pro`
 
