@@ -134,9 +134,7 @@ def check_results(
     # later file onto an earlier task's id. ``_wip_`` temp files are
     # dropped first so they don't consume a position slot.
     if not results:
-        candidates = [
-            p for p in sorted(glob.glob(str(rdir / file_glob))) if "/_wip_" not in p
-        ]
+        candidates = [p for p in sorted(glob.glob(str(rdir / file_glob))) if "/_wip_" not in p]
         for tid, path_str in enumerate(candidates[:total_tasks], start=1):
             if validate and path_str.endswith(".csv"):
                 status = _accept_csv(path_str)

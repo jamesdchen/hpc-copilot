@@ -31,9 +31,7 @@ _WAVE_FILE_RE = re.compile(r"^wave_\d+\.json$")
 def _wave_partial_files(combiner_dir: Path) -> list[str]:
     """``wave_<N>.json`` partial files in *combiner_dir* (runtime files excluded)."""
     return [
-        p
-        for p in glob.glob(str(combiner_dir / "wave_*.json"))
-        if _WAVE_FILE_RE.match(Path(p).name)
+        p for p in glob.glob(str(combiner_dir / "wave_*.json")) if _WAVE_FILE_RE.match(Path(p).name)
     ]
 
 

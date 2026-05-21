@@ -883,9 +883,7 @@ def cmd_axes_init(args: argparse.Namespace) -> int:
             try:
                 size = int(size_s)
             except ValueError as exc:
-                raise errors.SpecInvalid(
-                    f"--axes entry {tok!r} has non-integer size"
-                ) from exc
+                raise errors.SpecInvalid(f"--axes entry {tok!r} has non-integer size") from exc
             axes_list.append({"name": name.strip(), "size": size})
     _ok(
         axes_init(
