@@ -116,7 +116,14 @@ def _weighted_mean(entries):
         if key == "n_samples":
             result["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
             continue
-        pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
+        # Skip non-numeric values: write_metrics accepts an arbitrary
+        # JSON dict, so a metrics.json may carry string/list labels;
+        # ``v * w`` on those would raise and abort the whole wave.
+        pairs = [
+            (e[key], w)
+            for e, w in zip(entries, weights, strict=True)
+            if key in e and isinstance(e[key], (int, float))
+        ]
         if not pairs:
             continue
         w_total = _neumaier_sum(w for _, w in pairs)

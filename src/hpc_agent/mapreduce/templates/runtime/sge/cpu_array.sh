@@ -49,6 +49,14 @@ REPO_DIR="${REPO_DIR:-.}"
 # this template at .hpc/templates/common/hpc_preamble.sh by deploy_runtime.
 source "$REPO_DIR/.hpc/templates/common/hpc_preamble.sh"
 
+# Re-export thread caps to the SGE-allocated core count. The preamble
+# defaults OMP/MKL threads to 1 (safe for the common single-core case);
+# a multi-threaded CPU array job must raise them to its $NSLOTS slot
+# allocation or it silently runs single-threaded. An explicit
+# HPC_*_NUM_THREADS override still wins. Mirrors slurm/cpu_array.slurm.
+export OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-${NSLOTS:-1}}"
+export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${NSLOTS:-1}}"
+
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"
 

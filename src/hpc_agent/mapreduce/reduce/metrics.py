@@ -14,11 +14,25 @@ __all__ = [
 
 import glob
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
+
+# Combiner partial files are ``wave_<N>.json``. The combiner also writes
+# ``wave_<N>.runtime.json`` siblings into the same dir, which a bare
+# ``wave_*.json`` glob matches — and ``int("3.runtime")`` then crashes
+# the wave-number sort. Match strictly so runtime files are excluded.
+_WAVE_FILE_RE = re.compile(r"^wave_\d+\.json$")
+
+
+def _wave_partial_files(combiner_dir: Path) -> list[str]:
+    """``wave_<N>.json`` partial files in *combiner_dir* (runtime files excluded)."""
+    return [
+        p for p in glob.glob(str(combiner_dir / "wave_*.json")) if _WAVE_FILE_RE.match(Path(p).name)
+    ]
 
 
 def _neumaier_sum(values: Iterable[float]) -> float:
@@ -62,7 +76,14 @@ def _weighted_mean(entries: list[dict]) -> dict:
         if key == "n_samples":
             agg["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
             continue
-        pairs = [(e[key], w) for e, w in zip(entries, weights, strict=True) if key in e]
+        # Skip non-numeric values: a metrics.json may carry string/list
+        # labels, and ``v * w`` on those would raise. Kept in sync with
+        # the combiner's copy of this helper.
+        pairs = [
+            (e[key], w)
+            for e, w in zip(entries, weights, strict=True)
+            if key in e and isinstance(e[key], (int, float))
+        ]
         if not pairs:
             continue
         w_total = _neumaier_sum(w for _, w in pairs)
@@ -166,7 +187,7 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
     """
     combiner_dir = Path(combiner_dir)
     wave_files = sorted(
-        glob.glob(str(combiner_dir / "wave_*.json")),
+        _wave_partial_files(combiner_dir),
         key=lambda p: int(Path(p).stem.split("_", 1)[1]),
     )
 
@@ -185,6 +206,35 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
     # reduce_metrics so the two stay in lock-step on rounding and
     # missing-key semantics.
     return {run_id: _weighted_mean(entries) for run_id, entries in partials.items()}
+
+
+def collect_wave_errors(combiner_dir: str | Path) -> dict[int, list[str]]:
+    """Map wave number → the per-task read errors the combiner recorded.
+
+    Each ``wave_<N>.json`` carries an ``errors`` list naming tasks whose
+    ``metrics.json`` could not be read. Those tasks are absent from the
+    wave's ``grid_points``, so :func:`reduce_partials` silently means
+    over the readable subset. A caller that presents the aggregate as
+    final should consult this to know the mean was computed over a
+    partial task set. Only waves with at least one error are included.
+    """
+    combiner_dir = Path(combiner_dir)
+    out: dict[int, list[str]] = {}
+    for wf in sorted(_wave_partial_files(combiner_dir)):
+        try:
+            with open(wf) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        errs = data.get("errors") or []
+        if not errs:
+            continue
+        try:
+            wave_num = int(Path(wf).stem.split("_", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        out[wave_num] = [str(e) for e in errs]
+    return out
 
 
 def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:

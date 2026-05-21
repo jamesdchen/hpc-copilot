@@ -38,5 +38,5 @@ def campaign_status(*, experiment_dir: Path, campaign_id: str) -> dict[str, Any]
         "iterations": len(sidecars),
         "in_flight": in_flight,
         "history": history,
-        "run_ids": [s["run_id"] for s in sidecars],
+        "run_ids": [s.get("run_id", "") for s in sidecars],
     }

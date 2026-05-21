@@ -155,6 +155,11 @@ def _coerce_user_dict(d: Any, user: str) -> dict[str, Any]:
     out.setdefault("typical_gpu_types", {})  # gpu_type -> count
     out.setdefault("failure_rate", 0.0)
     out.setdefault("p_followup_within_6h", 0.0)
+    # Denominators for the two running means above: only observations
+    # that actually carry an exit_code / followup flag contribute, so
+    # they advance independently of n_observations.
+    out.setdefault("n_exit_obs", 0)
+    out.setdefault("n_followup_obs", 0)
     out.setdefault("last_seen_iso", None)
     return out
 
@@ -195,7 +200,6 @@ def _fold_observation(record: dict[str, Any], obs: dict[str, Any]) -> dict[str, 
     ``followed_up_within_6h`` keys when known.
     """
     record["n_observations"] = int(record.get("n_observations", 0)) + 1
-    n = record["n_observations"]
 
     sub_iso = obs.get("submitted_at_iso") or obs.get("submit_iso")
     bucket = _hour_of_week(sub_iso)
@@ -259,15 +263,22 @@ def _fold_observation(record: dict[str, Any], obs: dict[str, Any]) -> dict[str, 
         except (TypeError, ValueError):
             failed = None
         if failed is not None:
-            # Online mean: prev = (n-1) successes/N, new contributes failed/N.
+            # Online mean over observations carrying an exit_code only.
+            # n_observations also counts exit-code-less observations, so
+            # it is the wrong denominator for this running mean.
+            n_exit = int(record.get("n_exit_obs", 0)) + 1
+            record["n_exit_obs"] = n_exit
             prev = float(record.get("failure_rate", 0.0))
-            record["failure_rate"] = round(((n - 1) * prev + failed) / n, 4)
+            record["failure_rate"] = round(((n_exit - 1) * prev + failed) / n_exit, 4)
 
     followup = obs.get("followed_up_within_6h")
     if isinstance(followup, bool):
+        # Online mean over observations carrying a followup flag only.
+        n_fu = int(record.get("n_followup_obs", 0)) + 1
+        record["n_followup_obs"] = n_fu
         prev = float(record.get("p_followup_within_6h", 0.0))
         record["p_followup_within_6h"] = round(
-            ((n - 1) * prev + (1.0 if followup else 0.0)) / n,
+            ((n_fu - 1) * prev + (1.0 if followup else 0.0)) / n_fu,
             4,
         )
 
