@@ -14,8 +14,11 @@ attributes of the informal plugin contract:
   (after the core modules) so their ``@primitive`` decorators register.
 * ``register_cli(subparsers) -> None`` — callable handed the CLI's
   argparse subparsers action so the plugin can add subcommands.
+* ``slash_command_assets`` — a traversable directory holding
+  ``commands/`` and/or ``skills/`` subtrees, installed over the core
+  assets by ``hpc-agent install-commands``.
 
-Both are optional; a plugin may provide either, both, or neither.
+All are optional; a plugin may provide any combination, or none.
 """
 
 from __future__ import annotations
@@ -24,7 +27,13 @@ from functools import cache
 from importlib.metadata import entry_points
 from typing import Any
 
-__all__ = ["PLUGIN_GROUP", "load_plugins", "plugin_primitive_modules", "register_plugin_cli"]
+__all__ = [
+    "PLUGIN_GROUP",
+    "load_plugins",
+    "plugin_primitive_modules",
+    "plugin_slash_command_roots",
+    "register_plugin_cli",
+]
 
 PLUGIN_GROUP = "hpc_agent.plugins"
 
@@ -61,3 +70,20 @@ def register_plugin_cli(subparsers: Any) -> None:
         hook = getattr(plugin, "register_cli", None)
         if callable(hook):
             hook(subparsers)
+
+
+def plugin_slash_command_roots() -> tuple[Any, ...]:
+    """Return the slash-command asset roots contributed by plugins.
+
+    Each element is an :mod:`importlib.resources` traversable directory
+    holding ``commands/`` and/or ``skills/`` subtrees, exposed by a
+    plugin through its ``slash_command_assets`` attribute. Order follows
+    plugin-discovery order; ``install-commands`` applies them after the
+    core assets so a later writer wins.
+    """
+    roots: list[Any] = []
+    for plugin in load_plugins():
+        root = getattr(plugin, "slash_command_assets", None)
+        if root is not None:
+            roots.append(root)
+    return tuple(roots)

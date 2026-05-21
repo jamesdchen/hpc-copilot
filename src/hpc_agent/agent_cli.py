@@ -183,28 +183,6 @@ def _add_experiment_dir(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_profile_cluster_cmdsha(
-    parser: argparse.ArgumentParser,
-    *,
-    cmd_sha_help: str | None = None,
-) -> None:
-    """Add the ``--profile`` (required), ``--cluster`` (required), and
-    ``--cmd-sha`` (optional) trio used by every smart-submit pipeline
-    subcommand: ``plan-submit``, ``runtime-prior``, ``walltime-drift``,
-    ``house-edge``.
-
-    *cmd_sha_help* lets each subcommand explain how it consumes the
-    filter; defaults to a generic note.
-    """
-    parser.add_argument("--profile", required=True)
-    parser.add_argument("--cluster", required=True)
-    parser.add_argument(
-        "--cmd-sha",
-        default=None,
-        help=cmd_sha_help or "If set, filter runtime priors to samples with this cmd_sha.",
-    )
-
-
 def _add_run_id(parser: argparse.ArgumentParser) -> None:
     """Add the canonical ``--run-id`` argument (always required)."""
     parser.add_argument("--run-id", required=True)
@@ -323,7 +301,7 @@ def _live_subcommands() -> list[str]:
     """Derive the subcommand list from the actual argparse tree.
 
     Replaces the hand-typed literal that used to live here — the literal
-    drifted (it missed ``walltime-drift``, ``house-edge``, etc.) and had
+    drifted from the real subcommand set and had
     no test backing it. Walking ``parser._subparsers._group_actions[0]
     .choices`` gives the single source of truth.
     """

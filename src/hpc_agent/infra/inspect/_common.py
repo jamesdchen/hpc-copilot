@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 
-# In-process cache so a single submit cycle that calls inspect-cluster
+# In-process cache so a single submit cycle that calls inspect_cluster
 # multiple times pays the SSH cost once. Keyed by (cluster, scheduler).
 # Stores the dict-form of :class:`ClusterSnapshot` (so re-reads survive
 # even if the snapshot dataclass shape evolves between writes).

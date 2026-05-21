@@ -1,6 +1,6 @@
-Invoke the `hpc-submit` skill via the Skill tool (`skills/hpc-submit/SKILL.md`) for the workflow: discover executors → plan axis → auto-configure env → throughput plan → write tasks.py + sidecar → preflight → validate-campaign → submit-flow → verify scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
+Invoke the `hpc-submit` skill via the Skill tool (`skills/hpc-submit/SKILL.md`) for the workflow: discover executors → plan axis → auto-configure env → throughput plan → smart constraint planner → write tasks.py + sidecar → preflight → validate-campaign → predict-start-time → submit-flow → verify scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
 
-This slash command is the human-facing entry point. It carries three pieces of content the skill cannot:
+This slash command is the human-facing entry point. It carries four pieces of content the skill cannot:
 
 ## 1. Migration check (legacy `_hpc_dispatch.json`)
 
@@ -18,7 +18,7 @@ The skill calls `suggest-setup-action` and gets back `{action, candidates, ...}`
 |---|---|
 | `monitor` | "Found in-flight runs: <list>. Resume monitoring with `/monitor-hpc`, or start a new submission?" — group by `campaign_id` if >3 runs. |
 | `reuse` | "Recent submissions: <(profile, cluster) pairs from `candidates`>. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?" |
-| `interview` | "Found existing `.hpc/tasks.py` (axis already encoded). Skip the executor-discovery interview and go straight to scaffolding tasks.py?" |
+| `interview` | "Found existing `.hpc/tasks.py` (axis already encoded). Skip the executor-discovery interview and go straight to the planner?" |
 | `fresh` | (no prompt — fall through to full interview) |
 
 For `reuse`: list distinct `(profile, cluster)` pairs from recent run sidecars so the user can pick "same as last `ml_ridge` submission" without re-answering interview questions. Each sidecar carries the full v2 config snapshot — resources, env, constraints, runtime — so reuse is a one-line copy.
@@ -42,6 +42,24 @@ When the skill's `discover-executors` step returns an empty list, pivot to a sca
 3. Capture the flag set the user wants (this becomes that executor's entry in the FLAGS dict during the Step 6b interview).
 4. Hand off to **hpc-build-executor** skill for the actual scaffold call.
 5. Once the new file exists, hand back to **hpc-submit** skill which re-runs `discover-executors` and continues.
+
+## 4. Co-tenant exclusion judgment (Step 4c-B `stressed_nodes`)
+
+After `score-submit-plan` returns `stressed_nodes` for the chosen candidate, decide per-node whether to soft-exclude using `co_tenants` context — this is the human-judgment moment that no static threshold captures cleanly:
+
+- Co-tenant has been running >12h **and** holds >50% of CPU/mem on the node ⇒ exclude (long-running heavy job; unlikely to clear before our submit completes).
+- Co-tenant is recently-started or holds little of the node's resources ⇒ allow.
+- Multiple co-tenants on a node with combined high resource share ⇒ exclude.
+
+Build the resulting `--exclude=<node1>,<node2>,...` flag and pass it through to the skill's submit-flow spec. The slash command makes the call; the skill receives the result.
+
+## 5. Submit-now vs wait dialog (Step 6d `predict-start-time`)
+
+When the skill's `predict-start-time` returns `best_submit_offset_hours > 0`, render to the user:
+
+> "Predicted total time to actual start: 45 min (submit now would be 4h). OK to wait?"
+
+If they decline, proceed anyway (the skill submits now). If they accept, schedule the submit (or pause and let the operator resume manually). Surface uncertainty fields when populated (`predicted_iso_p10` / `predicted_iso_p90`) as "expected 45min, worst-case 4h" rather than a point estimate.
 
 ## Common Failure Modes (user-facing troubleshooting)
 

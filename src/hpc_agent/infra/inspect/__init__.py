@@ -13,7 +13,7 @@ the ingredients for resource-quality-aware submission decisions:
 The resulting JSON is a read-only snapshot of per-node cluster state for
 callers that need to reason about current resource availability.
 It is also useful standalone for ad-hoc cluster
-debugging via ``hpc-agent inspect-cluster --cluster <c>``.
+debugging.
 
 This module is intentionally permissive: scheduler outputs vary between
 versions and configurations. Parsing failures degrade to "unknown" /

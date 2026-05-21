@@ -73,6 +73,8 @@ include = ["hpc_agent_pro*"]
 [tool.setuptools.package-data]
 hpc_agent_pro = [
     "schemas/*.json",
+    "slash_commands/commands/*.md",
+    "slash_commands/skills/*/*.md",
 ]
 
 [tool.pytest.ini_options]
