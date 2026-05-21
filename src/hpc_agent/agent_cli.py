@@ -878,12 +878,14 @@ def cmd_axes_init(args: argparse.Namespace) -> int:
             if not tok:
                 continue
             if ":" not in tok:
-                raise SystemExit(f"--axes entry {tok!r} must be NAME:SIZE")
+                raise errors.SpecInvalid(f"--axes entry {tok!r} must be NAME:SIZE")
             name, _, size_s = tok.partition(":")
             try:
                 size = int(size_s)
             except ValueError as exc:
-                raise SystemExit(f"--axes entry {tok!r} has non-integer size") from exc
+                raise errors.SpecInvalid(
+                    f"--axes entry {tok!r} has non-integer size"
+                ) from exc
             axes_list.append({"name": name.strip(), "size": size})
     _ok(
         axes_init(

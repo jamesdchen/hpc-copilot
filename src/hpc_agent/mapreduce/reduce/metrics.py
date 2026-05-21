@@ -14,11 +14,27 @@ __all__ = [
 
 import glob
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
+
+# Combiner partial files are ``wave_<N>.json``. The combiner also writes
+# ``wave_<N>.runtime.json`` siblings into the same dir, which a bare
+# ``wave_*.json`` glob matches — and ``int("3.runtime")`` then crashes
+# the wave-number sort. Match strictly so runtime files are excluded.
+_WAVE_FILE_RE = re.compile(r"^wave_\d+\.json$")
+
+
+def _wave_partial_files(combiner_dir: Path) -> list[str]:
+    """``wave_<N>.json`` partial files in *combiner_dir* (runtime files excluded)."""
+    return [
+        p
+        for p in glob.glob(str(combiner_dir / "wave_*.json"))
+        if _WAVE_FILE_RE.match(Path(p).name)
+    ]
 
 
 def _neumaier_sum(values: Iterable[float]) -> float:
@@ -166,7 +182,7 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
     """
     combiner_dir = Path(combiner_dir)
     wave_files = sorted(
-        glob.glob(str(combiner_dir / "wave_*.json")),
+        _wave_partial_files(combiner_dir),
         key=lambda p: int(Path(p).stem.split("_", 1)[1]),
     )
 
@@ -199,7 +215,7 @@ def collect_wave_errors(combiner_dir: str | Path) -> dict[int, list[str]]:
     """
     combiner_dir = Path(combiner_dir)
     out: dict[int, list[str]] = {}
-    for wf in sorted(glob.glob(str(combiner_dir / "wave_*.json"))):
+    for wf in sorted(_wave_partial_files(combiner_dir)):
         try:
             with open(wf) as f:
                 data = json.load(f)

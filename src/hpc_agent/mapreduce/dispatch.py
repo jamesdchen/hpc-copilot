@@ -190,8 +190,14 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
 
         child = child_holder[0] if child_holder else None
         if child is not None and child.poll() is None:
+            # Signal the child's whole process group, not just child.pid.
+            # The executor runs under ``shell=True`` and was placed in
+            # its own process group (preexec_fn=os.setpgrp), so it is the
+            # group leader (pgid == child.pid). child.send_signal /
+            # .terminate / .kill hit only the shell pid — if the shell
+            # forks the real workload, the signal never reaches it.
             with contextlib.suppress(OSError):
-                child.send_signal(signal.SIGINT)
+                os.killpg(child.pid, signal.SIGINT)
             deadline = time.monotonic() + max(0, int(grace_sec))
             while time.monotonic() < deadline and child.poll() is None:
                 time.sleep(0.5)
@@ -202,12 +208,12 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
                 # half-rotated log file after the cgroup eventually
                 # collects it.
                 with contextlib.suppress(OSError):
-                    child.terminate()
+                    os.killpg(child.pid, signal.SIGTERM)
                 try:
                     child.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     with contextlib.suppress(OSError):
-                        child.kill()
+                        os.killpg(child.pid, signal.SIGKILL)
                     with contextlib.suppress(Exception):
                         child.wait(timeout=2)
         else:

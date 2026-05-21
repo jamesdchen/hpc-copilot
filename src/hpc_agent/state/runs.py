@@ -624,8 +624,16 @@ def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:
     return deleted
 
 
-def prune_old_runs(experiment_dir: Path, keep: int = MAX_RUNS) -> list[Path]:
-    """Evict oldest sidecars past the retention cap. Returns deleted paths."""
+def prune_old_runs(experiment_dir: Path, keep: int | None = None) -> list[Path]:
+    """Evict oldest sidecars past the retention cap. Returns deleted paths.
+
+    *keep* defaults to the module-level :data:`MAX_RUNS`, resolved at
+    call time so a test/caller that monkeypatches ``MAX_RUNS`` is
+    honoured — a ``keep=MAX_RUNS`` default argument would freeze the
+    value at import time.
+    """
+    if keep is None:
+        keep = MAX_RUNS
     if keep < 0:
         raise ValueError("keep must be non-negative")
     hits = find_existing_runs(experiment_dir)
