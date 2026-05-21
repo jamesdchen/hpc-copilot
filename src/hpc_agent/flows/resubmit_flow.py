@@ -40,6 +40,7 @@ the pipeline.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -221,6 +222,7 @@ def resubmit_flow(
 
     cluster_submitted = False
     cluster_job_ids: list[str] = []
+    _clear_marker_after = False
     if submit_to_cluster:
         if script is None or backend is None or job_name is None:
             raise errors.SpecInvalid(
@@ -270,17 +272,47 @@ def resubmit_flow(
             cluster_job_ids = list(existing.job_ids or [])
             cluster_submitted = True
         if not already_done:
-            # Batches that landed on a prior partial attempt — one job
-            # id per batch, in plan order — so we resume from batch
-            # ``len(prior_ids)`` and keep the ids already collected.
-            prior_ids = list(pending.get("job_ids", [])) if resuming else []
+            from hpc_agent._internal import session as _session_mod
+
+            # On resume, rebuild the batch plan from the failed_task_ids
+            # / overrides recorded at the *first* attempt — not the
+            # caller's current arguments. ``resubmit_plan`` is only
+            # deterministic for identical inputs, so a caller that
+            # changed the failed set (or passed an explicit request_id
+            # with a different set) must not shift the batch indexing
+            # that ``start_batch`` relies on.
+            if resuming:
+                plan_failed_ids = [
+                    int(t) for t in pending.get("failed_task_ids", failed_task_ids)
+                ]
+                plan_overrides = pending.get("overrides", effective_overrides)
+                prior_ids = list(pending.get("job_ids", []))
+            else:
+                plan_failed_ids = list(failed_task_ids)
+                plan_overrides = effective_overrides
+                prior_ids = []
+            # Batches landed so far — one job id per batch, in plan
+            # order — so we resume from batch ``len(prior_ids)``.
             partial_ids: list[str] = list(prior_ids)
+
+            def _save_marker(ids: list[str]) -> None:
+                _session_mod.update_run_status(
+                    experiment_dir,
+                    run_id,
+                    pending_resubmit={
+                        "request_id": derived_rid,
+                        "failed_task_ids": list(plan_failed_ids),
+                        "overrides": plan_overrides,
+                        "job_ids": list(ids),
+                    },
+                )
+
             try:
                 cluster_job_ids = _submit_resubmit_batches(
                     experiment_dir=experiment_dir,
                     run_id=run_id,
-                    failed_task_ids=failed_task_ids,
-                    effective_overrides=effective_overrides,
+                    failed_task_ids=plan_failed_ids,
+                    effective_overrides=plan_overrides,
                     ssh_target=(sidecar or {}).get("ssh_target") or "",
                     remote_path=(sidecar or {}).get("remote_path") or "",
                     scheduler=backend,
@@ -298,27 +330,16 @@ def resubmit_flow(
                 # un-submitted batch — without this marker the retry
                 # either re-submits the batches that already landed or
                 # (if the request_id were stamped) skips the remainder.
-                from hpc_agent._internal import session as _session_mod
-
-                _session_mod.update_run_status(
-                    experiment_dir,
-                    run_id,
-                    job_ids=list(partial_ids),
-                    pending_resubmit={
-                        "request_id": derived_rid,
-                        "job_ids": list(partial_ids),
-                    },
-                )
+                _save_marker(partial_ids)
                 raise
             cluster_submitted = True
-            # Whole plan landed — drop the resume marker so a later
-            # replay of this request dedups instead of resuming.
-            if pending:
-                from hpc_agent._internal import session as _session_mod
-
-                _session_mod.update_run_status(
-                    experiment_dir, run_id, pending_resubmit={}
-                )
+            # Whole plan landed. Record the marker as *complete* (job_ids
+            # == every batch) BEFORE the resubmit_failed journal stamp
+            # below: if anything between here and that stamp fails, a
+            # retry resumes with start_batch == len(plan.batches) — a
+            # no-op — instead of re-submitting the whole plan.
+            _save_marker(cluster_job_ids)
+            _clear_marker_after = True
 
     from hpc_agent._schema_models.actions.resubmit import ResubmitSpec
 
@@ -333,6 +354,15 @@ def resubmit_flow(
             request_id=request_id,
         ),
     )
+
+    if _clear_marker_after:
+        # Resubmit completed and resubmit_failed stamped the request_id
+        # — drop the resume marker. Best-effort: if this write fails the
+        # stale marker only makes a later replay resume to a no-op.
+        from hpc_agent._internal import session as _session_mod
+
+        with contextlib.suppress(Exception):
+            _session_mod.update_run_status(experiment_dir, run_id, pending_resubmit={})
 
     return ResubmitFlowResult(
         run_id=record.run_id,
