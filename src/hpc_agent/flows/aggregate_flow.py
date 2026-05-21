@@ -41,7 +41,7 @@ from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
-from hpc_agent.mapreduce.reduce.metrics import reduce_partials
+from hpc_agent.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
 from hpc_agent.runner import combine_wave, record_status
 from hpc_agent.state.runs import read_run_sidecar
 
@@ -299,6 +299,11 @@ def aggregate_flow(
 
     # Reduce locally.
     aggregated = reduce_partials(combiner_local)
+    # Waves where the combiner couldn't read every task's metrics.json
+    # contribute a partial grid_points set; reduce_partials means over
+    # only the readable subset. Surface those waves so the caller does
+    # not treat the aggregate as computed over the full task set.
+    incomplete_waves = sorted(collect_wave_errors(combiner_local))
 
     # Ingest runtime samples (timing + axis_bindings) from the pulled
     # ``wave_*.runtime.json`` files into <experiment>/.hpc/runtimes/.
@@ -349,11 +354,18 @@ def aggregate_flow(
             )
         summaries_local = str(sl)
 
-    escalation: str | None = None
+    escalation_parts: list[str] = []
     if combiner_failures:
-        escalation = "combiner_failed_max_retries:waves=" + ",".join(
-            str(w) for w, _ in combiner_failures
+        escalation_parts.append(
+            "combiner_failed_max_retries:waves="
+            + ",".join(str(w) for w, _ in combiner_failures)
         )
+    if incomplete_waves:
+        escalation_parts.append(
+            "partial_waves:metrics_unreadable_for_some_tasks:waves="
+            + ",".join(str(w) for w in incomplete_waves)
+        )
+    escalation: str | None = "; ".join(escalation_parts) if escalation_parts else None
 
     return AggregateFlowResult(
         run_id=run_id,
