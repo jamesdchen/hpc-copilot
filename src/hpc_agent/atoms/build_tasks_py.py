@@ -15,6 +15,7 @@ re-deriving the framework contract from prose.
 from __future__ import annotations
 
 import ast
+import keyword
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -112,6 +113,14 @@ def _validate_axis_name(name: str) -> None:
     ``.hpc/tasks.py`` is written, rather than as a silent runtime
     divergence after the executor reads (e.g.) the wrong ``$HOME``.
     """
+    if not name.isidentifier() or keyword.iskeyword(name):
+        raise errors.SpecInvalid(
+            f"axis name {name!r} is not a usable Python identifier. The "
+            "generated multi-axis tasks.py binds each axis name as a "
+            "loop variable, so a keyword or a name with spaces / hyphens "
+            "produces a SyntaxError. Use letters, digits and underscores "
+            "(not starting with a digit, not a Python keyword)."
+        )
     upper = name.upper()
     if upper in _RESERVED_AXIS_NAMES or any(upper.startswith(p) for p in _RESERVED_AXIS_PREFIXES):
         raise errors.SpecInvalid(

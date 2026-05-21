@@ -17,7 +17,7 @@ Verify that a campaign's input dataset exists, every referenced row is in bounds
 
 - `dataset_path` (string) — Path to the input dataset file (parquet, CSV, or JSONL).
 - `loader` (string) — One of: `"parquet"`, `"csv"`, `"jsonl"`.
-- `row_indices` (list of integers, min length 1) — Row indices that `tasks.py` references.
+- `row_indices` (list of integers, default `[]`) — Row indices that `tasks.py` references. An empty list runs a loader-only smoke test (open the dataset, skip row-level checks).
 - `required_non_null_cols` (list of strings, default `[]`) — Columns that must be non-null at every referenced row.
 
 ## Outputs
