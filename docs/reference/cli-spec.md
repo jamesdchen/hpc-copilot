@@ -120,23 +120,14 @@ CLI ↔ primitive mapping:
 | `hpc-agent resubmit --run-id <id> --spec <path>` | [resubmit-failed](primitives/resubmit-failed.md) |
 | `hpc-agent reconcile --run-id <id>` | [reconcile-journal](primitives/reconcile-journal.md) |
 | `hpc-agent build-executor --name <stem>` | [build-executor](primitives/build-executor.md) |
-| `hpc-agent inspect-cluster --cluster <name>` | [inspect-cluster](primitives/inspect-cluster.md) |
-| `hpc-agent runtime-prior --profile <p> --cluster <c>` | [read-runtime-prior](primitives/read-runtime-prior.md) |
-| `hpc-agent plan-submit --profile <p> --cluster <c>` | [score-submit-plan](primitives/score-submit-plan.md) |
 | `hpc-agent summarize-submit-plan --spec <path>` | [summarize-submit-plan](primitives/summarize-submit-plan.md) |
 | `hpc-agent decide-monitor-arm --spec <path>` | [decide-monitor-arm](primitives/decide-monitor-arm.md) |
-| `hpc-agent walltime-drift --profile <p> --cluster <c>` | [walltime-drift](primitives/walltime-drift.md) |
-| `hpc-agent house-edge --profile <p> --cluster <c>` | [house-edge](primitives/house-edge.md) |
-| `hpc-agent predict-queue-wait --profile <p> --cluster <c>` | [predict-queue-wait](primitives/predict-queue-wait.md) |
-| `hpc-agent predict-start-time --spec <path>` | [predict-start-time](primitives/predict-start-time.md) |
-| `hpc-agent best-submit-window --profile <p> --cluster <c>` | [best-submit-window](primitives/best-submit-window.md) |
 
-The CLI subcommand name and the primitive name sometimes differ:
-`plan-submit` is backed by `score-submit-plan`, `runtime-prior` by
-`read-runtime-prior`. The primitive name is the canonical identifier
-used in `hpc-agent capabilities` output and in the
-`docs/primitives/<name>.md` filenames; the CLI subcommand name is what
-you type. When in doubt, the auto-generated catalog at
+The CLI subcommand name and the primitive name sometimes differ — the
+primitive name is the canonical identifier used in `hpc-agent
+capabilities` output and in the `docs/primitives/<name>.md` filenames,
+while the CLI subcommand name is what you type. When in doubt, the
+auto-generated catalog at
 [`docs/generated/operations.md`](../generated/operations.md) and
 [`docs/primitives/README.md`](../primitives/README.md) is the canonical view.
 
@@ -151,7 +142,7 @@ shape:
 ```json
 {
   "version": "<package version, e.g. 0.3.0>",
-  "subcommands": ["aggregate", "campaign", ..., "walltime-drift"],
+  "subcommands": ["aggregate", "campaign", ..., "summarize-submit-plan"],
   "supported_schedulers": ["sge", "slurm"],
   "schemas_dir": "<absolute path to hpc_agent/schemas/>",
   "journal_dir": "<absolute path to $HPC_JOURNAL_DIR or default>",
