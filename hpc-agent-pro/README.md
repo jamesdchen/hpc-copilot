@@ -48,3 +48,6 @@ cd hpc-agent-pro
 uv run --extra dev pytest
 uv build
 ```
+
+Design notes for the forecasting internals — the queue-wait predictor
+model and its architecture — are under [`docs/`](docs/).
