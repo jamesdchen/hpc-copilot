@@ -1,12 +1,17 @@
-# Re-export experiment notebooks on commit so the committed .py never
-# drifts from its .ipynb. Injected by `hpc-agent build-template`.
+# Verify experiment notebooks export cleanly on commit. Injected by
+# `hpc-agent build-template`.
+#
+# The generated src/ package is .gitignore'd — this hook commits
+# nothing. It fails the commit only if a notebook no longer exports (a
+# syntax error, a broken cell, an output-path collision), so the
+# notebook — the single reviewed artifact — never lands broken.
 
 repos:
   - repo: local
     hooks:
-      - id: hpc-notebook-export
-        name: re-export experiment notebooks
-        entry: python .hpc/scaffold.py export
+      - id: hpc-export-package
+        name: build src/ from notebooks (export check)
+        entry: hpc-agent export-package --experiment-dir .
         language: system
         files: \.ipynb$
         pass_filenames: false

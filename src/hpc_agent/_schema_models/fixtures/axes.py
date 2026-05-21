@@ -1,9 +1,17 @@
 """Pydantic model for ``<experiment>/.hpc/axes.yaml``.
 
-Per-experiment hints for the axis_picker. The framework only stores
-fields it can independently act on; experiment-specific reasoning
-about WHY an axis is homogeneous lives in the agent's chat context,
-not here.
+Per-experiment hints for two orthogonal concerns:
+
+* **Scheduling** (``axes`` / ``homogeneous_axes``) — which sweep
+  dimension is promoted onto the SGE/SLURM task array, picked by
+  runtime homogeneity. Schema v1.
+* **Correctness** (``executors``) — how each ``@register_run`` function's
+  totally-ordered series may be split: the classified
+  :data:`~hpc_agent.template.axis.DataAxis`. Schema v2 (additive).
+
+The framework only stores fields it can independently act on;
+experiment-specific reasoning about WHY an axis is homogeneous (or WHY a
+series is a bounded halo) lives in the agent's chat context, not here.
 """
 
 from __future__ import annotations
@@ -31,12 +39,93 @@ class _AxisEntry(BaseModel):
     size: int = Field(ge=1)
 
 
+class _HaloConfig(BaseModel):
+    """The bounded look-back distance of a :class:`BoundedHalo` series axis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expr: str = Field(
+        min_length=1,
+        description=(
+            "Arithmetic expression giving the warm-up row count, over the "
+            "run()'s own parameter names (bare names, resolved from the "
+            "sweep point), e.g. 'train_window * 48'. Evaluated by "
+            "hpc_agent.template.axis_config with a restricted AST walk — "
+            "only names, numeric literals, + - * //, and min()/max() are "
+            "permitted; never eval()."
+        ),
+    )
+
+
+class _DataAxisConfig(BaseModel):
+    """A classified :data:`~hpc_agent.template.axis.DataAxis`, serialized.
+
+    The (de)serializer is :mod:`hpc_agent.template.axis_config`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["independent", "associative", "bounded_halo", "sequential"] = Field(
+        description=(
+            "How the series axis is safe to split. 'independent': the loop "
+            "body is a pure function of its row. 'associative': it "
+            "accumulates an associative summary — also set `monoid`. "
+            "'bounded_halo': it depends on a bounded look-back window — "
+            "also set `halo`. 'sequential': unbounded / order-dependent "
+            "state, not splittable; the fail-safe default."
+        ),
+    )
+    halo: _HaloConfig | None = Field(
+        default=None,
+        description="Required for kind='bounded_halo'; forbidden otherwise.",
+    )
+    monoid: Literal["sum", "moments"] | None = Field(
+        default=None,
+        description="For kind='associative': the built-in monoid chunks reduce with.",
+    )
+
+    @model_validator(mode="after")
+    def _check_kind_fields(self) -> _DataAxisConfig:
+        if self.kind == "bounded_halo" and self.halo is None:
+            raise ValueError("data_axis kind 'bounded_halo' requires a 'halo' block")
+        if self.kind != "bounded_halo" and self.halo is not None:
+            raise ValueError(f"data_axis kind {self.kind!r} must not carry a 'halo' block")
+        if self.kind != "associative" and self.monoid is not None:
+            raise ValueError(f"data_axis kind {self.kind!r} must not carry a 'monoid'")
+        return self
+
+
+class _ExecutorEntry(BaseModel):
+    """One ``@register_run`` function's classified series axis + provenance."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_signature_sha: str = Field(
+        min_length=1,
+        description=(
+            "Stable hash of the run()'s AST-extracted signature (the "
+            "Flag list discover_runs synthesizes). A mismatch against the "
+            "live run means the signature changed → re-classify."
+        ),
+    )
+    data_axis: _DataAxisConfig
+    classified_by: Literal["interview", "recall", "manual"] = Field(
+        description="How the classification was reached.",
+    )
+    classified_at: str = Field(
+        min_length=1,
+        description="ISO-8601 UTC timestamp the classification was recorded.",
+    )
+
+
 class AxesConfig(BaseModel):
     """Schema for ``<experiment>/.hpc/axes.yaml``."""
 
     model_config = ConfigDict(extra="forbid", title="experiment axes config")
 
-    axes_schema_version: Literal[1]
+    # v1 files carry version 1 and validate unchanged under this model;
+    # every write the framework makes now stamps version 2.
+    axes_schema_version: Literal[1, 2]
     axes: list[_AxisEntry] | None = Field(
         default=None,
         description=(
@@ -63,6 +152,16 @@ class AxesConfig(BaseModel):
         # field_validator below enforces the same constraint at
         # validation time so Pydantic and the emitted schema agree.
         json_schema_extra={"uniqueItems": True},
+    )
+    executors: dict[str, _ExecutorEntry] | None = Field(
+        default=None,
+        description=(
+            "Per-@register_run-function classified DataAxis (schema v2, "
+            "additive). Keyed by the run function's name. Records how the "
+            "experiment's totally-ordered series may be split correctly — "
+            "orthogonal to the homogeneous_axes scheduling hint above. "
+            "Written by the `classify-axis` primitive at interview time."
+        ),
     )
 
     @field_validator("homogeneous_axes")

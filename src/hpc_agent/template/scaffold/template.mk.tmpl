@@ -6,24 +6,28 @@
 
 PYTHON ?= python3
 
-.PHONY: export repro new-experiment lint test
+.DEFAULT_GOAL := build
+.PHONY: build export repro new-experiment lint test
+
+## build: export every notebook to src/ (content-hash cached; the default goal)
+build:
+	hpc-agent export-package --experiment-dir .
+
+## export: alias for build — re-export every notebook to src/
+export: build
 
 ## new-experiment: scaffold a new experiment notebook (make new-experiment NAME=foo)
 new-experiment:
 	$(PYTHON) .hpc/scaffold.py new $(NAME)
 
-## export: re-export every notebook to its sibling .py executor
-export:
-	$(PYTHON) .hpc/scaffold.py export
+## repro: rebuild src/, then run the test suite (the serial-elision gate lives here)
+repro: build test
 
-## repro: re-export, then run the test suite (the serial-elision gate lives here)
-repro: export test
+## lint: rebuild src/, then ruff-check the built package
+lint: build
+	ruff check src
+	ruff format --check src
 
-## lint: ruff + the notebook-sync check (exported .py matches its .ipynb)
-lint:
-	ruff check .
-	$(PYTHON) .hpc/scaffold.py check-sync
-
-## test: run the experiment test suite
+## test: run the experiment test suite (conftest.py rebuilds src/ if absent)
 test:
 	pytest -q

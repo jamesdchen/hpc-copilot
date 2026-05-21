@@ -1,8 +1,11 @@
 # Experiment CI — injected by `hpc-agent build-template`.
 #
-# Three gates: the exported .py matches its notebook, every notebook
-# exposes a @register_run, and the test suite (which carries the
-# mandatory serial-elision gate) passes.
+# The notebook is the reviewed artifact; src/ is generated and
+# .gitignore'd. CI builds it first, then runs every gate against the
+# *built* output — so a notebook that exports dirty fails here.
+#
+# Gates, in dependency order: build -> discovery -> lint/type-check ->
+# the serial-elision gate + experiment tests.
 
 name: experiments
 
@@ -20,9 +23,14 @@ jobs:
           python-version: "3.11"
       - name: Install
         run: pip install -e . || pip install hpc-agent
-      - name: Notebook-sync — exported .py matches its .ipynb
-        run: python .hpc/scaffold.py check-sync
+      - name: Build — export notebooks to src/
+        run: hpc-agent export-package --experiment-dir .
       - name: Discovery — every notebook exposes a @register_run
         run: python .hpc/scaffold.py discover
+      - name: Lint + type-check the built package
+        run: |
+          ruff check src
+          ruff format --check src
+          mypy --ignore-missing-imports src
       - name: Serial-elision gate + experiment tests
         run: pytest -q

@@ -5,6 +5,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## 0.4.0 — 2026-05-21
+
+### Added — interview-time `DataAxis` classification
+
+A `@register_run` notebook now carries its parallel-decomposition
+classification in `axes.yaml`, recorded once and reused across submits.
+
+- **`axes.yaml` schema v2** (additive — every v1 file still validates):
+  an optional `executors` block maps each `@register_run` function to
+  its classified `DataAxis` (`independent` / `associative` /
+  `bounded_halo` / `sequential`), the run's signature hash, and
+  classification provenance.
+- **`classify-axis` primitive** — records a resolved `DataAxis` into
+  `axes.yaml`'s `executors` block (`hpc-agent classify-axis --spec`).
+- **`hpc-classify-axis` skill** + `/classify-axis-hpc` command — the
+  proposes-then-confirms classification interview.
+- **`hpc_agent.template.axis_config`** — `data_axis_from_config` /
+  `config_from_data_axis` (de)serialize a `DataAxis`; halo expressions
+  are evaluated by a restricted-AST interpreter, never `eval()`.
+- `RunInfo.run_signature_sha` — a stable signature fingerprint;
+  `/submit-hpc` reuses a stored classification only while it matches.
+- `recall` surfaces prior classifications (`data_axes`,
+  `data_axis_kinds`) so a new interview pre-fills from similar past
+  experiments.
+
+### Added — submit-time build (`export-package`)
+
+The experiment repo no longer commits generated code.
+
+- **`export-package` primitive** — builds the `src/` package from
+  `notebooks/{pipeline,executors,scripts}/*.ipynb` at submit / CI /
+  repro time; convention-driven, content-hash cached, exporter
+  auto-picked (strict-AST for executors, `# export`-marker for pipeline
+  libraries).
+- `export_notebook_markers` / `notebook_imports_runtime` added to
+  `hpc_agent.template`.
+- Scaffold templates flipped to a `.gitignore`d generated set (`src/`,
+  `.hpc/tasks.py`, `.hpc/cli.py`, `.hpc/.build-cache.json`); CI builds
+  first then runs lint / type-check / the serial-elision gate on the
+  built output; `conftest.py` rebuilds `src/` on a fresh clone.
+
 ## 0.3.0 — 2026-05-22
 
 ### Removed — scheduling-strategy layer extracted to `hpc-agent-pro`

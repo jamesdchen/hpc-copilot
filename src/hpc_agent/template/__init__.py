@@ -56,9 +56,19 @@ from hpc_agent.template.axis import (
     Monoid,
     Sequential,
 )
+from hpc_agent.template.axis_config import (
+    HaloExprError,
+    config_from_data_axis,
+    data_axis_from_config,
+    eval_halo_expr,
+)
 from hpc_agent.template.discover import RunInfo, discover_runs
 from hpc_agent.template.elision import ElisionReport, assert_elision_equivalent, check_elision
-from hpc_agent.template.notebook import export_notebook
+from hpc_agent.template.notebook import (
+    export_notebook,
+    export_notebook_markers,
+    notebook_imports_runtime,
+)
 from hpc_agent.template.plan import TaskPlan, plan_tasks, sweep_grid
 from hpc_agent.template.reduce import reduce_monoid, reduce_monoid_sidecars
 from hpc_agent.template.register import RunSpec, register_run, save_artifact
@@ -78,6 +88,8 @@ __all__ = [
     "RunSpec",
     "save_artifact",
     "export_notebook",
+    "export_notebook_markers",
+    "notebook_imports_runtime",
     "discover_runs",
     "RunInfo",
     "flags_from_signature",
@@ -96,6 +108,10 @@ __all__ = [
     "plan_tasks",
     "TaskPlan",
     "sweep_grid",
+    "data_axis_from_config",
+    "config_from_data_axis",
+    "eval_halo_expr",
+    "HaloExprError",
     "load_series",
     "set_series_loader",
     "current_slice",

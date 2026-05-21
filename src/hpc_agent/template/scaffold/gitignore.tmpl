@@ -1,0 +1,14 @@
+# hpc-agent experiment-template — generated artifacts (never committed).
+#
+# The notebook is the single reviewed artifact. The src/ package and the
+# generated .hpc/ files are produced at submit / CI / repro time by
+# `hpc-agent export-package` and `hpc-agent build-tasks-py` — see
+# .hpc/template.mk. Committing them would just re-create the
+# notebook-vs-export drift this layout removes.
+src/
+.hpc/tasks.py
+.hpc/cli.py
+.hpc/.build-cache.json
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

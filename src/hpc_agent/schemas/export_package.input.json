@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/export_package.input.json",
+  "title": "export-package input",
+  "description": "Options for the notebook → ``src/`` build.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "force": {
+      "default": false,
+      "description": "Ignore the content-hash build cache (.hpc/.build-cache.json) and re-export every notebook. Default reuses unchanged notebooks' prior output.",
+      "title": "Force",
+      "type": "boolean"
+    },
+    "notebooks_dir": {
+      "default": "notebooks",
+      "description": "Directory (relative to experiment_dir) holding the {pipeline,executors,scripts}/ notebook subtrees. Convention default 'notebooks'.",
+      "minLength": 1,
+      "title": "Notebooks Dir",
+      "type": "string"
+    }
+  }
+}

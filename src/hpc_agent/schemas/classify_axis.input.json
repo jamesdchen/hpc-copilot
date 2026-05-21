@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/classify_axis.input.json",
+  "title": "classify-axis input",
+  "description": "The resolved classification for one ``@register_run`` function.",
+  "type": "object",
+  "required": [
+    "run_name",
+    "run_signature_sha",
+    "data_axis"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_name": {
+      "description": "The @register_run function's name — the key under which the classification is stored in axes.yaml's `executors` block.",
+      "minLength": 1,
+      "title": "Run Name",
+      "type": "string"
+    },
+    "run_signature_sha": {
+      "description": "The run's current signature hash (RunInfo.run_signature_sha from discover_runs). Stored so a later submit can detect a signature change and re-interview instead of reusing a stale classification.",
+      "minLength": 1,
+      "title": "Run Signature Sha",
+      "type": "string"
+    },
+    "data_axis": {
+      "$ref": "#/$defs/_DataAxisConfig",
+      "description": "The classified series axis: {kind, halo?, monoid?}. The classification must clear the serial-elision gate (hpc_agent.template.check_elision) before any cluster time is spent — a misclassified axis returns plausible-but-wrong numbers."
+    },
+    "classified_by": {
+      "default": "interview",
+      "description": "How the classification was reached: 'interview' (the agent ran the classification interview), 'recall' (a prior similar experiment's classification was reused), or 'manual' (the operator stated it directly).",
+      "enum": [
+        "interview",
+        "recall",
+        "manual"
+      ],
+      "title": "Classified By",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "_DataAxisConfig": {
+      "additionalProperties": false,
+      "description": "A classified :data:`~hpc_agent.template.axis.DataAxis`, serialized.\n\nThe (de)serializer is :mod:`hpc_agent.template.axis_config`.",
+      "properties": {
+        "kind": {
+          "description": "How the series axis is safe to split. 'independent': the loop body is a pure function of its row. 'associative': it accumulates an associative summary — also set `monoid`. 'bounded_halo': it depends on a bounded look-back window — also set `halo`. 'sequential': unbounded / order-dependent state, not splittable; the fail-safe default.",
+          "enum": [
+            "independent",
+            "associative",
+            "bounded_halo",
+            "sequential"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "halo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_HaloConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for kind='bounded_halo'; forbidden otherwise."
+        },
+        "monoid": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "moments"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For kind='associative': the built-in monoid chunks reduce with.",
+          "title": "Monoid"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_DataAxisConfig",
+      "type": "object"
+    },
+    "_HaloConfig": {
+      "additionalProperties": false,
+      "description": "The bounded look-back distance of a :class:`BoundedHalo` series axis.",
+      "properties": {
+        "expr": {
+          "description": "Arithmetic expression giving the warm-up row count, over the run()'s own parameter names (bare names, resolved from the sweep point), e.g. 'train_window * 48'. Evaluated by hpc_agent.template.axis_config with a restricted AST walk — only names, numeric literals, + - * //, and min()/max() are permitted; never eval().",
+          "minLength": 1,
+          "title": "Expr",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expr"
+      ],
+      "title": "_HaloConfig",
+      "type": "object"
+    }
+  }
+}

@@ -146,6 +146,24 @@ def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
         framework.append(".hpc/pyproject-fragment.toml")
         needs_manual_merge.append("pyproject.toml")
 
+    # 5. .gitignore — non-destructive merge. The generated set (src/,
+    #    .hpc/tasks.py, .hpc/cli.py, .hpc/.build-cache.json) must not be
+    #    committed; absent .gitignore gets the starter, an existing one
+    #    gains the hpc-agent block if it isn't already there.
+    gitignore = repo_dir / ".gitignore"
+    gitignore_block = _asset("gitignore.tmpl")
+    if not gitignore.exists():
+        gitignore.write_text(gitignore_block, encoding="utf-8")
+        written.append(".gitignore")
+    else:
+        text = gitignore.read_text(encoding="utf-8")
+        if "hpc-agent experiment-template" in text:
+            skipped.append(".gitignore")
+        else:
+            sep = "" if text.endswith("\n") else "\n"
+            gitignore.write_text(f"{text}{sep}\n{gitignore_block}", encoding="utf-8")
+            merged.append(".gitignore")
+
     return {
         "repo_dir": str(repo_dir),
         "framework_files": framework,
