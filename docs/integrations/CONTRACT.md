@@ -90,12 +90,8 @@ The minimum loop for a one-shot fan-out:
 12. **`hpc-agent reconcile --run-id <id>`** — reconcile journal vs
     scheduler when the cluster diverges from local belief.
 
-For schedule timing, two extra primitives are useful but not
-required for the basic loop:
+One extra primitive is useful but not required for the basic loop:
 
-- **`hpc-agent best-submit-window --profile <p> --cluster <c> --within-hours <h>`** —
-  sweeps the queue-wait predictor over a horizon, returns top-K
-  windows.
 - **`hpc-agent clusters list`** — discoverable cluster catalog.
 
 ## `error_code` → retry policy
@@ -249,7 +245,7 @@ hpc-agent capabilities --full  # multi-section text dump: catalog + every primit
 
 Use `--full` for one-shot LLM context loading. Use the JSON form to
 gate features programmatically (e.g. "does this install support
-`best-submit-window`?"); the `subcommands` array is the authoritative
+`summarize-submit-plan`?"); the `subcommands` array is the authoritative
 list.
 
 ## See also

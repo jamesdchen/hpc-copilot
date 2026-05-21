@@ -31,8 +31,6 @@ docs/
 ├── internals/                 subsystem deep-dives
 │   ├── README.md                          index
 │   ├── adding-a-primitive.md              recipe
-│   ├── queue-wait-predictor.md            ops notes
-│   ├── queue-wait-predictor-architecture.md  design deep-dive
 │   └── sync-checklist.md
 ├── primitives/                hybrid: frontmatter auto-generated, body hand-written
 │   ├── README.md              indexed catalog (table is auto-regenerated)
