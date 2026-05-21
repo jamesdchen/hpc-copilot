@@ -181,6 +181,7 @@
           "anyOf": [
             {
               "items": {
+                "additionalProperties": true,
                 "type": "object"
               },
               "type": "array"
