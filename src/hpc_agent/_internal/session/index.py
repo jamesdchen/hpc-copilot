@@ -76,9 +76,13 @@ def _read_index(experiment_dir: Path) -> dict:
 
 def _index_is_stale(experiment_dir: Path) -> bool:
     idx_path = journal_dir(experiment_dir) / "index.json"
-    if not idx_path.exists():
+    # _safe_mtime, not exists()+stat(): a concurrent rebuild/prune can
+    # remove the index between the two calls, and an unguarded stat()
+    # would crash a routine find_in_flight_runs. A missing index
+    # (mtime 0.0) counts as stale so the caller rebuilds.
+    idx_mtime = _safe_mtime(idx_path)
+    if not idx_mtime:
         return True
-    idx_mtime = idx_path.stat().st_mtime
     return any(_safe_mtime(p) > idx_mtime for p in _all_run_files(experiment_dir))
 
 

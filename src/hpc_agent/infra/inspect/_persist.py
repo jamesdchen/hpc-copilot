@@ -97,16 +97,40 @@ def persist_snapshot(experiment_dir: Path, snap: ClusterSnapshot) -> Path:
     return target
 
 
+def _snapshot_sort_key(p: Path) -> tuple[int, int]:
+    """Chronological sort key for a ``<unix_ts>[-<counter>].json`` snapshot.
+
+    Same-second snapshots get a ``-<counter>`` suffix. A lexical filename
+    sort misplaces them — ``-`` (0x2D) sorts before ``.`` (0x2E), so
+    ``1700000000-1.json`` would order before ``1700000000.json`` — so
+    parse the embedded integers and order by ``(unix_ts, counter)``.
+    """
+    ts_str, _, counter_str = p.stem.partition("-")
+    try:
+        ts = int(ts_str)
+    except ValueError:
+        return (0, 0)
+    try:
+        counter = int(counter_str) if counter_str else 0
+    except ValueError:
+        counter = 0
+    return (ts, counter)
+
+
 def _prune_history(d: Path, limit: int) -> None:
     """Delete oldest snapshot files until at most *limit* remain.
 
-    Sorts by filename so the embedded unix-ts orders chronologically.
-    Best-effort: an unlink that races with another writer is ignored.
+    Sorts by the embedded ``(unix_ts, counter)`` so files order
+    chronologically. Best-effort: an unlink that races with another
+    writer is ignored.
     """
     if limit <= 0:
         return
     try:
-        files = sorted(p for p in d.iterdir() if p.suffix == ".json" and p.is_file())
+        files = sorted(
+            (p for p in d.iterdir() if p.suffix == ".json" and p.is_file()),
+            key=_snapshot_sort_key,
+        )
     except OSError:
         return
     excess = len(files) - limit
@@ -144,6 +168,7 @@ def read_cluster_history(
     try:
         files = sorted(
             (p for p in d.iterdir() if p.suffix == ".json" and p.is_file()),
+            key=_snapshot_sort_key,
             reverse=True,
         )
     except OSError:
@@ -163,7 +188,10 @@ def read_cluster_history(
             continue
         if since_dt is not None:
             ts = parse_iso_utc_or_none(doc.get("now_iso"))
-            if ts is None or ts < since_dt:
+            # An unparseable now_iso falls through (returned) rather than
+            # being silently dropped — matches this module's permissive
+            # read posture and the read_cluster_history docstring.
+            if ts is not None and ts < since_dt:
                 continue
         try:
             snap = _snapshot_from_dict(doc)

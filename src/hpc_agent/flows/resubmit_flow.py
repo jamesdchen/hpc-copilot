@@ -40,6 +40,7 @@ the pipeline.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -221,6 +222,7 @@ def resubmit_flow(
 
     cluster_submitted = False
     cluster_job_ids: list[str] = []
+    _clear_marker_after = False
     if submit_to_cluster:
         if script is None or backend is None or job_name is None:
             raise errors.SpecInvalid(
@@ -252,23 +254,69 @@ def resubmit_flow(
         # below fires again and orphans the new array. Mirror the
         # runner's check here.
         _recent = list(existing.recent_resubmit_request_ids or [])
-        already_done = existing.last_resubmit_request_id == derived_rid or derived_rid in _recent
+        # A prior call to *this* request failed mid-batch and left a
+        # resume marker. Resuming takes precedence over the dedup check:
+        # the request is NOT done, and the marker tells us which batches
+        # already landed so we continue rather than re-submit or skip.
+        pending = dict(existing.pending_resubmit or {})
+        resuming = bool(pending) and pending.get("request_id") == derived_rid
+        already_done = not resuming and (
+            existing.last_resubmit_request_id == derived_rid or derived_rid in _recent
+        )
         if already_done:
-            # Replaying the same request_id — earlier call already
-            # submitted the batches. Surface the prior job_ids on the
+            # Replaying a completed request_id — earlier call already
+            # submitted every batch. Surface the prior job_ids on the
             # cluster_job_ids field so callers branching on
             # cluster_submitted/cluster_job_ids see the durable state
             # instead of treating the dedup as "no submission happened".
             cluster_job_ids = list(existing.job_ids or [])
             cluster_submitted = True
         if not already_done:
-            partial_ids: list[str] = []
+            from hpc_agent._internal import session as _session_mod
+
+            # On resume, rebuild the batch plan from the failed_task_ids
+            # / overrides recorded at the *first* attempt — not the
+            # caller's current arguments. ``resubmit_plan`` is only
+            # deterministic for identical inputs, so a caller that
+            # changed the failed set (or passed an explicit request_id
+            # with a different set) must not shift the batch indexing
+            # that ``start_batch`` relies on.
+            if resuming:
+                plan_failed_ids = [int(t) for t in pending.get("failed_task_ids", failed_task_ids)]
+                plan_overrides = pending.get("overrides", effective_overrides)
+                prior_ids = list(pending.get("job_ids", []))
+            else:
+                plan_failed_ids = list(failed_task_ids)
+                plan_overrides = effective_overrides
+                prior_ids = []
+            # Batches landed so far — one job id per batch, in plan
+            # order — so we resume from batch ``len(prior_ids)``.
+            partial_ids: list[str] = list(prior_ids)
+
+            def _save_marker(ids: list[str]) -> None:
+                # Also write the top-level job_ids so a monitor session
+                # polling the run record between a partial failure and a
+                # resume sees the resubmit array jobs that already
+                # landed — they would otherwise live only inside
+                # pending_resubmit, which monitor does not read.
+                _session_mod.update_run_status(
+                    experiment_dir,
+                    run_id,
+                    job_ids=list(ids),
+                    pending_resubmit={
+                        "request_id": derived_rid,
+                        "failed_task_ids": list(plan_failed_ids),
+                        "overrides": plan_overrides,
+                        "job_ids": list(ids),
+                    },
+                )
+
             try:
                 cluster_job_ids = _submit_resubmit_batches(
                     experiment_dir=experiment_dir,
                     run_id=run_id,
-                    failed_task_ids=failed_task_ids,
-                    effective_overrides=effective_overrides,
+                    failed_task_ids=plan_failed_ids,
+                    effective_overrides=plan_overrides,
                     ssh_target=(sidecar or {}).get("ssh_target") or "",
                     remote_path=(sidecar or {}).get("remote_path") or "",
                     scheduler=backend,
@@ -279,28 +327,23 @@ def resubmit_flow(
                     constraints=constraints,
                     backend_factory=backend_factory,
                     submitted_ids_out=partial_ids,
+                    start_batch=len(prior_ids),
                 )
             except errors.RemoteCommandFailed:
-                # Persist whatever batches succeeded BEFORE re-raising
-                # so a retry doesn't double-submit batches 0..N-1.
-                if partial_ids:
-                    from hpc_agent._schema_models.actions.resubmit import (
-                        ResubmitSpec as _ResubmitSpec,
-                    )
-
-                    runner.resubmit_failed(
-                        experiment_dir,
-                        run_id,
-                        spec=_ResubmitSpec(
-                            failed_task_ids=failed_task_ids,
-                            category=category,  # type: ignore[arg-type]
-                            overrides=effective_overrides,
-                            new_job_ids=partial_ids,
-                            request_id=request_id,
-                        ),
-                    )
+                # Record progress so a retry resumes from the next
+                # un-submitted batch — without this marker the retry
+                # either re-submits the batches that already landed or
+                # (if the request_id were stamped) skips the remainder.
+                _save_marker(partial_ids)
                 raise
             cluster_submitted = True
+            # Whole plan landed. Record the marker as *complete* (job_ids
+            # == every batch) BEFORE the resubmit_failed journal stamp
+            # below: if anything between here and that stamp fails, a
+            # retry resumes with start_batch == len(plan.batches) — a
+            # no-op — instead of re-submitting the whole plan.
+            _save_marker(cluster_job_ids)
+            _clear_marker_after = True
 
     from hpc_agent._schema_models.actions.resubmit import ResubmitSpec
 
@@ -315,6 +358,15 @@ def resubmit_flow(
             request_id=request_id,
         ),
     )
+
+    if _clear_marker_after:
+        # Resubmit completed and resubmit_failed stamped the request_id
+        # — drop the resume marker. Best-effort: if this write fails the
+        # stale marker only makes a later replay resume to a no-op.
+        from hpc_agent._internal import session as _session_mod
+
+        with contextlib.suppress(Exception):
+            _session_mod.update_run_status(experiment_dir, run_id, pending_resubmit={})
 
     return ResubmitFlowResult(
         run_id=record.run_id,
@@ -343,6 +395,7 @@ def _submit_resubmit_batches(
     constraints: Any,
     backend_factory: Any,
     submitted_ids_out: list[str] | None = None,
+    start_batch: int = 0,
 ) -> list[str]:
     """Build the array-submission shape and qsub each batch.
 
@@ -427,10 +480,13 @@ def _submit_resubmit_batches(
         )
 
     # Share the list with the caller so a mid-loop failure still
-    # surfaces the IDs that DID land on the cluster.
+    # surfaces the IDs that DID land on the cluster. *start_batch* skips
+    # batches a prior partial attempt already submitted — ``resubmit_plan``
+    # is deterministic, so plan.batches is the same across calls and
+    # batch index N always denotes the same task range.
     submitted_ids: list[str] = submitted_ids_out if submitted_ids_out is not None else []
     cwd = experiment_dir
-    for batch in plan.batches:
+    for batch in plan.batches[start_batch:]:
         job_id = _submit_one_batch(
             backend_obj,
             job_name=job_name,

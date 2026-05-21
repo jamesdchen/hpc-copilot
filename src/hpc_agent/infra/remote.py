@@ -40,6 +40,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -440,7 +441,12 @@ def _tar_ssh_push(
     ssh_remote_cmd = " && ".join(remote_steps)
     ssh_cmd = ["ssh", "-o", "BatchMode=yes", ssh_target, ssh_remote_cmd]
 
-    tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # tar's stderr goes to a temp file rather than a PIPE: it is only
+    # read after ``ssh`` exits, and a PIPE that fills its ~64 KB kernel
+    # buffer (e.g. many "file changed as we read it" warnings on a
+    # large tree) would block ``tar`` and deadlock the whole push.
+    tar_stderr_file = tempfile.TemporaryFile()  # noqa: SIM115 - closed in finally below
+    tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=tar_stderr_file)
     try:
         assert tar_proc.stdout is not None
         ssh_proc = subprocess.run(
@@ -452,7 +458,8 @@ def _tar_ssh_push(
         )
         tar_proc.stdout.close()
         tar_proc.wait(timeout=timeout)
-        tar_stderr_bytes = tar_proc.stderr.read() if tar_proc.stderr else b""
+        tar_stderr_file.seek(0)
+        tar_stderr_bytes = tar_stderr_file.read()
     except subprocess.TimeoutExpired as exc:
         tar_proc.kill()
         raise TimeoutError(
@@ -460,8 +467,7 @@ def _tar_ssh_push(
             f"{_truncate(f'{src_dir} -> {ssh_target}:{remote_path}')}"
         ) from exc
     finally:
-        if tar_proc.stderr is not None:
-            tar_proc.stderr.close()
+        tar_stderr_file.close()
 
     tar_stderr = tar_stderr_bytes.decode(errors="replace")
     combined_stderr = "\n".join(filter(None, [tar_stderr.strip(), ssh_proc.stderr.strip()]))

@@ -385,7 +385,19 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
             continue
         state_code = cols[4].strip()
         normalized = _SGE_STATE_MAP.get(state_code, "UNKNOWN")
-        task_spec = cols[-1].strip() if len(cols) >= 9 else ""
+        # qstat -u <user> trailing columns after the date/time pair are
+        # [queue] slots [ja-task-ID]: running jobs carry the queue
+        # column, pending jobs don't, and only array jobs carry the
+        # task-ID. Reading cols[-1] unconditionally mistakes a non-array
+        # running job's slot count for a task range. Disambiguate from
+        # the tail shape — the slots column is always an integer, the
+        # queue column never is.
+        tail = cols[7:]
+        task_spec = ""
+        if len(tail) == 2 and tail[0].isdigit():
+            task_spec = tail[1].strip()  # pending array: slots task
+        elif len(tail) >= 3:
+            task_spec = tail[2].strip()  # running array: queue slots task
         for tid in _expand_task_range(task_spec):
             task_info[tid] = {
                 "state": normalized,

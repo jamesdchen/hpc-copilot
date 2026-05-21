@@ -112,6 +112,36 @@ def _split_csv(token: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in token.split(",") if part.strip())
 
 
+def _split_nodelist(token: str) -> tuple[str, ...]:
+    """Split a SLURM ``Nodes=`` hostlist on top-level commas only.
+
+    Commas inside ``[...]`` ranges (e.g. ``cn[001-003,005]``) are range
+    separators, not nodelist separators — splitting on every comma the
+    way :func:`_split_csv` does corrupts the bracketed token into
+    invalid fragments (``cn[001-003`` / ``005]``). Ranges themselves are
+    left unexpanded, consistent with :func:`held_node_set`.
+    """
+    if not token or token in {"(null)", "None"}:
+        return ()
+    parts: list[str] = []
+    depth = 0
+    cur: list[str] = []
+    for ch in token:
+        if ch == "[":
+            depth += 1
+            cur.append(ch)
+        elif ch == "]":
+            depth = max(0, depth - 1)
+            cur.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    parts.append("".join(cur))
+    return tuple(p.strip() for p in parts if p.strip())
+
+
 def _parse_one_reservation(record: str) -> ReservationHold | None:
     """Parse one reservation record (a chunk of key=value tokens)."""
     fields_kv: dict[str, str] = {}
@@ -124,7 +154,7 @@ def _parse_one_reservation(record: str) -> ReservationHold | None:
         return None
     return ReservationHold(
         name=name,
-        nodes=_split_csv(fields_kv.get("Nodes", "")),
+        nodes=_split_nodelist(fields_kv.get("Nodes", "")),
         start_iso=_slurm_time_to_iso(fields_kv.get("StartTime", "")),
         end_iso=_slurm_time_to_iso(fields_kv.get("EndTime", "")),
         users=_split_csv(fields_kv.get("Users", "")),

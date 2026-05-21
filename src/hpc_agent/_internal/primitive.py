@@ -331,7 +331,20 @@ def register_primitives() -> None:
     from hpc_agent._internal.plugins import plugin_primitive_modules
 
     for modname in plugin_primitive_modules():
-        importlib.import_module(modname)
+        # Core modules above fail loudly; an optional plugin must not
+        # take down the core CLI (matches plugins.load_plugins' skip-on-
+        # error contract). A plugin whose entry point loaded but whose
+        # listed module fails to import is logged and skipped.
+        try:
+            importlib.import_module(modname)
+        except Exception as exc:  # noqa: BLE001 — broken plugin must not crash core
+            import warnings
+
+            warnings.warn(
+                f"hpc-agent plugin module {modname!r} failed to import; "
+                f"its primitives are unavailable: {exc}",
+                stacklevel=2,
+            )
     _REGISTRATION_DONE = True
 
 

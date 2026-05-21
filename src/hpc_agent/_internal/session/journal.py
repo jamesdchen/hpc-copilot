@@ -28,12 +28,14 @@ from hpc_agent._internal.session.run_record import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 __all__ = [
     "load_run",
     "upsert_run",
     "update_run_status",
+    "update_run_record",
     "mark_run",
 ]
 
@@ -93,6 +95,35 @@ def update_run_status(experiment_dir: Path, run_id: str, **fields: Any) -> RunRe
             raise FileNotFoundError(f"no run record for {run_id!r}")
         existing.update(fields)
         record = RunRecord.from_dict(existing)
+        _atomic_write_json(path, record.to_dict())
+    _refresh_index_entry(experiment_dir, record.run_id, record.status)
+    return record
+
+
+def update_run_record(
+    experiment_dir: Path,
+    run_id: str,
+    mutate: Callable[[RunRecord], None],
+) -> RunRecord:
+    """Locked read-modify-write of a run record via a mutation callback.
+
+    Unlike :func:`update_run_status` — which overwrites whitelisted
+    fields with caller-supplied *values* — this reads the record, hands
+    the live :class:`RunRecord` to *mutate*, and writes it back, all
+    inside the per-run flock. Use it when the new value depends on the
+    current on-disk value (e.g. appending to ``combined_waves``): passing
+    a snapshot computed from an earlier unlocked ``load_run`` read would
+    silently drop a concurrent writer's update.
+
+    Raises :class:`FileNotFoundError` if no record exists for *run_id*.
+    """
+    path = _run_path(experiment_dir, run_id)
+    with _locked(path):
+        existing = _read_json(path)
+        if existing is None:
+            raise FileNotFoundError(f"no run record for {run_id!r}")
+        record = RunRecord.from_dict(existing)
+        mutate(record)
         _atomic_write_json(path, record.to_dict())
     _refresh_index_entry(experiment_dir, record.run_id, record.status)
     return record

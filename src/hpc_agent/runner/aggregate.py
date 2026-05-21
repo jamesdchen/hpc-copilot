@@ -125,6 +125,14 @@ def verify_combiner_artifact(
     else:
         script = f"[ -f {shlex.quote(full_path)} ] && echo OK || echo MISSING"
     proc = remote.ssh_run(script, ssh_target=ssh_target)
+    if proc.returncode != 0:
+        # The remote verifier script always exits 0 (MISSING/OK/
+        # INVALID_JSON are echoed, not signalled via exit code), so a
+        # non-zero rc is an SSH transport failure — raise rather than
+        # misreport it as "unrecognised verifier output".
+        raise RemoteCommandFailed(
+            f"combiner-artifact verifier failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
+        )
     out_tail = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
     if out_tail == "OK":
         return True, "ok"
