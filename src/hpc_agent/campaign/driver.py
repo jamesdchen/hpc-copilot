@@ -133,18 +133,16 @@ def _run_cli_step(verb: str, run_id: str, experiment_dir: Path) -> int:
 
 
 def _run_agent_step(prompt: str, experiment_dir: Path) -> int:
-    """Shell ``claude -p`` for a judgement step in a fresh context.
+    """Run a judgement step in a fresh-context worker.
 
-    ``--bare`` skips auto-discovery (hooks, MCP, auto memory) for a
-    reproducible minimal context — the step recovers everything it
-    needs from disk via ``load-context``.
+    Transport is pluggable via :mod:`hpc_agent._internal.invoke`; the
+    default ``claude-cli`` invoker shells ``claude -p --bare`` so the
+    worker's context is a reproducible minimum — it recovers everything
+    it needs from disk via ``load-context``.
     """
-    proc = subprocess.run(
-        ["claude", "-p", "--bare", prompt],
-        cwd=str(experiment_dir),
-        check=False,
-    )
-    return proc.returncode
+    from hpc_agent._internal.invoke import get_invoker
+
+    return get_invoker().invoke(prompt, cwd=experiment_dir).exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
