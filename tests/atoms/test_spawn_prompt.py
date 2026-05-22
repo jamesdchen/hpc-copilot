@@ -57,6 +57,14 @@ def test_render_inlines_the_skill_body() -> None:
     assert _skill_body("hpc-aggregate") in prompt
 
 
+def test_render_frames_the_bare_skill_for_headless_use() -> None:
+    # The skill body is inlined verbatim (unedited SoT); the prompt frames
+    # it so a headless worker reads its slash-command assumptions correctly.
+    prompt = render_spawn_prompt(workflow="submit", experiment_dir="/e", fields={})
+    assert "Never wait for a slash command." in prompt
+    assert "you have no Skill tool" in prompt
+
+
 def test_render_prefix_is_stable_across_invocations() -> None:
     # The cacheable prefix — everything before the invocation context —
     # must be byte-identical regardless of experiment_dir / fields.
