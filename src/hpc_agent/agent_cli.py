@@ -1770,6 +1770,56 @@ def cmd_run(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: describe ──────────────────────────────────────────────────
+
+
+def cmd_describe(args: argparse.Namespace) -> int:
+    """Resolve a skill or primitive name to its content from package data.
+
+    A delegated worker calls this to fetch a cross-reference it reaches
+    on its branch — a skill it is pointed at, a primitive whose contract
+    it needs — instead of the prompt pre-stitching every possible
+    reference. Skills resolve to the SKILL.md body; primitives resolve
+    to their operations-catalog contract.
+    """
+    name = args.name
+    if not (
+        name and name[0].isalpha() and all(c.islower() or c.isdigit() or c == "-" for c in name)
+    ):
+        return _err(
+            error_code="spec_invalid",
+            message=(
+                f"name {name!r} must be lowercase letters, digits, and "
+                "hyphens — a skill or primitive name"
+            ),
+            category="user",
+            retry_safe=False,
+        )
+
+    from importlib.resources import files
+
+    skill_md = files("slash_commands") / "skills" / name / "SKILL.md"
+    if skill_md.is_file():
+        from hpc_agent.atoms.spawn_prompt import _skill_body
+
+        _ok({"kind": "skill", "name": name, "content": _skill_body(name)})
+        return EXIT_OK
+
+    from hpc_agent._internal.operations import operations_catalog
+
+    for entry in operations_catalog():
+        if entry.get("name") == name:
+            _ok({"kind": "primitive", "name": name, "content": entry})
+            return EXIT_OK
+
+    return _err(
+        error_code="spec_invalid",
+        message=f"no skill or primitive named {name!r}",
+        category="user",
+        retry_safe=False,
+    )
+
+
 # ─── parser ────────────────────────────────────────────────────────────────
 
 
@@ -2805,6 +2855,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_run.set_defaults(func=cmd_run)
+
+    # describe
+    p_describe = sub.add_parser(
+        "describe",
+        help=(
+            "Print a skill's procedure or a primitive's contract from the "
+            "installed package data. A delegated worker uses this to fetch "
+            "a cross-reference on the branch it is executing."
+        ),
+    )
+    p_describe.add_argument(
+        "name",
+        help=("A skill name (e.g. hpc-submit) or a primitive name (e.g. submit-flow)."),
+    )
+    p_describe.set_defaults(func=cmd_describe)
 
     # Optional plugin distributions add their own subcommands here. With
     # none installed this is a no-op and the parser is unchanged.

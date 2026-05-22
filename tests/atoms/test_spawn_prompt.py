@@ -62,7 +62,8 @@ def test_render_frames_the_bare_skill_for_headless_use() -> None:
     # it so a headless worker reads its slash-command assumptions correctly.
     prompt = render_spawn_prompt(workflow="submit", experiment_dir="/e", fields={})
     assert "Never wait for a slash command." in prompt
-    assert "you have no Skill tool" in prompt
+    # references are fetchable per-branch, not "ignore them".
+    assert "hpc-agent describe" in prompt
 
 
 def test_render_prefix_is_stable_across_invocations() -> None:
