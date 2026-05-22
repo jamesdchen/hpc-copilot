@@ -1,6 +1,8 @@
-Invoke the `hpc-campaign` skill via the Skill tool (`skills/hpc-campaign/SKILL.md`) for the workflow: campaign tagging, the per-iteration `submit-flow → monitor-flow → aggregate-flow` triplet, the stochastic-marker requirement for Path B (strategy-driven) campaigns, the resume-after-drop semantics. The skill is the canonical SoT.
+Do not run the `hpc-campaign` skill in this conversation's context. Spawn a fresh-context **subagent** via the `Task` tool to execute it (`skills/hpc-campaign/SKILL.md`) — the workflow is: campaign tagging, the per-iteration `submit-flow → monitor-flow → aggregate-flow` triplet, the stochastic-marker requirement for Path B (strategy-driven) campaigns, the resume-after-drop semantics. The skill is the canonical SoT.
 
-This slash command is the human-facing entry point. It exists for two reasons the skill alone doesn't cover:
+The subagent bootstraps its own context with `hpc-agent load-context` and runs the campaign against on-disk state alone. It is itself the loop orchestrator — it spawns a further per-step subagent for each `submit` / `monitor` / `aggregate` / `decide` step (see the skill's delegation section) — and returns **only** the campaign-state envelope (iterations completed, latest reduced metrics, next step, `campaign_id`) plus a free-text `anomalies` string. The verbose per-iteration output never enters this conversation. A fresh subagent context is what makes the workflow deterministic (it depends only on disk state, not on whatever preceded it in this chat) and keeps this conversation from rotting.
+
+This slash command is the human-facing entry point: the main agent handles the content below in this conversation and threads the results into the subagent's prompt — that content is not delegated. It exists for two reasons the skill alone doesn't cover:
 
 1. **Pick the path** in conversation with the user (Path A: manual params, vs Path B: Optuna/random-search/PBT strategy). The skill describes both; the slash command's job is to ask "is your search space small and known, or large and adaptive?" and route accordingly.
 

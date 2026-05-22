@@ -54,7 +54,16 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
 SLASH_ONLY_OK: set[str] = {"validate-campaign"}
 
 
-_INVOKE_DIRECTIVE_RE = re.compile(r"[Ii]nvoke the [`*]?[a-z][a-z0-9-]+[`*]? skill")
+# A workflow command must explicitly route to its skill, in one of two
+# forms: the inline "Invoke the `<skill>` skill" directive, or the
+# command-level-wrapper form that delegates execution to a fresh-context
+# subagent ("... subagent ... to execute it (`skills/<id>/SKILL.md`)").
+# Either way the command names the skill and hands the workflow off; what
+# it must not do is try to run the workflow from the slash body alone.
+_INVOKE_DIRECTIVE_RE = re.compile(
+    r"[Ii]nvoke the [`*]?[a-z][a-z0-9-]+[`*]? skill"
+    r"|subagent[^\n]*?to execute it \(`skills/[a-z0-9-]+/SKILL\.md`\)"
+)
 
 
 def main() -> int:
@@ -67,10 +76,11 @@ def main() -> int:
     declared_slashes = {pair[1] for pair in WORKFLOW_PAIRS}
 
     # Each declared pair must have both files. The slash body must also
-    # contain an explicit "Invoke the `<skill>` skill" directive — without
-    # it, the slash collapsed away its own workflow-mechanics content
-    # under the surgical-split refactor and the agent has nothing to
-    # work from. The regex tolerates `name`/**name**/plain wrapping.
+    # route to its skill — either an inline "Invoke the `<skill>` skill"
+    # directive or the subagent-delegation form — otherwise the slash
+    # collapsed away its own workflow-mechanics content and the agent has
+    # nothing to work from. The regex tolerates `name`/**name**/plain
+    # wrapping.
     for skill_id, slash_stem in WORKFLOW_PAIRS:
         skill_path = SKILLS_DIR / skill_id / "SKILL.md"
         slash_path = COMMANDS_DIR / f"{slash_stem}.md"
@@ -89,12 +99,12 @@ def main() -> int:
         if not _INVOKE_DIRECTIVE_RE.search(body):
             errors.append(
                 f"{slash_path.relative_to(REPO_ROOT)} is missing the "
-                "imperative skill-invocation directive (regex "
-                f"{_INVOKE_DIRECTIVE_RE.pattern!r}). Slash commands must "
-                "explicitly tell the agent to invoke the matching skill via "
-                "the Skill tool — without the directive, the agent may try "
-                "to do the workflow from the slash body alone, which lacks "
-                "the workflow mechanics by design."
+                "imperative skill-routing directive (regex "
+                f"{_INVOKE_DIRECTIVE_RE.pattern!r}). A workflow command must "
+                "either invoke the matching skill via the Skill tool or "
+                "delegate it to a subagent via the Task tool — without the "
+                "directive, the agent may try to do the workflow from the "
+                "slash body alone, which lacks the workflow mechanics by design."
             )
             continue
         # Stronger check: the directive should name *this pair's* skill_id.

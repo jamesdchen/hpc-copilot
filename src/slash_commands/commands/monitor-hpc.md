@@ -1,6 +1,8 @@
-Invoke the `hpc-status` skill via the Skill tool (`skills/hpc-status/SKILL.md`) for the workflow: poll-run-status vs monitor-flow choice, lifecycle dispatch, polling cadence, resubmit decision flow. The skill is the canonical SoT.
+Do not run the `hpc-status` skill in this conversation's context. Spawn a fresh-context **subagent** via the `Task` tool to execute it (`skills/hpc-status/SKILL.md`) — the workflow is: poll-run-status vs monitor-flow choice, lifecycle dispatch, polling cadence, resubmit decision flow. The skill is the canonical SoT.
 
-This slash command is the human-facing entry point. It carries one piece of content the skill cannot: the resume-offer dialog for cold-session recovery.
+The subagent bootstraps its own context with `hpc-agent load-context` and runs the workflow against on-disk state alone, returning **only** the result envelope (`lifecycle_state`, `complete`/`total`, `failed_task_ids`, `escalation_reason`) plus a free-text `anomalies` string. The verbose intermediate output — per-tick polls, SSH dumps, failed-task stderr tails — stays in the subagent and never enters this conversation. A fresh subagent context is what makes the workflow deterministic (it depends only on disk state, not on whatever preceded it in this chat) and keeps this conversation from rotting.
+
+This slash command is the human-facing entry point: the main agent handles the content below in this conversation and threads the results into the subagent's prompt — that content is not delegated. It carries one piece the skill cannot: the resume-offer dialog for cold-session recovery.
 
 ## Scheduling the next tick
 

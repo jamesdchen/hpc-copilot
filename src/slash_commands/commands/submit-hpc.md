@@ -1,6 +1,8 @@
-Invoke the `hpc-submit` skill via the Skill tool (`skills/hpc-submit/SKILL.md`) for the workflow: discover executors → plan axis → auto-configure env → throughput plan → write tasks.py + sidecar → preflight → validate-campaign → submit-flow → verify scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
+Do not run the `hpc-submit` skill in this conversation's context. Spawn a fresh-context **subagent** via the `Task` tool to execute it (`skills/hpc-submit/SKILL.md`) — the workflow is: discover executors → plan axis → auto-configure env → throughput plan → write tasks.py + sidecar → preflight → validate-campaign → submit-flow → verify the scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
 
-This slash command is the human-facing entry point. It carries three pieces of content the skill cannot:
+The subagent bootstraps its own context with `hpc-agent load-context` and runs the workflow against on-disk state alone, returning **only** the result envelope (`run_id`, `job_ids`, grid dimensions, verified scheduler state) plus a free-text `anomalies` string. The verbose intermediate output — discovery transcripts, scheduler dumps, rsync logs — stays in the subagent and never enters this conversation. A fresh subagent context is what makes the workflow deterministic (it depends only on disk state, not on whatever preceded it in this chat) and keeps this conversation from rotting.
+
+This slash command is the human-facing entry point: the main agent handles the content below in this conversation and threads the results into the subagent's prompt — that content is not delegated. Three pieces the skill cannot carry:
 
 ## 1. Migration check (legacy `_hpc_dispatch.json`)
 
