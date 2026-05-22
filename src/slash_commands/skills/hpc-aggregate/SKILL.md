@@ -17,7 +17,7 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 
 ## Delegating aggregation to a subagent
 
-Aggregation can pull large partial sets and emit a sizable `aggregated_metrics` dict. When you run this skill as part of a larger flow, do Steps 1–9 inside a fresh-context **subagent** (the `Task` tool) that returns only `{ok, aggregated_metrics summary, missing_waves, missing_tasks, escalation_reason}`. The raw `_combiner/` pull and per-task output stay in the subagent's context. It opens by running `hpc-agent load-context` to recover the `run_id` and SSH target.
+Aggregation can pull large partial sets and emit a sizable `aggregated_metrics` dict. When you run this skill as part of a larger flow, do Steps 1–9 inside a fresh-context **subagent** (the `Task` tool) that returns **only** the `aggregate-flow` output envelope — `{ok, aggregated_metrics summary, missing_waves, missing_tasks, escalation_reason}` — and a single free-text `anomalies` string for anything off-contract. No transcript, no raw output: the `_combiner/` pull and per-task output stay in the subagent's context. The orchestrator parses fields, not prose; that field-shaped return is what keeps its next call deterministic. The subagent opens by running `hpc-agent load-context` to recover the `run_id` and SSH target.
 
 ## Steps
 

@@ -23,7 +23,7 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 
 ## Delegating the poll to a subagent
 
-`monitor-flow` is verbose — one tick per poll, SSH dumps, failed-task stderr tails. When you run this skill as part of a larger flow, do the poll inside a fresh-context **subagent** (the `Task` tool) that returns only `{lifecycle_state, complete/total, failed_task_ids, escalation_reason}`. The tick log stays on disk and the raw output stays in the subagent's context; the orchestrator keeps just the summary. The subagent opens by running `hpc-agent load-context` to recover the `run_id` itself.
+`monitor-flow` is verbose — one tick per poll, SSH dumps, failed-task stderr tails. When you run this skill as part of a larger flow, do the poll inside a fresh-context **subagent** (the `Task` tool) that returns **only** the `poll-run-status` / `monitor-flow` output envelope — `{lifecycle_state, complete/total, failed_task_ids, escalation_reason}` — and a single free-text `anomalies` string for anything off-contract. No transcript, no SSH dumps: the tick log stays on disk and the raw output stays in the subagent's context. The orchestrator parses fields, not prose; that field-shaped return is what keeps its next call deterministic. The subagent opens by running `hpc-agent load-context` to recover the `run_id` itself.
 
 ## Steps
 

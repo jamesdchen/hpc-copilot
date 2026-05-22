@@ -39,11 +39,13 @@ Branch on `action`:
 
 ## Delegating verbose steps to a subagent
 
-This pipeline has several high-output steps. When you drive it as part of a larger flow, delegate each verbose, idempotent step to a fresh-context **subagent** (the `Task` tool) that returns only a short structured result, so the raw output never enters the orchestrator's context:
+This pipeline has several high-output steps. When you drive it as part of a larger flow, delegate each verbose, idempotent step to a fresh-context **subagent** (the `Task` tool):
 
 - Step 1 — executor/run discovery,
 - Step 6b — the pre-flight gate,
 - Step 8b — scheduler verification.
+
+Each subagent returns **only** that step's typed output envelope — Step 1: the discovery / `load-context` action result; Step 6b: the pre-flight gate result; Step 8b: the scheduler-verification result — and a single free-text `anomalies` string for anything off-contract. No transcript, no scheduler dumps, no raw output. The orchestrator parses fields, not prose; that field-shaped return is what keeps its next call deterministic.
 
 Keep the Step 5 user-confirmation gate and the `submit-flow` call in the orchestrator — they are short and need a decision. Every subagent opens by running `hpc-agent load-context`; it reconstructs its own context from disk and never inherits yours.
 
