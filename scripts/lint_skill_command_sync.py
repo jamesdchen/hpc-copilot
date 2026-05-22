@@ -57,15 +57,16 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
 SLASH_ONLY_OK: set[str] = {"validate-campaign"}
 
 
-# A workflow command must explicitly route to its skill, in one of two
-# forms: the inline "Invoke the `<skill>` skill" directive, or the
-# command-level-wrapper form that delegates execution to a fresh-context
-# subagent ("... subagent ... to execute it (`skills/<id>/SKILL.md`)").
-# Either way the command names the skill and hands the workflow off; what
-# it must not do is try to run the workflow from the slash body alone.
+# A workflow command must explicitly route to its skill rather than run
+# the workflow from the slash body alone. Accepted routing forms: the
+# inline "Invoke the `<skill>` skill" directive; the subagent-execute
+# form ("... subagent ... to execute it (`skills/<id>/SKILL.md`)"); or
+# the thin-trigger form — shelling `hpc-agent run <workflow>`, the
+# code-orchestrated entrypoint.
 _INVOKE_DIRECTIVE_RE = re.compile(
     r"[Ii]nvoke the [`*]?[a-z][a-z0-9-]+[`*]? skill"
     r"|subagent[^\n]*?to execute it \(`skills/[a-z0-9-]+/SKILL\.md`\)"
+    r"|hpc-agent run "
 )
 
 # Every workflow skill statically declares, in its frontmatter, whether
@@ -111,10 +112,10 @@ def main() -> int:
                 f"{slash_path.relative_to(REPO_ROOT)} is missing the "
                 "imperative skill-routing directive (regex "
                 f"{_INVOKE_DIRECTIVE_RE.pattern!r}). A workflow command must "
-                "either invoke the matching skill via the Skill tool or "
-                "delegate it to a subagent via the Task tool — without the "
-                "directive, the agent may try to do the workflow from the "
-                "slash body alone, which lacks the workflow mechanics by design."
+                "route to its skill — invoke it, delegate it to a subagent, "
+                "or shell `hpc-agent run` — without the directive the agent "
+                "may try to do the workflow from the slash body alone, which "
+                "lacks the workflow mechanics by design."
             )
             continue
         # Stronger check: the directive should name *this pair's* skill_id.

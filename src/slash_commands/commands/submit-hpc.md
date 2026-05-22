@@ -1,79 +1,8 @@
-Do not run the `hpc-submit` skill in this conversation's context. Delegate it to a fresh-context **subagent** to execute it (`skills/hpc-submit/SKILL.md`) — the workflow is: discover executors → plan axis → auto-configure env → throughput plan → write tasks.py + sidecar → preflight → validate-campaign → submit-flow → verify the scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
+`/submit-hpc` triggers the **submit** workflow — submit a parameter-grid experiment to an HPC cluster.
 
-You do **not** hand-write the worker's prompt — `hpc-agent run` generates it deterministically. The flow:
+This command is a thin trigger over `hpc-agent run`, the code-orchestrated entrypoint. Do not run the `hpc-submit` skill, and do not perform the workflow steps yourself in this conversation — the workflow runs in a fresh-context worker.
 
-1. Collect the human-facing inputs below (migration check, setup-action prompts, scaffolding sub-interview) in this conversation.
-2. Run, via the `Bash` tool: `hpc-agent run submit --fields-json '<fields>'`, where `<fields>` is a JSON object of the resolved inputs (picked run, cluster, flags, `campaign_id`, interview answers). It validates the fields, renders the canonical worker prompt, spawns a fresh-context worker that runs the `hpc-submit` skill, and returns its report. You author only the `fields` data — never the prompt prose.
-3. `hpc-agent run` prints a JSON envelope on stdout: `data.report` carries `result` (the skill's result envelope), `decisions` (the workflow's decision points and what the worker chose at each), and `anomalies`; `data.worker_exit_code` is the worker's exit status.
-4. Surface `data.report.result` (`run_id`, `job_ids`, grid dimensions, verified scheduler state), the `decisions` list, and the `anomalies` string to the user. The verbose workflow output — discovery transcripts, scheduler dumps, rsync logs — stayed in the worker and never entered this conversation.
-
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in `--fields-json`, do not delegate it. Three pieces the skill cannot carry:
-
-## 1. Migration check (legacy `_hpc_dispatch.json`)
-
-Before any of the priority checks, look for a top-level `_hpc_dispatch.json` (or `manifest.<sha8>.json`, or `manifest.json`) in the experiment dir. These are artifacts of the pre-`.hpc/tasks.py` model that no longer drive the framework. If present, surface a one-time migration message:
-
-> "I found a legacy dispatch manifest at `_hpc_dispatch.json`. The framework no longer reads manifests — task definitions live in `.hpc/tasks.py` and per-run state in `.hpc/runs/<run_id>.json`. I'll walk you through writing `.hpc/tasks.py` once at Step 6 (using your existing manifest as a translation hint if helpful), then we can move the old manifest aside. OK to proceed?"
-
-If the user agrees, continue to the suggest-setup-action priority ladder. The manifest's existing `tasks[*].cmd` and `tasks[*].params` are useful translation hints for the scaffolding sub-interview but are not consumed by the framework. Once `.hpc/tasks.py` is committed, suggest `git mv _hpc_dispatch.json .hpc/legacy/` (or simply delete it). Don't proceed silently — a stale `_hpc_dispatch.json` next to a fresh `.hpc/tasks.py` is confusing on inspection.
-
-## 2. Suggest-setup-action user prompts
-
-The skill calls `suggest-setup-action` and gets back `{action, candidates, ...}`. Render to the user per the action:
-
-| `action` | User prompt |
-|---|---|
-| `monitor` | "Found in-flight runs: <list>. Resume monitoring with `/monitor-hpc`, or start a new submission?" — group by `campaign_id` if >3 runs. |
-| `reuse` | "Recent submissions: <(profile, cluster) pairs from `candidates`>. Resubmit same, modify (edit `.hpc/tasks.py`), or start fresh?" |
-| `interview` | "Found existing `.hpc/tasks.py` (axis already encoded). Skip the executor-discovery interview and go straight to scaffolding tasks.py?" |
-| `fresh` | (no prompt — fall through to full interview) |
-
-For `reuse`: list distinct `(profile, cluster)` pairs from recent run sidecars so the user can pick "same as last `ml_ridge` submission" without re-answering interview questions. Each sidecar carries the full v2 config snapshot — resources, env, constraints, runtime — so reuse is a one-line copy.
-
-## 3. Scaffolding sub-interview (when nothing exists yet)
-
-### 3a. Whole-repo scaffolding — `build-template`
-
-Before scaffolding individual executors, check whether the repo is set up as an experiment repo at all. If there is no experiment-template scaffold — no `.hpc/`, no `Makefile` that does `include .hpc/template.mk` — and the user is starting from a notebook (or wants the notebook → executor workflow), offer to bootstrap the whole repo first:
-
-> "This repo isn't set up for hpc-agent experiments yet. Want me to scaffold it? `hpc-agent build-template` drops in a `Makefile`, a CI workflow (build-from-notebooks + lint/type-check + serial-elision gates), a pre-commit export-check hook, a `pyproject.toml`, a `.gitignore` for the generated set (`src/`, `.hpc/tasks.py`, `.hpc/cli.py`), and the `.hpc/` experiment tooling. Existing root files are never overwritten without `--force` (the `Makefile` / `.gitignore` gain a block non-destructively); the framework-owned `.hpc/` assets self-heal on every run."
-
-`build-template` is a human-facing CLI command — `hpc-agent build-template [--repo-dir <dir>] [--force]` — deliberately *not* a wire primitive: the experiment-template flow is built around researcher-authored notebooks, so it is exclusive to this human entry point and absent from the integrator primitive catalog. After it runs: `make new-experiment NAME=<name>` scaffolds `experiments/<name>.ipynb`, the researcher fills in the `@register_run` function, `make export` produces the executor `.py`. Then re-run `discover-executors` and continue. Surface `data.needs_manual_merge` verbatim — when the repo already had a `pyproject.toml` the template fragment is dropped at `.hpc/pyproject-fragment.toml` for a hand-merge rather than clobbering theirs.
-
-### 3b. Executor scaffolding sub-interview
-
-When the skill's `discover-executors` step returns an empty list, pivot to a scaffolding sub-interview right here (this absorbs what `/build-executor-hpc` used to be):
-
-1. Ask: "No executors found in `executors/` / `scripts/` / `src/`. Want me to scaffold one — what should it do?"
-2. Walk the user through filling in `compute(args)` based on their description — model fit/predict, simulation step, data transform, etc.
-3. Capture the flag set the user wants (this becomes that executor's entry in the FLAGS dict during the Step 6b interview).
-4. Hand off to **hpc-build-executor** skill for the actual scaffold call.
-5. Once the new file exists, hand back to **hpc-submit** skill which re-runs `discover-executors` and continues.
-
-## Common Failure Modes (user-facing troubleshooting)
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `Eqw` state (SGE) | Job error | `qmod -cj <JOBID>` or resubmit |
-| `PENDING` (SLURM) for >30min | Resource unavailable | Check `sinfo`, try different partition |
-| Memory exceeded | Exceeded mem limit | Resubmit with higher memory |
-| Walltime exceeded | Exceeded time limit | Resubmit with longer walltime |
-| ModuleNotFoundError | Env not set up | Check modules and conda_env |
-| file transfer failure (rsync/scp) | SSH key issue | Check `ssh $SSH_TARGET hostname` first |
-| `--features` not recognized | Executor doesn't support that arg | Check `--help`, update executor |
-
-When the user mentions CLI arguments that the executor doesn't support (e.g., "sweep features=[har, pca]" but `--features` isn't in `--help`), flag it: "ml_ridge.py doesn't accept --features. Should I add it, or did you mean a different executor?"
-
-## Args
-
-`$ARGUMENTS` formats:
-
-1. **Bare (the default)** — empty `$ARGUMENTS`. The skill runs `discover_runs` over `notebooks/`, lists every `@register_run` function, and the user picks one.
-2. **Scoped notebook** — `"<notebook>"` (a path or stem under `notebooks/`, e.g. `forecast` or `notebooks/forecast.ipynb`). Discovery is scoped to that file; if it carries exactly one `@register_run`, that run is used directly.
-3. **Executor + axis description** (legacy free-text) — `"run ridge"`, `"sweep horizons 1, 5, 25 on lightgbm"` — the slash parses to `(executor_id, axis_shape)` tuples and hands to the skill.
-4. **Flags**:
-   - `--no-canary` — skip the 1-task canary submission. Default: canary-on; only skip when the user has already smoke-tested the pipeline within the session.
-   - `--cluster <name>` — pin the target cluster (otherwise interactive).
-   - `--campaign-id <slug>` — tag this submission as one iteration of a closed-loop campaign. Required when invoked as part of `/campaign-hpc`.
-
-After the run is picked, the skill looks up its stored `DataAxis` classification in `.hpc/axes.yaml` (`executors.<run>`): a hit with a matching `run_signature_sha` is reused; a miss or signature drift triggers the `hpc-classify-axis` skill before submission.
+1. Structure the user's request into a JSON object `<fields>` — the run or notebook to submit, plus any explicit choices they stated (`cluster`, `--no-canary`, `campaign_id`). No up-front interview is needed; pass whatever the user gave.
+2. Run, via the `Bash` tool: `hpc-agent run submit --fields-json '<fields>'`. It validates the fields, generates the canonical worker prompt by code, and spawns a fresh-context worker that executes the `hpc-submit` skill. It prints a JSON envelope.
+3. Surface to the user: `data.report.result` (run id, job ids, grid dimensions, verified scheduler state), `data.report.decisions` (each decision point the worker reached and why), and `data.report.anomalies`.
+4. If a decision is an **escalation** — the worker needs an input only a human can give (a cluster choice, an axis classification, an executor to scaffold, a confirmation) — ask the user for it, add it to `<fields>`, and run `hpc-agent run submit` again. A fresh, unscaffolded experiment may take two round-trips.
