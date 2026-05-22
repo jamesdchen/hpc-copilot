@@ -51,27 +51,27 @@ def main() -> int:
 
     found: set[str] = set()
     for p in REPO.rglob("*.py"):
-        s = str(p)
-        # Skip:
+        # Skip (match path *components* via ``p.parts``, not substrings
+        # of ``str(p)`` — a substring check breaks on Windows, where
+        # path components join with ``\`` not ``/``):
         # - .git/             — git's own files
         # - tests/, scripts/  — never registration sites
         # - hpc-agent-pro/    — sibling plugin package; its primitives
         #   register through the plugin seam, not _PRIMITIVE_MODULES
-        # - .claude/worktrees/ — agent-isolated worktrees may shadow the
-        #   real source tree with their own copies; treating those as
-        #   first-class would double-count primitives
+        # - worktrees/        — .claude/worktrees agent-isolated copies
+        #   may shadow the real source tree and double-count primitives
         # - .venv/, venv/, build/, dist/ — install / build artifacts
-        if (
-            "/.git/" in s
-            or "/tests/" in s
-            or "/scripts/" in s
-            or "/hpc-agent-pro/" in s
-            or "/.claude/worktrees/" in s
-            or "/.venv/" in s
-            or "/venv/" in s
-            or "/build/" in s
-            or "/dist/" in s
-        ):
+        if set(p.parts) & {
+            ".git",
+            "tests",
+            "scripts",
+            "hpc-agent-pro",
+            "worktrees",
+            ".venv",
+            "venv",
+            "build",
+            "dist",
+        }:
             continue
         if p.resolve() == self_path:
             continue

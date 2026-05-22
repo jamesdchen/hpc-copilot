@@ -5,32 +5,34 @@ Framework-owned and self-healing: ``hpc-agent build-template`` re-writes
 this file verbatim on every run. Do NOT edit it — project code lives
 elsewhere.
 
-    python .hpc/scaffold.py new <name>    scaffold experiments/<name>.ipynb
-    python .hpc/scaffold.py export        re-export every notebook to a .py
-    python .hpc/scaffold.py check-sync    fail if an exported .py is stale
+    python .hpc/scaffold.py new <name>    scaffold notebooks/experiments/<name>.ipynb
     python .hpc/scaffold.py discover      list the @register_run experiments
+
+The notebook -> ``src/`` build is `hpc-agent export-package` (run by
+`make build`, CI, the conftest clone hook, and submit). There is no
+committed ``src/`` and no notebook-sync staleness check — the notebook
+is the single reviewed artifact.
 """
 
 from __future__ import annotations
 
 import sys
-import tempfile
 from pathlib import Path
 
-_SKIP = {".hpc", ".git", "__pycache__", ".ipynb_checkpoints", ".venv", "venv"}
+_SKIP = {".hpc", ".git", "__pycache__", ".ipynb_checkpoints", ".venv", "venv", "src"}
 
 
-def _notebooks(root: Path):
-    for nb in sorted(root.rglob("*.ipynb")):
-        if not any(part in _SKIP for part in nb.parts):
-            yield nb
+def _notebook_root(root: Path) -> Path:
+    """Prefer ``notebooks/`` when present — that is where runs are authored."""
+    nb = root / "notebooks"
+    return nb if nb.is_dir() else root
 
 
 def _cmd_new(name: str) -> int:
     from hpc_agent import _PACKAGE_ROOT
 
     skeleton = _PACKAGE_ROOT / "template" / "scaffold" / "experiment.ipynb.tmpl"
-    dest = Path("experiments") / f"{name}.ipynb"
+    dest = Path("notebooks") / "executors" / f"{name}.ipynb"
     if dest.exists():
         print(f"refusing to overwrite {dest}", file=sys.stderr)
         return 1
@@ -40,51 +42,19 @@ def _cmd_new(name: str) -> int:
     return 0
 
 
-def _cmd_export() -> int:
-    from hpc_agent.template import export_notebook
-
-    count = 0
-    for nb in _notebooks(Path(".")):
-        out = nb.with_suffix(".py")
-        export_notebook(nb, out)
-        print(f"exported {nb} -> {out}")
-        count += 1
-    print(f"{count} notebook(s) exported")
-    return 0
-
-
-def _cmd_check_sync() -> int:
-    from hpc_agent.template import export_notebook
-
-    stale: list[str] = []
-    for nb in _notebooks(Path(".")):
-        committed = nb.with_suffix(".py")
-        with tempfile.TemporaryDirectory() as td:
-            fresh = Path(td) / "out.py"
-            export_notebook(nb, fresh)
-            fresh_text = fresh.read_text(encoding="utf-8")
-        current = committed.read_text(encoding="utf-8") if committed.exists() else ""
-        if fresh_text != current:
-            stale.append(str(committed))
-    if stale:
-        print("stale exported .py (run `make export` and commit):", file=sys.stderr)
-        for s in stale:
-            print(f"  {s}", file=sys.stderr)
-        return 1
-    print("all exported .py files are in sync with their notebooks")
-    return 0
-
-
 def _cmd_discover() -> int:
     from hpc_agent.template import discover_runs
 
-    runs = discover_runs(".")
+    runs = discover_runs(_notebook_root(Path(".")))
     if not runs:
         print("no @register_run experiments found", file=sys.stderr)
         return 1
     for r in runs:
         flags = ", ".join(f.name for f in r.flags)
-        print(f"{r.path}::{r.name}  gpu={r.gpu}  flags=[{flags}]")
+        print(
+            f"{r.path}::{r.name}  gpu={r.gpu}  "
+            f"sha={r.run_signature_sha}  flags=[{flags}]"
+        )
     return 0
 
 
@@ -99,10 +69,6 @@ def main(argv: list[str] | None = None) -> int:
             print("usage: scaffold.py new <name>", file=sys.stderr)
             return 2
         return _cmd_new(rest[0])
-    if cmd == "export":
-        return _cmd_export()
-    if cmd == "check-sync":
-        return _cmd_check_sync()
     if cmd == "discover":
         return _cmd_discover()
     print(f"unknown command {cmd!r}; see `python .hpc/scaffold.py`", file=sys.stderr)

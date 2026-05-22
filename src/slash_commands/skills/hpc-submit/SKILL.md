@@ -28,7 +28,34 @@ Branch on `action`:
 | `interview` | 2 | `.hpc/tasks.py` exists, no run history | Skip executor-discovery + axes interview (tasks.py already encodes the axis); jump to Step 4b. |
 | `fresh` | 3 | Nothing exists | Full interview from Step 1. |
 
-## Step 1: Discover Executors
+## Step 0: Build the `src/` package
+
+The experiment repo commits **nothing generated** — `src/` is `.gitignore`d. Build it from the notebooks before anything else, so discovery, the elision gate, and the deploy bundle all see a current package:
+
+```bash
+hpc-agent export-package --experiment-dir .
+```
+
+`export-package` globs `notebooks/{pipeline,executors,scripts}/*.ipynb`, exports each to `src/<module>.py` (strict-AST for `@register_run` executors, `# export`-marker for pipeline libraries), and content-hash-caches against `.hpc/.build-cache.json` — a no-op when nothing changed. The built `src/` rides the `submit-flow` rsync into the deploy bundle; **the cluster node never builds** (it stays stdlib-only). On a `spec_invalid` envelope (an output-path collision, a bad module name), surface it and stop — the notebooks need a rename.
+
+## Step 1: Discover runs
+
+**Notebook-first.** The researcher authors only a notebook carrying a `@register_run def run(...)` — no axis declaration, no `tasks.py`, no CLI glue. Discovery is `discover_runs` over `notebooks/`, which AST-walks `.py` and `.ipynb` files (skipping `.hpc/`):
+
+```bash
+python .hpc/scaffold.py discover
+```
+
+Each line is `<path>::<name>  gpu=<bool>  sha=<run_signature_sha>  flags=[...]`.
+
+- **Bare `/submit-hpc`** (the default) — list every `@register_run` and let the user pick one.
+- **`/submit-hpc <notebook>`** — scope discovery to that one file.
+
+Record the picked run's `name`, `gpu`, `flags`, and `run_signature_sha` — the signature hash is the cache key for Step 3's classification lookup.
+
+For environment classification (Step 4) you still need the run's imports; invoke [discover-executors](../../docs/primitives/discover-executors.md) for the matching module's `info.imports` / `info.has_compute_function`, or read the notebook's import cells directly.
+
+### Step 1b: Discover Executors (legacy / env detail)
 
 Invoke [discover-executors](../../docs/primitives/discover-executors.md). The primitive scans `executors/`, `scripts/`, `src/` (in order, falling back to repo root), filters utilities, and classifies each executor by contract.
 
@@ -55,21 +82,15 @@ The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_i
 
 Read `compute()` / the `@register_run` function and its call graph — the same code-analysis pass that classifies hardware from `info.imports` at Step 4. A series axis is present when the executor loops over an ordered series (a time index, a date range, rows of a sorted frame) and you intend to parallelize *that loop*. If there is no series loop, it is a cartesian grid — skip to Step 4.
 
-### 3b: Classify the `DataAxis`
+### 3b: Classify the `DataAxis` — cache check, then interview
 
-The experiment declares nothing about parallelism — you classify it. The one question: **does the loop carry state, and is the state transition associative?** (Full model: `hpc_agent/template/axis.py`. The same classification reference lives in [build-tasks-py.md](../../docs/primitives/build-tasks-py.md) so an integrator driving `build-tasks-py` directly — without this skill — gets the identical guidance.)
+The experiment declares nothing about parallelism — the classification is stored in `<experiment>/.hpc/axes.yaml`'s `executors.<run_name>` block, keyed by run name and stamped with the `run_signature_sha` it was classified against.
 
-| Observation in `run()` | `DataAxis` | Halo |
-|---|---|---|
-| Loop body is a pure function of its row (no accumulator) | `Independent()` | none |
-| Accumulates an *associative* summary (sum, count, min/max, sufficient statistics) | `Associative(monoid)` | none |
-| Refits / re-reads a *trailing window* of bounded length (rolling stat, `train_window` lookback) | `BoundedHalo(halo_fn)` | ≈ the window length |
-| Unbounded or order-dependent dependency (running state with no fixed horizon; trial *n* depends on `0..n-1`) | `Sequential()` | — |
+**Cache lookup.** Read `axes.yaml`. If `executors.<run_name>` exists **and** its `run_signature_sha` equals the picked run's current `run_signature_sha` (from Step 1) → the stored `DataAxis` is still valid: **reuse it, skip the interview.** A mismatch (signature drifted) or no entry → conduct the classification interview.
 
-Inference is **never trusted unverified** — classifying data dependencies is real program analysis and you will sometimes get it wrong. Two rules:
+**Interview.** Hand off to the **[hpc-classify-axis](../hpc-classify-axis/SKILL.md) skill** — it walks the proposes-then-confirms decision tree (`Independent` / `Associative` / `BoundedHalo` / `Sequential`), pre-fills from `recall`, and records the result via the [classify-axis](../../docs/primitives/classify-axis.md) primitive into `axes.yaml`'s `executors` block. The single classifying question — **does the loop carry state, and is the state transition associative?** — and the full decision tree live in that skill and in `hpc_agent/template/axis.py`.
 
-- **Default to `Sequential()` on any uncertainty.** A serial run is slow, not wrong. Narrow to a splittable axis only when the code makes the dependency structure unambiguous.
-- **Bias halos large.** An over-wide halo wastes compute; a too-small halo is silent corruption. For a `train_window`-based refit, set `halo_fn` to the full window (e.g. `train_window` days × the intraday bar count), never a guess below it.
+> **`DataAxis` ≠ scheduling axes.** `axes.yaml` holds two unrelated things: the `executors.<run>.data_axis` block (this step — *how to split the series correctly*) and `homogeneous_axes` / `axes` (Step 4b / `hpc-axes-init` — *which sweep dimension goes on the task array*). They are orthogonal; classifying the `DataAxis` never touches the scheduling axes.
 
 ### 3c: Serial-elision gate (mandatory for a non-`Sequential` axis)
 
@@ -89,7 +110,9 @@ Resolve in order: cluster (interactive or `--cluster`); `SSH_TARGET` + `REMOTE_P
 
 For DL executors with `conda_envs` listed in `clusters.yaml` → present the options; without → ask. Resource defaults: CPU/ML 1×16G×4h; GPU/DL 4×16G×6h×2gpu (gpu_type=first in cluster's `gpu_types`).
 
-Build rsync excludes from `.gitignore` patterns + the standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories. `.hpc/` rides rsync — the cluster needs `tasks.py` and the in-flight `runs/<run_id>.json`; `submit-flow` protects the framework-deployed `.hpc/` files from `--delete` itself (see [submit-flow.md](../../docs/primitives/submit-flow.md)).
+Build rsync excludes from `.gitignore` patterns + the standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories.
+
+**Do not exclude the generated package.** The scaffolded `.gitignore` lists `src/`, `.hpc/tasks.py`, and `.hpc/cli.py` — they are generated, not committed — but the cluster node *needs* them: `src/` is the executor package built at Step 0, and `tasks.py`/`cli.py` are the dispatch contract. When deriving excludes from `.gitignore`, **drop `src/`, `.hpc/tasks.py`, and `.hpc/cli.py` from the exclude list** so the built bundle ships them. `.hpc/` rides rsync generally — the cluster also needs the in-flight `runs/<run_id>.json`; `submit-flow` protects the framework-deployed `.hpc/` files from `--delete` itself (see [submit-flow.md](../../docs/primitives/submit-flow.md)). Do keep excluding `.hpc/.build-cache.json` — it is a local-build artifact the node never reads.
 
 ## Step 4b: Compute Throughput Plan
 
@@ -131,7 +154,11 @@ If `tp.exists()`, read it as-is — never regenerate. To change the axis, the us
 
 If `tp.exists()` is False, walk through `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py` (top-level `FLAGS: dict[str, list[Flag]]`, eager-materialized `_TASKS = [...]`, three commented-out usage patterns inline). Generate via [build-tasks-py](../../docs/primitives/build-tasks-py.md) — don't hand-author it. Refuses to overwrite without `--force`.
 
-**Planner-driven axis (Step 3b).** When Step 3 classified a non-trivial `DataAxis`, pass it to [build-tasks-py](../../docs/primitives/build-tasks-py.md) in the spec's `data_axis` field: `{kind, chunks, series_length, halo_expr?, monoid?}`. The primitive then emits a `plan_tasks`-driven `tasks.py` deterministically — the `axes` become the sweep, the series axis is partitioned per the classification. The agent classifies; it never hand-writes `tasks.py`. `series_length` is the integer you probed at Step 3a; `halo_expr` (for `bounded_halo`) is a plain arithmetic expression over `params`, e.g. `params['train_window'] * 48`. The serial-elision gate (Step 3c) must have passed before the file is committed.
+**Planner-driven axis (Step 3b).** When Step 3 classified a non-trivial `DataAxis`, source it from `axes.yaml`'s `executors.<run_name>.data_axis` block (written by `classify-axis`) and pass it to [build-tasks-py](../../docs/primitives/build-tasks-py.md) in the spec's `data_axis` field: `{kind, chunks, series_length, halo_expr?, monoid?}`. The primitive then emits a `plan_tasks`-driven `tasks.py` deterministically — the `axes` become the sweep, the series axis is partitioned per the classification. The agent classifies; it never hand-writes `tasks.py`. `series_length` is the integer you probed at Step 3a; `chunks` is the desired per-sweep-point split count.
+
+> **Halo-expression form differs between the two surfaces.** The `executors` block stores the halo as `halo.expr` over **bare** parameter names (`train_window * 48`). `build-tasks-py`'s `data_axis.halo_expr` expects the **`params[...]`** form (`params['train_window'] * 48`). When threading a stored `bounded_halo` classification into `build-tasks-py`, rewrite each bare name `X` → `params['X']`. Both forms are validated to safe arithmetic before use.
+
+The serial-elision gate (Step 3c) must have passed before the file is committed.
 
 **Axis naming**: prefer experiment-prefixed axis names (`exp_horizon`, `ridge_alpha`) over bare ones (`horizon`, `alpha`) — a bare name whose uppercase form is a real env var (an axis `home` → `$HOME`) corrupts the executor's environment. `build-tasks-py` rejects names that collide with a reserved set at scaffold time; the mechanism and the recommended `HPC_KW_NAMESPACE_ONLY=1` default are in [build-tasks-py.md](../../docs/primitives/build-tasks-py.md).
 

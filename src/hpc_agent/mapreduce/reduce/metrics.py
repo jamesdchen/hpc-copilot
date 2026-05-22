@@ -55,6 +55,22 @@ def _neumaier_sum(values: Iterable[float]) -> float:
     return s + c
 
 
+def _coerce_weight(value, fallback):
+    """Coerce an entry's ``n_samples`` to a usable non-negative weight.
+
+    A ``metrics.json`` is an arbitrary user JSON dict, so ``n_samples``
+    may be a string/list/negative value; ``v * w`` on a bad weight would
+    raise and abort the whole reduce. ``bool`` is excluded so ``True`` is
+    not silently treated as the weight ``1``. Kept in sync with the copy
+    in ``hpc_agent/mapreduce/combiner.py``.
+    """
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, (int, float)) and value >= 0:
+        return value
+    return fallback
+
+
 def _weighted_mean(entries: list[dict]) -> dict:
     """Per-key weighted-mean rollup across a list of metric dicts.
 
@@ -69,12 +85,12 @@ def _weighted_mean(entries: list[dict]) -> dict:
         return {}
 
     all_keys = {k for e in entries for k in e}
-    weights = [e.get("n_samples", 1) for e in entries]
+    weights = [_coerce_weight(e.get("n_samples", 1), 1) for e in entries]
     agg: dict = {}
 
     for key in sorted(all_keys):
         if key == "n_samples":
-            agg["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
+            agg["n_samples"] = sum(_coerce_weight(e.get("n_samples", 0), 0) for e in entries)
             continue
         # Skip non-numeric values: a metrics.json may carry string/list
         # labels, and ``v * w`` on those would raise. Kept in sync with

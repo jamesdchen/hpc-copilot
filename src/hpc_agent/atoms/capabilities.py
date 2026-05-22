@@ -26,6 +26,7 @@ _SKILL_NAMES = (
     "hpc-aggregate",
     "hpc-build-executor",
     "hpc-campaign",
+    "hpc-classify-axis",
 )
 
 

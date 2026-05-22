@@ -89,12 +89,18 @@ class SGEBackend(HPCBackend):
 
     @staticmethod
     def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
-        """Cluster-side stderr path for SGE: ``<remote_path>/<job_name>.o<job_id>.<task_id>``.
+        """Cluster-side stderr path for SGE.
 
-        SGE uses the ``-j y`` join-stderr-into-stdout convention in the
-        templates, so the ``.o`` (output) file holds both streams.
+        ``_build_command`` passes ``-o <log_dir>`` to ``qsub`` and the
+        runtime array templates default ``log_dir`` to ``logs`` (relative
+        to the run dir, which is ``remote_path``); with ``-j y`` the
+        ``.o`` (output) file holds both streams. SGE names the file
+        ``<job_name>.o<job_id>.<SGE_TASK_ID>`` with a 1-based
+        ``SGE_TASK_ID``, while the array scripts derive the logical
+        0-based ``task_id`` as ``SGE_TASK_ID - 1`` (offset 0) — so the
+        on-disk filename index is ``task_id + 1``.
         """
-        return f"{remote_path.rstrip('/')}/{job_name}.o{job_id}.{task_id}"
+        return f"{remote_path.rstrip('/')}/logs/{job_name}.o{job_id}.{task_id + 1}"
 
     @staticmethod
     def err_log_disk_path(

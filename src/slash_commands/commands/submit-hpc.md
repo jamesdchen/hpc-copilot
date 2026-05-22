@@ -29,7 +29,7 @@ For `reuse`: list distinct `(profile, cluster)` pairs from recent run sidecars s
 
 Before scaffolding individual executors, check whether the repo is set up as an experiment repo at all. If there is no experiment-template scaffold — no `.hpc/`, no `Makefile` that does `include .hpc/template.mk` — and the user is starting from a notebook (or wants the notebook → executor workflow), offer to bootstrap the whole repo first:
 
-> "This repo isn't set up for hpc-agent experiments yet. Want me to scaffold it? `hpc-agent build-template` drops in a `Makefile`, a CI workflow (notebook-sync + serial-elision gates), a pre-commit re-export hook, a `pyproject.toml`, and the `.hpc/` experiment tooling. Existing root files are never overwritten without `--force`; the framework-owned `.hpc/` assets self-heal on every run."
+> "This repo isn't set up for hpc-agent experiments yet. Want me to scaffold it? `hpc-agent build-template` drops in a `Makefile`, a CI workflow (build-from-notebooks + lint/type-check + serial-elision gates), a pre-commit export-check hook, a `pyproject.toml`, a `.gitignore` for the generated set (`src/`, `.hpc/tasks.py`, `.hpc/cli.py`), and the `.hpc/` experiment tooling. Existing root files are never overwritten without `--force` (the `Makefile` / `.gitignore` gain a block non-destructively); the framework-owned `.hpc/` assets self-heal on every run."
 
 `build-template` is a human-facing CLI command — `hpc-agent build-template [--repo-dir <dir>] [--force]` — deliberately *not* a wire primitive: the experiment-template flow is built around researcher-authored notebooks, so it is exclusive to this human entry point and absent from the integrator primitive catalog. After it runs: `make new-experiment NAME=<name>` scaffolds `experiments/<name>.ipynb`, the researcher fills in the `@register_run` function, `make export` produces the executor `.py`. Then re-run `discover-executors` and continue. Surface `data.needs_manual_merge` verbatim — when the repo already had a `pyproject.toml` the template fragment is dropped at `.hpc/pyproject-fragment.toml` for a hand-merge rather than clobbering theirs.
 
@@ -61,9 +61,12 @@ When the user mentions CLI arguments that the executor doesn't support (e.g., "s
 
 `$ARGUMENTS` formats:
 
-1. **Executor + axis description**: `"run ridge"`, `"all ML models"`, `"sweep horizons 1, 5, 25 on lightgbm"`, `"subgroup analysis with ridge and xgboost"` — the slash parses to `(executor_id, axis_shape)` tuples and hands to the skill.
-2. **Flags**:
+1. **Bare (the default)** — empty `$ARGUMENTS`. The skill runs `discover_runs` over `notebooks/`, lists every `@register_run` function, and the user picks one.
+2. **Scoped notebook** — `"<notebook>"` (a path or stem under `notebooks/`, e.g. `forecast` or `notebooks/forecast.ipynb`). Discovery is scoped to that file; if it carries exactly one `@register_run`, that run is used directly.
+3. **Executor + axis description** (legacy free-text) — `"run ridge"`, `"sweep horizons 1, 5, 25 on lightgbm"` — the slash parses to `(executor_id, axis_shape)` tuples and hands to the skill.
+4. **Flags**:
    - `--no-canary` — skip the 1-task canary submission. Default: canary-on; only skip when the user has already smoke-tested the pipeline within the session.
    - `--cluster <name>` — pin the target cluster (otherwise interactive).
    - `--campaign-id <slug>` — tag this submission as one iteration of a closed-loop campaign. Required when invoked as part of `/campaign-hpc`.
-3. **Empty**: full interactive interview.
+
+After the run is picked, the skill looks up its stored `DataAxis` classification in `.hpc/axes.yaml` (`executors.<run>`): a hit with a matching `run_signature_sha` is reused; a miss or signature drift triggers the `hpc-classify-axis` skill before submission.

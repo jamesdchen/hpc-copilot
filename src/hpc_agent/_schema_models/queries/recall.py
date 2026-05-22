@@ -67,6 +67,17 @@ class _CampaignSummary(BaseModel):
     abort_if: dict[str, Any] | None = None
     cluster_target: dict[str, Any] | None = None
     task_generator: dict[str, Any] | None = None
+    data_axes: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Classified DataAxis per @register_run function, projected from "
+            "the campaign's .hpc/axes.yaml `executors` block: "
+            "{run_name: {kind, halo_expr?, monoid?}}. Lets the next "
+            "classification interview pre-fill from a prior similar "
+            "experiment instead of re-asking cold. None when the campaign "
+            "has no classified axes."
+        ),
+    )
 
 
 class _TaskCountStats(BaseModel):
@@ -127,6 +138,13 @@ class _RecallRollup(BaseModel):
     produced_by_kinds: dict[str, int]
     task_generator_kinds: dict[str, int]
     clusters: dict[str, int]
+    data_axis_kinds: dict[str, int] = Field(
+        description=(
+            "Histogram of classified DataAxis kinds (independent / "
+            "associative / bounded_halo / sequential) across every "
+            "matched campaign's executors block."
+        ),
+    )
     task_count: _TaskCountStats | None
     materialized_at: _MaterializedAtStats | None
     runtime_rollup: _RuntimeRollup | None = None

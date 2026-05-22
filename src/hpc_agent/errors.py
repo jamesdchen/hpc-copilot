@@ -173,7 +173,7 @@ class OutputsMissing(HpcError):
     category = "cluster"
     remediation = (
         "Resubmit the listed task ids and re-run aggregate.  Inspect "
-        "<remote_path>/_hpc_logs/ for per-task stderr if the resubmit "
+        "<remote_path>/logs/ for per-task stderr if the resubmit "
         "doesn't produce the expected output."
     )
 

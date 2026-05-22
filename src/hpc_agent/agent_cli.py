@@ -31,6 +31,8 @@ from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 import hpc_agent
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
@@ -104,7 +106,8 @@ def _ok(
     wins so callers can opt out of the catalog lookup if needed.
 
     *partial_errors*: optional list of ``{code, detail}`` dicts surfaced
-    at the top level of the envelope — distinct from ``data.errors``.
+    at the top level of the envelope — distinct from any per-primitive
+    error list that lives inside the ``data`` block.
     Used by primitives like ``inspect-cluster`` whose underlying data
     source can be partially degraded (qhost timed out, sacct
     unavailable) without the operation as a whole failing.
@@ -288,13 +291,6 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
 
 
 # ─── subcommand: capabilities ──────────────────────────────────────────────
-
-
-# Re-exported from hpc_agent.atoms.capabilities for back-compat with
-# tests that import the constant directly from agent_cli.
-# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 —
-# update tests to import from hpc_agent.atoms.capabilities directly.
-from hpc_agent.atoms.capabilities import _SKILL_NAMES  # noqa: E402,F401
 
 
 def _live_subcommands() -> list[str]:
@@ -710,6 +706,56 @@ def cmd_build_tasks_py(args: argparse.Namespace) -> int:
             retry_safe=False,
         )
     _ok(out, name="build-tasks-py")
+    return EXIT_OK
+
+
+def cmd_classify_axis(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at hpc_agent.atoms.classify_axis.
+
+    Accepts a JSON ``--spec <file>`` of ``{run_name, run_signature_sha,
+    data_axis, classified_by?}`` and records the classified ``DataAxis``
+    into ``<experiment>/.hpc/axes.yaml``'s ``executors`` block.
+    """
+    from hpc_agent.atoms.classify_axis import classify_axis
+
+    raw = _load_spec(args.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="classify-axis input must be a JSON object",
+            category="user",
+            retry_safe=False,
+        )
+    _validate_against_schema(raw, "classify_axis")
+    from hpc_agent._schema_models.actions.classify_axis import ClassifyAxisInput
+
+    try:
+        spec = ClassifyAxisInput.model_validate(raw)
+    except Exception as exc:  # pydantic.ValidationError
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user",
+            retry_safe=False,
+        )
+    out = classify_axis(args.experiment_dir, spec=spec)
+    _ok(out, name="classify-axis")
+    return EXIT_OK
+
+
+def cmd_export_package(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at hpc_agent.atoms.export_package.
+
+    Builds ``<experiment>/src/`` from the notebooks under
+    ``notebooks/{pipeline,executors,scripts}/``. Convention-driven, so
+    there is no ``--spec`` — only ``--force`` to bypass the build cache.
+    """
+    from hpc_agent._schema_models.actions.export_package import ExportPackageInput
+    from hpc_agent.atoms.export_package import export_package
+
+    spec = ExportPackageInput(force=bool(args.force))
+    out = export_package(args.experiment_dir, spec=spec)
+    _ok(out, name="export-package")
     return EXIT_OK
 
 
@@ -1162,6 +1208,16 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     _validate_against_schema(spec, "submit_flow")
 
     if args.dry_run:
+        # The dry-run path reads spec fields directly instead of going
+        # through ``SubmitFlowSpec.model_validate``; guard the required
+        # keys so a missing field is a clean spec_invalid (exit 1) rather
+        # than a bare KeyError → generic handler → exit 3.
+        required = ("total_tasks", "profile", "cluster", "run_id")
+        missing = [k for k in required if k not in spec]
+        if missing:
+            raise errors.SpecInvalid(
+                f"submit-flow --dry-run spec missing required field(s): {', '.join(missing)}"
+            )
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
@@ -1322,13 +1378,6 @@ def cmd_aggregate_flow(args: argparse.Namespace) -> int:
 
 
 # ─── subcommand: aggregate ─────────────────────────────────────────────────
-
-
-# Re-exported from hpc_agent.atoms.failures for back-compat with the
-# auto-retry resolver test suite, which imports the helper directly.
-# back-compat: introduced 0.2.0 (atoms split). Remove in 0.4.0 — update
-# tests/test_failures*.py to import from hpc_agent.atoms.failures.
-from hpc_agent.atoms.failures import _resolve_auto_retry  # noqa: E402,F401
 
 
 def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, str]:
@@ -1890,6 +1939,49 @@ def build_parser() -> argparse.ArgumentParser:
         dry_run_help="Validate the spec but don't write tasks.py.",
     )
     p_btp.set_defaults(func=cmd_build_tasks_py)
+
+    # classify-axis
+    p_ca = sub.add_parser(
+        "classify-axis",
+        help=(
+            "Record a @register_run function's classified DataAxis "
+            "(independent / associative / bounded_halo / sequential) into "
+            "<experiment>/.hpc/axes.yaml's `executors` block. Spec file is "
+            "{run_name, run_signature_sha, data_axis: {kind, halo?, "
+            "monoid?}, classified_by?}. The agent classifies; this "
+            "primitive only records."
+        ),
+    )
+    _add_experiment_dir(p_ca)
+    _add_spec_and_dry_run(
+        p_ca,
+        schema_hint=(
+            "{run_name, run_signature_sha, data_axis: {kind, halo?, monoid?}, classified_by?}"
+        ),
+        dry_run_help="Validate the spec but don't write axes.yaml.",
+    )
+    p_ca.set_defaults(func=cmd_classify_axis)
+
+    # export-package
+    p_ep = sub.add_parser(
+        "export-package",
+        help=(
+            "Build <experiment>/src/ from the notebooks under "
+            "notebooks/{pipeline,executors,scripts}/. Convention-driven: "
+            "the output module name and the exporter (strict-AST for "
+            "@register_run executors, # export-marker for pipeline "
+            "libraries) are both derived. Content-hash caches against "
+            ".hpc/.build-cache.json — a second run with no notebook edits "
+            "is all cache hits."
+        ),
+    )
+    _add_experiment_dir(p_ep)
+    p_ep.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore the build cache and re-export every notebook.",
+    )
+    p_ep.set_defaults(func=cmd_export_package)
 
     # cluster-reduce
     p_cr = sub.add_parser(
@@ -2812,6 +2904,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"scheduler subprocess timed out after {exc.timeout}s: {exc.cmd!r}"
             )
         )
+    except ValidationError as exc:
+        # pydantic v2 ``ValidationError`` does NOT subclass ``ValueError``,
+        # so without this clause a malformed --spec would fall through to
+        # the generic handler and be mislabelled internal / exit 3. A bad
+        # spec is a user error → spec_invalid / exit 1.
+        return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except ValueError as exc:
         # Route through the canonical errors enum rather than inlining
         # the "spec_invalid" string — keeps error_code values centralised

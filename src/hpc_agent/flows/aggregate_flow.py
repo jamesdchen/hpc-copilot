@@ -219,7 +219,7 @@ def aggregate_flow(
     sidecar_for_cmd: dict[str, Any] = {}
     try:
         sidecar_for_cmd = read_run_sidecar(experiment_dir, run_id) or {}
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
         sidecar_for_cmd = {}
     resolved_aggregate_cmd = aggregate_cmd or (
         (sidecar_for_cmd.get("aggregate_defaults") or {}).get("aggregate_cmd")
@@ -258,7 +258,7 @@ def aggregate_flow(
     try:
         sidecar_data = read_run_sidecar(experiment_dir, run_id)
         wave_map_keys = list((sidecar_data.get("wave_map") or {}).keys())
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
         # No wave_map → no waves to ensure. Aggregation falls back to
         # whatever's already in _combiner/ on the cluster.
         pass

@@ -96,10 +96,10 @@ def _read_json_doc(path: Path) -> dict[str, Any] | None:
     because refusing to plan is worse than ignoring it.
     """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     try:
         doc = json.loads(text)

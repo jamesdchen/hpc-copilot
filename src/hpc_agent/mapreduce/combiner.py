@@ -102,6 +102,21 @@ def _neumaier_sum(values):
     return s + c
 
 
+def _coerce_weight(value, fallback):
+    """Coerce an entry's ``n_samples`` to a usable non-negative weight.
+
+    ``metrics.json`` is an arbitrary user JSON dict, so ``n_samples`` may
+    be a string/list/negative value; ``v * w`` on a bad weight would raise
+    and abort the whole wave. ``bool`` is excluded so ``True`` is not
+    silently treated as the weight ``1``.
+    """
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, (int, float)) and value >= 0:
+        return value
+    return fallback
+
+
 def _weighted_mean(entries):
     if not entries:
         return {}
@@ -109,12 +124,12 @@ def _weighted_mean(entries):
     all_keys = set()
     for e in entries:
         all_keys.update(e.keys())
-    weights = [e.get("n_samples", 1) for e in entries]
+    weights = [_coerce_weight(e.get("n_samples", 1), 1) for e in entries]
     result = {}
 
     for key in sorted(all_keys):
         if key == "n_samples":
-            result["n_samples"] = sum(e.get("n_samples", 0) for e in entries)
+            result["n_samples"] = sum(_coerce_weight(e.get("n_samples", 0), 0) for e in entries)
             continue
         # Skip non-numeric values: write_metrics accepts an arbitrary
         # JSON dict, so a metrics.json may carry string/list labels;

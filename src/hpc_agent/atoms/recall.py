@@ -225,8 +225,51 @@ def _summarize(doc: dict[str, Any], path: Path) -> dict[str, Any] | None:
             if isinstance(generator, dict)
             else None
         ),
+        "data_axes": _axis_classifications(path.parent),
     }
     return summary
+
+
+def _axis_classifications(campaign_dir: Path) -> dict[str, Any] | None:
+    """Project the classified DataAxis per @register_run from a sibling axes.yaml.
+
+    Best-effort: reads ``<campaign_dir>/.hpc/axes.yaml``'s ``executors``
+    block so the next classification interview can pre-fill from a prior
+    similar experiment instead of re-asking cold. Parses leniently (a
+    malformed axes.yaml is skipped, matching recall's silent-skip
+    contract — it does NOT route through the schema-validating
+    ``read_axes``). Returns ``None`` when there is no axes.yaml, no
+    ``executors`` block, or the file is unreadable.
+    """
+    axes_yaml = campaign_dir / ".hpc" / "axes.yaml"
+    if not axes_yaml.is_file():
+        return None
+    try:
+        import yaml
+
+        doc = yaml.safe_load(axes_yaml.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, yaml.YAMLError):  # type: ignore[name-defined]
+        return None
+    if not isinstance(doc, dict):
+        return None
+    executors = doc.get("executors")
+    if not isinstance(executors, dict):
+        return None
+    out: dict[str, Any] = {}
+    for run_name, entry in executors.items():
+        if not isinstance(entry, dict):
+            continue
+        data_axis = entry.get("data_axis")
+        if not isinstance(data_axis, dict) or not data_axis.get("kind"):
+            continue
+        proj: dict[str, Any] = {"kind": data_axis["kind"]}
+        halo = data_axis.get("halo")
+        if isinstance(halo, dict) and halo.get("expr"):
+            proj["halo_expr"] = halo["expr"]
+        if data_axis.get("monoid"):
+            proj["monoid"] = data_axis["monoid"]
+        out[str(run_name)] = proj
+    return out or None
 
 
 # ─── Tier 1: invariant rollup over interview.json fields ─────────────────
@@ -247,6 +290,7 @@ def _tier1_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
             "produced_by_kinds": {},
             "task_generator_kinds": {},
             "clusters": {},
+            "data_axis_kinds": {},
             "task_count": None,
             "materialized_at": None,
         }
@@ -262,6 +306,12 @@ def _tier1_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
             (s.get("task_generator") or {}).get("kind") for s in summaries
         ),
         "clusters": _histogram(_cluster_of(s) for s in summaries),
+        "data_axis_kinds": _histogram(
+            proj.get("kind")
+            for s in summaries
+            for proj in (s.get("data_axes") or {}).values()
+            if isinstance(proj, dict)
+        ),
         "task_count": (
             {
                 "p50": _pctile(task_counts, 0.50),

@@ -168,6 +168,20 @@
           ],
           "default": null,
           "title": "Task Generator"
+        },
+        "data_axes": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Classified DataAxis per @register_run function, projected from the campaign's .hpc/axes.yaml `executors` block: {run_name: {kind, halo_expr?, monoid?}}. Lets the next classification interview pre-fill from a prior similar experiment instead of re-asking cold. None when the campaign has no classified axes.",
+          "title": "Data Axes"
         }
       },
       "required": [
@@ -330,6 +344,14 @@
           "title": "Clusters",
           "type": "object"
         },
+        "data_axis_kinds": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Histogram of classified DataAxis kinds (independent / associative / bounded_halo / sequential) across every matched campaign's executors block.",
+          "title": "Data Axis Kinds",
+          "type": "object"
+        },
         "task_count": {
           "anyOf": [
             {
@@ -380,6 +402,7 @@
         "produced_by_kinds",
         "task_generator_kinds",
         "clusters",
+        "data_axis_kinds",
         "task_count",
         "materialized_at"
       ],

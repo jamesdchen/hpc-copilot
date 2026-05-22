@@ -115,6 +115,8 @@ def _load_tasks():
     shadowing the .hpc one.
     """
     spec = importlib.util.spec_from_file_location("tasks", Path(__file__).parent / "tasks.py")
+    if spec is None or spec.loader is None:
+        raise ImportError("could not load tasks.py next to the dispatcher")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

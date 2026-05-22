@@ -13,6 +13,17 @@ dependencies = [
     "hpc-agent",
 ]
 
+[dependency-groups]
+# `hpc-agent export-package` post-processes every generated src/*.py with
+# `ruff format` + `ruff check --fix`. Pin ruff so the build is
+# byte-stable — an unpinned ruff would silently churn the build cache and
+# any generated-code diff. Bump deliberately, not by surprise.
+dev = [
+    "ruff==0.13.0",
+    "mypy",
+    "pytest",
+]
+
 [tool.ruff]
 line-length = 100
 
@@ -21,4 +32,5 @@ select = ["E", "F", "I", "W", "UP", "B"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
-testpaths = ["experiments", "tests"]
+# src/ is generated (conftest.py builds it); tests live under tests/.
+testpaths = ["tests"]

@@ -23,6 +23,7 @@ and the parameterised call form ``@register_run(gpu=True)``.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +31,7 @@ from pathlib import Path
 from hpc_agent.executor_cli import Flag
 from hpc_agent.template.signature import flags_from_ast
 
-__all__ = ["RunInfo", "discover_runs"]
+__all__ = ["RunInfo", "discover_runs", "run_signature_sha"]
 
 _SKIP_DIRS = frozenset({".hpc", ".git", "__pycache__", ".mypy_cache"})
 _DECORATOR_NAME = "register_run"
@@ -54,12 +55,20 @@ class RunInfo:
         The CLI :class:`~hpc_agent.executor_cli.Flag` list synthesised
         from the function signature (see
         :func:`hpc_agent.template.flags_from_ast`).
+    run_signature_sha:
+        A stable SHA-256 over the synthesised :attr:`flags` — the
+        run's *parallelization-relevant* fingerprint. A stored
+        ``DataAxis`` classification (``axes.yaml``'s
+        ``executors.<name>``) is reused only while this hash is
+        unchanged; a signature edit invalidates the classification and
+        triggers a fresh interview.
     """
 
     path: Path
     name: str
     gpu: bool
     flags: tuple[Flag, ...]
+    run_signature_sha: str
 
 
 def discover_runs(src_dir: str | Path) -> list[RunInfo]:
@@ -94,17 +103,45 @@ def discover_runs(src_dir: str | Path) -> list[RunInfo]:
                 gpu = _decorator_gpu(dec, bare, modules)
                 if gpu is None:
                     continue
+                flags = tuple(flags_from_ast(node))
                 found.append(
                     RunInfo(
                         path=path.resolve(),
                         name=node.name,
                         gpu=gpu,
-                        flags=tuple(flags_from_ast(node)),
+                        flags=flags,
+                        run_signature_sha=run_signature_sha(flags),
                     )
                 )
                 break
 
     return sorted(found, key=lambda r: (str(r.path), r.name))
+
+
+def run_signature_sha(flags: tuple[Flag, ...]) -> str:
+    """Return a stable SHA-256 fingerprint of a run's synthesised flags.
+
+    The hash is order-sensitive (signature order is meaningful) and
+    canonicalises each :class:`~hpc_agent.executor_cli.Flag` to a plain
+    dict — the ``type`` field, an argparse callable, is reduced to its
+    ``__name__`` so two structurally-identical signatures hash equal
+    regardless of object identity. Any non-JSON default falls back to
+    ``repr`` so the hash never raises.
+    """
+    canon = [
+        {
+            "name": f.name,
+            "type": getattr(f.type, "__name__", None) if f.type is not None else None,
+            "default": f.default,
+            "required": f.required,
+            "choices": list(f.choices) if f.choices is not None else None,
+            "nargs": f.nargs,
+            "action": f.action,
+        }
+        for f in flags
+    ]
+    blob = json.dumps(canon, sort_keys=True, default=repr)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _read_source(path: Path) -> str:

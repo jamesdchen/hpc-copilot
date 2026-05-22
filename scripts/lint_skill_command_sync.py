@@ -46,6 +46,7 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
     ("hpc-campaign", "campaign-hpc"),
     ("hpc-preflight", "preflight"),
     ("hpc-build-executor", "hpc-axes-init"),
+    ("hpc-classify-axis", "classify-axis-hpc"),
 ]
 
 # Slash-command files allowed to have no skill counterpart (e.g.

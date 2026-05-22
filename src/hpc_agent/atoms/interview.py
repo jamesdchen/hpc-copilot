@@ -143,7 +143,9 @@ def record_interview(
             "total_tasks": total_tasks,
         },
     }
-    interview_path.write_text(json.dumps(interview_doc, indent=2, sort_keys=True) + "\n")
+    interview_path.write_text(
+        json.dumps(interview_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     artifacts.append("interview.json")
 
     if _maybe_update_meta(intent=intent, campaign_dir=campaign_dir, total_tasks=total_tasks):
@@ -187,7 +189,7 @@ def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_t
             existing = loaded
     merged = {**meta_updates, **existing}
     merged["total_tasks"] = total_tasks
-    meta_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n")
+    meta_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return True
 
 
@@ -296,4 +298,4 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
         )
     else:
         raise ValueError(f"unknown task_generator.kind: {kind!r}")
-    path.write_text(_GENERATED_HEADER + "\n" + body)
+    path.write_text(_GENERATED_HEADER + "\n" + body, encoding="utf-8")

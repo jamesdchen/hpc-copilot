@@ -10,7 +10,10 @@
   "additionalProperties": false,
   "properties": {
     "axes_schema_version": {
-      "const": 1,
+      "enum": [
+        1,
+        2
+      ],
       "title": "Axes Schema Version",
       "type": "integer"
     },
@@ -47,6 +50,22 @@
       "description": "Names of axes the deployer believes have low runtime-cost variance. The cold-start axis_picker promotes the first one onto the task array. Once runtime priors exist, the warm-path picker uses observed CV instead. Must be a subset of axes when axes is present.",
       "title": "Homogeneous Axes",
       "uniqueItems": true
+    },
+    "executors": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/_ExecutorEntry"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-@register_run-function classified DataAxis (schema v2, additive). Keyed by the run function's name. Records how the experiment's totally-ordered series may be split correctly — orthogonal to the homogeneous_axes scheduling hint above. Written by the `classify-axis` primitive at interview time.",
+      "title": "Executors"
     }
   },
   "$defs": {
@@ -69,6 +88,113 @@
         "size"
       ],
       "title": "_AxisEntry",
+      "type": "object"
+    },
+    "_DataAxisConfig": {
+      "additionalProperties": false,
+      "description": "A classified :data:`~hpc_agent.template.axis.DataAxis`, serialized.\n\nThe (de)serializer is :mod:`hpc_agent.template.axis_config`.",
+      "properties": {
+        "kind": {
+          "description": "How the series axis is safe to split. 'independent': the loop body is a pure function of its row. 'associative': it accumulates an associative summary — also set `monoid`. 'bounded_halo': it depends on a bounded look-back window — also set `halo`. 'sequential': unbounded / order-dependent state, not splittable; the fail-safe default.",
+          "enum": [
+            "independent",
+            "associative",
+            "bounded_halo",
+            "sequential"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "halo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_HaloConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required for kind='bounded_halo'; forbidden otherwise."
+        },
+        "monoid": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "moments"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For kind='associative': the built-in monoid chunks reduce with.",
+          "title": "Monoid"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_DataAxisConfig",
+      "type": "object"
+    },
+    "_ExecutorEntry": {
+      "additionalProperties": false,
+      "description": "One ``@register_run`` function's classified series axis + provenance.",
+      "properties": {
+        "run_signature_sha": {
+          "description": "Stable hash of the run()'s AST-extracted signature (the Flag list discover_runs synthesizes). A mismatch against the live run means the signature changed → re-classify.",
+          "minLength": 1,
+          "title": "Run Signature Sha",
+          "type": "string"
+        },
+        "data_axis": {
+          "$ref": "#/$defs/_DataAxisConfig"
+        },
+        "classified_by": {
+          "description": "How the classification was reached.",
+          "enum": [
+            "interview",
+            "recall",
+            "manual"
+          ],
+          "title": "Classified By",
+          "type": "string"
+        },
+        "classified_at": {
+          "description": "ISO-8601 UTC timestamp the classification was recorded.",
+          "minLength": 1,
+          "title": "Classified At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_signature_sha",
+        "data_axis",
+        "classified_by",
+        "classified_at"
+      ],
+      "title": "_ExecutorEntry",
+      "type": "object"
+    },
+    "_HaloConfig": {
+      "additionalProperties": false,
+      "description": "The bounded look-back distance of a :class:`BoundedHalo` series axis.",
+      "properties": {
+        "expr": {
+          "description": "Arithmetic expression giving the warm-up row count, over the run()'s own parameter names (bare names, resolved from the sweep point), e.g. 'train_window * 48'. Evaluated by hpc_agent.template.axis_config with a restricted AST walk — only names, numeric literals, + - * //, and min()/max() are permitted; never eval().",
+          "minLength": 1,
+          "title": "Expr",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expr"
+      ],
+      "title": "_HaloConfig",
       "type": "object"
     }
   }

@@ -22,7 +22,6 @@ __all__ = [
     "load_clusters_config",
     "get_template_path",
     # Framework subdirectory layout (NEW — the .hpc/tasks.py model)
-    "HPC_SUBDIR",
     "TASKS_FILENAME",
     "RUNS_SUBDIR",
     "framework_subdir",
@@ -186,7 +185,6 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 # audit external callers via search; slash_commands/ is in-tree.
 # ---------------------------------------------------------------------------
 
-HPC_SUBDIR: str = ".hpc"
 TASKS_FILENAME: str = "tasks.py"
 RUNS_SUBDIR: str = "runs"
 

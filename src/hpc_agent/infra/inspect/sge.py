@@ -164,11 +164,13 @@ def _parse_qstat_full(text: str) -> dict[str, list[dict[str, Any]]]:
             state = cols[4] if len(cols) > 4 else ""
             cpus = 0
             # cols layout for ``qstat -u '*' -F gpu``: jid, prio, name,
-            # user, state, date, time, queue, slots, [task_spec].
-            # ``cols[-1]`` picks up the task_spec (e.g. ``7-9:1``) when
-            # present and mis-reports it as slots — use the fixed index.
-            if len(cols) > 8:
-                cpus = _to_int_or_none(cols[8]) or 0
+            # user, state, date, time, [queue,] slots, [task_spec].
+            # Pending jobs (state contains ``w``: qw/hqw/Eqw) omit the
+            # ``queue`` column, shifting ``slots`` from index 8 to 7 — a
+            # fixed index 8 mis-reports a pending job's CPU count.
+            slots_idx = 7 if "w" in state else 8
+            if len(cols) > slots_idx:
+                cpus = _to_int_or_none(cols[slots_idx]) or 0
             out.setdefault(current_host, []).append(
                 {
                     "user": user,

@@ -238,10 +238,10 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
 
 def _read_json(path: Path) -> dict | None:
     try:
-        result: dict = json.loads(path.read_text())
+        result: dict = json.loads(path.read_text(encoding="utf-8"))
         return result
     except FileNotFoundError:
         return None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         _log.warning("session: skipping unreadable %s (%s)", path, exc)
         return None

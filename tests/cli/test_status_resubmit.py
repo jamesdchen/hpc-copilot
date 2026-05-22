@@ -298,7 +298,7 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
     fake_logs = [
         {
             "task_id": 7,
-            "path": "/exp/_hpc_logs/ml_12345_7.err",
+            "path": "/exp/logs/ml_12345_8.err",
             "job_id": "12345",
             "content": "boom\n",
         }

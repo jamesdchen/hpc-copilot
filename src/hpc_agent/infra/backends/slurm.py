@@ -85,14 +85,15 @@ class SlurmBackend(HPCBackend):
     def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side path to a single task's stderr log.
 
-        Mirrors the ``--error`` template baked into ``_build_command``:
-        ``<remote_path>/_hpc_logs/<job_name>_<job_id>_<task_id>.err``.
-        Note the ``_hpc_logs`` directory is the convention used by the
-        framework's job templates, NOT ``self.log_dir`` (which on remote
-        backends defaults to ``<remote_repo>/logs`` for sbatch-side
-        plumbing). Keep these in sync if either moves.
+        ``_build_command`` passes ``--error <log_dir>/%x_%A_%a.err`` to
+        ``sbatch`` and the runtime array templates default ``log_dir`` to
+        ``logs`` (relative to the run dir, which is ``remote_path``).
+        SLURM expands ``%x``->job-name, ``%A``->array-master job id,
+        ``%a``->the 1-based array index. The array scripts derive the
+        logical 0-based ``task_id`` as ``%a - 1`` (offset 0), so the
+        on-disk filename index is ``task_id + 1``.
         """
-        return f"{remote_path.rstrip('/')}/_hpc_logs/{job_name}_{job_id}_{task_id}.err"
+        return f"{remote_path.rstrip('/')}/logs/{job_name}_{job_id}_{task_id + 1}.err"
 
     @staticmethod
     def err_log_disk_path(

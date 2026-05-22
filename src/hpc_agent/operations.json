@@ -454,6 +454,32 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent classify-axis --spec <path>",
+    "idempotent": true,
+    "input_schema": "classify_axis.input.json",
+    "name": "classify-axis",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.classify_axis.classify_axis",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent export-package",
+    "idempotent": true,
+    "input_schema": "export_package.input.json",
+    "name": "export-package",
+    "output_schema": null,
+    "python": "hpc_agent.atoms.export_package.export_package",
+    "side_effects": [
+      "writes-sidecar"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent interview",
     "idempotent": true,
     "input_schema": "interview.input.json",

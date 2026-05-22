@@ -394,7 +394,7 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     target = run_sidecar_path(experiment_dir, run_id)
     if not target.is_file():
         raise FileNotFoundError(f"run sidecar not found: {target}")
-    data: dict[str, Any] = json.loads(target.read_text())
+    data: dict[str, Any] = json.loads(target.read_text(encoding="utf-8"))
     # B8: route the schema-version check through the cross-domain
     # manifest in hpc_agent._internal.version. Strict here (raises) because
     # the sidecar shape is critical to the dispatcher / aggregator —
@@ -506,8 +506,8 @@ def find_run_by_cmd_sha(
         return None
     for path in find_existing_runs(experiment_dir):
         try:
-            data = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             continue
         if data.get("cmd_sha") != cmd_sha:
             continue
@@ -546,7 +546,7 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
     sidecar_path = run_sidecar_path(experiment_dir, run_id)
     sidecar_job_ids: list[str] | None = None
     try:
-        sidecar_data = json.loads(sidecar_path.read_text())
+        sidecar_data = json.loads(sidecar_path.read_text(encoding="utf-8"))
         raw = sidecar_data.get("job_ids")
         if isinstance(raw, list):
             sidecar_job_ids = [str(j) for j in raw]
@@ -581,7 +581,7 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     target = run_sidecar_path(experiment_dir, run_id)
     if not target.is_file():
         raise FileNotFoundError(f"run sidecar not found: {target}")
-    data: dict[str, Any] = json.loads(target.read_text())
+    data: dict[str, Any] = json.loads(target.read_text(encoding="utf-8"))
     data["job_ids"] = [str(j) for j in job_ids]
     _atomic_write_json(target, data)
     return target

@@ -41,11 +41,16 @@ __all__ = [
     "pick_array_axis",
     "pick_array_axis_warm",
     "read_axes",
+    "read_executor",
+    "upsert_executor",
     "validate_axes",
     "write_axes",
 ]
 
-AXES_SCHEMA_VERSION: int = 1
+# v2 (additive over v1): adds the optional ``executors`` block — the
+# classified DataAxis per @register_run function. Every write the
+# framework makes now stamps version 2; v1 files on disk still validate.
+AXES_SCHEMA_VERSION: int = 2
 AXES_FILENAME: str = "axes.yaml"
 
 _SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "schemas" / "axes.json"
@@ -77,6 +82,7 @@ def write_axes(
     *,
     axes: list[dict[str, Any]] | None = None,
     homogeneous_axes: list[str] | None = None,
+    executors: dict[str, dict[str, Any]] | None = None,
 ) -> Path:
     """Write the axes config atomically and return its path.
 
@@ -87,12 +93,20 @@ def write_axes(
     *homogeneous_axes* could replace the file with names that don't
     reference any declared axis. :class:`ValueError` is raised before
     any file write (atomic-write contract preserved).
+
+    *executors* is the v2 classified-DataAxis block — a map from
+    ``@register_run`` function name to its executor entry. Callers that
+    only want to update one entry without clobbering the rest of the
+    file should use :func:`upsert_executor` instead, which round-trips
+    the existing ``axes`` / ``homogeneous_axes`` / ``executors`` fields.
     """
     payload: dict[str, Any] = {"axes_schema_version": AXES_SCHEMA_VERSION}
     if axes is not None:
         payload["axes"] = [dict(a) for a in axes]
     if homogeneous_axes is not None:
         payload["homogeneous_axes"] = list(homogeneous_axes)
+    if executors is not None:
+        payload["executors"] = {k: dict(v) for k, v in executors.items()}
     if axes is not None and homogeneous_axes:
         axis_names = {a["name"] for a in axes}
         unknown = [n for n in homogeneous_axes if n not in axis_names]
@@ -143,6 +157,46 @@ def read_axes(experiment_dir: Path | str) -> dict[str, Any] | None:
         raise ValueError(f"{path}: top-level YAML must be a mapping, got {type(data).__name__}")
     validate_axes(data)
     return data
+
+
+def read_executor(experiment_dir: Path | str, run_name: str) -> dict[str, Any] | None:
+    """Return the stored ``executors.<run_name>`` entry, or ``None`` if absent.
+
+    The entry is the classified-DataAxis record written by the
+    ``classify-axis`` primitive: ``{run_signature_sha, data_axis,
+    classified_by, classified_at}``. ``None`` covers both "no axes.yaml"
+    and "axes.yaml has no executors block / no entry for this run".
+    """
+    config = read_axes(experiment_dir)
+    if config is None:
+        return None
+    entry = (config.get("executors") or {}).get(run_name)
+    return dict(entry) if isinstance(entry, dict) else None
+
+
+def upsert_executor(
+    experiment_dir: Path | str,
+    run_name: str,
+    *,
+    executor_entry: dict[str, Any],
+) -> Path:
+    """Merge one classified-DataAxis entry into ``axes.yaml``; return its path.
+
+    Reads the existing config, replaces (or inserts) ``executors.<run_name>``
+    with *executor_entry*, and writes the whole file back — so the
+    ``axes`` / ``homogeneous_axes`` scheduling hints and every other
+    executor entry round-trip untouched. The merged payload is validated
+    against the v2 schema before any disk write.
+    """
+    existing = read_axes(experiment_dir) or {}
+    executors = {k: dict(v) for k, v in (existing.get("executors") or {}).items()}
+    executors[run_name] = dict(executor_entry)
+    return write_axes(
+        experiment_dir,
+        axes=existing.get("axes"),
+        homogeneous_axes=existing.get("homogeneous_axes"),
+        executors=executors,
+    )
 
 
 def pick_array_axis(
