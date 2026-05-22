@@ -1,8 +1,13 @@
-Do not run the `hpc-aggregate` skill in this conversation's context. Spawn a fresh-context **subagent** via the `Task` tool to execute it (`skills/hpc-aggregate/SKILL.md`) — the workflow is: which mode to pick (auto / cluster-reduce / combiner-only), how to handle partial aggregation, the `verify-aggregation-complete` invariant check, error envelope branching. The skill is the canonical SoT.
+Do not run the `hpc-aggregate` skill in this conversation's context. Delegate it to a fresh-context **subagent** to execute it (`skills/hpc-aggregate/SKILL.md`) — the workflow is: which mode to pick (auto / cluster-reduce / combiner-only), how to handle partial aggregation, the `verify-aggregation-complete` invariant check, error envelope branching. The skill is the canonical SoT.
 
-The subagent bootstraps its own context with `hpc-agent load-context` and runs the workflow against on-disk state alone, returning **only** the result envelope (`ok`, an `aggregated_metrics` summary, `missing_waves`, `missing_tasks`, `escalation_reason`) plus a free-text `anomalies` string. The verbose intermediate output — the `_combiner/` pull, per-task files — stays in the subagent and never enters this conversation. A fresh subagent context is what makes the workflow deterministic (it depends only on disk state, not on whatever preceded it in this chat) and keeps this conversation from rotting.
+You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
 
-This slash command is the human-facing entry point: the main agent handles the content below in this conversation and threads the results into the subagent's prompt — that content is not delegated. It exists for two reasons the skill alone doesn't cover.
+1. Resolve the human-facing inputs below (the profile/stage to aggregate, plus the anti-pattern reasoning) in this conversation.
+2. Run `hpc-agent build-spawn-prompt --workflow aggregate --fields-json '<json>'`, where `<json>` is a JSON object of the resolved inputs (`profile`, optional `stage`, mode override if any). It writes a content-addressed spec to `.hpc/spawn/<sha>.json` and returns `data.spawn_ref` — a `spec://<sha>` token.
+3. Call the `Task` tool with `prompt` set to **exactly** that `spawn_ref` token — nothing prepended, appended, or paraphrased. A `PreToolUse` hook (`spawn_guard`) resolves the reference to the canonical generated prompt before the subagent starts; anything that is not a valid `spec://` token is denied.
+4. Surface the subagent's returned envelope (`ok`, an `aggregated_metrics` summary, `missing_waves`, `missing_tasks`, `escalation_reason`) plus its `anomalies` string, then run the post-flight spot-checks below.
+
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it through `--fields-json`, do not delegate it. It exists for two reasons the skill alone doesn't cover.
 
 ## Core principle (human advice): Reduce Where the Data Lives
 

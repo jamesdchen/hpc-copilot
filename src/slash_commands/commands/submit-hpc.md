@@ -1,8 +1,13 @@
-Do not run the `hpc-submit` skill in this conversation's context. Spawn a fresh-context **subagent** via the `Task` tool to execute it (`skills/hpc-submit/SKILL.md`) — the workflow is: discover executors → plan axis → auto-configure env → throughput plan → write tasks.py + sidecar → preflight → validate-campaign → submit-flow → verify the scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
+Do not run the `hpc-submit` skill in this conversation's context. Delegate it to a fresh-context **subagent** to execute it (`skills/hpc-submit/SKILL.md`) — the workflow is: discover executors → plan axis → auto-configure env → throughput plan → write tasks.py + sidecar → preflight → validate-campaign → submit-flow → verify the scheduler accepted the array → record. The skill is the canonical SoT for the call sequence.
 
-The subagent bootstraps its own context with `hpc-agent load-context` and runs the workflow against on-disk state alone, returning **only** the result envelope (`run_id`, `job_ids`, grid dimensions, verified scheduler state) plus a free-text `anomalies` string. The verbose intermediate output — discovery transcripts, scheduler dumps, rsync logs — stays in the subagent and never enters this conversation. A fresh subagent context is what makes the workflow deterministic (it depends only on disk state, not on whatever preceded it in this chat) and keeps this conversation from rotting.
+You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
 
-This slash command is the human-facing entry point: the main agent handles the content below in this conversation and threads the results into the subagent's prompt — that content is not delegated. Three pieces the skill cannot carry:
+1. Collect the human-facing inputs below (migration check, setup-action prompts, scaffolding sub-interview) in this conversation.
+2. Run `hpc-agent build-spawn-prompt --workflow submit --fields-json '<json>'`, where `<json>` is a JSON object of the resolved inputs (picked run, cluster, flags, `campaign_id`, interview answers). It writes a content-addressed spec to `.hpc/spawn/<sha>.json` and returns `data.spawn_ref` — a `spec://<sha>` token.
+3. Call the `Task` tool with `prompt` set to **exactly** that `spawn_ref` token — nothing prepended, appended, or paraphrased. A `PreToolUse` hook (`spawn_guard`) resolves the reference to the canonical generated prompt before the subagent starts; anything that is not a valid `spec://` token is denied.
+4. Surface the subagent's returned envelope (`run_id`, `job_ids`, grid dimensions, verified scheduler state) plus its `anomalies` string. The verbose workflow output — discovery transcripts, scheduler dumps, rsync logs — stayed in the subagent and never entered this conversation.
+
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it through `--fields-json`, do not delegate it. Three pieces the skill cannot carry:
 
 ## 1. Migration check (legacy `_hpc_dispatch.json`)
 
