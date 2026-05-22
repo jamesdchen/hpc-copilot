@@ -8,14 +8,23 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
-from hpc_agent.atoms.aggregation_invariants import verify_aggregation_complete
+from hpc_agent.atoms.aggregation_invariants import (
+    check_result_columns,
+    verify_aggregation_complete,
+)
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-def _seed_sidecar_with_wave_map(experiment: Path, run_id: str, wave_map: dict) -> None:
+def _seed_sidecar_with_wave_map(
+    experiment: Path,
+    run_id: str,
+    wave_map: dict,
+    *,
+    results: dict | None = None,
+) -> None:
     write_run_sidecar(
         experiment,
         run_id=run_id,
@@ -27,6 +36,7 @@ def _seed_sidecar_with_wave_map(experiment: Path, run_id: str, wave_map: dict) -
         task_count=sum(len(v) for v in wave_map.values()),
         tasks_py_sha="1" * 64,
         wave_map=wave_map,
+        results=results,
     )
 
 
@@ -130,3 +140,132 @@ def test_empty_run_id_raises(tmp_path: Path) -> None:
     combiner_dir.mkdir()
     with pytest.raises(errors.SpecInvalid, match="run_id"):
         verify_aggregation_complete(tmp_path, run_id="", combiner_dir_local=combiner_dir)
+
+
+# ---------------------------------------------------------------------------
+# Check 2 — expected columns + non-NaN metric (check_result_columns)
+# ---------------------------------------------------------------------------
+
+
+def _write_csv(path: Path, header: list[str], rows: list[list[str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [",".join(header)]
+    lines.extend(",".join(r) for r in rows)
+    path.write_text("\n".join(lines) + "\n")
+
+
+def test_check_result_columns_no_schema_is_noop(tmp_path: Path) -> None:
+    _write_csv(tmp_path / "task_1" / "out.csv", ["a", "b"], [["1", "2"]])
+    out = check_result_columns(tmp_path)
+    assert out["checked"] is False
+    assert out["ok"] is True
+    assert out["violations"] == []
+
+
+def test_check_result_columns_all_pass(tmp_path: Path) -> None:
+    _write_csv(tmp_path / "task_1" / "out.csv", ["seed", "qlike"], [["7", "0.42"]])
+    _write_csv(tmp_path / "task_2" / "out.csv", ["seed", "qlike"], [["8", "0.51"]])
+    out = check_result_columns(tmp_path, expected_columns=["seed", "qlike"], metric_column="qlike")
+    assert out["checked"] is True
+    assert out["ok"] is True
+    assert out["files_scanned"] == 2
+    assert out["violations"] == []
+
+
+def test_check_result_columns_missing_column(tmp_path: Path) -> None:
+    _write_csv(tmp_path / "task_1" / "out.csv", ["seed"], [["7"]])
+    out = check_result_columns(tmp_path, expected_columns=["seed", "qlike"], metric_column=None)
+    assert out["ok"] is False
+    assert out["violations"][0]["missing_columns"] == ["qlike"]
+
+
+def test_check_result_columns_nan_metric(tmp_path: Path) -> None:
+    # Blank cell, literal NaN, and a non-numeric token all count as NaN.
+    _write_csv(
+        tmp_path / "task_1" / "out.csv",
+        ["seed", "qlike"],
+        [["7", "0.42"], ["8", ""], ["9", "NaN"], ["10", "err"]],
+    )
+    out = check_result_columns(tmp_path, expected_columns=["seed", "qlike"], metric_column="qlike")
+    assert out["ok"] is False
+    v = out["violations"][0]
+    assert v["metric_nan"] is True
+    assert v["metric_nan_rows"] == [2, 3, 4]
+
+
+def test_check_result_columns_metric_column_absent(tmp_path: Path) -> None:
+    _write_csv(tmp_path / "task_1" / "out.csv", ["seed"], [["7"]])
+    out = check_result_columns(tmp_path, metric_column="qlike")
+    assert out["ok"] is False
+    assert "qlike" in out["violations"][0]["missing_columns"]
+
+
+def test_check_result_columns_empty_file(tmp_path: Path) -> None:
+    (tmp_path / "task_1").mkdir(parents=True)
+    (tmp_path / "task_1" / "out.csv").write_text("")
+    out = check_result_columns(tmp_path, metric_column="qlike")
+    assert out["ok"] is False
+    assert out["violations"][0]["error"] is not None
+
+
+def test_verify_aggregation_complete_runs_column_gate(tmp_path: Path) -> None:
+    """The columns gate fires when the sidecar declares a results schema."""
+    _seed_sidecar_with_wave_map(
+        tmp_path,
+        "r1",
+        {"0": [0, 1]},
+        results={"expected_columns": ["seed", "qlike"], "metric_column": "qlike"},
+    )
+    combiner_dir = tmp_path / "_combiner_local"
+    _write_wave_partial(combiner_dir, 0, "r1", [0, 1])
+    results_dir = tmp_path / "summaries"
+    _write_csv(results_dir / "task_1" / "out.csv", ["seed", "qlike"], [["7", "0.4"]])
+    _write_csv(results_dir / "task_2" / "out.csv", ["seed", "qlike"], [["8", ""]])
+
+    out = verify_aggregation_complete(
+        tmp_path,
+        run_id="r1",
+        combiner_dir_local=combiner_dir,
+        results_dir_local=results_dir,
+    )
+    assert out["columns_checked"] is True
+    assert out["ok"] is False
+    assert len(out["column_violations"]) == 1
+    assert out["column_violations"][0]["metric_nan"] is True
+
+
+def test_verify_aggregation_complete_column_gate_noop_without_schema(tmp_path: Path) -> None:
+    """No `results` block declared -> columns gate is a clean skip."""
+    _seed_sidecar_with_wave_map(tmp_path, "r1", {"0": [0]})
+    combiner_dir = tmp_path / "_combiner_local"
+    _write_wave_partial(combiner_dir, 0, "r1", [0])
+    results_dir = tmp_path / "summaries"
+    _write_csv(results_dir / "task_1" / "out.csv", ["seed"], [["7"]])
+
+    out = verify_aggregation_complete(
+        tmp_path,
+        run_id="r1",
+        combiner_dir_local=combiner_dir,
+        results_dir_local=results_dir,
+    )
+    assert out["columns_checked"] is False
+    assert out["column_violations"] == []
+    assert out["ok"] is True
+
+
+def test_verify_aggregation_complete_column_gate_noop_without_results_dir(
+    tmp_path: Path,
+) -> None:
+    """Schema declared but no results dir supplied -> clean skip."""
+    _seed_sidecar_with_wave_map(
+        tmp_path,
+        "r1",
+        {"0": [0]},
+        results={"expected_columns": ["seed"], "metric_column": None},
+    )
+    combiner_dir = tmp_path / "_combiner_local"
+    _write_wave_partial(combiner_dir, 0, "r1", [0])
+
+    out = verify_aggregation_complete(tmp_path, run_id="r1", combiner_dir_local=combiner_dir)
+    assert out["columns_checked"] is False
+    assert out["ok"] is True

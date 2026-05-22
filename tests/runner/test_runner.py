@@ -229,6 +229,52 @@ def test_record_status_sets_checked_at(journal_home, experiment):
     assert "checked_at" in record.last_status
 
 
+def test_record_status_threads_min_rows_to_cluster_cmd(journal_home, experiment):
+    """`--min-rows` set on record_status reaches the cluster-side reporter cmd."""
+    _seed_run(experiment)
+    payload = {"summary": {"complete": 7, "running": 0, "pending": 0, "failed": 0, "unknown": 0}}
+    seen_cmds: list[str] = []
+
+    def fake_ssh(cmd, *, ssh_target, **_kw):
+        seen_cmds.append(cmd)
+        return _completed(stdout=json.dumps(payload))
+
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
+        runner.record_status(
+            experiment,
+            "ml_ridge_abcd1234",
+            ssh_target="user@hoffman2.idre.ucla.edu",
+            remote_path="/u/scratch/exp",
+            job_ids=["12345678"],
+            job_name="ml_ridge",
+            min_rows=5,
+        )
+    assert seen_cmds, "ssh_run was never called"
+    assert "--min-rows 5" in seen_cmds[0]
+
+
+def test_record_status_min_rows_defaults_to_zero(journal_home, experiment):
+    """Default record_status emits `--min-rows 0` (accepts header-only CSVs)."""
+    _seed_run(experiment)
+    payload = {"summary": {"complete": 7, "running": 0, "pending": 0, "failed": 0, "unknown": 0}}
+    seen_cmds: list[str] = []
+
+    def fake_ssh(cmd, *, ssh_target, **_kw):
+        seen_cmds.append(cmd)
+        return _completed(stdout=json.dumps(payload))
+
+    with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
+        runner.record_status(
+            experiment,
+            "ml_ridge_abcd1234",
+            ssh_target="user@hoffman2.idre.ucla.edu",
+            remote_path="/u/scratch/exp",
+            job_ids=["12345678"],
+            job_name="ml_ridge",
+        )
+    assert "--min-rows 0" in seen_cmds[0]
+
+
 def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
     _seed_run(experiment, combined_waves=[0, 1, 2], failed_waves=[2])
     status_payload = json.dumps({"summary": {"complete": 50, "running": 50, "failed": 0}})

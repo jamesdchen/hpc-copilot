@@ -142,6 +142,22 @@ _V2_CONFIG_FIELDS: tuple[str, ...] = (
     "runtime",  # str — "uv" or omitted
     "auto_retry",  # dict — per-category retry policy
     "aggregate_defaults",  # dict — require_outputs/expect_output/aggregate_cmd
+    "results",  # dict — declared result-file schema (see _RESULTS_BLOCK_KEYS)
+)
+
+# Keys recognised inside the optional ``results`` sidecar block. Declaring
+# them lets the post-aggregate column gate
+# (``check_result_columns`` / ``verify-aggregation-complete``) verify each
+# task's result file deterministically — no LLM. All optional; an absent
+# ``results`` block (or empty fields) means the gate is a clean no-op.
+#
+#   summary_pattern  : str        — glob for the per-task result file
+#   expected_columns : list[str]  — column names every result CSV must carry
+#   metric_column    : str | None — column that must hold a non-NaN value
+_RESULTS_BLOCK_KEYS: tuple[str, ...] = (
+    "summary_pattern",
+    "expected_columns",
+    "metric_column",
 )
 
 # Backfill defaults for v1→v2 read. Containers default to empty so callers
@@ -161,6 +177,7 @@ _V2_BACKFILL_DEFAULTS: dict[str, Any] = {
     "runtime": None,
     "auto_retry": None,
     "aggregate_defaults": None,
+    "results": None,
     # job_ids lands AFTER qsub via :func:`update_run_sidecar_job_ids`. A
     # sidecar without job_ids (and without a journal record) is the half-
     # baked signal :func:`is_orphan_sidecar` keys on. Default `None` (not
@@ -286,6 +303,7 @@ def write_run_sidecar(
     runtime: str | None = None,
     auto_retry: dict[str, Any] | None = None,
     aggregate_defaults: dict[str, Any] | None = None,
+    results: dict[str, Any] | None = None,
     job_ids: list[str] | None = None,
 ) -> Path:
     """Write the per-run sidecar JSON. Returns the path written.
@@ -300,6 +318,12 @@ def write_run_sidecar(
     every successful ``/submit`` should populate the ones that apply, so
     subsequent commands (``/aggregate``, ``/status``, ``/resubmit``) can
     rebuild full context without consulting any external config file.
+
+    *results* is an optional declared-result-file schema block — recognised
+    keys are ``summary_pattern`` (glob), ``expected_columns`` (list[str]),
+    and ``metric_column`` (str). When present it lets the post-aggregate
+    column gate verify each task's result file deterministically; when
+    absent the gate is a clean no-op.
 
     Auto-derived ``wave_map``: when *wave_map* is None and
     ``<experiment>/.hpc/axes.yaml`` carries a full ``axes`` enumeration,
@@ -343,6 +367,7 @@ def write_run_sidecar(
         "runtime": runtime,
         "auto_retry": auto_retry,
         "aggregate_defaults": aggregate_defaults,
+        "results": results,
         "job_ids": list(job_ids) if job_ids is not None else None,
     }
     for k, v in v2_values.items():

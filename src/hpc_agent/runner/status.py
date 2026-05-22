@@ -28,6 +28,7 @@ def _ssh_status_report(
     job_name: str,
     log_dir: str = "logs",
     file_glob: str = "*",
+    min_rows: int = 0,
 ) -> dict:
     """Run the on-cluster status reporter (``--run-id``) and return parsed JSON.
 
@@ -35,6 +36,11 @@ def _ssh_status_report(
     ``.hpc/tasks.py`` for per-task kwargs, then emits the JSON envelope
     pinned by ``docs/reference/python-api-contract.md`` (summary / tasks / rollup /
     errors).
+
+    ``min_rows`` is forwarded to the cluster-side reporter's ``--min-rows``
+    flag: a completed task whose CSV result has fewer than ``min_rows`` data
+    rows beyond the header is demoted ``complete`` → ``failed``. The default
+    ``0`` accepts header-only CSVs (legitimately-empty results).
     """
     job_ids_csv = ",".join(job_ids)
     cmd = (
@@ -44,7 +50,8 @@ def _ssh_status_report(
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "
         f"--log-dir {shlex.quote(log_dir)} "
-        f"--file-glob {shlex.quote(file_glob)}"
+        f"--file-glob {shlex.quote(file_glob)} "
+        f"--min-rows {shlex.quote(str(int(min_rows)))}"
     )
     proc = remote.ssh_run(cmd, ssh_target=ssh_target)
     if proc.returncode != 0:
@@ -86,6 +93,7 @@ def record_status(
     job_ids: list[str],
     job_name: str,
     file_glob: str = "*",
+    min_rows: int = 0,
 ) -> RunRecord:
     """Run the status reporter and write ``last_status`` to the journal.
 
@@ -96,6 +104,12 @@ def record_status(
     journal record so any consumer (agent, human, ``jq`` pipeline, file
     watcher) can read the latest cached state without re-issuing an SSH
     call. The file's mtime tells the caller how stale the snapshot is.
+
+    ``min_rows`` is forwarded to the cluster-side reporter (see
+    :func:`_ssh_status_report`): a completed task whose CSV result has
+    fewer than ``min_rows`` data rows is demoted ``complete`` → ``failed``,
+    so a caller can gate on "every task wrote real data" rather than just
+    "every task wrote a file".
     """
     report = _ssh_status_report(
         ssh_target=ssh_target,
@@ -104,6 +118,7 @@ def record_status(
         job_ids=job_ids,
         job_name=job_name,
         file_glob=file_glob,
+        min_rows=min_rows,
     )
     summary = dict(report.get("summary", {}))
     summary["checked_at"] = utcnow_iso()

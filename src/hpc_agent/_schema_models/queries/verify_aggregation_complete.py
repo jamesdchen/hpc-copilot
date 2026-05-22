@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from hpc_agent._schema_models._shared import RunIdLoose
@@ -38,6 +40,24 @@ class VerifyAggregationCompleteResult(BaseModel):
         ),
     )
     provenance_present: bool
+    columns_checked: bool = Field(
+        default=False,
+        description=(
+            "True when the expected-columns / non-NaN-metric gate ran — "
+            "the run sidecar's ``results`` block declared "
+            "``expected_columns`` and/or ``metric_column`` AND a local "
+            "results directory was supplied. False = clean no-op skip."
+        ),
+    )
+    column_violations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Per-result-file violations from the columns gate: each "
+            "entry is {path, missing_columns, metric_nan, "
+            "metric_nan_rows, error}. Empty when the gate passed or was "
+            "skipped."
+        ),
+    )
     expected_wave_count: int = Field(ge=0)
     pulled_wave_count: int = Field(ge=0)
     expected_task_count: int = Field(ge=0)
