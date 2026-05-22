@@ -2,6 +2,7 @@
 name: hpc-campaign
 description: "Inspect and run closed-loop campaigns: tagged sequences of submit-flow → monitor-flow → aggregate-flow whose tasks.py reads prior history to decide what to run next."
 allowed-tools: Bash Read Write Task
+execution: delegated
 ---
 
 Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteration based on prior results. The framework provides two things — a `campaign_id` tag on every submit (carried by [submit-flow](../../docs/primitives/submit-flow.md)) and the [campaign-status](../../docs/primitives/campaign-status.md) accessor (called from inside `tasks.py`). The "loop" is repeated `submit-flow → monitor-flow → aggregate-flow` triplets sharing the same `campaign_id` slug — workflow-atom composition with no agent in the per-iteration critical path. Strategies (Optuna, RandomSearch, walk-forward, PBT) live as Python libraries the user imports in their own `tasks.py`. The framework ships **zero** strategy code.

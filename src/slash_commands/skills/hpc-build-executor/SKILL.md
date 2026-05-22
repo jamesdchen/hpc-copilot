@@ -2,6 +2,7 @@
 name: hpc-build-executor
 description: "Scaffold a new executor file from the starter template into the experiment repo, then customize it."
 allowed-tools: Bash Read Write
+execution: inline
 ---
 
 Agent-facing composition over the **[build-executor](../../docs/primitives/build-executor.md) primitive** (see that file for full input/output/error contract). Materializes the bundled starter template at a chosen path; the caller customizes it afterward.

@@ -2,6 +2,7 @@
 name: hpc-submit
 description: "Submit a parameter-grid experiment to a SLURM/SGE cluster via SSH and record it in the journal. End-to-end pipeline (rsync + deploy + qsub + record) in one CLI call."
 allowed-tools: Bash Read Write Task
+execution: delegated
 ---
 
 Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-flow.md) workflow atom** (full pre-flight + rsync + deploy + qsub + record pipeline in one CLI call). For just the journal-write half (when the agent has already qsubbed), use the [submit-spec](../../docs/primitives/submit-spec.md) primitive directly. Both are idempotent on `run_id`: a replay returns `data.deduped: true` and emits no cluster-side side effects.

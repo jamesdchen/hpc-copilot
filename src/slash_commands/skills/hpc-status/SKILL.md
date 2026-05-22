@@ -2,6 +2,7 @@
 name: hpc-status
 description: "Poll the status of an in-flight HPC run. Single snapshot via poll-run-status, or wait-until-terminal via monitor-flow."
 allowed-tools: Bash Read Write Task
+execution: delegated
 ---
 
 Agent-facing composition over two primitives that share the same observation surface but differ in scope:

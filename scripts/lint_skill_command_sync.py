@@ -7,6 +7,8 @@ catches the most common drift modes:
 
 1. A skill exists with no matching slash command (or vice versa).
 2. A skill or slash-command file is missing required frontmatter.
+3. A skill's declared ``execution`` mode disagrees with how its
+   command routes (``delegated`` ⇔ ``build-spawn-prompt``).
 
 It deliberately does **not** diff the bodies — the two surfaces have
 different audiences (agent skill vs. interactive slash-command prompt)
@@ -65,6 +67,13 @@ _INVOKE_DIRECTIVE_RE = re.compile(
     r"|subagent[^\n]*?to execute it \(`skills/[a-z0-9-]+/SKILL\.md`\)"
 )
 
+# Every workflow skill statically declares, in its frontmatter, whether
+# it runs `delegated` (in a fresh-context subagent, spawned from a
+# content-addressed spec) or `inline` (in the main conversation). This
+# is an authored property, not a per-invocation judgement — the lint
+# below cross-checks it against how the paired command routes.
+_EXECUTION_RE = re.compile(r"^execution:\s*(delegated|inline)\s*$", re.MULTILINE)
+
 
 def main() -> int:
     errors: list[str] = []
@@ -114,6 +123,37 @@ def main() -> int:
                 f"directive but does not name the matching skill {skill_id!r}. "
                 "Either fix the slash body to invoke the right skill, or "
                 "update WORKFLOW_PAIRS in this lint script."
+            )
+
+        # The skill's declared `execution` mode must agree with how its
+        # command routes: `delegated` ⇒ the command spawns a subagent
+        # from a `build-spawn-prompt` spec; `inline` ⇒ it does not.
+        if not skill_path.is_file():
+            continue
+        skill_body = skill_path.read_text(encoding="utf-8")
+        exec_match = _EXECUTION_RE.search(skill_body)
+        if exec_match is None:
+            errors.append(
+                f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
+                "`execution: delegated|inline` field. Every workflow skill "
+                "must statically declare how it runs."
+            )
+            continue
+        routes_via_generator = "build-spawn-prompt" in body
+        if exec_match.group(1) == "delegated" and not routes_via_generator:
+            errors.append(
+                f"{skill_id!r} declares `execution: delegated` but its command "
+                f"{slash_path.relative_to(REPO_ROOT)} does not route through "
+                "`hpc-agent build-spawn-prompt`. A delegated skill must be "
+                "spawned from a content-addressed spec."
+            )
+        if exec_match.group(1) == "inline" and routes_via_generator:
+            errors.append(
+                f"{skill_id!r} declares `execution: inline` but its command "
+                f"{slash_path.relative_to(REPO_ROOT)} routes through "
+                "`build-spawn-prompt`. An inline skill runs in the main "
+                "conversation — drop the spawn-prompt routing, or mark the "
+                "skill `delegated`."
             )
 
     # Skills present on disk but not declared in the pair table.

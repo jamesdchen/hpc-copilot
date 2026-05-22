@@ -2,6 +2,7 @@
 name: hpc-aggregate
 description: "Finalize a run's aggregated metrics: combine all waves on cluster, pull partials locally, run reduce_partials, optionally pull summary files."
 allowed-tools: Bash Read Write Task
+execution: delegated
 ---
 
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
