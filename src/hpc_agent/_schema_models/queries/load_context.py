@@ -10,11 +10,12 @@ so a sidecar-schema bump does not break this contract.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from hpc_agent._schema_models._shared import RunIdLoose
+from hpc_agent._schema_models.spawn_contract import SpawnRequest
 
 
 class _LatestRun(BaseModel):
@@ -47,23 +48,14 @@ class _CampaignRow(BaseModel):
     iterations_submitted: int = Field(ge=0)
 
 
-class _SpawnRequest(BaseModel):
-    """A delegated workflow spawn for an ``agent``-kind step.
-
-    The in-session orchestrator wraps this as the ``Task`` prompt
-    ``{"hpc_spawn": <this>}``; the spawn_guard hook renders it to the
-    canonical subagent prompt. ``None`` for ``cli``-kind steps.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    workflow: Literal["submit", "status", "aggregate", "campaign"]
-    experiment_dir: str
-    fields: dict[str, Any]
-
-
 class _Delegate(BaseModel):
-    """The next workflow step described as a delegable unit of work."""
+    """The next workflow step described as a delegable unit of work.
+
+    For an ``agent``-kind step ``spawn_request`` carries the shared
+    :class:`SpawnRequest` contract — the in-session orchestrator wraps
+    it as the ``Task`` prompt ``{"hpc_spawn": <spawn_request>}`` and the
+    spawn_guard hook renders it. ``None`` for ``cli``-kind steps.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -74,7 +66,7 @@ class _Delegate(BaseModel):
     experiment_dir: str
     reason: str
     prompt: str
-    spawn_request: _SpawnRequest | None = None
+    spawn_request: SpawnRequest | None = None
 
 
 class LoadContextResult(BaseModel):
