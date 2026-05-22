@@ -61,9 +61,7 @@ def load_context(experiment_dir: Path) -> dict[str, Any]:
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"load-context failed (exit {proc.returncode}): {proc.stderr.strip()}"
-        )
+        raise RuntimeError(f"load-context failed (exit {proc.returncode}): {proc.stderr.strip()}")
     envelope = json.loads(proc.stdout)
     if not envelope.get("ok"):
         raise RuntimeError(f"load-context returned a non-ok envelope: {envelope}")
@@ -88,7 +86,7 @@ def plan_action(delegate: dict[str, Any] | None, *, allow_agent_steps: bool) -> 
     step = delegate.get("step")
 
     if kind == "cli":
-        verb = _STEP_VERB.get(step)
+        verb = _STEP_VERB.get(step) if isinstance(step, str) else None
         if verb is None:
             return {"action": "skip", "reason": f"no cli verb mapped for step {step!r}"}
         run_id = delegate.get("run_id")

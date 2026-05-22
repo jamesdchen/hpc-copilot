@@ -11,9 +11,7 @@ from hpc_agent.campaign.driver import plan_action
 
 
 def test_cli_monitor_step_maps_to_monitor_flow():
-    plan = plan_action(
-        {"kind": "cli", "step": "monitor", "run_id": "r1"}, allow_agent_steps=False
-    )
+    plan = plan_action({"kind": "cli", "step": "monitor", "run_id": "r1"}, allow_agent_steps=False)
     assert plan == {
         "action": "cli",
         "verb": "monitor-flow",
@@ -30,31 +28,23 @@ def test_cli_aggregate_step_maps_to_aggregate_flow():
 
 
 def test_cli_step_without_run_id_skips():
-    plan = plan_action(
-        {"kind": "cli", "step": "monitor", "run_id": None}, allow_agent_steps=False
-    )
+    plan = plan_action({"kind": "cli", "step": "monitor", "run_id": None}, allow_agent_steps=False)
     assert plan["action"] == "skip"
 
 
 def test_cli_step_with_unmapped_step_skips():
-    plan = plan_action(
-        {"kind": "cli", "step": "decide", "run_id": "r1"}, allow_agent_steps=False
-    )
+    plan = plan_action({"kind": "cli", "step": "decide", "run_id": "r1"}, allow_agent_steps=False)
     assert plan["action"] == "skip"
 
 
 def test_agent_step_skipped_without_flag():
-    plan = plan_action(
-        {"kind": "agent", "step": "submit", "prompt": "go"}, allow_agent_steps=False
-    )
+    plan = plan_action({"kind": "agent", "step": "submit", "prompt": "go"}, allow_agent_steps=False)
     assert plan["action"] == "skip"
     assert "--allow-agent-steps" in plan["reason"]
 
 
 def test_agent_step_allowed_with_flag():
-    plan = plan_action(
-        {"kind": "agent", "step": "submit", "prompt": "go"}, allow_agent_steps=True
-    )
+    plan = plan_action({"kind": "agent", "step": "submit", "prompt": "go"}, allow_agent_steps=True)
     assert plan == {"action": "agent", "prompt": "go", "step": "submit"}
 
 
