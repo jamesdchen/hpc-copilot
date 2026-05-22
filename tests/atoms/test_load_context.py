@@ -164,12 +164,27 @@ def test_delegate_submit_is_agent_kind(journal_home, experiment):
     assert delegate["prompt"]
 
 
+def test_delegate_agent_step_carries_a_spawn_request(journal_home, experiment):
+    # An agent step is delegated through a pinned hpc_spawn request, not
+    # a hand-written prompt — the orchestrator passes spawn_request to
+    # Task and the spawn_guard hook renders it.
+    delegate = load_context(experiment_dir=experiment)["delegate"]
+    spawn = delegate["spawn_request"]
+    assert spawn["workflow"] == "submit"
+    assert spawn["experiment_dir"] == delegate["experiment_dir"]
+    assert isinstance(spawn["fields"], dict)
+    # prompt is the rendered canonical text, the same SoT as the hook.
+    assert "hpc-submit" in delegate["prompt"]
+
+
 def test_delegate_monitor_is_cli_kind(journal_home, experiment):
     session.upsert_run(experiment, _make_record("20260521-120000-aaa", stage="monitor"))
     delegate = load_context(experiment_dir=experiment)["delegate"]
     assert delegate["kind"] == "cli"
     assert delegate["step"] == "monitor"
     assert delegate["run_id"] == "20260521-120000-aaa"
+    # cli steps run directly — no subagent, so no spawn request.
+    assert delegate["spawn_request"] is None
 
 
 def test_delegate_aggregate_picks_non_monitor_run(journal_home, experiment):
@@ -191,6 +206,9 @@ def test_decide_hint_when_campaign_idle(journal_home, experiment):
     assert delegate["step"] == "decide"
     assert delegate["campaign_id"] == "optuna-1"
     assert delegate["run_id"] is None
+    # A decide step delegates the hpc-campaign workflow, pinned.
+    assert delegate["spawn_request"]["workflow"] == "campaign"
+    assert "hpc-campaign" in delegate["prompt"]
 
 
 def test_submit_hint_when_idle_and_no_campaign(journal_home, experiment):

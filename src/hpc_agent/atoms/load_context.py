@@ -100,6 +100,8 @@ def _build_delegate(
     ``kind`` is the cost/determinism split: ``cli`` steps are
     deterministic and need no LLM; ``agent`` steps need judgement.
     """
+    from hpc_agent.atoms.spawn_prompt import render_spawn_prompt
+
     exp = str(experiment_dir)
     if hint == "submit":
         return {
@@ -109,15 +111,19 @@ def _build_delegate(
             "campaign_id": None,
             "experiment_dir": exp,
             "reason": "no runs in flight; the next step is a new submission",
-            "prompt": (
-                f"Submit an HPC experiment in {exp}. First run `hpc-agent "
-                f"load-context --experiment-dir {exp}` and use its data as the "
-                "source of truth, then drive the hpc-submit skill. A submission "
-                "needs user intent, so this is an agent step."
-            ),
+            "spawn_request": {
+                "workflow": "submit",
+                "experiment_dir": exp,
+                "fields": {},
+            },
+            "prompt": render_spawn_prompt(workflow="submit", experiment_dir=exp, fields={}),
         }
     if hint == "decide":
         campaign_id = _decide_campaign_id(campaigns, latest_run)
+        decide_fields: dict[str, Any] = {
+            "campaign_id": campaign_id,
+            "step": "decide",
+        }
         return {
             "kind": "agent",
             "step": "decide",
@@ -128,14 +134,13 @@ def _build_delegate(
                 f"campaign {campaign_id!r} has no runs in flight; "
                 "decide and submit its next iteration"
             ),
-            "prompt": (
-                f"Advance campaign {campaign_id!r} in {exp}. First run "
-                f"`hpc-agent load-context --experiment-dir {exp}`, then read the "
-                "campaign's prior results (campaign-status, or tasks.py's "
-                "prior()) and drive the hpc-campaign skill to decide and submit "
-                "the next iteration. Choosing the next parameters is judgement, "
-                "so this is an agent step. If tasks.total() == 0 the campaign "
-                "is already finished — stop."
+            "spawn_request": {
+                "workflow": "campaign",
+                "experiment_dir": exp,
+                "fields": decide_fields,
+            },
+            "prompt": render_spawn_prompt(
+                workflow="campaign", experiment_dir=exp, fields=decide_fields
             ),
         }
     # monitor / aggregate — pick the in-flight run that governs the step.
@@ -162,6 +167,7 @@ def _build_delegate(
             "CLI step — no judgement required; a headless driver runs it "
             "directly without spawning an LLM."
         ),
+        "spawn_request": None,
     }
 
 
@@ -190,8 +196,8 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
       iteration).
     - ``delegate`` — the next step as a delegable unit of work
       (``kind`` ``cli``/``agent``, ``step``, ``run_id``,
-      ``campaign_id``, ``prompt``); consumed by an in-session
-      orchestrator or the headless campaign driver.
+      ``campaign_id``, ``prompt``, ``spawn_request``); consumed by an
+      in-session orchestrator or the headless campaign driver.
     - ``warnings`` — non-fatal notes (orphan sidecar, unreadable
       cursor).
 

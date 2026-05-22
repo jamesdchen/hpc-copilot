@@ -136,6 +136,17 @@
         "prompt": {
           "title": "Prompt",
           "type": "string"
+        },
+        "spawn_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_SpawnRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -230,6 +241,38 @@
         "is_orphan"
       ],
       "title": "_LatestRun",
+      "type": "object"
+    },
+    "_SpawnRequest": {
+      "additionalProperties": false,
+      "description": "A delegated workflow spawn for an ``agent``-kind step.\n\nThe in-session orchestrator wraps this as the ``Task`` prompt\n``{\"hpc_spawn\": <this>}``; the spawn_guard hook renders it to the\ncanonical subagent prompt. ``None`` for ``cli``-kind steps.",
+      "properties": {
+        "workflow": {
+          "enum": [
+            "submit",
+            "status",
+            "aggregate",
+            "campaign"
+          ],
+          "title": "Workflow",
+          "type": "string"
+        },
+        "experiment_dir": {
+          "title": "Experiment Dir",
+          "type": "string"
+        },
+        "fields": {
+          "additionalProperties": true,
+          "title": "Fields",
+          "type": "object"
+        }
+      },
+      "required": [
+        "workflow",
+        "experiment_dir",
+        "fields"
+      ],
+      "title": "_SpawnRequest",
       "type": "object"
     }
   }
