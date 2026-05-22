@@ -78,7 +78,7 @@ def plan_action(delegate: dict[str, Any] | None, *, allow_agent_steps: bool) -> 
     Returns one of:
 
     - ``{"action": "cli", "verb": ..., "run_id": ..., "step": ...}``
-    - ``{"action": "agent", "prompt": ..., "step": ...}``
+    - ``{"action": "agent", "spawn_request": ..., "step": ...}``
     - ``{"action": "skip", "reason": ...}``
     """
     if not delegate:
@@ -105,7 +105,13 @@ def plan_action(delegate: dict[str, Any] | None, *, allow_agent_steps: bool) -> 
                     "permit the driver to spawn `claude -p` (a billable side effect)"
                 ),
             }
-        return {"action": "agent", "prompt": delegate.get("prompt") or "", "step": step}
+        spawn_request = delegate.get("spawn_request")
+        if not spawn_request:
+            return {
+                "action": "skip",
+                "reason": f"agent step {step!r} has no spawn_request",
+            }
+        return {"action": "agent", "spawn_request": spawn_request, "step": step}
 
     return {"action": "skip", "reason": f"unknown delegate kind {kind!r}"}
 
@@ -132,17 +138,20 @@ def _run_cli_step(verb: str, run_id: str, experiment_dir: Path) -> int:
             os.unlink(spec_path)
 
 
-def _run_agent_step(prompt: str, experiment_dir: Path) -> int:
+def _run_agent_step(spawn_request: dict[str, Any], experiment_dir: Path) -> int:
     """Run a judgement step in a fresh-context worker.
 
-    Transport is pluggable via :mod:`hpc_agent._internal.invoke`; the
-    default ``claude-cli`` invoker shells ``claude -p --bare`` so the
-    worker's context is a reproducible minimum — it recovers everything
-    it needs from disk via ``load-context``.
+    *spawn_request* is the delegate block's ``spawn_request`` — a
+    ``{workflow, experiment_dir, fields}`` dict. It is validated and
+    rendered into the canonical worker prompt (split into a cacheable
+    prefix + variable suffix), then handed to a pluggable invoker
+    (default ``claude-cli``; see :mod:`hpc_agent._internal.invoke`).
     """
     from hpc_agent._internal.invoke import get_invoker
+    from hpc_agent.atoms.spawn_prompt import validate_and_render_parts
 
-    return get_invoker().invoke(prompt, cwd=experiment_dir).exit_code
+    rendered = validate_and_render_parts(spawn_request)
+    return get_invoker().invoke(rendered, cwd=experiment_dir).exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     if plan["action"] == "cli":
         return _run_cli_step(plan["verb"], plan["run_id"], args.experiment_dir)
     if plan["action"] == "agent":
-        return _run_agent_step(plan["prompt"], args.experiment_dir)
+        return _run_agent_step(plan["spawn_request"], args.experiment_dir)
     return 0
 
 

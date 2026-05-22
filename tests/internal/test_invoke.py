@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 import hpc_agent._internal.invoke as invoke_mod
-from hpc_agent._internal.invoke import ClaudeCliInvoker, InvocationResult, get_invoker
+from hpc_agent._internal.invoke import (
+    ClaudeCliInvoker,
+    InvocationResult,
+    RenderedPrompt,
+    get_invoker,
+)
 
 
 def test_get_invoker_default() -> None:
@@ -43,10 +48,24 @@ def test_claude_cli_invoker_builds_the_right_call(
 
     monkeypatch.setattr(invoke_mod.subprocess, "run", _fake_run)
 
-    result = ClaudeCliInvoker().invoke("the rendered prompt", cwd=tmp_path)
+    prompt = RenderedPrompt(cacheable_prefix="PREFIX", variable_suffix="SUFFIX")
+    result = ClaudeCliInvoker().invoke(prompt, cwd=tmp_path)
 
     assert isinstance(result, InvocationResult)
     assert result.exit_code == 0
     assert result.output == "worker output"
-    assert seen["argv"] == ["claude", "-p", "--bare", "the rendered prompt"]
+    # The cacheable prefix is conveyed via --append-system-prompt (Claude
+    # Code caches the system prompt); the variable suffix is the user prompt.
+    assert seen["argv"] == [
+        "claude",
+        "-p",
+        "--bare",
+        "--append-system-prompt",
+        "PREFIX",
+        "SUFFIX",
+    ]
     assert seen["cwd"] == str(tmp_path)
+
+
+def test_rendered_prompt_joined() -> None:
+    assert RenderedPrompt("A", "B").joined == "A\n\nB"

@@ -69,6 +69,21 @@ def test_render_prefix_is_stable_across_invocations() -> None:
     assert a != b
 
 
+def test_render_spawn_parts_splits_prefix_and_suffix() -> None:
+    from hpc_agent.atoms.spawn_prompt import render_spawn_parts
+
+    ed = "/tmp/zzz-unique-experiment-dir"
+    parts = render_spawn_parts(workflow="submit", experiment_dir=ed, fields={"x": 1})
+    # joined form equals the single-string renderer.
+    assert parts.joined == render_spawn_prompt(
+        workflow="submit", experiment_dir=ed, fields={"x": 1}
+    )
+    # the cacheable prefix carries the skill; the variable bits are not in it.
+    assert "hpc-submit" in parts.cacheable_prefix
+    assert ed not in parts.cacheable_prefix
+    assert ed in parts.variable_suffix
+
+
 def test_render_escapes_newlines_in_field_values() -> None:
     # A field value with newlines must not break out of the data block
     # and inject fake prompt structure.

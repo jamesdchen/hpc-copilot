@@ -23,7 +23,7 @@ from hpc_agent.atoms.spawn_prompt import (
     SpawnContractError,
     WorkerReport,
     parse_worker_report,
-    validate_and_render,
+    validate_and_render_parts,
 )
 
 
@@ -36,7 +36,7 @@ def run_workflow(
     Raises :class:`SpawnContractError` when the request is invalid or
     the worker produces no parseable report.
     """
-    prompt = validate_and_render(
+    prompt = validate_and_render_parts(
         {"workflow": workflow, "experiment_dir": experiment_dir, "fields": fields}
     )
     invocation = get_invoker().invoke(prompt, cwd=Path(experiment_dir))

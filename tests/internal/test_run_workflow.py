@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent._internal.invoke import InvocationResult
+from hpc_agent._internal.invoke import InvocationResult, RenderedPrompt
 from hpc_agent._internal.run_workflow import run_workflow
 from hpc_agent.atoms.spawn_prompt import SpawnContractError
 
@@ -20,7 +20,7 @@ class _StubInvoker:
         self._output = output
         self._exit_code = exit_code
 
-    def invoke(self, prompt: str, *, cwd: Path) -> InvocationResult:
+    def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult:
         return InvocationResult(exit_code=self._exit_code, output=self._output)
 
 

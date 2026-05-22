@@ -38,14 +38,28 @@ def test_cli_step_with_unmapped_step_skips():
 
 
 def test_agent_step_skipped_without_flag():
-    plan = plan_action({"kind": "agent", "step": "submit", "prompt": "go"}, allow_agent_steps=False)
+    plan = plan_action({"kind": "agent", "step": "submit"}, allow_agent_steps=False)
     assert plan["action"] == "skip"
     assert "--allow-agent-steps" in plan["reason"]
 
 
 def test_agent_step_allowed_with_flag():
-    plan = plan_action({"kind": "agent", "step": "submit", "prompt": "go"}, allow_agent_steps=True)
-    assert plan == {"action": "agent", "prompt": "go", "step": "submit"}
+    spawn_request = {"workflow": "submit", "experiment_dir": ".", "fields": {}}
+    plan = plan_action(
+        {"kind": "agent", "step": "submit", "spawn_request": spawn_request},
+        allow_agent_steps=True,
+    )
+    assert plan == {
+        "action": "agent",
+        "spawn_request": spawn_request,
+        "step": "submit",
+    }
+
+
+def test_agent_step_without_spawn_request_skips():
+    plan = plan_action({"kind": "agent", "step": "submit"}, allow_agent_steps=True)
+    assert plan["action"] == "skip"
+    assert "spawn_request" in plan["reason"]
 
 
 def test_no_delegate_block_skips():

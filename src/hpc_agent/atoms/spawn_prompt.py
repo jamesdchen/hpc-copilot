@@ -31,6 +31,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from hpc_agent._internal.invoke import RenderedPrompt
 from hpc_agent._schema_models.spawn_contract import (
     DECISION_POINTS,
     SPAWN_KEY,
@@ -47,6 +48,7 @@ __all__ = [
     "SPAWN_KEY",
     "WORKFLOW_SKILLS",
     "DecisionPoint",
+    "RenderedPrompt",
     "SpawnContractError",
     "SpawnRequest",
     "WorkerDecision",
@@ -55,8 +57,10 @@ __all__ = [
     "extract_spawn_payload",
     "is_unpinned_workflow_directive",
     "parse_worker_report",
+    "render_spawn_parts",
     "render_spawn_prompt",
     "validate_and_render",
+    "validate_and_render_parts",
 ]
 
 
@@ -113,18 +117,19 @@ def _skill_body(skill: str) -> str:
 _SUFFIX_MARKER = "─── invocation context ───"
 
 
-def render_spawn_prompt(*, workflow: str, experiment_dir: str, fields: dict[str, Any]) -> str:
-    """Render the canonical worker prompt for *workflow*.
+def render_spawn_parts(
+    *, workflow: str, experiment_dir: str, fields: dict[str, Any]
+) -> RenderedPrompt:
+    """Render the worker prompt split into cacheable + variable parts.
 
-    Deterministic given the installed package: the same inputs plus the
-    same installed hpc-agent always yield byte-identical output. The
-    fixed per-workflow prefix (scaffold + inlined skill + return
-    contract) precedes the per-invocation suffix (experiment_dir,
-    fields), so the large prefix is prompt-cacheable — see
-    :data:`_SUFFIX_MARKER`.
+    Deterministic given the installed package. The ``cacheable_prefix``
+    (scaffold + inlined skill + return contract) is byte-identical for
+    every run of *workflow*; the ``variable_suffix`` carries this
+    invocation's experiment_dir and fields. The split is what lets an
+    invoker prompt-cache the large prefix — see :class:`RenderedPrompt`.
     """
     skill = WORKFLOW_SKILLS[workflow]
-    prefix = (
+    cacheable_prefix = (
         f"You are an isolated hpc-agent subagent executing the `{workflow}` "
         "workflow. Your context is fresh — depend only on on-disk state and "
         "the invocation context at the end of this prompt, never on any "
@@ -148,12 +153,24 @@ def render_spawn_prompt(*, workflow: str, experiment_dir: str, fields: dict[str,
         "dumps, rsync logs — out of that object; it stays in your context, "
         "not the caller's."
     )
-    suffix = (
-        f"\n\n{_SUFFIX_MARKER}\n"
+    variable_suffix = (
+        f"{_SUFFIX_MARKER}\n"
         f"experiment_dir: {experiment_dir}\n"
         f"invocation inputs:\n{_render_fields(fields)}"
     )
-    return prefix + suffix
+    return RenderedPrompt(cacheable_prefix=cacheable_prefix, variable_suffix=variable_suffix)
+
+
+def render_spawn_prompt(*, workflow: str, experiment_dir: str, fields: dict[str, Any]) -> str:
+    """Render the canonical worker prompt for *workflow* as one string.
+
+    The joined form of :func:`render_spawn_parts` — used where a single
+    prompt string is needed (the ``Task`` tool, the ``delegate.prompt``
+    field). Byte-identical output for byte-identical inputs.
+    """
+    return render_spawn_parts(
+        workflow=workflow, experiment_dir=experiment_dir, fields=fields
+    ).joined
 
 
 # The directive grammar is built from the registry — no second spelling
@@ -194,18 +211,40 @@ def extract_spawn_payload(prompt: str) -> tuple[bool, Any]:
     return (True, obj[SPAWN_KEY])
 
 
-def validate_and_render(payload: Any) -> str:
-    """Validate a spawn-request *payload* and return the canonical prompt.
-
-    Raises :class:`SpawnContractError` when *payload* is not a valid
-    :class:`SpawnRequest`. This is the one entry point every consumer
-    calls — validation and rendering never fork.
-    """
+def _validated_request(payload: Any) -> SpawnRequest:
+    """Validate *payload* as a :class:`SpawnRequest`, or raise SpawnContractError."""
     try:
-        request = SpawnRequest.model_validate(payload)
+        request: SpawnRequest = SpawnRequest.model_validate(payload)
     except ValidationError as exc:
         raise SpawnContractError(str(exc)) from exc
+    return request
+
+
+def validate_and_render(payload: Any) -> str:
+    """Validate a spawn-request *payload* and return the joined prompt string.
+
+    For the ``Task``-tool path (the spawn_guard hook), which needs a
+    single string. Raises :class:`SpawnContractError` on an invalid
+    payload.
+    """
+    request = _validated_request(payload)
     return render_spawn_prompt(
+        workflow=request.workflow,
+        experiment_dir=request.experiment_dir,
+        fields=request.fields,
+    )
+
+
+def validate_and_render_parts(payload: Any) -> RenderedPrompt:
+    """Validate a spawn-request *payload* and return the split prompt.
+
+    For the code-orchestrated path (``hpc-agent run`` → an invoker that
+    prompt-caches the prefix). Raises :class:`SpawnContractError` on an
+    invalid payload — validation never forks from
+    :func:`validate_and_render`.
+    """
+    request = _validated_request(payload)
+    return render_spawn_parts(
         workflow=request.workflow,
         experiment_dir=request.experiment_dir,
         fields=request.fields,
