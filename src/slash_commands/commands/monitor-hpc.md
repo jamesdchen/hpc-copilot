@@ -1,15 +1,13 @@
 Do not run the `hpc-status` skill in this conversation's context. Delegate it to a fresh-context **subagent** to execute it (`skills/hpc-status/SKILL.md`) — the workflow is: poll-run-status vs monitor-flow choice, lifecycle dispatch, polling cadence, resubmit decision flow. The skill is the canonical SoT.
 
-You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
+You do **not** hand-write the worker's prompt — `hpc-agent run` generates it deterministically. The flow:
 
 1. Resolve the run to monitor with the human-facing resume-offer dialog below, in this conversation.
-2. Call the `Task` tool with `prompt` set to **exactly** this JSON object and nothing else — no prose around it:
-   `{"hpc_spawn": {"workflow": "status", "experiment_dir": ".", "fields": <fields>}}`
-   where `<fields>` is a JSON object of the resolved inputs (`run_id`, intent: snapshot vs wait-until-terminal). You author only the `fields` data — never the prompt prose.
-3. A `PreToolUse` hook (`spawn_guard`) validates that request and replaces it with the canonical, code-generated prompt before the subagent starts. A `Task` prompt that is not a valid `hpc_spawn` request — or that invokes a workflow skill in prose — is denied.
-4. Surface the subagent's returned envelope (`lifecycle_state`, `complete`/`total`, `failed_task_ids`, `escalation_reason`) plus its `anomalies` string. The verbose intermediate output — per-tick polls, SSH dumps, failed-task stderr tails — stayed in the subagent.
+2. Run, via the `Bash` tool: `hpc-agent run status --fields-json '<fields>'`, where `<fields>` is a JSON object of the resolved inputs (`run_id`, intent: snapshot vs wait-until-terminal). It validates the fields, renders the canonical worker prompt, spawns a fresh-context worker that runs the `hpc-status` skill, and returns its report. You author only the `fields` data — never the prompt prose.
+3. `hpc-agent run` prints a JSON envelope on stdout: `data.report` carries `result` (the skill's result envelope), `decisions` (the workflow's decision points and what the worker chose at each), and `anomalies`; `data.worker_exit_code` is the worker's exit status.
+4. Surface `data.report.result` (`lifecycle_state`, `complete`/`total`, `failed_task_ids`, `escalation_reason`), the `decisions` list, and the `anomalies` string to the user. The verbose intermediate output — per-tick polls, SSH dumps, failed-task stderr tails — stayed in the worker.
 
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in the `fields` object, do not delegate it. It carries one piece the skill cannot: the resume-offer dialog for cold-session recovery.
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in `--fields-json`, do not delegate it. It carries one piece the skill cannot: the resume-offer dialog for cold-session recovery.
 
 ## Scheduling the next tick
 

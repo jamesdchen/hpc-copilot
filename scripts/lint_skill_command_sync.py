@@ -8,7 +8,8 @@ catches the most common drift modes:
 1. A skill exists with no matching slash command (or vice versa).
 2. A skill or slash-command file is missing required frontmatter.
 3. A skill's declared ``execution`` mode disagrees with how its
-   command routes (``delegated`` ⇔ an ``hpc_spawn`` Task request).
+   command routes (``delegated`` ⇔ an ``hpc_spawn`` Task request or an
+   ``hpc-agent run`` Bash call).
 
 It deliberately does **not** diff the bodies — the two surfaces have
 different audiences (agent skill vs. interactive slash-command prompt)
@@ -127,7 +128,8 @@ def main() -> int:
 
         # The skill's declared `execution` mode must agree with how its
         # command routes: `delegated` ⇒ the command delegates via an
-        # `hpc_spawn` Task request; `inline` ⇒ it does not.
+        # `hpc_spawn` Task request or an `hpc-agent run` Bash call;
+        # `inline` ⇒ it does neither.
         if not skill_path.is_file():
             continue
         skill_body = skill_path.read_text(encoding="utf-8")
@@ -139,21 +141,21 @@ def main() -> int:
                 "must statically declare how it runs."
             )
             continue
-        routes_via_spawn = "hpc_spawn" in body
+        routes_via_spawn = "hpc_spawn" in body or "hpc-agent run" in body
         if exec_match.group(1) == "delegated" and not routes_via_spawn:
             errors.append(
                 f"{skill_id!r} declares `execution: delegated` but its command "
                 f"{slash_path.relative_to(REPO_ROOT)} does not delegate via an "
-                "`hpc_spawn` Task request. A delegated skill must run in a "
-                "spawn_guard-rendered subagent."
+                "`hpc_spawn` Task request or an `hpc-agent run` Bash call. A "
+                "delegated skill must run in a fresh-context worker."
             )
         if exec_match.group(1) == "inline" and routes_via_spawn:
             errors.append(
                 f"{skill_id!r} declares `execution: inline` but its command "
                 f"{slash_path.relative_to(REPO_ROOT)} routes through an "
-                "`hpc_spawn` Task request. An inline skill runs in the main "
-                "conversation — drop the spawn routing, or mark the skill "
-                "`delegated`."
+                "`hpc_spawn` Task request or an `hpc-agent run` Bash call. An "
+                "inline skill runs in the main conversation — drop the spawn "
+                "routing, or mark the skill `delegated`."
             )
 
     # Skills present on disk but not declared in the pair table.

@@ -1,15 +1,13 @@
 Do not run the `hpc-aggregate` skill in this conversation's context. Delegate it to a fresh-context **subagent** to execute it (`skills/hpc-aggregate/SKILL.md`) — the workflow is: which mode to pick (auto / cluster-reduce / combiner-only), how to handle partial aggregation, the `verify-aggregation-complete` invariant check, error envelope branching. The skill is the canonical SoT.
 
-You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
+You do **not** hand-write the worker's prompt — `hpc-agent run` generates it deterministically. The flow:
 
 1. Resolve the human-facing inputs below (the profile/stage to aggregate, plus the anti-pattern reasoning) in this conversation.
-2. Call the `Task` tool with `prompt` set to **exactly** this JSON object and nothing else — no prose around it:
-   `{"hpc_spawn": {"workflow": "aggregate", "experiment_dir": ".", "fields": <fields>}}`
-   where `<fields>` is a JSON object of the resolved inputs (`profile`, optional `stage`, mode override if any). You author only the `fields` data — never the prompt prose.
-3. A `PreToolUse` hook (`spawn_guard`) validates that request and replaces it with the canonical, code-generated prompt before the subagent starts. A `Task` prompt that is not a valid `hpc_spawn` request — or that invokes a workflow skill in prose — is denied.
-4. Surface the subagent's returned envelope (`ok`, an `aggregated_metrics` summary, `missing_waves`, `missing_tasks`, `escalation_reason`) plus its `anomalies` string, then run the post-flight spot-checks below.
+2. Run, via the `Bash` tool: `hpc-agent run aggregate --fields-json '<fields>'`, where `<fields>` is a JSON object of the resolved inputs (`profile`, optional `stage`, mode override if any). It validates the fields, renders the canonical worker prompt, spawns a fresh-context worker that runs the `hpc-aggregate` skill, and returns its report. You author only the `fields` data — never the prompt prose.
+3. `hpc-agent run` prints a JSON envelope on stdout: `data.report` carries `result` (the skill's result envelope), `decisions` (the workflow's decision points and what the worker chose at each), and `anomalies`; `data.worker_exit_code` is the worker's exit status.
+4. Surface `data.report.result` (`ok`, an `aggregated_metrics` summary, `missing_waves`, `missing_tasks`, `escalation_reason`), the `decisions` list, and the `anomalies` string to the user, then run the post-flight spot-checks below.
 
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in the `fields` object, do not delegate it. It exists for two reasons the skill alone doesn't cover.
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in `--fields-json`, do not delegate it. It exists for two reasons the skill alone doesn't cover.
 
 ## Core principle (human advice): Reduce Where the Data Lives
 
