@@ -46,9 +46,7 @@ def _render_fields(fields: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_spawn_prompt(
-    *, workflow: str, experiment_dir: str, fields: dict[str, Any]
-) -> str:
+def render_spawn_prompt(*, workflow: str, experiment_dir: str, fields: dict[str, Any]) -> str:
     """Render the canonical subagent prompt for *workflow*.
 
     Pure function of its inputs — the same ``(workflow, experiment_dir,
@@ -87,8 +85,7 @@ def build_spawn_prompt(
     """
     if workflow not in WORKFLOW_SKILLS:
         raise ValueError(
-            f"unknown workflow {workflow!r}; expected one of "
-            f"{sorted(WORKFLOW_SKILLS)}"
+            f"unknown workflow {workflow!r}; expected one of {sorted(WORKFLOW_SKILLS)}"
         )
 
     prompt = render_spawn_prompt(

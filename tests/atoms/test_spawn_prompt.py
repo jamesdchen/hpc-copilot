@@ -23,17 +23,13 @@ def test_render_spawn_prompt_is_deterministic() -> None:
 
 def test_render_names_the_workflow_skill() -> None:
     for workflow, skill in WORKFLOW_SKILLS.items():
-        prompt = render_spawn_prompt(
-            workflow=workflow, experiment_dir="/exp", fields={}
-        )
+        prompt = render_spawn_prompt(workflow=workflow, experiment_dir="/exp", fields={})
         assert skill in prompt
         assert "load-context" in prompt
 
 
 def test_build_spawn_prompt_writes_content_addressed_spec(tmp_path: Path) -> None:
-    out = build_spawn_prompt(
-        experiment_dir=tmp_path, workflow="submit", fields={"cluster": "sge1"}
-    )
+    out = build_spawn_prompt(experiment_dir=tmp_path, workflow="submit", fields={"cluster": "sge1"})
     sha = out["sha256"]
     assert out["spawn_ref"] == f"spec://{sha}"
 
@@ -66,9 +62,7 @@ def test_hook_ignores_calls_without_a_string_prompt() -> None:
 
 def test_hook_rewrites_a_valid_spec_ref(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    out = build_spawn_prompt(
-        experiment_dir=tmp_path, workflow="status", fields={"run_id": "r1"}
-    )
+    out = build_spawn_prompt(experiment_dir=tmp_path, workflow="status", fields={"run_id": "r1"})
     event = {"tool_input": {"prompt": out["spawn_ref"], "subagent_type": "general"}}
     decision = evaluate(event)
     assert decision is not None
@@ -92,9 +86,7 @@ def test_hook_denies_a_missing_spec(tmp_path: Path, monkeypatch) -> None:
 
 def test_hook_denies_a_tampered_spec(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    out = build_spawn_prompt(
-        experiment_dir=tmp_path, workflow="aggregate", fields={}
-    )
+    out = build_spawn_prompt(experiment_dir=tmp_path, workflow="aggregate", fields={})
     # Edit the file after generation — its hash no longer matches the name.
     spec_path = Path(out["spec_path"])
     record = json.loads(spec_path.read_text())
