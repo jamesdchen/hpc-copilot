@@ -64,6 +64,8 @@ def test_render_frames_the_bare_skill_for_headless_use() -> None:
     assert "Never wait for a slash command." in prompt
     # references are fetchable per-branch, not "ignore them".
     assert "hpc-agent describe" in prompt
+    # a hand-off to another workflow is a boundary, not fetch-and-follow.
+    assert "Never run another workflow inside this one." in prompt
 
 
 def test_render_prefix_is_stable_across_invocations() -> None:

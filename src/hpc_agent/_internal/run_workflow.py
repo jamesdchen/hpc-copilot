@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent._internal.invoke import get_invoker
 from hpc_agent.atoms.spawn_prompt import (
     SpawnContractError,
@@ -33,8 +34,10 @@ def run_workflow(
     """Run *workflow* end to end in a fresh-context worker.
 
     Returns the parsed :class:`WorkerReport` and the worker's exit code.
-    Raises :class:`SpawnContractError` when the request is invalid or
-    the worker produces no parseable report.
+    Raises :class:`SpawnContractError` when the *request* is invalid (a
+    user/spec error) and :class:`hpc_agent.errors.HpcError` when the
+    *worker* fails to return a valid report (an internal failure — not
+    the caller's fault).
     """
     prompt = validate_and_render_parts(
         {"workflow": workflow, "experiment_dir": experiment_dir, "fields": fields}
@@ -43,9 +46,8 @@ def run_workflow(
     try:
         report = parse_worker_report(invocation.output, workflow=workflow)
     except SpawnContractError as exc:
-        if invocation.exit_code != 0:
-            raise SpawnContractError(
-                f"worker exited {invocation.exit_code} and produced no valid report: {exc}"
-            ) from exc
-        raise
+        raise errors.HpcError(
+            f"the {workflow!r} worker did not return a valid report "
+            f"(exit {invocation.exit_code}): {exc}"
+        ) from exc
     return report, invocation.exit_code
