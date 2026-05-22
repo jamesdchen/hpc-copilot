@@ -73,6 +73,18 @@ def test_hook_denies_a_raw_canonical_prompt() -> None:
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_hook_allows_skill_mentions_without_a_directive() -> None:
+    # Mentioning a skill — to summarise, review, or read it — is not an
+    # invocation directive and must not be denied.
+    for prompt in (
+        "Summarize the hpc-submit skill documentation for me.",
+        "Read skills/hpc-submit/SKILL.md and report what it does.",
+        "Review the hpc-aggregate skill and flag any unclear steps.",
+        "Explain how the hpc-campaign skill differs from hpc-submit.",
+    ):
+        assert evaluate({"tool_input": {"prompt": prompt}}) is None, prompt
+
+
 def test_hook_ignores_calls_without_a_string_prompt() -> None:
     assert evaluate({"tool_input": {"subagent_type": "Explore"}}) is None
     assert evaluate({"tool_input": {"prompt": 42}}) is None

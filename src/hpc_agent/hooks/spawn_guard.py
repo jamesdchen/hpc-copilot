@@ -10,12 +10,14 @@ hook reads the tool-call event on stdin and classifies the spawn's
   text stored inside. The model's authored bytes never reach the
   subagent: the only thing it controls is a 64-hex-char hash, which
   either resolves to a code-written spec file or is denied.
-* A hand-written prompt that *invokes a workflow skill*
-  (``hpc-submit`` / ``hpc-status`` / ``hpc-aggregate`` /
-  ``hpc-campaign``) — deny it. A workflow run must be pinned; the
-  invocation directive is the one thing a bypass cannot omit, so its
-  presence in a raw prompt means an unpinned workflow spawn. The deny
-  points the caller at ``hpc-agent build-spawn-prompt``.
+* A hand-written prompt that imperatively *invokes* a workflow skill
+  (``invoke``/``run``/``execute`` the ``hpc-submit`` / ``hpc-status`` /
+  ``hpc-aggregate`` / ``hpc-campaign`` skill) — deny it. A workflow run
+  must be pinned; the invocation directive is the one thing a bypass
+  cannot omit, so its presence in a raw prompt means an unpinned
+  workflow spawn. A mere *mention* of a skill (summarising or reading
+  it) is not a directive and passes through. The deny points the
+  caller at ``hpc-agent build-spawn-prompt``.
 * Anything else (Explore, general-purpose, ...) — pass through
   untouched.
 
@@ -36,13 +38,16 @@ from typing import Any
 
 _REF_RE = re.compile(r"^spec://([0-9a-f]{64})$")
 
-# A subagent prompt that names a workflow skill within a short window of
-# the word "skill" is an attempt to run that workflow. For the run to
-# actually happen the prompt MUST carry this invocation directive, so it
-# is the one signal a bypass cannot drop — anchoring on it (rather than
-# on fuzzy keywords) is what makes the unpinned-spawn check tight.
+# A non-spec prompt that *imperatively invokes* a workflow skill is an
+# unpinned workflow run. Anchor on the directive grammar — an execution
+# verb, "the", the `hpc-<wf>` skill name, "skill" — not on a bare
+# skill-name mention. That keeps research / documentation spawns
+# ("summarize the hpc-submit skill", "read skills/hpc-submit/SKILL.md")
+# out of the deny while still catching every real invocation, including
+# a verbatim paste of the canonical generated prompt.
 _WORKFLOW_DIRECTIVE_RE = re.compile(
-    r"\bhpc-(?:submit|status|aggregate|campaign)\b[^\n]{0,40}\bskill\b",
+    r"\b(?:invoke|run|execute)\s+the\s+[`*]?"
+    r"hpc-(?:submit|status|aggregate|campaign)[`*]?\s+skill\b",
     re.IGNORECASE,
 )
 
