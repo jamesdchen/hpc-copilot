@@ -142,16 +142,22 @@ def _run_agent_step(spawn_request: dict[str, Any], experiment_dir: Path) -> int:
     """Run a judgement step in a fresh-context worker.
 
     *spawn_request* is the delegate block's ``spawn_request`` — a
-    ``{workflow, experiment_dir, fields}`` dict. It is validated and
-    rendered into the canonical worker prompt (split into a cacheable
-    prefix + variable suffix), then handed to a pluggable invoker
-    (default ``claude-cli``; see :mod:`hpc_agent._internal.invoke`).
+    ``{workflow, experiment_dir, fields}`` dict. It is handed to
+    :func:`hpc_agent._internal.run_workflow.run_workflow`, the same
+    code-orchestrated entrypoint ``hpc-agent run`` uses: it validates
+    and renders the request into the canonical worker prompt, invokes a
+    fresh-context worker, and parses the worker's report. The parsed
+    report is printed so a cron/`/loop` tick leaves a record of the step.
     """
-    from hpc_agent._internal.invoke import get_invoker
-    from hpc_agent.atoms.spawn_prompt import validate_and_render_parts
+    from hpc_agent._internal.run_workflow import run_workflow
 
-    rendered = validate_and_render_parts(spawn_request)
-    return get_invoker().invoke(rendered, cwd=experiment_dir).exit_code
+    report, exit_code = run_workflow(
+        workflow=spawn_request["workflow"],
+        experiment_dir=str(experiment_dir),
+        fields=spawn_request.get("fields", {}),
+    )
+    print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+    return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:

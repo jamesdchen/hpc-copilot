@@ -1,7 +1,7 @@
 ---
 name: hpc-campaign
 description: "Inspect and run closed-loop campaigns: tagged sequences of submit-flow → monitor-flow → aggregate-flow whose tasks.py reads prior history to decide what to run next."
-allowed-tools: Bash Read Write Task
+allowed-tools: Bash Read Write
 execution: delegated
 ---
 
@@ -15,15 +15,11 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 - `data.in_flight` — runs still active for this campaign (run_id, stage, job_ids).
 - `data.latest_run` — config snapshot (cluster, profile, resources) of the newest iteration.
 - `data.next_step_hint` — `submit` / `monitor` / `aggregate` for the current iteration.
-- `data.delegate` — the next step as a delegable unit of work. `kind: "cli"` is a deterministic step (`monitor` / `aggregate`) — run the matching workflow atom directly. `kind: "agent"` is a judgement step (a new submission, a `decide`) — spawn a fresh-context subagent for it by passing `{"hpc_spawn": <delegate.spawn_request>}` as the `Task` prompt; the `spawn_guard` hook renders the canonical prompt from it. Delegating each step to a fresh context keeps this orchestrator's context from accumulating verbose per-step output across a long campaign.
+- `data.delegate` — the next step as a delegable unit of work. `kind: "cli"` is a deterministic step (`monitor` / `aggregate`); `kind: "agent"` is a judgement step (a new submission, a `decide`). The `hpc-campaign-driver` console script consumes this block — see below.
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
 
-For unattended runs, the `hpc-campaign-driver` console script (equivalently `python -m hpc_agent.campaign.driver`) advances exactly one step per invocation off the same `delegate` block — `kind: "cli"` steps run directly, `kind: "agent"` steps shell `claude -p` only with `--allow-agent-steps`. Wrap it in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
-
-## Delegating each step to a subagent
-
-When you orchestrate the loop in-session, do not run the per-iteration steps in your own context — over many iterations the verbose `submit-flow` / `monitor-flow` / `aggregate-flow` output bloats it and a compaction loses the thread. For each step, spawn a fresh-context **subagent** (the `Task` tool): for an `agent` step pass `{"hpc_spawn": <data.delegate.spawn_request>}` as the `Task` prompt — the `spawn_guard` hook validates it and substitutes the canonical, code-generated prompt, so you never hand-write a workflow prompt. The subagent reconstructs its own context from disk and performs the one step. It returns **only** that step's typed output envelope — the `submit-flow` / `monitor-flow` / `aggregate-flow` result schema, or for a `decide` step the chosen next-step plus params — and a single free-text `anomalies` string for anything off-contract. No transcript, no reasoning, no raw output. The orchestrator parses fields, not prose; that field-shaped return is what keeps each iteration's next call deterministic, and your context only ever accumulates envelopes. `kind: "cli"` steps (`monitor`, `aggregate`) you may instead run directly — they are cheap and deterministic — but `kind: "agent"` steps (`submit`, `decide`) should always go to a subagent.
+The campaign loop is driven by the `hpc-campaign-driver` console script (equivalently `python -m hpc_agent.campaign.driver`), not by an in-session agent orchestrator. It advances exactly one step per invocation off the `delegate` block — `kind: "cli"` steps run the matching workflow atom directly; `kind: "agent"` steps run in a fresh-context worker (code-rendered prompt, no hand-written prose) and require the `--allow-agent-steps` flag, since spawning an LLM is a billable side effect. Wrap the driver in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
 
 ## When to use
 

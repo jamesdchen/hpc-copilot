@@ -1,7 +1,7 @@
 """Code-orchestrated workflow execution — the deterministic entrypoint.
 
-``hpc-agent run <workflow>`` (and, in future, the campaign driver's
-agent-step) call :func:`run_workflow`. It is the *code-orchestrated*
+``hpc-agent run <workflow>`` and the campaign driver's agent-step
+both call :func:`run_workflow`. It is the *code-orchestrated*
 counterpart to the model-orchestrated slash-command path: the spawn is
 emitted here, by code, not by an LLM composing a ``Task`` call — so the
 worker's prompt is deterministic by construction and no ``PreToolUse``

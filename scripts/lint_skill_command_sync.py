@@ -60,13 +60,15 @@ SLASH_ONLY_OK: set[str] = {"validate-campaign"}
 # A workflow command must explicitly route to its skill rather than run
 # the workflow from the slash body alone. Accepted routing forms: the
 # inline "Invoke the `<skill>` skill" directive; the subagent-execute
-# form ("... subagent ... to execute it (`skills/<id>/SKILL.md`)"); or
-# the thin-trigger form — shelling `hpc-agent run <workflow>`, the
-# code-orchestrated entrypoint.
+# form ("... subagent ... to execute it (`skills/<id>/SKILL.md`)"); the
+# thin-trigger form — shelling `hpc-agent run <workflow>`, the
+# code-orchestrated entrypoint; or, for the campaign loop, shelling
+# `hpc-campaign-driver`, the code-orchestrated tick-by-tick driver.
 _INVOKE_DIRECTIVE_RE = re.compile(
     r"[Ii]nvoke the [`*]?[a-z][a-z0-9-]+[`*]? skill"
     r"|subagent[^\n]*?to execute it \(`skills/[a-z0-9-]+/SKILL\.md`\)"
     r"|hpc-agent run "
+    r"|hpc-campaign-driver"
 )
 
 # Every workflow skill statically declares, in its frontmatter, whether
@@ -129,8 +131,8 @@ def main() -> int:
 
         # The skill's declared `execution` mode must agree with how its
         # command routes: `delegated` ⇒ the command delegates via an
-        # `hpc_spawn` Task request or an `hpc-agent run` Bash call;
-        # `inline` ⇒ it does neither.
+        # `hpc_spawn` Task request, an `hpc-agent run` Bash call, or an
+        # `hpc-campaign-driver` Bash call; `inline` ⇒ it does none of these.
         if not skill_path.is_file():
             continue
         skill_body = skill_path.read_text(encoding="utf-8")
@@ -142,7 +144,11 @@ def main() -> int:
                 "must statically declare how it runs."
             )
             continue
-        routes_via_spawn = "hpc_spawn" in body or "hpc-agent run" in body
+        routes_via_spawn = (
+            "hpc_spawn" in body
+            or "hpc-agent run" in body
+            or "hpc-campaign-driver" in body
+        )
         if exec_match.group(1) == "delegated" and not routes_via_spawn:
             errors.append(
                 f"{skill_id!r} declares `execution: delegated` but its command "

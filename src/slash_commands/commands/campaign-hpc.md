@@ -1,43 +1,26 @@
-Do not run the `hpc-campaign` skill in this conversation's context. Delegate it to a fresh-context **subagent** to execute it (`skills/hpc-campaign/SKILL.md`) — the workflow is: campaign tagging, the per-iteration `submit-flow → monitor-flow → aggregate-flow` triplet, the stochastic-marker requirement for Path B (strategy-driven) campaigns, the resume-after-drop semantics. The skill is the canonical SoT.
+`/campaign-hpc` triggers the **campaign** workflow — drive a closed-loop campaign (tagged `submit-flow → monitor-flow → aggregate-flow` iterations whose `tasks.py` adapts to prior results).
 
-You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
+This command is a thin trigger over `hpc-campaign-driver`, the code-orchestrated campaign loop. Do not run the `hpc-campaign` skill yourself in this conversation, and do not hand-write a per-step subagent prompt — the driver advances exactly one step per invocation, running deterministic steps directly and spawning a fresh-context worker for judgement steps. The `hpc-campaign` skill (`skills/hpc-campaign/SKILL.md`) stays the canonical SoT for campaign semantics.
 
-1. Pick the path and tag the slug with the user below, in this conversation.
-2. Call the `Task` tool with `prompt` set to **exactly** this JSON object and nothing else — no prose around it:
-   `{"hpc_spawn": {"workflow": "campaign", "experiment_dir": ".", "fields": <fields>}}`
-   where `<fields>` is a JSON object of the resolved inputs (`campaign_id`, path A/B, concurrency, the iteration to run). You author only the `fields` data — never the prompt prose.
-3. A `PreToolUse` hook (`spawn_guard`) validates that request and replaces it with the canonical, code-generated prompt before the subagent starts. A `Task` prompt that is not a valid `hpc_spawn` request — or that invokes a workflow skill in prose — is denied. That subagent is itself the loop orchestrator — it spawns a further per-step subagent for each `submit` / `monitor` / `aggregate` / `decide` step (see the skill's delegation section).
-4. Surface the subagent's returned campaign-state envelope (iterations completed, latest reduced metrics, next step, `campaign_id`) plus its `anomalies` string. The verbose per-iteration output never entered this conversation.
+Two things this command does in-conversation, because the driver can't:
 
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in the `fields` object, do not delegate it. It exists for two reasons the skill alone doesn't cover:
+1. **Pick the path** (first-time setup only). Ask the user: "Do you have a fixed grid to step through — walk-forward windows, ablations, a manual sweep? → Path A. Or do you want an optimizer to choose params adaptively — Optuna, random-search, PBT? → Path B." Walk them through writing `tasks.py` accordingly. For Path B, the `_optuna_trial_number` (or equivalent unique marker) in `tasks.resolve()`'s kwargs is load-bearing — without it the framework silently dedupes repeat-param iterations and the campaign collapses. The skill's mandatory `validate-campaign` gate enforces this; surface the requirement to the user up front.
 
-1. **Pick the path** in conversation with the user (Path A: manual params, vs Path B: Optuna/random-search/PBT strategy). The skill describes both; the slash command's job is to ask "is your search space small and known, or large and adaptive?" and route accordingly.
+2. **Tag the campaign**: ask "what should we call this campaign?" and validate the slug against `^[A-Za-z0-9._\-]+$`.
 
-2. **Drive the per-iteration loop** as a Claude Code chat (the alternative is the headless `hpc-campaign-driver` console script under cron or `/loop`, which is what the skill's "headless" pointer covers). The slash command is the chat-driven path: each `/campaign-hpc` invocation is one iteration; the user kicks the next one when they want.
+## Driving the loop
 
-## When the user asks "start a campaign"
+Once `tasks.py` and the slug are set, each `/campaign-hpc` invocation advances exactly one step:
 
-1. Ask which path:
-   - "Do you have a fixed grid you want to step through (walk-forward windows, ablations, manual hyperparam sweep)? → Path A."
-   - "Do you want an optimizer to choose params adaptively (Optuna, random-search, PBT)? → Path B."
-
-2. **Path A**: walk the user through writing `tasks.py` with the manual grid. `resolve(task_id)` enumerates the grid; `total()` returns its size. Each iteration submits a fixed slice. No stochastic marker needed (param tuple itself is unique per iteration).
-
-3. **Path B**: walk the user through writing `tasks.py` with the strategy library. Inside `total()` / `resolve()`, the user calls:
-   - `study.tell(prev_trial, prev_metric)` for each prior iteration (loaded via `prior(experiment_dir, campaign_id)`)
-   - `study.ask()` to get the next batch
-   - **Add `_optuna_trial_number` (or equivalent unique field) into the kwargs dict** so each iteration's `cmd_sha` differs even when the strategy picks repeat params. Without this, the framework dedupes the second iteration silently and the campaign collapses. The skill enforces this with a mandatory `validate-campaign` gate before each Path B submit — a missing marker is a hard `fail`, not a warning.
-
-4. Tag the slug: ask "what should we call this campaign?" and validate against `^[A-Za-z0-9._\-]+$`.
-
-5. Call into `hpc-submit` with `campaign_id=<slug>` set. The skill takes over from there.
+1. Run, via the `Bash` tool: `hpc-campaign-driver --experiment-dir . --allow-agent-steps`. It reads the on-disk `delegate` block emitted by `load-context` and executes the next step — a deterministic `monitor` / `aggregate` directly, or a judgement `submit` / `decide` in a fresh-context worker — then prints `{"delegate": ..., "plan": ...}`.
+2. Surface the printed `plan` and the step's result to the user: which step ran, the `run_id`, the lifecycle state or reduced metrics, and whether the campaign has more iterations queued.
+3. The user kicks the next iteration when ready. For unattended runs, point them at `/loop 30m hpc-campaign-driver --experiment-dir . --allow-agent-steps` or a cron wrapper — each tick is one step, and on-disk state is the only thing carried between ticks.
 
 ## When the user asks "show me what landed"
 
-Invoke `hpc-agent campaign list` first; if more than one campaign exists, ask which. Then `hpc-agent campaign status --campaign-id <slug>` and surface the per-iteration history. Group multiple in-flight runs by `campaign_id` when displaying — easier to scan than a flat list.
+Run `hpc-agent campaign list` first; if more than one campaign exists, ask which. Then `hpc-agent campaign status --campaign-id <slug>` and surface the per-iteration history. Group multiple in-flight runs by `campaign_id` — easier to scan than a flat list.
 
 ## Notes
 
-- **The `_optuna_trial_number` requirement is load-bearing for Path B.** Surface it explicitly to the user when their `tasks.py` doesn't have one — silently-deduped iterations are a notorious debugging nightmare.
-- **Concurrency**: ask "do you want one iteration in flight at a time, or multiple?" Default to sequential. Multiple is the right answer for Optuna with `constant_liar=True`; sequential is right for walk-forward where iteration N+1 depends on N's result.
-- **Pause and resume**: closing the chat or hitting a network drop doesn't lose state — sidecars on disk are the only durable artifact. Re-run `/campaign-hpc` and the skill's `campaign-status` call shows where you left off.
+- **Pause and resume is trivial.** There is no driver state to recover — sidecars on disk are the only durable artifact. Re-run `/campaign-hpc` (or `hpc-agent campaign status`) and the driver resumes from where it left off.
+- **Concurrency** is opt-in: for K iterations in flight (Optuna's `constant_liar=True` is built for this), the campaign's `tasks.py` and submit cadence control it. Default to sequential when in doubt — walk-forward iteration N+1 depends on N's result.
