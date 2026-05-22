@@ -1,7 +1,7 @@
 ---
 name: hpc-campaign
 description: "Inspect and run closed-loop campaigns: tagged sequences of submit-flow → monitor-flow → aggregate-flow whose tasks.py reads prior history to decide what to run next."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 ---
 
 Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteration based on prior results. The framework provides two things — a `campaign_id` tag on every submit (carried by [submit-flow](../../docs/primitives/submit-flow.md)) and the [campaign-status](../../docs/primitives/campaign-status.md) accessor (called from inside `tasks.py`). The "loop" is repeated `submit-flow → monitor-flow → aggregate-flow` triplets sharing the same `campaign_id` slug — workflow-atom composition with no agent in the per-iteration critical path. Strategies (Optuna, RandomSearch, walk-forward, PBT) live as Python libraries the user imports in their own `tasks.py`. The framework ships **zero** strategy code.
@@ -19,6 +19,10 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
 
 For unattended runs, the `hpc-campaign-driver` console script (equivalently `python -m hpc_agent.campaign.driver`) advances exactly one step per invocation off the same `delegate` block — `kind: "cli"` steps run directly, `kind: "agent"` steps shell `claude -p` only with `--allow-agent-steps`. Wrap it in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
+
+## Delegating each step to a subagent
+
+When you orchestrate the loop in-session, do not run the per-iteration steps in your own context — over many iterations the verbose `submit-flow` / `monitor-flow` / `aggregate-flow` output bloats it and a compaction loses the thread. For each step, spawn a fresh-context **subagent** (the `Task` tool) with `data.delegate.prompt` from `load-context`: the subagent reconstructs its own context from disk, performs the one step, and returns a one-line summary, so your context only ever accumulates summaries. `kind: "cli"` steps (`monitor`, `aggregate`) you may instead run directly — they are cheap and deterministic — but `kind: "agent"` steps (`submit`, `decide`) should always go to a subagent.
 
 ## When to use
 

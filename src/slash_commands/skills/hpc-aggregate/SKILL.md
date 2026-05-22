@@ -1,7 +1,7 @@
 ---
 name: hpc-aggregate
 description: "Finalize a run's aggregated metrics: combine all waves on cluster, pull partials locally, run reduce_partials, optionally pull summary files."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 ---
 
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
@@ -14,6 +14,10 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 - `data.latest_run` — config snapshot of the newest run, including `result_dir_template`.
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
+
+## Delegating aggregation to a subagent
+
+Aggregation can pull large partial sets and emit a sizable `aggregated_metrics` dict. When you run this skill as part of a larger flow, do Steps 1–9 inside a fresh-context **subagent** (the `Task` tool) that returns only `{ok, aggregated_metrics summary, missing_waves, missing_tasks, escalation_reason}`. The raw `_combiner/` pull and per-task output stay in the subagent's context. It opens by running `hpc-agent load-context` to recover the `run_id` and SSH target.
 
 ## Steps
 

@@ -1,7 +1,7 @@
 ---
 name: hpc-submit
 description: "Submit a parameter-grid experiment to a SLURM/SGE cluster via SSH and record it in the journal. End-to-end pipeline (rsync + deploy + qsub + record) in one CLI call."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 ---
 
 Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-flow.md) workflow atom** (full pre-flight + rsync + deploy + qsub + record pipeline in one CLI call). For just the journal-write half (when the agent has already qsubbed), use the [submit-spec](../../docs/primitives/submit-spec.md) primitive directly. Both are idempotent on `run_id`: a replay returns `data.deduped: true` and emits no cluster-side side effects.
@@ -36,6 +36,16 @@ Branch on `action`:
 | `reuse` | 1 | Per-experiment sidecars exist | Each sidecar carries the full v2 config snapshot — resources/env/constraints/runtime. Reuse keeps `tasks.py` byte-identical so `cmd_sha` matches. |
 | `interview` | 2 | `.hpc/tasks.py` exists, no run history | Skip executor-discovery + axes interview (tasks.py already encodes the axis); jump to Step 4b. |
 | `fresh` | 3 | Nothing exists | Full interview from Step 1. |
+
+## Delegating verbose steps to a subagent
+
+This pipeline has several high-output steps. When you drive it as part of a larger flow, delegate each verbose, idempotent step to a fresh-context **subagent** (the `Task` tool) that returns only a short structured result, so the raw output never enters the orchestrator's context:
+
+- Step 1 — executor/run discovery,
+- Step 6b — the pre-flight gate,
+- Step 8b — scheduler verification.
+
+Keep the Step 5 user-confirmation gate and the `submit-flow` call in the orchestrator — they are short and need a decision. Every subagent opens by running `hpc-agent load-context`; it reconstructs its own context from disk and never inherits yours.
 
 ## Step 0: Build the `src/` package
 

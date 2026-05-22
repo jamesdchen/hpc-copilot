@@ -1,7 +1,7 @@
 ---
 name: hpc-status
 description: "Poll the status of an in-flight HPC run. Single snapshot via poll-run-status, or wait-until-terminal via monitor-flow."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
 ---
 
 Agent-facing composition over two primitives that share the same observation surface but differ in scope:
@@ -20,6 +20,10 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 - `data.next_step_hint` — `monitor` when a run is still in flight.
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
+
+## Delegating the poll to a subagent
+
+`monitor-flow` is verbose — one tick per poll, SSH dumps, failed-task stderr tails. When you run this skill as part of a larger flow, do the poll inside a fresh-context **subagent** (the `Task` tool) that returns only `{lifecycle_state, complete/total, failed_task_ids, escalation_reason}`. The tick log stays on disk and the raw output stays in the subagent's context; the orchestrator keeps just the summary. The subagent opens by running `hpc-agent load-context` to recover the `run_id` itself.
 
 ## Steps
 
