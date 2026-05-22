@@ -5,6 +5,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## Unreleased
+
+### Added — fresh-context recovery and headless campaigns
+
+A step that lost its conversational memory (a subagent, a restarted
+session, a cron tick) can now rebuild the workflow picture from disk
+alone instead of trusting context that may be gone.
+
+- **`load-context` primitive** — reconstructs the on-disk workflow
+  context for an experiment (`hpc-agent load-context --experiment-dir
+  <path>`): the latest run's v2 config snapshot, in-flight journal
+  records, campaigns with their cursor iteration, a coarse
+  `next_step_hint`, and non-fatal `warnings`. Pure read — no SSH, no
+  scheduler, no writes. Carries a generated output schema
+  (`load_context.output.json`). Multi-step skills now open with this
+  call instead of caching run/campaign/cluster state in memory.
+- **`delegate` block on `load-context`** — describes the next workflow
+  step as a delegable unit of work: `kind` (`cli` for a deterministic
+  monitor/aggregate step, `agent` for a judgement step), `step`,
+  `run_id`, `experiment_dir`, `reason`, and a ready-to-hand-off
+  `prompt`. One contract shared by an in-session orchestrator and the
+  headless campaign driver.
+- **`hpc_agent.campaign.driver` — headless campaign driver** — advances
+  exactly one campaign workflow step per invocation off the
+  `load-context` `delegate` block. Installed as the `hpc-campaign-driver`
+  console script (equivalently `python -m hpc_agent.campaign.driver`).
+  `kind: "cli"` steps run the matching `hpc-agent` verb directly with no
+  LLM; `kind: "agent"` steps shell `claude -p` only when
+  `--allow-agent-steps` is passed. Idempotent and cron-friendly — wrap
+  it in cron or `/loop` to walk an unattended campaign.
+
+### Changed — precondition gates on `monitor-flow` / `aggregate-flow`
+
+- **`precondition_failed` error code** — `monitor-flow` and
+  `aggregate-flow` now reject a run that is not in a valid state for the
+  step with a structured `precondition_failed` envelope
+  (`errors.PreconditionFailed`) instead of failing deep in the workflow.
+- **Behavior change — `aggregate-flow` rejects a non-terminal run.**
+  `aggregate-flow` now fails with `precondition_failed` when invoked on a
+  run that has not reached a terminal state, unless
+  `ensure_all_combined=false` is passed in the spec. Callers that
+  intentionally aggregate a still-running run must opt out explicitly.
+
 ## 0.4.0 — 2026-05-21
 
 ### Added — interview-time `DataAxis` classification
