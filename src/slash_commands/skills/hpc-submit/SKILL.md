@@ -298,6 +298,22 @@ Report after submission and Step 8b verification: job ID, executor(s), grid dime
 
 The journal write happens inside `submit-flow` via `runner.submit_and_record`. For multi-executor submissions (one sidecar per executor), invoke `submit-flow` once per submitted job — each call writes its own sidecar.
 
+## Common failure modes
+
+When Step 8b finds a job in a failed state, or a later check surfaces task failures, map the symptom:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Eqw` state (SGE) | Job error | `qmod -cj <JOBID>` or resubmit |
+| `PENDING` (SLURM) for >30 min | Resource unavailable | Check `sinfo`; try a different partition |
+| Memory exceeded | Exceeded the memory limit | Resubmit with higher memory |
+| Walltime exceeded | Exceeded the time limit | Resubmit with longer walltime |
+| `ModuleNotFoundError` | Environment not set up | Check the modules / conda_env |
+| rsync / scp transfer failure | SSH key issue | Verify `ssh $SSH_TARGET hostname` first |
+| `--<flag>` not recognized | The executor does not accept that argument | Check `--help`; the flag must be in the executor's `FLAGS` / CLI |
+
+If the requested run names a CLI flag the executor does not accept, surface that before submitting — a missing flag fails every task in the array.
+
 ## Notes
 
 - **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` or every cluster call hangs on auth. Run `hpc-preflight` first.

@@ -76,6 +76,26 @@ Aggregation can pull large partial sets and emit a sizable `aggregated_metrics` 
 
 10. **Profile-specific aggregate command**: when the per-run sidecar's `aggregate_defaults.aggregate_cmd` is set and `mode != "auto"` skipped it, the atom already ran the user-defined cluster-side command. When `mode == "combiner-only"` was forced and the user still wants the cluster-side command, run it manually after `aggregate-flow` returns — it's an arbitrary user-defined command that the framework doesn't introspect.
 
+## Reduce where the data lives
+
+Never move bulk result files just to reach a Python environment. If the reduction is trivial (a pandas concat, `optuna.tell()`, a JSON dump) but the host holding the data lacks the dependencies, install the dependencies on that host — a 30-second `pip install` beats minutes of small-file scp/rsync. Decide before any `scp`/`rsync` of results:
+
+1. **Genuinely HPC-scale compute** (GPU, multi-node, hours of CPU) → run it on the cluster, aggregate on the cluster, pull only summaries.
+2. **Trivial compute** (pandas, sqlite, a scalar) → run it wherever the data already sits; install missing deps in place.
+3. **Data must actually move** → move the *small* side (params/code down, reduced output up). Never bulk-push raw chunks between clusters to reach an environment.
+
+Anti-pattern: `scp -r results/tune/*_chunk_*.csv cluster-B:...` because cluster-B has the conda env and cluster-A does not — fix the environment, not the data location. Small-file scp/rsync is especially slow (per-file SSH handshake); if bulk movement is unavoidable, `tar` first. `mode: "auto"` routes around this by default — stay on it unless a debug case needs the raw files local.
+
+## Post-flight spot-checks
+
+`aggregate-flow` returning `ok=true` is necessary but not sufficient: `summary.complete == total_tasks` says every task wrote *something*, not that the file is non-trivial. After Step 7's invariant check passes, before reporting success, run three more:
+
+1. **Non-empty rows.** Re-run the `poll-run-status` cluster-side reporter with `--min-rows N` (a profile-appropriate floor — 1 minimum, more if the expected row count is known). Any task that read `complete` but flips to `failed` here wrote an empty/short file; report which task ids.
+2. **Spot-check three tasks.** For the first, middle, and last task ids (`0`, `task_count // 2`, `task_count - 1`): the result file exists and is non-empty; the expected columns are present (use `results.summary_pattern` and the executor's schema); the key metric column has at least one non-NaN value.
+3. **Sanity-check the aggregated metrics.** `aggregated_metrics` is keyed by run_id or grid-point; confirm the keys match what was submitted — no missing grid points, none unexpected. A key present in the dict but absent from `tasks.resolve(i)` for every `i` is a cross-run contamination flag — escalate, do not paper over.
+
+If any of the three fails, do not report success — record the failure in the result and `anomalies`.
+
 ## Notes
 
 - **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
