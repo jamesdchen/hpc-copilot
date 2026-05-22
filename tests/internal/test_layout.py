@@ -117,3 +117,30 @@ def test_journal_layout_run_record_path(tmp_path: Path, monkeypatch: pytest.Monk
     idx = journal.index()
     assert idx.name == "index.json"
     assert idx.parent == journal.root
+
+
+def test_journal_layout_preflight_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    journal = JournalLayout(tmp_path)
+    marker = journal.preflight_marker("perlmutter")
+    assert marker.name == "preflight-perlmutter.json"
+    assert marker.parent == journal.root
+
+
+def test_journal_layout_preflight_marker_sanitizes_slash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    journal = JournalLayout(tmp_path)
+    marker = journal.preflight_marker("site/cluster")
+    assert marker.name == "preflight-site_cluster.json"
+    assert marker.parent == journal.root
+
+
+def test_journal_layout_preflight_marker_rejects_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+    journal = JournalLayout(tmp_path)
+    with pytest.raises(ValueError, match="cluster must be non-empty"):
+        journal.preflight_marker("")
