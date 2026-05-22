@@ -23,8 +23,10 @@ lives here. A consumer imports these; it does not re-declare them.
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import re
+from importlib.resources import files
 from typing import Any
 
 from pydantic import ValidationError
@@ -82,37 +84,76 @@ def _render_decision_points(workflow: str) -> str:
     return "\n".join(f"- `{p.id}` ({p.kind})" for p in points)
 
 
-def render_spawn_prompt(*, workflow: str, experiment_dir: str, fields: dict[str, Any]) -> str:
-    """Render the canonical subagent prompt for *workflow*.
+@functools.cache
+def _skill_body(skill: str) -> str:
+    """The markdown body of a bundled ``SKILL.md``, frontmatter stripped.
 
-    Pure function of its inputs — the same ``(workflow, experiment_dir,
-    fields)`` always yields byte-identical output.
+    Read from the installed ``slash_commands`` package data and cached.
+    The worker prompt *inlines* this rather than telling the worker to
+    invoke the Skill tool: a headless ``claude -p`` worker has no skill
+    discovery (``--bare`` skips it, and headless mode does not support
+    user-invoked skills), so the procedure must travel inside the
+    prompt itself.
+    """
+    raw = (files("slash_commands") / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+    if raw.startswith("---"):
+        close = raw.find("\n---", 3)
+        if close != -1:
+            raw = raw[close + 4 :]
+    return raw.strip()
+
+
+# Splits the cacheable per-workflow prefix from the per-invocation
+# suffix. Everything before this marker — scaffold, inlined skill body,
+# return contract — is byte-identical for every run of the same
+# workflow; only what follows (experiment_dir, fields) varies. Keeping
+# the variable parts strictly last is what lets the large fixed prefix
+# be prompt-cached. test_render_prefix_is_stable_across_invocations
+# guards the byte-identity.
+_SUFFIX_MARKER = "─── invocation context ───"
+
+
+def render_spawn_prompt(*, workflow: str, experiment_dir: str, fields: dict[str, Any]) -> str:
+    """Render the canonical worker prompt for *workflow*.
+
+    Deterministic given the installed package: the same inputs plus the
+    same installed hpc-agent always yield byte-identical output. The
+    fixed per-workflow prefix (scaffold + inlined skill + return
+    contract) precedes the per-invocation suffix (experiment_dir,
+    fields), so the large prefix is prompt-cacheable — see
+    :data:`_SUFFIX_MARKER`.
     """
     skill = WORKFLOW_SKILLS[workflow]
-    return (
+    prefix = (
         f"You are an isolated hpc-agent subagent executing the `{workflow}` "
-        "workflow. Your context is fresh and you must keep it that way: depend "
-        "only on on-disk state and the invocation inputs below, never on any "
+        "workflow. Your context is fresh — depend only on on-disk state and "
+        "the invocation context at the end of this prompt, never on any "
         "prior conversation.\n\n"
-        f"1. Bootstrap: run `hpc-agent load-context --experiment-dir "
-        f"{experiment_dir}` and read the result.\n"
-        f"2. Invoke the `{skill}` skill (skills/{skill}/SKILL.md) via the "
-        "Skill tool and execute its workflow exactly — the skill is the "
-        "canonical source of truth for the call sequence.\n"
-        "3. Apply the invocation inputs below as you run the skill.\n\n"
-        "Invocation inputs:\n"
-        f"{_render_fields(fields)}\n\n"
-        "Return ONLY a single JSON object as your final message, nothing "
-        'else: {"result": <the skill\'s result envelope>, "decisions": '
-        '[...], "anomalies": "<free text, or empty>"}.\n\n'
-        'Each `decisions` entry is {"point": "<id>", "outcome": "<what you '
-        'decided>", "why": "<the deciding input>"}. Record one entry per '
-        f"decision point you reach. The `{workflow}` workflow's decision "
-        f"points are:\n{_render_decision_points(workflow)}\n\n"
+        f"Execute the `{skill}` skill below exactly as written — it is the "
+        "canonical procedure for this workflow. Before you begin, run "
+        "`hpc-agent load-context --experiment-dir <experiment_dir>` (the "
+        "value is in the invocation context below) and treat its data as "
+        "the source of truth.\n\n"
+        f"=== BEGIN {skill} SKILL ===\n"
+        f"{_skill_body(skill)}\n"
+        f"=== END {skill} SKILL ===\n\n"
+        "When the workflow is complete, return ONLY a single JSON object as "
+        'your final message: {"result": <the skill\'s result envelope>, '
+        '"decisions": [...], "anomalies": "<free text, or empty>"}. Each '
+        '`decisions` entry is {"point": "<id>", "outcome": "<what you '
+        'decided>", "why": "<the deciding input>"}; record one per decision '
+        f"point you reach. The `{workflow}` workflow's decision points:\n"
+        f"{_render_decision_points(workflow)}\n\n"
         "Keep verbose intermediate output — discovery transcripts, scheduler "
-        "dumps, rsync logs — out of this object; it stays in your context, "
+        "dumps, rsync logs — out of that object; it stays in your context, "
         "not the caller's."
     )
+    suffix = (
+        f"\n\n{_SUFFIX_MARKER}\n"
+        f"experiment_dir: {experiment_dir}\n"
+        f"invocation inputs:\n{_render_fields(fields)}"
+    )
+    return prefix + suffix
 
 
 # The directive grammar is built from the registry — no second spelling

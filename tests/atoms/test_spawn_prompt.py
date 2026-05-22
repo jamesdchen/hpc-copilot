@@ -47,6 +47,28 @@ def test_render_names_the_workflow_skill() -> None:
         assert "load-context" in prompt
 
 
+def test_render_inlines_the_skill_body() -> None:
+    # The worker prompt carries the skill procedure inline — a headless
+    # claude -p worker cannot invoke the Skill tool.
+    from hpc_agent.atoms.spawn_prompt import _skill_body
+
+    prompt = render_spawn_prompt(workflow="aggregate", experiment_dir="/e", fields={})
+    assert "=== BEGIN hpc-aggregate SKILL ===" in prompt
+    assert _skill_body("hpc-aggregate") in prompt
+
+
+def test_render_prefix_is_stable_across_invocations() -> None:
+    # The cacheable prefix — everything before the invocation context —
+    # must be byte-identical regardless of experiment_dir / fields.
+    from hpc_agent.atoms.spawn_prompt import _SUFFIX_MARKER
+
+    a = render_spawn_prompt(workflow="submit", experiment_dir="/exp/a", fields={"x": 1})
+    b = render_spawn_prompt(workflow="submit", experiment_dir="/exp/b", fields={"y": 2})
+    assert a.split(_SUFFIX_MARKER)[0] == b.split(_SUFFIX_MARKER)[0]
+    # ...and the variable parts really did differ.
+    assert a != b
+
+
 def test_render_escapes_newlines_in_field_values() -> None:
     # A field value with newlines must not break out of the data block
     # and inject fake prompt structure.
