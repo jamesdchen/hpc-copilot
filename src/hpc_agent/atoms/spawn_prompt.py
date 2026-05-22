@@ -1,15 +1,14 @@
 """Spawn-prompt rendering, report parsing, and shared spawn-contract helpers.
 
-The four workflow slash commands (``/submit-hpc``, ``/monitor-hpc``,
-``/aggregate-hpc``, ``/campaign-hpc``) delegate a skill to a
-fresh-context subagent. The prompt that subagent runs on must be
+The workflow slash commands trigger a workflow that runs in a
+fresh-context worker. The prompt that worker runs on must be
 *deterministic*: it depends only on on-disk state and the invocation's
 mutable fields, never on whatever rotted in the parent conversation.
 
-The agent is not trusted to type that prompt: it is an LLM composing a
-call. Instead it passes a structured request — ``{"hpc_spawn":
-{workflow, experiment_dir, fields}}`` — and the consumer calls
-:func:`validate_and_render` to replace it with the canonical text. The
+The prompt is not hand-typed by an LLM: the code-orchestrated
+entrypoints (``hpc-agent run`` and ``hpc-campaign-driver``) build a
+structured request — ``{workflow, experiment_dir, fields}`` — and call
+:func:`validate_and_render_parts` to render the canonical text. The
 worker returns a structured :class:`WorkerReport`, parsed back by
 :func:`parse_worker_report`.
 
@@ -25,7 +24,6 @@ from __future__ import annotations
 import contextlib
 import functools
 import json
-import re
 from importlib.resources import files
 from typing import Any
 
@@ -54,12 +52,9 @@ __all__ = [
     "WorkerDecision",
     "WorkerReport",
     "WorkflowName",
-    "extract_spawn_payload",
-    "is_unpinned_workflow_directive",
     "parse_worker_report",
     "render_spawn_parts",
     "render_spawn_prompt",
-    "validate_and_render",
     "validate_and_render_parts",
 ]
 
@@ -192,50 +187,12 @@ def render_spawn_prompt(*, workflow: str, experiment_dir: str, fields: dict[str,
     """Render the canonical worker prompt for *workflow* as one string.
 
     The joined form of :func:`render_spawn_parts` — used where a single
-    prompt string is needed (the ``Task`` tool, the ``delegate.prompt``
-    field). Byte-identical output for byte-identical inputs.
+    prompt string is needed (the ``delegate.prompt`` field of
+    ``load-context``). Byte-identical output for byte-identical inputs.
     """
     return render_spawn_parts(
         workflow=workflow, experiment_dir=experiment_dir, fields=fields
     ).joined
-
-
-# The directive grammar is built from the registry — no second spelling
-# of the workflow set. A non-request prompt that imperatively invokes a
-# workflow skill (verb + "the" + the skill name + "skill") is an
-# unpinned workflow run; a mere mention ("summarize the hpc-submit
-# skill") is not a directive and is left alone.
-_WORKFLOW_DIRECTIVE_RE = re.compile(
-    r"\b(?:invoke|run|execute)\s+the\s+[`*]?(?:"
-    + "|".join(re.escape(skill) for skill in WORKFLOW_SKILLS.values())
-    + r")[`*]?\s+skill\b",
-    re.IGNORECASE,
-)
-
-
-def is_unpinned_workflow_directive(prompt: str) -> bool:
-    """True if *prompt* imperatively invokes a workflow skill in prose."""
-    return _WORKFLOW_DIRECTIVE_RE.search(prompt) is not None
-
-
-def extract_spawn_payload(prompt: str) -> tuple[bool, Any]:
-    """``(is_request, payload)`` — parse a Task prompt as a spawn request.
-
-    ``is_request`` is False when *prompt* is not an ``{"hpc_spawn": ...}``
-    JSON object at all (an ordinary subagent prompt). When True,
-    ``payload`` is the unvalidated request body for
-    :func:`validate_and_render`.
-    """
-    stripped = prompt.strip()
-    if not stripped.startswith("{"):
-        return (False, None)
-    try:
-        obj = json.loads(stripped)
-    except json.JSONDecodeError:
-        return (False, None)
-    if not isinstance(obj, dict) or SPAWN_KEY not in obj:
-        return (False, None)
-    return (True, obj[SPAWN_KEY])
 
 
 def _validated_request(payload: Any) -> SpawnRequest:
@@ -247,28 +204,12 @@ def _validated_request(payload: Any) -> SpawnRequest:
     return request
 
 
-def validate_and_render(payload: Any) -> str:
-    """Validate a spawn-request *payload* and return the joined prompt string.
-
-    For the ``Task``-tool path (the spawn_guard hook), which needs a
-    single string. Raises :class:`SpawnContractError` on an invalid
-    payload.
-    """
-    request = _validated_request(payload)
-    return render_spawn_prompt(
-        workflow=request.workflow,
-        experiment_dir=request.experiment_dir,
-        fields=request.fields,
-    )
-
-
 def validate_and_render_parts(payload: Any) -> RenderedPrompt:
     """Validate a spawn-request *payload* and return the split prompt.
 
-    For the code-orchestrated path (``hpc-agent run`` → an invoker that
-    prompt-caches the prefix). Raises :class:`SpawnContractError` on an
-    invalid payload — validation never forks from
-    :func:`validate_and_render`.
+    For the code-orchestrated path (``hpc-agent run`` and
+    ``hpc-campaign-driver`` → an invoker that prompt-caches the prefix).
+    Raises :class:`SpawnContractError` on an invalid payload.
     """
     request = _validated_request(payload)
     return render_spawn_parts(

@@ -120,7 +120,7 @@
     },
     "_Delegate": {
       "additionalProperties": false,
-      "description": "The next workflow step described as a delegable unit of work.\n\nFor an ``agent``-kind step ``spawn_request`` carries the shared\n:class:`SpawnRequest` contract — the in-session orchestrator wraps\nit as the ``Task`` prompt ``{\"hpc_spawn\": <spawn_request>}`` and the\nspawn_guard hook renders it. ``None`` for ``cli``-kind steps.",
+      "description": "The next workflow step described as a delegable unit of work.\n\nFor an ``agent``-kind step ``spawn_request`` carries the shared\n:class:`SpawnRequest` contract — the campaign driver feeds it to\n``run_workflow``, which renders the canonical worker prompt and\ninvokes a fresh-context worker. ``None`` for ``cli``-kind steps.\nThe ``prompt`` field carries that canonical prompt pre-rendered.",
       "properties": {
         "kind": {
           "enum": [

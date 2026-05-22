@@ -52,9 +52,10 @@ class _Delegate(BaseModel):
     """The next workflow step described as a delegable unit of work.
 
     For an ``agent``-kind step ``spawn_request`` carries the shared
-    :class:`SpawnRequest` contract — the in-session orchestrator wraps
-    it as the ``Task`` prompt ``{"hpc_spawn": <spawn_request>}`` and the
-    spawn_guard hook renders it. ``None`` for ``cli``-kind steps.
+    :class:`SpawnRequest` contract — the campaign driver feeds it to
+    ``run_workflow``, which renders the canonical worker prompt and
+    invokes a fresh-context worker. ``None`` for ``cli``-kind steps.
+    The ``prompt`` field carries that canonical prompt pre-rendered.
     """
 
     model_config = ConfigDict(extra="forbid")

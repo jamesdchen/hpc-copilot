@@ -1,7 +1,7 @@
 """The single source of truth for the delegated-workflow spawn contract.
 
 A *delegated workflow spawn* has the same shape wherever it is consumed
-inside hpc-agent — the Claude Code ``spawn_guard`` PreToolUse hook, the
+inside hpc-agent — the ``hpc-agent run`` entrypoint, the
 ``load-context`` ``delegate`` block, the headless campaign driver. This
 module owns that shape end to end:
 
@@ -14,9 +14,10 @@ module owns that shape end to end:
 
 so validation never forks across consumers. Each consumer is a thin
 adapter feeding requests to
-:func:`hpc_agent.atoms.spawn_prompt.validate_and_render` and parsing
-reports with :func:`hpc_agent.atoms.spawn_prompt.parse_worker_report`;
-it never re-declares the workflow set or re-implements validation.
+:func:`hpc_agent.atoms.spawn_prompt.validate_and_render_parts` and
+parsing reports with
+:func:`hpc_agent.atoms.spawn_prompt.parse_worker_report`; it never
+re-declares the workflow set or re-implements validation.
 
 Kept under ``_schema_models`` so wire-schema models (the ``load-context``
 ``delegate`` block) can reference :class:`SpawnRequest` without a
@@ -31,7 +32,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-# The JSON key wrapping a spawn request when it travels as a Task prompt:
+# The JSON key under which a spawn request travels in a JSON envelope:
 # ``{"hpc_spawn": {workflow, experiment_dir, fields}}``.
 SPAWN_KEY = "hpc_spawn"
 

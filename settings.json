@@ -1,5 +1,5 @@
 {
-  "_comment": "hpc-agent safety policy — committed to the repo. Editor / dream-mode / sandbox config lives in settings.local.json (gitignored). The split keeps destructive-op denials traceable in git history while letting per-developer ergonomics drift independently. The permissions `ask` block routes the interactive agent toward `hpc-agent run` (the code-orchestrated entrypoint): hand-running a workflow atom prompts, while `hpc-agent run` is pre-allowed. The worker (`claude -p --bare`) and the headless driver are unaffected — `--bare` skips this file and the driver is not a Claude session.",
+  "_comment": "hpc-agent safety policy — committed to the repo. Editor / dream-mode / sandbox config lives in settings.local.json (gitignored). The split keeps destructive-op denials traceable in git history while letting per-developer ergonomics drift independently. The permissions `ask` block routes the interactive agent toward `hpc-agent run` (the code-orchestrated entrypoint): hand-running a workflow atom prompts, while `hpc-agent run` is pre-allowed. The worker (`claude -p --bare`) and the headless driver are unaffected — `--bare` skips this file and the driver is not a Claude session. Workflow delegation is code-orchestrated (`hpc-agent run` / `hpc-campaign-driver` render the worker prompt), so no PreToolUse spawn guard is needed.",
   "permissions": {
     "allow": [
       "Bash(hpc-agent run:*)",
@@ -32,17 +32,6 @@
     ]
   },
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Task|Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 -m hpc_agent.hooks.spawn_guard"
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
