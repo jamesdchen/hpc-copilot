@@ -32,7 +32,9 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -119,11 +121,15 @@ def _run_cli_step(verb: str, run_id: str, experiment_dir: Path) -> int:
     ) as handle:
         json.dump({"run_id": run_id}, handle)
         spec_path = handle.name
-    proc = subprocess.run(
-        ["hpc-agent", verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)],
-        check=False,
-    )
-    return proc.returncode
+    try:
+        proc = subprocess.run(
+            ["hpc-agent", verb, "--spec", spec_path, "--experiment-dir", str(experiment_dir)],
+            check=False,
+        )
+        return proc.returncode
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(spec_path)
 
 
 def _run_agent_step(prompt: str, experiment_dir: Path) -> int:
