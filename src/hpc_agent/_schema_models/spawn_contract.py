@@ -1,12 +1,14 @@
-"""The harness-agnostic spawn-request contract.
+"""The single source of truth for a delegated-workflow spawn request.
 
-A *delegated workflow spawn* has the same shape no matter which harness
-intercepts it — the Claude Code ``spawn_guard`` PreToolUse hook today,
-a MARs sub-agent interceptor tomorrow. This module is the single source
-of truth for that shape: the workflow registry, the request model, and
-the JSON envelope key. Each harness writes only a thin adapter that
-extracts a request from its own spawn mechanism and feeds it to
-:func:`hpc_agent.atoms.spawn_prompt.validate_and_render` — it never
+A *delegated workflow spawn* has the same shape wherever it is consumed
+inside hpc-agent — the Claude Code ``spawn_guard`` PreToolUse hook, the
+``load-context`` ``delegate`` block, the headless campaign driver. This
+module owns that shape: the workflow registry, the request model, and
+the JSON envelope key, so validation never forks across consumers.
+
+Each consumer is a thin adapter: it extracts a request from its own
+spawn mechanism and feeds it to
+:func:`hpc_agent.atoms.spawn_prompt.validate_and_render`; it never
 re-declares the workflow set or re-implements validation.
 
 Kept under ``_schema_models`` so wire-schema models (the ``load-context``

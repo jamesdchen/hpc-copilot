@@ -1,22 +1,21 @@
-"""Spawn-prompt rendering and the shared harness-adapter helpers.
+"""Spawn-prompt rendering and the shared spawn-contract helpers.
 
 The four workflow slash commands (``/submit-hpc``, ``/monitor-hpc``,
-``/aggregate-hpc``, ``/campaign-hpc``) — and, in future, MARs sub-agent
-spawns — delegate a skill to a fresh-context subagent. The prompt that
-subagent runs on must be *deterministic*: it depends only on on-disk
-state and the invocation's mutable fields, never on whatever rotted in
-the parent conversation.
+``/aggregate-hpc``, ``/campaign-hpc``) delegate a skill to a
+fresh-context subagent. The prompt that subagent runs on must be
+*deterministic*: it depends only on on-disk state and the invocation's
+mutable fields, never on whatever rotted in the parent conversation.
 
 The agent is not trusted to type that prompt: it is an LLM composing a
 call. Instead it passes a structured request — ``{"hpc_spawn":
-{workflow, experiment_dir, fields}}`` — and the harness adapter calls
+{workflow, experiment_dir, fields}}`` — and the consumer calls
 :func:`validate_and_render` to replace it with the canonical text.
 
-This module is the single import surface for every harness adapter:
-the contract data (registry, request model, envelope key) is re-exported
-from :mod:`hpc_agent._schema_models.spawn_contract`, and the logic over
-it lives here. A new harness writes only its own interceptor — it
-imports these, it does not re-declare them.
+This module is the single import surface for every consumer of the
+spawn contract: the contract data (registry, request model, envelope
+key) is re-exported from
+:mod:`hpc_agent._schema_models.spawn_contract`, and the logic over it
+lives here. A consumer imports these; it does not re-declare them.
 """
 
 from __future__ import annotations

@@ -1,11 +1,11 @@
 """``PreToolUse`` hook — the Claude Code adapter for the spawn contract.
 
 Wired into ``settings.json`` against the ``Task``/``Agent`` tool. This
-module is deliberately thin: it is one harness's *adapter* onto the
+module is deliberately thin: it is the Claude Code *adapter* onto the
 shared spawn contract. All the contract logic — what a spawn request
 is, how it validates, how it renders — lives in
-:mod:`hpc_agent.atoms.spawn_prompt`; a MARs interceptor would reuse the
-exact same functions behind its own adapter.
+:mod:`hpc_agent.atoms.spawn_prompt`; this module only bridges the
+Claude Code hook protocol to it.
 
 The hook reads the tool-call event on stdin and classifies the
 spawn's ``prompt``:
