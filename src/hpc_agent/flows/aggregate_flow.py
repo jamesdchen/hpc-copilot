@@ -147,6 +147,7 @@ def _combine_missing(
         errors.CombinerFailed,
         errors.OutputsMissing,
         errors.JournalCorrupt,
+        errors.PreconditionFailed,
     ],
     idempotent=True,
     idempotency_key="run_id",
@@ -196,6 +197,19 @@ def aggregate_flow(
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for {run_id!r}; submit the run first")
+
+    # Precondition gate: aggregating a run that monitor-flow has not
+    # driven to a terminal state risks reducing over partial data and
+    # reporting plausible-but-wrong metrics. ``ensure_all_combined=false``
+    # is the documented opt-in for a deliberate partial aggregate, so it
+    # bypasses the gate.
+    if ensure_all_combined and record.status not in session.TERMINAL_STATUSES:
+        raise errors.PreconditionFailed(
+            f"run {run_id!r} is {record.status!r}, not terminal; monitor-flow "
+            "has not driven it to complete/failed/abandoned. Aggregating now "
+            "risks partial or wrong metrics. Pass ensure_all_combined=false to "
+            "aggregate partial results deliberately."
+        )
 
     if mode not in {"auto", "combiner-only", "cluster-reduce"}:
         raise errors.SpecInvalid(

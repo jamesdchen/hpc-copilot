@@ -57,6 +57,64 @@ def _next_step_hint(in_flight: list[dict[str, Any]]) -> str:
     return "aggregate"
 
 
+def _build_delegate(
+    experiment_dir: Path,
+    hint: str,
+    in_flight: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Describe the next workflow step as a delegable unit of work.
+
+    The ``delegate`` block is the single contract two consumers share:
+
+    - an in-session orchestrator reads it and either runs the step
+      itself (``kind == "cli"``) or spawns a fresh-context subagent
+      with ``prompt`` (``kind == "agent"``);
+    - the headless campaign driver reads the same block and either
+      runs the ``hpc-agent`` verb directly (``cli``) or shells
+      ``claude -p`` (``agent``).
+
+    ``kind`` is the cost/determinism split: ``cli`` steps are
+    deterministic and need no LLM; ``agent`` steps need judgement.
+    """
+    exp = str(experiment_dir)
+    if hint == "submit":
+        return {
+            "kind": "agent",
+            "step": "submit",
+            "run_id": None,
+            "experiment_dir": exp,
+            "reason": "no runs in flight; the next step is a new submission",
+            "prompt": (
+                f"Submit an HPC experiment in {exp}. First run `hpc-agent "
+                f"load-context --experiment-dir {exp}` and use its data as the "
+                "source of truth, then drive the hpc-submit skill. A submission "
+                "needs user intent, so this is an agent step."
+            ),
+        }
+    # monitor / aggregate — pick the in-flight run that governs the step.
+    run_id: str | None = None
+    for row in in_flight:
+        in_monitor = row.get("stage") == "monitor"
+        if (hint == "monitor" and in_monitor) or (hint == "aggregate" and not in_monitor):
+            run_id = row.get("run_id")
+            break
+    if run_id is None and in_flight:
+        run_id = in_flight[0].get("run_id")
+    verb = "monitor-flow" if hint == "monitor" else "aggregate-flow"
+    return {
+        "kind": "cli",
+        "step": hint,
+        "run_id": run_id,
+        "experiment_dir": exp,
+        "reason": f"run {run_id} is in flight; the next step is {hint}",
+        "prompt": (
+            f"Drive {verb} for run {run_id} in {exp}. This is a deterministic "
+            "CLI step — no judgement required; a headless driver runs it "
+            "directly without spawning an LLM."
+        ),
+    }
+
+
 @primitive(
     name="load-context",
     verb="query",
@@ -78,6 +136,10 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
       iteration when a cursor file exists.
     - ``next_step_hint`` — ``submit`` / ``monitor`` / ``aggregate``,
       derived purely from the in-flight set.
+    - ``delegate`` — the next step as a delegable unit of work
+      (``kind`` ``cli``/``agent``, ``step``, ``run_id``, ``prompt``);
+      consumed by an in-session orchestrator or the headless campaign
+      driver.
     - ``warnings`` — non-fatal notes (orphan sidecar, unreadable
       cursor).
 
@@ -94,6 +156,11 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
         is_orphan_sidecar,
         read_run_sidecar,
     )
+
+    # Resolve to an absolute path: the delegate block embeds it into
+    # prompts a fresh-context consumer (a subagent, the headless driver)
+    # reads from a different cwd, so a relative path would not resolve.
+    experiment_dir = _Path(experiment_dir).resolve()
 
     warnings: list[str] = []
 
@@ -166,11 +233,13 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
                 row["cursor_last_run_id"] = cursor.get("last_run_id") or None
         campaigns.append(row)
 
+    hint = _next_step_hint(in_flight)
     return {
         "experiment_dir": str(experiment_dir),
         "latest_run": latest_run,
         "in_flight": in_flight,
         "campaigns": campaigns,
-        "next_step_hint": _next_step_hint(in_flight),
+        "next_step_hint": hint,
+        "delegate": _build_delegate(experiment_dir, hint, in_flight),
         "warnings": warnings,
     }

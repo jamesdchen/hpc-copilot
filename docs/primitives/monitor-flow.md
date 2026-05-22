@@ -13,6 +13,9 @@ error_codes:
 - code: journal_corrupt
   category: internal
   retry_safe: false
+- code: precondition_failed
+  category: user
+  retry_safe: false
 - code: remote_command_failed
   category: cluster
   retry_safe: false

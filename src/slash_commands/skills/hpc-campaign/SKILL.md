@@ -14,8 +14,11 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 - `data.in_flight` — runs still active for this campaign (run_id, stage, job_ids).
 - `data.latest_run` — config snapshot (cluster, profile, resources) of the newest iteration.
 - `data.next_step_hint` — `submit` / `monitor` / `aggregate` for the current iteration.
+- `data.delegate` — the next step as a delegable unit of work. `kind: "cli"` is a deterministic step (`monitor` / `aggregate`) — run the matching workflow atom directly. `kind: "agent"` is a judgement step (a new submission, a `decide`) — hand `delegate.prompt` to a fresh-context subagent. Delegating each step to a fresh context keeps this orchestrator's context from accumulating verbose per-step output across a long campaign.
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
+
+For unattended runs, `python -m hpc_agent.campaign.driver --experiment-dir .` advances exactly one step per invocation off the same `delegate` block — `kind: "cli"` steps run directly, `kind: "agent"` steps shell `claude -p` only with `--allow-agent-steps`. Wrap it in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
 
 ## When to use
 

@@ -154,3 +154,27 @@ def test_campaign_without_cursor_omits_cursor_fields(journal_home, experiment):
     camp = ctx["campaigns"][0]
     assert camp["campaign_id"] == "optuna-1"
     assert "cursor_iteration" not in camp
+
+
+def test_delegate_submit_is_agent_kind(journal_home, experiment):
+    delegate = load_context(experiment_dir=experiment)["delegate"]
+    assert delegate["kind"] == "agent"
+    assert delegate["step"] == "submit"
+    assert delegate["run_id"] is None
+    assert delegate["prompt"]
+
+
+def test_delegate_monitor_is_cli_kind(journal_home, experiment):
+    session.upsert_run(experiment, _make_record("20260521-120000-aaa", stage="monitor"))
+    delegate = load_context(experiment_dir=experiment)["delegate"]
+    assert delegate["kind"] == "cli"
+    assert delegate["step"] == "monitor"
+    assert delegate["run_id"] == "20260521-120000-aaa"
+
+
+def test_delegate_aggregate_picks_non_monitor_run(journal_home, experiment):
+    session.upsert_run(experiment, _make_record("20260521-120000-aaa", stage="aggregate"))
+    delegate = load_context(experiment_dir=experiment)["delegate"]
+    assert delegate["kind"] == "cli"
+    assert delegate["step"] == "aggregate"
+    assert delegate["run_id"] == "20260521-120000-aaa"
