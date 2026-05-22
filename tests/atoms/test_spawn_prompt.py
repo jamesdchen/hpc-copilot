@@ -8,11 +8,13 @@ from typing import Any, get_args
 import pytest
 
 from hpc_agent.atoms.spawn_prompt import (
+    DECISION_POINTS,
     WORKFLOW_SKILLS,
     SpawnContractError,
     WorkflowName,
     extract_spawn_payload,
     is_unpinned_workflow_directive,
+    parse_worker_report,
     render_spawn_prompt,
     validate_and_render,
 )
@@ -200,3 +202,40 @@ def test_extract_spawn_payload() -> None:
 def test_is_unpinned_workflow_directive() -> None:
     assert is_unpinned_workflow_directive("Invoke the `hpc-submit` skill now.")
     assert not is_unpinned_workflow_directive("Summarize the hpc-submit skill.")
+
+
+# ─── decision points / worker report ────────────────────────────────────────
+
+
+def test_render_lists_the_workflow_decision_points() -> None:
+    prompt = render_spawn_prompt(workflow="submit", experiment_dir="/e", fields={})
+    for point in DECISION_POINTS["submit"]:
+        assert point.id in prompt
+
+
+def test_parse_worker_report_ok() -> None:
+    out = (
+        '{"result": {"run_id": "r1"}, "decisions": '
+        '[{"point": "canary", "outcome": "passed", "why": "1/1 ok"}], '
+        '"anomalies": ""}'
+    )
+    report = parse_worker_report(out, workflow="submit")
+    assert report.result == {"run_id": "r1"}
+    assert report.decisions[0].point == "canary"
+
+
+def test_parse_worker_report_finds_a_trailing_object() -> None:
+    out = 'Here is my report:\n{"result": {}, "decisions": [], "anomalies": "x"}'
+    report = parse_worker_report(out, workflow="status")
+    assert report.anomalies == "x"
+
+
+def test_parse_worker_report_rejects_an_unknown_decision_point() -> None:
+    out = '{"result": {}, "decisions": [{"point": "made_up", "outcome": "x"}]}'
+    with pytest.raises(SpawnContractError, match="not defined"):
+        parse_worker_report(out, workflow="submit")
+
+
+def test_parse_worker_report_rejects_missing_json() -> None:
+    with pytest.raises(SpawnContractError, match="no JSON"):
+        parse_worker_report("just prose, no object at all", workflow="submit")

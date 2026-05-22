@@ -1,15 +1,22 @@
-"""The single source of truth for a delegated-workflow spawn request.
+"""The single source of truth for the delegated-workflow spawn contract.
 
 A *delegated workflow spawn* has the same shape wherever it is consumed
 inside hpc-agent — the Claude Code ``spawn_guard`` PreToolUse hook, the
 ``load-context`` ``delegate`` block, the headless campaign driver. This
-module owns that shape: the workflow registry, the request model, and
-the JSON envelope key, so validation never forks across consumers.
+module owns that shape end to end:
 
-Each consumer is a thin adapter: it extracts a request from its own
-spawn mechanism and feeds it to
-:func:`hpc_agent.atoms.spawn_prompt.validate_and_render`; it never
-re-declares the workflow set or re-implements validation.
+* the **request** side — :class:`SpawnRequest`, the workflow registry,
+  the JSON envelope key;
+* the **decision points** — :data:`DECISION_POINTS`, the enumerated
+  judgement branches each workflow reaches;
+* the **report** side — :class:`WorkerReport`, the structured object a
+  delegated worker returns.
+
+so validation never forks across consumers. Each consumer is a thin
+adapter feeding requests to
+:func:`hpc_agent.atoms.spawn_prompt.validate_and_render` and parsing
+reports with :func:`hpc_agent.atoms.spawn_prompt.parse_worker_report`;
+it never re-declares the workflow set or re-implements validation.
 
 Kept under ``_schema_models`` so wire-schema models (the ``load-context``
 ``delegate`` block) can reference :class:`SpawnRequest` without a
@@ -19,6 +26,7 @@ logic-layer import. The logic over this contract lives in
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -41,7 +49,7 @@ WORKFLOW_SKILLS: dict[str, str] = {
 
 
 class SpawnRequest(BaseModel):
-    """A delegated workflow spawn — the contract every harness shares.
+    """A delegated workflow spawn — the contract every consumer shares.
 
     The agent supplies only ``workflow`` (constrained to the registry)
     and ``fields`` (invocation data); the prompt scaffold around them is
@@ -62,3 +70,98 @@ class SpawnRequest(BaseModel):
         if "\n" in value or "\r" in value:
             raise ValueError("experiment_dir must be a single-line string")
         return value
+
+
+# ── decision points ─────────────────────────────────────────────────────────
+
+# What shape a decision is.
+DecisionKind = Literal["gate", "selection", "plan", "branch"]
+
+# Who makes it: a deterministic primitive, or genuine LLM judgement.
+DecidedBy = Literal["code", "judgement"]
+
+
+@dataclass(frozen=True)
+class DecisionPoint:
+    """One enumerated decision a workflow reaches.
+
+    A ``code`` point is produced by a deterministic primitive whose
+    envelope already records the outcome on disk — so a worker's
+    reported outcome is *verifiable*, not merely trusted, and the same
+    on-disk state reproduces it. A ``judgement`` point is a genuine LLM
+    choice; its rationale is the thing worth capturing.
+    """
+
+    id: str
+    kind: DecisionKind
+    decided_by: DecidedBy
+    primitive: str | None  # backing operation (catalog name), if any
+
+
+# The judgement branches of each workflow, derived from the skills' call
+# sequences. A worker reports its decisions against these ids; an id not
+# listed here is rejected by parse_worker_report. test_decision_points
+# cross-checks every `primitive` against the operations catalog.
+DECISION_POINTS: dict[str, tuple[DecisionPoint, ...]] = {
+    "submit": (
+        DecisionPoint("entry_path", "selection", "code", "suggest-setup-action"),
+        DecisionPoint("prior_run", "branch", "code", "find-prior-run"),
+        DecisionPoint("axis_class", "selection", "judgement", "classify-axis"),
+        DecisionPoint("throughput_plan", "plan", "code", "plan-throughput"),
+        DecisionPoint("canary", "gate", "code", "verify-canary"),
+        DecisionPoint("preflight", "gate", "code", "check-preflight"),
+        DecisionPoint("validate_campaign", "gate", "code", "validate-campaign"),
+    ),
+    "status": (
+        DecisionPoint("surface", "selection", "judgement", None),
+        DecisionPoint("lifecycle_dispatch", "branch", "code", "poll-run-status"),
+        DecisionPoint("resubmit", "branch", "judgement", "resubmit-failed"),
+        DecisionPoint("monitor_cadence", "plan", "code", "decide-monitor-arm"),
+    ),
+    "aggregate": (
+        DecisionPoint("mode", "selection", "code", "aggregate-flow"),
+        DecisionPoint("partial_handling", "branch", "judgement", None),
+        DecisionPoint("completeness", "gate", "code", "verify-aggregation-complete"),
+        DecisionPoint("reduce_locality", "branch", "judgement", None),
+    ),
+    "campaign": (
+        DecisionPoint("path", "selection", "judgement", None),
+        DecisionPoint("stochastic_marker", "gate", "code", "validate-stochastic-marker"),
+        DecisionPoint("decide", "plan", "judgement", "campaign-advance"),
+        DecisionPoint("convergence", "gate", "code", "campaign-converged"),
+        DecisionPoint("budget", "gate", "code", "campaign-budget"),
+        DecisionPoint("concurrency", "selection", "judgement", None),
+    ),
+}
+
+
+# ── report side ──────────────────────────────────────────────────────────────
+
+
+class WorkerDecision(BaseModel):
+    """One decision a delegated worker reports making.
+
+    ``point`` must be a :class:`DecisionPoint` id for the worker's
+    workflow — cross-checked by ``parse_worker_report``.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    point: str
+    outcome: str
+    why: str = ""
+
+
+class WorkerReport(BaseModel):
+    """The structured object a delegated worker returns as its final message.
+
+    ``extra="ignore"`` — lenient on a worker's *output* (an LLM may add a
+    stray key), unlike the strict ``extra="forbid"`` on the
+    :class:`SpawnRequest` *input* contract.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    result: dict[str, Any] = {}
+    decisions: list[WorkerDecision] = []
+    anomalies: str = ""
