@@ -23,7 +23,7 @@ agent confirmed every prior fix is sound with zero regressions.
   missing `rich`, `flock`, symlinks, ssh-gate — they pass on Linux CI);
   9 of them are now fixed, 32 remain (all pre-existing, out of audit scope).
 
-## Bugs fixed (28)
+## Bugs fixed (29)
 
 ### Encoding / Windows correctness
 - `_internal/io.py`, `_internal/session/run_record.py`, `state/runs.py` (×3 readers),
@@ -48,6 +48,11 @@ agent confirmed every prior fix is sound with zero regressions.
 - `atoms/preflight.py` — missing `host` probed loopback instead of failing.
 - `planning/throughput.py` — unparseable `max_walltime` → false "exceeds 0s" error.
 - `forecast/age_priority_climb.py` — two-point near-zero Δt manufactured huge slope.
+- `forecast/state_forecast.py` — `walltime_ask_sec` was read only off the
+  co-tenant row, a key production snapshots don't populate, so the resource
+  forecast was a silent no-op. Now falls back to the owning user's profile
+  median (`median_walltime_ask_sec`) — the source `queue_simulator_inputs`
+  already uses; an unprofiled user still degrades to "treated as running".
 - `agent_cli.py` — pydantic v2 `ValidationError` (not a `ValueError`) → bad `--spec`
   mislabelled internal/exit-3 instead of user-error/exit-1; `submit-flow --dry-run`
   `KeyError` on a missing field.
@@ -72,13 +77,3 @@ agent confirmed every prior fix is sound with zero regressions.
 - `runner/logs.py` `ssh_error` is now recorded on entries but `failures.py`
   `cluster_failures` still buckets them as `log_missing` — surfacing a distinct
   `ssh_unreachable` bucket is a product decision.
-- `forecast/state_forecast.py` reads `walltime_ask_sec`, a key real co-tenant
-  snapshot rows do not carry (the queue simulator derives the walltime ask
-  from the user *profile* — `median_walltime_ask_sec` — instead), so the
-  resource forecast is a no-op in production. Sweep 1 auto-added an
-  `elapsed + 3600` fallback, but it contradicts the module docstring and
-  `test_missing_walltime_treated_as_running` (unknown walltime → treat as
-  running, free nothing) and makes the forecast *optimistic* — over-predicting
-  availability drives bad submit timing. **Reverted.** The real fix feeds
-  `forecast_state_at` the profile-derived walltime estimate the way
-  `queue_simulator_inputs` already does — a feature change, not a hotfix.
