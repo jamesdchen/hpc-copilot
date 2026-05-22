@@ -1,17 +1,23 @@
 """``PreToolUse`` hook — pin the prompt of every delegated workflow spawn.
 
 Wired into ``settings.json`` against the ``Task``/``Agent`` tool. The
-hook reads the tool-call event on stdin and acts only on calls whose
-``prompt`` is a bare ``spec://<sha256>`` reference — every other
-subagent spawn (Explore, general-purpose, ...) passes through
-untouched.
+hook reads the tool-call event on stdin and classifies the spawn's
+``prompt``:
 
-For a spec reference it resolves ``.hpc/spawn/<sha256>.json``, verifies
-the file's SHA-256 still equals the reference, and rewrites the tool
-call's ``prompt`` to the canonical text stored inside. The model's
-authored bytes never reach the subagent: the only thing it controls is
-a 64-hex-char hash, which either resolves to a code-written spec file
-or is denied.
+* A bare ``spec://<sha256>`` reference — resolve
+  ``.hpc/spawn/<sha256>.json``, verify the file's SHA-256 still equals
+  the reference, and rewrite the call's ``prompt`` to the canonical
+  text stored inside. The model's authored bytes never reach the
+  subagent: the only thing it controls is a 64-hex-char hash, which
+  either resolves to a code-written spec file or is denied.
+* A hand-written prompt that *invokes a workflow skill*
+  (``hpc-submit`` / ``hpc-status`` / ``hpc-aggregate`` /
+  ``hpc-campaign``) — deny it. A workflow run must be pinned; the
+  invocation directive is the one thing a bypass cannot omit, so its
+  presence in a raw prompt means an unpinned workflow spawn. The deny
+  points the caller at ``hpc-agent build-spawn-prompt``.
+* Anything else (Explore, general-purpose, ...) — pass through
+  untouched.
 
 Run as ``python3 -m hpc_agent.hooks.spawn_guard``. It always exits 0 —
 the decision travels in the JSON written to stdout, never the exit
@@ -29,6 +35,16 @@ from pathlib import Path
 from typing import Any
 
 _REF_RE = re.compile(r"^spec://([0-9a-f]{64})$")
+
+# A subagent prompt that names a workflow skill within a short window of
+# the word "skill" is an attempt to run that workflow. For the run to
+# actually happen the prompt MUST carry this invocation directive, so it
+# is the one signal a bypass cannot drop — anchoring on it (rather than
+# on fuzzy keywords) is what makes the unpinned-spawn check tight.
+_WORKFLOW_DIRECTIVE_RE = re.compile(
+    r"\bhpc-(?:submit|status|aggregate|campaign)\b[^\n]{0,40}\bskill\b",
+    re.IGNORECASE,
+)
 
 
 def _decision(
@@ -62,7 +78,21 @@ def evaluate(event: dict[str, Any]) -> dict[str, Any] | None:
 
     match = _REF_RE.match(prompt.strip())
     if match is None:
-        # Not a delegated-workflow spawn — leave it alone.
+        # Not a pinned spec reference. If the prompt nonetheless invokes
+        # a workflow skill, it is an unpinned workflow spawn — deny it
+        # so the only way to run a workflow is the deterministic,
+        # code-generated path. Every other spawn passes through.
+        if _WORKFLOW_DIRECTIVE_RE.search(prompt):
+            return _decision(
+                "deny",
+                reason=(
+                    "This Task prompt invokes an hpc-agent workflow skill but "
+                    "is not a content-addressed spec reference. Workflow runs "
+                    "must be delegated deterministically: call `hpc-agent "
+                    "build-spawn-prompt` and pass the `spec://<sha>` token it "
+                    "returns as the Task prompt — not a hand-written one."
+                ),
+            )
         return None
     sha = match.group(1)
 

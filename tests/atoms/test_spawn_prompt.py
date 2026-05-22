@@ -54,6 +54,25 @@ def test_hook_passes_through_non_spec_prompts() -> None:
     assert evaluate(event) is None
 
 
+def test_hook_denies_unpinned_workflow_directive() -> None:
+    for skill in WORKFLOW_SKILLS.values():
+        event = {"tool_input": {"prompt": f"Invoke the `{skill}` skill and run it."}}
+        decision = evaluate(event)
+        assert decision is not None, skill
+        inner = decision["hookSpecificOutput"]
+        assert inner["permissionDecision"] == "deny", skill
+        assert "build-spawn-prompt" in inner["permissionDecisionReason"]
+
+
+def test_hook_denies_a_raw_canonical_prompt() -> None:
+    # The obvious bypass — pasting the generated prompt verbatim instead
+    # of the spec:// ref — is itself an unpinned workflow spawn.
+    raw = render_spawn_prompt(workflow="submit", experiment_dir="/exp", fields={})
+    decision = evaluate({"tool_input": {"prompt": raw}})
+    assert decision is not None
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_hook_ignores_calls_without_a_string_prompt() -> None:
     assert evaluate({"tool_input": {"subagent_type": "Explore"}}) is None
     assert evaluate({"tool_input": {"prompt": 42}}) is None
