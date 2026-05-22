@@ -1723,6 +1723,53 @@ def cmd_build_template(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: run ───────────────────────────────────────────────────────
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run a workflow end to end in a fresh-context worker.
+
+    The code-orchestrated entrypoint: validates the fields, renders the
+    canonical worker prompt, invokes a worker, and returns its parsed
+    report. The spawn is emitted by code here — no PreToolUse hook
+    mediates this path. See hpc_agent._internal.run_workflow.
+    """
+    from hpc_agent._internal.run_workflow import run_workflow
+    from hpc_agent.atoms.spawn_prompt import SpawnContractError
+
+    try:
+        fields = json.loads(args.fields_json)
+    except json.JSONDecodeError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=f"--fields-json is not valid JSON: {exc}",
+            category="user",
+            retry_safe=False,
+        )
+    if not isinstance(fields, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="--fields-json must be a JSON object",
+            category="user",
+            retry_safe=False,
+        )
+    try:
+        report, exit_code = run_workflow(
+            workflow=args.workflow,
+            experiment_dir=str(args.experiment_dir),
+            fields=fields,
+        )
+    except SpawnContractError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user",
+            retry_safe=False,
+        )
+    _ok({"report": report.model_dump(), "worker_exit_code": exit_code})
+    return EXIT_OK
+
+
 # ─── parser ────────────────────────────────────────────────────────────────
 
 
@@ -2728,6 +2775,36 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_bt.set_defaults(func=cmd_build_template)
+
+    # run
+    p_run = sub.add_parser(
+        "run",
+        help=(
+            "Run a workflow (submit / status / aggregate) end to end in a "
+            "fresh-context worker — the code-orchestrated entrypoint. "
+            "Renders the canonical prompt, invokes a worker, returns its "
+            "parsed report. Campaign is a loop; use hpc-campaign-driver."
+        ),
+    )
+    _add_experiment_dir(p_run)
+    p_run.add_argument(
+        "--workflow",
+        required=True,
+        # campaign is excluded: it is a loop driven tick-by-tick by
+        # hpc-campaign-driver, not a single run.
+        choices=["submit", "status", "aggregate"],
+        help="Which workflow the fresh-context worker will run.",
+    )
+    p_run.add_argument(
+        "--fields-json",
+        type=str,
+        default="{}",
+        help=(
+            "Inline JSON object of the invocation's resolved fields "
+            "(interview answers). Default: '{}'."
+        ),
+    )
+    p_run.set_defaults(func=cmd_run)
 
     # Optional plugin distributions add their own subcommands here. With
     # none installed this is a no-op and the parser is unchanged.
