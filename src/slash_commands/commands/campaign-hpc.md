@@ -4,7 +4,7 @@ This slash command is the human-facing entry point. It exists for two reasons th
 
 1. **Pick the path** in conversation with the user (Path A: manual params, vs Path B: Optuna/random-search/PBT strategy). The skill describes both; the slash command's job is to ask "is your search space small and known, or large and adaptive?" and route accordingly.
 
-2. **Drive the per-iteration loop** as a Claude Code chat (the alternative is a `bash .hpc/campaigns/<slug>/iterate.sh` cron loop, which is what the skill's "headless" pointer covers). The slash command is the chat-driven path: each `/campaign-hpc` invocation is one iteration; the user kicks the next one when they want.
+2. **Drive the per-iteration loop** as a Claude Code chat (the alternative is the headless `hpc-campaign-driver` console script under cron or `/loop`, which is what the skill's "headless" pointer covers). The slash command is the chat-driven path: each `/campaign-hpc` invocation is one iteration; the user kicks the next one when they want.
 
 ## When the user asks "start a campaign"
 
@@ -17,7 +17,7 @@ This slash command is the human-facing entry point. It exists for two reasons th
 3. **Path B**: walk the user through writing `tasks.py` with the strategy library. Inside `total()` / `resolve()`, the user calls:
    - `study.tell(prev_trial, prev_metric)` for each prior iteration (loaded via `prior(experiment_dir, campaign_id)`)
    - `study.ask()` to get the next batch
-   - **Add `_optuna_trial_number` (or equivalent unique field) into the kwargs dict** so each iteration's `cmd_sha` differs even when the strategy picks repeat params. Without this, the framework dedupes the second iteration silently and the campaign collapses.
+   - **Add `_optuna_trial_number` (or equivalent unique field) into the kwargs dict** so each iteration's `cmd_sha` differs even when the strategy picks repeat params. Without this, the framework dedupes the second iteration silently and the campaign collapses. The skill enforces this with a mandatory `validate-campaign` gate before each Path B submit — a missing marker is a hard `fail`, not a warning.
 
 4. Tag the slug: ask "what should we call this campaign?" and validate against `^[A-Za-z0-9._\-]+$`.
 

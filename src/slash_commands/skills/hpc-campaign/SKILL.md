@@ -18,7 +18,7 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
 
-For unattended runs, `python -m hpc_agent.campaign.driver --experiment-dir .` advances exactly one step per invocation off the same `delegate` block — `kind: "cli"` steps run directly, `kind: "agent"` steps shell `claude -p` only with `--allow-agent-steps`. Wrap it in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
+For unattended runs, the `hpc-campaign-driver` console script (equivalently `python -m hpc_agent.campaign.driver`) advances exactly one step per invocation off the same `delegate` block — `kind: "cli"` steps run directly, `kind: "agent"` steps shell `claude -p` only with `--allow-agent-steps`. Wrap it in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
 
 ## When to use
 
@@ -36,11 +36,26 @@ Closed-loop campaigns split along whether `tasks.py` chooses parameters by hand 
 
 The framework doesn't care which path the user picks — `tasks.py`'s `total()` + `resolve(task_id)` is the only contract. Both paths thread `campaign_id` through `submit-flow`; both read history via the same `campaign-status` primitive (or its Python form, `hpc_agent.mapreduce.reduce.history.prior`).
 
-## Stochastic-marker requirement (Path B only)
+## Stochastic-marker gate (Path B only) — MANDATORY before each submit
 
 Strategies that re-sample the same param ranges across iterations (Optuna, random-search, PBT) MUST include a unique iteration-disambiguating field in `tasks.resolve()` so each iteration's `cmd_sha` differs even when the strategy happens to pick repeat params. Idiomatic: a `_optuna_trial_number` (or equivalent) integer in the kwargs dict. Without this, two iterations with identical params would compute the same `cmd_sha`, and the second one would dedupe at submit time — collapsing the campaign into a single iteration silently.
 
+This is **not** advisory. Before every Path B submit (Step 1 of "Driving the loop"), you MUST run the `validate-campaign` gate below; an `error`-severity finding from the `validate-stochastic-marker` validator means `overall: "fail"` and you may NOT proceed to `submit-flow`. Fix the `tasks.py` and re-run.
+
 For Path A (manual params), this isn't needed: the param tuple itself differs per iteration.
+
+### Running the gate
+
+Compute the about-to-submit run's `cmd_sha` (the same value `build-submit-spec` produces), then invoke `validate-campaign` with both `campaign_id` and `expected_cmd_sha` set so the stochastic-marker validator fires:
+
+```bash
+hpc-agent validate-campaign --spec validate_campaign.input.json --experiment-dir .
+```
+
+Spec must include `{"campaign_id": "<slug>", "expected_cmd_sha": "<cmd_sha>", ...}`. Branch on `data.overall`:
+
+- `pass` / `warn` → proceed to `submit-flow`.
+- `fail` → STOP. The `validate-stochastic-marker` finding (`code: stochastic_marker_missing`) lists the prior iteration whose `cmd_sha` collides. Apply its `suggested_fix` — add `_optuna_trial_number` (or equivalent) to `tasks.resolve()`'s output — and re-run the gate. There is no `--force`; the dedup would be silent, so the gate is hard by design.
 
 ## Inspection
 
@@ -56,7 +71,7 @@ Pass `campaign_id: "<slug>"` in the [submit-flow](../../docs/primitives/submit-f
 
 Per iteration, three workflow-atom invocations:
 
-1. **Submit**: invoke [submit-flow](../../docs/primitives/submit-flow.md) with `campaign_id` set. `tasks.py` is re-imported during scaffolding, so `_PRIOR = prior(".", os.environ["HPC_CAMPAIGN_ID"])` sees every previously-completed iteration before deciding what to submit.
+1. **Submit**: for a Path B campaign, FIRST run the mandatory stochastic-marker gate (see "Stochastic-marker gate" above) — `validate-campaign` with `campaign_id` + `expected_cmd_sha`; a `fail` blocks the submit. Then invoke [submit-flow](../../docs/primitives/submit-flow.md) with `campaign_id` set. `tasks.py` is re-imported during scaffolding, so `_PRIOR = prior(".", os.environ["HPC_CAMPAIGN_ID"])` sees every previously-completed iteration before deciding what to submit.
 2. **Monitor**: invoke [monitor-flow](../../docs/primitives/monitor-flow.md) with the returned `run_id`. Polls until terminal or budget elapses; returns `lifecycle_state` ∈ `{complete, failed, abandoned, timeout}`.
 3. **Aggregate** (optional, when the strategy needs cross-wave reduced metrics): invoke [aggregate-flow](../../docs/primitives/aggregate-flow.md). For per-trial-QLIKE-style strategies, this is where the metric the strategy will `tell()` comes from; for simpler strategies that read per-task reduce JSONs directly, skip this step.
 4. **Decide**: re-import `tasks.py` and check `tasks.total()`. If `> 0`, go to Step 1. Else done.
@@ -65,7 +80,7 @@ Three CLI calls per iteration, all emitting the same JSON envelope shape. The sa
 
 Concurrency is opt-in: invoke `submit-flow` again before the previous iteration's `monitor-flow` returns if you want K iterations in flight (Optuna's `constant_liar=True` is built for this). Default to sequential when in doubt.
 
-For headless overnight runs, wrap the loop in a recurring trigger (e.g. `/loop 30m bash .hpc/campaigns/<slug>/iterate.sh`) — `tasks.total() == 0` halts it automatically.
+For headless overnight runs, do not hand-write a loop script. Wrap the driver in a recurring trigger (e.g. `/loop 30m hpc-campaign-driver --experiment-dir . --allow-agent-steps`) — each tick advances exactly one step off the on-disk `delegate` block, and `tasks.total() == 0` ends the campaign automatically (the driver finds nothing in flight and emits a `submit` hint with no work).
 
 Resume after a network drop or laptop sleep is trivial: there is no driver state to recover. Re-run `campaign-status` to see what landed, then resume the loop. Sidecars on disk are the only durable state.
 
