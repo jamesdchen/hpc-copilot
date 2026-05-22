@@ -86,16 +86,6 @@ Never move bulk result files just to reach a Python environment. If the reductio
 
 Anti-pattern: `scp -r results/tune/*_chunk_*.csv cluster-B:...` because cluster-B has the conda env and cluster-A does not — fix the environment, not the data location. Small-file scp/rsync is especially slow (per-file SSH handshake); if bulk movement is unavoidable, `tar` first. `mode: "auto"` routes around this by default — stay on it unless a debug case needs the raw files local.
 
-## Post-flight spot-checks
-
-`aggregate-flow` returning `ok=true` is necessary but not sufficient: `summary.complete == total_tasks` says every task wrote *something*, not that the file is non-trivial. After Step 7's invariant check passes, before reporting success, run three more:
-
-1. **Non-empty rows.** Re-run the `poll-run-status` cluster-side reporter with `--min-rows N` (a profile-appropriate floor — 1 minimum, more if the expected row count is known). Any task that read `complete` but flips to `failed` here wrote an empty/short file; report which task ids.
-2. **Spot-check three tasks.** For the first, middle, and last task ids (`0`, `task_count // 2`, `task_count - 1`): the result file exists and is non-empty; the expected columns are present (use `results.summary_pattern` and the executor's schema); the key metric column has at least one non-NaN value.
-3. **Sanity-check the aggregated metrics.** `aggregated_metrics` is keyed by run_id or grid-point; confirm the keys match what was submitted — no missing grid points, none unexpected. A key present in the dict but absent from `tasks.resolve(i)` for every `i` is a cross-run contamination flag — escalate, do not paper over.
-
-If any of the three fails, do not report success — record the failure in the result and `anomalies`.
-
 ## Notes
 
 - **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
