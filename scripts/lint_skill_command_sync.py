@@ -7,6 +7,9 @@ catches the most common drift modes:
 
 1. A skill exists with no matching slash command (or vice versa).
 2. A skill or slash-command file is missing required frontmatter.
+3. A skill's declared ``execution`` mode disagrees with how its
+   command routes (``delegated`` ⇔ an ``hpc_spawn`` Task request or an
+   ``hpc-agent run`` Bash call).
 
 It deliberately does **not** diff the bodies — the two surfaces have
 different audiences (agent skill vs. interactive slash-command prompt)
@@ -54,7 +57,26 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
 SLASH_ONLY_OK: set[str] = {"validate-campaign"}
 
 
-_INVOKE_DIRECTIVE_RE = re.compile(r"[Ii]nvoke the [`*]?[a-z][a-z0-9-]+[`*]? skill")
+# A workflow command must explicitly route to its skill rather than run
+# the workflow from the slash body alone. Accepted routing forms: the
+# inline "Invoke the `<skill>` skill" directive; the subagent-execute
+# form ("... subagent ... to execute it (`skills/<id>/SKILL.md`)"); the
+# thin-trigger form — shelling `hpc-agent run <workflow>`, the
+# code-orchestrated entrypoint; or, for the campaign loop, shelling
+# `hpc-campaign-driver`, the code-orchestrated tick-by-tick driver.
+_INVOKE_DIRECTIVE_RE = re.compile(
+    r"[Ii]nvoke the [`*]?[a-z][a-z0-9-]+[`*]? skill"
+    r"|subagent[^\n]*?to execute it \(`skills/[a-z0-9-]+/SKILL\.md`\)"
+    r"|hpc-agent run "
+    r"|hpc-campaign-driver"
+)
+
+# Every workflow skill statically declares, in its frontmatter, whether
+# it runs `delegated` (in a fresh-context subagent, spawned from a
+# content-addressed spec) or `inline` (in the main conversation). This
+# is an authored property, not a per-invocation judgement — the lint
+# below cross-checks it against how the paired command routes.
+_EXECUTION_RE = re.compile(r"^execution:\s*(delegated|inline)\s*$", re.MULTILINE)
 
 
 def main() -> int:
@@ -67,10 +89,11 @@ def main() -> int:
     declared_slashes = {pair[1] for pair in WORKFLOW_PAIRS}
 
     # Each declared pair must have both files. The slash body must also
-    # contain an explicit "Invoke the `<skill>` skill" directive — without
-    # it, the slash collapsed away its own workflow-mechanics content
-    # under the surgical-split refactor and the agent has nothing to
-    # work from. The regex tolerates `name`/**name**/plain wrapping.
+    # route to its skill — either an inline "Invoke the `<skill>` skill"
+    # directive or the subagent-delegation form — otherwise the slash
+    # collapsed away its own workflow-mechanics content and the agent has
+    # nothing to work from. The regex tolerates `name`/**name**/plain
+    # wrapping.
     for skill_id, slash_stem in WORKFLOW_PAIRS:
         skill_path = SKILLS_DIR / skill_id / "SKILL.md"
         slash_path = COMMANDS_DIR / f"{slash_stem}.md"
@@ -89,12 +112,12 @@ def main() -> int:
         if not _INVOKE_DIRECTIVE_RE.search(body):
             errors.append(
                 f"{slash_path.relative_to(REPO_ROOT)} is missing the "
-                "imperative skill-invocation directive (regex "
-                f"{_INVOKE_DIRECTIVE_RE.pattern!r}). Slash commands must "
-                "explicitly tell the agent to invoke the matching skill via "
-                "the Skill tool — without the directive, the agent may try "
-                "to do the workflow from the slash body alone, which lacks "
-                "the workflow mechanics by design."
+                "imperative skill-routing directive (regex "
+                f"{_INVOKE_DIRECTIVE_RE.pattern!r}). A workflow command must "
+                "route to its skill — invoke it, delegate it to a subagent, "
+                "or shell `hpc-agent run` — without the directive the agent "
+                "may try to do the workflow from the slash body alone, which "
+                "lacks the workflow mechanics by design."
             )
             continue
         # Stronger check: the directive should name *this pair's* skill_id.
@@ -104,6 +127,40 @@ def main() -> int:
                 f"directive but does not name the matching skill {skill_id!r}. "
                 "Either fix the slash body to invoke the right skill, or "
                 "update WORKFLOW_PAIRS in this lint script."
+            )
+
+        # The skill's declared `execution` mode must agree with how its
+        # command routes: `delegated` ⇒ the command delegates via an
+        # `hpc_spawn` Task request, an `hpc-agent run` Bash call, or an
+        # `hpc-campaign-driver` Bash call; `inline` ⇒ it does none of these.
+        if not skill_path.is_file():
+            continue
+        skill_body = skill_path.read_text(encoding="utf-8")
+        exec_match = _EXECUTION_RE.search(skill_body)
+        if exec_match is None:
+            errors.append(
+                f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
+                "`execution: delegated|inline` field. Every workflow skill "
+                "must statically declare how it runs."
+            )
+            continue
+        routes_via_spawn = (
+            "hpc_spawn" in body or "hpc-agent run" in body or "hpc-campaign-driver" in body
+        )
+        if exec_match.group(1) == "delegated" and not routes_via_spawn:
+            errors.append(
+                f"{skill_id!r} declares `execution: delegated` but its command "
+                f"{slash_path.relative_to(REPO_ROOT)} does not delegate via an "
+                "`hpc_spawn` Task request or an `hpc-agent run` Bash call. A "
+                "delegated skill must run in a fresh-context worker."
+            )
+        if exec_match.group(1) == "inline" and routes_via_spawn:
+            errors.append(
+                f"{skill_id!r} declares `execution: inline` but its command "
+                f"{slash_path.relative_to(REPO_ROOT)} routes through an "
+                "`hpc_spawn` Task request or an `hpc-agent run` Bash call. An "
+                "inline skill runs in the main conversation — drop the spawn "
+                "routing, or mark the skill `delegated`."
             )
 
     # Skills present on disk but not declared in the pair table.

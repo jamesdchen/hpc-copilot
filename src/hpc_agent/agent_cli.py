@@ -308,20 +308,6 @@ def _live_subcommands() -> list[str]:
     return []
 
 
-def cmd_hook_install(args: argparse.Namespace) -> int:
-    """Install hpc-agent's bundled Stop hooks into ~/.claude/settings.json.
-
-    Idempotent: re-running with already-installed hooks is a no-op. Use
-    ``--dry-run`` to preview the merge without writing.
-    """
-    from hpc_agent.hooks.install import install_hooks
-
-    settings_path = Path(args.settings).expanduser() if args.settings else None
-    summary = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
-    _ok(summary, name="hook-install")
-    return EXIT_OK
-
-
 def cmd_install_commands(args: argparse.Namespace) -> int:
     """Copy bundled slash commands + skills into ~/.claude/.
 
@@ -339,24 +325,18 @@ def cmd_install_commands(args: argparse.Namespace) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
-    """One-shot setup: install commands + skills, then wire the Stop hooks.
+    """One-shot setup: install the bundled slash commands + skills.
 
     The single entry point a new user runs after ``pip install
     hpc-agent``. Copies the bundled slash commands and skills into
-    ~/.claude/ and installs hpc-agent's Stop hooks. Both steps are
-    idempotent, so re-running is safe. ``--no-hooks`` skips the hook
-    step; ``--dry-run`` previews both without writing.
+    ~/.claude/. Idempotent, so re-running is safe. ``--dry-run``
+    previews without writing.
     """
     from hpc_agent.agent_assets import install_agent_assets
-    from hpc_agent.hooks.install import install_hooks
 
     claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
     assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
-    data: dict[str, Any] = {"assets": assets}
-    if not args.no_hooks:
-        settings_path = claude_dir / "settings.json" if claude_dir else None
-        data["hooks"] = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
-    _emit({"ok": True, "idempotent": True, "data": data})
+    _emit({"ok": True, "idempotent": True, "data": {"assets": assets}})
     return EXIT_OK
 
 
@@ -597,6 +577,14 @@ def cmd_list_in_flight(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_load_context(args: argparse.Namespace) -> int:
+    """Argparse adapter — primitive lives at hpc_agent.atoms.load_context."""
+    from hpc_agent.atoms.load_context import load_context
+
+    _ok(load_context(experiment_dir=args.experiment_dir), name="load-context")
+    return EXIT_OK
+
+
 # ─── subcommand: campaign status / list ────────────────────────────────────
 
 
@@ -755,9 +743,9 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.monitor_arm.
 
     Reads a JSON ``--spec`` describing the current run state and emits
-    the cron/loop/none decision + ``armed:`` line + cron_create_args.
-    The slash-command epilogue copies ``armed_line`` verbatim and (when
-    ``arm == "cron"``) passes ``cron_create_args`` to ``CronCreate``.
+    the cron/loop/none decision + cadence + cron_create_args. When
+    ``arm == "cron"`` the caller passes ``cron_create_args`` to
+    ``CronCreate`` to schedule the next monitor tick.
     """
     from hpc_agent.atoms.monitor_arm import decide_monitor_arm
 
@@ -839,6 +827,7 @@ def cmd_verify_aggregation_complete(args: argparse.Namespace) -> int:
             args.experiment_dir,
             run_id=args.run_id,
             combiner_dir_local=args.combiner_dir,
+            results_dir_local=getattr(args, "results_dir", None),
         ),
         name="verify-aggregation-complete",
     )
@@ -1040,6 +1029,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         remote_path=record.remote_path,
         job_ids=record.job_ids,
         job_name=record.job_name,
+        min_rows=getattr(args, "min_rows", 0),
     )
     data: dict[str, Any] = {
         "run_id": updated.run_id,
@@ -1735,6 +1725,103 @@ def cmd_build_template(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+# ─── subcommand: run ───────────────────────────────────────────────────────
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """Run a workflow end to end in a fresh-context worker.
+
+    The code-orchestrated entrypoint: validates the fields, renders the
+    canonical worker prompt, invokes a worker, and returns its parsed
+    report. The spawn is emitted by code here — no PreToolUse hook
+    mediates this path. See hpc_agent._internal.run_workflow.
+    """
+    from hpc_agent._internal.run_workflow import run_workflow
+    from hpc_agent.atoms.spawn_prompt import SpawnContractError
+
+    try:
+        fields = json.loads(args.fields_json)
+    except json.JSONDecodeError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=f"--fields-json is not valid JSON: {exc}",
+            category="user",
+            retry_safe=False,
+        )
+    if not isinstance(fields, dict):
+        return _err(
+            error_code="spec_invalid",
+            message="--fields-json must be a JSON object",
+            category="user",
+            retry_safe=False,
+        )
+    try:
+        report, exit_code = run_workflow(
+            workflow=args.workflow,
+            experiment_dir=str(args.experiment_dir),
+            fields=fields,
+        )
+    except SpawnContractError as exc:
+        return _err(
+            error_code="spec_invalid",
+            message=str(exc),
+            category="user",
+            retry_safe=False,
+        )
+    _ok({"report": report.model_dump(), "worker_exit_code": exit_code})
+    return EXIT_OK
+
+
+# ─── subcommand: describe ──────────────────────────────────────────────────
+
+
+def cmd_describe(args: argparse.Namespace) -> int:
+    """Resolve a skill or primitive name to its content from package data.
+
+    A delegated worker calls this to fetch a cross-reference it reaches
+    on its branch — a skill it is pointed at, a primitive whose contract
+    it needs — instead of the prompt pre-stitching every possible
+    reference. Skills resolve to the SKILL.md body; primitives resolve
+    to their operations-catalog contract.
+    """
+    name = args.name
+    if not (
+        name and name[0].isalpha() and all(c.islower() or c.isdigit() or c == "-" for c in name)
+    ):
+        return _err(
+            error_code="spec_invalid",
+            message=(
+                f"name {name!r} must be lowercase letters, digits, and "
+                "hyphens — a skill or primitive name"
+            ),
+            category="user",
+            retry_safe=False,
+        )
+
+    from importlib.resources import files
+
+    skill_md = files("slash_commands") / "skills" / name / "SKILL.md"
+    if skill_md.is_file():
+        from hpc_agent.atoms.spawn_prompt import _skill_body
+
+        _ok({"kind": "skill", "name": name, "content": _skill_body(name)})
+        return EXIT_OK
+
+    from hpc_agent._internal.operations import operations_catalog
+
+    for entry in operations_catalog():
+        if entry.get("name") == name:
+            _ok({"kind": "primitive", "name": name, "content": entry})
+            return EXIT_OK
+
+    return _err(
+        error_code="spec_invalid",
+        message=f"no skill or primitive named {name!r}",
+        category="user",
+        retry_safe=False,
+    )
+
+
 # ─── parser ────────────────────────────────────────────────────────────────
 
 
@@ -1770,37 +1857,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_cap.set_defaults(func=cmd_capabilities)
 
-    # hook-install
-    p_hook = sub.add_parser(
-        "hook-install",
-        help=(
-            "Install hpc-agent Stop hooks into the user-global "
-            "~/.claude/settings.json so the agent is held to slash-command "
-            "exit contracts (e.g. /monitor-hpc must emit an `armed:` line). "
-            "Writes to the user-global settings file unless --settings "
-            "overrides; there is no automatic project-scoped install path "
-            "today — point --settings at .claude/settings.json inside a "
-            "repo to install per-project."
-        ),
-    )
-    p_hook.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview the merge without writing to settings.json.",
-    )
-    p_hook.add_argument(
-        "--settings",
-        type=str,
-        default=None,
-        help=(
-            "Override the target settings path. Defaults to "
-            "~/.claude/settings.json (user-global). Pass "
-            "<repo>/.claude/settings.json to scope the install to a "
-            "single project instead."
-        ),
-    )
-    p_hook.set_defaults(func=cmd_hook_install)
-
     # install-commands
     p_install = sub.add_parser(
         "install-commands",
@@ -1830,20 +1886,14 @@ def build_parser() -> argparse.ArgumentParser:
         "setup",
         help=(
             "One-shot setup: copy the bundled slash commands and skills "
-            "into ~/.claude/ and install hpc-agent's Stop hooks. Run this "
-            "once after `pip install hpc-agent`. Idempotent — safe to "
-            "re-run. Use --no-hooks to skip the hook step."
+            "into ~/.claude/. Run this once after `pip install "
+            "hpc-agent`. Idempotent — safe to re-run."
         ),
     )
     p_setup.add_argument(
         "--dry-run",
         action="store_true",
-        help="Preview both steps without writing.",
-    )
-    p_setup.add_argument(
-        "--no-hooks",
-        action="store_true",
-        help="Skip installing the Stop hooks (only copy commands + skills).",
+        help="Preview without writing.",
     )
     p_setup.add_argument(
         "--claude-dir",
@@ -2103,6 +2153,17 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Local path the cluster's _combiner/ was rsync_pull'd to.",
     )
+    p_vac.add_argument(
+        "--results-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional local path the cluster's per-task result files were "
+            "pulled to. When given AND the run sidecar's `results` block "
+            "declares expected_columns / metric_column, each CSV is "
+            "verified for the declared columns and a non-NaN metric value."
+        ),
+    )
     p_vac.set_defaults(func=cmd_verify_aggregation_complete)
 
     # verify-canary
@@ -2147,10 +2208,9 @@ def build_parser() -> argparse.ArgumentParser:
         "decide-monitor-arm",
         help=(
             "Pick cron/loop/none + cadence + cron schedule string from "
-            "the run's current summary. Returns the literal armed: line "
-            "the slash command must emit (Stop hook checks for it) and "
-            "ready-to-pass CronCreate args. Replaces /monitor-hpc Step 5 "
-            "agent judgment."
+            "the run's current summary. Returns ready-to-pass CronCreate "
+            "args for scheduling the next monitor tick. Replaces "
+            "/monitor-hpc Step 5 agent judgment."
         ),
     )
     _add_spec_and_dry_run(
@@ -2384,6 +2444,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_experiment_dir(p_lif)
     p_lif.set_defaults(func=cmd_list_in_flight)
 
+    # load-context
+    p_lctx = sub.add_parser(
+        "load-context",
+        help=(
+            "Reconstruct workflow context (latest run + config snapshot, "
+            "in-flight runs, campaigns) from on-disk state. Run this first "
+            "in any fresh-context step instead of relying on memory."
+        ),
+    )
+    _add_experiment_dir(p_lctx)
+    p_lctx.set_defaults(func=cmd_load_context)
+
     # campaign — closed-loop campaign read-only commands
     p_camp = sub.add_parser(
         "campaign",
@@ -2495,6 +2567,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_st)
     _add_run_id(p_st)
+    p_st.add_argument(
+        "--min-rows",
+        type=int,
+        default=0,
+        help=(
+            "Require each task's CSV result to have at least N data rows "
+            "beyond the header. A completed task with fewer rows is demoted "
+            "complete -> failed. Default 0 accepts header-only CSVs."
+        ),
+    )
     p_st.set_defaults(func=cmd_status)
 
     # submit
@@ -2766,6 +2848,51 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_bt.set_defaults(func=cmd_build_template)
+
+    # run
+    p_run = sub.add_parser(
+        "run",
+        help=(
+            "Run a workflow (submit / status / aggregate) end to end in a "
+            "fresh-context worker — the code-orchestrated entrypoint. "
+            "Renders the canonical prompt, invokes a worker, returns its "
+            "parsed report. Campaign is a loop; use hpc-campaign-driver."
+        ),
+    )
+    _add_experiment_dir(p_run)
+    p_run.add_argument(
+        "--workflow",
+        required=True,
+        # campaign is excluded: it is a loop driven tick-by-tick by
+        # hpc-campaign-driver, not a single run.
+        choices=["submit", "status", "aggregate"],
+        help="Which workflow the fresh-context worker will run.",
+    )
+    p_run.add_argument(
+        "--fields-json",
+        type=str,
+        default="{}",
+        help=(
+            "Inline JSON object of the invocation's resolved fields "
+            "(interview answers). Default: '{}'."
+        ),
+    )
+    p_run.set_defaults(func=cmd_run)
+
+    # describe
+    p_describe = sub.add_parser(
+        "describe",
+        help=(
+            "Print a skill's procedure or a primitive's contract from the "
+            "installed package data. A delegated worker uses this to fetch "
+            "a cross-reference on the branch it is executing."
+        ),
+    )
+    p_describe.add_argument(
+        "name",
+        help=("A skill name (e.g. hpc-submit) or a primitive name (e.g. submit-flow)."),
+    )
+    p_describe.set_defaults(func=cmd_describe)
 
     # Optional plugin distributions add their own subcommands here. With
     # none installed this is a no-op and the parser is unchanged.

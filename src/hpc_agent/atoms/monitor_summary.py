@@ -100,9 +100,10 @@ def monitor_summary(
       case.
     * ``headline`` — single sentence the slash command prints first.
     * ``body`` — multi-line counts + diff + most-recent actions.
-    * ``armed_hint`` — None when terminal (slash command exits);
-      otherwise a one-line note to remind the slash command that
-      ``decide-monitor-arm`` should be called next.
+    * ``armed_hint`` — None when terminal (no further ticks needed);
+      otherwise a one-line note reminding the slash command to
+      schedule the next monitor tick (e.g. via a cron running
+      ``hpc-campaign-driver`` or a re-invocation of ``/monitor-hpc``).
 
     Reads ``<experiment>/.hpc/runs/<run_id>.monitor.jsonl`` for the
     most recent tick. If the file is absent / empty, returns a minimal
@@ -163,7 +164,7 @@ def monitor_summary(
     armed_hint = (
         None
         if lifecycle in _TERMINAL_LIFECYCLE_STATES
-        else "next: call decide-monitor-arm and emit its armed_line"
+        else "next: schedule the next monitor tick (cron / re-invoke /monitor-hpc)"
     )
 
     return {

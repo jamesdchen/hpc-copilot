@@ -1,7 +1,8 @@
 ---
 name: hpc-submit
 description: "Submit a parameter-grid experiment to a SLURM/SGE cluster via SSH and record it in the journal. End-to-end pipeline (rsync + deploy + qsub + record) in one CLI call."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
+execution: delegated
 ---
 
 Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-flow.md) workflow atom** (full pre-flight + rsync + deploy + qsub + record pipeline in one CLI call). For just the journal-write half (when the agent has already qsubbed), use the [submit-spec](../../docs/primitives/submit-spec.md) primitive directly. Both are idempotent on `run_id`: a replay returns `data.deduped: true` and emits no cluster-side side effects.
@@ -9,6 +10,15 @@ Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-f
 Throughout this skill, "invoke <primitive>" means call the primitive's `backed_by.cli` or `backed_by.python` entry point; see `docs/primitives/<name>.md` for the full contract. For envelope/exit-code shapes see `docs/reference/cli-spec.md`.
 
 ## Setup
+
+**Load context first.** Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign / cluster state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
+
+- `data.latest_run` — cluster, profile, resources, env, remote_path, campaign_id, run_id, cmd_sha, job_ids. On a `reuse`/`interview` action, read these instead of re-interviewing the user.
+- `data.in_flight` — active runs (run_id, stage, ssh_target, job_ids).
+- `data.campaigns` — campaign ids + cursor iteration.
+- `data.next_step_hint` — `submit` / `monitor` / `aggregate`.
+
+If a value you need later is absent here, derive it from the run sidecar on disk — never from memory.
 
 Read cluster definitions:
 - `clusters.yaml`: resolve path via `python -c 'from hpc_agent import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
@@ -27,6 +37,18 @@ Branch on `action`:
 | `reuse` | 1 | Per-experiment sidecars exist | Each sidecar carries the full v2 config snapshot — resources/env/constraints/runtime. Reuse keeps `tasks.py` byte-identical so `cmd_sha` matches. |
 | `interview` | 2 | `.hpc/tasks.py` exists, no run history | Skip executor-discovery + axes interview (tasks.py already encodes the axis); jump to Step 4b. |
 | `fresh` | 3 | Nothing exists | Full interview from Step 1. |
+
+## Delegating verbose steps to a subagent
+
+This pipeline has several high-output steps. When you drive it as part of a larger flow, delegate each verbose, idempotent step to a fresh-context **subagent** (the `Task` tool):
+
+- Step 1 — executor/run discovery,
+- Step 6b — the pre-flight gate,
+- Step 8b — scheduler verification.
+
+Each subagent returns **only** that step's typed output envelope — Step 1: the discovery / `load-context` action result; Step 6b: the pre-flight gate result; Step 8b: the scheduler-verification result — and a single free-text `anomalies` string for anything off-contract. No transcript, no scheduler dumps, no raw output. The orchestrator parses fields, not prose; that field-shaped return is what keeps its next call deterministic.
+
+Keep the Step 5 user-confirmation gate and the `submit-flow` call in the orchestrator — they are short and need a decision. Every subagent opens by running `hpc-agent load-context`; it reconstructs its own context from disk and never inherits yours.
 
 ## Step 0: Build the `src/` package
 
@@ -270,11 +292,27 @@ On a failed state: surface the scheduler reason verbatim, tell the user which jo
 
 ## Step 9-10: Cache + report
 
-Cache to Claude Code memory: executor directory, cluster, remote_path, env config per executor type, default resources.
+Do not cache run config in conversational memory. `submit-flow` persists the full v2 config snapshot (executor, cluster, remote_path, env, resources) to the run sidecar; any later step recovers it with `hpc-agent load-context`. Conversational memory is lost on context compaction or a session restart — the sidecar is not.
 
 Report after submission and Step 8b verification: job ID, executor(s), grid dimensions, total tasks, cluster, verified scheduler state. Suggest `/monitor-hpc` to track progress.
 
 The journal write happens inside `submit-flow` via `runner.submit_and_record`. For multi-executor submissions (one sidecar per executor), invoke `submit-flow` once per submitted job — each call writes its own sidecar.
+
+## Common failure modes
+
+When Step 8b finds a job in a failed state, or a later check surfaces task failures, map the symptom:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Eqw` state (SGE) | Job error | `qmod -cj <JOBID>` or resubmit |
+| `PENDING` (SLURM) for >30 min | Resource unavailable | Check `sinfo`; try a different partition |
+| Memory exceeded | Exceeded the memory limit | Resubmit with higher memory |
+| Walltime exceeded | Exceeded the time limit | Resubmit with longer walltime |
+| `ModuleNotFoundError` | Environment not set up | Check the modules / conda_env |
+| rsync / scp transfer failure | SSH key issue | Verify `ssh $SSH_TARGET hostname` first |
+| `--<flag>` not recognized | The executor does not accept that argument | Check `--help`; the flag must be in the executor's `FLAGS` / CLI |
+
+If the requested run names a CLI flag the executor does not accept, surface that before submitting — a missing flag fails every task in the array.
 
 ## Notes
 

@@ -42,7 +42,7 @@
           "type": "null"
         }
       ],
-      "description": "One-line note pointing the slash command at decide-monitor-arm; null when terminal.",
+      "description": "One-line note reminding the slash command to schedule the next monitor tick; null when terminal.",
       "title": "Armed Hint"
     },
     "journal_missing": {

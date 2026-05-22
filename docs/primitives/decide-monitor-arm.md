@@ -18,9 +18,9 @@ exit_codes:
 
 ## Purpose
 
-Pick the cron / loop / none arm mode + cadence + cron schedule string + the literal `armed:` exit-line for a `/monitor-hpc` tick. Replaces four slash-command failure modes at once: arm choice, cadence selection, cron schedule formatting, and `armed:` line construction.
+Pick the cron / loop / none arm mode + cadence + cron schedule string for a `/monitor-hpc` tick. Replaces three slash-command failure modes at once: arm choice, cadence selection, and cron schedule formatting.
 
-The agent's job collapses to: read the run state, call this primitive, copy `data.armed_line` verbatim as the last line of stdout, and (when `arm == "cron"`) pass `data.cron_create_args` directly to the `CronCreate` Claude Code tool.
+The agent's job collapses to: read the run state, call this primitive, and (when `arm == "cron"`) pass `data.cron_create_args` directly to the `CronCreate` Claude Code tool to schedule the next monitor tick.
 
 ## Compose with
 
@@ -30,7 +30,7 @@ The agent's job collapses to: read the run state, call this primitive, copy `dat
 ## Notes
 
 - **Adaptive table**: built into the primitive, lifted from `/monitor-hpc` Step 5's Markdown table. Order: queue-wait super-cache → ETA branches → all-pending fallback → running fallback. Single source of truth so changes land in one place.
-- **Stop hook contract**: `data.armed_line` matches the regex the `monitor_armed_check` Stop hook enforces. Hand-authoring the line is the failure mode this primitive exists to eliminate; the hook's block message points users back to this primitive.
+- **Cron-driven self-scheduling**: `data.cron_create_args` is ready to pass to `CronCreate`; each tick is a fresh process, so there is no exit contract to satisfy. The cadence table also picks a sensible interval for a cron running the headless `hpc-campaign-driver`.
 - **Terminal detection**: `arm == "none"` when (a) `complete == total_tasks` or (b) `failed > 0 and running == 0 and pending == 0`. The slash command must `CronDelete` any prior cron for the run_id when arm is none.
-- **`/loop` invocation**: when `user_invoked_via_loop=True`, returns `arm == "loop"` with `cadence_sec=0` and `cron_create_args=null`. The user is driving the cadence; the primitive's only job is the `armed:` line.
+- **`/loop` invocation**: when `user_invoked_via_loop=True`, returns `arm == "loop"` with `cadence_sec=0` and `cron_create_args=null`. The user is driving the cadence, so no cron is registered.
 - **Side-effect-free**: pure function. Safe to call from anywhere (slash command, external orchestrator, debug shell). Run multiple times to compare cadence picks across hypothetical states.

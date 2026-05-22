@@ -70,6 +70,21 @@
       "title": "Provenance Present",
       "type": "boolean"
     },
+    "columns_checked": {
+      "default": false,
+      "description": "True when the expected-columns / non-NaN-metric gate ran — the run sidecar's ``results`` block declared ``expected_columns`` and/or ``metric_column`` AND a local results directory was supplied. False = clean no-op skip.",
+      "title": "Columns Checked",
+      "type": "boolean"
+    },
+    "column_violations": {
+      "description": "Per-result-file violations from the columns gate: each entry is {path, missing_columns, metric_nan, metric_nan_rows, error}. Empty when the gate passed or was skipped.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Column Violations",
+      "type": "array"
+    },
     "expected_wave_count": {
       "minimum": 0,
       "title": "Expected Wave Count",

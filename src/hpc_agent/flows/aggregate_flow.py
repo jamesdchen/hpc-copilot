@@ -14,8 +14,22 @@ Third workflow atom in the :mod:`hpc_agent.flows.submit_flow` /
 4. ``reduce_partials`` over the local dir → aggregated metrics dict.
 5. (Optional) ``rsync_pull`` per-task result summaries matching
    ``summary_glob`` from the cluster's ``results/`` subtree.
-6. Return :class:`AggregateFlowResult` — paths + metrics + which waves
-   were combined this call vs already-combined.
+6. (Optional) Run two deterministic post-aggregation gates:
+
+   * **Non-empty rows** (``spec.min_rows > 0``) — the cluster-side
+     status reporter is run with ``--min-rows``; task ids whose CSV
+     result has fewer than ``min_rows`` data rows beyond the header are
+     surfaced in ``nonempty_failing_task_ids``. ``ok`` from the combiner
+     only means every task wrote *a file* — this gate proves the file
+     has real data.
+   * **Expected columns + non-NaN metric** — when the run sidecar's
+     ``results`` block declares ``expected_columns`` / ``metric_column``,
+     every pulled per-task result file is checked for the declared
+     columns and a non-NaN metric value; violations land in
+     ``column_violations``. A clean no-op when no schema is declared.
+
+7. Return :class:`AggregateFlowResult` — paths + metrics + which waves
+   were combined this call vs already-combined + the gate results.
 
 Composition fit: the campaign loop's per-iteration code goes
 ``submit-flow → monitor-flow → aggregate-flow`` (or skips aggregate-flow
@@ -60,6 +74,10 @@ class AggregateFlowResult:
     aggregated_metrics: dict[str, dict[str, Any]]
     summaries_dir_local: str | None = None
     escalation_reason: str | None = None
+    nonempty_rows_checked: bool = False
+    nonempty_failing_task_ids: list[int] | None = None
+    columns_checked: bool = False
+    column_violations: list[dict[str, Any]] | None = None
 
     def to_envelope_data(self) -> dict[str, Any]:
         return {
@@ -71,6 +89,10 @@ class AggregateFlowResult:
             "aggregated_metrics": dict(self.aggregated_metrics),
             "summaries_dir_local": self.summaries_dir_local,
             "escalation_reason": self.escalation_reason,
+            "nonempty_rows_checked": self.nonempty_rows_checked,
+            "nonempty_failing_task_ids": list(self.nonempty_failing_task_ids or []),
+            "columns_checked": self.columns_checked,
+            "column_violations": list(self.column_violations or []),
         }
 
 
@@ -96,6 +118,51 @@ def _missing_waves(wave_map_keys: list[str], already_combined: list[int]) -> lis
         if wave_num not in seen:
             waves.append(wave_num)
     return sorted(waves)
+
+
+def _nonempty_failing_task_ids(
+    run_id: str,
+    *,
+    ssh_target: str,
+    remote_path: str,
+    job_ids: list[str],
+    job_name: str,
+    min_rows: int,
+) -> list[int]:
+    """Return task ids whose CSV result has fewer than *min_rows* data rows.
+
+    Runs the cluster-side status reporter twice — once with ``--min-rows 0``
+    (a file with just a header still counts complete) and once with
+    ``--min-rows <min_rows>`` — and diffs the two ``complete`` task sets.
+    A task that is ``complete`` at min_rows=0 but NOT at min_rows=N wrote a
+    result file with too few real data rows: that is the precise
+    "wrote something, but no real data" signal Check 1 gates on.
+
+    Pure read-only: two SSH round-trips, no cluster-side or local writes.
+    """
+    from hpc_agent.runner.status import ssh_status_report
+
+    def _complete_ids(rows: int) -> set[int]:
+        report = ssh_status_report(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            run_id=run_id,
+            job_ids=job_ids,
+            job_name=job_name,
+            min_rows=rows,
+        )
+        out: set[int] = set()
+        for tid_str, entry in (report.get("tasks") or {}).items():
+            if isinstance(entry, dict) and entry.get("status") == "complete":
+                try:
+                    out.add(int(tid_str))
+                except (TypeError, ValueError):
+                    continue
+        return out
+
+    complete_lenient = _complete_ids(0)
+    complete_strict = _complete_ids(min_rows)
+    return sorted(complete_lenient - complete_strict)
 
 
 def _combine_missing(
@@ -147,6 +214,7 @@ def _combine_missing(
         errors.CombinerFailed,
         errors.OutputsMissing,
         errors.JournalCorrupt,
+        errors.PreconditionFailed,
     ],
     idempotent=True,
     idempotency_key="run_id",
@@ -196,6 +264,19 @@ def aggregate_flow(
     record = session.load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for {run_id!r}; submit the run first")
+
+    # Precondition gate: aggregating a run that monitor-flow has not
+    # driven to a terminal state risks reducing over partial data and
+    # reporting plausible-but-wrong metrics. ``ensure_all_combined=false``
+    # is the documented opt-in for a deliberate partial aggregate, so it
+    # bypasses the gate.
+    if ensure_all_combined and record.status not in session.TERMINAL_STATUSES:
+        raise errors.PreconditionFailed(
+            f"run {run_id!r} is {record.status!r}, not terminal; monitor-flow "
+            "has not driven it to complete/failed/abandoned. Aggregating now "
+            "risks partial or wrong metrics. Pass ensure_all_combined=false to "
+            "aggregate partial results deliberately."
+        )
 
     if mode not in {"auto", "combiner-only", "cluster-reduce"}:
         raise errors.SpecInvalid(
@@ -354,6 +435,57 @@ def aggregate_flow(
             )
         summaries_local = str(sl)
 
+    # Check 1 — non-empty rows. `aggregate-flow` returning ok only means
+    # every task wrote *a file*; it does not mean the file has real data.
+    # When spec.min_rows > 0, run the cluster-side status reporter and
+    # surface the task ids whose CSV result has fewer than min_rows data
+    # rows — i.e. tasks that wrote a header-only / under-populated file.
+    nonempty_rows_checked = False
+    nonempty_failing: list[int] = []
+    if spec.min_rows > 0:
+        nonempty_failing = _nonempty_failing_task_ids(
+            run_id,
+            ssh_target=record.ssh_target,
+            remote_path=record.remote_path,
+            job_ids=list(record.job_ids),
+            job_name=record.job_name,
+            min_rows=spec.min_rows,
+        )
+        nonempty_rows_checked = True
+
+    # Check 2 — expected columns + non-NaN metric. Deterministic given a
+    # declared schema in the run sidecar's `results` block. Runs against
+    # the locally-pulled per-task result files (summaries_local); a clean
+    # no-op when no schema is declared or summaries were not pulled.
+    columns_checked = False
+    column_violations: list[dict[str, Any]] = []
+    results_block = (sidecar_for_cmd or {}).get("results")
+    if not isinstance(results_block, dict):
+        try:
+            results_block = (read_run_sidecar(experiment_dir, run_id) or {}).get("results")
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            results_block = None
+    if isinstance(results_block, dict) and summaries_local is not None:
+        raw_cols = results_block.get("expected_columns")
+        expected_columns = [str(c) for c in raw_cols] if isinstance(raw_cols, list) else []
+        raw_metric = results_block.get("metric_column")
+        metric_column = raw_metric if isinstance(raw_metric, str) and raw_metric else None
+        if expected_columns or metric_column:
+            from hpc_agent.atoms.aggregation_invariants import check_result_columns
+
+            summary_pattern = results_block.get("summary_pattern")
+            file_glob = (
+                summary_pattern if isinstance(summary_pattern, str) and summary_pattern else "*.csv"
+            )
+            col_report = check_result_columns(
+                Path(summaries_local),
+                expected_columns=expected_columns,
+                metric_column=metric_column,
+                file_glob=file_glob,
+            )
+            columns_checked = bool(col_report["checked"])
+            column_violations = list(col_report["violations"])
+
     escalation_parts: list[str] = []
     if combiner_failures:
         escalation_parts.append(
@@ -364,6 +496,12 @@ def aggregate_flow(
             "partial_waves:metrics_unreadable_for_some_tasks:waves="
             + ",".join(str(w) for w in incomplete_waves)
         )
+    if nonempty_failing:
+        escalation_parts.append(
+            "empty_result_rows:tasks=" + ",".join(str(t) for t in nonempty_failing)
+        )
+    if column_violations:
+        escalation_parts.append(f"column_violations:files={len(column_violations)}")
     escalation: str | None = "; ".join(escalation_parts) if escalation_parts else None
 
     return AggregateFlowResult(
@@ -375,4 +513,8 @@ def aggregate_flow(
         aggregated_metrics=aggregated,
         summaries_dir_local=summaries_local,
         escalation_reason=escalation,
+        nonempty_rows_checked=nonempty_rows_checked,
+        nonempty_failing_task_ids=nonempty_failing,
+        columns_checked=columns_checked,
+        column_violations=column_violations,
     )

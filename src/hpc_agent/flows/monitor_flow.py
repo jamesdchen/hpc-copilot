@@ -378,7 +378,12 @@ def _is_terminal(
             "writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (refreshes last_status)"
         ),
     ],
-    error_codes=[errors.SshUnreachable, errors.JournalCorrupt, errors.RemoteCommandFailed],
+    error_codes=[
+        errors.SshUnreachable,
+        errors.JournalCorrupt,
+        errors.PreconditionFailed,
+        errors.RemoteCommandFailed,
+    ],
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
@@ -416,6 +421,17 @@ def monitor_flow(
     if record is None:
         raise errors.JournalCorrupt(
             f"no journal record for {run_id!r}; cannot monitor an unknown run"
+        )
+
+    # Precondition gate: a run with no scheduler job ids never reached
+    # the cluster (orphan sidecar, or submit-flow aborted before qsub).
+    # Polling it would loop to the wall-clock budget against nothing —
+    # fail loud instead of proceeding on a stale assumption.
+    if not record.job_ids:
+        raise errors.PreconditionFailed(
+            f"run {run_id!r} has no scheduler job ids on its journal record; "
+            "submit-flow has not run through to qsub (or it left an orphan "
+            "sidecar). There is nothing to monitor."
         )
 
     # Read the per-run sidecar (under <experiment_dir>/.hpc/runs/, not the

@@ -1,6 +1,6 @@
 # /setup-hpc — Install hpc-agent commands and package globally
 
-Install the Python package, copy the bundled slash commands and skills into the global Claude config directory, and (with explicit consent) wire up bundled Stop hooks that enforce slash-command exit contracts.
+Install the Python package and copy the bundled slash commands and skills into the global Claude config directory.
 
 ## Steps
 
@@ -8,17 +8,7 @@ Install the Python package, copy the bundled slash commands and skills into the 
 
 2. Run `hpc-agent install-commands` to copy the bundled slash commands and skills into `~/.claude/commands/` and `~/.claude/skills/`. The assets ship inside the package, so this works identically for an editable checkout and a wheel install. Pass `--dry-run` first to preview the file list.
 
-3. **Preview the bundled Stop hooks** by running `hpc-agent hook-install --dry-run`. Show the user the JSON envelope it would write — specifically the `added` list (e.g. `["monitor-armed"]`) and the `settings_path`. Explain in one sentence what each hook does:
-
-   - `monitor-armed` — blocks `/monitor-hpc` from finishing without an `armed:` line. This is what makes cron-arming behavior reliable; without it the agent's compliance is best-effort.
-
-4. **Ask for consent** before modifying `~/.claude/settings.json`:
-
-   > Install the Stop hooks now? They take agent compliance with /monitor-hpc out of discretion (Claude Code re-prompts the agent if it tries to finish without arming a follow-up tick). [Y/n]
-
-5. **On Y**, run `hpc-agent hook-install` (no flags). Report the result envelope's `wrote` and `added` fields back to the user. **On N**, note that the user can install later by running `hpc-agent hook-install` themselves.
-
-6. **Optional: install the wait-predictor snapshot cron.** Detect whether the `forecasting` extra is installed:
+3. **Optional: install the wait-predictor snapshot cron.** Detect whether the `forecasting` extra is installed:
 
    ```bash
    python -c "import lightgbm" 2>/dev/null && echo "lightgbm: installed" || echo "lightgbm: not installed (skipping cron offer)"
@@ -68,4 +58,4 @@ Install the Python package, copy the bundled slash commands and skills into the 
 
    This step is idempotent — re-running `/setup-hpc` after a successful cron install detects the existing entries and skips. To remove either cron, run `crontab -e` and delete the matching line.
 
-7. List the installed commands and confirm the `hpc_agent` package is importable.
+4. List the installed commands and confirm the `hpc_agent` package is importable.

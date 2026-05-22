@@ -2,6 +2,7 @@
 name: hpc-classify-axis
 description: "Classify a @register_run experiment's series axis as a DataAxis (Independent / Associative / BoundedHalo / Sequential) through a short proposes-then-confirms interview, and record it into .hpc/axes.yaml."
 allowed-tools: Bash Read Write
+execution: inline
 ---
 
 Agent-facing composition over the **[classify-axis](../../docs/primitives/classify-axis.md) primitive**. Conducts the *classification interview* — the agent reads `run()`, proposes a `DataAxis` with one-sentence reasoning, the experimenter confirms or corrects — then records the resolved classification into `<experiment>/.hpc/axes.yaml`'s `executors` block.

@@ -101,6 +101,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [failures](failures.md) | yes | ssh: `<cluster>` | `hpc-agent failures --run-id <id> [--lines <n>]` |
 | [find-prior-run](find-prior-run.md) | yes | _none_ | `hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>` |
 | [list-in-flight](list-in-flight.md) | yes | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` |
+| [load-context](load-context.md) | yes | _none_ | `hpc-agent load-context --experiment-dir <path>` |
 | [logs](logs.md) | yes | ssh: `<cluster>` | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` |
 | [monitor-summary](monitor-summary.md) | yes | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` |
 | [plan-throughput](plan-throughput.md) | yes | _none_ | `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]` |

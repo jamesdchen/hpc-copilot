@@ -1,12 +1,10 @@
 """Tests for ``hpc_agent.atoms.monitor_arm.decide_monitor_arm``.
 
-The primitive picks cron/loop/none + cadence + cron schedule + the
-literal ``armed:`` line. We test:
+The primitive picks cron/loop/none + cadence + cron schedule. We test:
 
   * terminal states return arm="none"
   * /loop invocation returns arm="loop"
   * adaptive table picks the right cadence per (eta, pace, queue_wait)
-  * ``armed_line`` is byte-stable for the same input
   * ``cron_create_args`` carries the invocation_argv verbatim
   * SpecInvalid on bad inputs
 """
@@ -34,7 +32,7 @@ def test_complete_terminal_arms_none() -> None:
     assert out["cadence_sec"] == 0
     assert out["schedule"] is None
     assert out["cron_create_args"] is None
-    assert out["armed_line"] == 'armed: none run_id=r1 cadence=0s reason="complete"'
+    assert out["reason"] == "complete"
 
 
 def test_failed_no_running_terminal_arms_none() -> None:
@@ -47,7 +45,7 @@ def test_failed_no_running_terminal_arms_none() -> None:
         )
     )
     assert out["arm"] == "none"
-    assert "failed_no_running" in out["armed_line"]
+    assert out["reason"] == "failed_no_running"
 
 
 def test_user_loop_invocation_arms_loop() -> None:
@@ -62,7 +60,7 @@ def test_user_loop_invocation_arms_loop() -> None:
     )
     assert out["arm"] == "loop"
     assert out["cron_create_args"] is None
-    assert 'reason="user_invoked_via_loop"' in out["armed_line"]
+    assert out["reason"] == "user_invoked_via_loop"
 
 
 def test_eta_lt_10min_picks_60s() -> None:
@@ -177,9 +175,8 @@ def test_no_eta_all_pending_picks_super_cache() -> None:
     assert out["reason"] == "all_pending_fallback"
 
 
-def test_armed_line_format_is_byte_stable() -> None:
-    """Same inputs must produce byte-identical armed_line — the Stop hook
-    matches it textually."""
+def test_decision_is_byte_stable() -> None:
+    """Same inputs must produce an identical decision record."""
     spec = DecideMonitorArmSpec(
         run_id="ml_ridge_abc",
         summary=_summary(running=5, pending=5),
@@ -189,8 +186,10 @@ def test_armed_line_format_is_byte_stable() -> None:
     )
     a = decide_monitor_arm(spec=spec)
     b = decide_monitor_arm(spec=spec)
-    assert a["armed_line"] == b["armed_line"]
-    assert a["armed_line"] == 'armed: cron run_id=ml_ridge_abc cadence=60s reason="eta_lt_10min"'
+    assert a == b
+    assert a["arm"] == "cron"
+    assert a["cadence_sec"] == 60
+    assert a["reason"] == "eta_lt_10min"
 
 
 def test_cron_create_args_carries_invocation_argv() -> None:

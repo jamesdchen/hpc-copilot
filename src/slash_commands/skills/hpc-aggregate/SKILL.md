@@ -1,10 +1,24 @@
 ---
 name: hpc-aggregate
 description: "Finalize a run's aggregated metrics: combine all waves on cluster, pull partials locally, run reduce_partials, optionally pull summary files."
-allowed-tools: Bash Read Write
+allowed-tools: Bash Read Write Task
+execution: delegated
 ---
 
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
+
+## Step 0: Load context (run this first, every time)
+
+Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
+
+- `data.in_flight` — active runs with `run_id`, `ssh_target`, `remote_path`. These resolve the `$SSH_TARGET` / `$REMOTE_PATH` / `<run_id>` used in Step 2's rsync.
+- `data.latest_run` — config snapshot of the newest run, including `result_dir_template`.
+
+If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
+
+## Delegating aggregation to a subagent
+
+Aggregation can pull large partial sets and emit a sizable `aggregated_metrics` dict. When you run this skill as part of a larger flow, do Steps 1–9 inside a fresh-context **subagent** (the `Task` tool) that returns **only** the `aggregate-flow` output envelope — `{ok, aggregated_metrics summary, missing_waves, missing_tasks, escalation_reason}` — and a single free-text `anomalies` string for anything off-contract. No transcript, no raw output: the `_combiner/` pull and per-task output stay in the subagent's context. The orchestrator parses fields, not prose; that field-shaped return is what keeps its next call deterministic. The subagent opens by running `hpc-agent load-context` to recover the `run_id` and SSH target.
 
 ## Steps
 
@@ -61,6 +75,16 @@ Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggre
 9. **On error envelopes**, branch by `error_code` per the atom's frontmatter (`journal_corrupt` / `spec_invalid` / `ssh_unreachable` / `remote_command_failed`).
 
 10. **Profile-specific aggregate command**: when the per-run sidecar's `aggregate_defaults.aggregate_cmd` is set and `mode != "auto"` skipped it, the atom already ran the user-defined cluster-side command. When `mode == "combiner-only"` was forced and the user still wants the cluster-side command, run it manually after `aggregate-flow` returns — it's an arbitrary user-defined command that the framework doesn't introspect.
+
+## Reduce where the data lives
+
+Never move bulk result files just to reach a Python environment. If the reduction is trivial (a pandas concat, `optuna.tell()`, a JSON dump) but the host holding the data lacks the dependencies, install the dependencies on that host — a 30-second `pip install` beats minutes of small-file scp/rsync. Decide before any `scp`/`rsync` of results:
+
+1. **Genuinely HPC-scale compute** (GPU, multi-node, hours of CPU) → run it on the cluster, aggregate on the cluster, pull only summaries.
+2. **Trivial compute** (pandas, sqlite, a scalar) → run it wherever the data already sits; install missing deps in place.
+3. **Data must actually move** → move the *small* side (params/code down, reduced output up). Never bulk-push raw chunks between clusters to reach an environment.
+
+Anti-pattern: `scp -r results/tune/*_chunk_*.csv cluster-B:...` because cluster-B has the conda env and cluster-A does not — fix the environment, not the data location. Small-file scp/rsync is especially slow (per-file SSH handshake); if bulk movement is unavoidable, `tar` first. `mode: "auto"` routes around this by default — stay on it unless a debug case needs the raw files local.
 
 ## Notes
 

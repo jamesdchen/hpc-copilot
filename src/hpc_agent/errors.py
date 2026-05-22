@@ -18,6 +18,7 @@ __all__ = [
     "ExecutorNotFound",
     "ClusterUnknown",
     "JournalCorrupt",
+    "PreconditionFailed",
     "RemoteCommandFailed",
     "ConfigInvalid",
     "CombinerFailed",
@@ -113,6 +114,30 @@ class JournalCorrupt(HpcError):
     remediation = (
         "Inspect the journal file under $HPC_JOURNAL_DIR (or ~/.claude/hpc/); "
         "delete the bad record if you don't need to recover it."
+    )
+
+
+class PreconditionFailed(HpcError):
+    """A workflow step was invoked out of order — a precondition on prior
+    on-disk state is not met.
+
+    Raised before any cluster-side work when a flow is called against a
+    run that is not in the expected state: ``monitor-flow`` on a run
+    that never reached the scheduler (no job ids), or ``aggregate-flow``
+    on a run that monitor-flow has not driven to a terminal state.
+    Failing loud with this code is deliberate — proceeding would loop
+    against nothing or reduce over partial data and report
+    plausible-but-wrong metrics.
+    """
+
+    error_code = "precondition_failed"
+    retry_safe = False
+    category = "user"
+    remediation = (
+        "Run the prior workflow step first (submit-flow before "
+        "monitor-flow; monitor-flow to a terminal state before "
+        "aggregate-flow). `hpc-agent load-context` reports each run's "
+        "actual on-disk state."
     )
 
 

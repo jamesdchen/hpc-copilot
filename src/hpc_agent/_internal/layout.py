@@ -173,3 +173,20 @@ class JournalLayout:
     def index(self) -> Path:
         """``<journal_root>/index.json`` — run_id -> {status, updated_at}."""
         return self.root / "index.json"
+
+    def preflight_marker(self, cluster: str) -> Path:
+        """``<journal_root>/preflight-<cluster>.json`` — per-cluster cache marker.
+
+        The single source of truth for the preflight cache-marker path.
+        ``hpc-preflight`` writes ``{checked_at, all_ok, cluster}`` here on a
+        green run; ``hpc-submit``'s pre-flight gate reads it and skips the
+        re-check while the marker is under its TTL. Both skills' markdown
+        document the same ``~/.claude/hpc/<repo_hash>/preflight-<cluster>.json``
+        literal — keep them in step with this method.
+        """
+        if not cluster:
+            raise ValueError("cluster must be non-empty")
+        # Sanitize separators so a path-like cluster token can't escape the
+        # journal root — same defensive substitution as ``cluster_history``.
+        safe_cluster = cluster.replace("/", "_")
+        return self.root / f"preflight-{safe_cluster}.json"

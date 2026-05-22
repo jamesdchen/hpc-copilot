@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/worker.output.json",
+  "title": "WorkerReport",
+  "description": "The structured object a delegated worker returns as its final message.\n\n``extra=\"ignore\"`` — lenient on a worker's *output* (an LLM may add a\nstray key), unlike the strict ``extra=\"forbid\"`` on the\n:class:`SpawnRequest` *input* contract.",
+  "type": "object",
+  "properties": {
+    "result": {
+      "additionalProperties": true,
+      "default": {},
+      "title": "Result",
+      "type": "object"
+    },
+    "decisions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/WorkerDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "anomalies": {
+      "default": "",
+      "title": "Anomalies",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "WorkerDecision": {
+      "description": "One decision a delegated worker reports making.\n\n``point`` must be a :class:`DecisionPoint` id for the worker's\nworkflow — cross-checked by ``parse_worker_report``.",
+      "properties": {
+        "point": {
+          "title": "Point",
+          "type": "string"
+        },
+        "outcome": {
+          "title": "Outcome",
+          "type": "string"
+        },
+        "why": {
+          "default": "",
+          "title": "Why",
+          "type": "string"
+        }
+      },
+      "required": [
+        "point",
+        "outcome"
+      ],
+      "title": "WorkerDecision",
+      "type": "object"
+    }
+  }
+}

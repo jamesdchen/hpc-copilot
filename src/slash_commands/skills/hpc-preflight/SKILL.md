@@ -2,6 +2,7 @@
 name: hpc-preflight
 description: "Verify the local environment can submit HPC jobs before the first submit of a session."
 allowed-tools: Bash Read Write
+execution: inline
 ---
 
 Agent-facing composition over the **[check-preflight](../../docs/primitives/check-preflight.md) primitive** (see that file for full contract). Run this BEFORE the first `hpc-submit` invocation in a session, or any time submissions hang or fail. Catches the most common failure mode: SSH credentials not forwarded into the spawned shell.

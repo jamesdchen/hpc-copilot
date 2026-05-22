@@ -20,6 +20,9 @@ error_codes:
 - code: journal_corrupt
   category: internal
   retry_safe: false
+- code: precondition_failed
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent aggregate-flow --spec <path>
   python: hpc_agent.flows.aggregate_flow.aggregate_flow

@@ -9,21 +9,18 @@ summary + total_tasks (+ optional ETA hints / a "user invoked via
   * ``cadence_sec`` — int, the schedule's period
   * ``schedule`` — cron expression like ``*/5 * * * *`` (or None when
     arm != "cron")
-  * ``armed_line`` — the literal final-line-of-stdout the slash
-    command must emit (the Stop hook checks for this verbatim)
   * ``cron_create_args`` — ready-to-pass dict for the agent's
     ``CronCreate`` tool call (or None when arm != "cron")
 
-Eliminates four /monitor-hpc failure modes at once:
+Eliminates three /monitor-hpc failure modes at once:
 
   1. Picking the arm mode  → primitive output, deterministic.
   2. Picking the cadence   → primitive output, from a single table.
   3. Cron schedule string  → primitive output, no string formatting.
-  4. ``armed:`` line       → primitive output, copied verbatim.
 
 The agent's job collapses to: read the run record, call this
-primitive, copy ``armed_line`` to the end of stdout, and (when
-``arm == "cron"``) pass ``cron_create_args`` to ``CronCreate``.
+primitive, and (when ``arm == "cron"``) pass ``cron_create_args`` to
+``CronCreate`` to schedule the next monitor tick.
 """
 
 from __future__ import annotations
@@ -61,7 +58,6 @@ class MonitorArm:
     cadence_sec: int
     reason: str
     schedule: str | None  # cron expression or None
-    armed_line: str
     cron_create_args: dict[str, str] | None
 
     def to_envelope_data(self) -> dict[str, Any]:
@@ -70,7 +66,6 @@ class MonitorArm:
             "cadence_sec": self.cadence_sec,
             "reason": self.reason,
             "schedule": self.schedule,
-            "armed_line": self.armed_line,
             "cron_create_args": dict(self.cron_create_args) if self.cron_create_args else None,
         }
 
@@ -141,13 +136,13 @@ def _classify_state(
     agent_facing=True,
 )
 def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
-    """Pick the arm mode + cadence + cron args + ``armed:`` line.
+    """Pick the arm mode + cadence + cron args.
 
     Parameters
     ----------
     run_id:
-        The run being monitored — stamped into the ``armed:`` line and
-        the cron prompt so terminal-state cleanup can target it.
+        The run being monitored — stamped into the cron prompt so
+        terminal-state cleanup can target it.
     summary:
         ``last_status['summary']`` from the run journal —
         ``{complete, running, pending, failed, unknown}``. Missing keys
@@ -163,7 +158,7 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     user_invoked_via_loop:
         True iff the current tick is running under `/loop` (the user
         invoked it themselves). When True we surface ``arm="loop"``
-        and emit a placeholder cadence — the slash command does NOT
+        with a placeholder cadence — the slash command does NOT
         register a cron because the user is already driving the
         cadence.
     eta_sec, pace_unstable, queue_wait_sec:
@@ -175,9 +170,9 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
     Returns
     -------
     Dict with ``arm``, ``cadence_sec``, ``reason``, ``schedule``,
-    ``armed_line``, ``cron_create_args``. The slash-command epilogue
-    copies ``armed_line`` verbatim and (when ``arm == "cron"``) passes
-    ``cron_create_args`` to the ``CronCreate`` tool.
+    ``cron_create_args``. When ``arm == "cron"`` the caller passes
+    ``cron_create_args`` to the ``CronCreate`` tool to schedule the
+    next monitor tick.
     """
     run_id = spec.run_id
     summary = spec.summary
@@ -203,7 +198,6 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
             cadence_sec=0,
             reason="no_tasks",
             schedule=None,
-            armed_line=f'armed: none run_id={run_id} cadence=0s reason="no_tasks"',
             cron_create_args=None,
         )
         return decision.to_envelope_data()
@@ -214,23 +208,17 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
             cadence_sec=0,
             reason=("complete" if complete == total_tasks else "failed_no_running"),
             schedule=None,
-            armed_line=(
-                f"armed: none run_id={run_id} cadence=0s "
-                f'reason="{"complete" if complete == total_tasks else "failed_no_running"}"'
-            ),
             cron_create_args=None,
         )
         return decision.to_envelope_data()
 
-    # User invoked via /loop — they own the cadence; we just emit the
-    # armed: line and skip CronCreate.
+    # User invoked via /loop — they own the cadence; we skip CronCreate.
     if user_invoked_via_loop:
         decision = MonitorArm(
             arm="loop",
             cadence_sec=0,
             reason="user_invoked_via_loop",
             schedule=None,
-            armed_line=(f'armed: loop run_id={run_id} cadence=0s reason="user_invoked_via_loop"'),
             cron_create_args=None,
         )
         return decision.to_envelope_data()
@@ -249,7 +237,6 @@ def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:
         cadence_sec=cadence_sec,
         reason=label,
         schedule=schedule,
-        armed_line=(f'armed: cron run_id={run_id} cadence={cadence_sec}s reason="{label}"'),
         cron_create_args={
             "schedule": schedule,
             "prompt": invocation_argv,
