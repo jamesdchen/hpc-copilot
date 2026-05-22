@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/load_context.output.json",
+  "title": "load-context output data",
+  "description": "On-disk workflow context reconstructed for a fresh-context step.\n\nA subagent, a restarted session, or a cron tick has no\nconversational memory; this is the single source of truth it reads\ninstead — run sidecars, the journal, and campaign cursors projected\ninto one envelope.",
+  "type": "object",
+  "required": [
+    "experiment_dir",
+    "latest_run",
+    "in_flight",
+    "campaigns",
+    "next_step_hint",
+    "delegate",
+    "warnings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "experiment_dir": {
+      "title": "Experiment Dir",
+      "type": "string"
+    },
+    "latest_run": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/_LatestRun"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "in_flight": {
+      "items": {
+        "$ref": "#/$defs/_InFlightRow"
+      },
+      "title": "In Flight",
+      "type": "array"
+    },
+    "campaigns": {
+      "items": {
+        "$ref": "#/$defs/_CampaignRow"
+      },
+      "title": "Campaigns",
+      "type": "array"
+    },
+    "next_step_hint": {
+      "enum": [
+        "submit",
+        "monitor",
+        "aggregate"
+      ],
+      "title": "Next Step Hint",
+      "type": "string"
+    },
+    "delegate": {
+      "$ref": "#/$defs/_Delegate"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    }
+  },
+  "$defs": {
+    "_CampaignRow": {
+      "additionalProperties": true,
+      "description": "One campaign with a sidecar, plus its cursor iteration when present.",
+      "properties": {
+        "campaign_id": {
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "iterations_submitted": {
+          "minimum": 0,
+          "title": "Iterations Submitted",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "iterations_submitted"
+      ],
+      "title": "_CampaignRow",
+      "type": "object"
+    },
+    "_Delegate": {
+      "additionalProperties": false,
+      "description": "The next workflow step described as a delegable unit of work.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "cli",
+            "agent"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "step": {
+          "title": "Step",
+          "type": "string"
+        },
+        "run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Run Id"
+        },
+        "experiment_dir": {
+          "title": "Experiment Dir",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        },
+        "prompt": {
+          "title": "Prompt",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "step",
+        "run_id",
+        "experiment_dir",
+        "reason",
+        "prompt"
+      ],
+      "title": "_Delegate",
+      "type": "object"
+    },
+    "_InFlightRow": {
+      "additionalProperties": true,
+      "description": "One journal record still in flight.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Id"
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cluster"
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stage"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "title": "_InFlightRow",
+      "type": "object"
+    },
+    "_LatestRun": {
+      "additionalProperties": true,
+      "description": "Newest run sidecar projected to identity + v2 config snapshot.",
+      "properties": {
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "is_orphan": {
+          "title": "Is Orphan",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "run_id",
+        "is_orphan"
+      ],
+      "title": "_LatestRun",
+      "type": "object"
+    }
+  }
+}

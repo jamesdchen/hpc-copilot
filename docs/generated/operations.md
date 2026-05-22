@@ -36,7 +36,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-agent failures --run-id <id> [--lines <n>]` | `hpc_agent.atoms.failures.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
 | [`find-prior-run`](primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>` | `hpc_agent.atoms.setup_actions.find_prior_run` | — | `hpc_agent/schemas/find_prior_run.output.json` |
 | [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` | `hpc_agent.atoms.list_in_flight.list_in_flight` | — | `hpc_agent/schemas/list_in_flight.output.json` |
-| [`load-context`](primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context --experiment-dir <path>` | `hpc_agent.atoms.load_context.load_context` | — | — |
+| [`load-context`](primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context --experiment-dir <path>` | `hpc_agent.atoms.load_context.load_context` | — | `hpc_agent/schemas/load_context.output.json` |
 | [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` | `hpc_agent.atoms.logs.fetch_logs` | — | — |
 | [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` | `hpc_agent.atoms.monitor_summary.monitor_summary` | — | `hpc_agent/schemas/monitor_summary.output.json` |
 | [`plan-throughput`](primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]` | `hpc_agent.atoms.plan_throughput.plan_throughput` | — | — |
