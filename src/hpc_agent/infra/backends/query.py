@@ -269,6 +269,7 @@ def _process_qacct_block(
 
     exit_status = block.get("exit_status", "0")
     failed = block.get("failed", "0")
+    parse_failed = False
     try:
         exit_int = int(exit_status)
         failed_int = int(failed.split()[0]) if failed else 0
@@ -280,8 +281,14 @@ def _process_qacct_block(
             }
         )
         exit_int, failed_int = -1, -1
+        parse_failed = True
 
-    if exit_int == 0 and failed_int == 0:
+    if parse_failed:
+        # Unparseable exit/failed fields: classify as a generic FAILED
+        # rather than letting the -1 sentinel fall through into the
+        # ``failed_int != 0`` branch and alarm with a (wrong) NODE_FAIL.
+        state = "FAILED"
+    elif exit_int == 0 and failed_int == 0:
         state = "COMPLETED"
     elif failed_int == 100:
         state = "TIMEOUT"

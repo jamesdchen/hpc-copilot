@@ -35,7 +35,7 @@ __all__ = [
 ]
 
 
-_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}")
 
 
 def _read_sidecar_safe(path: Path) -> dict[str, Any] | None:
@@ -114,13 +114,20 @@ def result_dirs_for_sidecar(
 
     found: list[Path] = []
     for task_id in range(task_count):
-        # Substitute the framework-known names first.
-        partial = template.replace("{run_id}", run_id).replace("{task_id}", str(task_id))
-        # Any remaining `{name}` placeholders become glob wildcards. The
-        # user's per-task kwargs (seed, lr, …) appear here and we don't
-        # know their values without tasks.py, so we accept the over-match
-        # and let metrics.json's presence narrow it down.
-        pattern = _PLACEHOLDER_RE.sub("*", partial)
+        # Substitute the framework-known names (honouring any format spec
+        # such as ``{task_id:03d}``); any other ``{name}`` placeholder is
+        # a per-task kwarg (seed, lr, …) whose value we cannot know
+        # without tasks.py, so it becomes a glob wildcard and the
+        # presence of metrics.json narrows the over-match.
+        def _expand(m: re.Match[str], _rid: str = run_id, _tid: int = task_id) -> str:
+            name, spec = m.group(1), m.group(2)
+            if name == "run_id":
+                return format(_rid, spec) if spec else _rid
+            if name == "task_id":
+                return format(_tid, spec) if spec else str(_tid)
+            return "*"
+
+        pattern = _PLACEHOLDER_RE.sub(_expand, template)
         candidate = base / pattern if not Path(pattern).is_absolute() else Path(pattern)
         for hit in glob.glob(str(candidate)):
             p = Path(hit)

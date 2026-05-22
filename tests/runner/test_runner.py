@@ -844,7 +844,7 @@ def test_cluster_failures_buckets_missing_logs():
 
 
 def test_fetch_task_logs_returns_content_for_slurm():
-    """SLURM log path: <remote_path>/_hpc_logs/<job>_<jid>_<tid>.err."""
+    """SLURM log path: <remote_path>/logs/<job>_<jid>_<tid+1>.err."""
     captured: list[str] = []
 
     def fake_ssh_run(cmd, *, ssh_target, **_kw):
@@ -867,7 +867,7 @@ def test_fetch_task_logs_returns_content_for_slurm():
     entry = logs[0]
     assert entry["task_id"] == 7
     assert entry["job_id"] == "12345"
-    assert entry["path"] == "/exp/_hpc_logs/ml_12345_7.err"
+    assert entry["path"] == "/exp/logs/ml_12345_8.err"
     assert "line1\nline2\nline3" in entry["content"]
 
 
@@ -929,7 +929,7 @@ def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
             task_ids=[7],
         )
 
-    assert logs[0]["path"] == "/exp/ml.o12345.7"
+    assert logs[0]["path"] == "/exp/logs/ml.o12345.8"
 
 
 def test_write_remote_provenance_writes_sidecar_path():

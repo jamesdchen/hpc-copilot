@@ -31,6 +31,8 @@ from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 import hpc_agent
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
@@ -1198,6 +1200,16 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     _validate_against_schema(spec, "submit_flow")
 
     if args.dry_run:
+        # The dry-run path reads spec fields directly instead of going
+        # through ``SubmitFlowSpec.model_validate``; guard the required
+        # keys so a missing field is a clean spec_invalid (exit 1) rather
+        # than a bare KeyError → generic handler → exit 3.
+        required = ("total_tasks", "profile", "cluster", "run_id")
+        missing = [k for k in required if k not in spec]
+        if missing:
+            raise errors.SpecInvalid(
+                f"submit-flow --dry-run spec missing required field(s): {', '.join(missing)}"
+            )
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
@@ -2872,6 +2884,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"scheduler subprocess timed out after {exc.timeout}s: {exc.cmd!r}"
             )
         )
+    except ValidationError as exc:
+        # pydantic v2 ``ValidationError`` does NOT subclass ``ValueError``,
+        # so without this clause a malformed --spec would fall through to
+        # the generic handler and be mislabelled internal / exit 3. A bad
+        # spec is a user error → spec_invalid / exit 1.
+        return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except ValueError as exc:
         # Route through the canonical errors enum rather than inlining
         # the "spec_invalid" string — keeps error_code values centralised

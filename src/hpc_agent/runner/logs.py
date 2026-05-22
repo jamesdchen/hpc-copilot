@@ -27,8 +27,8 @@ def fetch_task_logs(
 
     Path conventions (must stay aligned with the job templates):
 
-    * SGE:    ``<remote_path>/<job_name>.o<job_id>.<task_id>``
-    * SLURM:  ``<remote_path>/_hpc_logs/<job_name>_<job_id>_<task_id>.err``
+    * SGE:    ``<remote_path>/logs/<job_name>.o<job_id>.<task_id + 1>``
+    * SLURM:  ``<remote_path>/logs/<job_name>_<job_id>_<task_id + 1>.err``
     """
     if not task_ids:
         return []
@@ -41,6 +41,8 @@ def fetch_task_logs(
     out: list[dict[str, Any]] = []
     for tid in task_ids:
         found: dict[str, Any] | None = None
+        ssh_error: str | None = None
+        got_clean_response = False
         for job_id in reversed(job_ids or []):
             path = backend_cls.stderr_log_path(remote_path, job_name, job_id, tid)
             quoted = shlex.quote(path)
@@ -51,9 +53,11 @@ def fetch_task_logs(
             )
             proc = remote.ssh_run(script, ssh_target=ssh_target)
             if proc.returncode != 0:
-                # SSH itself blew up; attribute to this attempt and try
-                # the next job_id rather than aborting the whole batch.
+                # SSH transport itself blew up; record it and try the
+                # next job_id rather than aborting the whole batch.
+                ssh_error = (proc.stderr or "").strip()[-300:] or f"ssh exited {proc.returncode}"
                 continue
+            got_clean_response = True
             stdout = proc.stdout or ""
             first, _, rest = stdout.partition("\n")
             if first.strip() == "FOUND":
@@ -64,8 +68,16 @@ def fetch_task_logs(
                     "content": rest,
                 }
                 break
-        if found is None:
+        if found is not None:
+            out.append(found)
+        elif got_clean_response:
+            # The remote shell answered for at least one job_id and the
+            # log genuinely was not there.
             out.append({"task_id": tid, "missing": True})
         else:
-            out.append(found)
+            # Every attempt hit an SSH transport error — do not let an
+            # unreachable cluster masquerade as a merely-missing log.
+            out.append(
+                {"task_id": tid, "missing": True, "ssh_error": ssh_error or "ssh unreachable"}
+            )
     return out

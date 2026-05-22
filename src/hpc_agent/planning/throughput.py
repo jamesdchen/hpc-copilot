@@ -104,7 +104,10 @@ def compute_submission_plan(
 
     if workload.est_task_duration_s is not None:
         effective_time = spin_up + workload.est_task_duration_s
-        if effective_time > walltime_limit:
+        # walltime_limit <= 0 means max_walltime is unset or unparseable
+        # (parse_walltime_to_sec is permissive and returns 0); skip the
+        # check rather than raise a misleading "exceeds 0s" error.
+        if walltime_limit > 0 and effective_time > walltime_limit:
             raise ValueError(
                 f"A single task ({effective_time}s incl. spin-up) exceeds "
                 f"max walltime ({walltime_limit}s). Consider splitting the "

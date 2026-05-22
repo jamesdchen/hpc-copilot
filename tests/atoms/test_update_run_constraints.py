@@ -79,7 +79,9 @@ def test_set_features_runs_scontrol_for_each_job(tmp_path: Path) -> None:
     assert mock_ssh.call_count == 2
     cmds = [call.args[0] for call in mock_ssh.call_args_list]
     assert all("scontrol update" in cmd for cmd in cmds)
-    assert all("Features=a100|l40s" in cmd for cmd in cmds)
+    # The ``|`` feature separator is a shell metacharacter, so the
+    # Features expression is shell-quoted before it reaches scontrol.
+    assert all("Features='a100|l40s'" in cmd for cmd in cmds)
 
 
 def test_add_features_extends_existing_set(tmp_path: Path) -> None:

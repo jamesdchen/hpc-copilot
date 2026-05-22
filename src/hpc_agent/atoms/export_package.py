@@ -183,7 +183,7 @@ def export_package(
     # the runtime seam (current_slice / load_series) without being
     # runnable experiments, and the strict-AST exporter would mangle them.
     # discover_runs resolves every decorator spelling (bare/aliased/attr).
-    register_run_paths = {ri.path for ri in discover_runs(notebooks_root)}
+    register_run_paths = {ri.path.resolve() for ri in discover_runs(notebooks_root)}
 
     cache: dict[str, Any] = {}
     if cache_path.is_file() and not spec.force:

@@ -36,6 +36,7 @@ __all__ = [
     "run_combiner_checked",
 ]
 
+import contextlib
 import os
 import shlex
 import shutil
@@ -462,6 +463,14 @@ def _tar_ssh_push(
         tar_stderr_bytes = tar_stderr_file.read()
     except subprocess.TimeoutExpired as exc:
         tar_proc.kill()
+        # Reap the killed child and close its stdout pipe — otherwise the
+        # pipe FD and the zombie process leak on this timeout path (the
+        # happy path closes/waits, this one did not).
+        if tar_proc.stdout is not None:
+            with contextlib.suppress(OSError):
+                tar_proc.stdout.close()
+        with contextlib.suppress(Exception):
+            tar_proc.wait(timeout=5)
         raise TimeoutError(
             f"tar/ssh push to {ssh_target} timed out after {timeout}s: "
             f"{_truncate(f'{src_dir} -> {ssh_target}:{remote_path}')}"

@@ -111,11 +111,19 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
             checks.append(_check("cluster_known", False, f"{cluster!r} not in clusters.yaml"))
         else:
             host = clusters[cluster].get("host")
-            try:
-                with socket.create_connection((host, 22), timeout=3):
-                    checks.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
-            except OSError as exc:
-                checks.append(_check("cluster_tcp_22", False, f"{host}:22 — {exc}"))
+            if not host:
+                # ``socket.create_connection((None, 22))`` does not raise —
+                # Python treats a None host as loopback, so a misconfigured
+                # cluster would falsely probe (and possibly pass) localhost.
+                checks.append(
+                    _check("cluster_tcp_22", False, f"{cluster!r} has no 'host' in clusters.yaml")
+                )
+            else:
+                try:
+                    with socket.create_connection((host, 22), timeout=3):
+                        checks.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
+                except OSError as exc:
+                    checks.append(_check("cluster_tcp_22", False, f"{host}:22 — {exc}"))
 
     all_ok = all(c["ok"] for c in checks)
     return {"all_ok": all_ok, "checks": checks}

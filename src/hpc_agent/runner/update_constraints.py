@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import tempfile
 from typing import TYPE_CHECKING
 
@@ -125,7 +126,7 @@ def update_run_constraints(
         if not _FEATURE_RE.fullmatch(jid):  # job-id is also command-substituted
             failed.append(jid)
             continue
-        cmd = f"scontrol update jobid={jid} Features={feature_expr}"
+        cmd = f"scontrol update jobid={jid} Features={shlex.quote(feature_expr)}"
         try:
             cp = ssh_run(cmd, ssh_target=ssh_target)
         except errors.SshUnreachable:

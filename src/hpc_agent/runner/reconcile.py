@@ -109,8 +109,8 @@ def reconcile(
 
     Re-derives ground truth from the cluster:
       A. Fresh status report -> ``last_status``.
-      B. List ``_combiner/wave_*/_combined.ok`` -> canonical
-         ``combined_waves`` (cluster wins; journal overwritten on drift).
+      B. List ``_combiner/wave_*.json`` -> canonical ``combined_waves``
+         (cluster wins; journal overwritten on drift).
       C. Cross-check ``job_ids`` against the scheduler; if zero are alive,
          flip ``status`` to ``"abandoned"``.
 
