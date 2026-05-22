@@ -145,9 +145,7 @@ def main() -> int:
             )
             continue
         routes_via_spawn = (
-            "hpc_spawn" in body
-            or "hpc-agent run" in body
-            or "hpc-campaign-driver" in body
+            "hpc_spawn" in body or "hpc-agent run" in body or "hpc-campaign-driver" in body
         )
         if exec_match.group(1) == "delegated" and not routes_via_spawn:
             errors.append(
