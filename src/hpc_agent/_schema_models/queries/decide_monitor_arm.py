@@ -12,8 +12,7 @@ from hpc_agent._schema_models._shared import RunIdStrict
 class DecideMonitorArmSpec(BaseModel):
     """Run-state inputs to ``hpc_agent.atoms.monitor_arm.decide_monitor_arm``.
 
-    Drives the cron / loop / none arm decision + cadence + literal
-    armed: line.
+    Drives the cron / loop / none arm decision + cadence.
     """
 
     model_config = ConfigDict(extra="forbid", title="decide-monitor-arm input")
@@ -43,8 +42,8 @@ class _CronCreateArgs(BaseModel):
 class DecideMonitorArmResult(BaseModel):
     """Decision record from decide-monitor-arm.
 
-    The slash-command epilogue copies armed_line verbatim and (when
-    arm == 'cron') passes cron_create_args to CronCreate.
+    When arm == 'cron' the caller passes cron_create_args to CronCreate
+    to schedule the next monitor tick.
     """
 
     model_config = ConfigDict(extra="forbid", title="decide-monitor-arm output")
@@ -54,9 +53,6 @@ class DecideMonitorArmResult(BaseModel):
     reason: str
     schedule: str | None = Field(
         description="Cron expression (e.g. '*/5 * * * *') when arm=='cron'; null otherwise.",
-    )
-    armed_line: str = Field(
-        description="Literal final-line-of-stdout the slash command must emit; matches the Stop hook's regex by construction.",
     )
     cron_create_args: _CronCreateArgs | None = Field(
         description="Ready-to-pass keyword args for the CronCreate Claude Code tool when arm=='cron'; null otherwise.",

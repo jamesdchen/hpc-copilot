@@ -2,14 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/decide_monitor_arm.output.json",
   "title": "decide-monitor-arm output",
-  "description": "Decision record from decide-monitor-arm.\n\nThe slash-command epilogue copies armed_line verbatim and (when\narm == 'cron') passes cron_create_args to CronCreate.",
+  "description": "Decision record from decide-monitor-arm.\n\nWhen arm == 'cron' the caller passes cron_create_args to CronCreate\nto schedule the next monitor tick.",
   "type": "object",
   "required": [
     "arm",
     "cadence_sec",
     "reason",
     "schedule",
-    "armed_line",
     "cron_create_args"
   ],
   "additionalProperties": false,
@@ -43,11 +42,6 @@
       ],
       "description": "Cron expression (e.g. '*/5 * * * *') when arm=='cron'; null otherwise.",
       "title": "Schedule"
-    },
-    "armed_line": {
-      "description": "Literal final-line-of-stdout the slash command must emit; matches the Stop hook's regex by construction.",
-      "title": "Armed Line",
-      "type": "string"
     },
     "cron_create_args": {
       "anyOf": [

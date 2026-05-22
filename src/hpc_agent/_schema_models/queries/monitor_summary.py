@@ -29,7 +29,7 @@ class MonitorSummaryResult(BaseModel):
     headline: str
     body: str
     armed_hint: str | None = Field(
-        description="One-line note pointing the slash command at decide-monitor-arm; null when terminal.",
+        description="One-line note reminding the slash command to schedule the next monitor tick; null when terminal.",
     )
     journal_missing: bool = Field(
         description=(

@@ -308,20 +308,6 @@ def _live_subcommands() -> list[str]:
     return []
 
 
-def cmd_hook_install(args: argparse.Namespace) -> int:
-    """Install hpc-agent's bundled Stop hooks into ~/.claude/settings.json.
-
-    Idempotent: re-running with already-installed hooks is a no-op. Use
-    ``--dry-run`` to preview the merge without writing.
-    """
-    from hpc_agent.hooks.install import install_hooks
-
-    settings_path = Path(args.settings).expanduser() if args.settings else None
-    summary = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
-    _ok(summary, name="hook-install")
-    return EXIT_OK
-
-
 def cmd_install_commands(args: argparse.Namespace) -> int:
     """Copy bundled slash commands + skills into ~/.claude/.
 
@@ -339,24 +325,18 @@ def cmd_install_commands(args: argparse.Namespace) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
-    """One-shot setup: install commands + skills, then wire the Stop hooks.
+    """One-shot setup: install the bundled slash commands + skills.
 
     The single entry point a new user runs after ``pip install
     hpc-agent``. Copies the bundled slash commands and skills into
-    ~/.claude/ and installs hpc-agent's Stop hooks. Both steps are
-    idempotent, so re-running is safe. ``--no-hooks`` skips the hook
-    step; ``--dry-run`` previews both without writing.
+    ~/.claude/. Idempotent, so re-running is safe. ``--dry-run``
+    previews without writing.
     """
     from hpc_agent.agent_assets import install_agent_assets
-    from hpc_agent.hooks.install import install_hooks
 
     claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
     assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
-    data: dict[str, Any] = {"assets": assets}
-    if not args.no_hooks:
-        settings_path = claude_dir / "settings.json" if claude_dir else None
-        data["hooks"] = install_hooks(settings_path=settings_path, dry_run=args.dry_run)
-    _emit({"ok": True, "idempotent": True, "data": data})
+    _emit({"ok": True, "idempotent": True, "data": {"assets": assets}})
     return EXIT_OK
 
 
@@ -763,9 +743,9 @@ def cmd_decide_monitor_arm(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.monitor_arm.
 
     Reads a JSON ``--spec`` describing the current run state and emits
-    the cron/loop/none decision + ``armed:`` line + cron_create_args.
-    The slash-command epilogue copies ``armed_line`` verbatim and (when
-    ``arm == "cron"``) passes ``cron_create_args`` to ``CronCreate``.
+    the cron/loop/none decision + cadence + cron_create_args. When
+    ``arm == "cron"`` the caller passes ``cron_create_args`` to
+    ``CronCreate`` to schedule the next monitor tick.
     """
     from hpc_agent.atoms.monitor_arm import decide_monitor_arm
 
@@ -1778,37 +1758,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_cap.set_defaults(func=cmd_capabilities)
 
-    # hook-install
-    p_hook = sub.add_parser(
-        "hook-install",
-        help=(
-            "Install hpc-agent Stop hooks into the user-global "
-            "~/.claude/settings.json so the agent is held to slash-command "
-            "exit contracts (e.g. /monitor-hpc must emit an `armed:` line). "
-            "Writes to the user-global settings file unless --settings "
-            "overrides; there is no automatic project-scoped install path "
-            "today — point --settings at .claude/settings.json inside a "
-            "repo to install per-project."
-        ),
-    )
-    p_hook.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview the merge without writing to settings.json.",
-    )
-    p_hook.add_argument(
-        "--settings",
-        type=str,
-        default=None,
-        help=(
-            "Override the target settings path. Defaults to "
-            "~/.claude/settings.json (user-global). Pass "
-            "<repo>/.claude/settings.json to scope the install to a "
-            "single project instead."
-        ),
-    )
-    p_hook.set_defaults(func=cmd_hook_install)
-
     # install-commands
     p_install = sub.add_parser(
         "install-commands",
@@ -1838,20 +1787,14 @@ def build_parser() -> argparse.ArgumentParser:
         "setup",
         help=(
             "One-shot setup: copy the bundled slash commands and skills "
-            "into ~/.claude/ and install hpc-agent's Stop hooks. Run this "
-            "once after `pip install hpc-agent`. Idempotent — safe to "
-            "re-run. Use --no-hooks to skip the hook step."
+            "into ~/.claude/. Run this once after `pip install "
+            "hpc-agent`. Idempotent — safe to re-run."
         ),
     )
     p_setup.add_argument(
         "--dry-run",
         action="store_true",
-        help="Preview both steps without writing.",
-    )
-    p_setup.add_argument(
-        "--no-hooks",
-        action="store_true",
-        help="Skip installing the Stop hooks (only copy commands + skills).",
+        help="Preview without writing.",
     )
     p_setup.add_argument(
         "--claude-dir",
@@ -2155,10 +2098,9 @@ def build_parser() -> argparse.ArgumentParser:
         "decide-monitor-arm",
         help=(
             "Pick cron/loop/none + cadence + cron schedule string from "
-            "the run's current summary. Returns the literal armed: line "
-            "the slash command must emit (Stop hook checks for it) and "
-            "ready-to-pass CronCreate args. Replaces /monitor-hpc Step 5 "
-            "agent judgment."
+            "the run's current summary. Returns ready-to-pass CronCreate "
+            "args for scheduling the next monitor tick. Replaces "
+            "/monitor-hpc Step 5 agent judgment."
         ),
     )
     _add_spec_and_dry_run(
