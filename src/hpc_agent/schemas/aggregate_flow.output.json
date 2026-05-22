@@ -76,6 +76,35 @@
       "default": null,
       "description": "When non-null, indicates partial success — typically 'combiner_failed_max_retries:waves=...'. The caller may inspect failed_waves and decide whether the partial aggregation is acceptable. Null when every wave combined cleanly.",
       "title": "Escalation Reason"
+    },
+    "nonempty_rows_checked": {
+      "default": false,
+      "description": "True when the non-empty-rows gate ran (spec.min_rows > 0). False when the gate was skipped — `nonempty_failing_task_ids` is then an empty list and carries no signal.",
+      "title": "Nonempty Rows Checked",
+      "type": "boolean"
+    },
+    "nonempty_failing_task_ids": {
+      "description": "Task ids (1-based) whose CSV result has fewer than spec.min_rows data rows beyond the header — i.e. tasks that wrote a file but no real data. Empty when the gate passed or was skipped. A non-empty list means the aggregate was computed over tasks that produced no usable rows.",
+      "items": {
+        "type": "integer"
+      },
+      "title": "Nonempty Failing Task Ids",
+      "type": "array"
+    },
+    "columns_checked": {
+      "default": false,
+      "description": "True when the expected-columns / non-NaN-metric gate ran — i.e. the run sidecar's `results` block declared `expected_columns` and/or `metric_column` AND a local results directory was available to scan. False = skipped (no declared schema, or no pulled results).",
+      "title": "Columns Checked",
+      "type": "boolean"
+    },
+    "column_violations": {
+      "description": "Per-result-file violations found by the columns gate: each entry is {path, missing_columns, metric_nan, error}. Empty when the gate passed or was skipped.",
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Column Violations",
+      "type": "array"
     }
   }
 }

@@ -73,6 +73,18 @@ class AggregateFlowSpec(BaseModel):
             "the framework convention."
         ),
     )
+    min_rows: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Non-empty-rows gate. When > 0, after combining + pulling, "
+            "aggregate-flow runs the cluster-side status reporter with "
+            "--min-rows: any task whose CSV result has fewer than this "
+            "many data rows beyond the header is reported as a failing "
+            "task id in `nonempty_failing_task_ids`. 0 (default) skips "
+            "the gate — header-only CSVs are accepted."
+        ),
+    )
 
     @model_validator(mode="after")
     def _require_summary_glob_when_pulling(self) -> AggregateFlowSpec:
@@ -121,5 +133,41 @@ class AggregateFlowResult(BaseModel):
             "inspect failed_waves and decide whether the partial "
             "aggregation is acceptable. Null when every wave combined "
             "cleanly."
+        ),
+    )
+    nonempty_rows_checked: bool = Field(
+        default=False,
+        description=(
+            "True when the non-empty-rows gate ran (spec.min_rows > 0). "
+            "False when the gate was skipped — `nonempty_failing_task_ids` "
+            "is then an empty list and carries no signal."
+        ),
+    )
+    nonempty_failing_task_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Task ids (1-based) whose CSV result has fewer than "
+            "spec.min_rows data rows beyond the header — i.e. tasks that "
+            "wrote a file but no real data. Empty when the gate passed or "
+            "was skipped. A non-empty list means the aggregate was "
+            "computed over tasks that produced no usable rows."
+        ),
+    )
+    columns_checked: bool = Field(
+        default=False,
+        description=(
+            "True when the expected-columns / non-NaN-metric gate ran — "
+            "i.e. the run sidecar's `results` block declared "
+            "`expected_columns` and/or `metric_column` AND a local "
+            "results directory was available to scan. False = skipped "
+            "(no declared schema, or no pulled results)."
+        ),
+    )
+    column_violations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Per-result-file violations found by the columns gate: each "
+            "entry is {path, missing_columns, metric_nan, error}. Empty "
+            "when the gate passed or was skipped."
         ),
     )

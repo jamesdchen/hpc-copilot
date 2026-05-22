@@ -827,6 +827,7 @@ def cmd_verify_aggregation_complete(args: argparse.Namespace) -> int:
             args.experiment_dir,
             run_id=args.run_id,
             combiner_dir_local=args.combiner_dir,
+            results_dir_local=getattr(args, "results_dir", None),
         ),
         name="verify-aggregation-complete",
     )
@@ -1028,6 +1029,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         remote_path=record.remote_path,
         job_ids=record.job_ids,
         job_name=record.job_name,
+        min_rows=getattr(args, "min_rows", 0),
     )
     data: dict[str, Any] = {
         "run_id": updated.run_id,
@@ -2151,6 +2153,17 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Local path the cluster's _combiner/ was rsync_pull'd to.",
     )
+    p_vac.add_argument(
+        "--results-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional local path the cluster's per-task result files were "
+            "pulled to. When given AND the run sidecar's `results` block "
+            "declares expected_columns / metric_column, each CSV is "
+            "verified for the declared columns and a non-NaN metric value."
+        ),
+    )
     p_vac.set_defaults(func=cmd_verify_aggregation_complete)
 
     # verify-canary
@@ -2554,6 +2567,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_experiment_dir(p_st)
     _add_run_id(p_st)
+    p_st.add_argument(
+        "--min-rows",
+        type=int,
+        default=0,
+        help=(
+            "Require each task's CSV result to have at least N data rows "
+            "beyond the header. A completed task with fewer rows is demoted "
+            "complete -> failed. Default 0 accepts header-only CSVs."
+        ),
+    )
     p_st.set_defaults(func=cmd_status)
 
     # submit

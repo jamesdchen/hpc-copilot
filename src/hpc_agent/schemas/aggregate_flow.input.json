@@ -64,6 +64,13 @@
       "description": "Cluster-side subdir under remote_path that holds the per-task result trees. Defaults to 'results' to match the framework convention.",
       "title": "Results Subdir",
       "type": "string"
+    },
+    "min_rows": {
+      "default": 0,
+      "description": "Non-empty-rows gate. When > 0, after combining + pulling, aggregate-flow runs the cluster-side status reporter with --min-rows: any task whose CSV result has fewer than this many data rows beyond the header is reported as a failing task id in `nonempty_failing_task_ids`. 0 (default) skips the gate — header-only CSVs are accepted.",
+      "minimum": 0,
+      "title": "Min Rows",
+      "type": "integer"
     }
   }
 }

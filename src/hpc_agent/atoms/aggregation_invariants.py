@@ -14,7 +14,9 @@ the user.
 
 from __future__ import annotations
 
+import csv
 import json
+import math
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -22,6 +24,120 @@ from hpc_agent._internal.primitive import primitive
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _is_nan(value: str) -> bool:
+    """Return True when *value* is an empty cell or a NaN-like float string.
+
+    A result-file metric cell is "missing" when it is blank, or when it
+    parses to a float that is NaN. Non-numeric strings that are not
+    blank (e.g. an error token) are also treated as missing — a metric
+    column is expected to hold a real number.
+    """
+    stripped = value.strip()
+    if not stripped:
+        return True
+    try:
+        return math.isnan(float(stripped))
+    except (TypeError, ValueError):
+        return True
+
+
+def check_result_columns(
+    results_dir: Path | str,
+    *,
+    expected_columns: list[str] | None = None,
+    metric_column: str | None = None,
+    file_glob: str = "*.csv",
+) -> dict[str, Any]:
+    """Verify CSV result files under *results_dir* against a declared schema.
+
+    Deterministic, pure-code check — no LLM. For every ``*.csv`` (matched
+    by *file_glob*) found anywhere under *results_dir*:
+
+    * ``expected_columns`` — every declared column name must be present
+      in the file's header row. Missing names land in ``missing_columns``.
+    * ``metric_column`` — the named column must exist and every data row
+      must carry a non-empty, non-NaN numeric value. A blank cell, a
+      non-numeric token, or a NaN float is a violation (``metric_nan``).
+
+    When neither *expected_columns* nor *metric_column* is declared the
+    check is a clean no-op: ``checked=False``, empty ``violations``.
+
+    Returns a dict::
+
+        {
+          "checked": bool,            # True iff a schema was declared
+          "ok": bool,                 # True iff no violations
+          "files_scanned": int,
+          "violations": [             # one entry per offending file
+            {"path": str,
+             "missing_columns": list[str],
+             "metric_nan": bool,
+             "metric_nan_rows": list[int],   # 1-based data-row indices
+             "error": str | None},
+          ],
+        }
+    """
+    from pathlib import Path as _Path
+
+    declared = bool(expected_columns) or bool(metric_column)
+    rdir = _Path(results_dir)
+    violations: list[dict[str, Any]] = []
+    files_scanned = 0
+
+    if not declared:
+        return {"checked": False, "ok": True, "files_scanned": 0, "violations": []}
+
+    expected = list(expected_columns or [])
+    paths = sorted(p for p in rdir.rglob(file_glob) if p.is_file() and "_wip_" not in str(p))
+    for path in paths:
+        files_scanned += 1
+        missing_columns: list[str] = []
+        metric_nan_rows: list[int] = []
+        error: str | None = None
+        try:
+            with open(path, newline="", encoding="utf-8") as fh:
+                reader = csv.reader(fh)
+                header = next(reader, None)
+                if header is None:
+                    error = "empty file: no header row"
+                else:
+                    header_set = set(header)
+                    missing_columns = [c for c in expected if c not in header_set]
+                    metric_idx: int | None = None
+                    if metric_column is not None:
+                        if metric_column in header:
+                            metric_idx = header.index(metric_column)
+                        else:
+                            # Surface as a missing column too so the
+                            # caller sees one coherent violation list.
+                            if metric_column not in missing_columns:
+                                missing_columns.append(metric_column)
+                    if metric_idx is not None:
+                        for row_no, row in enumerate(reader, start=1):
+                            if metric_idx >= len(row) or _is_nan(row[metric_idx]):
+                                metric_nan_rows.append(row_no)
+        except OSError as exc:
+            error = f"unreadable: {exc}"
+
+        if missing_columns or metric_nan_rows or error is not None:
+            violations.append(
+                {
+                    "path": str(path),
+                    "missing_columns": missing_columns,
+                    "metric_nan": bool(metric_nan_rows),
+                    "metric_nan_rows": metric_nan_rows,
+                    "error": error,
+                }
+            )
+
+    return {
+        "checked": True,
+        "ok": not violations,
+        "files_scanned": files_scanned,
+        "violations": violations,
+    }
 
 
 @primitive(
@@ -40,6 +156,7 @@ def verify_aggregation_complete(
     combiner_dir_local: Path | str,
     aggregated_metrics: dict[str, Any] | None = None,
     aggregated_keying: str | None = None,
+    results_dir_local: Path | str | None = None,
 ) -> dict[str, Any]:
     """Verify the post-aggregate invariants for *run_id* against *combiner_dir_local*.
 
@@ -67,6 +184,14 @@ def verify_aggregation_complete(
       ``unexpected_tasks`` but at the post-reduce layer). Empty list
       when the check was not run (no aggregated_metrics or wrong
       keying).
+    * ``columns_checked`` / ``column_violations`` — when *results_dir_local*
+      is given AND the run sidecar's ``results`` block declares
+      ``expected_columns`` and/or ``metric_column``, every CSV result
+      file under that directory is verified to (a) carry every declared
+      column in its header and (b) hold a non-empty, non-NaN value in
+      the metric column for every data row. ``columns_checked`` is False
+      and ``column_violations`` empty when no schema is declared or no
+      results directory was supplied — a clean no-op skip.
     * ``ok`` — True iff every invariant passes.
 
     The agent reads ``ok`` and surfaces any violations to the user.
@@ -78,6 +203,11 @@ def verify_aggregation_complete(
     the keys-vs-tasks-resolve check, ``"run_id"`` skips it (the keys
     are then expected to be a single run_id string), ``None``
     disables.
+
+    *results_dir_local* is the locally-pulled per-task results tree
+    (e.g. aggregate-flow's ``summaries_dir_local``). Supplying it
+    enables the deterministic columns / non-NaN-metric gate against the
+    schema declared in the sidecar's ``results`` block.
 
     Raises
     ------
@@ -180,12 +310,36 @@ def verify_aggregation_complete(
             # available.
             unexpected_aggregated_keys = []
 
+    # Expected-columns / non-NaN-metric gate. Deterministic given a
+    # declared schema in the sidecar's ``results`` block; a clean no-op
+    # (columns_checked=False) when no schema is declared or no local
+    # results directory was supplied.
+    columns_checked = False
+    column_violations: list[dict[str, Any]] = []
+    results_block = sidecar.get("results")
+    if isinstance(results_block, dict) and results_dir_local is not None:
+        raw_cols = results_block.get("expected_columns")
+        expected_columns = [str(c) for c in raw_cols] if isinstance(raw_cols, list) else []
+        raw_metric = results_block.get("metric_column")
+        metric_column = raw_metric if isinstance(raw_metric, str) and raw_metric else None
+        if expected_columns or metric_column:
+            results_dir = _Path(results_dir_local)
+            if results_dir.is_dir():
+                col_report = check_result_columns(
+                    results_dir,
+                    expected_columns=expected_columns,
+                    metric_column=metric_column,
+                )
+                columns_checked = bool(col_report["checked"])
+                column_violations = list(col_report["violations"])
+
     ok = (
         all_waves_combined
         and all_tasks_present
         and provenance_present
         and not unexpected_tasks
         and not unexpected_aggregated_keys
+        and not column_violations
     )
 
     return {
@@ -198,6 +352,8 @@ def verify_aggregation_complete(
         "unexpected_tasks": unexpected_tasks,
         "unexpected_aggregated_keys": unexpected_aggregated_keys,
         "provenance_present": provenance_present,
+        "columns_checked": columns_checked,
+        "column_violations": column_violations,
         "expected_wave_count": len(expected_waves),
         "pulled_wave_count": len(pulled_waves),
         "expected_task_count": len(expected_tasks),
