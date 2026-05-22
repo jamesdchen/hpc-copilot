@@ -3,11 +3,13 @@ Do not run the `hpc-campaign` skill in this conversation's context. Delegate it 
 You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
 
 1. Pick the path and tag the slug with the user below, in this conversation.
-2. Run `hpc-agent build-spawn-prompt --workflow campaign --fields-json '<json>'`, where `<json>` is a JSON object of the resolved inputs (`campaign_id`, path A/B, concurrency, the iteration to run). It writes a content-addressed spec to `.hpc/spawn/<sha>.json` and returns `data.spawn_ref` — a `spec://<sha>` token.
-3. Call the `Task` tool with `prompt` set to **exactly** that `spawn_ref` token — nothing prepended, appended, or paraphrased. A `PreToolUse` hook (`spawn_guard`) resolves the reference to the canonical generated prompt before the subagent starts; anything that is not a valid `spec://` token is denied. That subagent is itself the loop orchestrator — it spawns a further per-step subagent for each `submit` / `monitor` / `aggregate` / `decide` step (see the skill's delegation section).
+2. Call the `Task` tool with `prompt` set to **exactly** this JSON object and nothing else — no prose around it:
+   `{"hpc_spawn": {"workflow": "campaign", "experiment_dir": ".", "fields": <fields>}}`
+   where `<fields>` is a JSON object of the resolved inputs (`campaign_id`, path A/B, concurrency, the iteration to run). You author only the `fields` data — never the prompt prose.
+3. A `PreToolUse` hook (`spawn_guard`) validates that request and replaces it with the canonical, code-generated prompt before the subagent starts. A `Task` prompt that is not a valid `hpc_spawn` request — or that invokes a workflow skill in prose — is denied. That subagent is itself the loop orchestrator — it spawns a further per-step subagent for each `submit` / `monitor` / `aggregate` / `decide` step (see the skill's delegation section).
 4. Surface the subagent's returned campaign-state envelope (iterations completed, latest reduced metrics, next step, `campaign_id`) plus its `anomalies` string. The verbose per-iteration output never entered this conversation.
 
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it through `--fields-json`, do not delegate it. It exists for two reasons the skill alone doesn't cover:
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in the `fields` object, do not delegate it. It exists for two reasons the skill alone doesn't cover:
 
 1. **Pick the path** in conversation with the user (Path A: manual params, vs Path B: Optuna/random-search/PBT strategy). The skill describes both; the slash command's job is to ask "is your search space small and known, or large and adaptive?" and route accordingly.
 

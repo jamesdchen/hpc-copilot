@@ -3,11 +3,13 @@ Do not run the `hpc-aggregate` skill in this conversation's context. Delegate it
 You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
 
 1. Resolve the human-facing inputs below (the profile/stage to aggregate, plus the anti-pattern reasoning) in this conversation.
-2. Run `hpc-agent build-spawn-prompt --workflow aggregate --fields-json '<json>'`, where `<json>` is a JSON object of the resolved inputs (`profile`, optional `stage`, mode override if any). It writes a content-addressed spec to `.hpc/spawn/<sha>.json` and returns `data.spawn_ref` — a `spec://<sha>` token.
-3. Call the `Task` tool with `prompt` set to **exactly** that `spawn_ref` token — nothing prepended, appended, or paraphrased. A `PreToolUse` hook (`spawn_guard`) resolves the reference to the canonical generated prompt before the subagent starts; anything that is not a valid `spec://` token is denied.
+2. Call the `Task` tool with `prompt` set to **exactly** this JSON object and nothing else — no prose around it:
+   `{"hpc_spawn": {"workflow": "aggregate", "experiment_dir": ".", "fields": <fields>}}`
+   where `<fields>` is a JSON object of the resolved inputs (`profile`, optional `stage`, mode override if any). You author only the `fields` data — never the prompt prose.
+3. A `PreToolUse` hook (`spawn_guard`) validates that request and replaces it with the canonical, code-generated prompt before the subagent starts. A `Task` prompt that is not a valid `hpc_spawn` request — or that invokes a workflow skill in prose — is denied.
 4. Surface the subagent's returned envelope (`ok`, an `aggregated_metrics` summary, `missing_waves`, `missing_tasks`, `escalation_reason`) plus its `anomalies` string, then run the post-flight spot-checks below.
 
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it through `--fields-json`, do not delegate it. It exists for two reasons the skill alone doesn't cover.
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in the `fields` object, do not delegate it. It exists for two reasons the skill alone doesn't cover.
 
 ## Core principle (human advice): Reduce Where the Data Lives
 

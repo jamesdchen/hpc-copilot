@@ -1723,47 +1723,6 @@ def cmd_build_template(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-# ─── subcommand: build-spawn-prompt ────────────────────────────────────────
-
-
-def cmd_build_spawn_prompt(args: argparse.Namespace) -> int:
-    """Generate a content-addressed subagent spawn spec.
-
-    The four workflow slash commands delegate their skill to a
-    fresh-context subagent; this command writes the deterministic
-    prompt that subagent runs on to ``.hpc/spawn/<sha>.json`` and
-    returns a ``spec://<sha>`` reference. The agent passes only that
-    reference to the ``Task`` tool — the spawn_guard PreToolUse hook
-    resolves it back to the canonical prompt. See
-    hpc_agent.atoms.spawn_prompt for the rationale.
-    """
-    from hpc_agent.atoms.spawn_prompt import build_spawn_prompt
-
-    try:
-        fields = json.loads(args.fields_json)
-    except json.JSONDecodeError as exc:
-        return _err(
-            error_code="spec_invalid",
-            message=f"--fields-json is not valid JSON: {exc}",
-            category="user",
-            retry_safe=False,
-        )
-    if not isinstance(fields, dict):
-        return _err(
-            error_code="spec_invalid",
-            message="--fields-json must be a JSON object",
-            category="user",
-            retry_safe=False,
-        )
-    data = build_spawn_prompt(
-        experiment_dir=args.experiment_dir,
-        workflow=args.workflow,
-        fields=fields,
-    )
-    _ok(data)
-    return EXIT_OK
-
-
 # ─── parser ────────────────────────────────────────────────────────────────
 
 
@@ -2770,37 +2729,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_bt.set_defaults(func=cmd_build_template)
 
-    # build-spawn-prompt
-    p_bsp = sub.add_parser(
-        "build-spawn-prompt",
-        help=(
-            "Generate a content-addressed subagent spawn spec under "
-            ".hpc/spawn/ and emit a spec:// reference. The workflow "
-            "slash commands pass that reference to the Task tool; the "
-            "spawn_guard PreToolUse hook resolves it to the canonical "
-            "prompt so the delegated subagent's context is deterministic."
-        ),
-    )
-    _add_experiment_dir(p_bsp)
-    p_bsp.add_argument(
-        "--workflow",
-        required=True,
-        # Mirrors hpc_agent.atoms.spawn_prompt.WORKFLOW_SKILLS; hardcoded
-        # to keep parser construction import-free.
-        choices=["submit", "status", "aggregate", "campaign"],
-        help="Which workflow the spawned subagent will run.",
-    )
-    p_bsp.add_argument(
-        "--fields-json",
-        type=str,
-        default="{}",
-        help=(
-            "Inline JSON object of the invocation's mutable fields "
-            "(e.g. resolved interview answers). Default: '{}'."
-        ),
-    )
-    p_bsp.set_defaults(func=cmd_build_spawn_prompt)
-
     # Optional plugin distributions add their own subcommands here. With
     # none installed this is a no-op and the parser is unchanged.
     from hpc_agent._internal.plugins import register_plugin_cli
@@ -2838,7 +2766,6 @@ _VERB_GROUPS: dict[str, frozenset[str]] = {
         {
             "axes-init",
             "build-executor",
-            "build-spawn-prompt",
             "build-submit-spec",
             "build-tasks-py",
             "build-template",

@@ -1,50 +1,55 @@
-"""``PreToolUse`` hook — pin the prompt of every delegated workflow spawn.
+"""``PreToolUse`` hook — generate the prompt of every delegated workflow spawn.
 
 Wired into ``settings.json`` against the ``Task``/``Agent`` tool. The
 hook reads the tool-call event on stdin and classifies the spawn's
 ``prompt``:
 
-* A bare ``spec://<sha256>`` reference — resolve
-  ``.hpc/spawn/<sha256>.json``, verify the file's SHA-256 still equals
-  the reference, and rewrite the call's ``prompt`` to the canonical
-  text stored inside. The model's authored bytes never reach the
-  subagent: the only thing it controls is a 64-hex-char hash, which
-  either resolves to a code-written spec file or is denied.
+* An ``{"hpc_spawn": {...}}`` JSON request — validate it (``workflow``
+  is one of four, ``fields`` is an object) and replace the ``prompt``
+  with the canonical text from :func:`render_spawn_prompt`. The prompt
+  scaffold is generated here, by code, at spawn time; the agent only
+  supplies the workflow name and the fields data. An invalid request
+  is denied.
 * A hand-written prompt that imperatively *invokes* a workflow skill
   (``invoke``/``run``/``execute`` the ``hpc-submit`` / ``hpc-status`` /
   ``hpc-aggregate`` / ``hpc-campaign`` skill) — deny it. A workflow run
-  must be pinned; the invocation directive is the one thing a bypass
-  cannot omit, so its presence in a raw prompt means an unpinned
-  workflow spawn. A mere *mention* of a skill (summarising or reading
-  it) is not a directive and passes through. The deny points the
-  caller at ``hpc-agent build-spawn-prompt``.
+  must go through the structured request; the invocation directive is
+  the one thing such a bypass cannot omit. A mere *mention* of a skill
+  (summarising or reading it) is not a directive and passes through.
 * Anything else (Explore, general-purpose, ...) — pass through
   untouched.
 
-Run as ``python3 -m hpc_agent.hooks.spawn_guard``. It always exits 0 —
-the decision travels in the JSON written to stdout, never the exit
-code, so a hook-internal hiccup degrades to "allow unchanged" rather
-than wedging every subagent spawn.
+Run as ``python3 -m hpc_agent.hooks.spawn_guard``. On a malformed event
+or an internal logic error it falls back to "pass through" (exit 0, no
+output) rather than wedging spawns. One case it cannot fail-open on: if
+``hpc_agent`` itself fails to import, ``python3 -m`` exits non-zero
+before this module runs.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sys
-from pathlib import Path
 from typing import Any
 
-_REF_RE = re.compile(r"^spec://([0-9a-f]{64})$")
+from hpc_agent.atoms.spawn_prompt import WORKFLOW_SKILLS, render_spawn_prompt
 
-# A non-spec prompt that *imperatively invokes* a workflow skill is an
+# A spawn request is the whole Task prompt: a JSON object carrying this
+# single key. Its payload is {workflow, experiment_dir?, fields?}.
+_SPAWN_KEY = "hpc_spawn"
+_ALLOWED_REQUEST_KEYS = frozenset({"workflow", "experiment_dir", "fields"})
+
+# Sentinel: the prompt is not a spawn request at all (vs. a malformed
+# one, which is a request that fails validation and gets denied).
+_NOT_A_REQUEST: Any = object()
+
+# A non-request prompt that *imperatively invokes* a workflow skill is an
 # unpinned workflow run. Anchor on the directive grammar — an execution
 # verb, "the", the `hpc-<wf>` skill name, "skill" — not on a bare
 # skill-name mention. That keeps research / documentation spawns
 # ("summarize the hpc-submit skill", "read skills/hpc-submit/SKILL.md")
-# out of the deny while still catching every real invocation, including
-# a verbatim paste of the canonical generated prompt.
+# out of the deny while still catching every real invocation.
 _WORKFLOW_DIRECTIVE_RE = re.compile(
     r"\b(?:invoke|run|execute)\s+the\s+[`*]?"
     r"hpc-(?:submit|status|aggregate|campaign)[`*]?\s+skill\b",
@@ -69,6 +74,46 @@ def _decision(
     return {"hookSpecificOutput": inner}
 
 
+def _spawn_request(prompt: str) -> Any:
+    """Extract the ``hpc_spawn`` payload from *prompt*.
+
+    Returns the payload (any type — validation is the caller's job) when
+    the prompt is a JSON object carrying the ``hpc_spawn`` key, else
+    :data:`_NOT_A_REQUEST`.
+    """
+    stripped = prompt.strip()
+    if not stripped.startswith("{"):
+        return _NOT_A_REQUEST
+    try:
+        obj = json.loads(stripped)
+    except json.JSONDecodeError:
+        return _NOT_A_REQUEST
+    if not isinstance(obj, dict) or _SPAWN_KEY not in obj:
+        return _NOT_A_REQUEST
+    return obj[_SPAWN_KEY]
+
+
+def _validate(payload: Any) -> str | None:
+    """Return a deny reason for *payload*, or ``None`` if it is valid."""
+    if not isinstance(payload, dict):
+        return f"`{_SPAWN_KEY}` must be a JSON object."
+    extra = sorted(set(payload) - _ALLOWED_REQUEST_KEYS)
+    if extra:
+        return (
+            f"unexpected key(s) in the {_SPAWN_KEY} request: {extra}; "
+            f"allowed keys are {sorted(_ALLOWED_REQUEST_KEYS)}."
+        )
+    workflow = payload.get("workflow")
+    if workflow not in WORKFLOW_SKILLS:
+        return f"`workflow` must be one of {sorted(WORKFLOW_SKILLS)}; got {workflow!r}."
+    if not isinstance(payload.get("fields", {}), dict):
+        return "`fields` must be a JSON object."
+    experiment_dir = payload.get("experiment_dir", ".")
+    if not isinstance(experiment_dir, str) or "\n" in experiment_dir:
+        return "`experiment_dir` must be a single-line string."
+    return None
+
+
 def evaluate(event: dict[str, Any]) -> dict[str, Any] | None:
     """Return the hook output for *event*, or ``None`` to pass through.
 
@@ -81,62 +126,37 @@ def evaluate(event: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(prompt, str):
         return None
 
-    match = _REF_RE.match(prompt.strip())
-    if match is None:
-        # Not a pinned spec reference. If the prompt nonetheless invokes
-        # a workflow skill, it is an unpinned workflow spawn — deny it
-        # so the only way to run a workflow is the deterministic,
-        # code-generated path. Every other spawn passes through.
+    payload = _spawn_request(prompt)
+    if payload is _NOT_A_REQUEST:
+        # Not a spawn request. If the prompt nonetheless invokes a
+        # workflow skill, it is an unpinned workflow run — deny it so a
+        # workflow can only run through the structured request. Every
+        # other spawn passes through.
         if _WORKFLOW_DIRECTIVE_RE.search(prompt):
             return _decision(
                 "deny",
                 reason=(
                     "This Task prompt invokes an hpc-agent workflow skill but "
-                    "is not a content-addressed spec reference. Workflow runs "
-                    "must be delegated deterministically: call `hpc-agent "
-                    "build-spawn-prompt` and pass the `spec://<sha>` token it "
-                    "returns as the Task prompt — not a hand-written one."
+                    "is not an `hpc_spawn` request. A workflow must be "
+                    'delegated as a Task prompt of the form {"hpc_spawn": '
+                    '{"workflow": ..., "fields": ...}} — the spawn_guard hook '
+                    "renders the canonical prompt from it. Do not hand-write "
+                    "a workflow prompt."
                 ),
             )
         return None
-    sha = match.group(1)
 
-    spec_path = Path.cwd() / ".hpc" / "spawn" / f"{sha}.json"
-    if not spec_path.is_file():
-        return _decision(
-            "deny",
-            reason=(
-                f"spawn spec {sha} not found under .hpc/spawn/. Re-run "
-                "`hpc-agent build-spawn-prompt` to regenerate it."
-            ),
-        )
+    reason = _validate(payload)
+    if reason is not None:
+        return _decision("deny", reason=f"invalid hpc_spawn request: {reason}")
 
-    raw = spec_path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != sha:
-        return _decision(
-            "deny",
-            reason=(
-                f"spawn spec {sha} failed its integrity check — the file's "
-                "hash no longer matches its name. It was edited after "
-                "generation; regenerate with `hpc-agent build-spawn-prompt`."
-            ),
-        )
-
-    try:
-        canonical_prompt = json.loads(raw)["prompt"]
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return _decision(
-            "deny",
-            reason=f"spawn spec {sha} is malformed (no usable `prompt`).",
-        )
-    if not isinstance(canonical_prompt, str):
-        return _decision(
-            "deny",
-            reason=f"spawn spec {sha} is malformed (no usable `prompt`).",
-        )
-
+    rendered = render_spawn_prompt(
+        workflow=payload["workflow"],
+        experiment_dir=payload.get("experiment_dir", "."),
+        fields=payload.get("fields", {}),
+    )
     updated = dict(tool_input)
-    updated["prompt"] = canonical_prompt
+    updated["prompt"] = rendered
     return _decision("allow", updated_input=updated)
 
 

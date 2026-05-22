@@ -3,11 +3,13 @@ Do not run the `hpc-status` skill in this conversation's context. Delegate it to
 You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
 
 1. Resolve the run to monitor with the human-facing resume-offer dialog below, in this conversation.
-2. Run `hpc-agent build-spawn-prompt --workflow status --fields-json '<json>'`, where `<json>` is a JSON object of the resolved inputs (`run_id`, intent: snapshot vs wait-until-terminal). It writes a content-addressed spec to `.hpc/spawn/<sha>.json` and returns `data.spawn_ref` — a `spec://<sha>` token.
-3. Call the `Task` tool with `prompt` set to **exactly** that `spawn_ref` token — nothing prepended, appended, or paraphrased. A `PreToolUse` hook (`spawn_guard`) resolves the reference to the canonical generated prompt before the subagent starts; anything that is not a valid `spec://` token is denied.
+2. Call the `Task` tool with `prompt` set to **exactly** this JSON object and nothing else — no prose around it:
+   `{"hpc_spawn": {"workflow": "status", "experiment_dir": ".", "fields": <fields>}}`
+   where `<fields>` is a JSON object of the resolved inputs (`run_id`, intent: snapshot vs wait-until-terminal). You author only the `fields` data — never the prompt prose.
+3. A `PreToolUse` hook (`spawn_guard`) validates that request and replaces it with the canonical, code-generated prompt before the subagent starts. A `Task` prompt that is not a valid `hpc_spawn` request — or that invokes a workflow skill in prose — is denied.
 4. Surface the subagent's returned envelope (`lifecycle_state`, `complete`/`total`, `failed_task_ids`, `escalation_reason`) plus its `anomalies` string. The verbose intermediate output — per-tick polls, SSH dumps, failed-task stderr tails — stayed in the subagent.
 
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it through `--fields-json`, do not delegate it. It carries one piece the skill cannot: the resume-offer dialog for cold-session recovery.
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in the `fields` object, do not delegate it. It carries one piece the skill cannot: the resume-offer dialog for cold-session recovery.
 
 ## Scheduling the next tick
 

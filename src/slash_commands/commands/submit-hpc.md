@@ -3,11 +3,13 @@ Do not run the `hpc-submit` skill in this conversation's context. Delegate it to
 You do **not** hand-write the subagent's prompt — it is code-generated so the spawned context is deterministic. The flow:
 
 1. Collect the human-facing inputs below (migration check, setup-action prompts, scaffolding sub-interview) in this conversation.
-2. Run `hpc-agent build-spawn-prompt --workflow submit --fields-json '<json>'`, where `<json>` is a JSON object of the resolved inputs (picked run, cluster, flags, `campaign_id`, interview answers). It writes a content-addressed spec to `.hpc/spawn/<sha>.json` and returns `data.spawn_ref` — a `spec://<sha>` token.
-3. Call the `Task` tool with `prompt` set to **exactly** that `spawn_ref` token — nothing prepended, appended, or paraphrased. A `PreToolUse` hook (`spawn_guard`) resolves the reference to the canonical generated prompt before the subagent starts; anything that is not a valid `spec://` token is denied.
+2. Call the `Task` tool with `prompt` set to **exactly** this JSON object and nothing else — no prose around it:
+   `{"hpc_spawn": {"workflow": "submit", "experiment_dir": ".", "fields": <fields>}}`
+   where `<fields>` is a JSON object of the resolved inputs (picked run, cluster, flags, `campaign_id`, interview answers). You author only the `fields` data — never the prompt prose.
+3. A `PreToolUse` hook (`spawn_guard`) validates that request and replaces it with the canonical, code-generated prompt before the subagent starts. A `Task` prompt that is not a valid `hpc_spawn` request — or that invokes a workflow skill in prose — is denied.
 4. Surface the subagent's returned envelope (`run_id`, `job_ids`, grid dimensions, verified scheduler state) plus its `anomalies` string. The verbose workflow output — discovery transcripts, scheduler dumps, rsync logs — stayed in the subagent and never entered this conversation.
 
-This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it through `--fields-json`, do not delegate it. Three pieces the skill cannot carry:
+This slash command is the human-facing entry point: the content below is the main agent's job — collect it here and pass it in the `fields` object, do not delegate it. Three pieces the skill cannot carry:
 
 ## 1. Migration check (legacy `_hpc_dispatch.json`)
 
