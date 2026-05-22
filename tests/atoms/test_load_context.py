@@ -42,7 +42,7 @@ def _write_sidecar(experiment: Path, run_id: str, **overrides) -> None:
     base = dict(
         run_id=run_id,
         cmd_sha="a" * 64,
-        hpc_agent_version="0.3.0",
+        hpc_agent_version="0.4.0",
         submitted_at="2026-05-21T12:00:00+00:00",
         executor="python3 exec.py",
         result_dir_template="results/{task_id}",

@@ -10,6 +10,15 @@ Throughout this skill, "invoke <primitive>" means call the primitive's `backed_b
 
 ## Setup
 
+**Load context first.** Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign / cluster state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
+
+- `data.latest_run` — cluster, profile, resources, env, remote_path, campaign_id, run_id, cmd_sha, job_ids. On a `reuse`/`interview` action, read these instead of re-interviewing the user.
+- `data.in_flight` — active runs (run_id, stage, ssh_target, job_ids).
+- `data.campaigns` — campaign ids + cursor iteration.
+- `data.next_step_hint` — `submit` / `monitor` / `aggregate`.
+
+If a value you need later is absent here, derive it from the run sidecar on disk — never from memory.
+
 Read cluster definitions:
 - `clusters.yaml`: resolve path via `python -c 'from hpc_agent import _PACKAGE_ROOT; print(_PACKAGE_ROOT / "config" / "clusters.yaml")'`
 
@@ -270,7 +279,7 @@ On a failed state: surface the scheduler reason verbatim, tell the user which jo
 
 ## Step 9-10: Cache + report
 
-Cache to Claude Code memory: executor directory, cluster, remote_path, env config per executor type, default resources.
+Do not cache run config in conversational memory. `submit-flow` persists the full v2 config snapshot (executor, cluster, remote_path, env, resources) to the run sidecar; any later step recovers it with `hpc-agent load-context`. Conversational memory is lost on context compaction or a session restart — the sidecar is not.
 
 Report after submission and Step 8b verification: job ID, executor(s), grid dimensions, total tasks, cluster, verified scheduler state. Suggest `/monitor-hpc` to track progress.
 

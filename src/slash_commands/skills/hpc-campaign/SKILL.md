@@ -6,6 +6,17 @@ allowed-tools: Bash Read Write
 
 Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteration based on prior results. The framework provides two things — a `campaign_id` tag on every submit (carried by [submit-flow](../../docs/primitives/submit-flow.md)) and the [campaign-status](../../docs/primitives/campaign-status.md) accessor (called from inside `tasks.py`). The "loop" is repeated `submit-flow → monitor-flow → aggregate-flow` triplets sharing the same `campaign_id` slug — workflow-atom composition with no agent in the per-iteration critical path. Strategies (Optuna, RandomSearch, walk-forward, PBT) live as Python libraries the user imports in their own `tasks.py`. The framework ships **zero** strategy code.
 
+## Step 0: Load context (run this first, every time)
+
+Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for campaign state. Never rely on conversational memory or shell variables — a context compaction, a network drop, or a session restart erases them; the on-disk state does not. This is what makes campaign resume trivial.
+
+- `data.campaigns` — every campaign id, its `iterations_submitted`, and `cursor_iteration`.
+- `data.in_flight` — runs still active for this campaign (run_id, stage, job_ids).
+- `data.latest_run` — config snapshot (cluster, profile, resources) of the newest iteration.
+- `data.next_step_hint` — `submit` / `monitor` / `aggregate` for the current iteration.
+
+If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
+
 ## When to use
 
 - The user mentions hyperparameter tuning, walk-forward backtesting, active learning, population-based training, or any pattern where iteration N's submission depends on iteration N-1's results.

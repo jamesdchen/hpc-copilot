@@ -6,6 +6,15 @@ allowed-tools: Bash Read Write
 
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
 
+## Step 0: Load context (run this first, every time)
+
+Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
+
+- `data.in_flight` — active runs with `run_id`, `ssh_target`, `remote_path`. These resolve the `$SSH_TARGET` / `$REMOTE_PATH` / `<run_id>` used in Step 2's rsync.
+- `data.latest_run` — config snapshot of the newest run, including `result_dir_template`.
+
+If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
+
 ## Steps
 
 1. **Verify the run is done** (or close enough). Invoke [poll-run-status](../../docs/primitives/poll-run-status.md); only proceed if `lifecycle_state` is `complete` (or the user explicitly wants a partial aggregate). For partial aggregation, pass `ensure_all_combined: false` to `aggregate-flow` to skip combining waves still in flight.

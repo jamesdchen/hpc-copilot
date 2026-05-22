@@ -11,9 +11,19 @@ Agent-facing composition over two primitives that share the same observation sur
 
 Both write the same journal `last_status` and the same `.monitor.jsonl` tick log; they're interchangeable views of the same operation.
 
+## Step 0: Load context (run this first, every time)
+
+Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
+
+- `data.in_flight` — active runs with `run_id`, `stage`, `ssh_target`, `job_ids`. This is the authoritative recovery path when `run_id` is unknown.
+- `data.latest_run` — config snapshot of the newest run (cluster, profile, campaign_id).
+- `data.next_step_hint` — `monitor` when a run is still in flight.
+
+If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
+
 ## Steps
 
-1. **If `run_id` is unknown**, invoke [list-in-flight](../../docs/primitives/list-in-flight.md) first; pick the matching `data.runs[].run_id` (filter by `profile`, `cluster`, or `submitted_at`).
+1. **If `run_id` is unknown**, pick it from `data.in_flight` returned by Step 0 (filter by `profile`, `cluster`, or `submitted_at`). `list-in-flight` is the same data if you need a standalone call.
 
 2. **Pick the surface** based on the caller's need:
    - Snapshot: `hpc-agent status --run-id <id>`. Returns immediately. (The `status` subcommand is the CLI alias for the [poll-run-status](../../docs/primitives/poll-run-status.md) primitive.)
