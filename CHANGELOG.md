@@ -24,9 +24,12 @@ alone instead of trusting context that may be gone.
 - **`delegate` block on `load-context`** — describes the next workflow
   step as a delegable unit of work: `kind` (`cli` for a deterministic
   monitor/aggregate step, `agent` for a judgement step), `step`,
-  `run_id`, `experiment_dir`, `reason`, and a ready-to-hand-off
-  `prompt`. One contract shared by an in-session orchestrator and the
-  headless campaign driver.
+  `run_id`, `campaign_id`, `experiment_dir`, `reason`, and a
+  ready-to-hand-off `prompt`. One contract shared by an in-session
+  orchestrator and the headless campaign driver. When a campaign is
+  idle (no runs in flight), `load-context` emits
+  `next_step_hint: "decide"` and a `kind="agent"` `decide` delegate
+  carrying the campaign to advance.
 - **`hpc_agent.campaign.driver` — headless campaign driver** — advances
   exactly one campaign workflow step per invocation off the
   `load-context` `delegate` block. Installed as the `hpc-campaign-driver`
@@ -47,6 +50,28 @@ alone instead of trusting context that may be gone.
   run that has not reached a terminal state, unless
   `ensure_all_combined=false` is passed in the spec. Callers that
   intentionally aggregate a still-running run must opt out explicitly.
+
+### Removed — `/monitor-hpc` exit contract and Stop-hook subsystem
+
+- **`/monitor-hpc` `armed:` exit contract removed.** `/monitor-hpc` no
+  longer has to emit a final `armed: <cron|loop|none> run_id=... cadence=...
+  reason=...` line of stdout, and the `monitor_armed_check` Stop hook that
+  blocked the agent from finishing without it is gone. The exact-string
+  contract was fragile; self-scheduling now runs as a cron tick of the
+  headless `hpc-campaign-driver` — each tick is a fresh process, so no
+  exit contract is needed.
+- **`hooks/` package and `hpc-agent hook-install` removed.** With
+  `monitor-armed` gone, the hook-install framework had nothing left to
+  manage, so the whole `hpc_agent.hooks` package and the `hook-install`
+  CLI subcommand are deleted (`hpc-agent setup` no longer wires hooks;
+  `--no-hooks` is gone). For monitoring that outlives the chat, schedule
+  a cron (or `/loop`) that runs `hpc-campaign-driver` or re-invokes
+  `/monitor-hpc`.
+- **`decide-monitor-arm` retained, `armed_line` output dropped.** The
+  primitive still picks the cron/loop/none arm mode + cadence + cron
+  schedule + `cron_create_args` — its cadence-by-run-state table is
+  reusable for choosing a cron interval for the driver — but the
+  contract-specific `armed_line` field is removed from its output.
 
 ## 0.4.0 — 2026-05-21
 

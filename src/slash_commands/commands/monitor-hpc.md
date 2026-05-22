@@ -1,24 +1,17 @@
 Invoke the `hpc-status` skill via the Skill tool (`skills/hpc-status/SKILL.md`) for the workflow: poll-run-status vs monitor-flow choice, lifecycle dispatch, polling cadence, resubmit decision flow. The skill is the canonical SoT.
 
-This slash command is the human-facing entry point. It carries two pieces of content the skill cannot: the **EXIT CONTRACT** (which is slash-specific because a Stop hook validates this command's stdout), and the resume-offer dialog for cold-session recovery.
+This slash command is the human-facing entry point. It carries one piece of content the skill cannot: the resume-offer dialog for cold-session recovery.
 
-## ⚠️ EXIT CONTRACT — read before anything else
+## Scheduling the next tick
 
-Every `/monitor-hpc` invocation is **one tick that arms the next tick**, not a one-off. Before exiting, you MUST do exactly one of:
+Each `/monitor-hpc` invocation is **one tick**. A tick that runs inside the chat needs no follow-up — when it finishes, it finishes.
 
-1. **Arm `CronCreate`** for any tick that may outlive the chat session is open (which for HPC monitoring is essentially always). Survives turn boundaries within the session; dies when the session ends.
-2. **`/loop <interval> /monitor-hpc <args>`** when the user wants to drive the cadence themselves.
-3. **Skip arming** only when the run reached a terminal state (`complete` / `failed` / `abandoned`) — and in that case you MUST cancel any existing cron for this run_id.
+For monitoring that must outlive the chat session, the user schedules a recurring job that re-checks the run:
 
-Then emit the final line of stdout in this exact form:
+- **Cron** running the headless `hpc-campaign-driver --experiment-dir <dir>` — each tick is a fresh process, no exit contract. Use [decide-monitor-arm](../../docs/primitives/decide-monitor-arm.md) to pick a sensible cron cadence from the run's current state.
+- **`/loop <interval> /monitor-hpc <args>`** when the user wants Claude Code to drive the cadence within a session.
 
-```
-armed: <cron|loop|none> run_id=<X> cadence=<Y>s reason="<short>"
-```
-
-`none` is only valid when terminal-state cleanup ran. Anything else (including silent exit) is a spec violation. If you are about to exit without this line, you have not completed the tick — restart from the cold-session-resume step below.
-
-A Stop hook in `~/.claude/settings.json` (installed via `hpc-agent hook-install`) verifies this line and blocks termination if missing.
+Once the run reaches a terminal state (`complete` / `failed` / `abandoned`), cancel any cron that was scheduled for its run_id.
 
 ## Cold-session resume
 
@@ -40,10 +33,9 @@ A Stop hook in `~/.claude/settings.json` (installed via `hpc-agent hook-install`
 
 4. **Resolved run_id** → hand off to the **hpc-status** skill with the chosen run_id. The skill picks the snapshot vs wait-until-terminal surface based on the caller's intent (driven by chat context).
 
-5. **Before exiting**, check `lifecycle_state` from the skill's response and follow the EXIT CONTRACT above.
+5. **Before exiting**, check `lifecycle_state` from the skill's response. If still in flight and the monitoring must outlive the chat, schedule the next tick per "Scheduling the next tick" above; if terminal, cancel any cron for the run_id.
 
 ## Notes
 
-- **The EXIT CONTRACT is the load-bearing slash-specific bit.** Without it, `/monitor-hpc` invocations silently fail to schedule the next tick, and runs sit unwatched until the user notices. The Stop hook validates the final stdout line; missing it blocks termination.
 - **Resume offer is human UX.** The agent uses `list-in-flight` directly (no human prompt); the slash command is what shows the offer.
 - **Cron arming reasoning** is per-run: pick interval based on the run's expected duration. Short jobs (< 1h) use 5min; medium (1-4h) use 15min; long (> 4h) use 30min. Long-running monitor cadence ramps up with the run age — see the skill for the internal cadence rules `monitor-flow` applies.

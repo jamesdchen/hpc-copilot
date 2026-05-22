@@ -13,14 +13,13 @@ Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markd
 
 ```bash
 pip install hpc-agent          # or `pip install -e .` from a checkout
-hpc-agent setup                # copy commands + skills, wire the Stop hooks
+hpc-agent setup                # copy commands + skills
 ```
 `hpc-agent setup` copies the bundled slash commands into
-`~/.claude/commands/` and the skills into `~/.claude/skills/`, then
-installs hpc-agent's Stop hooks — all idempotent, so re-running is
-safe. Both asset trees ship inside the package, so this works the same
-from a wheel install or an editable checkout. Pass `--no-hooks` to
-skip the hook step or `--dry-run` to preview. Every command
+`~/.claude/commands/` and the skills into `~/.claude/skills/` —
+idempotent, so re-running is safe. Both asset trees ship inside the
+package, so this works the same from a wheel install or an editable
+checkout. Pass `--dry-run` to preview. Every command
 (`/preflight`, `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`,
 `/campaign-hpc`, `/hpc-axes-init`) and skill ships inside the package.
 
@@ -177,7 +176,7 @@ The slash commands above compose ~50 primitives exposed as `hpc-agent <name>`. F
 | `build-submit-spec` | Resolved-interview-values → validated `submit_flow.input.json` spec. |
 | `build-tasks-py` | Cartesian-product axes → `.hpc/tasks.py` from the canonical Pattern 1 template. |
 | `discover-executors` / `discover-reducers` | Scan repo for executor scripts / aggregator scripts (find existing reducer instead of writing a fresh one). |
-| `decide-monitor-arm` | Pick cron/loop/none + cadence + cron schedule + literal `armed:` line. |
+| `decide-monitor-arm` | Pick cron/loop/none + cadence + cron schedule for scheduling the next monitor tick. |
 | `monitor-summary` | Canonical user-facing tick summary (byte-stable framing). |
 | `summarize-submit-plan` | Canonical pre-submit confirmation summary. |
 | `verify-canary` | Wait + grep + output-check protocol for 1-task canary submissions. |
