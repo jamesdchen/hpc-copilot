@@ -55,6 +55,7 @@ class _Delegate(BaseModel):
     kind: Literal["cli", "agent"]
     step: str
     run_id: str | None
+    campaign_id: str | None = None
     experiment_dir: str
     reason: str
     prompt: str
@@ -75,6 +76,6 @@ class LoadContextResult(BaseModel):
     latest_run: _LatestRun | None
     in_flight: list[_InFlightRow]
     campaigns: list[_CampaignRow]
-    next_step_hint: Literal["submit", "monitor", "aggregate"]
+    next_step_hint: Literal["submit", "monitor", "aggregate", "decide"]
     delegate: _Delegate
     warnings: list[str]

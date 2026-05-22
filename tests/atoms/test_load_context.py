@@ -178,3 +178,25 @@ def test_delegate_aggregate_picks_non_monitor_run(journal_home, experiment):
     assert delegate["kind"] == "cli"
     assert delegate["step"] == "aggregate"
     assert delegate["run_id"] == "20260521-120000-aaa"
+
+
+def test_decide_hint_when_campaign_idle(journal_home, experiment):
+    # A campaign sidecar exists and nothing is in flight -> the next
+    # step is to decide the campaign's next iteration, not a cold submit.
+    _write_sidecar(experiment, "20260521-120000-aaa", campaign_id="optuna-1")
+    ctx = load_context(experiment_dir=experiment)
+    assert ctx["next_step_hint"] == "decide"
+    delegate = ctx["delegate"]
+    assert delegate["kind"] == "agent"
+    assert delegate["step"] == "decide"
+    assert delegate["campaign_id"] == "optuna-1"
+    assert delegate["run_id"] is None
+
+
+def test_submit_hint_when_idle_and_no_campaign(journal_home, experiment):
+    # An idle non-campaign run stays a cold submit, not decide.
+    _write_sidecar(experiment, "20260521-120000-aaa", campaign_id=None)
+    ctx = load_context(experiment_dir=experiment)
+    assert ctx["next_step_hint"] == "submit"
+    assert ctx["delegate"]["step"] == "submit"
+    assert ctx["delegate"]["campaign_id"] is None

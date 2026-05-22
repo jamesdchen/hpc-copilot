@@ -40,27 +40,51 @@ _CONFIG_KEYS: tuple[str, ...] = (
 )
 
 
-def _next_step_hint(in_flight: list[dict[str, Any]]) -> str:
-    """Coarse next-action hint derived only from the in-flight set.
+def _next_step_hint(in_flight: list[dict[str, Any]], campaigns: list[dict[str, Any]]) -> str:
+    """Coarse next-action hint from the in-flight set and known campaigns.
 
     - any in-flight run still in the ``monitor`` stage  -> ``monitor``
     - in-flight runs exist but all past monitoring      -> ``aggregate``
-    - nothing in flight                                 -> ``submit``
+    - nothing in flight, a campaign exists              -> ``decide``
+    - nothing in flight, no campaign                    -> ``submit``
+
+    ``decide`` distinguishes "a campaign finished an iteration and needs
+    its next one chosen" from a cold ``submit`` of a fresh experiment.
 
     Advisory only: the skill still decides, but a fresh step gets a
     deterministic starting point instead of guessing from memory.
     """
     if not in_flight:
-        return "submit"
+        return "decide" if campaigns else "submit"
     if any(r.get("stage") == "monitor" for r in in_flight):
         return "monitor"
     return "aggregate"
+
+
+def _decide_campaign_id(
+    campaigns: list[dict[str, Any]], latest_run: dict[str, Any] | None
+) -> str | None:
+    """Pick the campaign whose next iteration a ``decide`` step advances.
+
+    Prefer the campaign of the most recent run — that is the iteration
+    that just finished — and fall back to the first known campaign.
+    """
+    if latest_run is not None:
+        cid = latest_run.get("campaign_id")
+        if isinstance(cid, str) and cid:
+            return cid
+    if campaigns:
+        first: str = campaigns[0]["campaign_id"]
+        return first
+    return None
 
 
 def _build_delegate(
     experiment_dir: Path,
     hint: str,
     in_flight: list[dict[str, Any]],
+    campaigns: list[dict[str, Any]],
+    latest_run: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Describe the next workflow step as a delegable unit of work.
 
@@ -82,6 +106,7 @@ def _build_delegate(
             "kind": "agent",
             "step": "submit",
             "run_id": None,
+            "campaign_id": None,
             "experiment_dir": exp,
             "reason": "no runs in flight; the next step is a new submission",
             "prompt": (
@@ -91,20 +116,45 @@ def _build_delegate(
                 "needs user intent, so this is an agent step."
             ),
         }
+    if hint == "decide":
+        campaign_id = _decide_campaign_id(campaigns, latest_run)
+        return {
+            "kind": "agent",
+            "step": "decide",
+            "run_id": None,
+            "campaign_id": campaign_id,
+            "experiment_dir": exp,
+            "reason": (
+                f"campaign {campaign_id!r} has no runs in flight; "
+                "decide and submit its next iteration"
+            ),
+            "prompt": (
+                f"Advance campaign {campaign_id!r} in {exp}. First run "
+                f"`hpc-agent load-context --experiment-dir {exp}`, then read the "
+                "campaign's prior results (campaign-status, or tasks.py's "
+                "prior()) and drive the hpc-campaign skill to decide and submit "
+                "the next iteration. Choosing the next parameters is judgement, "
+                "so this is an agent step. If tasks.total() == 0 the campaign "
+                "is already finished — stop."
+            ),
+        }
     # monitor / aggregate — pick the in-flight run that governs the step.
-    run_id: str | None = None
+    governing: dict[str, Any] | None = None
     for row in in_flight:
         in_monitor = row.get("stage") == "monitor"
         if (hint == "monitor" and in_monitor) or (hint == "aggregate" and not in_monitor):
-            run_id = row.get("run_id")
+            governing = row
             break
-    if run_id is None and in_flight:
-        run_id = in_flight[0].get("run_id")
+    if governing is None and in_flight:
+        governing = in_flight[0]
+    run_id = governing.get("run_id") if governing else None
+    campaign_id = governing.get("campaign_id") if governing else None
     verb = "monitor-flow" if hint == "monitor" else "aggregate-flow"
     return {
         "kind": "cli",
         "step": hint,
         "run_id": run_id,
+        "campaign_id": campaign_id,
         "experiment_dir": exp,
         "reason": f"run {run_id} is in flight; the next step is {hint}",
         "prompt": (
@@ -134,12 +184,14 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
     - ``in_flight`` — journal records still in flight, one row each.
     - ``campaigns`` — every campaign with a sidecar, plus its cursor
       iteration when a cursor file exists.
-    - ``next_step_hint`` — ``submit`` / ``monitor`` / ``aggregate``,
-      derived purely from the in-flight set.
+    - ``next_step_hint`` — ``submit`` / ``monitor`` / ``aggregate`` /
+      ``decide``, derived from the in-flight set and known campaigns
+      (``decide`` when a campaign is idle and awaiting its next
+      iteration).
     - ``delegate`` — the next step as a delegable unit of work
-      (``kind`` ``cli``/``agent``, ``step``, ``run_id``, ``prompt``);
-      consumed by an in-session orchestrator or the headless campaign
-      driver.
+      (``kind`` ``cli``/``agent``, ``step``, ``run_id``,
+      ``campaign_id``, ``prompt``); consumed by an in-session
+      orchestrator or the headless campaign driver.
     - ``warnings`` — non-fatal notes (orphan sidecar, unreadable
       cursor).
 
@@ -233,13 +285,13 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
                 row["cursor_last_run_id"] = cursor.get("last_run_id") or None
         campaigns.append(row)
 
-    hint = _next_step_hint(in_flight)
+    hint = _next_step_hint(in_flight, campaigns)
     return {
         "experiment_dir": str(experiment_dir),
         "latest_run": latest_run,
         "in_flight": in_flight,
         "campaigns": campaigns,
         "next_step_hint": hint,
-        "delegate": _build_delegate(experiment_dir, hint, in_flight),
+        "delegate": _build_delegate(experiment_dir, hint, in_flight, campaigns, latest_run),
         "warnings": warnings,
     }

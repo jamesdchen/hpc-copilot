@@ -47,7 +47,8 @@
       "enum": [
         "submit",
         "monitor",
-        "aggregate"
+        "aggregate",
+        "decide"
       ],
       "title": "Next Step Hint",
       "type": "string"
@@ -111,6 +112,18 @@
             }
           ],
           "title": "Run Id"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Id"
         },
         "experiment_dir": {
           "title": "Experiment Dir",
