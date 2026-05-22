@@ -110,7 +110,9 @@ Resolve in order: cluster (interactive or `--cluster`); `SSH_TARGET` + `REMOTE_P
 
 For DL executors with `conda_envs` listed in `clusters.yaml` → present the options; without → ask. Resource defaults: CPU/ML 1×16G×4h; GPU/DL 4×16G×6h×2gpu (gpu_type=first in cluster's `gpu_types`).
 
-Build rsync excludes from `.gitignore` patterns + the standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories. `.hpc/` rides rsync — the cluster needs `tasks.py` and the in-flight `runs/<run_id>.json`; `submit-flow` protects the framework-deployed `.hpc/` files from `--delete` itself (see [submit-flow.md](../../docs/primitives/submit-flow.md)).
+Build rsync excludes from `.gitignore` patterns + the standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories.
+
+**Do not exclude the generated package.** The scaffolded `.gitignore` lists `src/`, `.hpc/tasks.py`, and `.hpc/cli.py` — they are generated, not committed — but the cluster node *needs* them: `src/` is the executor package built at Step 0, and `tasks.py`/`cli.py` are the dispatch contract. When deriving excludes from `.gitignore`, **drop `src/`, `.hpc/tasks.py`, and `.hpc/cli.py` from the exclude list** so the built bundle ships them. `.hpc/` rides rsync generally — the cluster also needs the in-flight `runs/<run_id>.json`; `submit-flow` protects the framework-deployed `.hpc/` files from `--delete` itself (see [submit-flow.md](../../docs/primitives/submit-flow.md)). Do keep excluding `.hpc/.build-cache.json` — it is a local-build artifact the node never reads.
 
 ## Step 4b: Compute Throughput Plan
 
