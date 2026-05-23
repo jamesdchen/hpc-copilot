@@ -27,7 +27,7 @@ agent confirmed every prior fix is sound with zero regressions.
 
 ### Encoding / Windows correctness
 - `_internal/io.py`, `_internal/session/run_record.py`, `state/runs.py` (×3 readers),
-  `campaign/manifest.py`, `atoms/interview.py` (×3 writers) — `read_text`/`write_text`
+  `campaign/manifest.py`, `ops/memory/interview.py` (×3 writers) — `read_text`/`write_text`
   without `encoding="utf-8"` → cp1252 round-trips / uncaught `UnicodeDecodeError`;
   `interview.py` made generator-mode `tasks.py` unimportable on Windows.
 - `scripts/lint_primitive_modules.py` — substring path filter broke on Windows `\` separators.

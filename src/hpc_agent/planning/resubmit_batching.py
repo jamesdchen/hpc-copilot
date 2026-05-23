@@ -1,3 +1,4 @@
+# @pure: no-io
 """Resubmission helpers: re-run only the failed task IDs from a prior job.
 
 When a grid job finishes with some failed tasks, ``/status`` (and the LLM)

@@ -341,7 +341,7 @@
     "input_schema": "recall.input.json",
     "name": "recall",
     "output_schema": "recall.output.json",
-    "python": "hpc_agent.atoms.recall.recall_campaigns",
+    "python": "hpc_agent.ops.memory.recall.recall_campaigns",
     "side_effects": [],
     "verb": "query"
   },
@@ -409,7 +409,7 @@
     "input_schema": null,
     "name": "build-executor",
     "output_schema": "build_executor.output.json",
-    "python": "hpc_agent.atoms.build_executor.build_executor",
+    "python": "hpc_agent.incorporation.build.executor.build_executor",
     "side_effects": [
       "writes-file"
     ],
@@ -422,7 +422,7 @@
     "input_schema": "build_submit_spec.input.json",
     "name": "build-submit-spec",
     "output_schema": null,
-    "python": "hpc_agent.atoms.build_submit_spec.build_submit_spec",
+    "python": "hpc_agent.incorporation.build.submit_spec.build_submit_spec",
     "side_effects": [],
     "verb": "scaffold"
   },
@@ -433,7 +433,7 @@
     "input_schema": "build_tasks_py.input.json",
     "name": "build-tasks-py",
     "output_schema": null,
-    "python": "hpc_agent.atoms.build_tasks_py.build_tasks_py",
+    "python": "hpc_agent.incorporation.build.tasks_py.build_tasks_py",
     "side_effects": [
       "writes-sidecar"
     ],
@@ -446,7 +446,7 @@
     "input_schema": null,
     "name": "build-template",
     "output_schema": null,
-    "python": "hpc_agent.atoms.build_template.build_template",
+    "python": "hpc_agent.incorporation.build.template.build_template",
     "side_effects": [
       "writes-file"
     ],
@@ -498,7 +498,7 @@
     "input_schema": "interview.input.json",
     "name": "interview",
     "output_schema": "interview.output.json",
-    "python": "hpc_agent.atoms.interview.record_interview",
+    "python": "hpc_agent.ops.memory.interview.record_interview",
     "side_effects": [
       "file_write"
     ],

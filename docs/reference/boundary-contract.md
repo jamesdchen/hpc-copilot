@@ -379,7 +379,7 @@ user.
   (`HOME`, `PATH`, `LD_LIBRARY_PATH`, `OMP_NUM_THREADS`, framework-
   reserved `HPC_*`, scheduler-injected `SLURM_*`/`SGE_*`/`PBS_*`,
   ...) — see `_RESERVED_AXIS_NAMES` and `_RESERVED_AXIS_PREFIXES`
-  in `atoms/build_tasks_py.py`.
+  in `incorporation/build/tasks_py.py`.
 
 ### What the framework does not — and cannot — guarantee
 

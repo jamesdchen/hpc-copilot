@@ -5,58 +5,29 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent.infra.parsing import (
+    FAILURE_CATEGORY_PATTERNS as _FAILURE_CATEGORY_PATTERNS,
+)
+from hpc_agent.infra.parsing import (
+    categorize_failure as _categorize,
+)
+
 if TYPE_CHECKING:
     from hpc_agent._internal.session import RunRecord
 
-# Patterns that strongly identify a failure category, ordered most-specific first.
-# Matched case-insensitively against the joined log tail.  The first hit wins.
-_FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # The campus user got bumped, not failed. Match the dispatcher's
-    # SIGTERM-trap stderr line so the cluster groups all preempted
-    # tasks together and the harness can resubmit cleanly.
-    (
-        "preempted",
-        re.compile(r"\[hpc-agent\] SIGTERM received; cluster preemption imminent"),
-    ),
-    ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
-    # Pattern kept identical to the ``system_oom`` row of
-    # ``failure_signatures.CATALOG`` so the two classifiers cannot
-    # disagree — a kernel ``oom-kill:`` line (no "oom-killer" token)
-    # must not classify as ``unknown`` here while the catalog tags it
-    # ``system_oom`` and recommends increase-mem.
-    (
-        "system_oom",
-        re.compile(r"oom-kill|out of memory.*killed|\bMemoryError\b|killed.*signal 9", re.I),
-    ),
-    (
-        # Narrowed to scheduler-specific markers — bare ``walltime`` or
-        # ``signal SIGTERM 15`` collide with preemption (which the
-        # scheduler also delivers via SIGTERM). The exit-code 130/143
-        # override below routes confirmed SIGTERM cases to ``preempted``.
-        "walltime",
-        # Kept in sync with the ``walltime`` row of
-        # ``failure_signatures.CATALOG`` (scheduler-specific markers
-        # only — no bare ``walltime`` token, which collides with
-        # preemption) so the two classifiers cannot disagree.
-        re.compile(
-            r"DUE TO TIME LIMIT|CANCELLED.*TIME LIMIT|"
-            r"wall.?time.*expired|wall.?time.*exceeded|"
-            r"Time limit exceeded|h_rt.*exceeded|qmaster enforced h_rt",
-            re.I,
-        ),
-    ),
-    (
-        "node_failure",
-        re.compile(
-            r"NODE_FAIL|node failed|connection (closed|reset by peer)|ssh: connect.*refused", re.I
-        ),
-    ),
-    ("import_error", re.compile(r"\bImportError\b|\bModuleNotFoundError\b", re.I)),
-    ("file_not_found", re.compile(r"\bFileNotFoundError\b|No such file or directory", re.I)),
-    ("permission_denied", re.compile(r"\bPermissionError\b|Permission denied", re.I)),
-    ("disk_full", re.compile(r"No space left on device|\bENOSPC\b", re.I)),
-    ("python_traceback", re.compile(r"^Traceback \(most recent call last\):", re.I | re.M)),
-)
+# Re-exported from :mod:`hpc_agent.infra.parsing` (extracted in PR 1.5 so
+# multiple Wave-2 subjects can share the catalog without contending for
+# this module). The high-level :func:`cluster_failures_by_fingerprint`
+# orchestrator below layers exit-code overrides and the richer
+# :func:`hpc_agent.runner.failure_signatures.classify` catalog on top.
+__all__ = [
+    "_FAILURE_CATEGORY_PATTERNS",
+    "_categorize",
+    "fingerprint_stderr_tail",
+    "annotate_clusters_with_retry_advice",
+    "cluster_failures_by_fingerprint",
+    "DEFAULT_AUTO_RETRY_POLICY",
+]
 
 # Lines we strip before fingerprinting so per-task volatility (paths,
 # pids, timestamps, line numbers in tracebacks) doesn't fragment a
@@ -93,16 +64,6 @@ def fingerprint_stderr_tail(content: str | None, *, max_chars: int = 400) -> str
     # Collapse runs of whitespace introduced by the substitutions.
     line = re.sub(r"\s{2,}", " ", line).strip()
     return line[:max_chars]
-
-
-def _categorize(content: str | None) -> str:
-    """Map a stderr blob to one of :data:`_FAILURE_CATEGORY_PATTERNS` or 'unknown'."""
-    if not content:
-        return "unknown"
-    for category, pat in _FAILURE_CATEGORY_PATTERNS:
-        if pat.search(content):
-            return category
-    return "unknown"
 
 
 # Default per-failure-category retry policy. Conservative caps so an

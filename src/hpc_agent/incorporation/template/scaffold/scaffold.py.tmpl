@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Experiment-repo helper — injected as ``.hpc/scaffold.py``.
+
+Framework-owned and self-healing: ``hpc-agent build-template`` re-writes
+this file verbatim on every run. Do NOT edit it — project code lives
+elsewhere.
+
+    python .hpc/scaffold.py new <name>    scaffold notebooks/experiments/<name>.ipynb
+    python .hpc/scaffold.py discover      list the @register_run experiments
+
+The notebook -> ``src/`` build is `hpc-agent export-package` (run by
+`make build`, CI, the conftest clone hook, and submit). There is no
+committed ``src/`` and no notebook-sync staleness check — the notebook
+is the single reviewed artifact.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_SKIP = {".hpc", ".git", "__pycache__", ".ipynb_checkpoints", ".venv", "venv", "src"}
+
+
+def _notebook_root(root: Path) -> Path:
+    """Prefer ``notebooks/`` when present — that is where runs are authored."""
+    nb = root / "notebooks"
+    return nb if nb.is_dir() else root
+
+
+def _cmd_new(name: str) -> int:
+    from hpc_agent import _PACKAGE_ROOT
+
+    skeleton = _PACKAGE_ROOT / "template" / "scaffold" / "experiment.ipynb.tmpl"
+    dest = Path("notebooks") / "executors" / f"{name}.ipynb"
+    if dest.exists():
+        print(f"refusing to overwrite {dest}", file=sys.stderr)
+        return 1
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(skeleton.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"created {dest}")
+    return 0
+
+
+def _cmd_discover() -> int:
+    from hpc_agent.incorporation.template import discover_runs
+
+    runs = discover_runs(_notebook_root(Path(".")))
+    if not runs:
+        print("no @register_run experiments found", file=sys.stderr)
+        return 1
+    for r in runs:
+        flags = ", ".join(f.name for f in r.flags)
+        print(
+            f"{r.path}::{r.name}  gpu={r.gpu}  "
+            f"sha={r.run_signature_sha}  flags=[{flags}]"
+        )
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv:
+        print(__doc__)
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    if cmd == "new":
+        if not rest:
+            print("usage: scaffold.py new <name>", file=sys.stderr)
+            return 2
+        return _cmd_new(rest[0])
+    if cmd == "discover":
+        return _cmd_discover()
+    print(f"unknown command {cmd!r}; see `python .hpc/scaffold.py`", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

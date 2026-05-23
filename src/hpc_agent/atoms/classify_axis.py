@@ -3,7 +3,7 @@
 The agent classifies a ``@register_run`` function's series axis (by
 reading ``run()`` and conducting the classification interview — see the
 ``hpc-classify-axis`` skill); this primitive only *records* the resolved
-:data:`~hpc_agent.template.axis.DataAxis` into
+:data:`~hpc_agent.incorporation.template.axis.DataAxis` into
 ``<experiment>/.hpc/axes.yaml``'s ``executors.<run_name>`` block. Same
 agent-reasons / primitive-records split as ``axes-init``.
 
@@ -85,7 +85,7 @@ def classify_axis(
     run's parameters.
     """
     from hpc_agent.state.axes import axes_path, upsert_executor
-    from hpc_agent.template.axis_config import HaloExprError, data_axis_from_config
+    from hpc_agent.incorporation.template.axis_config import HaloExprError, data_axis_from_config
 
     data_axis = spec.data_axis.model_dump(exclude_none=True, mode="json")
     # Normalise: an 'associative' axis with no monoid stated defaults to

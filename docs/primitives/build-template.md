@@ -12,7 +12,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent build-template [--repo-dir <repo_dir>] [--force]
-  python: hpc_agent.atoms.build_template.build_template
+  python: hpc_agent.incorporation.build.template.build_template
 ---
 # build-template
 

@@ -86,3 +86,15 @@ repos:
         language: system
         pass_filenames: false
         files: '^(src/slash_commands/skills/.*/SKILL\.md|src/slash_commands/commands/.*\.md|scripts/lint_skill_command_sync\.py)$'
+
+      - id: lint-pure-files
+        name: '@pure: no-io files must not import I/O modules'
+        entry: python scripts/lint_pure_files.py
+        language: python
+        pass_filenames: false
+
+      - id: lint-subject-imports
+        name: subjects under ops/ and meta/ must not cross-import
+        entry: python scripts/lint_subject_imports.py
+        language: python
+        pass_filenames: false

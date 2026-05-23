@@ -1,7 +1,7 @@
 """Pydantic model for the ``classify-axis`` scaffold's input.
 
 ``classify-axis`` records one ``@register_run`` function's classified
-:data:`~hpc_agent.template.axis.DataAxis` into
+:data:`~hpc_agent.incorporation.template.axis.DataAxis` into
 ``<experiment>/.hpc/axes.yaml``'s ``executors`` block. The agent does
 the *classification* (reading ``run()``, conducting the interview); this
 spec is the resolved answer the primitive persists.
@@ -43,7 +43,7 @@ class ClassifyAxisInput(BaseModel):
         description=(
             "The classified series axis: {kind, halo?, monoid?}. The "
             "classification must clear the serial-elision gate "
-            "(hpc_agent.template.check_elision) before any cluster time is "
+            "(hpc_agent.incorporation.template.check_elision) before any cluster time is "
             "spent — a misclassified axis returns plausible-but-wrong "
             "numbers."
         ),

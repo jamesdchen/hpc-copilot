@@ -30,7 +30,7 @@ error_codes:
 backed_by:
   cli: hpc-agent build-executor --name <name> [--output-dir <output_dir>] [--type
     <type>] [--force]
-  python: hpc_agent.atoms.build_executor.build_executor
+  python: hpc_agent.incorporation.build.executor.build_executor
 exit_codes:
 - 0: ok
 - 1: spec_invalid / config_invalid

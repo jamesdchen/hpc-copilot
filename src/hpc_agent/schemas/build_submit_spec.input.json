@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/build_submit_spec.input.json",
   "title": "build-submit-spec input",
-  "description": "Resolved interview values fed to ``hpc_agent.atoms.build_submit_spec``.\n\nThe primitive synthesizes the framework-required job_env keys\nand emits a validated submit_flow.input.json spec ready for\nsubmit-flow.",
+  "description": "Resolved interview values fed to ``hpc_agent.incorporation.build.submit_spec``.\n\nThe primitive synthesizes the framework-required job_env keys\nand emits a validated submit_flow.input.json spec ready for\nsubmit-flow.",
   "type": "object",
   "required": [
     "profile",

@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent build-submit-spec --spec <path>
-  python: hpc_agent.atoms.build_submit_spec.build_submit_spec
+  python: hpc_agent.incorporation.build.submit_spec.build_submit_spec
 exit_codes:
 - 0: ok
 - 1: user-error

@@ -14,7 +14,7 @@ from hpc_agent._schema_models._shared import (
 
 
 class BuildSubmitSpecInput(BaseModel):
-    """Resolved interview values fed to ``hpc_agent.atoms.build_submit_spec``.
+    """Resolved interview values fed to ``hpc_agent.incorporation.build.submit_spec``.
 
     The primitive synthesizes the framework-required job_env keys
     and emits a validated submit_flow.input.json spec ready for
