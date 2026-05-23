@@ -7,7 +7,7 @@ Per-experiment hints for two orthogonal concerns:
   runtime homogeneity. Schema v1.
 * **Correctness** (``executors``) — how each ``@register_run`` function's
   totally-ordered series may be split: the classified
-  :data:`~hpc_agent.template.axis.DataAxis`. Schema v2 (additive).
+  :data:`~hpc_agent.incorporation.template.axis.DataAxis`. Schema v2 (additive).
 
 The framework only stores fields it can independently act on;
 experiment-specific reasoning about WHY an axis is homogeneous (or WHY a
@@ -50,7 +50,7 @@ class _HaloConfig(BaseModel):
             "Arithmetic expression giving the warm-up row count, over the "
             "run()'s own parameter names (bare names, resolved from the "
             "sweep point), e.g. 'train_window * 48'. Evaluated by "
-            "hpc_agent.template.axis_config with a restricted AST walk — "
+            "hpc_agent.incorporation.template.axis_config with a restricted AST walk — "
             "only names, numeric literals, + - * //, and min()/max() are "
             "permitted; never eval()."
         ),
@@ -58,9 +58,9 @@ class _HaloConfig(BaseModel):
 
 
 class _DataAxisConfig(BaseModel):
-    """A classified :data:`~hpc_agent.template.axis.DataAxis`, serialized.
+    """A classified :data:`~hpc_agent.incorporation.template.axis.DataAxis`, serialized.
 
-    The (de)serializer is :mod:`hpc_agent.template.axis_config`.
+    The (de)serializer is :mod:`hpc_agent.incorporation.template.axis_config`.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -79,7 +79,7 @@ For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **ba
 The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 scaffolds it once per experiment; from then on it is committed and reused on every submit. There are two shapes, and Step 3 decides which:
 
 - **Cartesian grid** — each task is one independent cell of a parameter grid. `tasks_example.py` Pattern 1; scaffolded deterministically by [build-tasks-py](../../docs/primitives/build-tasks-py.md) at Step 6b. The 80% case.
-- **Planner-driven** — the executor iterates a *totally-ordered series* (a walk-forward backtest, an online-learning scan) and you want to fan that series out. Splitting a *stateful* series computation is only correct if each chunk replays the right warm-up; hpc-agent owns that via `hpc_agent.template.plan_tasks`. Emitted by [build-tasks-py](../../docs/primitives/build-tasks-py.md) when the spec carries a `data_axis` (Step 3b's classification).
+- **Planner-driven** — the executor iterates a *totally-ordered series* (a walk-forward backtest, an online-learning scan) and you want to fan that series out. Splitting a *stateful* series computation is only correct if each chunk replays the right warm-up; hpc-agent owns that via `hpc_agent.incorporation.template.plan_tasks`. Emitted by [build-tasks-py](../../docs/primitives/build-tasks-py.md) when the spec carries a `data_axis` (Step 3b's classification).
 
 ### 3a: Detect a series axis
 
@@ -97,7 +97,7 @@ The experiment declares nothing about parallelism — the classification is stor
 
 ### 3c: Serial-elision gate (mandatory for a non-`Sequential` axis)
 
-Before scaffolding a planner-driven `tasks.py`, prove the classification on a fixture: `hpc_agent.template.check_elision` (or `assert_elision_equivalent`) runs the experiment once whole and once split N ways and asserts the results agree. If it fails, the axis is misclassified — widen the halo or fall back to `Sequential()`. This gate is what makes the inference safe: a misclassified axis produces a job that runs fine and returns plausible-but-wrong numbers, and nothing else catches it. Do not skip it, and recommend the experiment repo wire `assert_elision_equivalent` into its CI as a required check.
+Before scaffolding a planner-driven `tasks.py`, prove the classification on a fixture: `hpc_agent.incorporation.template.check_elision` (or `assert_elision_equivalent`) runs the experiment once whole and once split N ways and asserts the results agree. If it fails, the axis is misclassified — widen the halo or fall back to `Sequential()`. This gate is what makes the inference safe: a misclassified axis produces a job that runs fine and returns plausible-but-wrong numbers, and nothing else catches it. Do not skip it, and recommend the experiment repo wire `assert_elision_equivalent` into its CI as a required check.
 
 If the projected task count exceeds `constraints.max_tasks` or ~1000, record a `magnitude_warning` in `decisions` / `anomalies` so the caller can confirm with the user before proceeding.
 
