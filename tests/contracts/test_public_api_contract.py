@@ -21,7 +21,6 @@ import hpc_agent
 import hpc_agent.errors
 import hpc_agent.integration
 
-
 # ---------------------------------------------------------------------------
 # Snapshots — edit these only when you are intentionally changing the public
 # API. Each change must ship with a version bump and a CHANGELOG entry.
