@@ -7,9 +7,8 @@ fresh-context ``claude -p`` worker, and emits its parsed report.
 This is a Tier 3 verb: a CLI-only orchestrator with no ``@primitive``
 backing — it lives outside the registry-driven dispatcher
 (:mod:`hpc_agent.cli._dispatch`). The ``register(sub)`` function below
-is invoked from :func:`hpc_agent.agent_cli._register_legacy_subcommands`
-so it slots into the legacy fallback alongside the unmigrated
-hand-written parsers.
+is invoked from
+:func:`hpc_agent.cli.parser._register_tier3_modules`.
 """
 
 from __future__ import annotations
@@ -72,10 +71,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 def register(sub: argparse._SubParsersAction) -> None:
     """Register the ``run`` subcommand on *sub*.
 
-    Called from :func:`hpc_agent.agent_cli._register_legacy_subcommands`
-    as part of the legacy fallback path. ``run`` is a Tier 3 verb (no
-    ``@primitive`` backing), so it cannot be picked up by the registry
-    walk in :func:`hpc_agent.cli.parser._register_from_registry`.
+    Called from :func:`hpc_agent.cli.parser._register_tier3_modules`.
+    ``run`` is a Tier 3 verb (no ``@primitive`` backing), so it cannot
+    be picked up by the registry walk in
+    :func:`hpc_agent.cli.parser._register_from_registry`.
     """
     p_run = sub.add_parser(
         "run",
