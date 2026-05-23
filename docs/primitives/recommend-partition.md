@@ -11,41 +11,56 @@ backed_by:
 ---
 # recommend-partition
 
-Route a job to the best partition using a four-rule priority system. SLURM debug partitions often run at much higher priority tier (10× vs 1×) but cap walltime at 1 hour; this primitive honors user preference, routes short jobs to debug for leverage, refuses long jobs to debug (which would be killed), and recommends the best fallback. Each decision includes a `rationale` and `leverage_estimate` to help the agent understand the tradeoff.
+Route a job to the best partition using a four-rule priority system.
+SLURM debug partitions often run at a much higher priority tier (10×
+vs 1×) but cap walltime at one hour; this primitive honours user
+preference, routes short jobs to debug for leverage, refuses long
+jobs to debug (which would be killed), and recommends the best
+fallback. Each decision includes a ``rationale`` and
+``leverage_estimate`` so the composing primitive can surface the
+tradeoff.
 
-## Inputs
+## Composers
 
-- `requested_walltime_sec` (integer) — Job's requested wall-time in seconds.
-- `partitions` (list of objects) — The cluster's partition definitions. Each object has:
-  - `name` (string) — Partition name.
-  - `priority_tier` (integer, default 1) — SLURM PriorityTier for this partition.
-  - `walltime_cap_sec` (integer, optional) — Hard cap on walltimes this partition accepts (often 1h for debug).
-  - `is_debug` (boolean, default false) — Mark whether this is a debug partition.
-- `user_preferred_partition` (string, optional) — User's explicit preference; when set and exists, the primitive honours it verbatim and returns.
+Called by:
 
-## Outputs
+- ``plan-throughput`` — uses the recommendation when packing a
+  task grid into batched submission waves.
+- ``submit-flow`` — uses it implicitly via ``plan-throughput``.
 
-A `RecommendPartitionResult` object with:
+Not invoked by the agent directly; ``agent_facing=False`` and no
+standalone CLI verb.
 
-- `recommended_partition` (string) — Name of the chosen partition.
-- `rationale` (string) — One of: `"user_preference_honoured"`, `"debug_short_walltime"`, `"debug_overrun_refused"`, `"default_long_walltime"`, `"no_debug_partition_available"`.
-- `message` (string) — Human-readable explanation of the routing decision.
-- `leverage_estimate` (float, default 1.0) — Multiplicative speedup (priority-tier ratio) the recommendation buys vs. the default partition. Example: 10.0 means 10× backfill leverage on debug.
+## Invariants
 
-## Errors
+- Pure local routing logic — no SSH, no filesystem, no scheduler
+  query.
+- Calling twice with the same inputs produces the same output
+  (``idempotency_key`` is intentionally absent; the function is
+  stateless).
+- The four routing rules are exhaustive; rule 4 is the default
+  fallback so a recommendation always comes back.
+- ``leverage_estimate`` is the ratio
+  ``debug.priority_tier / fallback.priority_tier`` when
+  recommending debug; otherwise ``1.0``.
 
-None declared. Spec validation errors raise `pydantic.ValidationError`; with a valid spec the primitive always returns a `RecommendPartitionResult` (the four routing rules are exhaustive, with rule 4 as the default fallback).
+## Coupling
 
-## Idempotency
+- Input shape: ``RecommendPartitionSpec`` (see
+  ``src/hpc_agent/_schema_models/queries/recommend_partition.py``).
+- Output shape: ``RecommendPartitionResult`` with
+  ``recommended_partition``, ``rationale`` (one of the four
+  enumerated values), ``message``, ``leverage_estimate``.
+- Cluster partition definitions flow in via the spec; the primitive
+  doesn't read clusters.yaml itself — that's the composer's
+  responsibility.
 
-Pure local routing logic — calling twice with the same inputs produces the same output.
+## Failure modes
 
-## Notes
+None declared. Spec validation errors raise
+``pydantic.ValidationError`` at the boundary; with a valid spec the
+primitive always returns a ``RecommendPartitionResult``.
 
-- Rule 1 (User Preference): If `user_preferred_partition` is set and exists, use it unconditionally. The message notes that the smart router would have picked differently, giving context.
-- Rule 2 (Debug Short): If a debug partition exists and `requested_walltime_sec ≤ walltime_cap_sec`, route to debug for leverage.
-- Rule 3 (Debug Overrun): If a debug partition exists and `requested_walltime_sec > walltime_cap_sec`, refuse debug (job would be killed mid-flight) and route to the highest-priority non-debug partition.
-- Rule 4 (Fallback): If no debug partition exists, recommend the highest-priority partition.
-- The `leverage_estimate` is the ratio `debug.priority_tier / fallback.priority_tier` when recommending debug; otherwise 1.0. This helps the agent understand whether the routing difference is meaningful.
-
-**Schemas:** [`recommend_partition.input.json`](../../src/hpc_agent/schemas/recommend_partition.input.json), [`recommend_partition.output.json`](../../src/hpc_agent/schemas/recommend_partition.output.json).
+**Schemas:**
+[``recommend_partition.input.json``](../../src/hpc_agent/schemas/recommend_partition.input.json),
+[``recommend_partition.output.json``](../../src/hpc_agent/schemas/recommend_partition.output.json).

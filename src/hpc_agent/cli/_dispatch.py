@@ -176,18 +176,15 @@ def _leaf_verb(primitive_name: str, shape: CliShape) -> str:
 def cli_to_invocation_string(name: str, cli: Any) -> str | None:
     """Render a primitive's ``cli=`` declaration as a shell invocation string.
 
-    Consumers that historically read ``meta.cli`` as a string (the
-    operations catalog, the markdown frontmatter generator, the
-    catalog-table renderer) flow through this so they don't have to
-    branch on ``isinstance(cli, CliShape)``. Returns ``None`` when no
-    CLI is declared, the legacy string verbatim when ``cli`` is a str,
-    or a synthesized ``hpc-agent <group?> <verb> [flags]`` string for a
-    :class:`CliShape`.
+    Consumers that read ``meta.cli`` as a string (the operations catalog,
+    the markdown frontmatter generator, the catalog-table renderer)
+    flow through this so they don't have to branch on
+    ``isinstance(cli, CliShape)``. Returns ``None`` when no CLI is
+    declared, or a synthesized ``hpc-agent <group?> <verb> [flags]``
+    string for a :class:`CliShape`.
     """
     if cli is None:
         return None
-    if isinstance(cli, str):
-        return cli
     if not isinstance(cli, CliShape):
         return str(cli)
     parts = ["hpc-agent"]
@@ -339,6 +336,12 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
             f"{type(shape).__name__}, not CliShape"
         )
 
+    # Handlers run BEFORE the requires_ssh gate so they can short-circuit
+    # paths that don't actually touch the cluster (e.g. submit's
+    # dedup/replay path that only records to the journal, or the
+    # --dry-run preview path). Handlers that DO need SSH must self-gate
+    # (cmd_aggregate, cmd_status). For Tier 1 dispatch (no handler), the
+    # gate below runs unconditionally.
     if shape.handler is not None:
         return shape.handler(ns)
 

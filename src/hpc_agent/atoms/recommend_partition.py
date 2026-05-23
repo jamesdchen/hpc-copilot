@@ -55,7 +55,9 @@ def _highest_priority_non_debug(parts: list[PartitionInfo]) -> PartitionInfo | N
     verb="query",
     side_effects=[],
     idempotent=True,
-    agent_facing=True,
+    # Composed into ``plan-throughput`` and ``submit-flow``; no independent
+    # agent surface, so the LLM/agent never targets it directly.
+    agent_facing=False,
 )
 def recommend_partition(
     experiment_dir: Path,  # noqa: ARG001 — convention: every atom takes experiment_dir

@@ -82,9 +82,19 @@ def _recall_arg_pre(ns: Namespace) -> dict[str, Any]:
         payload["since"] = ns.since
     _validate_against_schema(payload, "recall")
     return {
-        "spec": RecallSpec.model_validate(payload),
+        "spec": _model_validate_or_raise(RecallSpec, payload),
         "roots": resolve_roots(getattr(ns, "root", None)),
     }
+
+
+def _model_validate_or_raise(model_cls, payload):
+    """Wrap pydantic ``model_validate`` so failures map to typed ``SpecInvalid``."""
+    try:
+        return model_cls.model_validate(payload)
+    except Exception as exc:  # noqa: BLE001 — pydantic ValidationError shape
+        from hpc_agent import errors
+
+        raise errors.SpecInvalid(str(exc)) from exc
 
 
 @primitive(

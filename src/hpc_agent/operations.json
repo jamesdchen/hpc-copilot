@@ -346,7 +346,7 @@
     "verb": "query"
   },
   {
-    "agent_facing": true,
+    "agent_facing": false,
     "cli": null,
     "idempotent": true,
     "input_schema": "recommend_partition.input.json",
