@@ -57,7 +57,12 @@ def _cmd_campaign_health(ns: argparse.Namespace) -> int:
     if getattr(ns, "cluster", None) is not None:
         payload["cluster"] = ns.cluster
     _validate_against_schema(payload, "campaign_health")
-    spec = CampaignHealthSpec.model_validate(payload)
+    try:
+        spec = CampaignHealthSpec.model_validate(payload)
+    except Exception as exc:  # noqa: BLE001 — pydantic ValidationError shape
+        from hpc_agent import errors
+
+        raise errors.SpecInvalid(str(exc)) from exc
     data = campaign_health(ns.experiment_dir, spec=spec)
     _ok(data, name="campaign-health")
     return EXIT_OK

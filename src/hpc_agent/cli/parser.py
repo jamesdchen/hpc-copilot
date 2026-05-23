@@ -20,11 +20,6 @@ from hpc_agent.cli._dispatch import CliShape, _leaf_verb, dispatch_primitive
 _GROUP_HELP: dict[str, str] = {
     "campaign": "Closed-loop campaign read-only commands (status, list, init, ...).",
     "clusters": "Introspect available cluster definitions.",
-    "validate": "Validators (campaign, ...).",
-    "build": (
-        "Scaffolders (axes-init, build-executor, build-template, "
-        "build-tasks-py, build-submit-spec)."
-    ),
 }
 
 

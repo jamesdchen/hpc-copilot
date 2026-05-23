@@ -54,8 +54,13 @@ _PRIMITIVE_TO_CLI_VERB: dict[str, str] = {
 # the exception so a future maintainer adding/removing one has to
 # argue for it explicitly.
 _INTENTIONALLY_NO_CLI: set[str] = {
-    # Validators composed into ``validate-campaign``; not invoked
-    # individually from the agent surface.
+    # Validators that are part of the ``validate-campaign`` family but
+    # have no standalone CLI verb. Four of them
+    # (validate-executor-signatures, validate-input-dataset,
+    # validate-stochastic-marker, validate-walltime-against-history)
+    # are explicitly composed into ``validate-campaign``;
+    # ``validate-self-qos-limit`` is registered for schema/contract
+    # symmetry but not yet wired into the workflow body.
     "validate-executor-signatures",
     "validate-input-dataset",
     "validate-self-qos-limit",
