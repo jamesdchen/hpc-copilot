@@ -43,6 +43,10 @@ jobs:
         run: python scripts/check_no_pending_primitive_docs.py
       - name: Check skills <-> slash_commands stay in sync
         run: python scripts/lint_skill_command_sync.py
+      - name: Lint @pure files (no I/O imports/calls)
+        run: python scripts/lint_pure_files.py
+      - name: Lint subject imports (no cross-subject reach)
+        run: python scripts/lint_subject_imports.py
       - name: Check JSON schemas regenerated from Pydantic
         run: python scripts/build_schemas.py --check
       - name: Check baked operations.json is up to date
