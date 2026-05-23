@@ -525,7 +525,7 @@
     "input_schema": null,
     "name": "check-preflight",
     "output_schema": "preflight.output.json",
-    "python": "hpc_agent.atoms.preflight.check_preflight",
+    "python": "hpc_agent.ops.preflight.check.check_preflight",
     "side_effects": [],
     "verb": "validate"
   },
