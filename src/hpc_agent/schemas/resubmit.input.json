@@ -28,6 +28,11 @@
         "queue_stall",
         "code_bug",
         "unknown",
+        "import_error",
+        "file_not_found",
+        "permission_denied",
+        "disk_full",
+        "python_traceback",
         "preempted"
       ],
       "title": "Category",

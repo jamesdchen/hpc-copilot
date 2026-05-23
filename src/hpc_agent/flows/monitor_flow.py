@@ -285,7 +285,13 @@ def _write_failed_task_ids(
     Writes ``<exp>/.hpc/runs/<run_id>.failed.json`` with the shape
     documented in the D2b primitive doc — kept on disk (not in the
     sidecar) so aggregate-flow can read it without a sidecar parse.
+
+    Routed through :func:`atomic_write_json` so a concurrent reader
+    (aggregate-flow scanning the ledger) never observes a partial JSON
+    write — without this, a Python-level ``write_text`` produces a
+    truncate-then-write sequence that can land mid-payload.
     """
+    from hpc_agent._internal.io import atomic_write_json
     from hpc_agent.state.runs import run_sidecar_path
 
     target = run_sidecar_path(experiment_dir, run_id).with_suffix(".failed.json")
@@ -296,7 +302,7 @@ def _write_failed_task_ids(
         "wave": wave,
         "classifier_codes": list(classifier_codes or []),
     }
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    atomic_write_json(target, payload)
 
 
 def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
@@ -312,34 +318,39 @@ def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
     typically <100KB total) — cheap relative to a full `_combiner/`
     pull. Idempotent: re-running on the same run is safe because
     `append_sample` dedups on `(run_id, task_id)`.
+
+    The pull lands under a :class:`tempfile.TemporaryDirectory` so a
+    long-running monitor that ticks N runs to terminal does not leak N
+    ``hpc_runtime_pull_*`` dirs under ``$TMPDIR``.
     """
-    from tempfile import mkdtemp
+    import tempfile
 
     from hpc_agent.infra.remote import rsync_pull
     from hpc_agent.state.runs import read_run_sidecar
     from hpc_agent.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
 
     try:
-        local_dir = Path(mkdtemp(prefix="hpc_runtime_pull_"))
-        result = rsync_pull(
-            ssh_target=record.ssh_target,
-            remote_path=record.remote_path,
-            remote_subdir="_combiner",
-            local_dir=str(local_dir),
-            include=["wave_*.runtime.json"],
-        )
-        if result.returncode != 0:
-            return 0
-        cmd_sha = None
-        with contextlib.suppress(FileNotFoundError, OSError, json.JSONDecodeError):
-            cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
-        return ingest_runtime_samples_from_combiner_dir(
-            local_dir,
-            experiment_dir=experiment_dir,
-            profile=record.profile,
-            cluster=record.cluster,
-            cmd_sha=cmd_sha,
-        )
+        with tempfile.TemporaryDirectory(prefix="hpc_runtime_pull_") as local_dir_str:
+            local_dir = Path(local_dir_str)
+            result = rsync_pull(
+                ssh_target=record.ssh_target,
+                remote_path=record.remote_path,
+                remote_subdir="_combiner",
+                local_dir=str(local_dir),
+                include=["wave_*.runtime.json"],
+            )
+            if result.returncode != 0:
+                return 0
+            cmd_sha = None
+            with contextlib.suppress(FileNotFoundError, OSError, json.JSONDecodeError):
+                cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
+            return ingest_runtime_samples_from_combiner_dir(
+                local_dir,
+                experiment_dir=experiment_dir,
+                profile=record.profile,
+                cluster=record.cluster,
+                cmd_sha=cmd_sha,
+            )
     except (OSError, TimeoutError):
         return 0
 
@@ -406,6 +417,7 @@ def _is_terminal(
         spec_model=MonitorFlowSpec,
         schema_ref=SchemaRef(input="monitor_flow"),
         experiment_dir_arg=True,
+        requires_ssh=True,
         dry_run_arg=True,
         dry_run_passthrough_keys=(
             "run_id",

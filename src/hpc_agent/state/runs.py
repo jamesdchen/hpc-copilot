@@ -626,6 +626,20 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     return target
 
 
+# Default minimum age before a sidecar is eligible for orphan pruning.
+# ``write_run_sidecar`` writes the (jobless) sidecar at Step 6d, then
+# ``submit_flow`` runs the rsync + qsub + ``update_run_sidecar_job_ids``
+# + journal-write sequence. Between those two points the sidecar IS
+# legitimately job-less, which is what :func:`is_orphan_sidecar` keys
+# on — pruning during that window deletes a sidecar an in-flight
+# submit is about to finalize, then the post-qsub finalize raises
+# ``FileNotFoundError`` and orphans the cluster jobs. A 5-minute floor
+# is long enough to cover the rsync + canary + qsub of even a
+# large-deploy submit while still keeping prune useful after a failed
+# batch (the slow path takes seconds, not minutes).
+_PRUNE_ORPHAN_MIN_AGE_SECONDS: int = 300
+
+
 @primitive(
     name="prune-orphan-sidecars",
     verb="mutate",
@@ -636,7 +650,11 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     idempotency_key="experiment_dir",
     agent_facing=True,
 )
-def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:
+def prune_orphan_sidecars(
+    experiment_dir: Path,
+    *,
+    min_age_seconds: int = _PRUNE_ORPHAN_MIN_AGE_SECONDS,
+) -> list[str]:
     """Delete every orphan sidecar under ``<exp>/.hpc/runs/``.
 
     Returns the list of run_ids whose sidecars were removed (for a
@@ -649,12 +667,36 @@ def prune_orphan_sidecars(experiment_dir: Path) -> list[str]:
     runtime-prior aggregator without a corresponding cluster job. Run
     this primitive after the batch finishes (or as part of `/resume-hpc`
     or `/setup-hpc`) to clean them up.
+
+    *min_age_seconds* skips sidecars younger than the cutoff (default
+    5 minutes, see :data:`_PRUNE_ORPHAN_MIN_AGE_SECONDS`). Between
+    ``write_run_sidecar`` (Step 6d) and the post-qsub finalize that
+    populates ``job_ids``, a sidecar is legitimately job-less — pruning
+    in that window deletes a sidecar an in-flight submit is about to
+    finalize, raising ``FileNotFoundError`` on the finalize and orphaning
+    the cluster jobs. Pass ``min_age_seconds=0`` to prune immediately
+    (only safe when the caller can guarantee no concurrent
+    ``submit_flow`` is mid-pipeline against the same experiment).
     """
+    import time as _time
+
+    if min_age_seconds < 0:
+        raise ValueError("min_age_seconds must be non-negative")
+    cutoff = _time.time() - float(min_age_seconds)
     deleted: list[str] = []
     for path in find_existing_runs(experiment_dir):
         run_id = path.stem
         if not is_orphan_sidecar(experiment_dir, run_id):
             continue
+        if min_age_seconds > 0:
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > cutoff:
+                # Too fresh — skip; an in-flight submit may still be
+                # mid-pipeline against this sidecar.
+                continue
         try:
             path.unlink()
             deleted.append(run_id)

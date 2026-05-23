@@ -68,6 +68,7 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
             "{ok, failure_kind, details, stderr_tail}."
         ),
         experiment_dir_arg=True,
+        requires_ssh=True,
         args=(
             CliArg(
                 "--canary-run-id",
@@ -80,6 +81,15 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
                 type=str,
                 default=None,
                 help="Optional path (relative to remote_path) the canary should have written.",
+            ),
+            CliArg(
+                "--fingerprint",
+                type=str,
+                default=None,
+                help=(
+                    "Optional remote path (relative to result_dir or absolute) to "
+                    "SHA256 over SSH; hex digest returned as data.metrics_fingerprint."
+                ),
             ),
             CliArg(
                 "--poll-interval-sec",

@@ -632,9 +632,16 @@ def _submit_flow_batch_locked(
     # to the agent's resume-detection prompts. The prune is silent on
     # success (returns []); if it deletes anything, the cluster traffic
     # we're about to send is fresh anyway.
+    #
+    # ``min_age_seconds=0`` is safe here: the per-repo lock above
+    # serialises submit_flow_batch invocations against the same
+    # experiment, so the only sidecars present at this point are from
+    # PRIOR batches (which had to complete or fail before releasing the
+    # lock). The default min_age_seconds guard is for ad-hoc invocations
+    # that don't hold the lock and could race a concurrent submit.
     from hpc_agent.state.runs import prune_orphan_sidecars
 
-    prune_orphan_sidecars(experiment_dir)
+    prune_orphan_sidecars(experiment_dir, min_age_seconds=0)
 
     # Single-target invariant: rsync + deploy can only target one place.
     targets = {(s.ssh_target, s.remote_path) for s in specs}

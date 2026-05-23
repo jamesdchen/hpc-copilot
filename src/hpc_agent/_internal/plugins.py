@@ -23,6 +23,7 @@ All are optional; a plugin may provide any combination, or none.
 
 from __future__ import annotations
 
+import warnings
 from functools import cache
 from importlib.metadata import entry_points
 from typing import Any
@@ -46,13 +47,21 @@ def load_plugins() -> tuple[Any, ...]:
     Cached: entry-point resolution touches installed-distribution
     metadata and the set cannot change within a process. A plugin whose
     entry point fails to import is skipped rather than crashing the
-    host — a broken optional plugin must not take down the core CLI.
+    host — a broken optional plugin must not take down the core CLI —
+    but the failure is surfaced via :func:`warnings.warn` so the
+    operator notices a silently-disabled plugin (was previously a bare
+    ``continue`` that swallowed every load error).
     """
     loaded: list[Any] = []
     for ep in entry_points(group=PLUGIN_GROUP):
         try:
             loaded.append(ep.load())
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — entry-point load may raise anything
+            warnings.warn(
+                f"failed to load hpc-agent plugin {ep.name!r} (entry_point={ep.value!r}): {exc!r}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             continue
     return tuple(loaded)
 

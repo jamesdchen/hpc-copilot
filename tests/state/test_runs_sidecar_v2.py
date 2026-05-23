@@ -515,7 +515,11 @@ def test_prune_orphan_sidecars_removes_only_orphans(_journal_home: Path, tmp_pat
     write_run_sidecar(tmp_path, **orphan_kwargs)
     _seed_journal(tmp_path, real_kwargs["run_id"], job_ids=["999"])
 
-    deleted = prune_orphan_sidecars(tmp_path)
+    # min_age_seconds=0 — this isolated test has no concurrent submit to
+    # race the prune; the production default (300s) protects ad-hoc CLI
+    # invocations from deleting a sidecar an in-flight submit is about
+    # to finalize.
+    deleted = prune_orphan_sidecars(tmp_path, min_age_seconds=0)
     assert deleted == [orphan_kwargs["run_id"]]
     assert run_sidecar_path(tmp_path, real_kwargs["run_id"]).is_file()
     assert not run_sidecar_path(tmp_path, orphan_kwargs["run_id"]).is_file()
@@ -525,8 +529,9 @@ def test_prune_orphan_sidecars_idempotent(_journal_home: Path, tmp_path: Path) -
     from hpc_agent.state.runs import prune_orphan_sidecars
 
     write_run_sidecar(tmp_path, **_common_required_kwargs())
-    first = prune_orphan_sidecars(tmp_path)
-    second = prune_orphan_sidecars(tmp_path)
+    # min_age_seconds=0 — see test_prune_orphan_sidecars_removes_only_orphans.
+    first = prune_orphan_sidecars(tmp_path, min_age_seconds=0)
+    second = prune_orphan_sidecars(tmp_path, min_age_seconds=0)
     assert len(first) == 1
     assert second == []
 

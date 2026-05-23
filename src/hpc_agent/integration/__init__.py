@@ -68,9 +68,10 @@ ERROR_CODES = frozenset(
         "outputs_missing",
         "journal_corrupt",
         "schema_incompat",
+        "precondition_failed",
     }
 )
-"""The 14 ``error_code`` values an error envelope may carry. The
+"""The 15 ``error_code`` values an error envelope may carry. The
 catch-all ``internal`` code is intentionally NOT included — it
 indicates a framework bug or corrupt state, not a stable wire
 contract integrators should branch on. The full set with retry-policy
