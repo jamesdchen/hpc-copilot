@@ -289,7 +289,7 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
     args = argparse.Namespace(
         experiment_dir=tmp_path,
         run_id="ml_abcd1234",
-        task_id="7",
+        task_ids="7",  # CliShape uses dest="task_ids"; arg_pre parses to list[int]
         all_failed=False,
         lines=50,
     )

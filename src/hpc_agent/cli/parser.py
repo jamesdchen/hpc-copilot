@@ -169,20 +169,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    nested_groups = _register_from_registry(sub)
+    _ = _register_from_registry(sub)
 
     # Tier 3 modules — CLI-only orchestrators with no @primitive backing.
     # Each module owns its add_parser blocks via a ``register(sub)``
-    # function. Future Tier 3 agents (spawn, ...) append a call here.
+    # function.
     _register_tier3_modules(sub)
-
-    # Legacy fallback — the hand-written add_parser blocks in agent_cli
-    # for primitives that haven't been migrated yet. The fallback is
-    # idempotent against the registry walk: it inspects ``sub.choices``
-    # and ``nested_groups`` to skip names already taken.
-    from hpc_agent.agent_cli import _register_legacy_subcommands
-
-    _register_legacy_subcommands(sub, nested_groups=nested_groups)
 
     # Plugins register at the very end so they can override / extend
     # core verbs. Same hookup as before the registry-driven split.

@@ -27,7 +27,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`campaign-list`](primitives/campaign-list.md) | ✓ | _none_ | `hpc-agent campaign list [--experiment-dir <dir>]` | `hpc_agent.atoms.campaign_list.campaign_list` | — | — |
 | [`campaign-replay`](primitives/campaign-replay.md) | ✓ | _none_ | `hpc-agent campaign replay [--experiment-dir <dir>] --campaign-id <campaign_id> [--last-n <last_n>]` | `hpc_agent.atoms.campaign_replay.campaign_replay` | — | `hpc_agent/schemas/campaign.output.json` |
 | [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` | `hpc_agent.atoms.campaign_status.campaign_status` | — | — |
-| [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-agent capabilities` | `hpc_agent.atoms.capabilities.capabilities` | — | `hpc_agent/schemas/capabilities.output.json` |
+| [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.capabilities.capabilities` | — | `hpc_agent/schemas/capabilities.output.json` |
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `hpc_agent.atoms.clusters.describe_cluster` | — | `hpc_agent/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `hpc_agent.atoms.clusters.list_clusters` | — | `hpc_agent/schemas/clusters_list.output.json` |
 | [`decide-monitor-arm`](primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `hpc_agent.atoms.monitor_arm.decide_monitor_arm` | `hpc_agent/schemas/decide_monitor_arm.input.json` | `hpc_agent/schemas/decide_monitor_arm.output.json` |

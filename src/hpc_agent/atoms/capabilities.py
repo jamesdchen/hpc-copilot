@@ -27,7 +27,11 @@ from hpc_agent._internal.primitive import primitive
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent capabilities",
+    # CLI is registered as a Tier 3 verb in :mod:`hpc_agent.cli.setup`
+    # (the ``--full`` flag bypasses the JSON-envelope contract, so the
+    # adapter is hand-written rather than dispatcher-driven). The atom
+    # is registered for the catalog only.
+    cli=None,
     agent_facing=True,
 )
 def capabilities(*, subcommands: list[str]) -> dict[str, Any]:

@@ -175,7 +175,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent capabilities",
+    "cli": null,
     "idempotent": true,
     "input_schema": null,
     "name": "capabilities",
