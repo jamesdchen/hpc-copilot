@@ -3,6 +3,7 @@ name: hpc-status
 description: "Poll the status of an in-flight HPC run. Single snapshot via poll-run-status, or wait-until-terminal via monitor-flow."
 allowed-tools: Bash Read Write Task
 execution: delegated
+category: worker-prompt
 ---
 
 Agent-facing composition over two primitives that share the same observation surface but differ in scope:
@@ -63,6 +64,6 @@ If the agent is driving its own polling loop instead of using `monitor-flow`, do
 
 ## Notes
 
-- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
+- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-agent setup --cluster <name>` once per machine to probe the environment before submitting.
 - **No cancel/abort**: hpc-agent has no kill primitive. Receiving `lifecycle_state == "in_flight"` for a bad experiment means the cluster jobs continue to walltime; the caller can stop monitoring but cannot terminate.
 - The journal `last_status` and the per-run `<run_id>.last_status.json` cache file both update on each `poll-run-status` call; the cache file's mtime tells the caller how stale the snapshot is.

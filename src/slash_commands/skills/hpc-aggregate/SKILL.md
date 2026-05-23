@@ -3,6 +3,7 @@ name: hpc-aggregate
 description: "Finalize a run's aggregated metrics: combine all waves on cluster, pull partials locally, run reduce_partials, optionally pull summary files."
 allowed-tools: Bash Read Write Task
 execution: delegated
+category: worker-prompt
 ---
 
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
@@ -88,7 +89,7 @@ Anti-pattern: `scp -r results/tune/*_chunk_*.csv cluster-B:...` because cluster-
 
 ## Notes
 
-- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
+- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-agent setup --cluster <name>` once per machine to probe the environment before submitting.
 - **Idempotency**: re-invoking `aggregate-flow` on the same `run_id` is safe and cheap. `combine-wave` skips already-combined waves; `rsync_pull` handles the diff; `reduce_partials` is a pure function over the pulled files.
 - **No cancel/abort**: `combine-wave` runs the user's combiner script on the cluster; once started, it cannot be stopped from here. Set sensible walltimes in the combiner job itself.
 - **CLI does NOT choose the combiner script or output schema.** The user's repo provides `.hpc/_hpc_combiner.py`. This skill only orchestrates the call and records outcomes via the workflow atom.

@@ -3,6 +3,7 @@ name: hpc-submit
 description: "Submit a parameter-grid experiment to a SLURM/SGE cluster via SSH and record it in the journal. End-to-end pipeline (rsync + deploy + qsub + record) in one CLI call."
 allowed-tools: Bash Read Write Task
 execution: delegated
+category: worker-prompt
 ---
 
 Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-flow.md) workflow atom** (full pre-flight + rsync + deploy + qsub + record pipeline in one CLI call). For just the journal-write half (when the agent has already qsubbed), use the [submit-spec](../../docs/primitives/submit-spec.md) primitive directly. Both are idempotent on `run_id`: a replay returns `data.deduped: true` and emits no cluster-side side effects.
@@ -316,7 +317,7 @@ If the requested run names a CLI flag the executor does not accept, surface that
 
 ## Notes
 
-- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` or every cluster call hangs on auth. Run `hpc-preflight` first.
+- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` or every cluster call hangs on auth. Run `hpc-agent setup --cluster <name>` once per machine to probe the environment and populate the 24h cache marker Step 6b reads.
 - **Scheduler rate limits**: serialize submits to a single cluster; most schedulers cap at ~1/sec. Sleep 1s between back-to-back calls or expect `scheduler_throttled`.
 - **Idempotency**: `submit-flow` is replay-safe on `run_id`. If `data.deduped: true`, original cluster jobs are running — do NOT re-invoke.
 - **No cancel/abort**: hpc-agent has no kill primitive. If you decide an experiment is bad, stop monitoring; cluster jobs run to walltime.

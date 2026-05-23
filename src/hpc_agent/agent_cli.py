@@ -347,18 +347,42 @@ def cmd_install_commands(args: argparse.Namespace) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
-    """One-shot setup: install the bundled slash commands + skills.
+    """One-shot setup: install assets; optionally probe a cluster.
 
-    The single entry point a new user runs after ``pip install
-    hpc-agent``. Copies the bundled slash commands and skills into
-    ~/.claude/. Idempotent, so re-running is safe. ``--dry-run``
-    previews without writing.
+    Installs the bundled slash commands + skills into ``~/.claude/``.
+    With ``--cluster <name>``, also probes the cluster environment
+    (SSH agent, ssh + file-transfer transport on PATH, ``clusters.yaml``
+    parses, TCP :22 reachable) and — on a green probe — writes the
+    24h cache marker that ``/submit-hpc``'s Step 6b gate reads, so the
+    first submit in this experiment doesn't repeat the probe.
+
+    The marker is scoped to ``--experiment-dir`` (default: cwd)
+    because the Step 6b gate reads from ``JournalLayout(experiment_dir)``
+    — run setup from your experiment directory or pass ``--experiment-dir``.
+
+    Idempotent: re-run after fixing your SSH agent to refresh the
+    marker. Always returns ``EXIT_OK`` on a successful primitive call
+    — callers branch on ``data.preflight.all_ok``.
     """
     from hpc_agent.agent_assets import install_agent_assets
+    from hpc_agent.atoms.preflight import check_preflight, write_preflight_marker
 
     claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
     assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
-    _emit({"ok": True, "idempotent": True, "data": {"assets": assets}})
+    payload: dict[str, Any] = {"assets": assets}
+
+    cluster = getattr(args, "cluster", None)
+    if cluster:
+        preflight = check_preflight(cluster=cluster)
+        payload["preflight"] = preflight
+        if preflight["all_ok"] and not args.dry_run:
+            experiment_dir = (
+                Path(args.experiment_dir).expanduser() if args.experiment_dir else Path.cwd()
+            )
+            marker = write_preflight_marker(cluster=cluster, experiment_dir=experiment_dir)
+            payload["preflight_marker"] = str(marker)
+
+    _emit({"ok": True, "idempotent": True, "data": payload})
     return EXIT_OK
 
 
@@ -1791,6 +1815,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Override the target Claude config dir. Defaults to ~/.claude.",
+    )
+    p_setup.add_argument(
+        "--cluster",
+        type=str,
+        default=None,
+        help=(
+            "Optional cluster name. When supplied, probe the cluster's "
+            "environment (SSH agent, ssh/transport on PATH, clusters.yaml, "
+            "TCP :22) after install and write the 24h cache marker that "
+            "/submit-hpc's Step 6b gate reads."
+        ),
+    )
+    p_setup.add_argument(
+        "--experiment-dir",
+        type=str,
+        default=None,
+        help=(
+            "Experiment directory whose journal receives the preflight "
+            "cache marker. Defaults to cwd. Only used when --cluster is set."
+        ),
     )
     p_setup.set_defaults(func=cmd_setup)
 

@@ -22,7 +22,6 @@ from hpc_agent._internal.primitive import primitive
 _SKILL_NAMES = (
     "hpc-submit",
     "hpc-status",
-    "hpc-preflight",
     "hpc-aggregate",
     "hpc-build-executor",
     "hpc-campaign",

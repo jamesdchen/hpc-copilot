@@ -2,7 +2,7 @@
 
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
-- **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/preflight`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1; preflight is folded into `/submit-hpc` Step 6b as an idempotent gate (with `/preflight` still available as a standalone diagnostic).
+- **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/setup-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1. Environment preflight (SSH agent, cluster reachability) runs once per machine via `/setup-hpc` (or `hpc-agent setup --cluster <name>`), which writes a 24h cache marker `/submit-hpc`'s Step 6b gate reads — runtime workflows assume setup succeeded.
 - **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via a `Bash`-style tool by external orchestrators. This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md). For integrators: [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
 Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (`hpc_agent.runner`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
@@ -12,20 +12,24 @@ Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markd
 ### For humans (Claude Code)
 
 ```bash
-pip install hpc-agent          # or `pip install -e .` from a checkout
-hpc-agent setup                # copy commands + skills
+pip install hpc-agent                              # or `pip install -e .` from a checkout
+hpc-agent setup                                    # copy commands + skills
+hpc-agent setup --cluster hoffman2                 # probe cluster + populate 24h preflight cache (run once per cluster)
 ```
-`hpc-agent setup` copies the bundled slash commands into
+`hpc-agent setup` (no flags) copies the bundled slash commands into
 `~/.claude/commands/` and the skills into `~/.claude/skills/` —
-idempotent, so re-running is safe. Both asset trees ship inside the
-package, so this works the same from a wheel install or an editable
-checkout. Pass `--dry-run` to preview. Every command
-(`/preflight`, `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`,
-`/campaign-hpc`, `/hpc-axes-init`) and skill ships inside the package.
+idempotent. Re-run with `--cluster <name>` once per machine + cluster
+to probe SSH agent reachability, ssh/transport on PATH,
+`clusters.yaml` parseability, and TCP :22; on a green probe it writes
+a 24h cache marker that `/submit-hpc`'s Step 6b gate consults, so the
+first submit doesn't re-run the check. Pass `--dry-run` to preview.
+Every command (`/setup-hpc`, `/submit-hpc`, `/monitor-hpc`,
+`/aggregate-hpc`, `/campaign-hpc`, `/hpc-axes-init`) and skill ships
+inside the package.
 
 Once installed:
 
-- `/preflight` (optional) — verify SSH agent + cluster reachability. `/submit-hpc` auto-runs this as a cached gate, so you only need it for ad-hoc diagnostics.
+- `/setup-hpc` (once per machine + cluster) — install assets and probe each cluster you'll submit to. Runtime workflows assume setup succeeded; re-run if SSH credentials or a cluster's reachability change.
 - `/submit-hpc` — answer prompts about cluster, executor, grid params. Scaffolds the executor inline if none exists.
 - `/monitor-hpc` to monitor, `/aggregate-hpc` to collect results.
 
@@ -33,7 +37,7 @@ Once installed:
 
 ```bash
 pip install hpc-agent
-hpc-agent preflight --cluster hoffman2                    # health check
+hpc-agent setup --cluster hoffman2                        # one-time: install assets + probe cluster + write 24h cache marker
 hpc-agent interview --spec intent.json --campaign-dir <d> # persist campaign intent next to tasks.py
 hpc-agent recall --root ~/experiments --task-kind <kind>  # query past interviews for next-interview grounding
 hpc-agent submit --spec spec.json                          # JSON envelope on stdout
@@ -62,10 +66,11 @@ The most common first-time failure is the harness's default-empty
 spawn env dropping `SSH_AUTH_SOCK`. `hpc-agent
 status`/`aggregate`/`reconcile` fail fast with `error_code:
 "ssh_unreachable"` (exit 2) instead of hanging on auth — run
-`hpc-agent preflight` first to verify the spawn env. hpc-agent does
-not kill cluster jobs by design (`settings.json` denies
-`scancel`/`qdel`); if the integrator decides a run is bad, stop
-polling and let it expire.
+`hpc-agent setup --cluster <name>` once on each machine to verify the
+spawn env and populate the 24h cache marker that `/submit-hpc`'s
+Step 6b gate reads. hpc-agent does not kill cluster jobs by design
+(`settings.json` denies `scancel`/`qdel`); if the integrator decides
+a run is bad, stop polling and let it expire.
 
 ---
 
@@ -92,7 +97,7 @@ Each executor accepts experiment-specific arguments (`--horizon`, `--start`, `--
 ### Run
 
 ```
-/preflight → verify SSH agent + cluster reachability before first submit
+/setup-hpc → one-time per machine: install assets + probe each cluster's environment
 /submit    → discovers executors, walks you through .hpc/tasks.py, syncs code, submits
 /monitor-hpc    → tracks completion per grid point, diagnoses failures, auto-resubmits
 /aggregate → validates completeness, runs aggregation, downloads summaries
@@ -157,7 +162,7 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 
 | Command | What it does |
 |---------|-------------|
-| `/preflight` | Standalone: verify SSH agent, ssh/rsync on PATH, clusters.yaml parses, cluster reachable. `/submit-hpc` auto-runs the same checks as a 24h-cached gate, so direct invocation is mostly for ad-hoc diagnostics. |
+| `/setup-hpc` | One-time per machine: install commands + skills into `~/.claude/`, then probe each cluster's environment (SSH agent, ssh/rsync on PATH, `clusters.yaml` parses, TCP :22) and write the 24h cache marker that `/submit-hpc`'s Step 6b gate consults. Re-run when SSH credentials or a cluster's reachability change. |
 | `/submit-hpc` | Discover executors (scaffolds inline if none found), build grid conversationally, write `.hpc/tasks.py` with FLAGS dict + `.hpc/cli.py` dispatcher, sync code, submit array jobs |
 | `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate-hpc` | Validate completeness, run aggregation on cluster, download summaries |

@@ -2,14 +2,18 @@
 """Cross-check ``skills/`` against ``src/slash_commands/commands/``.
 
 Both trees describe the same workflows (submit, monitor, aggregate,
-campaign, preflight, build-executor) in different prose. This lint
-catches the most common drift modes:
+campaign, build-executor, classify-axis) in different prose.
+Environment-authority work (the former ``hpc-preflight`` skill) moved
+to ``hpc-agent setup`` — see ``docs/internals/skill-policy.md``. This
+lint catches the most common drift modes:
 
 1. A skill exists with no matching slash command (or vice versa).
 2. A skill or slash-command file is missing required frontmatter.
 3. A skill's declared ``execution`` mode disagrees with how its
    command routes (``delegated`` ⇔ an ``hpc_spawn`` Task request or an
    ``hpc-agent run`` Bash call).
+4. A skill's declared ``category`` (the policy witness) disagrees
+   with its ``execution`` mode — see ``docs/internals/skill-policy.md``.
 
 It deliberately does **not** diff the bodies — the two surfaces have
 different audiences (agent skill vs. interactive slash-command prompt)
@@ -47,7 +51,6 @@ WORKFLOW_PAIRS: list[tuple[str, str]] = [
     ("hpc-status", "monitor-hpc"),
     ("hpc-aggregate", "aggregate-hpc"),
     ("hpc-campaign", "campaign-hpc"),
-    ("hpc-preflight", "preflight"),
     ("hpc-build-executor", "hpc-axes-init"),
     ("hpc-classify-axis", "classify-axis-hpc"),
 ]
@@ -80,6 +83,27 @@ _INVOKE_DIRECTIVE_RE = re.compile(
 # is an authored property, not a per-invocation judgement — the lint
 # below cross-checks it against how the paired command routes.
 _EXECUTION_RE = re.compile(r"^execution:\s*(delegated|inline)\s*$", re.MULTILINE)
+
+# Every workflow skill also declares its policy category — the witness
+# for docs/internals/skill-policy.md:
+#
+#   * ``experimenter-intent``  — runs inline in the user's interactive
+#     Claude Code chat; the Skill tool consumes it; tolerant prose is
+#     acceptable because the underlying primitive validates downstream.
+#   * ``worker-prompt``        — gets inlined as text into the
+#     code-rendered ``claude -p --bare`` worker prompt via
+#     ``spawn_prompt._skill_body``; the deterministic prefix means
+#     these are eligible for prose hardening (snapshot tests, token
+#     budgets, banned-construct lints) that real skills are not.
+#
+# The category must agree with ``execution``: ``experimenter-intent``
+# ⇔ ``inline``; ``worker-prompt`` ⇔ ``delegated``. This pairing is the
+# machine-readable expression of the skill-policy rule.
+_CATEGORY_RE = re.compile(r"^category:\s*(experimenter-intent|worker-prompt)\s*$", re.MULTILINE)
+_CATEGORY_BY_EXECUTION = {
+    "inline": "experimenter-intent",
+    "delegated": "worker-prompt",
+}
 
 
 def main() -> int:
@@ -169,6 +193,30 @@ def main() -> int:
                 "`hpc_spawn` Task request or an `hpc-agent run` Bash call. An "
                 "inline skill runs in the main conversation — drop the spawn "
                 "routing, or mark the skill `delegated`."
+            )
+
+        # Policy: every skill declares its category (see
+        # docs/internals/skill-policy.md). The category must agree with
+        # the `execution` mode — that pairing is what makes the policy
+        # machine-checkable.
+        category_match = _CATEGORY_RE.search(skill_body)
+        if category_match is None:
+            errors.append(
+                f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
+                "`category: experimenter-intent|worker-prompt` field. See "
+                "docs/internals/skill-policy.md — the category records "
+                "whether this skill is consumed by the user's chat (real "
+                "Skill tool) or inlined into a worker prompt."
+            )
+            continue
+        expected_category = _CATEGORY_BY_EXECUTION[exec_match.group(1)]
+        if category_match.group(1) != expected_category:
+            errors.append(
+                f"{skill_id!r} declares `execution: {exec_match.group(1)}` but "
+                f"`category: {category_match.group(1)}` — expected "
+                f"`category: {expected_category}`. See "
+                "docs/internals/skill-policy.md: inline execution ↔ "
+                "experimenter-intent; delegated execution ↔ worker-prompt."
             )
 
     # Skills present on disk but not declared in the pair table.
