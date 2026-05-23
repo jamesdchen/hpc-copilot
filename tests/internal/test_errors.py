@@ -34,6 +34,7 @@ DOCUMENTED_ERROR_CODES = frozenset(
         "outputs_missing",
         "schema_incompat",
         "preempted",
+        "precondition_failed",
         "internal",
     }
 )
@@ -55,6 +56,7 @@ EXPECTED_SUBCLASSES = {
     "outputs_missing": errors.OutputsMissing,
     "schema_incompat": errors.SchemaIncompat,
     "preempted": errors.Preempted,
+    "precondition_failed": errors.PreconditionFailed,
 }
 
 

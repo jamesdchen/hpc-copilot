@@ -27,6 +27,7 @@
             "outputs_missing",
             "schema_incompat",
             "preempted",
+            "precondition_failed",
             "internal"
           ],
           "title": "Error Code",

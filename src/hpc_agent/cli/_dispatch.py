@@ -318,8 +318,12 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
     """Generic dispatcher — reads the registry, executes the primitive.
 
     1. Look up the primitive in the registry.
-    2. If ``cli.handler`` is set → delegate (Tier 2 path).
-    3. If ``cli.requires_ssh`` → gate via :func:`_require_ssh_agent`.
+    2. If ``cli.handler`` is set → delegate (Tier 2 path); handlers
+       self-gate SSH when their cluster-touching branches run, so they
+       can short-circuit local-only paths (dry-run, dedup) without
+       paying the SSH gate.
+    3. If ``cli.requires_ssh`` → gate via :func:`_require_ssh_agent`
+       BEFORE building kwargs so a missing SSH_AUTH_SOCK fails fast.
     4. Build kwargs (spec, experiment_dir, args, arg_pre).
     5. If ``--dry-run`` and ``dry_run_passthrough_keys`` → emit shape, exit.
     6. Call the primitive.
@@ -341,7 +345,9 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
     # dedup/replay path that only records to the journal, or the
     # --dry-run preview path). Handlers that DO need SSH must self-gate
     # (cmd_aggregate, cmd_status). For Tier 1 dispatch (no handler), the
-    # gate below runs unconditionally.
+    # gate below runs BEFORE _build_kwargs so a missing SSH_AUTH_SOCK
+    # fails fast — before we spend time loading and validating a spec
+    # for a primitive whose first action is going to be an SSH call.
     if shape.handler is not None:
         return shape.handler(ns)
 

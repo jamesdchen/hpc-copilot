@@ -283,6 +283,7 @@ def _combine_missing(
         spec_model=AggregateFlowSpec,
         schema_ref=SchemaRef(input="aggregate_flow"),
         experiment_dir_arg=True,
+        requires_ssh=True,
         dry_run_arg=True,
         dry_run_passthrough_keys=("run_id", "ensure_all_combined", "pull_summaries", "output_dir"),
     ),

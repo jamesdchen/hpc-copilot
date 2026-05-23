@@ -159,6 +159,7 @@ def _cluster_reduce_arg_pre(ns: argparse.Namespace) -> dict[str, Any]:
             "mode at /aggregate-hpc + campaign-loop time."
         ),
         experiment_dir_arg=True,
+        requires_ssh=True,
         args=(
             CliArg(
                 "--run-id",
