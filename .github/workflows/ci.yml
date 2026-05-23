@@ -108,9 +108,10 @@ jobs:
         # version, pip would fall back to PyPI here and the
         # subsequent integration checks would import an unrelated
         # host build — the contract-surface assertions below would
-        # then fail loudly rather than silently.
+        # then fail loudly rather than silently. ``[dev]`` on the
+        # plugin pulls in pytest so the e2e atom step below resolves.
         run: |
-          pip install -e . -e ./hpc-agent-pro
+          pip install -e . -e './hpc-agent-pro[dev]'
       - name: Verify the plugin plugs into the host
         # Asserts registry membership + ``hpc-agent --help`` surface +
         # plugin SKILL.md routing to delegated workers.

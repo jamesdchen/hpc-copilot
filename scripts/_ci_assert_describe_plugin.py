@@ -25,10 +25,7 @@ def main(path: str) -> int:
         return 1
     python_path = (data.get("content") or {}).get("python") or ""
     if not python_path.startswith("hpc_agent_pro."):
-        print(
-            "FAIL: describe resolved a plugin primitive to a non-plugin module: "
-            f"{python_path!r}"
-        )
+        print(f"FAIL: describe resolved a plugin primitive to a non-plugin module: {python_path!r}")
         return 1
     print("OK: describe resolves a plugin-owned primitive to its plugin module.")
     return 0

@@ -155,9 +155,7 @@ def _check_path_open(call: ast.Call) -> str | None:
         return None
     recv = func.value
     if not (
-        isinstance(recv, ast.Call)
-        and isinstance(recv.func, ast.Name)
-        and recv.func.id == "Path"
+        isinstance(recv, ast.Call) and isinstance(recv.func, ast.Name) and recv.func.id == "Path"
     ):
         return None
     mode = _mode_arg(call, mode_pos=0)

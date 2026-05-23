@@ -186,9 +186,7 @@ def test_first_call_emits_unfiltered_pull(journal_home, experiment):
     assert combiner_call.kwargs.get("include") is None
 
 
-def test_second_call_with_no_new_waves_uses_non_matching_include(
-    journal_home, experiment
-):
+def test_second_call_with_no_new_waves_uses_non_matching_include(journal_home, experiment):
     """All waves already pulled -> include narrows so rsync transfers nothing.
 
     This is the optimization's core: on a re-run of aggregate_flow over
@@ -302,8 +300,7 @@ def test_second_call_pulls_strictly_fewer_files_than_first(journal_home, experim
     pass2_effective = 0
     for w in range(5):
         if pass2_include and (
-            f"wave_{w}.json" in pass2_include
-            or f"wave_{w}.runtime.json" in pass2_include
+            f"wave_{w}.json" in pass2_include or f"wave_{w}.runtime.json" in pass2_include
         ):
             pass2_effective += 1
 

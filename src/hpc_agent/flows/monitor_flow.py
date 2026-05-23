@@ -639,9 +639,7 @@ def monitor_flow(
         if last_fingerprint is not None and fingerprint == last_fingerprint:
             unchanged_count += 1
             if unchanged_count >= _UNCHANGED_POLLS_BEFORE_BACKOFF:
-                effective_interval = min(
-                    effective_interval * 2.0, _MAX_ADAPTIVE_POLL_SECONDS
-                )
+                effective_interval = min(effective_interval * 2.0, _MAX_ADAPTIVE_POLL_SECONDS)
         else:
             unchanged_count = 0
             effective_interval = float(poll_interval_seconds)

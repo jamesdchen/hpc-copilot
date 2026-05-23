@@ -157,8 +157,7 @@ def test_unchanged_status_backs_off_then_caps(
 
     # Backoff actually kicked in: the 5th poll's sleep > 1st poll's sleep.
     assert sleeps[-1] > sleeps[0], (
-        f"adaptive backoff didn't grow: first={sleeps[0]} last={sleeps[-1]} "
-        f"sleeps={sleeps}"
+        f"adaptive backoff didn't grow: first={sleeps[0]} last={sleeps[-1]} sleeps={sleeps}"
     )
 
     # Specifically, with K=2 and POLL_FLOOR=60, the expected trace is

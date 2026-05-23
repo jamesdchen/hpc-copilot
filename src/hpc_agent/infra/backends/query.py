@@ -138,9 +138,7 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
         cmd.insert(1, f"--clusters={cluster}")
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", timeout=30
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=30)
     except subprocess.TimeoutExpired as exc:
         return {
             "tasks": {},
