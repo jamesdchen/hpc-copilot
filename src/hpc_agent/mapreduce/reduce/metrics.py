@@ -133,7 +133,7 @@ def reduce_metrics(result_dirs: Sequence[str | Path]) -> dict:
         if not path.exists():
             continue
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 entries.append(json.load(f))
         except (json.JSONDecodeError, OSError):
             continue
@@ -211,7 +211,7 @@ def reduce_partials(combiner_dir: str | Path) -> dict[str, dict]:
     partials: dict[str, list[dict]] = {}
     for wf in wave_files:
         try:
-            with open(wf) as f:
+            with open(wf, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue
@@ -238,7 +238,7 @@ def collect_wave_errors(combiner_dir: str | Path) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {}
     for wf in sorted(_wave_partial_files(combiner_dir)):
         try:
-            with open(wf) as f:
+            with open(wf, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError):
             continue

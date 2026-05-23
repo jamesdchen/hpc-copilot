@@ -45,6 +45,7 @@ def fetch_operations() -> list[dict]:
         ["hpc-agent", "capabilities"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=True,
     )
     lines = result.stdout.strip().splitlines()

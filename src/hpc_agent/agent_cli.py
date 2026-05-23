@@ -275,7 +275,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     try:
         schema_text = (
             _resource_files("hpc_agent.schemas") / f"{schema_name}.input.json"
-        ).read_text()
+        ).read_text(encoding="utf-8")
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)

@@ -56,7 +56,13 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
         checks.append(_check("ssh_auth_sock", False, "SSH_AUTH_SOCK is not set"))
     else:
         try:
-            agent = subprocess.run(["ssh-add", "-l"], capture_output=True, text=True, timeout=5)
+            agent = subprocess.run(
+                ["ssh-add", "-l"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
+            )
             has_keys = agent.returncode == 0 and bool(agent.stdout.strip())
             checks.append(
                 _check(

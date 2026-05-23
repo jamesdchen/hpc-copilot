@@ -97,7 +97,7 @@ def check_results(
                 return None
             if min_rows <= 0:
                 return {"status": "complete", "path": path_str}
-            with open(path_str, newline="") as f:
+            with open(path_str, newline="", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 header = next(reader, None)
                 if header is None:
@@ -169,7 +169,7 @@ def detect_scheduler(result_dir: str | Path | None = None) -> str:
             meta_path = candidate / "experiment_meta.json"
             if meta_path.exists():
                 try:
-                    meta = json.loads(meta_path.read_text())
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
                     backend = meta.get("backend", "")
                     if "sge" in backend:
                         return "sge"
@@ -181,7 +181,13 @@ def detect_scheduler(result_dir: str | Path | None = None) -> str:
             parent = candidate.parent
             candidate = parent if parent != candidate else None
     try:
-        result = subprocess.run(["sacct", "--version"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["sacct", "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=5,
+        )
         if result.returncode == 0:
             return "slurm"
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -398,7 +404,7 @@ def check_results_from_tasks(
                 continue
             if min_rows > 0 and match_str.endswith(".csv"):
                 try:
-                    with open(match_str, newline="") as f:
+                    with open(match_str, newline="", encoding="utf-8") as f:
                         reader = csv.reader(f)
                         header = next(reader, None)
                         if header is None:

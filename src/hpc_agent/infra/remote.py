@@ -339,6 +339,7 @@ def ssh_run(
                 argv,
                 capture_output=capture,
                 text=True,
+                encoding="utf-8",
                 timeout=effective_timeout,
             )
         except subprocess.TimeoutExpired as exc:
@@ -455,6 +456,7 @@ def _tar_ssh_push(
             stdin=tar_proc.stdout,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
         )
         tar_proc.stdout.close()
@@ -513,7 +515,13 @@ def _scp_pull(
 
     scp_cmd = ["scp", "-r", "-o", "BatchMode=yes", src, dst]
     try:
-        return subprocess.run(scp_cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(
+            scp_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(
             f"scp pull from {ssh_target} timed out after {timeout}s: {_truncate(f'{src} -> {dst}')}"
@@ -600,6 +608,7 @@ def rsync_push(
                 [*flags, *exclude_flags, src, dst],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=effective_timeout,
             )
         except subprocess.TimeoutExpired as exc:
@@ -662,6 +671,7 @@ def deploy_runtime(
                     ["scp", str(src), dst],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
                     timeout=SSH_TIMEOUT_SEC,
                 )
             except subprocess.TimeoutExpired as exc:
@@ -888,6 +898,7 @@ def rsync_pull(
                 ["rsync", "-az", *filter_flags, src, dst],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=effective_timeout,
             )
         except subprocess.TimeoutExpired as exc:

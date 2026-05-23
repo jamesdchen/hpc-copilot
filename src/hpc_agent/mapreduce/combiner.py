@@ -63,7 +63,7 @@ def _default_max_workers():
 
 
 def _read_metrics(metrics_path):
-    with open(metrics_path) as f:
+    with open(metrics_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -224,7 +224,7 @@ def main(max_workers=None, argv=None):
         sys.exit(1)
 
     try:
-        sidecar = json.loads(sidecar_path.read_text())
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         print(f"[combiner] ERROR: failed to parse sidecar: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -336,7 +336,7 @@ def main(max_workers=None, argv=None):
                 # critical artifact.
                 if runtime_path is not None:
                     try:
-                        with open(runtime_path) as rfh:
+                        with open(runtime_path, encoding="utf-8") as rfh:
                             runtime_rows.append(json.load(rfh))
                     except (json.JSONDecodeError, OSError) as exc:
                         errors.append(f"task {tid}: failed to read _runtime.json: {exc}")

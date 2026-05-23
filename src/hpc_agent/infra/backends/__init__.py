@@ -189,6 +189,7 @@ class HPCBackend(abc.ABC):
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=SUBMIT_TIMEOUT_SEC,
         )
 

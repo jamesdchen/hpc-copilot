@@ -68,7 +68,7 @@ def _load_per_task_dict(per_task_dict_path: Path) -> dict:
     """
     if not per_task_dict_path.is_file():
         raise FileNotFoundError(f"per-task dict not found: {per_task_dict_path}")
-    data: dict = json.loads(per_task_dict_path.read_text())
+    data: dict = json.loads(per_task_dict_path.read_text(encoding="utf-8"))
     return data
 
 
@@ -105,7 +105,7 @@ def _classify_failures(report: dict, per_task_dict: dict) -> dict[str, int]:
             counts["unknown"] = counts.get("unknown", 0) + 1
             continue
         try:
-            text = Path(path).read_text(errors="replace")[-8000:]
+            text = Path(path).read_text(encoding="utf-8", errors="replace")[-8000:]
         except OSError:
             counts["unknown"] = counts.get("unknown", 0) + 1
             continue
@@ -131,7 +131,7 @@ def _failing_tail(report: dict, limit: int = 10) -> list[tuple[str, str]]:
         diag = ""
         if path:
             try:
-                text = Path(path).read_text(errors="replace")
+                text = Path(path).read_text(encoding="utf-8", errors="replace")
                 for line in reversed(text.splitlines()):
                     line = line.strip()
                     if line:
@@ -560,7 +560,7 @@ def _main(argv: list[str] | None = None) -> int:
     # silently shows every task as `unknown`.
     per_task_dict_path = sidecar_path.with_suffix(".per-task-dict.json")
     _tmp = per_task_dict_path.with_suffix(per_task_dict_path.suffix + ".tmp")
-    _tmp.write_text(json.dumps(per_task_dict, sort_keys=True))
+    _tmp.write_text(json.dumps(per_task_dict, sort_keys=True), encoding="utf-8")
     _tmp.replace(per_task_dict_path)
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]

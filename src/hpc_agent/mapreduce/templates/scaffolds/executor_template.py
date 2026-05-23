@@ -95,7 +95,7 @@ def compute(args: argparse.Namespace) -> None:
     result: dict[str, Any] = {"value": 0.0, "n_samples": 0, "seed": _seed}
 
     os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
-    with open(args.output_file, "w", newline="") as f:
+    with open(args.output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(list(result.keys()))
         writer.writerow(list(result.values()))

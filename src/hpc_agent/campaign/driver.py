@@ -60,6 +60,7 @@ def load_context(experiment_dir: Path) -> dict[str, Any]:
         ["hpc-agent", "load-context", "--experiment-dir", str(experiment_dir)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if proc.returncode != 0:

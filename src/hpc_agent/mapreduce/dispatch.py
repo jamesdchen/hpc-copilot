@@ -121,7 +121,7 @@ def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
     a bumped run by hand.
     """
     try:
-        sidecar = json.loads(Path(sidecar_path).read_text())
+        sidecar = json.loads(Path(sidecar_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
     tasks = sidecar.setdefault("tasks", {})
@@ -303,7 +303,7 @@ def main() -> None:
         print(f"[dispatch] ERROR: run sidecar not found: {sidecar_path}", file=sys.stderr)
         sys.exit(1)
     try:
-        sidecar = json.loads(sidecar_path.read_text())
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         print(f"[dispatch] ERROR: failed to parse sidecar: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -390,7 +390,7 @@ def main() -> None:
     prior_cmd_sha = ""
     if current_cmd_sha and cmd_sha_marker.is_file():
         try:
-            prior_cmd_sha = cmd_sha_marker.read_text().strip()
+            prior_cmd_sha = cmd_sha_marker.read_text(encoding="utf-8").strip()
         except OSError:
             prior_cmd_sha = ""
         if prior_cmd_sha and prior_cmd_sha != current_cmd_sha:
@@ -565,7 +565,7 @@ def main() -> None:
         # (the task succeeded; the marker is only a hint for next time).
         if current_cmd_sha:
             try:
-                Path(result_dir, ".hpc_cmd_sha").write_text(current_cmd_sha)
+                Path(result_dir, ".hpc_cmd_sha").write_text(current_cmd_sha, encoding="utf-8")
             except OSError as exc:
                 print(
                     f"[dispatch] WARN: failed to stamp .hpc_cmd_sha in {result_dir}: {exc}",

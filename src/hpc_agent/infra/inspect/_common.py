@@ -111,6 +111,7 @@ class _CommandRunner:
                     shell=True,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
                     timeout=self.timeout,
                 )
                 return cp.returncode, cp.stdout or "", cp.stderr or ""
