@@ -140,9 +140,14 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
     def fake_emit(payload):
         captured.append(payload)
 
+    # ``cmd_capabilities`` now lives in :mod:`hpc_agent.cli.setup`
+    # (Tier 3 — no @primitive backing); patch at the canonical home so
+    # the argparse parser's ``set_defaults(func=cmd_capabilities)``
+    # binding (created in ``setup.register()`` at parser-build time)
+    # actually sees the override.
     with (
         patch("hpc_agent.cli._helpers._emit", side_effect=fake_emit),
-        patch.object(cli, "cmd_capabilities", side_effect=boom),
+        patch("hpc_agent.cli.setup.cmd_capabilities", side_effect=boom),
     ):
         rc = cli.main(["capabilities"])
     assert rc == cli.EXIT_INTERNAL

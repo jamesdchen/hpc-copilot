@@ -53,7 +53,7 @@ Read + binary health check. Same composability as `query`.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-agent preflight [--cluster <name>]` | `hpc_agent.atoms.preflight.check_preflight` | — | `hpc_agent/schemas/preflight.output.json` |
+| [`check-preflight`](primitives/check-preflight.md) | ✓ | _none_ | `hpc-agent preflight [--cluster <cluster>]` | `hpc_agent.atoms.preflight.check_preflight` | — | `hpc_agent/schemas/preflight.output.json` |
 | [`validate-executor-signatures`](primitives/validate-executor-signatures.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.validate_executor_signatures.validate_executor_signatures` | `hpc_agent/schemas/validate_executor_signatures.input.json` | `hpc_agent/schemas/validate_executor_signatures.output.json` |
 | [`validate-input-dataset`](primitives/validate-input-dataset.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.validate_input_dataset.validate_input_dataset` | `hpc_agent/schemas/validate_input_dataset.input.json` | `hpc_agent/schemas/validate_input_dataset.output.json` |
 | [`validate-self-qos-limit`](primitives/validate-self-qos-limit.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.validate_self_qos_limit.validate_self_qos_limit` | `hpc_agent/schemas/validate_self_qos_limit.input.json` | `hpc_agent/schemas/validate_self_qos_limit.output.json` |
@@ -107,6 +107,6 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 | [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path>` | `hpc_agent.flows.monitor_flow.monitor_flow` | `hpc_agent/schemas/monitor_flow.input.json` | `hpc_agent/schemas/monitor_flow.output.json` |
 | [`submit-flow`](primitives/submit-flow.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow --spec <path>` | `hpc_agent.flows.submit_flow.submit_flow` | `hpc_agent/schemas/submit_flow.input.json` | `hpc_agent/schemas/submit_flow.output.json` |
 | [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow-batch --spec <path>` | `hpc_agent.flows.submit_flow.submit_flow_batch` | `hpc_agent/schemas/submit_flow_batch.input.json` | `hpc_agent/schemas/submit_flow_batch.output.json` |
-| [`validate-campaign`](primitives/validate-campaign.md) | ✓ | _none_ | `hpc-agent validate-campaign --spec <path>` | `hpc_agent.flows.validate_campaign.validate_campaign` | `hpc_agent/schemas/validate_campaign.input.json` | `hpc_agent/schemas/validate_campaign.output.json` |
+| [`validate-campaign`](primitives/validate-campaign.md) | ✓ | _none_ | `hpc-agent validate-campaign --spec <path> [--experiment-dir <dir>]` | `hpc_agent.flows.validate_campaign.validate_campaign` | `hpc_agent/schemas/validate_campaign.input.json` | `hpc_agent/schemas/validate_campaign.output.json` |
 | [`verify-canary`](primitives/verify-canary.md) | ✓ | ssh | `hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]` | `hpc_agent.atoms.canary_verify.verify_canary` | — | `hpc_agent/schemas/verify_canary.output.json` |
 

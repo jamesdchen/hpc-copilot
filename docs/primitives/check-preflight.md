@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent preflight [--cluster <name>]
+  cli: hpc-agent preflight [--cluster <cluster>]
   python: hpc_agent.atoms.preflight.check_preflight
 exit_codes:
 - 0: all checks passed
