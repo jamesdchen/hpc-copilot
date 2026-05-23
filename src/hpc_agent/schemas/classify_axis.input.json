@@ -25,7 +25,7 @@
     },
     "data_axis": {
       "$ref": "#/$defs/_DataAxisConfig",
-      "description": "The classified series axis: {kind, halo?, monoid?}. The classification must clear the serial-elision gate (hpc_agent.template.check_elision) before any cluster time is spent — a misclassified axis returns plausible-but-wrong numbers."
+      "description": "The classified series axis: {kind, halo?, monoid?}. The classification must clear the serial-elision gate (hpc_agent.incorporation.template.check_elision) before any cluster time is spent — a misclassified axis returns plausible-but-wrong numbers."
     },
     "classified_by": {
       "default": "interview",
@@ -42,7 +42,7 @@
   "$defs": {
     "_DataAxisConfig": {
       "additionalProperties": false,
-      "description": "A classified :data:`~hpc_agent.template.axis.DataAxis`, serialized.\n\nThe (de)serializer is :mod:`hpc_agent.template.axis_config`.",
+      "description": "A classified :data:`~hpc_agent.incorporation.template.axis.DataAxis`, serialized.\n\nThe (de)serializer is :mod:`hpc_agent.incorporation.template.axis_config`.",
       "properties": {
         "kind": {
           "description": "How the series axis is safe to split. 'independent': the loop body is a pure function of its row. 'associative': it accumulates an associative summary — also set `monoid`. 'bounded_halo': it depends on a bounded look-back window — also set `halo`. 'sequential': unbounded / order-dependent state, not splittable; the fail-safe default.",
@@ -96,7 +96,7 @@
       "description": "The bounded look-back distance of a :class:`BoundedHalo` series axis.",
       "properties": {
         "expr": {
-          "description": "Arithmetic expression giving the warm-up row count, over the run()'s own parameter names (bare names, resolved from the sweep point), e.g. 'train_window * 48'. Evaluated by hpc_agent.template.axis_config with a restricted AST walk — only names, numeric literals, + - * //, and min()/max() are permitted; never eval().",
+          "description": "Arithmetic expression giving the warm-up row count, over the run()'s own parameter names (bare names, resolved from the sweep point), e.g. 'train_window * 48'. Evaluated by hpc_agent.incorporation.template.axis_config with a restricted AST walk — only names, numeric literals, + - * //, and min()/max() are permitted; never eval().",
           "minLength": 1,
           "title": "Expr",
           "type": "string"

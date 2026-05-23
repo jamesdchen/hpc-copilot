@@ -60,7 +60,7 @@ extraction plus a `ruff` post-pass — no notebook execution.
   `\d+[a-z]?_` ordering prefix stripped — `01_loading.ipynb` →
   `src/loading.py`.
 - **Exporter auto-picked by content.** A notebook that imports
-  `hpc_agent.template` is a `@register_run` executor → strict-AST
+  `hpc_agent.incorporation.template` is a `@register_run` executor → strict-AST
   `export_notebook` (the runtime is inlined, so the cluster node stays
   stdlib-only). Otherwise it is a pipeline-library notebook → the
   `# export`-marker `export_notebook_markers`.

@@ -19,7 +19,7 @@ class _FlagSpec(BaseModel):
 
     name: str = Field(min_length=1)
     # Restricted to the four whitelist entries in
-    # ``hpc_agent.atoms.build_tasks_py._FLAG_TYPE_NAMES``. Before v3 this
+    # ``hpc_agent.incorporation.build.tasks_py._FLAG_TYPE_NAMES``. Before v3 this
     # was an unconstrained ``str`` whose value was rendered verbatim into
     # ``.hpc/tasks.py``'s ``flag(name, <type_token>)`` call — any non-token
     # string (``"__import__('os').system('rm -rf /')"`` etc) detonated on
@@ -35,7 +35,7 @@ class _DataAxisSpec(BaseModel):
     """The classified series axis — drives planner-mode codegen.
 
     When present on :class:`BuildTasksPyInput`, ``build-tasks-py`` emits a
-    ``hpc_agent.template.plan_tasks``-based ``tasks.py`` (the deterministic
+    ``hpc_agent.incorporation.template.plan_tasks``-based ``tasks.py`` (the deterministic
     materialisation of the ``/submit-hpc`` Step 3 ``DataAxis`` inference)
     instead of a cartesian-product one. The cartesian ``axes`` become the
     *sweep* and the series axis is partitioned by the planner.
@@ -54,7 +54,7 @@ class _DataAxisSpec(BaseModel):
             "'sequential': unbounded or order-dependent state — not splittable, and the "
             "fail-safe default whenever the dependency structure is not unambiguous. The "
             "classification must be verified with the serial-elision gate "
-            "(hpc_agent.template.check_elision) before submitting — a misclassified axis "
+            "(hpc_agent.incorporation.template.check_elision) before submitting — a misclassified axis "
             "returns plausible-but-wrong numbers."
         ),
     )
@@ -82,7 +82,7 @@ class _DataAxisSpec(BaseModel):
         # Mirror the invariant enforced by _DataAxisConfig in
         # fixtures/axes.py so the kind-conditional fields are validated
         # at the schema boundary instead of leaking through to
-        # atoms/build_tasks_py.py as a SpecInvalid.
+        # incorporation/build/tasks_py.py as a SpecInvalid.
         if self.kind == "bounded_halo" and self.halo_expr is None:
             raise ValueError("data_axis kind 'bounded_halo' requires 'halo_expr'")
         if self.kind != "bounded_halo" and self.halo_expr is not None:
@@ -95,13 +95,13 @@ class _DataAxisSpec(BaseModel):
 class BuildTasksPyInput(BaseModel):
     """Axes spec + per-executor flag declarations for the ``tasks.py`` scaffold.
 
-    Drives ``hpc_agent.atoms.build_tasks_py`` to scaffold
+    Drives ``hpc_agent.incorporation.build.tasks_py`` to scaffold
     ``<experiment>/.hpc/tasks.py``. Two modes:
 
     * **cartesian** (``data_axis`` omitted) — ``axes`` is a cartesian
       product, one independent task per cell.
     * **planner** (``data_axis`` present) — ``axes`` is the *sweep* and
-      the series axis is partitioned by ``hpc_agent.template.plan_tasks``
+      the series axis is partitioned by ``hpc_agent.incorporation.template.plan_tasks``
       per the classified ``DataAxis``.
     """
 
