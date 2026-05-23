@@ -110,7 +110,7 @@ class TestFailureCategoryVocabulary:
 
     def test_classifier_categories_are_all_valid_resubmit_categories(self):
         from hpc_agent.agent_cli import _VALID_RESUBMIT_CATEGORIES
-        from hpc_agent.runner import _FAILURE_CATEGORY_PATTERNS
+        from hpc_agent.runner.failures import _FAILURE_CATEGORY_PATTERNS
 
         emitted = {name for name, _ in _FAILURE_CATEGORY_PATTERNS}
         missing = emitted - _VALID_RESUBMIT_CATEGORIES

@@ -411,7 +411,7 @@ class TestIngestFromCombinerDir:
 
     def test_warm_picker_picks_up_after_ingest(self, tmp_path: Path) -> None:
         """End-to-end: ingest → warm picker can rank axes by CV."""
-        from hpc_agent.planning.axes import (
+        from hpc_agent.state.axes import (
             pick_array_axis_warm,
             write_axes,
         )

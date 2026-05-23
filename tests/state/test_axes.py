@@ -1,4 +1,4 @@
-"""Tests for hpc_agent.planning.axes — cold-start axis picker."""
+"""Tests for hpc_agent.state.axes — cold-start axis picker."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import jsonschema
 import pytest
 
-from hpc_agent.planning.axes import (
+from hpc_agent.state.axes import (
     AXES_FILENAME,
     AXES_SCHEMA_VERSION,
     axes_path,

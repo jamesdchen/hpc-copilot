@@ -7,7 +7,7 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._schema_models.actions.classify_axis import ClassifyAxisInput
 from hpc_agent.atoms.classify_axis import classify_axis
-from hpc_agent.planning.axes import read_axes, read_executor
+from hpc_agent.state.axes import read_axes, read_executor
 from hpc_agent.template import data_axis_from_config, plan_tasks
 
 
@@ -40,7 +40,7 @@ def test_classify_axis_associative_defaults_monoid(tmp_path) -> None:
 
 def test_classify_axis_preserves_scheduling_axes(tmp_path) -> None:
     """Recording a DataAxis must not clobber homogeneous_axes / axes."""
-    from hpc_agent.planning.axes import write_axes
+    from hpc_agent.state.axes import write_axes
 
     write_axes(
         tmp_path,

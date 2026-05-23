@@ -10,6 +10,9 @@ submodule:
 * :mod:`hpc_agent.planning.resubmit_batching` — pack failed task IDs
   into compact scheduler array expressions.
 * :mod:`hpc_agent.planning.throughput` — batch a task grid into waves.
-* :mod:`hpc_agent.planning.axes` — campaign axis-sweep helpers.
-* :mod:`hpc_agent.planning.stages` — campaign stage loading.
+
+Per-experiment on-disk state (``axes.yaml`` reader/writer, ``stages.py``
+loader) lives in :mod:`hpc_agent.state.axes` / :mod:`hpc_agent.state.stages`
+— planning/ is pure (no disk I/O, no importlib of user code); reading
+or writing state belongs in state/.
 """
