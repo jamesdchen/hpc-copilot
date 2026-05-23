@@ -8,7 +8,7 @@ error_codes: []
 backed_by:
   cli: hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats]
     [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]
-  python: hpc_agent.atoms.recall.recall_campaigns
+  python: hpc_agent.ops.memory.recall.recall_campaigns
 ---
 # recall
 

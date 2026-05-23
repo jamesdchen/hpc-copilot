@@ -48,8 +48,6 @@ _ALLOWLIST_FILES: set[str] = {
 # (or add an explicit timeout) and remove its entry here. DO NOT GROW.
 _GRANDFATHERED: set[str] = {
     "tests/atoms/test_cli_campaign.py",
-    "tests/atoms/test_interview.py",
-    "tests/atoms/test_recall.py",
     "tests/cli/_helpers.py",
     "tests/cli/test_discover_search_dirs.py",
     "tests/integration/test_external_harness_compat.py",
@@ -57,6 +55,8 @@ _GRANDFATHERED: set[str] = {
     "tests/integration/test_status_integration.py",
     "tests/internal/test_audit_fixes.py",
     "tests/internal/test_bake_operations_json.py",
+    "tests/ops/memory/test_interview.py",
+    "tests/ops/memory/test_recall.py",
 }
 
 

@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent._schema_models.actions.interview import InterviewSpec
-from hpc_agent.atoms.interview import record_interview
+from hpc_agent.ops.memory.interview import record_interview
 
 if TYPE_CHECKING:
     from pathlib import Path
