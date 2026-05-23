@@ -60,11 +60,13 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import warnings
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+    from hpc_agent.cli._dispatch import CliShape
     from hpc_agent.errors import HpcError
 
 
@@ -110,11 +112,14 @@ class PrimitiveMeta:
     idempotency_key: str | None = None
     exit_codes: tuple[tuple[int, str], ...] = ()
     description: str = ""
-    # Shell invocation string (e.g. ``"hpc-agent build-executor --name <stem>"``)
-    # or ``None`` for Python-only primitives. Previously round-tripped
-    # through ``docs/primitives/<name>.md`` frontmatter; the registry
-    # is now SoT so the regen script writes ``backed_by.cli`` from here.
-    cli: str | None = None
+    # CLI declaration. Either a :class:`hpc_agent.cli._dispatch.CliShape`
+    # (the registry-driven form consumed by
+    # :func:`hpc_agent.cli._dispatch.dispatch_primitive`) or a plain
+    # invocation string (legacy form kept during the per-domain CLI
+    # migration; emits a one-shot DeprecationWarning at decoration time
+    # and is dropped in Phase 3). ``None`` marks a Python-only primitive
+    # with no shell surface.
+    cli: CliShape | str | None = None
     # Whether the LLM/agent calls this primitive directly. Workflows,
     # scaffolds, validators, and atoms slash-commands or skills link to
     # are ``True``; framework internals composed inside workflows
@@ -131,6 +136,29 @@ class PrimitiveMeta:
 
 _REGISTRY: dict[str, PrimitiveMeta] = {}
 _REGISTRATION_DONE: bool = False
+_LEGACY_CLI_STRING_WARNED: bool = False
+
+
+def _warn_legacy_cli_string_once(name: str) -> None:
+    """Emit one DeprecationWarning the first time a ``cli=str`` is seen.
+
+    Suppressed entirely on subsequent calls so the warning doesn't spam
+    the test suite during the migration. After Phase 3 lands this helper
+    is replaced with a ``raise TypeError(...)`` to force the cutover.
+    """
+    global _LEGACY_CLI_STRING_WARNED
+    if _LEGACY_CLI_STRING_WARNED:
+        return
+    _LEGACY_CLI_STRING_WARNED = True
+    warnings.warn(
+        f"Primitive {name!r} (and possibly others) declares ``cli=`` as a "
+        "string. This is the legacy form and will be removed in the cleanup "
+        "phase of the registry-driven CLI migration. Migrate to "
+        "``cli=CliShape(...)`` on the @primitive decorator; see "
+        "docs/internals/skill-policy.md.",
+        DeprecationWarning,
+        stacklevel=4,
+    )
 
 
 def primitive(
@@ -144,7 +172,7 @@ def primitive(
     idempotency_key: str | None = None,
     exit_codes: Iterable[tuple[int, str]] | None = None,
     description: str | None = None,
-    cli: str | None = None,
+    cli: CliShape | str | None = None,
     agent_facing: bool = False,
 ) -> Callable[[F], F]:
     """Register a primitive in the runtime catalog.
@@ -174,6 +202,13 @@ def primitive(
             if existing is func:
                 return func
             raise ValueError(f"Primitive {name!r} already registered (by {existing!r})")
+        # Legacy form: emit a one-shot DeprecationWarning during the
+        # migration so callers see drift before Phase 3 drops support
+        # entirely. The CliShape form is the canonical one; cli=str is a
+        # scaffold for hand-written cmd_* still owned by the legacy
+        # build_parser body.
+        if isinstance(cli, str):
+            _warn_legacy_cli_string_once(name)
         # Idempotency-key gate: a state-mutating primitive that claims
         # idempotent=True owes the caller an equivalence rule. Without
         # one, the registry says "safe to retry" but doesn't say what
