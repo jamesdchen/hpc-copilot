@@ -121,7 +121,7 @@ def _mark_preempted_in_sidecar(sidecar_path, task_id, when_iso, *, grace_sec):
     a bumped run by hand.
     """
     try:
-        sidecar = json.loads(Path(sidecar_path).read_text())
+        sidecar = json.loads(Path(sidecar_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return
     tasks = sidecar.setdefault("tasks", {})
@@ -303,7 +303,7 @@ def main() -> None:
         print(f"[dispatch] ERROR: run sidecar not found: {sidecar_path}", file=sys.stderr)
         sys.exit(1)
     try:
-        sidecar = json.loads(sidecar_path.read_text())
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         print(f"[dispatch] ERROR: failed to parse sidecar: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -390,7 +390,7 @@ def main() -> None:
     prior_cmd_sha = ""
     if current_cmd_sha and cmd_sha_marker.is_file():
         try:
-            prior_cmd_sha = cmd_sha_marker.read_text().strip()
+            prior_cmd_sha = cmd_sha_marker.read_text(encoding="utf-8").strip()
         except OSError:
             prior_cmd_sha = ""
         if prior_cmd_sha and prior_cmd_sha != current_cmd_sha:
@@ -462,10 +462,24 @@ def main() -> None:
             os.rename(wip_dir, stale_target)
             print(f"[dispatch] preserved prior failed WIP at {stale_target}/")
         except OSError as exc:
+            # Fall through with the stale WIP still in place would mix
+            # leftover files from the prior run with this task's outputs
+            # and corrupt the atomic promote — try a forced cleanup
+            # instead. If even that fails, abort dispatch rather than
+            # write into a polluted directory.
             print(
-                f"[dispatch] WARN: could not preserve stale WIP {wip_dir}: {exc}",
+                f"[dispatch] WARN: could not preserve stale WIP {wip_dir}: {exc}; "
+                f"removing it instead",
                 file=sys.stderr,
             )
+            try:
+                shutil.rmtree(wip_dir)
+            except OSError as exc2:
+                print(
+                    f"[dispatch] FATAL: could not clean stale WIP {wip_dir}: {exc2}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
     os.makedirs(wip_dir, exist_ok=True)
 
@@ -522,12 +536,27 @@ def main() -> None:
         # already in place would be skipped on retry and the missing
         # outputs would never be recovered. Move metrics.json last so a
         # crash before that point leaves the task obviously incomplete.
-        entries = sorted(
-            os.listdir(wip_dir),
-            key=lambda n: (n == "metrics.json", n),
-        )
-        for fname in entries:
-            os.replace(os.path.join(wip_dir, fname), os.path.join(result_dir, fname))
+        #
+        # Walk the WIP tree recursively so an executor that writes
+        # nested subdirs (e.g. ``per_seed/seed_0/metric.csv``) promotes
+        # correctly. A flat ``os.listdir`` + ``os.replace`` would have
+        # tried to rename the subdir over an existing result-side
+        # subdir on retry and failed with ENOTEMPTY.
+        promote_pairs: list[tuple[str, str]] = []
+        for root, _dirs, fnames in os.walk(wip_dir):
+            for fname in fnames:
+                src = os.path.join(root, fname)
+                rel = os.path.relpath(src, wip_dir)
+                promote_pairs.append((src, rel))
+        # Sort: metrics.json at the top level last (it's the
+        # idempotency marker); everything else alphabetically.
+        promote_pairs.sort(key=lambda pair: (pair[1] == "metrics.json", pair[1]))
+        for src, rel in promote_pairs:
+            dst = os.path.join(result_dir, rel)
+            parent = os.path.dirname(dst)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            os.replace(src, dst)
         shutil.rmtree(wip_dir, ignore_errors=True)
         # Stamp this submission's cmd_sha so a subsequent re-entry can
         # detect "code or kwargs changed since this result was written"
@@ -536,7 +565,7 @@ def main() -> None:
         # (the task succeeded; the marker is only a hint for next time).
         if current_cmd_sha:
             try:
-                Path(result_dir, ".hpc_cmd_sha").write_text(current_cmd_sha)
+                Path(result_dir, ".hpc_cmd_sha").write_text(current_cmd_sha, encoding="utf-8")
             except OSError as exc:
                 print(
                     f"[dispatch] WARN: failed to stamp .hpc_cmd_sha in {result_dir}: {exc}",

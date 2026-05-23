@@ -189,6 +189,7 @@ class HPCBackend(abc.ABC):
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=SUBMIT_TIMEOUT_SEC,
         )
 
@@ -305,6 +306,8 @@ class HPCBackend(abc.ABC):
         track: bool = False,
     ) -> list[tuple[str, str]]:
         """Core batching loop shared by submit_array and submit_array_tracked."""
+        if tasks_per_array < 1:
+            raise ValueError(f"tasks_per_array must be >= 1, got {tasks_per_array}")
         cwd = cwd or Path.cwd()
         self._setup_log_dir()
         submissions: list[tuple[str, str]] = []

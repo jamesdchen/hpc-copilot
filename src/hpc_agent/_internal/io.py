@@ -40,8 +40,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def atomic_write_json(path: Path, payload: Any) -> None:
-    """Write *payload* as JSON to *path* atomically and durably.
+def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
+    """Write *payload* as JSON to *path* atomically and (optionally) durably.
 
     Recipe: serialize to a ``tempfile.mkstemp``-allocated sibling,
     ``flush()`` + ``fsync(fd)`` the data, ``os.replace`` to swap, then
@@ -52,11 +52,37 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     don't collide. Parent-dir fsync is best-effort: NFS and some other
     network filesystems don't support it; we suppress the OSError.
 
+    Durability tradeoff (``fsync``)
+    -------------------------------
+    Set ``fsync=False`` ONLY when the file is a non-authoritative
+    derived cache that can be regenerated from a separately-persisted
+    source of truth, and you've already paid (or are about to pay) the
+    fsync cost on that source.
+
+    With ``fsync=False`` the call is still **atomic** (mkstemp + replace
+    means readers never observe a half-written file) but no longer
+    **durable**: on a kernel panic / power loss between the
+    ``os.replace`` and the OS background-flush, the file may revert to
+    its previous contents (or to a missing-file state if it's a new
+    write). The page-cache view stays consistent, so a process that
+    survives the crash sees the new content immediately.
+
+    The motivating case is the hot monitor-tick path: each tick writes
+    a journal record (durable, must fsync) AND a denormalized
+    ``<run_id>.last_status.json`` cache file (a strict subset of the
+    journal record's ``last_status`` field). On networked filesystems
+    each fsync is hundreds of ms; pairing a durable write with a
+    no-fsync cache write halves the per-tick fsync cost. If the cache
+    file is lost to a crash, the next status poll rewrites it from the
+    still-durable journal record.
+
     Used by:
       * ``_internal/session/run_record._atomic_write_json`` (forwarder
         below — back-compat for callers that still import it).
       * ``state/runs.py`` for per-run sidecars.
       * ``runner/update_constraints.py`` for the journal hand-off.
+      * ``runner/status.py`` for the ``last_status.json`` cache
+        (``fsync=False`` — see tradeoff above).
       * ``infra/inspect/_persist.py`` for the cluster-history file.
       * ``mapreduce/metrics_io.py`` for per-task metrics JSONs.
       * ``mapreduce/combiner.py`` and ``mapreduce/dispatch.py`` keep
@@ -69,20 +95,22 @@ def atomic_write_json(path: Path, payload: Any) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, sort_keys=True)
             fh.flush()
-            with contextlib.suppress(OSError):
-                os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        try:
-            dir_fd = os.open(str(path.parent), os.O_RDONLY)
-            try:
+            if fsync:
                 with contextlib.suppress(OSError):
-                    os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            # Some filesystems (notably NFS) don't allow opening a dir
-            # for fsync; best-effort.
-            pass
+                    os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        if fsync:
+            try:
+                dir_fd = os.open(str(path.parent), os.O_RDONLY)
+                try:
+                    with contextlib.suppress(OSError):
+                        os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                # Some filesystems (notably NFS) don't allow opening a dir
+                # for fsync; best-effort.
+                pass
     except Exception:
         with contextlib.suppress(OSError):
             os.unlink(tmp)

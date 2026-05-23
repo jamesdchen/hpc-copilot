@@ -152,9 +152,15 @@ def _split_frontmatter(text: str) -> tuple[str, str]:
     if not text.startswith("---\n"):
         return "", text
     end = text.find("\n---\n", 4)
-    if end == -1:
-        return "", text
-    return text[4:end], text[end + len("\n---\n") :]
+    if end != -1:
+        return text[4:end], text[end + len("\n---\n") :]
+    # EOF-terminated frontmatter: ``\n---`` at end of file with no
+    # trailing newline. Without this fallback the function returned
+    # ``("", text)`` and the rewriter would later PREPEND a fresh
+    # frontmatter block, duplicating it.
+    if text.endswith("\n---"):
+        return text[4 : -len("\n---")], ""
+    return "", text
 
 
 def _render_doc(meta, body: str, fm_existing: dict) -> str:

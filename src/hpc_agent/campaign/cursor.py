@@ -64,7 +64,7 @@ def read_cursor(experiment_dir: Path | str, campaign_id: str) -> dict[str, Any] 
     """
     path = cursor_path(experiment_dir, campaign_id)
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
     try:

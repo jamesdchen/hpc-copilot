@@ -63,7 +63,7 @@ def _default_max_workers():
 
 
 def _read_metrics(metrics_path):
-    with open(metrics_path) as f:
+    with open(metrics_path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -224,7 +224,7 @@ def main(max_workers=None, argv=None):
         sys.exit(1)
 
     try:
-        sidecar = json.loads(sidecar_path.read_text())
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         print(f"[combiner] ERROR: failed to parse sidecar: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -314,12 +314,14 @@ def main(max_workers=None, argv=None):
 
     runtime_rows = []  # one dict per task with a readable _runtime.json
     if readable:
+        from concurrent.futures import as_completed
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
             future_to_info = {
                 pool.submit(_read_metrics, metrics_path): (tid, grid_key, runtime_path)
                 for tid, grid_key, metrics_path, runtime_path in readable
             }
-            for future in future_to_info:
+            for future in as_completed(future_to_info):
                 tid, grid_key, runtime_path = future_to_info[future]
                 try:
                     metrics = future.result()
@@ -334,7 +336,7 @@ def main(max_workers=None, argv=None):
                 # critical artifact.
                 if runtime_path is not None:
                     try:
-                        with open(runtime_path) as rfh:
+                        with open(runtime_path, encoding="utf-8") as rfh:
                             runtime_rows.append(json.load(rfh))
                     except (json.JSONDecodeError, OSError) as exc:
                         errors.append(f"task {tid}: failed to read _runtime.json: {exc}")

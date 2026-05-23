@@ -46,6 +46,7 @@ def campaign_init(
     direction: str | None = None,
     plateau_window: int | None = None,
     plateau_tolerance: float | None = None,
+    plateau_mode: str | None = None,
     max_jobs: int | None = None,
     max_tasks: int | None = None,
     max_walltime_sec: int | None = None,
@@ -72,7 +73,15 @@ def campaign_init(
     stop_criteria: dict[str, Any] | None = None
     if any(
         v is not None
-        for v in (max_iters, metric, target, direction, plateau_window, plateau_tolerance)
+        for v in (
+            max_iters,
+            metric,
+            target,
+            direction,
+            plateau_window,
+            plateau_tolerance,
+            plateau_mode,
+        )
     ):
         stop_criteria = {}
         if max_iters is not None:
@@ -87,6 +96,8 @@ def campaign_init(
             stop_criteria["plateau_window"] = plateau_window
         if plateau_tolerance is not None:
             stop_criteria["plateau_tolerance"] = plateau_tolerance
+        if plateau_mode is not None:
+            stop_criteria["plateau_mode"] = plateau_mode
 
     strategy: dict[str, Any] | None = None
     if strategy_name is not None:

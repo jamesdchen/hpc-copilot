@@ -243,6 +243,14 @@ def _resolve(annotation: Any, metadata: list[Any]) -> Any:
 # qualname; values are merged into the synthesized kwargs.
 _CROSS_FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "UpdateRunConstraintsSpec": {"add_features": ["a"]},
+    # _Provenance enforces ``session_sha`` when ``kind=='agent'``. The
+    # generic synthesizer picks kind='agent' (first Literal value) but
+    # leaves the conditionally-required session_sha unset; supply it so
+    # the kind-conditional ``model_validator`` passes. The synthesizer
+    # builds nested required models by name lookup, so the override
+    # belongs on ``_Provenance`` itself, not on the enclosing
+    # ``InterviewSpec``.
+    "_Provenance": {"session_sha": "abc12345"},
 }
 
 

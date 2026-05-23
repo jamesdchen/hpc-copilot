@@ -1,22 +1,36 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/recall.output.json",
-  "title": "recall output envelope",
-  "description": "Envelope returned by ``hpc-agent recall``.\n\nEach campaign summary projects the prior-decision fields the\nnext interviewer would compare against. The rollup block\npre-computes cross-campaign aggregations.",
+  "title": "recall output",
+  "description": "Data block returned by ``hpc-agent recall``.\n\nEach campaign summary projects the prior-decision fields the\nnext interviewer would compare against. The rollup block\npre-computes cross-campaign aggregations.\n\nThe outer ``{ok, data}`` envelope is supplied by ``_ok`` in\n``agent_cli.py``; the shipped ``recall.output.json`` matches THIS\ndata-block shape, not the envelope (every other primitive's\nResult/Data model follows the same convention).",
   "type": "object",
   "required": [
-    "ok",
-    "data"
+    "campaigns",
+    "total_matching",
+    "showing",
+    "rollup"
   ],
   "additionalProperties": false,
   "properties": {
-    "ok": {
-      "const": true,
-      "title": "Ok",
-      "type": "boolean"
+    "campaigns": {
+      "items": {
+        "$ref": "#/$defs/_CampaignSummary"
+      },
+      "title": "Campaigns",
+      "type": "array"
     },
-    "data": {
-      "$ref": "#/$defs/_RecallData"
+    "total_matching": {
+      "minimum": 0,
+      "title": "Total Matching",
+      "type": "integer"
+    },
+    "showing": {
+      "minimum": 0,
+      "title": "Showing",
+      "type": "integer"
+    },
+    "rollup": {
+      "$ref": "#/$defs/_RecallRollup"
     }
   },
   "$defs": {
@@ -266,39 +280,6 @@
         "latest"
       ],
       "title": "_MaterializedAtStats",
-      "type": "object"
-    },
-    "_RecallData": {
-      "additionalProperties": false,
-      "properties": {
-        "campaigns": {
-          "items": {
-            "$ref": "#/$defs/_CampaignSummary"
-          },
-          "title": "Campaigns",
-          "type": "array"
-        },
-        "total_matching": {
-          "minimum": 0,
-          "title": "Total Matching",
-          "type": "integer"
-        },
-        "showing": {
-          "minimum": 0,
-          "title": "Showing",
-          "type": "integer"
-        },
-        "rollup": {
-          "$ref": "#/$defs/_RecallRollup"
-        }
-      },
-      "required": [
-        "campaigns",
-        "total_matching",
-        "showing",
-        "rollup"
-      ],
-      "title": "_RecallData",
       "type": "object"
     },
     "_RecallRollup": {

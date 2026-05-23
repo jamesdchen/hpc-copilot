@@ -85,6 +85,7 @@
       "additionalProperties": false,
       "properties": {
         "campaign_id": {
+          "minLength": 1,
           "title": "Campaign Id",
           "type": "string"
         },

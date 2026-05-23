@@ -45,7 +45,7 @@ def main() -> int:
     print(f"OK: {len(registry)} primitives registered with the plugin installed.")
 
     help_text = subprocess.run(
-        ["hpc-agent", "--help"], capture_output=True, text=True, check=True
+        ["hpc-agent", "--help"], capture_output=True, text=True, encoding="utf-8", check=True
     ).stdout
     missing_cmds = [c for c in EXPECTED_SUBCOMMANDS if c not in help_text]
     if missing_cmds:

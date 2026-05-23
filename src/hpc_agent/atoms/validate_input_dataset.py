@@ -119,7 +119,7 @@ def _check_non_null_parquet(
 
 
 def _load_csv_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(newline="") as f:
+    with path.open(newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
 
@@ -158,7 +158,7 @@ def _check_non_null_csv(
 
 def _load_jsonl_rows(path: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    with path.open() as f:
+    with path.open(encoding="utf-8") as f:
         for line in f:
             stripped = line.strip()
             if not stripped:

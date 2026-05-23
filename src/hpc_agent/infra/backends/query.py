@@ -138,7 +138,7 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
         cmd.insert(1, f"--clusters={cluster}")
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=30)
     except subprocess.TimeoutExpired as exc:
         return {
             "tasks": {},
@@ -246,6 +246,8 @@ def _expand_task_range(spec: str) -> list[int]:
     start = int(m.group(1))
     end = int(m.group(2)) if m.group(2) else start
     step = int(m.group(3)) if m.group(3) else 1
+    if step <= 0:
+        step = 1
     return list(range(start, end + 1, step))
 
 
@@ -272,7 +274,8 @@ def _process_qacct_block(
     parse_failed = False
     try:
         exit_int = int(exit_status)
-        failed_int = int(failed.split()[0]) if failed else 0
+        failed_tokens = failed.split() if failed else []
+        failed_int = int(failed_tokens[0]) if failed_tokens else 0
     except ValueError:
         errors.append(
             {
@@ -353,7 +356,7 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
 
     task_info: dict[int, dict] = {}
     errors: list[dict] = []
-    sge_user = user or os.environ.get("USER", os.environ.get("USERNAME", ""))
+    sge_user = user or os.environ.get("USER") or os.environ.get("USERNAME") or ""
 
     # Phase 1: single qstat call for running/pending tasks across all jobs.
     qstat_ok = False
@@ -362,6 +365,7 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
             ["qstat", "-u", sge_user],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=30,
         )
         if result.returncode == 0:
@@ -431,6 +435,7 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
                 ["qacct", "-j", key],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=30,
             )
         except subprocess.TimeoutExpired as exc:

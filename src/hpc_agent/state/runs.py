@@ -606,9 +606,23 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     target = run_sidecar_path(experiment_dir, run_id)
     if not target.is_file():
         raise FileNotFoundError(f"run sidecar not found: {target}")
-    data: dict[str, Any] = json.loads(target.read_text(encoding="utf-8"))
-    data["job_ids"] = [str(j) for j in job_ids]
-    _atomic_write_json(target, data)
+    # Route through ``atomic_locked_update`` so the read-modify-write
+    # serializes against concurrent ``write_run_sidecar`` callers; every
+    # sibling state writer (runtime_prior, user_profiles, cursor) uses
+    # the same lock seam.
+    from hpc_agent._internal.io import atomic_locked_update
+
+    new_job_ids = [str(j) for j in job_ids]
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        if existing is None:
+            # Sidecar vanished between the existence check and the lock —
+            # preserve the documented FileNotFoundError contract.
+            raise FileNotFoundError(f"run sidecar not found: {target}")
+        existing["job_ids"] = new_job_ids
+        return existing
+
+    atomic_locked_update(target, _mutate)
     return target
 
 

@@ -53,7 +53,10 @@ INTERNAL_HEADERS = (
 )
 
 _HEADER_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
-_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+# Tolerate frontmatter terminated by ``\n---`` at EOF (no trailing
+# newline); otherwise the stripper leaves the YAML block in the body
+# and skews the agent/internal header count.
+_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---(?:\n|\Z)", re.DOTALL)
 
 
 def _classify_body(body: str) -> tuple[int, int]:

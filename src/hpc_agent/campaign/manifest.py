@@ -40,7 +40,7 @@ _SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "schemas" / "campa
 
 def manifest_schema() -> dict[str, Any]:
     """Load and return the manifest JSON Schema as a dict."""
-    data: dict[str, Any] = json.loads(_SCHEMA_PATH.read_text())
+    data: dict[str, Any] = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
     return data
 
 

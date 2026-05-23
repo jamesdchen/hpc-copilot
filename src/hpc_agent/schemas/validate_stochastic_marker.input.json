@@ -19,6 +19,7 @@
     "expected_cmd_sha": {
       "description": "The cmd_sha the about-to-submit run will have, computed via ``compute_cmd_sha(load_tasks_module(.hpc/tasks.py))`` BEFORE invoking submit-flow. The validator checks whether any prior sidecar tagged with the same campaign_id already carries this cmd_sha — if so, the submit would dedupe silently.",
       "minLength": 8,
+      "pattern": "^[0-9a-f]{8,64}$",
       "title": "Expected Cmd Sha",
       "type": "string"
     }

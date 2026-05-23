@@ -88,20 +88,67 @@ jobs:
         working-directory: hpc-agent-pro
         run: pytest -q
 
-  integration:
+  pro-integration:
     # With both packages installed, the plugin must register its
-    # primitives and restore its CLI subcommands. A failure here means
-    # the contract surface between the packages has drifted.
-    name: integration
+    # primitives, restore its CLI subcommands, and be reachable through
+    # the host's contract surfaces (``describe`` + ``capabilities``).
+    # A failure here means the contract surface between the packages has
+    # drifted — which is exactly the class of bug a host-side version
+    # pin ("hpc-agent>=0.3,<0.4") would silently introduce.
+    name: pro-integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install host + plugin
+      - name: Install host + plugin in the same env
+        # Install BOTH packages editable in the same env. If the
+        # plugin's ``hpc-agent`` requirement excluded the host's
+        # version, pip would fall back to PyPI here and the
+        # subsequent integration checks would import an unrelated
+        # host build — the contract-surface assertions below would
+        # then fail loudly rather than silently. ``[dev]`` on the
+        # plugin pulls in pytest so the e2e atom step below resolves.
         run: |
-          pip install -e .
-          pip install -e ./hpc-agent-pro
+          pip install -e . -e './hpc-agent-pro[dev]'
       - name: Verify the plugin plugs into the host
+        # Asserts registry membership + ``hpc-agent --help`` surface +
+        # plugin SKILL.md routing to delegated workers.
         run: python scripts/check_plugin_integration.py
+      - name: Assert ``describe`` resolves a plugin primitive
+        # Smoke test of the host's per-primitive contract surface
+        # against a plugin-owned primitive. ``ok: false`` here means
+        # the plugin's @primitive decorator never registered, or the
+        # host installed an incompatible version that lacks the
+        # registry seam this plugin writes to.
+        run: |
+          hpc-agent describe predict-start-time > /tmp/describe.json
+          cat /tmp/describe.json
+          python -c "
+          import json
+          d = json.load(open('/tmp/describe.json'))
+          assert d['ok'] is True, d
+          assert d['data']['kind'] == 'primitive'
+          assert d['data']['content']['python'].startswith('hpc_agent_pro.'), d
+          print('OK: describe resolves a plugin-owned primitive to its plugin module.')
+          "
+      - name: Assert plugin operations appear in the capabilities catalog
+        # ``capabilities`` is what agents read to discover what's
+        # callable. Plugin ops missing here = the catalog the LLM sees
+        # is wrong.
+        run: |
+          python -m hpc_agent capabilities > /tmp/caps.json
+          python -c "
+          import json
+          d = json.load(open('/tmp/caps.json'))['data']
+          names = {o['name'] for o in d['operations']}
+          for req in ('predict-start-time', 'best-submit-window', 'walltime-drift'):
+              assert req in names, f'{req} missing from capabilities (have: {sorted(names)})'
+          print(f'OK: {len(names)} operations in catalog, plugin ops present.')
+          "
+      - name: End-to-end atom against a fixture (no lightgbm path)
+        # Smallest atom that exercises the plugin entry point: a pure
+        # function under hpc_agent_pro.atoms imported through the
+        # installed plugin. Runs in well under a second.
+        run: pytest -q hpc-agent-pro/tests/forecast/test_walltime_arbitrage.py

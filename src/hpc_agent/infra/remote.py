@@ -85,6 +85,16 @@ RSYNC_TIMEOUT_SEC = _env_int("HPC_RSYNC_TIMEOUT_SEC", 1800)
 # value can't escape into argv as a separate token or into the shell.
 _DISALLOWED_TARGET_CHARS = " \t\n\r;|&`$<>\"'\\"
 
+# Default ControlPersist window. Tunable via ``HPC_SSH_PERSIST_INTERVAL``;
+# see :func:`_ssh_multiplex_opts` for the accepted shapes.
+_DEFAULT_SSH_PERSIST_INTERVAL = "10m"
+
+# Characters that must never appear in the persist-interval env var. OpenSSH
+# accepts plain ints (seconds), suffixed durations (``30m``, ``2h``), ``0``
+# (persist until master exits), and ``no``/``yes``; none of those need any
+# of these chars, so any occurrence indicates a typo or an injection attempt.
+_DISALLOWED_PERSIST_CHARS = " \t\n\r;|&`$<>\"'\\*?!()=/"
+
 # Characters that must never appear in a remote path. Mirrors the
 # ssh_target set with the addition of ``*`` and ``?`` (glob), ``(``/``)``
 # (subshell), and ``!`` (history); excludes ``/`` (legitimate in paths).
@@ -150,24 +160,77 @@ def _ssh_multiplex_opts() -> list[str]:
     """Return SSH options that enable connection multiplexing.
 
     First call to a host opens the master socket; subsequent calls within
-    the ControlPersist window (10 minutes) reuse it. For an agent polling
-    `status` every 30s during a 4-hour job, this is the difference between
-    hundreds of full handshakes and a single one.
+    the ControlPersist window reuse it. For an agent polling ``status``
+    every 30s during a 4-hour job, this is the difference between hundreds
+    of full handshakes and a single one.
 
-    Opt out by setting ``HPC_NO_SSH_MULTIPLEX=1`` (some clusters disallow
-    multiplexed sessions, e.g. due to PAM-based session limits).
+    Env vars
+    --------
+    ``HPC_NO_SSH_MULTIPLEX=1``
+        Opt out of multiplexing entirely (some clusters disallow
+        multiplexed sessions, e.g. due to PAM-based session limits).
+    ``HPC_SSH_PERSIST_INTERVAL``
+        Override the ControlPersist window. The value is passed verbatim
+        to OpenSSH, so any shape ``ssh_config(5)`` accepts works:
+
+        * plain integer seconds (e.g. ``600``)
+        * suffixed durations (e.g. ``30m``, ``2h``, ``1h30m``)
+        * ``0`` — persist until the master exits
+        * ``no`` / ``yes`` — disable persist (master exits with last
+          session) / persist forever
+
+        Defaults to ``10m`` for backwards compatibility. The value is
+        validated loosely: whitespace and shell metacharacters are
+        rejected; on rejection we log to stderr (no raise) and fall back
+        to the default so a typo cannot break every cluster call.
+
+        When the value is ``no``, no ``ControlPersist`` option is emitted —
+        OpenSSH's default behaviour applies (master exits with the last
+        client session).
     """
     if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
         return []
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
-    return [
+    opts = [
         "-o",
         "ControlMaster=auto",
         "-o",
         f"ControlPath={runtime_dir}/hpc-cm-%C",
-        "-o",
-        "ControlPersist=10m",
     ]
+    persist = _resolve_ssh_persist_interval()
+    if persist is not None:
+        opts += ["-o", f"ControlPersist={persist}"]
+    return opts
+
+
+def _resolve_ssh_persist_interval() -> str | None:
+    """Return the ControlPersist value to emit, or ``None`` to omit the opt.
+
+    Reads ``HPC_SSH_PERSIST_INTERVAL`` and applies the validation rule
+    documented on :func:`_ssh_multiplex_opts`. Returns ``None`` when the
+    operator explicitly disabled persist (``no``); otherwise returns the
+    string to embed after ``ControlPersist=``. Invalid values fall back
+    to :data:`_DEFAULT_SSH_PERSIST_INTERVAL` after a stderr warning.
+    """
+    raw = os.environ.get("HPC_SSH_PERSIST_INTERVAL")
+    if raw is None or raw == "":
+        return _DEFAULT_SSH_PERSIST_INTERVAL
+    bad = sorted({c for c in _DISALLOWED_PERSIST_CHARS if c in raw})
+    if bad:
+        # Don't raise — a malformed env var in someone's shell rc should
+        # not break every ssh call. Warn loudly and fall back to default.
+        import sys
+
+        print(
+            f"hpc-agent: ignoring HPC_SSH_PERSIST_INTERVAL={raw!r} "
+            f"(disallowed characters {bad!r}); using default "
+            f"{_DEFAULT_SSH_PERSIST_INTERVAL!r}",
+            file=sys.stderr,
+        )
+        return _DEFAULT_SSH_PERSIST_INTERVAL
+    if raw.lower() == "no":
+        return None
+    return raw
 
 
 # Sentinel marker meaning "caller did not specify a timeout".  We need a
@@ -339,6 +402,7 @@ def ssh_run(
                 argv,
                 capture_output=capture,
                 text=True,
+                encoding="utf-8",
                 timeout=effective_timeout,
             )
         except subprocess.TimeoutExpired as exc:
@@ -455,6 +519,7 @@ def _tar_ssh_push(
             stdin=tar_proc.stdout,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=timeout,
         )
         tar_proc.stdout.close()
@@ -513,7 +578,13 @@ def _scp_pull(
 
     scp_cmd = ["scp", "-r", "-o", "BatchMode=yes", src, dst]
     try:
-        return subprocess.run(scp_cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(
+            scp_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(
             f"scp pull from {ssh_target} timed out after {timeout}s: {_truncate(f'{src} -> {dst}')}"
@@ -600,6 +671,7 @@ def rsync_push(
                 [*flags, *exclude_flags, src, dst],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=effective_timeout,
             )
         except subprocess.TimeoutExpired as exc:
@@ -662,6 +734,7 @@ def deploy_runtime(
                     ["scp", str(src), dst],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
                     timeout=SSH_TIMEOUT_SEC,
                 )
             except subprocess.TimeoutExpired as exc:
@@ -888,6 +961,7 @@ def rsync_pull(
                 ["rsync", "-az", *filter_flags, src, dst],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=effective_timeout,
             )
         except subprocess.TimeoutExpired as exc:

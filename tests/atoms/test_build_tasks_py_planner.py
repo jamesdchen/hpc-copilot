@@ -101,14 +101,18 @@ def test_planner_associative_carries_no_halo(tmp_path: Path) -> None:
 
 
 def test_planner_bounded_halo_requires_halo_expr(tmp_path: Path) -> None:
-    with pytest.raises(errors.SpecInvalid, match="halo_expr"):
-        build_tasks_py(
-            tmp_path,
-            spec=BuildTasksPyInput(
-                axes=[{"name": "a", "values": [1]}],
-                flags_by_executor={"src.exp": [{"name": "a", "type": "int"}]},
-                data_axis={"kind": "bounded_halo", "chunks": 2, "series_length": 10},
-            ),
+    # The invariant is now enforced at the schema boundary (a
+    # ``model_validator`` on ``_DataAxisSpec``) instead of leaking
+    # through to a downstream ``SpecInvalid`` raised by the atom — a
+    # bare ``BuildTasksPyInput(...)`` with the malformed payload should
+    # raise Pydantic's ValidationError naming ``halo_expr``.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="halo_expr"):
+        BuildTasksPyInput(
+            axes=[{"name": "a", "values": [1]}],
+            flags_by_executor={"src.exp": [{"name": "a", "type": "int"}]},
+            data_axis={"kind": "bounded_halo", "chunks": 2, "series_length": 10},
         )
 
 

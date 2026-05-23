@@ -30,6 +30,17 @@ class _StopCriteria(BaseModel):
     direction: Literal["minimize", "maximize"] | None = None
     plateau_window: int | None = Field(default=None, ge=1)
     plateau_tolerance: float | None = Field(default=None, ge=0)
+    plateau_mode: Literal["prior_window", "all_time_best"] | None = Field(
+        default=None,
+        description=(
+            "Plateau baseline. ``all_time_best`` (default): fires when the "
+            "recent window failed to beat the all-time prior best — 'no "
+            "new record in N iters'. ``prior_window``: fires when the "
+            "recent window failed to beat the prior window of equal size "
+            "— 'improvements have stalled'. See campaign_converged for "
+            "the data-requirement and use-case trade-offs."
+        ),
+    )
 
 
 class _Strategy(BaseModel):

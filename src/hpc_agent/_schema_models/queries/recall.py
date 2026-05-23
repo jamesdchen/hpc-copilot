@@ -151,24 +151,22 @@ class _RecallRollup(BaseModel):
     generator_rollup: _GeneratorRollup | None = None
 
 
-class _RecallData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class RecallResult(BaseModel):
+    """Data block returned by ``hpc-agent recall``.
+
+    Each campaign summary projects the prior-decision fields the
+    next interviewer would compare against. The rollup block
+    pre-computes cross-campaign aggregations.
+
+    The outer ``{ok, data}`` envelope is supplied by ``_ok`` in
+    ``agent_cli.py``; the shipped ``recall.output.json`` matches THIS
+    data-block shape, not the envelope (every other primitive's
+    Result/Data model follows the same convention).
+    """
+
+    model_config = ConfigDict(extra="forbid", title="recall output")
 
     campaigns: list[_CampaignSummary]
     total_matching: int = Field(ge=0)
     showing: int = Field(ge=0)
     rollup: _RecallRollup
-
-
-class RecallEnvelope(BaseModel):
-    """Envelope returned by ``hpc-agent recall``.
-
-    Each campaign summary projects the prior-decision fields the
-    next interviewer would compare against. The rollup block
-    pre-computes cross-campaign aggregations.
-    """
-
-    model_config = ConfigDict(extra="forbid", title="recall output envelope")
-
-    ok: Literal[True]
-    data: _RecallData

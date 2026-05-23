@@ -16,6 +16,13 @@ __all__ = [
     "rollup_by_wave",
 ]
 
+# Status keys we count into per-status buckets. The bucket dict ALSO
+# carries a sibling ``"total"`` key; using ``status in bucket`` to gate
+# the increment would treat a literal status value of ``"total"`` (from
+# a corrupt / legacy report) as a valid bucket and double-increment the
+# total counter.
+_STATUS_BUCKETS = frozenset({"complete", "running", "pending", "failed", "unknown"})
+
 
 def _grid_point_key(params: dict) -> str:
     """Stable grid-point identifier from a params dict."""
@@ -47,7 +54,7 @@ def rollup_by_grid_point(report: dict, tasks_data: dict) -> dict[str, dict]:
         )
         bucket["total"] += 1
         status = task_info.get("status", "unknown")
-        if status in bucket:
+        if status in _STATUS_BUCKETS:
             bucket[status] += 1
         else:
             bucket["unknown"] += 1
@@ -87,7 +94,7 @@ def rollup_by_wave(report: dict, tasks_data: dict) -> dict[str, dict]:
                 report_key = str(tid)
             task_info = report_tasks.get(report_key) or {}
             status = task_info.get("status", "unknown")
-            if status in bucket:
+            if status in _STATUS_BUCKETS:
                 bucket[status] += 1
             else:
                 bucket["unknown"] += 1

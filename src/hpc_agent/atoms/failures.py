@@ -106,7 +106,13 @@ def fetch_failures(
         clusters_cfg = load_clusters_config()
     except Exception:  # noqa: BLE001
         clusters_cfg = {}
-    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler") or "slurm"
+    scheduler = (clusters_cfg.get(record.cluster) or {}).get("scheduler")
+    if not scheduler:
+        raise errors.SpecInvalid(
+            f"cannot resolve scheduler for cluster {record.cluster!r}: "
+            f"absent from clusters.yaml or missing a 'scheduler' key — refusing "
+            f"to guess 'slurm' and risk misrouting the SGE log fetch"
+        )
 
     logs = runner.fetch_task_logs(
         ssh_target=record.ssh_target,

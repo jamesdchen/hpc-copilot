@@ -133,6 +133,14 @@ def record_status(
     # Atomic write so a concurrent reader never sees a half-written
     # file.  ``Path.write_text`` truncates in place; readers that
     # race with the writer would otherwise observe a JSONDecodeError.
+    #
+    # ``fsync=False`` because the cache is a strict denormalization of
+    # the journal record's ``last_status`` field — ``update_run_status``
+    # above already fsync'd that. On a kernel-panic/power-loss between
+    # the two writes the cache may revert, but the next monitor tick
+    # rewrites it from the still-durable journal. Halves per-tick fsync
+    # cost on networked filesystems (hundreds of ms each). See the
+    # ``atomic_write_json`` docstring for the full tradeoff.
     with contextlib.suppress(OSError):
-        _atomic_write_json(cache_path, summary)
+        _atomic_write_json(cache_path, summary, fsync=False)
     return record

@@ -24,6 +24,13 @@ repos:
         pass_filenames: false
         files: '^src/hpc_agent/.*\.py$'
 
+      - id: lint-text-io-encoding
+        name: text I/O must pass encoding='utf-8' (TIO001)
+        entry: python scripts/lint_text_io_encoding.py
+        language: system
+        pass_filenames: false
+        files: '^(src/hpc_agent/.*\.py|hpc-agent-pro/src/.*\.py|scripts/[^/]+\.py)$'
+
       - id: build-primitive-frontmatter
         name: regenerate primitive frontmatter
         entry: python scripts/build_primitive_frontmatter.py --write

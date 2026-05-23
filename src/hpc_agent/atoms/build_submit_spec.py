@@ -224,7 +224,9 @@ def _validate(spec: dict[str, Any]) -> None:
     except ImportError:
         return  # defence-in-depth; primitive callers still upstream-validate
     try:
-        schema_text = (_resource_files("hpc_agent.schemas") / "submit_flow.input.json").read_text()
+        schema_text = (_resource_files("hpc_agent.schemas") / "submit_flow.input.json").read_text(
+            encoding="utf-8"
+        )
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)

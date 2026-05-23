@@ -65,9 +65,12 @@ SLASH_ONLY_OK: set[str] = {"validate-campaign"}
 # code-orchestrated entrypoint; or, for the campaign loop, shelling
 # `hpc-campaign-driver`, the code-orchestrated tick-by-tick driver.
 _INVOKE_DIRECTIVE_RE = re.compile(
-    r"[Ii]nvoke the [`*]?[a-z][a-z0-9-]+[`*]? skill"
+    # ``[\`*]{0,2}`` (not ``[\`*]?``) so the directive accepts
+    # ``**hpc-submit**`` and ``\`hpc-submit\``` wrapping — the comment
+    # above promises bold wrapping is tolerated.
+    r"[Ii]nvoke the [`*]{0,2}[a-z][a-z0-9-]+[`*]{0,2} skill"
     r"|subagent[^\n]*?to execute it \(`skills/[a-z0-9-]+/SKILL\.md`\)"
-    r"|hpc-agent run "
+    r"|hpc-agent run\b"
     r"|hpc-campaign-driver"
 )
 
@@ -145,7 +148,12 @@ def main() -> int:
             )
             continue
         routes_via_spawn = (
-            "hpc_spawn" in body or "hpc-agent run" in body or "hpc-campaign-driver" in body
+            "hpc_spawn" in body
+            # Match ``hpc-agent run`` at a word boundary so a body that
+            # wraps it in backticks (``\`hpc-agent run\```) or starts a
+            # new line with it (``\nhpc-agent run\n``) still counts.
+            or re.search(r"hpc-agent run\b", body) is not None
+            or "hpc-campaign-driver" in body
         )
         if exec_match.group(1) == "delegated" and not routes_via_spawn:
             errors.append(

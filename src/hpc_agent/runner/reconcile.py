@@ -47,9 +47,7 @@ def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
     return sorted(waves)
 
 
-def _ssh_alive_job_ids(
-    *, ssh_target: str, remote_path: str, job_ids: list[str], scheduler: str
-) -> set[str]:
+def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -> set[str]:
     """Return the subset of *job_ids* still known to the scheduler.
 
     "Alive" means *currently* known to the scheduler (queued, running,
@@ -139,7 +137,6 @@ def reconcile(
         fut_alive = pool.submit(
             _ssh_alive_job_ids,
             ssh_target=record.ssh_target,
-            remote_path=record.remote_path,
             job_ids=record.job_ids,
             scheduler=scheduler,
         )

@@ -177,8 +177,8 @@ def read_cluster_history(
     yielded = 0
     for p in files:
         try:
-            text = p.read_text()
-        except OSError:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             doc = json.loads(text)

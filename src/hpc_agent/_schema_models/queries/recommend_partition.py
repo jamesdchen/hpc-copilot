@@ -40,7 +40,15 @@ class RecommendPartitionSpec(BaseModel):
 class RecommendPartitionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    recommended_partition: str = Field(min_length=1)
+    recommended_partition: str | None = Field(
+        default=None,
+        description=(
+            "The chosen partition's name, or None when no safe partition "
+            "exists (e.g. only a debug partition is declared and the "
+            "request exceeds its walltime cap — see the "
+            "``only_debug_available_walltime_too_long`` rationale)."
+        ),
+    )
     rationale: Literal[
         "user_preference_honoured",
         "debug_short_walltime",

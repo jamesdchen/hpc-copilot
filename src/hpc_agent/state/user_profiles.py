@@ -355,8 +355,8 @@ def all_profiles(experiment_dir: Path, *, cluster: str) -> dict[str, UserProfile
     if not path.exists():
         return {}
     try:
-        text = path.read_text()
-    except OSError:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return {}
     import json
 

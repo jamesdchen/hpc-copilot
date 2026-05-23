@@ -47,7 +47,7 @@ def stages_path(experiment_dir: Path) -> Path:
 
 def stages_schema() -> dict[str, Any]:
     """Load and return the stages JSON Schema as a dict."""
-    data: dict[str, Any] = json.loads(_SCHEMA_PATH.read_text())
+    data: dict[str, Any] = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
     return data
 
 

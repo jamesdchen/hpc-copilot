@@ -42,8 +42,8 @@ What it intentionally does NOT do (in MVP)
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -99,6 +99,37 @@ class MonitorFlowResult:
 #: is large enough to be unreachable in practice without ambiguity.
 _COMBINER_GIVE_UP_SENTINEL: int = 10**9
 
+#: Upper bound (seconds) on the adaptive poll sleep. Hot-path cost is
+#: dominated by the per-poll SSH + remote-status round-trip (~0.5-1s).
+#: After K consecutive unchanged polls we double the effective interval
+#: up to this cap (5 minutes), reverting instantly on any state change.
+_MAX_ADAPTIVE_POLL_SECONDS: float = 300.0
+
+#: Number of consecutive unchanged polls before the adaptive backoff
+#: starts doubling the effective sleep. Small (2) so a long-running but
+#: chatty job barely backs off, while a truly idle 4h job ramps up
+#: quickly: 60s → 120 → 240 → 300 (cap) within ~10 minutes of quiet.
+_UNCHANGED_POLLS_BEFORE_BACKOFF: int = 2
+
+
+def _status_fingerprint(status: dict[str, Any]) -> str:
+    """Return a stable hash of the polled status dict.
+
+    Any change in task counts, scheduler-state flips, new waves, etc.
+    flips the fingerprint and resets the adaptive backoff. We serialize
+    with ``sort_keys=True`` and ``default=str`` so heterogeneous (and
+    nested-dict) values like the ``waves`` block hash deterministically
+    without us having to enumerate which keys matter. blake2b is fast
+    and collision-resistant enough for an equality oracle.
+    """
+    try:
+        payload = json.dumps(status, sort_keys=True, default=str).encode("utf-8")
+    except (TypeError, ValueError):
+        # Pathological payload — fall back to a per-call unique value so
+        # we never spuriously declare "unchanged" on an opaque diff.
+        payload = repr(status).encode("utf-8", errors="replace")
+    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+
 
 @dataclass
 class _LoopState:
@@ -121,32 +152,9 @@ def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
     return session.runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
 
 
-@contextlib.contextmanager
-def _flock_append(target: Path):
-    """Hold an exclusive flock on a sibling ``.lock`` while yielding.
-
-    Mirrors :func:`hpc_agent._internal.session._locked` so the slash-command
-    surface (which appends to the same ``.monitor.jsonl`` file) and this
-    workflow atom serialize their writes. Without flock, a concurrent
-    slash-command poll and an in-process monitor_flow tick can interleave
-    a partial JSON line and produce a torn record.
-
-    Best-effort on platforms without ``fcntl`` (Windows): degrades to a
-    no-op so the workflow primitive remains importable.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if _fcntl is None:
-        yield
-        return
-    lock = target.with_suffix(target.suffix + ".lock")
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        _fcntl.flock(fd, _fcntl.LOCK_EX)
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            _fcntl.flock(fd, _fcntl.LOCK_UN)
-        os.close(fd)
+# _flock_append was removed in favour of routing the tick-log append
+# through hpc_agent._internal.telemetry's monitor-jsonl sink, which owns
+# the flock-guarded writer pattern (see _append_tick below).
 
 
 def _append_tick(
@@ -176,12 +184,10 @@ def _append_tick(
         "console_emitted": False,
     }
     path = _tick_log_path(experiment_dir, run_id)
-    # B7: Route the JSONL append through hpc_agent._internal.telemetry, which
-    # owns the flock-guarded writer pattern. The local _flock_append /
-    # legacy fallback below remain as the on-disk shape -- the only
-    # change is that the writer call goes through the canonical sink.
-    # Telemetry's monitor-jsonl sink ignores HPC_TELEMETRY_SINK because
-    # this caller is the canonical producer.
+    # B7: Route the JSONL append through hpc_agent._internal.telemetry,
+    # which owns the flock-guarded writer pattern. Telemetry's
+    # monitor-jsonl sink ignores HPC_TELEMETRY_SINK because this caller
+    # is the canonical producer.
     try:
         from hpc_agent._internal.telemetry import record as _telemetry_record
 
@@ -289,7 +295,7 @@ def _write_failed_task_ids(
         "wave": wave,
         "classifier_codes": list(classifier_codes or []),
     }
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
@@ -324,7 +330,7 @@ def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
         if result.returncode != 0:
             return 0
         cmd_sha = None
-        with contextlib.suppress(FileNotFoundError, OSError):
+        with contextlib.suppress(FileNotFoundError, OSError, json.JSONDecodeError):
             cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
         return ingest_runtime_samples_from_combiner_dir(
             local_dir,
@@ -454,6 +460,16 @@ def monitor_flow(
         last_failed_waves=list(record.failed_waves),
     )
     started = _now()
+
+    # Adaptive backoff: the user-supplied poll_interval_seconds is the
+    # floor; we double it (capped at _MAX_ADAPTIVE_POLL_SECONDS) after
+    # _UNCHANGED_POLLS_BEFORE_BACKOFF consecutive polls whose status
+    # fingerprint matched the prior poll. Any state change snaps the
+    # effective interval back to the floor. For a 4h idle job this
+    # cuts ~480 SSH polls to ~60.
+    effective_interval = float(poll_interval_seconds)
+    unchanged_count = 0
+    last_fingerprint: str | None = None
 
     while True:
         state.ticks += 1
@@ -616,7 +632,19 @@ def monitor_flow(
                 escalation_reason=None,
             )
 
-        # Still in flight; record the tick and keep watching.
+        # Still in flight; update adaptive backoff and record the tick.
+        # Fingerprint covers the entire status snapshot (counts, scheduler
+        # state, waves block) so any change snaps us back to the floor.
+        fingerprint = _status_fingerprint(last_status)
+        if last_fingerprint is not None and fingerprint == last_fingerprint:
+            unchanged_count += 1
+            if unchanged_count >= _UNCHANGED_POLLS_BEFORE_BACKOFF:
+                effective_interval = min(effective_interval * 2.0, _MAX_ADAPTIVE_POLL_SECONDS)
+        else:
+            unchanged_count = 0
+            effective_interval = float(poll_interval_seconds)
+        last_fingerprint = fingerprint
+
         _append_tick(
             experiment_dir,
             run_id,
@@ -624,6 +652,6 @@ def monitor_flow(
             diff_from_prev=diff,
             actions=actions,
             lifecycle_state="in_flight",
-            next_tick_seconds=poll_interval_seconds,
+            next_tick_seconds=effective_interval,
         )
-        _sleep(poll_interval_seconds)
+        _sleep(effective_interval)

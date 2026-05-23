@@ -421,7 +421,7 @@ def _submit_one_spec(
 
         marker = run_sidecar_path(experiment_dir, spec.run_id).with_suffix(".partial_ok")
         with contextlib.suppress(OSError):
-            marker.write_text("1")
+            marker.write_text("1", encoding="utf-8")
 
     return SubmitFlowResult(
         run_id=spec.run_id,

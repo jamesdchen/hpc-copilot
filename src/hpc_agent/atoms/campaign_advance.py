@@ -37,6 +37,7 @@ def campaign_advance(
     direction: Literal["minimize", "maximize"] | None = None,
     plateau_window: int | None = None,
     plateau_tolerance: float | None = None,
+    plateau_mode: Literal["prior_window", "all_time_best"] | None = None,
     max_jobs: int | None = None,
     max_tasks: int | None = None,
     max_walltime_sec: int | None = None,
@@ -73,6 +74,7 @@ def campaign_advance(
         direction=direction,
         plateau_window=plateau_window,
         plateau_tolerance=plateau_tolerance,
+        plateau_mode=plateau_mode,
     )
 
     if budget["exhausted"]:

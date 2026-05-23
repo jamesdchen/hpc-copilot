@@ -57,7 +57,7 @@ class RepoLayout:
         sub.mkdir(parents=True, exist_ok=True)
         gitignore = sub / ".gitignore"
         if not gitignore.exists():
-            gitignore.write_text("runs/\n")
+            gitignore.write_text("runs/\n", encoding="utf-8")
         return sub
 
     @property

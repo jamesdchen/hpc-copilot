@@ -7,14 +7,9 @@ file path, and asserts membership. ~30 LOC. No runtime cost.
 
 from __future__ import annotations
 
-import re
+import ast
 import sys
 from pathlib import Path
-
-# Decorator application: optional leading whitespace, then ``@primitive(``.
-# Excludes occurrences inside docstrings / comments where the literal
-# is escaped or wrapped in backticks.
-_DECORATOR_RE = re.compile(r"^\s*@primitive\(", re.MULTILINE)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -79,10 +74,28 @@ def main() -> int:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        # Match the decorator-application form only — avoids false
-        # positives from docstrings, comments, and the @primitive
-        # decorator's own definition site.
-        if not _DECORATOR_RE.search(text):
+        # Use AST so a ``@primitive(`` literal inside a triple-quoted
+        # docstring or string constant doesn't false-trigger the way
+        # the prior regex-only check did.
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        has_primitive_decorator = False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            for deco in node.decorator_list:
+                target = deco.func if isinstance(deco, ast.Call) else deco
+                if isinstance(target, ast.Name) and target.id == "primitive":
+                    has_primitive_decorator = True
+                    break
+                if isinstance(target, ast.Attribute) and target.attr == "primitive":
+                    has_primitive_decorator = True
+                    break
+            if has_primitive_decorator:
+                break
+        if not has_primitive_decorator:
             continue
         found.add(file_to_modname(p))
 

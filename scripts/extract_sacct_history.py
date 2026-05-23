@@ -101,8 +101,11 @@ def parse_sacct_lines(text: str) -> list[dict]:
 def _build_sacct_command(*, since_days: int) -> str:
     """Compose the sacct invocation. We want completed top-level jobs
     with a real start time within the window."""
+    # Stamp the explicit UTC offset so sacct doesn't reinterpret a naive
+    # timestamp as cluster-local time, which would shift the cutoff by
+    # the cluster's TZ offset (up to 14h either way).
     starttime = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime(
-        "%Y-%m-%dT00:00:00"
+        "%Y-%m-%dT00:00:00+0000"
     )
     return (
         f"sacct -P -X --noheader=no --starttime={starttime} "
@@ -138,7 +141,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     rows = parse_sacct_lines(text)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(rows, indent=2))
+    args.out.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print(f"wrote {len(rows)} completed-job rows to {args.out}")
     return 0
 

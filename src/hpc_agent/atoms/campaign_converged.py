@@ -57,6 +57,7 @@ def campaign_converged(
     direction: Literal["minimize", "maximize"] | None = None,
     plateau_window: int | None = None,
     plateau_tolerance: float | None = None,
+    plateau_mode: Literal["prior_window", "all_time_best"] | None = None,
 ) -> dict[str, Any]:
     """Apply stop criteria to the campaign's reduced-metric history.
 
@@ -68,6 +69,20 @@ def campaign_converged(
     matching field under ``stop_criteria`` in
     ``<campaign_dir>/manifest.json`` if the manifest exists. Explicit
     CLI args always win.
+
+    ``plateau_mode`` (defaults to ``"all_time_best"``) selects which
+    baseline the recent window is compared to:
+
+    * ``"all_time_best"`` (default): fires when the recent ``window``
+      iterations failed to beat the all-time prior best by more than
+      ``tolerance``. Read as "no new record in N iters." Good fit when
+      each iter is expensive and a single record is the stop signal.
+      Requires at least ``window + 1`` history points.
+    * ``"prior_window"``: fires when the recent ``window`` iterations
+      failed to beat the *prior window of equal size* by more than
+      ``tolerance``. Read as "improvements have stalled vs the last
+      window." Good fit for fine-tuning campaigns where the first
+      record isn't the answer. Requires ``2 * window`` history points.
     """
     from hpc_agent.campaign.manifest import read_manifest
     from hpc_agent.mapreduce.reduce.history import prior
@@ -95,6 +110,11 @@ def campaign_converged(
         plateau_window = manifest_stop.get("plateau_window")
     if plateau_tolerance is None:
         plateau_tolerance = float(manifest_stop.get("plateau_tolerance") or 0.0)
+    resolved_mode: Literal["prior_window", "all_time_best"] = (
+        plateau_mode
+        if plateau_mode is not None
+        else (manifest_stop.get("plateau_mode") or "all_time_best")
+    )
 
     history = prior(experiment_dir, campaign_id)
     n_iters = sum(1 for entry in history if entry)  # only completed iters
@@ -132,8 +152,19 @@ def campaign_converged(
                 "iterations": n_iters,
                 "best_metric": best,
             }
-        if len(metric_values) >= window + 1:
-            prior_best = _best(metric_values[:-window], resolved_direction)
+        # Two modes — see docstring. Both compute (prior_best,
+        # recent_best, improved) and fire the same plateau envelope; the
+        # only difference is which baseline ``prior_best`` measures.
+        if resolved_mode == "prior_window":
+            min_history = 2 * window
+            prior_slice = (
+                metric_values[-2 * window : -window] if len(metric_values) >= min_history else []
+            )
+        else:
+            min_history = window + 1
+            prior_slice = metric_values[:-window] if len(metric_values) >= min_history else []
+        if len(metric_values) >= min_history:
+            prior_best = _best(prior_slice, resolved_direction)
             recent_best = _best(metric_values[-window:], resolved_direction)
             if prior_best is not None and recent_best is not None:
                 improved = (
@@ -142,11 +173,16 @@ def campaign_converged(
                     else (recent_best - prior_best)
                 )
                 if improved <= float(plateau_tolerance):
+                    baseline_label = (
+                        f"vs prior {window}"
+                        if resolved_mode == "prior_window"
+                        else "vs all-time best"
+                    )
                     return {
                         "converged": True,
                         "reason": (
                             f"plateau (last {window} iters improved by {improved:.6g} "
-                            f"<= tolerance {plateau_tolerance})"
+                            f"<= tolerance {plateau_tolerance} {baseline_label})"
                         ),
                         "iterations": n_iters,
                         "best_metric": best,

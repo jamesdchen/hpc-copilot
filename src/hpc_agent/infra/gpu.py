@@ -250,7 +250,7 @@ def _run_qstat(ssh_host: str | None = None) -> str | None:
     # Local qstat path — no SSH wrapping needed.
     cmd = ["qstat", "-f", "-q", "gpu_*"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=30)
         if result.returncode == 0:
             return result.stdout
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):

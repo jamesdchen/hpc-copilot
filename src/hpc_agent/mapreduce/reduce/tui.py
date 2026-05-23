@@ -68,7 +68,7 @@ def _load_per_task_dict(per_task_dict_path: Path) -> dict:
     """
     if not per_task_dict_path.is_file():
         raise FileNotFoundError(f"per-task dict not found: {per_task_dict_path}")
-    data: dict = json.loads(per_task_dict_path.read_text())
+    data: dict = json.loads(per_task_dict_path.read_text(encoding="utf-8"))
     return data
 
 
@@ -105,7 +105,7 @@ def _classify_failures(report: dict, per_task_dict: dict) -> dict[str, int]:
             counts["unknown"] = counts.get("unknown", 0) + 1
             continue
         try:
-            text = Path(path).read_text(errors="replace")[-8000:]
+            text = Path(path).read_text(encoding="utf-8", errors="replace")[-8000:]
         except OSError:
             counts["unknown"] = counts.get("unknown", 0) + 1
             continue
@@ -131,7 +131,7 @@ def _failing_tail(report: dict, limit: int = 10) -> list[tuple[str, str]]:
         diag = ""
         if path:
             try:
-                text = Path(path).read_text(errors="replace")
+                text = Path(path).read_text(encoding="utf-8", errors="replace")
                 for line in reversed(text.splitlines()):
                     line = line.strip()
                     if line:
@@ -249,6 +249,11 @@ def _render(state: _UiState, report: dict, per_task_dict: dict, poll_interval: i
     if tail:
         from rich.markup import escape as _rich_escape
 
+        # Bind focus BEFORE drawing rows so the first frame after the
+        # user presses 'f' shows a focused row instead of an unmarked one
+        # that only becomes visible on the next refresh.
+        if state.focused_failing and state.focused_task_id is None:
+            state.focused_task_id = tail[-1][0]
         for tid, diag in tail:
             is_focused = state.focused_failing and str(tid) == str(state.focused_task_id)
             prefix = "> " if is_focused else ""
@@ -259,9 +264,6 @@ def _render(state: _UiState, report: dict, per_task_dict: dict, poll_interval: i
                 prefix + str(tid),
                 _rich_escape(diag) if diag else "(no diagnostic)",
             )
-        # Track the focused task if none set yet.
-        if state.focused_failing and state.focused_task_id is None:
-            state.focused_task_id = tail[-1][0]
     else:
         tail_tbl.add_row("-", "(no failures)")
 
@@ -542,7 +544,12 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"run sidecar not found: {sidecar_path}", file=sys.stderr)
         return 2
     try:
-        sidecar = json.loads(sidecar_path.read_text())
+        # Route through the hardened reader so v1-shape sidecars get the
+        # v2 backfill (task_count, result_dir_template) the downstream
+        # _build_per_task_dict_from_sidecar requires.
+        from hpc_agent.state.runs import read_run_sidecar
+
+        sidecar = read_run_sidecar(_P("."), args.run_id)
         tasks = load_tasks_module(_P(".hpc") / "tasks.py")
         per_task_dict = _build_per_task_dict_from_sidecar(sidecar, tasks)
     except Exception as exc:
@@ -553,7 +560,7 @@ def _main(argv: list[str] | None = None) -> int:
     # silently shows every task as `unknown`.
     per_task_dict_path = sidecar_path.with_suffix(".per-task-dict.json")
     _tmp = per_task_dict_path.with_suffix(per_task_dict_path.suffix + ".tmp")
-    _tmp.write_text(json.dumps(per_task_dict, sort_keys=True))
+    _tmp.write_text(json.dumps(per_task_dict, sort_keys=True), encoding="utf-8")
     _tmp.replace(per_task_dict_path)
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]

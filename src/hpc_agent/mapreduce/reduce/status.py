@@ -97,7 +97,7 @@ def check_results(
                 return None
             if min_rows <= 0:
                 return {"status": "complete", "path": path_str}
-            with open(path_str, newline="") as f:
+            with open(path_str, newline="", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 header = next(reader, None)
                 if header is None:
@@ -113,7 +113,7 @@ def check_results(
     for tid in range(1, total_tasks + 1):
         task_dir = rdir / f"task_{tid}"
         if task_dir.is_dir():
-            for path_str in glob.glob(str(task_dir / file_glob)):
+            for path_str in sorted(glob.glob(str(task_dir / file_glob))):
                 if "/_wip_" in path_str:
                     continue
                 if validate and path_str.endswith(".csv"):
@@ -169,7 +169,7 @@ def detect_scheduler(result_dir: str | Path | None = None) -> str:
             meta_path = candidate / "experiment_meta.json"
             if meta_path.exists():
                 try:
-                    meta = json.loads(meta_path.read_text())
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
                     backend = meta.get("backend", "")
                     if "sge" in backend:
                         return "sge"
@@ -181,7 +181,13 @@ def detect_scheduler(result_dir: str | Path | None = None) -> str:
             parent = candidate.parent
             candidate = parent if parent != candidate else None
     try:
-        result = subprocess.run(["sacct", "--version"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["sacct", "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=5,
+        )
         if result.returncode == 0:
             return "slurm"
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -218,7 +224,11 @@ def get_err_log_paths(
         for job_id in reversed(job_ids):
             p = backend_cls.err_log_disk_path(log_dir, scratch_dir, job_name, job_id, tid)
             if scheduler != "sge" and not os.path.isfile(p):
-                matches = glob.glob(os.path.join(log_dir, f"*{job_id}_{tid}.err"))
+                # Anchor the job_id boundary with a non-digit prefix so
+                # the glob can't match a sibling job whose digits happen
+                # to end with the requested ``<job_id>_<tid>.err`` slug
+                # (e.g. tid=1 + job_id=4 matching ``…14_1.err``).
+                matches = glob.glob(os.path.join(log_dir, f"*[!0-9]{job_id}_{tid}.err"))
                 if matches:
                     p = max(matches, key=os.path.getmtime)
             if os.path.isfile(p):
@@ -383,7 +393,7 @@ def check_results_from_tasks(
         rdir = Path(result_dir_raw)
         if not rdir.is_dir():
             continue
-        for match in rdir.glob(file_glob):
+        for match in sorted(rdir.glob(file_glob)):
             match_str = str(match)
             if "_wip_" in match_str:
                 continue
@@ -394,7 +404,7 @@ def check_results_from_tasks(
                 continue
             if min_rows > 0 and match_str.endswith(".csv"):
                 try:
-                    with open(match_str, newline="") as f:
+                    with open(match_str, newline="", encoding="utf-8") as f:
                         reader = csv.reader(f)
                         header = next(reader, None)
                         if header is None:

@@ -362,10 +362,12 @@ def test_validate_ssh_target_rejects_empty_and_shell_chars():
 
 
 def test_sge_alive_check_returns_empty_when_qstat_silent():
-    """Previously the pipeline ``qstat | head -1 && echo __ALIVE__`` always
-    fired because the pipeline's exit status came from ``head -1`` (which
-    exits 0 even on empty input) — making every SGE alive-check return
-    every job_id and ``reconcile`` never marking runs abandoned.
+    """Empty ``qstat -u $USER`` output means no live jobs — the alive set
+    must be empty so ``reconcile`` can flag abandoned runs.
+
+    Hot-path perf: a single batched ``qstat -u $USER`` call replaces the
+    previous per-job ``qstat -j <jid>`` loop (which spawned N subprocesses
+    per poll on the cluster head node).
     """
     with patch(
         "hpc_agent.infra.remote.ssh_run",
@@ -373,31 +375,42 @@ def test_sge_alive_check_returns_empty_when_qstat_silent():
     ) as m:
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123", "456"],
             scheduler="sge",
         )
     assert alive == set()
-    # The new command anchors on qstat's *exit code*, not a piped tail.
     sent_cmd = m.call_args[0][0]
-    assert ">/dev/null 2>&1" in sent_cmd
-    assert "head -1" not in sent_cmd
+    # Exactly one qstat invocation, querying by user (not per-job ``-j``).
+    assert sent_cmd.count("qstat") == 1
+    assert "-u" in sent_cmd
+    assert "qstat -j" not in sent_cmd
+    # Still falls back to rc 0 so the SSH transport guard isn't tripped
+    # by an empty queue.
+    assert "|| true" in sent_cmd
 
 
-def test_sge_alive_check_emits_marker_for_each_alive_job():
-    """The marker line ``__ALIVE__<jid>`` is still produced (and parsed) for
-    jobs that qstat knows about.
+def test_sge_alive_check_filters_qstat_output_to_requested_ids():
+    """Lines from ``qstat -u $USER`` whose first column matches a requested
+    job id count as alive; unrelated co-tenant jobs and header rows are
+    ignored.
     """
+    qstat_out = (
+        "job-ID  prior   name       user         state submit/start at     queue\n"
+        "------------------------------------------------------------------------\n"
+        "    123 0.50000 myjob      alice        r     05/23/2026 10:00:00 q@n1\n"
+        "    456 0.50000 myjob      alice        qw    05/23/2026 10:00:00\n"
+        "    999 0.50000 otherjob   alice        r     05/23/2026 09:00:00 q@n2\n"
+    )
     with patch(
         "hpc_agent.infra.remote.ssh_run",
-        return_value=_completed(stdout="__ALIVE__123\n__ALIVE__456\n"),
+        return_value=_completed(stdout=qstat_out),
     ):
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123", "456"],
             scheduler="sge",
         )
+    # 999 belongs to another run and must not leak in.
     assert alive == {"123", "456"}
 
 
@@ -416,7 +429,6 @@ def test_slurm_alive_check_skips_sacct_so_completed_jobs_drop_off():
     ) as m:
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123"],
             scheduler="slurm",
         )
@@ -436,7 +448,6 @@ def test_slurm_alive_check_accepts_squeue_output():
     ):
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123"],
             scheduler="slurm",
         )
@@ -521,6 +532,76 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
     # Round-trip parse — would raise on a half-written file.
     body = json.loads(cache.read_text())
     assert body["complete"] == 1
+
+
+def test_record_status_cache_write_skips_fsync(journal_home, experiment):
+    """Hot-path perf: the ``last_status.json`` cache write must NOT fsync.
+
+    On a monitor tick the journal record write fsyncs (durable source of
+    truth); the cache write is a strict denormalization of that same
+    payload and would double the per-tick fsync cost on networked
+    filesystems. The cache write is best-effort and self-heals on the
+    next tick, so it passes ``fsync=False`` to ``atomic_write_json``.
+
+    Count ``os.fsync`` calls and split them by which file the underlying
+    fd points at — the cache temp file must never appear in the
+    fsync'd set.
+    """
+    import os
+
+    _seed_run(experiment)
+    payload = {"summary": {"complete": 1, "running": 0, "failed": 0, "unknown": 0}}
+
+    real_fsync = os.fsync
+    fsynced_paths: list[str] = []
+
+    def tracking_fsync(fd: int) -> None:
+        # Resolve the fd to a path so we can attribute each fsync to a
+        # specific file (NOT just count calls). The journal/index writes
+        # legitimately fsync; the cache write must not.
+        try:
+            path = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            path = "<unknown>"
+        fsynced_paths.append(path)
+        return real_fsync(fd)
+
+    with (
+        patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_completed(stdout=json.dumps(payload)),
+        ),
+        patch("os.fsync", side_effect=tracking_fsync),
+    ):
+        runner.record_status(
+            experiment,
+            "ml_ridge_abcd1234",
+            ssh_target="user@host",
+            remote_path="/x",
+            job_ids=["1"],
+            job_name="job",
+        )
+
+    cache = session.runs_dir(experiment) / "ml_ridge_abcd1234.last_status.json"
+    assert cache.exists(), "cache file must still be written, just without fsync"
+
+    # Each ``atomic_write_json(fsync=True)`` call contributes exactly one
+    # file-fd fsync (the data fsync — the parent-dir fsync opens a
+    # separate fd via ``os.open`` and runs through the same hook). The
+    # journal record + index = at most 4 fsyncs (2 data + 2 dir). The
+    # cache must add ZERO. Assert the cache temp-file path never shows
+    # up in the fsynced set.
+    cache_dir = str(session.runs_dir(experiment))
+    cache_temp_fsyncs = [
+        p
+        for p in fsynced_paths
+        # mkstemp pattern: <name>.<random>.tmp inside the cache dir
+        if p.startswith(cache_dir) and ".last_status.json." in p and p.endswith(".tmp")
+    ]
+    assert cache_temp_fsyncs == [], (
+        "cache write must not fsync its temp file (hot-path perf fix); "
+        f"saw fsyncs on: {cache_temp_fsyncs}"
+    )
 
 
 # ─── aggregate verification helpers ────────────────────────────────────────
