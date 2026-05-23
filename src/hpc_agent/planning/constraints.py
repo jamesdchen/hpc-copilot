@@ -1,3 +1,4 @@
+# @pure: no-io
 """Cluster constraint declarations for throughput optimization."""
 
 from __future__ import annotations

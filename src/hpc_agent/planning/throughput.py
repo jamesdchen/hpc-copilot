@@ -1,3 +1,4 @@
+# @pure: no-io
 """Throughput optimizer: packs tasks into batched waves for HPC submission.
 
 Given cluster constraints (max array size, max walltime, max concurrent jobs)
