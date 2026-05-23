@@ -16,6 +16,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,7 +42,17 @@ def _spent_walltime_sec(sidecar: dict[str, Any]) -> float:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign budget --campaign-id <id>",
+    cli=CliShape(
+        help="Roll up campaign-level spend and compare to optional caps.",
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--campaign-id", type=str, required=True),
+            CliArg("--max-jobs", type=int, default=None),
+            CliArg("--max-tasks", type=int, default=None),
+            CliArg("--max-walltime-sec", type=int, default=None),
+        ),
+        group="campaign",
+    ),
 )
 def campaign_budget(
     *,

@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**54 operations total**: 48 primitive atoms + 6 workflow atoms.
+**55 operations total**: 49 primitive atoms + 6 workflow atoms.
 
 ## How to read this page
 
@@ -20,32 +20,32 @@ Read-only, no side effects. Freely composable; cacheable.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`campaign-advance`](primitives/campaign-advance.md) | ✓ | _none_ | `hpc-agent campaign advance --campaign-id <id>` | `hpc_agent.atoms.campaign_advance.campaign_advance` | — | `hpc_agent/schemas/campaign.output.json` |
-| [`campaign-budget`](primitives/campaign-budget.md) | ✓ | _none_ | `hpc-agent campaign budget --campaign-id <id>` | `hpc_agent.atoms.campaign_budget.campaign_budget` | — | `hpc_agent/schemas/campaign.output.json` |
-| [`campaign-converged`](primitives/campaign-converged.md) | ✓ | _none_ | `hpc-agent campaign converged --campaign-id <id>` | `hpc_agent.atoms.campaign_converged.campaign_converged` | — | `hpc_agent/schemas/campaign.output.json` |
-| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]` | `hpc_agent.atoms.campaign_health.campaign_health` | `hpc_agent/schemas/campaign_health.input.json` | `hpc_agent/schemas/campaign_health.output.json` |
+| [`campaign-advance`](primitives/campaign-advance.md) | ✓ | _none_ | `hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>]` | `hpc_agent.atoms.campaign_advance.campaign_advance` | — | `hpc_agent/schemas/campaign.output.json` |
+| [`campaign-budget`](primitives/campaign-budget.md) | ✓ | _none_ | `hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>]` | `hpc_agent.atoms.campaign_budget.campaign_budget` | — | `hpc_agent/schemas/campaign.output.json` |
+| [`campaign-converged`](primitives/campaign-converged.md) | ✓ | _none_ | `hpc-agent campaign converged [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>]` | `hpc_agent.atoms.campaign_converged.campaign_converged` | — | `hpc_agent/schemas/campaign.output.json` |
+| [`campaign-health`](primitives/campaign-health.md) | ✓ | _none_ | `hpc-agent campaign health [--experiment-dir <dir>] [--campaign-id <campaign_id>] [--since-iso <since_iso>] [--profile <profile>] [--cluster <cluster>]` | `hpc_agent.atoms.campaign_health.campaign_health` | `hpc_agent/schemas/campaign_health.input.json` | `hpc_agent/schemas/campaign_health.output.json` |
 | [`campaign-list`](primitives/campaign-list.md) | ✓ | _none_ | `hpc-agent campaign list [--experiment-dir <dir>]` | `hpc_agent.atoms.campaign_list.campaign_list` | — | — |
-| [`campaign-replay`](primitives/campaign-replay.md) | ✓ | _none_ | `hpc-agent campaign replay --campaign-id <id> [--last-n <n>]` | `hpc_agent.atoms.campaign_replay.campaign_replay` | — | `hpc_agent/schemas/campaign.output.json` |
-| [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]` | `hpc_agent.atoms.campaign_status.campaign_status` | — | — |
+| [`campaign-replay`](primitives/campaign-replay.md) | ✓ | _none_ | `hpc-agent campaign replay [--experiment-dir <dir>] --campaign-id <campaign_id> [--last-n <last_n>]` | `hpc_agent.atoms.campaign_replay.campaign_replay` | — | `hpc_agent/schemas/campaign.output.json` |
+| [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` | `hpc_agent.atoms.campaign_status.campaign_status` | — | — |
 | [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-agent capabilities` | `hpc_agent.atoms.capabilities.capabilities` | — | `hpc_agent/schemas/capabilities.output.json` |
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `hpc_agent.atoms.clusters.describe_cluster` | — | `hpc_agent/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `hpc_agent.atoms.clusters.list_clusters` | — | `hpc_agent/schemas/clusters_list.output.json` |
 | [`decide-monitor-arm`](primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `hpc_agent.atoms.monitor_arm.decide_monitor_arm` | `hpc_agent/schemas/decide_monitor_arm.input.json` | `hpc_agent/schemas/decide_monitor_arm.output.json` |
-| [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover --experiment-dir <path> [--search-dirs <a,b,c>]` | `hpc_agent.state.discover.discover_executors` | — | `hpc_agent/schemas/discover.output.json` |
-| [`discover-reducers`](primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers --experiment-dir <path>` | `hpc_agent.state.discover.discover_reducers` | — | — |
-| [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-agent failures --run-id <id> [--lines <n>]` | `hpc_agent.atoms.failures.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
-| [`find-prior-run`](primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>` | `hpc_agent.atoms.setup_actions.find_prior_run` | — | `hpc_agent/schemas/find_prior_run.output.json` |
-| [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight --experiment-dir <path>` | `hpc_agent.atoms.list_in_flight.list_in_flight` | — | `hpc_agent/schemas/list_in_flight.output.json` |
-| [`load-context`](primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context --experiment-dir <path>` | `hpc_agent.atoms.load_context.load_context` | — | `hpc_agent/schemas/load_context.output.json` |
-| [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]` | `hpc_agent.atoms.logs.fetch_logs` | — | — |
-| [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary --experiment-dir <path> --run-id <id>` | `hpc_agent.atoms.monitor_summary.monitor_summary` | — | `hpc_agent/schemas/monitor_summary.output.json` |
-| [`plan-throughput`](primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]` | `hpc_agent.atoms.plan_throughput.plan_throughput` | — | — |
-| [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status --run-id <id> [--experiment-dir <dir>]` | `hpc_agent.runner.status.record_status` | — | `hpc_agent/schemas/status.output.json` |
-| [`recall`](primitives/recall.md) | ✓ | _none_ | `hpc-agent recall` | `hpc_agent.atoms.recall.recall_campaigns` | `hpc_agent/schemas/recall.input.json` | `hpc_agent/schemas/recall.output.json` |
+| [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `hpc_agent.state.discover.discover_executors` | — | `hpc_agent/schemas/discover.output.json` |
+| [`discover-reducers`](primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `hpc_agent.state.discover.discover_reducers` | — | — |
+| [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` | `hpc_agent.atoms.failures.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
+| [`find-prior-run`](primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>` | `hpc_agent.atoms.setup_actions.find_prior_run` | — | `hpc_agent/schemas/find_prior_run.output.json` |
+| [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight [--experiment-dir <dir>]` | `hpc_agent.atoms.list_in_flight.list_in_flight` | — | `hpc_agent/schemas/list_in_flight.output.json` |
+| [`load-context`](primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context [--experiment-dir <dir>]` | `hpc_agent.atoms.load_context.load_context` | — | `hpc_agent/schemas/load_context.output.json` |
+| [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` | `hpc_agent.atoms.logs.fetch_logs` | — | — |
+| [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` | `hpc_agent.atoms.monitor_summary.monitor_summary` | — | `hpc_agent/schemas/monitor_summary.output.json` |
+| [`plan-throughput`](primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>]` | `hpc_agent.atoms.plan_throughput.plan_throughput` | — | — |
+| [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `hpc_agent.runner.status.record_status` | — | `hpc_agent/schemas/status.output.json` |
+| [`recall`](primitives/recall.md) | ✓ | _none_ | `hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats] [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]` | `hpc_agent.atoms.recall.recall_campaigns` | `hpc_agent/schemas/recall.input.json` | `hpc_agent/schemas/recall.output.json` |
 | [`recommend-partition`](primitives/recommend-partition.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.recommend_partition.recommend_partition` | `hpc_agent/schemas/recommend_partition.input.json` | `hpc_agent/schemas/recommend_partition.output.json` |
-| [`suggest-setup-action`](primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action --experiment-dir <path>` | `hpc_agent.atoms.setup_actions.suggest_setup_action` | — | `hpc_agent/schemas/suggest_setup_action.output.json` |
+| [`suggest-setup-action`](primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` | `hpc_agent.atoms.setup_actions.suggest_setup_action` | — | `hpc_agent/schemas/suggest_setup_action.output.json` |
 | [`summarize-submit-plan`](primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `hpc_agent.atoms.submit_plan_summary.summarize_submit_plan` | — | `hpc_agent/schemas/summarize_submit_plan.output.json` |
-| [`verify-aggregation-complete`](primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>` | `hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete` | — | `hpc_agent/schemas/verify_aggregation_complete.output.json` |
+| [`verify-aggregation-complete`](primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> --combiner-dir <combiner_dir_local> [--results-dir <results_dir_local>]` | `hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete` | — | `hpc_agent/schemas/verify_aggregation_complete.output.json` |
 
 ## `validate` (6)
 
@@ -66,12 +66,12 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`cluster-reduce`](primitives/cluster-reduce.md) | ✓ | ssh; sync-pull | `hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]` | `hpc_agent.atoms.cluster_reduce.cluster_reduce` | — | `hpc_agent/schemas/cluster_reduce.output.json` |
-| [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]` | `hpc_agent.runner.combine.combine_wave` | — | `hpc_agent/schemas/combine_wave.output.json` |
+| [`cluster-reduce`](primitives/cluster-reduce.md) | ✓ | ssh; sync-pull | `hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env <extra_env>] [--timeout-sec <timeout_sec>]` | `hpc_agent.atoms.cluster_reduce.cluster_reduce` | — | `hpc_agent/schemas/cluster_reduce.output.json` |
+| [`combine-wave`](primitives/combine-wave.md) | ✓ | runs; ssh; writes-cluster; writes-journal | `hpc-agent aggregate [--experiment-dir <dir>] --run-id <run_id> --wave <wave> [--force] [--require-outputs <require_outputs>] [--expect-output <expect_output>]` | `hpc_agent.runner.combine.combine_wave` | — | `hpc_agent/schemas/combine_wave.output.json` |
 | [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `hpc_agent.runner.reconcile.mark_terminal` | — | — |
 | [`prune-orphan-sidecars`](primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `hpc_agent.state.runs.prune_orphan_sidecars` | — | — |
-| [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]` | `hpc_agent.runner.reconcile.reconcile` | — | `hpc_agent/schemas/reconcile.output.json` |
-| [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]` | `hpc_agent.runner.resubmit.resubmit_failed` | `hpc_agent/schemas/resubmit.input.json` | — |
+| [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` | `hpc_agent.runner.reconcile.reconcile` | — | `hpc_agent/schemas/reconcile.output.json` |
+| [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` | `hpc_agent.runner.resubmit.resubmit_failed` | `hpc_agent/schemas/resubmit.input.json` | — |
 | [`update-run-constraints`](primitives/update-run-constraints.md) | ✓ | ssh | `_(Python-only)_` | `hpc_agent.runner.update_constraints.update_run_constraints` | `hpc_agent/schemas/update_run_constraints.input.json` | `hpc_agent/schemas/update_run_constraints.output.json` |
 
 ## `submit` (1)
@@ -82,20 +82,21 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.runner.submit.submit_and_record` | `hpc_agent/schemas/submit.input.json` | `hpc_agent/schemas/submit.output.json` |
 
-## `scaffold` (8)
+## `scaffold` (9)
 
 Creates new files (e.g. starter executor templates).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`axes-init`](primitives/axes-init.md) | ✓ | writes-sidecar | `hpc-agent axes-init` | `hpc_agent.atoms.axes_init.axes_init` | — | — |
-| [`build-executor`](primitives/build-executor.md) | ✗ | writes-file | `hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]` | `hpc_agent.atoms.build_executor.build_executor` | — | `hpc_agent/schemas/build_executor.output.json` |
+| [`axes-init`](primitives/axes-init.md) | ✓ | writes-sidecar | `hpc-agent axes-init [--experiment-dir <dir>] [--axes <axes>] [--homogeneous-axes <homogeneous_axes>] [--force]` | `hpc_agent.atoms.axes_init.axes_init` | — | — |
+| [`build-executor`](primitives/build-executor.md) | ✗ | writes-file | `hpc-agent build-executor --name <name> [--output-dir <output_dir>] [--type <type>] [--force]` | `hpc_agent.atoms.build_executor.build_executor` | — | `hpc_agent/schemas/build_executor.output.json` |
 | [`build-submit-spec`](primitives/build-submit-spec.md) | ✓ | _none_ | `hpc-agent build-submit-spec --spec <path>` | `hpc_agent.atoms.build_submit_spec.build_submit_spec` | `hpc_agent/schemas/build_submit_spec.input.json` | — |
-| [`build-tasks-py`](primitives/build-tasks-py.md) | ✓ | writes-sidecar | `hpc-agent build-tasks-py --spec <path>` | `hpc_agent.atoms.build_tasks_py.build_tasks_py` | `hpc_agent/schemas/build_tasks_py.input.json` | — |
-| [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `hpc-agent campaign init --campaign-id <id> --strategy <s>` | `hpc_agent.atoms.campaign_init.campaign_init` | — | `hpc_agent/schemas/campaign.output.json` |
-| [`classify-axis`](primitives/classify-axis.md) | ✓ | writes-sidecar | `hpc-agent classify-axis --spec <path>` | `hpc_agent.atoms.classify_axis.classify_axis` | `hpc_agent/schemas/classify_axis.input.json` | — |
-| [`export-package`](primitives/export-package.md) | ✓ | writes-sidecar | `hpc-agent export-package` | `hpc_agent.atoms.export_package.export_package` | `hpc_agent/schemas/export_package.input.json` | — |
-| [`interview`](primitives/interview.md) | ✓ | file_write | `hpc-agent interview` | `hpc_agent.atoms.interview.record_interview` | `hpc_agent/schemas/interview.input.json` | `hpc_agent/schemas/interview.output.json` |
+| [`build-tasks-py`](primitives/build-tasks-py.md) | ✓ | writes-sidecar | `hpc-agent build-tasks-py [--experiment-dir <dir>] --spec <spec> [--force]` | `hpc_agent.atoms.build_tasks_py.build_tasks_py` | `hpc_agent/schemas/build_tasks_py.input.json` | — |
+| [`build-template`](primitives/build-template.md) | ✓ | writes-file | `hpc-agent build-template [--repo-dir <repo_dir>] [--force]` | `hpc_agent.atoms.build_template.build_template` | — | — |
+| [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]` | `hpc_agent.atoms.campaign_init.campaign_init` | — | `hpc_agent/schemas/campaign.output.json` |
+| [`classify-axis`](primitives/classify-axis.md) | ✓ | writes-sidecar | `hpc-agent classify-axis --spec <path> [--experiment-dir <dir>]` | `hpc_agent.atoms.classify_axis.classify_axis` | `hpc_agent/schemas/classify_axis.input.json` | — |
+| [`export-package`](primitives/export-package.md) | ✓ | writes-sidecar | `hpc-agent export-package [--experiment-dir <dir>] [--force]` | `hpc_agent.atoms.export_package.export_package` | `hpc_agent/schemas/export_package.input.json` | — |
+| [`interview`](primitives/interview.md) | ✓ | file_write | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` | `hpc_agent.atoms.interview.record_interview` | `hpc_agent/schemas/interview.input.json` | `hpc_agent/schemas/interview.output.json` |
 
 ## `workflow` (6)
 
@@ -103,10 +104,10 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | ssh; sync-pull; writes-journal | `hpc-agent aggregate-flow --spec <path>` | `hpc_agent.flows.aggregate_flow.aggregate_flow` | `hpc_agent/schemas/aggregate_flow.input.json` | `hpc_agent/schemas/aggregate_flow.output.json` |
-| [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path>` | `hpc_agent.flows.monitor_flow.monitor_flow` | `hpc_agent/schemas/monitor_flow.input.json` | `hpc_agent/schemas/monitor_flow.output.json` |
-| [`submit-flow`](primitives/submit-flow.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow --spec <path>` | `hpc_agent.flows.submit_flow.submit_flow` | `hpc_agent/schemas/submit_flow.input.json` | `hpc_agent/schemas/submit_flow.output.json` |
-| [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow-batch --spec <path>` | `hpc_agent.flows.submit_flow.submit_flow_batch` | `hpc_agent/schemas/submit_flow_batch.input.json` | `hpc_agent/schemas/submit_flow_batch.output.json` |
+| [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | ssh; sync-pull; writes-journal | `hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.flows.aggregate_flow.aggregate_flow` | `hpc_agent/schemas/aggregate_flow.input.json` | `hpc_agent/schemas/aggregate_flow.output.json` |
+| [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.flows.monitor_flow.monitor_flow` | `hpc_agent/schemas/monitor_flow.input.json` | `hpc_agent/schemas/monitor_flow.output.json` |
+| [`submit-flow`](primitives/submit-flow.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok]` | `hpc_agent.flows.submit_flow.submit_flow` | `hpc_agent/schemas/submit_flow.input.json` | `hpc_agent/schemas/submit_flow.output.json` |
+| [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow-batch --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.flows.submit_flow.submit_flow_batch` | `hpc_agent/schemas/submit_flow_batch.input.json` | `hpc_agent/schemas/submit_flow_batch.output.json` |
 | [`validate-campaign`](primitives/validate-campaign.md) | ✓ | _none_ | `hpc-agent validate-campaign --spec <path> [--experiment-dir <dir>]` | `hpc_agent.flows.validate_campaign.validate_campaign` | `hpc_agent/schemas/validate_campaign.input.json` | `hpc_agent/schemas/validate_campaign.output.json` |
-| [`verify-canary`](primitives/verify-canary.md) | ✓ | ssh | `hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]` | `hpc_agent.atoms.canary_verify.verify_canary` | — | `hpc_agent/schemas/verify_canary.output.json` |
+| [`verify-canary`](primitives/verify-canary.md) | ✓ | ssh | `hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]` | `hpc_agent.atoms.canary_verify.verify_canary` | — | `hpc_agent/schemas/verify_canary.output.json` |
 

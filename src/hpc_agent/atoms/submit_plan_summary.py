@@ -18,6 +18,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliShape
 
 
 def _format_resources(spec: dict[str, Any]) -> str:
@@ -45,7 +46,16 @@ def _format_resources(spec: dict[str, Any]) -> str:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent summarize-submit-plan --spec <path>",
+    cli=CliShape(
+        help=(
+            "Render the canonical pre-submit confirmation summary for a "
+            "submit_flow.input.json spec. Returns {headline, body, "
+            "confirm_prompt} the slash command prints verbatim. "
+            "Eliminates per-submit wording drift."
+        ),
+        spec_arg=True,
+        spec_model=None,  # primitive takes a raw dict
+    ),
     agent_facing=True,
 )
 def summarize_submit_plan(spec: dict[str, Any]) -> dict[str, Any]:

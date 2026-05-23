@@ -11,6 +11,7 @@ from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.time import utcnow_iso
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
 from hpc_agent.runner.status import _ssh_status_report
 
@@ -80,6 +81,17 @@ def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -
     return backend_cls.parse_alive_output(proc.stdout, job_ids)
 
 
+def _reconcile_envelope(record: RunRecord) -> dict[str, Any]:
+    """Project ``RunRecord`` into the ``reconcile.output.json`` envelope shape."""
+    return {
+        "run_id": record.run_id,
+        "lifecycle_state": record.status,
+        "combined_waves": record.combined_waves,
+        "failed_waves": record.failed_waves,
+        "last_status": record.last_status,
+    }
+
+
 @primitive(
     name="reconcile-journal",
     verb="mutate",
@@ -93,7 +105,22 @@ def _ssh_alive_job_ids(*, ssh_target: str, job_ids: list[str], scheduler: str) -
     error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
     idempotent=True,
     idempotency_key="run_id",
-    cli="hpc-agent reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir <dir>]",
+    cli=CliShape(
+        verb="reconcile",
+        requires_ssh=True,
+        experiment_dir_arg=True,
+        args=(
+            CliArg(flag="--run-id", required=True),
+            CliArg(
+                flag="--scheduler",
+                required=True,
+                choices=("sge", "slurm"),
+                help="Scheduler family — needed to query alive job IDs.",
+            ),
+        ),
+        result_post=_reconcile_envelope,
+        help="Re-derive ground truth from the cluster (status, waves, alive jobs).",
+    ),
     agent_facing=True,
 )
 def reconcile(

@@ -10,7 +10,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent list-in-flight --experiment-dir <path>
+  cli: hpc-agent list-in-flight [--experiment-dir <dir>]
   python: hpc_agent.atoms.list_in_flight.list_in_flight
 exit_codes:
 - 0: ok

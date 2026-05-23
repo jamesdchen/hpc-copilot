@@ -54,6 +54,7 @@ from hpc_agent._internal.lifecycle import LifecycleState
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.time import utcnow_iso
 from hpc_agent._schema_models.workflows.monitor_flow import MonitorFlowSpec
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.runner import mark_terminal, record_status
 from hpc_agent.state.runs import read_run_sidecar
 
@@ -393,7 +394,26 @@ def _is_terminal(
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
-    cli="hpc-agent monitor-flow --spec <path>",
+    cli=CliShape(
+        help=(
+            "Workflow atom: poll a run to terminal lifecycle (or wall-clock "
+            "budget); auto-combine waves as they finish; write the same "
+            ".monitor.jsonl tick log /monitor-hpc writes. Pairs with "
+            "submit-flow for the campaign loop composition. MVP does not "
+            "auto-resubmit failed tasks."
+        ),
+        spec_arg=True,
+        spec_model=MonitorFlowSpec,
+        schema_ref=SchemaRef(input="monitor_flow"),
+        experiment_dir_arg=True,
+        dry_run_arg=True,
+        dry_run_passthrough_keys=(
+            "run_id",
+            "poll_interval_seconds",
+            "wall_clock_budget_seconds",
+            "auto_combine_waves",
+        ),
+    ),
     agent_facing=True,
 )
 def monitor_flow(

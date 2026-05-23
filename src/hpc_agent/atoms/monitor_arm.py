@@ -31,6 +31,7 @@ from typing import Any
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
 from hpc_agent._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 # Adaptive delay table — lifted from /monitor-hpc Step 5's Markdown
 # table so the primitive is the single source of truth. Each row is
@@ -132,7 +133,17 @@ def _classify_state(
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent decide-monitor-arm --spec <path>",
+    cli=CliShape(
+        help=(
+            "Pick cron/loop/none + cadence + cron schedule string from "
+            "the run's current summary. Returns ready-to-pass CronCreate "
+            "args for scheduling the next monitor tick. Replaces "
+            "/monitor-hpc Step 5 agent judgment."
+        ),
+        spec_arg=True,
+        spec_model=DecideMonitorArmSpec,
+        schema_ref=SchemaRef(input="decide_monitor_arm"),
+    ),
     agent_facing=True,
 )
 def decide_monitor_arm(*, spec: DecideMonitorArmSpec) -> dict[str, Any]:

@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]
+  cli: hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>
   python: hpc_agent.atoms.campaign_status.campaign_status
 exit_codes:
 - 0: ok

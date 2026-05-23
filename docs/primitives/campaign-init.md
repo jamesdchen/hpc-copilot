@@ -10,7 +10,12 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent campaign init --campaign-id <id> --strategy <s>
+  cli: hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id>
+    [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>]
+    [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance
+    <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks
+    <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--strategy-name <strategy_name>]
+    [--strategy-params-json <strategy_params_json>]
   python: hpc_agent.atoms.campaign_init.campaign_init
 ---
 # campaign-init

@@ -139,8 +139,10 @@ def _register_tier3_modules(sub: argparse._SubParsersAction) -> None:
     new module = one line here, plus the module file).
     """
     from hpc_agent.cli.setup import register as _register_setup
+    from hpc_agent.cli.spawn import register as _register_spawn
 
     _register_setup(sub)
+    _register_spawn(sub)
 
 
 def build_parser() -> argparse.ArgumentParser:

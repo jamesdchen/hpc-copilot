@@ -6,7 +6,8 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent campaign budget --campaign-id <id>
+  cli: hpc-agent campaign budget [--experiment-dir <dir>] --campaign-id <campaign_id>
+    [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>]
   python: hpc_agent.atoms.campaign_budget.campaign_budget
 ---
 # campaign-budget

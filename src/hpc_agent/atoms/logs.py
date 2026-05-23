@@ -15,10 +15,35 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 
 if TYPE_CHECKING:
+    import argparse
     from pathlib import Path
+
+
+def _logs_arg_pre(ns: argparse.Namespace) -> dict[str, Any]:
+    """Parse ``--task-id "1,2,3"`` → ``list[int]`` and enforce the mutex.
+
+    ``--all-failed`` and ``--task-id`` select different task sets; the
+    legacy adapter silently preferred ``--all-failed`` when both were
+    supplied. The mutex is enforced explicitly here so a caller who
+    sets both sees a clear ``spec_invalid`` instead of a silent demotion.
+    """
+    raw = getattr(ns, "task_ids", None)
+    all_failed = bool(getattr(ns, "all_failed", False))
+    if all_failed and raw:
+        raise errors.SpecInvalid("--all-failed and --task-id are mutually exclusive")
+    if raw:
+        try:
+            parsed = [int(x.strip()) for x in str(raw).split(",") if x.strip()]
+        except ValueError as exc:
+            raise errors.SpecInvalid(f"--task-id must be comma-separated integers: {exc}") from exc
+        if not parsed:
+            raise errors.SpecInvalid("--task-id is empty")
+        return {"task_ids": parsed}
+    return {"task_ids": None}
 
 
 @primitive(
@@ -32,7 +57,33 @@ if TYPE_CHECKING:
         errors.SpecInvalid,
     ],
     idempotent=True,
-    cli="hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]",
+    cli=CliShape(
+        help=("Fetch per-task stderr logs from the cluster (requires --task-id or --all-failed)."),
+        requires_ssh=True,
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--run-id", type=str, required=True),
+            CliArg(
+                "--task-id",
+                type=str,
+                default=None,
+                dest="task_ids",
+                help="Comma-separated task ids to fetch (e.g. '7,12,42').",
+            ),
+            CliArg(
+                "--all-failed",
+                action="store_true",
+                help="Re-poll status and fetch logs for every task with status=failed.",
+            ),
+            CliArg(
+                "--lines",
+                type=int,
+                default=50,
+                help="Number of trailing lines to return per log (default 50).",
+            ),
+        ),
+        arg_pre=_logs_arg_pre,
+    ),
     agent_facing=True,
 )
 def fetch_logs(

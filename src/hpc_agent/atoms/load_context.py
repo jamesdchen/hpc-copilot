@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -176,7 +177,14 @@ def _build_delegate(
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent load-context --experiment-dir <path>",
+    cli=CliShape(
+        help=(
+            "Reconstruct workflow context (latest run + config snapshot, "
+            "in-flight runs, campaigns) from on-disk state. Run this first "
+            "in any fresh-context step instead of relying on memory."
+        ),
+        experiment_dir_arg=True,
+    ),
     agent_facing=True,
 )
 def load_context(*, experiment_dir: Path) -> dict[str, Any]:

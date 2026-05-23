@@ -39,8 +39,10 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal.primitive import primitive
 from hpc_agent._schema_models.queries.recall import RecallSpec
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
+    from argparse import Namespace
     from collections.abc import Iterable, Sequence
 
 
@@ -54,12 +56,108 @@ _MAX_INTERVIEW_FILES = 10_000
 _USER_CONFIG = Path("~/.hpc-agent/config.json").expanduser()
 
 
+def _recall_arg_pre(ns: Namespace) -> dict[str, Any]:
+    """Build {spec, roots} from the recall CLI flags.
+
+    Re-maps the individual --root / --limit / --task-kind / --operator /
+    --since / --include-* flags into a ``RecallSpec`` payload (wire-validated
+    via the recall JSON schema, then ``model_validate``-d) plus the
+    ``roots`` list the primitive expects. The raw flag values are dropped
+    by the dispatcher's signature-based kwarg filter.
+    """
+    from hpc_agent.cli._helpers import _validate_against_schema
+
+    payload: dict[str, Any] = {
+        "limit": int(ns.limit),
+        "include_runtime": bool(ns.include_runtime),
+        "include_generator_stats": bool(ns.include_generator_stats),
+    }
+    if getattr(ns, "root", None):
+        payload["root"] = ns.root
+    if getattr(ns, "task_kind", None):
+        payload["task_kind"] = ns.task_kind
+    if getattr(ns, "operator", None):
+        payload["operator"] = ns.operator
+    if getattr(ns, "since", None):
+        payload["since"] = ns.since
+    _validate_against_schema(payload, "recall")
+    return {
+        "spec": RecallSpec.model_validate(payload),
+        "roots": resolve_roots(getattr(ns, "root", None)),
+    }
+
+
 @primitive(
     name="recall",
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent recall",
+    cli=CliShape(
+        help=(
+            "Query past interview.json files under --root. Returns "
+            "recency-sorted campaign summaries (goal, task_kind, "
+            "task_count, operator, materialized_at, cmd_sha) for use as "
+            "context in the next interview."
+        ),
+        args=(
+            CliArg(
+                "--limit",
+                type=int,
+                default=20,
+                help="Maximum number of summaries to return (default 20).",
+            ),
+            CliArg(
+                "--include-runtime",
+                action="store_true",
+                help=(
+                    "Tier 2 rollup: walk each matched campaign's "
+                    ".hpc/runtimes/*.json and aggregate elapsed_sec / failure "
+                    "rate across all dispatched tasks."
+                ),
+            ),
+            CliArg(
+                "--include-generator-stats",
+                action="store_true",
+                help=(
+                    "Tier 3 rollup: bucket by task_generator.kind and report "
+                    "observed parameter envelopes. Most useful with --task-kind "
+                    "also set."
+                ),
+            ),
+            CliArg(
+                "--root",
+                type=str,
+                default=None,
+                help=(
+                    "Filesystem directory to walk recursively for interview.json. "
+                    "When omitted, falls back to ~/.hpc-agent/config.json:"
+                    "experiment_roots; if neither is set, errors."
+                ),
+            ),
+            CliArg(
+                "--task-kind",
+                type=str,
+                default=None,
+                help="Exact-match filter against intent.task_kind.",
+            ),
+            CliArg(
+                "--operator",
+                type=str,
+                default=None,
+                help="Exact-match filter against intent.produced_by.operator.",
+            ),
+            CliArg(
+                "--since",
+                type=str,
+                default=None,
+                help=(
+                    "ISO-8601 timestamp; only campaigns materialized at or "
+                    "after this point are returned."
+                ),
+            ),
+        ),
+        arg_pre=_recall_arg_pre,
+    ),
     agent_facing=True,
 )
 def recall_campaigns(

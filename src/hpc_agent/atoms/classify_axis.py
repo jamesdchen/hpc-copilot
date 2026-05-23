@@ -23,6 +23,7 @@ from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.time import utcnow
 from hpc_agent._schema_models.actions.classify_axis import ClassifyAxisInput
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,7 +40,20 @@ __all__ = ["classify_axis"]
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-agent classify-axis --spec <path>",
+    cli=CliShape(
+        help=(
+            "Record a @register_run function's classified DataAxis "
+            "(independent / associative / bounded_halo / sequential) into "
+            "<experiment>/.hpc/axes.yaml's `executors` block. Spec file is "
+            "{run_name, run_signature_sha, data_axis: {kind, halo?, "
+            "monoid?}, classified_by?}. The agent classifies; this "
+            "primitive only records."
+        ),
+        spec_arg=True,
+        schema_ref=SchemaRef(input="classify_axis"),
+        spec_model=ClassifyAxisInput,
+        experiment_dir_arg=True,
+    ),
     agent_facing=True,
 )
 def classify_axis(

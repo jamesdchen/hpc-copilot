@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent discover --experiment-dir <path> [--search-dirs <a,b,c>]
+  cli: hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]
   python: hpc_agent.state.discover.discover_executors
 exit_codes:
 - 0: ok

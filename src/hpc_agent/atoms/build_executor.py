@@ -8,14 +8,13 @@ out otherwise.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import hpc_agent
 from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 
 @primitive(
@@ -29,7 +28,34 @@ if TYPE_CHECKING:
     ],
     idempotent=False,
     error_codes=[errors.SpecInvalid, errors.ConfigInvalid],
-    cli="hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain] [--force]",
+    cli=CliShape(
+        help="Scaffold a new executor from a starter template.",
+        args=(
+            CliArg("--name", type=str, required=True, help="Output filename stem (no .py)."),
+            CliArg(
+                "--output-dir",
+                type=Path,
+                default=Path.cwd(),
+                help="Where to write the new file (default: CWD).",
+            ),
+            CliArg(
+                "--type",
+                type=str,
+                default="plain",
+                choices=("plain",),
+                help=(
+                    "Which template to instantiate. The only template is 'plain' "
+                    "(a standard executor scaffold); per-task fan-out lives "
+                    "inline in .hpc/tasks.py, scaffolded by /submit Step 6."
+                ),
+            ),
+            CliArg(
+                "--force",
+                action="store_true",
+                help="Overwrite the destination file if it already exists.",
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def build_executor(

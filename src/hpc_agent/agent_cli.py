@@ -25,6 +25,7 @@ import contextlib
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -59,28 +60,10 @@ from hpc_agent.cli._helpers import (  # noqa: F401 — re-exported public surfac
     _validate_against_schema,
 )
 
-# ─── campaign verb-group re-exports ────────────────────────────────────────
-#
-# Phase-1 split: the eight ``cmd_campaign_*`` adapters now live in
-# :mod:`hpc_agent.cli.campaign`. We re-export them here so:
-#   * external imports (``from hpc_agent.agent_cli import cmd_campaign_init``)
-#     keep resolving, and
-#   * the ``set_defaults(func=cmd_campaign_*)`` argparse wiring further
-#     down in :func:`build_parser` resolves the bare names.
-# The submodule lazy-imports the envelope helpers (``_ok``, ``_err``,
-# ``_validate_against_schema``) from this module *inside* each function
-# body to break the import cycle.
-from hpc_agent.cli.campaign import (  # noqa: E402
-    cmd_campaign_advance,
-    cmd_campaign_budget,
-    cmd_campaign_converged,
-    cmd_campaign_health,
-    cmd_campaign_init,
-    cmd_campaign_list,
-    cmd_campaign_replay,
-    cmd_campaign_status,
-)
-
+# Campaign verb-group adapters were moved to CliShape declarations on
+# the ``@primitive`` decorator in ``atoms/campaign_*.py`` — auto-
+# registered by the registry walk in :mod:`hpc_agent.cli.parser`. No
+# hand-written cmd_campaign_* adapters remain.
 # ─── setup-domain re-exports ───────────────────────────────────────────────
 #
 # The four setup-domain adapters (cmd_install_commands, cmd_setup,
@@ -94,6 +77,7 @@ from hpc_agent.cli.setup import (  # noqa: E402, F401
     cmd_install_commands,
     cmd_setup,
 )
+from hpc_agent.cli.spawn import cmd_run  # noqa: E402, F401
 from hpc_agent.state.discover import discover_executors
 
 # ─── subcommand: capabilities ──────────────────────────────────────────────
@@ -1330,48 +1314,11 @@ def cmd_build_template(args: argparse.Namespace) -> int:
 # ─── subcommand: run ───────────────────────────────────────────────────────
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    """Run a workflow end to end in a fresh-context worker.
-
-    The code-orchestrated entrypoint: validates the fields, renders the
-    canonical worker prompt, invokes a worker, and returns its parsed
-    report. The spawn is emitted by code here — no PreToolUse hook
-    mediates this path. See hpc_agent._internal.run_workflow.
-    """
-    from hpc_agent._internal.run_workflow import run_workflow
-    from hpc_agent.atoms.spawn_prompt import SpawnContractError
-
-    try:
-        fields = json.loads(args.fields_json)
-    except json.JSONDecodeError as exc:
-        return _err(
-            error_code="spec_invalid",
-            message=f"--fields-json is not valid JSON: {exc}",
-            category="user",
-            retry_safe=False,
-        )
-    if not isinstance(fields, dict):
-        return _err(
-            error_code="spec_invalid",
-            message="--fields-json must be a JSON object",
-            category="user",
-            retry_safe=False,
-        )
-    try:
-        report, exit_code = run_workflow(
-            workflow=args.workflow,
-            experiment_dir=str(args.experiment_dir),
-            fields=fields,
-        )
-    except SpawnContractError as exc:
-        return _err(
-            error_code="spec_invalid",
-            message=str(exc),
-            category="user",
-            retry_safe=False,
-        )
-    _ok({"report": report.model_dump(), "worker_exit_code": exit_code})
-    return EXIT_OK
+# ─── subcommand: run ───────────────────────────────────────────────────────
+#
+# Moved to :mod:`hpc_agent.cli.spawn` (Tier 3 — no @primitive backing).
+# Re-exported at the bottom of this module so existing imports keep
+# resolving.
 
 
 # ─── subcommand: describe ──────────────────────────────────────────────────
@@ -1400,6 +1347,47 @@ def build_parser() -> argparse.ArgumentParser:
     return _build_parser()
 
 
+class _NullParser:
+    """No-op argparse-parser stand-in for legacy blocks whose verb is already registered."""
+
+    def add_argument(self, *_args: object, **_kwargs: object) -> _NullParser:
+        return self
+
+    def add_subparsers(self, *_args: object, **_kwargs: object) -> _NullParser:
+        return self
+
+    def add_parser(self, *_args: object, **_kwargs: object) -> _NullParser:
+        return self
+
+    def set_defaults(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+class _SkipExisting:
+    """Wrap a ``_SubParsersAction`` so ``add_parser`` for already-registered verbs no-ops.
+
+    Per-domain CliShape migrations add a verb to the registry walk
+    without simultaneously deleting the matching ``sub.add_parser(...)``
+    block below; argparse would otherwise raise on the duplicate. The
+    wrapper returns a :class:`_NullParser` (which absorbs all subsequent
+    ``add_argument`` / ``set_defaults`` calls) so the legacy block runs
+    as a no-op when the registry walk has already claimed its verb.
+    Phase 3 drops the legacy body entirely and the shim with it.
+    """
+
+    def __init__(self, inner: argparse._SubParsersAction) -> None:
+        self._inner = inner
+
+    def add_parser(self, name: str, **kwargs: object) -> object:
+        if name in self._inner.choices:
+            return _NullParser()
+        return self._inner.add_parser(name, **kwargs)
+
+    @property
+    def choices(self) -> Mapping[str, argparse.ArgumentParser]:
+        return self._inner.choices
+
+
 def _register_legacy_subcommands(
     sub: argparse._SubParsersAction,
     *,
@@ -1421,6 +1409,17 @@ def _register_legacy_subcommands(
     group.
     """
     _ = nested_groups  # reserved for partial-group migrations; unused today.
+
+    # During the migration, the registry walk in :mod:`hpc_agent.cli.parser`
+    # auto-registers every primitive that already carries a CliShape; the
+    # hand-written ``add_parser`` blocks below are still here for primitives
+    # that haven't been migrated yet. To avoid argparse duplicate-name
+    # errors when a CliShape is added without simultaneously deleting the
+    # legacy block, wrap ``sub`` so any add_parser call for an already-taken
+    # verb returns a no-op stand-in. This lets per-domain migrations add
+    # CliShape declarations without having to also delete the matching
+    # legacy block in this file — keeping per-domain PRs small.
+    sub = _SkipExisting(sub)  # type: ignore[assignment]
 
     # capabilities / install-commands / setup parsers now live in
     # ``hpc_agent.cli.setup.register()`` (Tier 3 module).
@@ -1952,139 +1951,6 @@ def _register_legacy_subcommands(
     _add_experiment_dir(p_lctx)
     p_lctx.set_defaults(func=cmd_load_context)
 
-    # campaign — closed-loop campaign read-only commands
-    p_camp = sub.add_parser(
-        "campaign",
-        help="Closed-loop campaign read-only commands (status, list).",
-    )
-    p_camp_sub = p_camp.add_subparsers(dest="action", required=True)
-
-    p_camp_st = p_camp_sub.add_parser(
-        "status",
-        help=(
-            "Report per-iteration reduced metrics for one campaign. "
-            "Walks every sidecar tagged with --campaign-id, runs "
-            "reduce_metrics on each, and emits the history dict-list."
-        ),
-    )
-    _add_experiment_dir(p_camp_st)
-    p_camp_st.add_argument("--campaign-id", required=True)
-    p_camp_st.set_defaults(func=cmd_campaign_status)
-
-    p_camp_ls = p_camp_sub.add_parser(
-        "list",
-        help="List every campaign with at least one sidecar in this experiment.",
-    )
-    _add_experiment_dir(p_camp_ls)
-    p_camp_ls.set_defaults(func=cmd_campaign_list)
-
-    p_camp_in = p_camp_sub.add_parser(
-        "init",
-        help="Write the campaign manifest from CLI args.",
-    )
-    _add_experiment_dir(p_camp_in)
-    p_camp_in.add_argument("--campaign-id", required=True)
-    p_camp_in.add_argument("--goal", type=str, default="")
-    p_camp_in.add_argument("--max-iters", type=int, default=None)
-    p_camp_in.add_argument("--metric", type=str, default=None)
-    p_camp_in.add_argument("--target", type=float, default=None)
-    p_camp_in.add_argument("--direction", choices=["minimize", "maximize"], default=None)
-    p_camp_in.add_argument("--plateau-window", type=int, default=None)
-    p_camp_in.add_argument("--plateau-tolerance", type=float, default=None)
-    p_camp_in.add_argument(
-        "--plateau-mode",
-        choices=["prior_window", "all_time_best"],
-        default=None,
-        help=(
-            "Plateau baseline (default ``all_time_best``). Controls whether the "
-            "recent window is compared to the all-time prior best or to the "
-            "prior window of equal size — see ``campaign-converged --help``."
-        ),
-    )
-    p_camp_in.add_argument("--max-jobs", type=int, default=None)
-    p_camp_in.add_argument("--max-tasks", type=int, default=None)
-    p_camp_in.add_argument("--max-walltime-sec", type=int, default=None)
-    p_camp_in.add_argument("--strategy-name", type=str, default=None)
-    p_camp_in.add_argument(
-        "--strategy-params-json",
-        type=str,
-        default=None,
-        help="JSON object for strategy.params (round-tripped untouched).",
-    )
-    p_camp_in.set_defaults(func=cmd_campaign_init)
-
-    p_camp_rp = p_camp_sub.add_parser(
-        "replay",
-        help="Return the last N iterations of a campaign with reduced metrics.",
-    )
-    _add_experiment_dir(p_camp_rp)
-    p_camp_rp.add_argument("--campaign-id", required=True)
-    p_camp_rp.add_argument("--last-n", type=int, default=5)
-    p_camp_rp.set_defaults(func=cmd_campaign_replay)
-
-    p_camp_cv = p_camp_sub.add_parser(
-        "converged",
-        help="Apply user-supplied stop criteria to a campaign's history.",
-    )
-    _add_experiment_dir(p_camp_cv)
-    p_camp_cv.add_argument("--campaign-id", required=True)
-    p_camp_cv.add_argument("--max-iters", type=int, default=None)
-    p_camp_cv.add_argument("--metric", type=str, default=None)
-    p_camp_cv.add_argument("--target", type=float, default=None)
-    p_camp_cv.add_argument("--direction", choices=["minimize", "maximize"], default=None)
-    p_camp_cv.add_argument("--plateau-window", type=int, default=None)
-    p_camp_cv.add_argument("--plateau-tolerance", type=float, default=None)
-    p_camp_cv.add_argument(
-        "--plateau-mode",
-        choices=["prior_window", "all_time_best"],
-        default=None,
-        help=(
-            "Plateau baseline. ``all_time_best`` (default): fires when the "
-            "recent ``--plateau-window`` iters didn't beat the all-time prior "
-            "best — 'no new record in N iters'. ``prior_window``: fires when "
-            "they didn't beat the prior window of equal size — 'improvements "
-            "have stalled'. The prior_window mode requires 2*window history."
-        ),
-    )
-    p_camp_cv.set_defaults(func=cmd_campaign_converged)
-
-    p_camp_bg = p_camp_sub.add_parser(
-        "budget",
-        help="Roll up campaign-level spend and compare to optional caps.",
-    )
-    _add_experiment_dir(p_camp_bg)
-    p_camp_bg.add_argument("--campaign-id", required=True)
-    p_camp_bg.add_argument("--max-jobs", type=int, default=None)
-    p_camp_bg.add_argument("--max-tasks", type=int, default=None)
-    p_camp_bg.add_argument("--max-walltime-sec", type=int, default=None)
-    p_camp_bg.set_defaults(func=cmd_campaign_budget)
-
-    p_camp_ad = p_camp_sub.add_parser(
-        "advance",
-        help=(
-            "Decide the next campaign action (continue / stop_converged / "
-            "stop_over_budget / wait_in_flight)."
-        ),
-    )
-    _add_experiment_dir(p_camp_ad)
-    p_camp_ad.add_argument("--campaign-id", required=True)
-    p_camp_ad.add_argument("--max-iters", type=int, default=None)
-    p_camp_ad.add_argument("--metric", type=str, default=None)
-    p_camp_ad.add_argument("--target", type=float, default=None)
-    p_camp_ad.add_argument("--direction", choices=["minimize", "maximize"], default=None)
-    p_camp_ad.add_argument("--plateau-window", type=int, default=None)
-    p_camp_ad.add_argument("--plateau-tolerance", type=float, default=None)
-    p_camp_ad.add_argument(
-        "--plateau-mode",
-        choices=["prior_window", "all_time_best"],
-        default=None,
-        help="See ``campaign-converged --help``.",
-    )
-    p_camp_ad.add_argument("--max-jobs", type=int, default=None)
-    p_camp_ad.add_argument("--max-tasks", type=int, default=None)
-    p_camp_ad.add_argument("--max-walltime-sec", type=int, default=None)
-    p_camp_ad.set_defaults(func=cmd_campaign_advance)
-
     # status
     p_st = sub.add_parser(
         "status", help="Poll cluster status for a run_id; one-shot, returns snapshot."
@@ -2307,22 +2173,6 @@ def _register_legacy_subcommands(
     )
     p_fail.set_defaults(func=cmd_failures)
 
-    # campaign-health (D2a)
-    p_ch = sub.add_parser(
-        "campaign-health",
-        help=(
-            "Structured run-history aggregation for an LLM agent. Returns "
-            "walltime cliff rates, failure breakdown, GPU utilization, and "
-            "a ready-to-feed-LLM suggested_prompt."
-        ),
-    )
-    _add_experiment_dir(p_ch)
-    p_ch.add_argument("--campaign-id", default=None)
-    p_ch.add_argument("--since-iso", default=None)
-    p_ch.add_argument("--profile", default=None)
-    p_ch.add_argument("--cluster", default=None)
-    p_ch.set_defaults(func=cmd_campaign_health)
-
     # build-executor
     p_be = sub.add_parser(
         "build-executor",
@@ -2373,35 +2223,8 @@ def _register_legacy_subcommands(
     )
     p_bt.set_defaults(func=cmd_build_template)
 
-    # run
-    p_run = sub.add_parser(
-        "run",
-        help=(
-            "Run a workflow (submit / status / aggregate) end to end in a "
-            "fresh-context worker — the code-orchestrated entrypoint. "
-            "Renders the canonical prompt, invokes a worker, returns its "
-            "parsed report. Campaign is a loop; use hpc-campaign-driver."
-        ),
-    )
-    _add_experiment_dir(p_run)
-    p_run.add_argument(
-        "--workflow",
-        required=True,
-        # campaign is excluded: it is a loop driven tick-by-tick by
-        # hpc-campaign-driver, not a single run.
-        choices=["submit", "status", "aggregate"],
-        help="Which workflow the fresh-context worker will run.",
-    )
-    p_run.add_argument(
-        "--fields-json",
-        type=str,
-        default="{}",
-        help=(
-            "Inline JSON object of the invocation's resolved fields "
-            "(interview answers). Default: '{}'."
-        ),
-    )
-    p_run.set_defaults(func=cmd_run)
+    # run parser now lives in ``hpc_agent.cli.spawn.register()``
+    # (Tier 3 module — no @primitive backing).
 
     # describe parser now lives in ``hpc_agent.cli.setup.register()``
     # (Tier 3 module — no @primitive backing).

@@ -55,6 +55,7 @@ from hpc_agent import errors, runner
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.workflows.aggregate_flow import AggregateFlowSpec
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
 from hpc_agent.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
 from hpc_agent.runner import combine_wave, record_status
@@ -271,7 +272,20 @@ def _combine_missing(
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
-    cli="hpc-agent aggregate-flow --spec <path>",
+    cli=CliShape(
+        help=(
+            "Workflow atom: ensure all waves combined on the cluster, "
+            "rsync the _combiner/ partials locally, reduce_partials over "
+            "them, optionally pull per-task summaries. Third atom in the "
+            "submit-flow → monitor-flow → aggregate-flow campaign chain."
+        ),
+        spec_arg=True,
+        spec_model=AggregateFlowSpec,
+        schema_ref=SchemaRef(input="aggregate_flow"),
+        experiment_dir_arg=True,
+        dry_run_arg=True,
+        dry_run_passthrough_keys=("run_id", "ensure_all_combined", "pull_summaries", "output_dir"),
+    ),
     agent_facing=True,
 )
 def aggregate_flow(

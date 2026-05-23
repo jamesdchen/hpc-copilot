@@ -52,7 +52,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent logs --run-id <id> (--task-id <ids> | --all-failed) [--lines <n>]
+  cli: hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>]
+    [--all-failed] [--lines <lines>]
   python: hpc_agent.atoms.logs.fetch_logs
 exit_codes:
 - 0: ok

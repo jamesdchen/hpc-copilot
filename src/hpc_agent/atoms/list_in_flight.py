@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,7 +46,10 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent list-in-flight --experiment-dir <path>",
+    cli=CliShape(
+        help="List runs with status=in_flight in the journal (recovery path).",
+        experiment_dir_arg=True,
+    ),
     agent_facing=True,
 )
 def list_in_flight(*, experiment_dir: Path) -> dict[str, Any]:

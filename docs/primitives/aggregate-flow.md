@@ -24,7 +24,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent aggregate-flow --spec <path>
+  cli: hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]
   python: hpc_agent.flows.aggregate_flow.aggregate_flow
 ---
 

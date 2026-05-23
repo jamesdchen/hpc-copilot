@@ -3,17 +3,33 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.actions.resubmit import ResubmitSpec
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    import argparse
 
     from hpc_agent._internal.session import RunRecord
+
+
+def _resubmit_handler(ns: argparse.Namespace) -> int:
+    """Tier 2 dispatcher entrypoint — delegate to the hand-written adapter.
+
+    The cmd_resubmit body has custom validation logic (the canonical
+    seven-category gate, per-element ``int()`` cast with slot-indexed
+    error messages) that doesn't fit the standard CliShape hooks. The
+    lazy import keeps atoms → cli decoupled — the registry walk imports
+    the atom for ``meta.cli`` long before the adapter body is needed.
+    """
+    from hpc_agent.cli.recover import cmd_resubmit
+
+    return cmd_resubmit(ns)
 
 
 def derive_resubmit_request_id(
@@ -53,7 +69,17 @@ def derive_resubmit_request_id(
     error_codes=[errors.SpecInvalid, errors.JournalCorrupt],
     idempotent=True,
     idempotency_key="request_id",
-    cli="hpc-agent resubmit --run-id <id> --spec spec.json [--experiment-dir <dir>]",
+    cli=CliShape(
+        verb="resubmit",
+        requires_ssh=False,
+        experiment_dir_arg=True,
+        args=(
+            CliArg(flag="--run-id", required=True),
+            CliArg(flag="--spec", type=Path, required=True),
+        ),
+        handler=_resubmit_handler,
+        help="Record a resubmission attempt in the journal (caller does the actual qsub).",
+    ),
     agent_facing=True,
 )
 def resubmit_failed(

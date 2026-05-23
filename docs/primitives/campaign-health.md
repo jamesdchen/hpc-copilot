@@ -6,7 +6,8 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]
+  cli: hpc-agent campaign health [--experiment-dir <dir>] [--campaign-id <campaign_id>]
+    [--since-iso <since_iso>] [--profile <profile>] [--cluster <cluster>]
   python: hpc_agent.atoms.campaign_health.campaign_health
 ---
 # campaign-health

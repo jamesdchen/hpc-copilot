@@ -9,8 +9,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id>
-    --combiner-dir <path>
+  cli: hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id>
+    --combiner-dir <combiner_dir_local> [--results-dir <results_dir_local>]
   python: hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete
 exit_codes:
 - 0: ok

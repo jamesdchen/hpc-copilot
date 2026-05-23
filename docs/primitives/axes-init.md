@@ -10,7 +10,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent axes-init
+  cli: hpc-agent axes-init [--experiment-dir <dir>] [--axes <axes>] [--homogeneous-axes
+    <homogeneous_axes>] [--force]
   python: hpc_agent.atoms.axes_init.axes_init
 ---
 # axes-init

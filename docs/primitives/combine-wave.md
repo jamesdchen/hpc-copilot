@@ -37,7 +37,8 @@ error_codes:
   category: internal
   retry_safe: false
 backed_by:
-  cli: hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]
+  cli: hpc-agent aggregate [--experiment-dir <dir>] --run-id <run_id> --wave <wave>
+    [--force] [--require-outputs <require_outputs>] [--expect-output <expect_output>]
   python: hpc_agent.runner.combine.combine_wave
 exit_codes:
 - 0: combined successfully

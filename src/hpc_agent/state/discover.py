@@ -20,7 +20,10 @@ source parse. Any Python file with the right shape qualifies.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 __all__ = [
     "ExecutorInfo",
@@ -33,6 +36,56 @@ __all__ = [
 import ast
 from dataclasses import dataclass, field
 from pathlib import Path
+
+if TYPE_CHECKING:
+    import argparse
+
+
+def _discover_executors_arg_pre(ns: argparse.Namespace) -> dict[str, object]:
+    """Parse the comma-separated ``--search-dirs`` flag into a tuple kwarg.
+
+    The CliArg registers ``--search-dirs`` as a string; this hook splits
+    on commas and drops empty entries so a user typing
+    ``--search-dirs scripts,`` does not accidentally scan an unnamed
+    subdir. Returns ``{}`` (no override) when the flag is unset, so the
+    primitive's ``search_dirs=None`` default takes effect.
+    """
+    raw = getattr(ns, "search_dirs", None)
+    if not raw:
+        return {}
+    parts = tuple(p.strip() for p in raw.split(",") if p.strip())
+    return {"search_dirs": parts} if parts else {}
+
+
+def _discover_executors_result_post(infos: list[ExecutorInfo]) -> dict[str, object]:
+    """Project ExecutorInfo dataclasses into the JSON envelope shape."""
+    return {
+        "executors": [
+            {
+                "name": i.name,
+                "path": str(i.path),
+                "cli_framework": i.cli_framework,
+                "has_main_guard": i.has_main_guard,
+            }
+            for i in infos
+        ]
+    }
+
+
+def _discover_reducers_result_post(infos: list[ReducerInfo]) -> dict[str, object]:
+    """Project ReducerInfo dataclasses into the JSON envelope shape."""
+    return {
+        "reducers": [
+            {
+                "name": i.name,
+                "path": str(i.path),
+                "matches": list(i.matches),
+                "docstring": i.docstring,
+            }
+            for i in infos
+        ]
+    }
+
 
 # Module names that signal a CLI framework. Matched against any ``import X``
 # or ``from X import ...`` statement at the top level of the script.
@@ -121,27 +174,51 @@ def is_executor_source(source: str) -> bool:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent discover --experiment-dir <path> [--search-dirs <a,b,c>]",
+    cli=CliShape(
+        help="List executor scripts in --experiment-dir (CLIs with __main__).",
+        # Legacy verb alias: the slash command + the pinning test know this
+        # primitive as ``hpc-agent discover``; preserve that surface even
+        # though the catalog name is ``discover-executors``.
+        verb="discover",
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--search-dirs",
+                type=str,
+                default=None,
+                help=(
+                    "Comma-separated subdirectory names to scan under "
+                    "--experiment-dir (e.g. 'scripts' or 'scripts,executors'). "
+                    "Default: 'executors,scripts,src' with a fallback to the "
+                    "experiment-dir root. Pass this when the caller knows its "
+                    "own layout convention — e.g. an integrator with a "
+                    "modules-only 'src/' should pass --search-dirs scripts."
+                ),
+            ),
+        ),
+        arg_pre=_discover_executors_arg_pre,
+        result_post=_discover_executors_result_post,
+    ),
     agent_facing=True,
 )
 def discover_executors(
-    root: Path | str,
+    experiment_dir: Path | str,
     *,
     search_dirs: tuple[str, ...] | None = None,
     recursive: bool = False,
 ) -> list[ExecutorInfo]:
-    """Scan *root* for executor ``.py`` files.
+    """Scan *experiment_dir* for executor ``.py`` files.
 
     Parameters
     ----------
-    root:
+    experiment_dir:
         Experiment-repo root (typically the user's CWD when they invoke
         ``/submit`` or ``/build-executor``).
     search_dirs:
-        Names of subdirectories under *root* to scan. If ``None`` (the
-        default), try each of :data:`_DEFAULT_CANDIDATE_DIRS` in turn and
-        collect from every one that exists. If every candidate is missing,
-        fall back to scanning *root* itself.
+        Names of subdirectories under *experiment_dir* to scan. If ``None``
+        (the default), try each of :data:`_DEFAULT_CANDIDATE_DIRS` in turn
+        and collect from every one that exists. If every candidate is
+        missing, fall back to scanning *experiment_dir* itself.
     recursive:
         If ``True``, walk each search dir recursively; otherwise only the
         top level.
@@ -152,7 +229,7 @@ def discover_executors(
     (utilities, ``__init__.py``, and files we can't parse) are excluded so
     callers can present the list directly to the user.
     """
-    root = Path(root).resolve()
+    root = Path(experiment_dir).resolve()
     if not root.is_dir():
         return []
 
@@ -407,15 +484,24 @@ def _classify_reducer(source: str, *, path: Path) -> ReducerInfo | None:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent discover-reducers --experiment-dir <path>",
+    cli=CliShape(
+        help=(
+            "List candidate reducer / aggregator scripts in --experiment-dir "
+            "(matches by filename stem and top-level function names like "
+            "aggregate / reduce / score). Use at /aggregate-hpc time to find "
+            "an existing reducer instead of writing a fresh one."
+        ),
+        experiment_dir_arg=True,
+        result_post=_discover_reducers_result_post,
+    ),
 )
 def discover_reducers(
-    root: Path | str,
+    experiment_dir: Path | str,
     *,
     search_dirs: tuple[str, ...] | None = None,
     recursive: bool = True,
 ) -> list[ReducerInfo]:
-    """Scan *root* for likely reducer / aggregator ``.py`` files.
+    """Scan *experiment_dir* for likely reducer / aggregator ``.py`` files.
 
     The motivating failure mode: the agent at /aggregate-hpc time writes
     a fresh QLIKE / RMSE / etc. aggregator instead of finding the one the
@@ -426,12 +512,12 @@ def discover_reducers(
 
     Parameters
     ----------
-    root:
+    experiment_dir:
         Experiment-repo root (typically the user's CWD).
     search_dirs:
-        Subdirectory names under *root* to scan. ``None`` (default) tries
-        :data:`_DEFAULT_REDUCER_DIRS` and falls back to *root* itself if
-        none exist.
+        Subdirectory names under *experiment_dir* to scan. ``None``
+        (default) tries :data:`_DEFAULT_REDUCER_DIRS` and falls back to
+        *experiment_dir* itself if none exist.
     recursive:
         Walk each search dir recursively. Default ``True`` (reducers
         often live a level deep, e.g. ``src/eval/qlike.py``); contrast
@@ -445,7 +531,7 @@ def discover_reducers(
     point ranks above one with only a name hint), then alphabetically.
     Files without any reducer signal are excluded.
     """
-    root = Path(root).resolve()
+    root = Path(experiment_dir).resolve()
     if not root.is_dir():
         return []
 

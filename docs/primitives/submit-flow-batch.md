@@ -21,7 +21,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent submit-flow-batch --spec <path>
+  cli: hpc-agent submit-flow-batch --spec <path> [--experiment-dir <dir>] [--dry-run]
   python: hpc_agent.flows.submit_flow.submit_flow_batch
 ---
 

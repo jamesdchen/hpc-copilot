@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: hpc-agent discover-reducers --experiment-dir <path>
+  cli: hpc-agent discover-reducers [--experiment-dir <dir>]
   python: hpc_agent.state.discover.discover_reducers
 exit_codes:
 - 0: ok

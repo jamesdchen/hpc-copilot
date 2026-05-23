@@ -19,15 +19,48 @@ Idempotent: aggregates from on-disk state; no SSH, no scheduler calls.
 
 from __future__ import annotations
 
+import argparse
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal.primitive import primitive
 from hpc_agent._schema_models.queries.campaign_health import CampaignHealthSpec
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ["campaign_health"]
+
+
+def _cmd_campaign_health(ns: argparse.Namespace) -> int:
+    """Tier 2 handler — flat CLI flags → schema-validated ``CampaignHealthSpec``.
+
+    The dispatcher's Tier 1 path passes every ``CliShape.args`` entry
+    through to the primitive as a kwarg, but ``campaign_health``'s
+    signature is ``(experiment_dir, *, spec)`` — the four flat flags
+    (``--campaign-id``, ``--since-iso``, ``--profile``, ``--cluster``)
+    must fold into a single ``CampaignHealthSpec``. A Tier 2 handler is
+    the right shape per the architectural rule: "If a primitive doesn't
+    fit even with rich hooks, classify as Tier 2; don't invent new
+    hooks." The handler still emits via ``_ok`` so the envelope shape
+    matches the rest of the campaign verb-group.
+    """
+    from hpc_agent.cli._helpers import EXIT_OK, _ok, _validate_against_schema
+
+    payload: dict[str, Any] = {}
+    if getattr(ns, "campaign_id", None) is not None:
+        payload["campaign_id"] = ns.campaign_id
+    if getattr(ns, "since_iso", None) is not None:
+        payload["since_iso"] = ns.since_iso
+    if getattr(ns, "profile", None) is not None:
+        payload["profile"] = ns.profile
+    if getattr(ns, "cluster", None) is not None:
+        payload["cluster"] = ns.cluster
+    _validate_against_schema(payload, "campaign_health")
+    spec = CampaignHealthSpec.model_validate(payload)
+    data = campaign_health(ns.experiment_dir, spec=spec)
+    _ok(data, name="campaign-health")
+    return EXIT_OK
 
 
 def _walltime_cliff_rate(samples: list[dict[str, Any]]) -> dict[str, float]:
@@ -122,7 +155,22 @@ def _build_prompt(payload: dict[str, Any]) -> str:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign-health [--campaign-id <id>] [--since-iso <ts>]",
+    cli=CliShape(
+        help=(
+            "Structured run-history aggregation for an LLM agent. Returns "
+            "walltime cliff rates, failure breakdown, GPU utilization, and "
+            "a ready-to-feed-LLM suggested_prompt."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--campaign-id", type=str, default=None),
+            CliArg("--since-iso", type=str, default=None),
+            CliArg("--profile", type=str, default=None),
+            CliArg("--cluster", type=str, default=None),
+        ),
+        handler=_cmd_campaign_health,
+        group="campaign",
+    ),
 )
 def campaign_health(
     experiment_dir: Path,

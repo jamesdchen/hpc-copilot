@@ -10,7 +10,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent build-tasks-py --spec <path>
+  cli: hpc-agent build-tasks-py [--experiment-dir <dir>] --spec <spec> [--force]
   python: hpc_agent.atoms.build_tasks_py.build_tasks_py
 exit_codes:
 - 0: ok

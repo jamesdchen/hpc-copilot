@@ -34,13 +34,13 @@ The ``hpc_agent.template`` library itself is **not** injected — it is a
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import hpc_agent
 from hpc_agent import errors
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 # (scaffold asset, destination relative to repo root).
 # Framework-owned: rewritten verbatim every run.
@@ -59,6 +59,45 @@ _ROOT_ASSETS: tuple[tuple[str, str], ...] = (
 _MAKEFILE_INCLUDE = "include .hpc/template.mk"
 
 
+@primitive(
+    name="build-template",
+    verb="scaffold",
+    side_effects=[
+        SideEffect(
+            "writes-file",
+            "<repo_dir>/{.hpc/template.mk,.hpc/scaffold.py} (self-healing); "
+            "<repo_dir>/{Makefile,.gitignore,pyproject.toml,.pre-commit-config.yaml,"
+            "conftest.py,.github/workflows/ci.yml} (refuse-without-force at repo root)",
+        ),
+    ],
+    error_codes=[errors.SpecInvalid],
+    idempotent=True,
+    idempotency_key="repo_dir",
+    cli=CliShape(
+        help="Inject the experiment-template scaffold into a repo.",
+        args=(
+            CliArg(
+                "--repo-dir",
+                type=Path,
+                default=Path.cwd(),
+                help="Target repository root (default: CWD).",
+            ),
+            CliArg(
+                "--force",
+                action="store_true",
+                help=(
+                    "Overwrite repo-root files that already exist. The "
+                    "framework-owned .hpc/ assets are re-injected regardless."
+                ),
+            ),
+        ),
+    ),
+    # Registered with the verb=scaffold convention that the contract
+    # test ``test_scaffolds_are_agent_facing`` enforces. Even though
+    # build-template is primarily a human entry point, the agent walks
+    # users through scaffold flows and needs visibility.
+    agent_facing=True,
+)
 def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
     """Inject the experiment-template scaffold into ``repo_dir``.
 
