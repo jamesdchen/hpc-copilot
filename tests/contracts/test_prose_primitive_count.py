@@ -75,19 +75,6 @@ def registry() -> dict[str, PrimitiveMeta]:
     return get_registry()
 
 
-# TODO: PR #A (claude/audit-fixes-A-bugs) updates the prose primitive
-# counts in README.md and docs/internals/adding-a-primitive.md to track
-# the registry. Drop this xfail when PR A merges.
-_PR_A_PENDING = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PR #A (claude/audit-fixes-A-bugs) updates README.md and "
-        "docs/internals/adding-a-primitive.md to track the live primitive "
-        "count. Drop this xfail when PR A merges."
-    ),
-)
-
-
 def _file_is_auto_generated(text: str) -> bool:
     """True iff the file declares itself auto-generated at the top."""
     head = text[:400].lower()
@@ -102,7 +89,6 @@ def _match_is_auto_generated(text: str, match: re.Match[str]) -> bool:
     return any(marker in window for marker in _EXEMPT_MARKERS)
 
 
-@_PR_A_PENDING
 def test_prose_primitive_counts_track_registry(
     registry: dict[str, PrimitiveMeta],
 ) -> None:
