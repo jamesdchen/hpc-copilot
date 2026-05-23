@@ -77,20 +77,6 @@ def registry() -> dict[str, PrimitiveMeta]:
     return get_registry()
 
 
-# TODO: PR #A (claude/audit-fixes-A-bugs) flips ``requires_ssh=True`` on
-# the four bypassed primitives (verify-canary, cluster-reduce,
-# aggregate-flow, monitor-flow). When PR A merges, drop this xfail
-# marker so the test becomes a regression guard instead of a
-# documented-expected-fail.
-_PR_A_PENDING = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PR #A (claude/audit-fixes-A-bugs) flips requires_ssh=True on the "
-        "four SSH-bypassed primitives. Drop this xfail when PR A merges."
-    ),
-)
-
-
 def _declares_ssh_side_effect(meta: PrimitiveMeta) -> bool:
     """True iff any declared :class:`SideEffect.kind` matches the SSH set."""
     return any(se.kind in _SSH_SIDE_EFFECT_KINDS for se in meta.side_effects)
@@ -114,7 +100,6 @@ def _source_uses_ssh(meta: PrimitiveMeta) -> bool:
     return any(needle in src for needle in _SSH_SOURCE_NEEDLES)
 
 
-@_PR_A_PENDING
 def test_ssh_touching_primitives_declare_requires_ssh(
     registry: dict[str, PrimitiveMeta],
 ) -> None:

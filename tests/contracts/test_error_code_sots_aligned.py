@@ -34,8 +34,6 @@ import json
 import typing
 from pathlib import Path
 
-import pytest
-
 from hpc_agent import errors
 from hpc_agent._schema_models import _shared
 from hpc_agent.integration import ERROR_CODES as INTEGRATION_ERROR_CODES
@@ -87,15 +85,6 @@ def _set_d_envelope_schema() -> set[str]:
     return set(enum)
 
 
-# TODO: PR #A (claude/audit-fixes-A-bugs) adds ``precondition_failed``
-# to Sets B, C, and D. Drop this xfail marker when PR A merges.
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PR #A (claude/audit-fixes-A-bugs) lands 'precondition_failed' in "
-        "Sets B, C, and D. Drop this xfail when PR A merges."
-    ),
-)
 def test_error_code_sources_of_truth_aligned() -> None:
     """Sets A, B, C, D must agree (modulo :data:`_EXPECTED_ASYMMETRY`)."""
     sets = {
