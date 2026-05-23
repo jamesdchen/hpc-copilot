@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent._internal.time import utcnow_iso
 from hpc_agent.errors import RemoteCommandFailed
 from hpc_agent.infra import remote
-from hpc_agent.runner._ssh import _parse_remote_json
+from hpc_agent.infra.remote import parse_remote_json
 
 if TYPE_CHECKING:
     from hpc_agent._internal.session import RunRecord
@@ -32,7 +32,7 @@ def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> d
             f"failed to read remote sidecar at {remote_path}/{sidecar_rel}: "
             f"{proc.stderr.strip()[:500]}"
         )
-    return _parse_remote_json(
+    return parse_remote_json(
         proc.stdout, source_label=f"remote sidecar at {remote_path}/{sidecar_rel}"
     )
 

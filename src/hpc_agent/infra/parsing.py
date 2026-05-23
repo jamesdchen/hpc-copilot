@@ -27,6 +27,8 @@ __all__ = [
     "parse_walltime_to_sec",
     "parse_sacct_pipe_row",
     "parse_qstat_columns",
+    "FAILURE_CATEGORY_PATTERNS",
+    "categorize_failure",
 ]
 
 import re
@@ -195,6 +197,82 @@ def parse_sacct_pipe_row(parts: list[str], format_spec: list[str]) -> dict[str, 
         else:
             out[name] = ""
     return out
+
+
+# ---------------------------------------------------------------------------
+# Failure-category fingerprinting (regex catalog)
+# ---------------------------------------------------------------------------
+
+# Patterns that strongly identify a failure category, ordered most-specific
+# first. Matched case-insensitively against the joined log tail.  The first
+# hit wins. Subject-level orchestration (in
+# :mod:`hpc_agent.runner.failures`) layers exit-code overrides and the
+# richer :func:`hpc_agent.runner.failure_signatures.classify` catalog on
+# top of this primitive bucket.
+FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # The campus user got bumped, not failed. Match the dispatcher's
+    # SIGTERM-trap stderr line so the cluster groups all preempted
+    # tasks together and the harness can resubmit cleanly.
+    (
+        "preempted",
+        re.compile(r"\[hpc-agent\] SIGTERM received; cluster preemption imminent"),
+    ),
+    ("gpu_oom", re.compile(r"cuda(?: out of memory|.*OOM)|torch\.cuda\.OutOfMemoryError", re.I)),
+    # Pattern kept identical to the ``system_oom`` row of
+    # ``failure_signatures.CATALOG`` so the two classifiers cannot
+    # disagree -- a kernel ``oom-kill:`` line (no "oom-killer" token)
+    # must not classify as ``unknown`` here while the catalog tags it
+    # ``system_oom`` and recommends increase-mem.
+    (
+        "system_oom",
+        re.compile(r"oom-kill|out of memory.*killed|\bMemoryError\b|killed.*signal 9", re.I),
+    ),
+    (
+        # Narrowed to scheduler-specific markers -- bare ``walltime`` or
+        # ``signal SIGTERM 15`` collide with preemption (which the
+        # scheduler also delivers via SIGTERM). The exit-code 130/143
+        # override in the runner's orchestrator routes confirmed SIGTERM
+        # cases to ``preempted``.
+        "walltime",
+        # Kept in sync with the ``walltime`` row of
+        # ``failure_signatures.CATALOG`` (scheduler-specific markers
+        # only -- no bare ``walltime`` token, which collides with
+        # preemption) so the two classifiers cannot disagree.
+        re.compile(
+            r"DUE TO TIME LIMIT|CANCELLED.*TIME LIMIT|"
+            r"wall.?time.*expired|wall.?time.*exceeded|"
+            r"Time limit exceeded|h_rt.*exceeded|qmaster enforced h_rt",
+            re.I,
+        ),
+    ),
+    (
+        "node_failure",
+        re.compile(
+            r"NODE_FAIL|node failed|connection (closed|reset by peer)|ssh: connect.*refused", re.I
+        ),
+    ),
+    ("import_error", re.compile(r"\bImportError\b|\bModuleNotFoundError\b", re.I)),
+    ("file_not_found", re.compile(r"\bFileNotFoundError\b|No such file or directory", re.I)),
+    ("permission_denied", re.compile(r"\bPermissionError\b|Permission denied", re.I)),
+    ("disk_full", re.compile(r"No space left on device|\bENOSPC\b", re.I)),
+    ("python_traceback", re.compile(r"^Traceback \(most recent call last\):", re.I | re.M)),
+)
+
+
+def categorize_failure(content: str | None) -> str:
+    """Map a stderr blob to one of :data:`FAILURE_CATEGORY_PATTERNS` or 'unknown'.
+
+    Pure pattern match -- no exit-code awareness, no preemption override.
+    Subject-level orchestration in :mod:`hpc_agent.runner.failures` wraps
+    this with the exit-code 130/143 -> ``preempted`` override and the
+    richer signature-catalog classifier.
+    """
+    if not content:
+        return "unknown"
+    for category, pat in FAILURE_CATEGORY_PATTERNS:
+        if pat.search(content):
+            return category
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
