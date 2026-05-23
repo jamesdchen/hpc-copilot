@@ -41,6 +41,47 @@ def test_render_inlines_the_skill_body() -> None:
     assert _skill_body("hpc-aggregate") in prompt
 
 
+def test_skill_body_resolves_plugin_override(tmp_path, monkeypatch) -> None:
+    # A plugin's slash_command_assets/skills/<name>/SKILL.md is the
+    # canonical SoT for the worker when that plugin is installed — this
+    # is the symmetry that lets a plugin (e.g. hpc-agent-pro) extend
+    # the worker's behavior, not just the interactive context.
+    from hpc_agent.atoms import spawn_prompt
+    from hpc_agent.atoms.spawn_prompt import _skill_body
+
+    plugin_skill = tmp_path / "skills" / "hpc-submit" / "SKILL.md"
+    plugin_skill.parent.mkdir(parents=True)
+    plugin_skill.write_text("---\nname: hpc-submit\n---\n\nPLUGIN-PROVIDED submit skill body.\n")
+
+    monkeypatch.setattr(spawn_prompt, "_skill_body", _skill_body)
+    _skill_body.cache_clear()
+    monkeypatch.setattr(
+        "hpc_agent._internal.plugins.plugin_slash_command_roots",
+        lambda: (tmp_path,),
+    )
+
+    assert _skill_body("hpc-submit") == "PLUGIN-PROVIDED submit skill body."
+    # A skill the plugin does NOT provide still resolves to the host.
+    assert "load-context" in _skill_body("hpc-aggregate")
+
+    _skill_body.cache_clear()
+
+
+def test_skill_body_falls_back_to_host_when_no_plugin_provides(monkeypatch) -> None:
+    from hpc_agent.atoms.spawn_prompt import _skill_body
+
+    monkeypatch.setattr(
+        "hpc_agent._internal.plugins.plugin_slash_command_roots",
+        lambda: (),
+    )
+    _skill_body.cache_clear()
+
+    # Host's hpc-submit body has the Setup section.
+    assert "Setup" in _skill_body("hpc-submit")
+
+    _skill_body.cache_clear()
+
+
 def test_render_frames_the_bare_skill_for_headless_use() -> None:
     # The skill body is inlined verbatim (unedited SoT); the prompt frames
     # it so a headless worker reads its slash-command assumptions correctly.

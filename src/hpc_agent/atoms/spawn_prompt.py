@@ -87,14 +87,34 @@ def _render_decision_points(workflow: str) -> str:
 def _skill_body(skill: str) -> str:
     """The markdown body of a bundled ``SKILL.md``, frontmatter stripped.
 
-    Read from the installed ``slash_commands`` package data and cached.
+    Resolution order: every plugin's ``slash_command_assets`` tree
+    (first plugin to provide ``skills/<skill>/SKILL.md`` wins) is
+    checked before the host's ``slash_commands`` package data. This is
+    what lets a plugin like ``hpc-agent-pro`` ship an overriding skill
+    that the worker actually sees — plugin entry points contribute
+    primitives by design, and now their skill text reaches workers the
+    same way. With no plugin providing the skill the host's bundled
+    copy is used unchanged.
+
+    Cached: skill text is process-stable (plugin set cannot change
+    in-process). Tests that swap plugins call ``cache_clear()``.
+
     The worker prompt *inlines* this rather than telling the worker to
     invoke the Skill tool: a headless ``claude -p`` worker has no skill
     discovery (``--bare`` skips it, and headless mode does not support
     user-invoked skills), so the procedure must travel inside the
     prompt itself.
     """
-    raw = (files("slash_commands") / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+    from hpc_agent._internal.plugins import plugin_slash_command_roots
+
+    raw: str | None = None
+    for root in plugin_slash_command_roots():
+        candidate = root / "skills" / skill / "SKILL.md"
+        if candidate.is_file():
+            raw = candidate.read_text(encoding="utf-8")
+            break
+    if raw is None:
+        raw = (files("slash_commands") / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
     if raw.startswith("---"):
         close = raw.find("\n---", 3)
         if close != -1:
