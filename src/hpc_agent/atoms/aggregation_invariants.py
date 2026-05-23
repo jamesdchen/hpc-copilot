@@ -302,7 +302,7 @@ def verify_aggregation_complete(
             expected_grid_points = {_metrics_key(tasks.resolve(i) or {}) for i in range(total)}
             keys = set(aggregated_metrics.keys())
             unexpected_aggregated_keys = sorted(keys - expected_grid_points)
-        except (FileNotFoundError, AttributeError, TypeError, ValueError):
+        except (FileNotFoundError, AttributeError, TypeError, ValueError, ImportError, SyntaxError):
             # tasks.py may not be importable in the local checkout
             # (e.g. cluster-side aggregate replayed locally). Skip
             # silently — the check is opt-in and shouldn't fail the

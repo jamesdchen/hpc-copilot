@@ -314,12 +314,14 @@ def main(max_workers=None, argv=None):
 
     runtime_rows = []  # one dict per task with a readable _runtime.json
     if readable:
+        from concurrent.futures import as_completed
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
             future_to_info = {
                 pool.submit(_read_metrics, metrics_path): (tid, grid_key, runtime_path)
                 for tid, grid_key, metrics_path, runtime_path in readable
             }
-            for future in future_to_info:
+            for future in as_completed(future_to_info):
                 tid, grid_key, runtime_path = future_to_info[future]
                 try:
                     metrics = future.result()

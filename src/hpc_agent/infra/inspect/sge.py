@@ -112,7 +112,7 @@ def _parse_qhost(text: str) -> list[NodeSnapshot]:
             if m_free:
                 current.gres = f"gpu:{m_free.group(1)}"
             continue
-        if len(cols) < 8:
+        if len(cols) < 9:
             continue
         host = cols[0]
         current = NodeSnapshot(name=host)
@@ -142,6 +142,13 @@ def _parse_qstat_full(text: str) -> dict[str, list[dict[str, Any]]]:
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped:
+            continue
+        # Section separators (e.g. ``############`` before PENDING JOBS,
+        # or a row of dashes) must clear ``current_host`` — otherwise the
+        # digit-led pending rows that follow get bucketed under whichever
+        # queue@host appeared last in the running section.
+        if stripped.startswith(("#", "-", "=")):
+            current_host = None
             continue
         first_token = stripped.split()[0]
         # Queue-instance header lines look like:

@@ -129,7 +129,7 @@ def update_run_constraints(
         cmd = f"scontrol update jobid={jid} Features={shlex.quote(feature_expr)}"
         try:
             cp = ssh_run(cmd, ssh_target=ssh_target)
-        except errors.SshUnreachable:
+        except (errors.SshUnreachable, TimeoutError, OSError):
             failed.append(jid)
             continue
         if cp.returncode == 0:

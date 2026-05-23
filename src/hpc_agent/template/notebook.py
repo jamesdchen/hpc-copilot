@@ -215,7 +215,10 @@ def _imports_runtime(node: ast.stmt) -> bool:
     if isinstance(node, ast.ImportFrom) and node.module:
         return node.module == _RUNTIME_MODULE or node.module.startswith(_RUNTIME_MODULE + ".")
     if isinstance(node, ast.Import):
-        return any(a.name.startswith(_RUNTIME_MODULE) for a in node.names)
+        return any(
+            a.name == _RUNTIME_MODULE or a.name.startswith(_RUNTIME_MODULE + ".")
+            for a in node.names
+        )
     return False
 
 

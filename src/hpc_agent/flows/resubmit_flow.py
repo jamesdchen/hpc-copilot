@@ -317,8 +317,14 @@ def resubmit_flow(
                     run_id=run_id,
                     failed_task_ids=plan_failed_ids,
                     effective_overrides=plan_overrides,
-                    ssh_target=(sidecar or {}).get("ssh_target") or "",
-                    remote_path=(sidecar or {}).get("remote_path") or "",
+                    # Prefer the sidecar's values (they carry any v2
+                    # config that supersedes the journal), but fall back
+                    # to the journal record so a missing/empty sidecar
+                    # doesn't blank these and trip downstream validation.
+                    ssh_target=(sidecar or {}).get("ssh_target") or existing.ssh_target,
+                    remote_path=(sidecar or {}).get("remote_path") or existing.remote_path,
+                    slurm_account=(sidecar or {}).get("slurm_account"),
+                    slurm_cluster=(sidecar or {}).get("slurm_cluster"),
                     scheduler=backend,
                     script=script,
                     job_name=job_name,
@@ -396,6 +402,8 @@ def _submit_resubmit_batches(
     backend_factory: Any,
     submitted_ids_out: list[str] | None = None,
     start_batch: int = 0,
+    slurm_account: str | None = None,
+    slurm_cluster: str | None = None,
 ) -> list[str]:
     """Build the array-submission shape and qsub each batch.
 
@@ -469,6 +477,8 @@ def _submit_resubmit_batches(
             remote_path=remote_path,
             pass_env_keys=tuple(job_env.keys()),
             job_env_keys=tuple(job_env.keys()),
+            slurm_account=slurm_account,
+            slurm_cluster=slurm_cluster,
         )
     else:
         backend_obj = backend_factory(

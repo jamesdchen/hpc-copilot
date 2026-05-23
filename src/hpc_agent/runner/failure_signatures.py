@@ -178,21 +178,23 @@ def classify(stderr: str | None, exit_code: int | None) -> dict[str, Any]:
     """
     text = stderr or ""
     sorted_catalog = sorted(CATALOG, key=lambda s: -s.priority)
+    # Two passes so the docstring promise — "stderr_pattern match alone
+    # is sufficient" — holds in priority order. The single-pass version
+    # let a high-priority exit-only hit win against a lower-priority but
+    # actually-matching pattern hit.
     for sig in sorted_catalog:
-        pattern_hit = sig.stderr_pattern is not None and bool(sig.stderr_pattern.search(text))
+        if sig.stderr_pattern is not None and sig.stderr_pattern.search(text):
+            return {
+                "error_class": sig.error_class,
+                "suggested_fix": dict(sig.suggested_fix),
+                "matched_pattern": sig.stderr_pattern.pattern,
+            }
+    for sig in sorted_catalog:
         exit_hit = (
             sig.exit_code is not None
             and exit_code is not None
             and int(exit_code) == int(sig.exit_code)
         )
-        if pattern_hit:
-            return {
-                "error_class": sig.error_class,
-                "suggested_fix": dict(sig.suggested_fix),
-                "matched_pattern": sig.stderr_pattern.pattern
-                if sig.stderr_pattern is not None
-                else None,
-            }
         if exit_hit and sig.priority >= 90:
             return {
                 "error_class": sig.error_class,

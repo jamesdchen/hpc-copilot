@@ -131,7 +131,7 @@ def load_playbook(experiment_dir: Path) -> Playbook:
     if not path.is_file():
         return _DEFAULT_PLAYBOOK
     try:
-        raw = yaml.safe_load(path.read_text())
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ValueError(f"playbook.yaml parse error: {exc}") from exc
     if raw is None:

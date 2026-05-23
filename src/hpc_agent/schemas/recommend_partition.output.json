@@ -4,16 +4,23 @@
   "title": "RecommendPartitionResult",
   "type": "object",
   "required": [
-    "recommended_partition",
     "rationale",
     "message"
   ],
   "additionalProperties": false,
   "properties": {
     "recommended_partition": {
-      "minLength": 1,
-      "title": "Recommended Partition",
-      "type": "string"
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The chosen partition's name, or None when no safe partition exists (e.g. only a debug partition is declared and the request exceeds its walltime cap — see the ``only_debug_available_walltime_too_long`` rationale).",
+      "title": "Recommended Partition"
     },
     "rationale": {
       "enum": [

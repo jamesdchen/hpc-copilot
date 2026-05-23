@@ -27,6 +27,17 @@ class _Provenance(BaseModel):
         description="Human operator name/handle when kind=human; null when kind=agent.",
     )
 
+    @model_validator(mode="after")
+    def _check_kind_fields(self) -> _Provenance:
+        # Enforce the kind-conditional invariants the field descriptions
+        # promise so a malformed provenance fails fast at the schema
+        # boundary rather than leaking through to consumers.
+        if self.kind == "agent" and self.session_sha is None:
+            raise ValueError("provenance kind='agent' requires 'session_sha'")
+        if self.kind == "human" and self.operator is None:
+            raise ValueError("provenance kind='human' requires 'operator'")
+        return self
+
 
 class _BudgetSpec(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -257,8 +268,20 @@ class _InterviewPreview(BaseModel):
     last: Any = Field(description="tasks.resolve(total_tasks - 1)")
 
 
-class _InterviewData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class InterviewResult(BaseModel):
+    """Data block returned by ``hpc-agent interview``.
+
+    Reports the artifacts persisted (interview.json, optionally
+    meta.json) and a dry-resolve preview so the calling agent can
+    echo 'sweep starts here, midpoint here, ends here' back to the
+    operator before submit.
+
+    The outer ``{ok, data}`` envelope is supplied by ``_ok`` in
+    ``agent_cli.py``; the shipped ``interview.output.json`` matches
+    THIS data-block shape, not the envelope.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="interview output")
 
     campaign_dir: str = Field(
         description="Absolute path to the campaign workdir (where tasks.py and the persisted interview.json live).",
@@ -285,16 +308,3 @@ class _InterviewData(BaseModel):
     )
 
 
-class InterviewEnvelope(BaseModel):
-    """Envelope returned by ``hpc-agent interview``.
-
-    Reports the artifacts persisted (interview.json, optionally
-    meta.json) and a dry-resolve preview so the calling agent can
-    echo 'sweep starts here, midpoint here, ends here' back to the
-    operator before submit.
-    """
-
-    model_config = ConfigDict(extra="forbid", title="interview output envelope")
-
-    ok: Literal[True]
-    data: _InterviewData

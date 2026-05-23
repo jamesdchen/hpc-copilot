@@ -462,10 +462,24 @@ def main() -> None:
             os.rename(wip_dir, stale_target)
             print(f"[dispatch] preserved prior failed WIP at {stale_target}/")
         except OSError as exc:
+            # Fall through with the stale WIP still in place would mix
+            # leftover files from the prior run with this task's outputs
+            # and corrupt the atomic promote — try a forced cleanup
+            # instead. If even that fails, abort dispatch rather than
+            # write into a polluted directory.
             print(
-                f"[dispatch] WARN: could not preserve stale WIP {wip_dir}: {exc}",
+                f"[dispatch] WARN: could not preserve stale WIP {wip_dir}: {exc}; "
+                f"removing it instead",
                 file=sys.stderr,
             )
+            try:
+                shutil.rmtree(wip_dir)
+            except OSError as exc2:
+                print(
+                    f"[dispatch] FATAL: could not clean stale WIP {wip_dir}: {exc2}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
     os.makedirs(wip_dir, exist_ok=True)
 

@@ -48,6 +48,7 @@ class ValidateStochasticMarkerSpec(BaseModel):
     )
     expected_cmd_sha: str = Field(
         min_length=8,
+        pattern=r"^[0-9a-f]{8,64}$",
         description=(
             "The cmd_sha the about-to-submit run will have, computed via "
             "``compute_cmd_sha(load_tasks_module(.hpc/tasks.py))`` BEFORE "

@@ -98,6 +98,8 @@ class ClaudeCliInvoker:
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         return InvocationResult(exit_code=proc.returncode, output=proc.stdout)

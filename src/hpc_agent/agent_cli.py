@@ -231,7 +231,7 @@ def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dic
     if spec_path is None:
         return {}
     try:
-        loaded = json.loads(spec_path.read_text())
+        loaded = json.loads(spec_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise errors.SpecInvalid(f"--spec file not found: {spec_path}") from exc
     except json.JSONDecodeError as exc:
@@ -1124,6 +1124,9 @@ def cmd_submit(args: argparse.Namespace) -> int:
         )
 
     if args.dry_run:
+        # Skip ``name=...`` so the dry-run-specific shape isn't validated
+        # against ``SubmitResult`` (which requires job_ids / total_tasks
+        # / deduped and forbids would_launch / dry_run).
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
@@ -1132,7 +1135,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 "run_id": spec["run_id"],
                 "dry_run": True,
             },
-            name="submit-spec",
+            idempotent=True,
         )
         return EXIT_OK
 
@@ -1200,6 +1203,9 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
             raise errors.SpecInvalid(
                 f"submit-flow --dry-run spec missing required field(s): {', '.join(missing)}"
             )
+        # Skip ``name=...`` so the dry-run-specific shape isn't validated
+        # against ``SubmitFlowResult`` (which requires job_ids /
+        # canary_done and forbids the dry-run-only fields).
         _ok(
             {
                 "would_launch": int(spec["total_tasks"]),
@@ -1209,7 +1215,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
                 "canary": bool(spec.get("canary", True)),
                 "dry_run": True,
             },
-            name="submit-flow",
+            idempotent=True,
         )
         return EXIT_OK
 
@@ -1261,6 +1267,9 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         targets = sorted({(s.ssh_target, s.remote_path) for s in batch_spec.specs})
+        # Skip ``name=...`` so the dry-run-specific shape isn't validated
+        # against ``SubmitFlowBatchResult`` (which requires results /
+        # n_results and forbids the dry-run-only fields).
         _ok(
             {
                 "would_launch": [
@@ -1270,7 +1279,7 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
                 "n_specs": len(batch_spec.specs),
                 "dry_run": True,
             },
-            name="submit-flow-batch",
+            idempotent=True,
         )
         return EXIT_OK
 
@@ -1687,6 +1696,8 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     spec = CampaignHealthSpec.model_validate(payload)
     try:
         data = campaign_health(args.experiment_dir, spec=spec)
+    except errors.HpcError:
+        raise
     except Exception as exc:  # noqa: BLE001 — last-resort error envelope
         return _err(
             error_code="internal",

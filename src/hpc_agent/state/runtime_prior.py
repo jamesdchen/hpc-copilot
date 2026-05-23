@@ -140,10 +140,10 @@ def _resolve_queue_wait_sec(
 
 def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return _empty_doc(profile, cluster)
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return _empty_doc(profile, cluster)
     try:
         doc = json.loads(text)

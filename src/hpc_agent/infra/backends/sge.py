@@ -68,14 +68,12 @@ class SGEBackend(HPCBackend):
 
         if not job_ids:
             return "true"
-        return (
-            "{ "
-            + "; ".join(
-                f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 && echo __ALIVE__{jid}"
-                for jid in job_ids
-            )
-            + "; } || true"
-        )
+
+        def _one(jid: str) -> str:
+            quoted_marker = shlex.quote(f"__ALIVE__{jid}")
+            return f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 && echo {quoted_marker}"
+
+        return "{ " + "; ".join(_one(jid) for jid in job_ids) + "; } || true"
 
     @staticmethod
     def parse_alive_output(stdout: str, job_ids: list[str]) -> set[str]:

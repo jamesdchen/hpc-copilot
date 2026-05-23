@@ -373,7 +373,6 @@ def test_sge_alive_check_returns_empty_when_qstat_silent():
     ) as m:
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123", "456"],
             scheduler="sge",
         )
@@ -394,7 +393,6 @@ def test_sge_alive_check_emits_marker_for_each_alive_job():
     ):
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123", "456"],
             scheduler="sge",
         )
@@ -416,7 +414,6 @@ def test_slurm_alive_check_skips_sacct_so_completed_jobs_drop_off():
     ) as m:
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123"],
             scheduler="slurm",
         )
@@ -436,7 +433,6 @@ def test_slurm_alive_check_accepts_squeue_output():
     ):
         alive = runner._ssh_alive_job_ids(
             ssh_target="user@host",
-            remote_path="/x",
             job_ids=["123"],
             scheduler="slurm",
         )

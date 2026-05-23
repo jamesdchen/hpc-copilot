@@ -87,7 +87,13 @@ def fetch_logs(
         clusters = load_clusters_config()
     except Exception:  # noqa: BLE001 — config errors fall through to user-error path
         clusters = {}
-    scheduler = (clusters.get(record.cluster) or {}).get("scheduler") or "slurm"
+    scheduler = (clusters.get(record.cluster) or {}).get("scheduler")
+    if not scheduler:
+        raise errors.SpecInvalid(
+            f"cannot resolve scheduler for cluster {record.cluster!r}: "
+            f"absent from clusters.yaml or missing a 'scheduler' key — refusing "
+            f"to guess 'slurm' and risk misrouting the SGE log fetch"
+        )
 
     logs: list[dict[str, Any]] = []
     if resolved_task_ids:

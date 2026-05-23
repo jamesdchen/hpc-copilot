@@ -145,8 +145,8 @@ def resolve_roots(explicit: str | None) -> list[Path]:
     if not _USER_CONFIG.is_file():
         return []
     try:
-        config = json.loads(_USER_CONFIG.read_text())
-    except (OSError, json.JSONDecodeError):
+        config = json.loads(_USER_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return []
     raw = config.get("experiment_roots") or []
     if not isinstance(raw, list):
@@ -171,8 +171,8 @@ def _collect(
             if seen > _MAX_INTERVIEW_FILES:
                 return
             try:
-                doc = json.loads(path.read_text())
-            except (OSError, json.JSONDecodeError):
+                doc = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                 continue
             summary = _summarize(doc, path)
             if summary is None:
@@ -353,8 +353,8 @@ def _tier2_runtime_rollup(summaries: list[dict[str, Any]]) -> dict[str, Any]:
         any_samples = False
         for runtime_file in runtimes_dir.glob("*.json"):
             try:
-                doc = json.loads(runtime_file.read_text())
-            except (OSError, json.JSONDecodeError):
+                doc = json.loads(runtime_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                 continue
             samples = doc.get("samples") or []
             if not isinstance(samples, list):

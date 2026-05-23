@@ -182,7 +182,7 @@ def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_t
     existing: dict[str, Any] = {}
     if meta_path.exists():
         try:
-            loaded = json.loads(meta_path.read_text())
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             loaded = {}
         if isinstance(loaded, dict):

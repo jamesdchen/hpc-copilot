@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -121,32 +120,9 @@ def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
     return session.runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
 
 
-@contextlib.contextmanager
-def _flock_append(target: Path):
-    """Hold an exclusive flock on a sibling ``.lock`` while yielding.
-
-    Mirrors :func:`hpc_agent._internal.session._locked` so the slash-command
-    surface (which appends to the same ``.monitor.jsonl`` file) and this
-    workflow atom serialize their writes. Without flock, a concurrent
-    slash-command poll and an in-process monitor_flow tick can interleave
-    a partial JSON line and produce a torn record.
-
-    Best-effort on platforms without ``fcntl`` (Windows): degrades to a
-    no-op so the workflow primitive remains importable.
-    """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if _fcntl is None:
-        yield
-        return
-    lock = target.with_suffix(target.suffix + ".lock")
-    fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        _fcntl.flock(fd, _fcntl.LOCK_EX)
-        yield
-    finally:
-        with contextlib.suppress(OSError):
-            _fcntl.flock(fd, _fcntl.LOCK_UN)
-        os.close(fd)
+# _flock_append was removed in favour of routing the tick-log append
+# through hpc_agent._internal.telemetry's monitor-jsonl sink, which owns
+# the flock-guarded writer pattern (see _append_tick below).
 
 
 def _append_tick(
@@ -176,12 +152,10 @@ def _append_tick(
         "console_emitted": False,
     }
     path = _tick_log_path(experiment_dir, run_id)
-    # B7: Route the JSONL append through hpc_agent._internal.telemetry, which
-    # owns the flock-guarded writer pattern. The local _flock_append /
-    # legacy fallback below remain as the on-disk shape -- the only
-    # change is that the writer call goes through the canonical sink.
-    # Telemetry's monitor-jsonl sink ignores HPC_TELEMETRY_SINK because
-    # this caller is the canonical producer.
+    # B7: Route the JSONL append through hpc_agent._internal.telemetry,
+    # which owns the flock-guarded writer pattern. Telemetry's
+    # monitor-jsonl sink ignores HPC_TELEMETRY_SINK because this caller
+    # is the canonical producer.
     try:
         from hpc_agent._internal.telemetry import record as _telemetry_record
 
@@ -289,7 +263,7 @@ def _write_failed_task_ids(
         "wave": wave,
         "classifier_codes": list(classifier_codes or []),
     }
-    target.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
@@ -324,7 +298,7 @@ def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
         if result.returncode != 0:
             return 0
         cmd_sha = None
-        with contextlib.suppress(FileNotFoundError, OSError):
+        with contextlib.suppress(FileNotFoundError, OSError, json.JSONDecodeError):
             cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
         return ingest_runtime_samples_from_combiner_dir(
             local_dir,

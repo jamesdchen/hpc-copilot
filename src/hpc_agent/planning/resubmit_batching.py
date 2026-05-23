@@ -184,7 +184,10 @@ def resubmit_plan(
     if unknown:
         raise ValueError(f"failed_task_ids out of range [0, {task_count}): {unknown}")
 
-    sorted_ids = sorted(int(tid) for tid in failed_task_ids)
+    # Dedup: a caller passing duplicate tids would otherwise produce a
+    # malformed scheduler array spec like ``"1,1-3"`` (two ``1``s before
+    # the contiguous run), which sbatch / qsub reject.
+    sorted_ids = sorted({int(tid) for tid in failed_task_ids})
     if constraints is None:
         constraints = ClusterConstraints()
 

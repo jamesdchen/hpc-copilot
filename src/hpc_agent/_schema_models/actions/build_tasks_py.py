@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _AxisSpec(BaseModel):
@@ -76,6 +76,20 @@ class _DataAxisSpec(BaseModel):
         default=None,
         description="For kind='associative': which built-in monoid chunks reduce with (default: moments).",
     )
+
+    @model_validator(mode="after")
+    def _check_kind_fields(self) -> _DataAxisSpec:
+        # Mirror the invariant enforced by _DataAxisConfig in
+        # fixtures/axes.py so the kind-conditional fields are validated
+        # at the schema boundary instead of leaking through to
+        # atoms/build_tasks_py.py as a SpecInvalid.
+        if self.kind == "bounded_halo" and self.halo_expr is None:
+            raise ValueError("data_axis kind 'bounded_halo' requires 'halo_expr'")
+        if self.kind != "bounded_halo" and self.halo_expr is not None:
+            raise ValueError(f"data_axis kind {self.kind!r} must not carry 'halo_expr'")
+        if self.kind != "associative" and self.monoid is not None:
+            raise ValueError(f"data_axis kind {self.kind!r} must not carry 'monoid'")
+        return self
 
 
 class BuildTasksPyInput(BaseModel):

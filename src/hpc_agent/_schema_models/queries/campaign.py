@@ -35,7 +35,7 @@ class CampaignStatusData(BaseModel):
 class _CampaignListEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    campaign_id: str
+    campaign_id: str = Field(min_length=1)
     iterations: int = Field(ge=1)
 
 

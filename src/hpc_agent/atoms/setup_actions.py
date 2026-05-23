@@ -42,8 +42,8 @@ def _summarize_sidecar(path: Any) -> dict[str, Any]:
     import json
 
     try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         data = {}
     return {
         "run_id": path.stem,
@@ -224,8 +224,8 @@ def find_prior_run(
 
     run_id = path.stem
     try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         data = {}
 
     age_sec: int | None = None

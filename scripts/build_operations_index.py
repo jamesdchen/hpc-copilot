@@ -53,7 +53,10 @@ def fetch_operations() -> list[dict]:
     envelope = json.loads(lines[-1])
     if not envelope.get("ok"):
         raise SystemExit(f"capabilities envelope returned ok=false: {envelope}")
-    return envelope["data"].get("operations", [])
+    data = envelope.get("data") or {}
+    if not isinstance(data, dict):
+        raise SystemExit(f"capabilities envelope returned non-dict data: {type(data).__name__}")
+    return data.get("operations", [])
 
 
 def render_row(op: dict) -> str:
