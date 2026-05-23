@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 def main(path: str) -> int:
-    payload = json.loads(Path(path).read_text())
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not payload.get("ok"):
         print(f"FAIL: describe envelope ok=false: {payload}")
         return 1

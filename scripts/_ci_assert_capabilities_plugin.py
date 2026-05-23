@@ -24,7 +24,7 @@ REQUIRED = (
 
 
 def main(path: str) -> int:
-    payload = json.loads(Path(path).read_text())
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
     data = payload.get("data") or {}
     ops = data.get("operations") or []
     names = {o.get("name") for o in ops}
