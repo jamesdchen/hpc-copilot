@@ -15,7 +15,7 @@ from hpc_agent._internal.time import utcnow_iso
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.errors import RemoteCommandFailed
 from hpc_agent.infra import remote
-from hpc_agent.runner._ssh import _parse_remote_json
+from hpc_agent.infra.remote import parse_remote_json
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -73,7 +73,7 @@ def _ssh_status_report(
         raise RemoteCommandFailed(
             f"status reporter failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
         )
-    return _parse_remote_json(proc.stdout, source_label="status reporter")
+    return parse_remote_json(proc.stdout, source_label="status reporter")
 
 
 # Public alias — atoms / external orchestrators that need to invoke the

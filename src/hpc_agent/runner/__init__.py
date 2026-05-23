@@ -10,11 +10,18 @@ SSH calls and journal writes meet.
 Public surface is in ``__all__`` below. Private helpers (underscore-prefixed
 names like ``_ssh_status_report``, ``_categorize``,
 ``_FAILURE_CATEGORY_PATTERNS``) live on their canonical submodule —
-``hpc_agent.runner.status``, ``.failures``, ``.reconcile``, ``._ssh`` — and
+``hpc_agent.runner.status``, ``.failures``, ``.reconcile`` — and
 must be imported from there directly. The pre-split monolith re-exported
 them from this ``__init__`` so test code could write ``runner._X``; that
 leaked private surface across the package boundary and is no longer
 supported (post-audit cleanup, 2026-05).
+
+PR 1.5 moved the SSH JSON-parse helper (``_parse_remote_json``) to
+``infra.remote.parse_remote_json`` and the failure-category regex
+catalog (``_FAILURE_CATEGORY_PATTERNS`` / ``_categorize``) to
+``infra.parsing.FAILURE_CATEGORY_PATTERNS`` / ``categorize_failure``;
+``runner.failures`` still re-exports the underscore-prefixed names so
+existing call sites keep working.
 """
 
 from __future__ import annotations
