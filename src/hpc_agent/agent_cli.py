@@ -290,6 +290,28 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
         ) from exc
 
 
+# ─── campaign verb-group re-exports ────────────────────────────────────────
+#
+# Phase-1 split: the eight ``cmd_campaign_*`` adapters now live in
+# :mod:`hpc_agent.cli.campaign`. We re-export them here so:
+#   * external imports (``from hpc_agent.agent_cli import cmd_campaign_init``)
+#     keep resolving, and
+#   * the ``set_defaults(func=cmd_campaign_*)`` argparse wiring further
+#     down in :func:`build_parser` resolves the bare names.
+# The submodule lazy-imports the envelope helpers (``_ok``, ``_err``,
+# ``_validate_against_schema``) from this module *inside* each function
+# body to break the import cycle.
+from hpc_agent.cli.campaign import (  # noqa: E402
+    cmd_campaign_advance,
+    cmd_campaign_budget,
+    cmd_campaign_converged,
+    cmd_campaign_health,
+    cmd_campaign_init,
+    cmd_campaign_list,
+    cmd_campaign_replay,
+    cmd_campaign_status,
+)
+
 # ─── subcommand: capabilities ──────────────────────────────────────────────
 
 
@@ -588,23 +610,10 @@ def cmd_load_context(args: argparse.Namespace) -> int:
 # ─── subcommand: campaign status / list ────────────────────────────────────
 
 
-def cmd_campaign_status(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_status."""
-    from hpc_agent.atoms.campaign_status import campaign_status
-
-    _ok(
-        campaign_status(experiment_dir=args.experiment_dir, campaign_id=args.campaign_id),
-        name="campaign-status",
-    )
-    return EXIT_OK
-
-
-def cmd_campaign_list(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_list."""
-    from hpc_agent.atoms.campaign_list import campaign_list
-
-    _ok(campaign_list(experiment_dir=args.experiment_dir), name="campaign-list")
-    return EXIT_OK
+# cmd_campaign_status / cmd_campaign_list now live in hpc_agent.cli.campaign;
+# re-exported with the rest of the campaign verb group below (search for
+# "from hpc_agent.cli.campaign import"). Kept here as a comment so future
+# greps for ``def cmd_campaign_status`` in agent_cli still find the trail.
 
 
 def cmd_build_submit_spec(args: argparse.Namespace) -> int:
@@ -910,108 +919,11 @@ def cmd_axes_init(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cmd_campaign_init(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_init."""
-    from hpc_agent.atoms.campaign_init import campaign_init
-
-    _ok(
-        campaign_init(
-            experiment_dir=args.experiment_dir,
-            campaign_id=args.campaign_id,
-            goal=args.goal,
-            max_iters=args.max_iters,
-            metric=args.metric,
-            target=args.target,
-            direction=args.direction,
-            plateau_window=args.plateau_window,
-            plateau_tolerance=args.plateau_tolerance,
-            plateau_mode=args.plateau_mode,
-            max_jobs=args.max_jobs,
-            max_tasks=args.max_tasks,
-            max_walltime_sec=args.max_walltime_sec,
-            strategy_name=args.strategy_name,
-            strategy_params_json=args.strategy_params_json,
-        ),
-        name="campaign-init",
-    )
-    return EXIT_OK
-
-
-def cmd_campaign_replay(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_replay."""
-    from hpc_agent.atoms.campaign_replay import campaign_replay
-
-    _ok(
-        campaign_replay(
-            experiment_dir=args.experiment_dir,
-            campaign_id=args.campaign_id,
-            last_n=args.last_n,
-        ),
-        name="campaign-replay",
-    )
-    return EXIT_OK
-
-
-def cmd_campaign_converged(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_converged."""
-    from hpc_agent.atoms.campaign_converged import campaign_converged
-
-    _ok(
-        campaign_converged(
-            experiment_dir=args.experiment_dir,
-            campaign_id=args.campaign_id,
-            max_iters=args.max_iters,
-            metric=args.metric,
-            target=args.target,
-            direction=args.direction,
-            plateau_window=args.plateau_window,
-            plateau_tolerance=args.plateau_tolerance,
-            plateau_mode=args.plateau_mode,
-        ),
-        name="campaign-converged",
-    )
-    return EXIT_OK
-
-
-def cmd_campaign_budget(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_budget."""
-    from hpc_agent.atoms.campaign_budget import campaign_budget
-
-    _ok(
-        campaign_budget(
-            experiment_dir=args.experiment_dir,
-            campaign_id=args.campaign_id,
-            max_jobs=args.max_jobs,
-            max_tasks=args.max_tasks,
-            max_walltime_sec=args.max_walltime_sec,
-        ),
-        name="campaign-budget",
-    )
-    return EXIT_OK
-
-
-def cmd_campaign_advance(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_advance."""
-    from hpc_agent.atoms.campaign_advance import campaign_advance
-
-    _ok(
-        campaign_advance(
-            experiment_dir=args.experiment_dir,
-            campaign_id=args.campaign_id,
-            max_iters=args.max_iters,
-            metric=args.metric,
-            target=args.target,
-            direction=args.direction,
-            plateau_window=args.plateau_window,
-            plateau_tolerance=args.plateau_tolerance,
-            plateau_mode=args.plateau_mode,
-            max_jobs=args.max_jobs,
-            max_tasks=args.max_tasks,
-            max_walltime_sec=args.max_walltime_sec,
-        ),
-        name="campaign-advance",
-    )
-    return EXIT_OK
+# cmd_campaign_init / _replay / _converged / _budget / _advance now live in
+# hpc_agent.cli.campaign; re-exported at the bottom of this module (see
+# the ``from hpc_agent.cli.campaign import ...`` line) so existing import
+# paths (``from hpc_agent.agent_cli import cmd_campaign_init``) and the
+# ``set_defaults(func=cmd_campaign_*)`` argparse wiring below keep working.
 
 
 # ─── subcommand: status ────────────────────────────────────────────────────
@@ -1674,42 +1586,7 @@ def cmd_failures(args: argparse.Namespace) -> int:
 # ─── subcommand: campaign-health ───────────────────────────────────────────
 
 
-def cmd_campaign_health(args: argparse.Namespace) -> int:
-    """Aggregate run-history into a campaign-health payload (D2a).
-
-    Thin CLI wrapper. The ``@primitive(name="campaign-health", ...)``
-    decorator lives on ``hpc_agent.atoms.campaign_health.campaign_health``
-    (the module-level implementation), matching the ``backed_by.python``
-    pointer in ``docs/primitives/campaign-health.md``.
-    """
-    from hpc_agent.atoms.campaign_health import campaign_health
-
-    payload: dict[str, Any] = {}
-    if args.campaign_id is not None:
-        payload["campaign_id"] = args.campaign_id
-    if args.since_iso is not None:
-        payload["since_iso"] = args.since_iso
-    if args.profile is not None:
-        payload["profile"] = args.profile
-    if args.cluster is not None:
-        payload["cluster"] = args.cluster
-    _validate_against_schema(payload, "campaign_health")
-    from hpc_agent._schema_models.queries.campaign_health import CampaignHealthSpec
-
-    spec = CampaignHealthSpec.model_validate(payload)
-    try:
-        data = campaign_health(args.experiment_dir, spec=spec)
-    except errors.HpcError:
-        raise
-    except Exception as exc:  # noqa: BLE001 — last-resort error envelope
-        return _err(
-            error_code="internal",
-            message=f"campaign_health failed: {exc}",
-            category="internal",
-            retry_safe=False,
-        )
-    _ok(data, name="campaign-health")
-    return EXIT_OK
+# cmd_campaign_health now lives in hpc_agent.cli.campaign; re-exported below.
 
 
 # ─── subcommand: build-executor ────────────────────────────────────────────
