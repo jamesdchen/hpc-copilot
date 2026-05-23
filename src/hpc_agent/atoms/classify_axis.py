@@ -84,8 +84,8 @@ def classify_axis(
     ``bounded_halo`` whose ``halo.expr`` is not safe arithmetic over the
     run's parameters.
     """
-    from hpc_agent.state.axes import axes_path, upsert_executor
     from hpc_agent.incorporation.template.axis_config import HaloExprError, data_axis_from_config
+    from hpc_agent.state.axes import axes_path, upsert_executor
 
     data_axis = spec.data_axis.model_dump(exclude_none=True, mode="json")
     # Normalise: an 'associative' axis with no monoid stated defaults to

@@ -34,7 +34,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from hpc_agent.incorporation.template.axis import Associative, BoundedHalo, DataAxis, Independent, Sequential
+from hpc_agent.incorporation.template.axis import (
+    Associative,
+    BoundedHalo,
+    DataAxis,
+    Independent,
+    Sequential,
+)
 
 __all__ = ["TaskPlan", "plan_tasks", "sweep_grid"]
 
