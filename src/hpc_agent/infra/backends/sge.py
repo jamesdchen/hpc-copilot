@@ -57,32 +57,57 @@ class SGEBackend(HPCBackend):
 
     @staticmethod
     def build_alive_check_cmd(job_ids: list[str]) -> str:
-        """Shell command whose stdout lists ``__ALIVE__<jid>`` per live job.
+        """Shell command whose stdout lists active SGE job ids for ``$USER``.
 
-        Key the marker on ``qstat -j``'s exit code, not on the pipeline
-        tail.  ``qstat | head -1`` would always return 0 (head reads
-        empty stdin successfully), making ``&& echo __ALIVE__`` fire for
-        missing jobs and the alive check meaningless.
+        Single cluster-side ``qstat -u $USER`` call regardless of N.
+        Previously we emitted one ``qstat -j <jid>`` invocation per job
+        id and chained them with ``;`` — for a 100-task array polled
+        every 30s over 4h that's 48k subprocess spawns on the head node.
+
+        Why ``qstat -u $USER`` over ``qstat -j ID1,ID2,...``:
+          * ``qstat -j`` is documented (and behaves) as accepting a
+            single ``job_identifier``; comma-separated lists are NOT
+            portable across SGE forks (Univa / Son of Grid Engine /
+            OGS) — some accept it, some treat the whole string as one
+            opaque id and report "Following jobs do not exist".
+          * For very long id lists, multi-arg ``qstat -j ID1 ID2 ...``
+            risks blowing ``ARG_MAX`` on the wrapping ssh/exec call.
+          * ``qstat -u $USER`` is already the pattern used by
+            :func:`hpc_agent.infra.backends.query.query_sge` (see
+            ``query.py:_SGE`` block) so the output shape and parser
+            convention is well-trodden.
+
+        The filtering happens in :meth:`parse_alive_output`; this keeps
+        the on-the-wire payload tiny (no per-id marker echoing).
+        ``|| true`` ensures rc 0 on an empty-user-queue so the SSH
+        transport guard in reconcile doesn't mistake "no live jobs"
+        for "transport failure".
         """
-        import shlex
-
         if not job_ids:
             return "true"
-
-        def _one(jid: str) -> str:
-            quoted_marker = shlex.quote(f"__ALIVE__{jid}")
-            return f"qstat -j {shlex.quote(jid)} >/dev/null 2>&1 && echo {quoted_marker}"
-
-        return "{ " + "; ".join(_one(jid) for jid in job_ids) + "; } || true"
+        # NB: $USER expands cluster-side, matching query_sge's invocation.
+        return 'qstat -u "$USER" 2>/dev/null || true'
 
     @staticmethod
     def parse_alive_output(stdout: str, job_ids: list[str]) -> set[str]:
-        """Extract job ids from ``__ALIVE__<jid>`` markers."""
+        """Filter ``qstat -u $USER`` output to the requested *job_ids*.
+
+        ``qstat -u`` output has a 2-line header (``job-ID prior name ...``
+        and ``---...---``) followed by one row per job; the job id is the
+        first whitespace-separated column. Lines that don't start with a
+        digit (headers, blanks) are skipped silently.
+        """
         alive: set[str] = set()
+        wanted = {str(j) for j in job_ids}
         for line in stdout.splitlines():
-            token = line.strip()
-            if token.startswith("__ALIVE__"):
-                alive.add(token.removeprefix("__ALIVE__"))
+            cols = line.split()
+            if not cols:
+                continue
+            jid = cols[0].strip()
+            if not jid or not jid[0].isdigit():
+                continue  # header / separator line
+            if jid in wanted:
+                alive.add(jid)
         return alive
 
     @staticmethod
