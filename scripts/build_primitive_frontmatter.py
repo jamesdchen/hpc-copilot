@@ -128,8 +128,11 @@ def _build_frontmatter(meta, fm_existing: dict) -> dict:
     # we render as the legacy human-readable marker so existing readers
     # stay happy). ``python`` is the canonical entry-point pointer derived
     # from the func's qualified name.
+    from hpc_agent.cli._dispatch import cli_to_invocation_string
+
+    cli_str = cli_to_invocation_string(meta.name, meta.cli)
     fm["backed_by"] = {
-        "cli": meta.cli if meta.cli is not None else "(none — Python-only primitive)",
+        "cli": cli_str if cli_str is not None else "(none — Python-only primitive)",
         "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
     }
     if "exit_codes" in fm_existing:

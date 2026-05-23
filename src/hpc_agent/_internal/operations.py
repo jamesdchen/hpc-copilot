@@ -109,11 +109,13 @@ def _from_registry() -> list[dict[str, Any]]:
     * ``input_schema`` / ``output_schema`` resolve via :func:`schema_for`
       using a synthetic ``backed_by`` dict.
     """
+    from hpc_agent.cli._dispatch import cli_to_invocation_string
+
     out: list[dict[str, Any]] = []
     for meta in get_registry().values():
         backed = {
             "python": f"{meta.func.__module__}.{meta.func.__qualname__}",
-            "cli": meta.cli,
+            "cli": cli_to_invocation_string(meta.name, meta.cli),
         }
         out.append(
             {

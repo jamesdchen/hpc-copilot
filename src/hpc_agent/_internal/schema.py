@@ -113,9 +113,13 @@ def _output_schema_for(primitive_name: str) -> dict | None:
 
         meta = get_registry().get(primitive_name)
         if meta is not None and meta.cli:
-            cli_name = _cli_subcommand({"cli": meta.cli})
-            if cli_name:
-                candidates.append(f"{cli_name.replace('-', '_')}.output.json")
+            from hpc_agent.cli._dispatch import cli_to_invocation_string
+
+            cli_str = cli_to_invocation_string(meta.name, meta.cli)
+            if cli_str:
+                cli_name = _cli_subcommand({"cli": cli_str})
+                if cli_name:
+                    candidates.append(f"{cli_name.replace('-', '_')}.output.json")
     except Exception:  # noqa: BLE001 — fallback ladder; never crash validation
         pass
 

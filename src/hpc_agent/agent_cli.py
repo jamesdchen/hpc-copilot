@@ -30,7 +30,6 @@ from typing import Any
 
 from pydantic import ValidationError
 
-import hpc_agent
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
 
@@ -1529,20 +1528,43 @@ def cmd_describe(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="hpc-agent",
-        description=(
-            "Submit, track status of, and aggregate parameter-grid HPC experiments. "
-            "Stdout is a single-line JSON envelope; stderr is JSON-per-line "
-            "log records. See docs/reference/cli-spec.md for full schemas."
-        ),
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {hpc_agent.__version__}",
-    )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    """Public entry point — delegates to the registry-driven orchestrator.
+
+    The hand-written ``add_parser`` blocks below now live in
+    :func:`_register_legacy_subcommands` and run as a *fallback* after
+    the registry walk in :func:`hpc_agent.cli.parser.build_parser` has
+    registered every primitive that already carries a
+    :class:`hpc_agent.cli._dispatch.CliShape`. Per-domain migration PRs
+    delete blocks from the legacy body as they add ``CliShape``
+    declarations to the corresponding ``atoms/<x>.py`` decorator; Phase 3
+    cleanup drops the fallback entirely.
+    """
+    from hpc_agent.cli.parser import build_parser as _build_parser
+
+    return _build_parser()
+
+
+def _register_legacy_subcommands(
+    sub: argparse._SubParsersAction,
+    *,
+    nested_groups: dict[str, argparse._SubParsersAction] | None = None,
+) -> None:
+    """Register the hand-written subcommand parsers for unmigrated primitives.
+
+    Called by :func:`hpc_agent.cli.parser.build_parser` after the
+    registry walk. The fallback is the migration safety net: every
+    primitive still using ``cli=str`` (or ``cli=None``) keeps a parser
+    here until its per-domain migration PR moves it to a
+    :class:`CliShape` declaration on the @primitive decorator.
+
+    ``nested_groups`` maps verb-group name → the already-created child
+    subparser (e.g. ``"campaign"`` → the ``campaign`` parent's nested
+    ``_SubParsersAction``) so legacy blocks that still need to add
+    siblings under a registry-owned group can reuse the parent. Empty
+    in Phase 1; populated as per-domain agents partially migrate a
+    group.
+    """
+    _ = nested_groups  # reserved for partial-group migrations; unused today.
 
     # capabilities
     p_cap = sub.add_parser(
@@ -2645,13 +2667,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_describe.set_defaults(func=cmd_describe)
 
-    # Optional plugin distributions add their own subcommands here. With
-    # none installed this is a no-op and the parser is unchanged.
-    from hpc_agent._internal.plugins import register_plugin_cli
-
-    register_plugin_cli(sub)
-
-    return parser
+    # Plugin CLI registration moved to hpc_agent.cli.parser.build_parser;
+    # it runs after the registry walk and after this legacy fallback so
+    # plugin verbs can override / extend core verbs uniformly.
 
 
 # ─── Verb grouping (post-rename UX bump) ───────────────────────────────────
