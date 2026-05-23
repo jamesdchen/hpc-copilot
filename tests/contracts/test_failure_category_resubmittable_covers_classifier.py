@@ -36,8 +36,6 @@ from __future__ import annotations
 
 import typing
 
-import pytest
-
 from hpc_agent._internal.lifecycle import FailureCategory as FailureCategoryEnum
 from hpc_agent._schema_models._shared import (
     FailureCategoryResubmittable,
@@ -71,21 +69,6 @@ def _enum_values() -> set[str]:
     return {member.value for member in FailureCategoryEnum}
 
 
-# TODO: PR #A (claude/audit-fixes-A-bugs) widens FailureCategoryResubmittable
-# to cover the five classifier emissions (import_error, file_not_found,
-# permission_denied, disk_full, python_traceback). Drop these xfail
-# markers when PR A merges.
-_PR_A_PENDING = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "PR #A (claude/audit-fixes-A-bugs) widens "
-        "FailureCategoryResubmittable to cover all classifier emissions. "
-        "Drop this xfail when PR A merges."
-    ),
-)
-
-
-@_PR_A_PENDING
 def test_resubmittable_covers_catalog_emissions() -> None:
     """Every category :data:`CATALOG` emits must be resubmittable."""
     catalog = _catalog_categories()
@@ -100,7 +83,6 @@ def test_resubmittable_covers_catalog_emissions() -> None:
     )
 
 
-@_PR_A_PENDING
 def test_resubmittable_covers_fingerprint_emissions() -> None:
     """Every category the fingerprint classifier emits must be resubmittable."""
     fp = _fingerprint_categories()
