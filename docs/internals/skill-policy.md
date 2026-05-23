@@ -11,7 +11,7 @@ because it's masquerading as an LLM-tolerant skill. Both have happened.
 | Consumer | Mechanism | Drift tolerance |
 |---|---|---|
 | The user's interactive Claude Code chat | Real Skill tool, `~/.claude/skills/` discovery | High — the LLM interprets intent |
-| A code-rendered worker prompt for `claude -p --bare` | Text inlined into the cacheable prefix by `spawn_prompt._skill_body` | Low — the prompt is deterministic, the model boundary is the only stochasticity |
+| A code-rendered worker prompt for `claude -p --bare` | Text inlined into the cacheable prefix by `spawn_prompt._procedure_body` | Low — the prompt is deterministic, the model boundary is the only stochasticity |
 | A primitive caller (any harness via the JSON CLI) | None — primitives have no prompt | Zero — pure function call |
 
 ## The forcing rule

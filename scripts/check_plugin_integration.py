@@ -53,22 +53,27 @@ def main() -> int:
         return 1
     print("OK: advisory subcommands restored by the plugin.")
 
-    # The plugin's overriding hpc-submit SKILL.md must reach workers
-    # via the prompt-renderer's plugin lookup — that's what lets
-    # `/submit-hpc` actually run planner-aware steps under a delegated
-    # worker, not only in the interactive context.
-    from hpc_agent.atoms.spawn_prompt import _skill_body
+    # The plugin's overriding submit worker-prompt must reach delegated
+    # workers via the prompt-renderer's plugin lookup — that's what
+    # lets `/submit-hpc` actually run planner-aware steps under a
+    # spawned worker, not only in the interactive context. The plugin
+    # exposes ``worker_prompt_assets`` (a sibling of
+    # ``slash_command_assets``); the host's
+    # ``spawn_prompt._procedure_body`` checks plugin overlays first
+    # and falls back to the bundled ``hpc_agent/worker_prompts/<name>.md``.
+    from hpc_agent.atoms.spawn_prompt import _procedure_body
 
-    _skill_body.cache_clear()
-    body = _skill_body("hpc-submit")
+    _procedure_body.cache_clear()
+    body = _procedure_body("submit")
     if "score-submit-plan" not in body:
         print(
-            "FAIL: hpc-submit skill resolved for workers does not contain the "
-            "plugin's planner steps (`score-submit-plan`). The plugin's "
-            "slash_command_assets aren't being consulted by spawn_prompt._skill_body."
+            "FAIL: submit worker-prompt resolved for workers does not contain "
+            "the plugin's planner steps (`score-submit-plan`). The plugin's "
+            "worker_prompt_assets aren't being consulted by "
+            "spawn_prompt._procedure_body."
         )
         return 1
-    print("OK: plugin's overriding hpc-submit SKILL.md is visible to workers.")
+    print("OK: plugin's overriding submit worker-prompt is visible to workers.")
     return 0
 
 

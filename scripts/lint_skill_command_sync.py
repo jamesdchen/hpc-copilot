@@ -100,7 +100,7 @@ _EXECUTION_RE = re.compile(r"^execution:\s*(delegated|inline)\s*$", re.MULTILINE
 #     acceptable because the underlying primitive validates downstream.
 #   * ``worker-prompt``        — gets inlined as text into the
 #     code-rendered ``claude -p --bare`` worker prompt via
-#     ``spawn_prompt._skill_body``; the deterministic prefix means
+#     ``spawn_prompt._procedure_body``; the deterministic prefix means
 #     these are eligible for prose hardening (snapshot tests, token
 #     budgets, banned-construct lints) that real skills are not.
 #
