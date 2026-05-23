@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from hpc_agent import errors
 from hpc_agent._internal import primitive as _prim_mod
-from hpc_agent._internal.primitive import _reset_for_tests, primitive, register_primitives
+from hpc_agent._internal.primitive import primitive, register_primitives
 from hpc_agent.cli._dispatch import (
     CliArg,
     CliShape,
@@ -38,19 +38,24 @@ from hpc_agent.cli._dispatch import (
 
 @pytest.fixture(autouse=True)
 def _fresh_registry() -> Any:
-    """Reset the primitive registry around each test.
+    """Save-and-restore the primitive registry around each test.
 
-    Each test registers a small handful of synthetic primitives. After
-    teardown we re-populate the production registry so subsequent
-    unrelated tests still see the real primitives.
+    Each test registers a small handful of synthetic primitives via
+    ``@primitive(name="syn-...", cli=CliShape(...))``. We snapshot the
+    production registry (populated by the session-scoped autouse
+    fixture in ``tests/conftest.py``) and pop synthetic names on
+    teardown. We *don't* use ``_reset_for_tests`` here: that helper
+    wipes the registry and clears the registration latch, but
+    ``register_primitives`` reads ``sys.modules`` (cached imports) and
+    cannot re-run @primitive decorators, so the registry would stay
+    empty for every test in subsequent modules.
     """
-    _reset_for_tests()
-    # Latch the registration-done flag so get_meta() works without
-    # forcing the full register_primitives() walk in every test.
-    _prim_mod._REGISTRATION_DONE = True
-    yield
-    _reset_for_tests()
     register_primitives()
+    snapshot = set(_prim_mod._REGISTRY.keys())
+    yield
+    for name in list(_prim_mod._REGISTRY.keys()):
+        if name not in snapshot:
+            del _prim_mod._REGISTRY[name]
 
 
 def _capsys_envelope(captured) -> dict[str, Any]:
@@ -86,9 +91,7 @@ def test_args_based_dispatch_emits_ok_envelope(capsys: pytest.CaptureFixture[str
     assert env == {"ok": True, "idempotent": True, "data": {"sum": 5}}
 
 
-def test_experiment_dir_arg_injects_kwarg(
-    capsys: pytest.CaptureFixture[str], tmp_path
-) -> None:
+def test_experiment_dir_arg_injects_kwarg(capsys: pytest.CaptureFixture[str], tmp_path) -> None:
     @primitive(
         name="syn-cwd",
         verb="query",
@@ -111,9 +114,7 @@ class _Spec(BaseModel):
     count: int = Field(ge=1)
 
 
-def test_spec_arg_loads_and_model_validates(
-    capsys: pytest.CaptureFixture[str], tmp_path
-) -> None:
+def test_spec_arg_loads_and_model_validates(capsys: pytest.CaptureFixture[str], tmp_path) -> None:
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps({"name": "alpha", "count": 7}), encoding="utf-8")
 
@@ -155,9 +156,7 @@ def test_spec_arg_rejects_missing_spec_with_user_error(
     assert env["category"] == "user"
 
 
-def test_spec_arg_rejects_invalid_model(
-    capsys: pytest.CaptureFixture[str], tmp_path
-) -> None:
+def test_spec_arg_rejects_invalid_model(capsys: pytest.CaptureFixture[str], tmp_path) -> None:
     spec_file = tmp_path / "spec.json"
     spec_file.write_text(json.dumps({"name": "alpha", "count": 0}), encoding="utf-8")
 
@@ -447,10 +446,7 @@ def test_verb_group_nests_under_parent_in_parser() -> None:
 
 
 def test_invocation_string_preserves_legacy_string() -> None:
-    assert (
-        cli_to_invocation_string("foo", "hpc-agent foo --bar")
-        == "hpc-agent foo --bar"
-    )
+    assert cli_to_invocation_string("foo", "hpc-agent foo --bar") == "hpc-agent foo --bar"
 
 
 def test_invocation_string_synthesizes_from_cli_shape() -> None:
@@ -477,9 +473,7 @@ def test_invocation_string_synthesizes_from_cli_shape() -> None:
 
 def test_invocation_string_for_grouped_primitive() -> None:
     shape = CliShape(help="X", group="campaign")
-    assert cli_to_invocation_string("campaign-status", shape) == (
-        "hpc-agent campaign status"
-    )
+    assert cli_to_invocation_string("campaign-status", shape) == ("hpc-agent campaign status")
 
 
 def test_invocation_string_none_for_python_only() -> None:

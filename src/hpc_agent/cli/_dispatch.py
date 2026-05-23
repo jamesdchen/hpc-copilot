@@ -214,9 +214,7 @@ def cli_to_invocation_string(name: str, cli: Any) -> str | None:
     return " ".join(parts)
 
 
-def _build_kwargs(
-    name: str, shape: CliShape, ns: argparse.Namespace, func: Any
-) -> dict[str, Any]:
+def _build_kwargs(name: str, shape: CliShape, ns: argparse.Namespace, func: Any) -> dict[str, Any]:
     """Build the kwarg dict to pass to *func*.
 
     The build order is: standard injectors (``experiment_dir`` from
@@ -263,9 +261,7 @@ def _filter_to_signature(kwargs: dict[str, Any], func: Any) -> dict[str, Any]:
     return {k: v for k, v in kwargs.items() if k in accepted}
 
 
-def _load_and_model_validate_spec(
-    name: str, shape: CliShape, ns: argparse.Namespace
-) -> Any:
+def _load_and_model_validate_spec(name: str, shape: CliShape, ns: argparse.Namespace) -> Any:
     """Load ``--spec`` from disk, optionally schema-validate, optionally model_validate."""
     spec_path: Path | None = getattr(ns, "spec", None)
     schema_name = shape.schema_ref.input if shape.schema_ref else None
