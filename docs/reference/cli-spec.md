@@ -147,7 +147,6 @@ shape:
   "schemas_dir": "<absolute path to hpc_agent/schemas/>",
   "journal_dir": "<absolute path to $HPC_JOURNAL_DIR or default>",
   "ssh_multiplexing": true,
-  "skill_paths": {"hpc-submit": "<path>/skills/hpc-submit/SKILL.md", ...},
   "required_env": ["SSH_AUTH_SOCK", "HPC_JOURNAL_DIR", "HPC_CLUSTERS_CONFIG"],
   "cluster_yaml_keys": [{"key": "scheduler", "type": "Literal", "required": true, "description": "..."}, ...],
   "operations": [{"name": "<primitive>", "verb": "...", "idempotent": true, "side_effects": [...], "cli": "...", "input_schema": "<file>", "output_schema": "<file>", "agent_facing": true}, ...]
@@ -159,10 +158,12 @@ Full schema: `hpc_agent/schemas/capabilities.output.json`.
 - `subcommands` is the authoritative list of available CLI verbs
   (derived from the live argparse tree). New installs that ship
   additional subcommands surface them here automatically.
-- `skill_paths` maps each slash-command skill bundle's basename
-  to its `SKILL.md` path. Skills ship as package data, so the
-  values are the package's `slash_commands/skills/hpc-*/SKILL.md`
-  paths for both wheel and source-tree installs.
+- To fetch the body of a named primitive, skill, or worker-prompt
+  procedure, call `hpc-agent describe <name>` — it returns the body
+  inside a JSON envelope. An earlier `skill_paths` field that exposed
+  package-data filesystem paths was removed; `describe` is the
+  canonical content-fetch surface and avoids the
+  reach-into-package-data anti-pattern.
 - `cluster_yaml_keys` is the canonical declarative manifest of
   per-cluster YAML fields. Use it to introspect what's recognized
   without parsing source.

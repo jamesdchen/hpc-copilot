@@ -1,11 +1,16 @@
----
-name: hpc-campaign
-description: "Inspect and run closed-loop campaigns: tagged sequences of submit-flow → monitor-flow → aggregate-flow whose tasks.py reads prior history to decide what to run next."
-allowed-tools: Bash Read Write
-execution: delegated
-category: worker-prompt
----
+You are an isolated hpc-agent subagent executing the `campaign` workflow. Your context is fresh — depend only on on-disk state and the invocation context at the end of this prompt, never on any prior conversation.
 
+Execute the `campaign` procedure below exactly as written — it is the canonical procedure for this workflow. Before you begin, run `hpc-agent load-context --experiment-dir <experiment_dir>` (the value is in the invocation context below) and treat its data as the source of truth.
+
+The procedure below is the canonical sequence to follow. Read it with these standing adjustments:
+- Anything attributed to "the slash command" or "the caller" (parsing the user's request, rendering prompts, running a sub-interview) has already happened; its results are in the invocation context at the end of this prompt. Never wait for a slash command.
+- A reference to a *primitive* (`submit-flow`, `plan-throughput`, a `docs/...` link to one) is fetchable: `hpc-agent describe <name>` prints its contract and `hpc-agent <primitive> --help` its exact CLI. Fetch what the branch you are on needs and follow it inline.
+- A reference handing off to another *workflow* — submit, status, aggregate, campaign — is a boundary, not your job: that workflow is a separate run the caller starts next. Stop, and record it as the next step in `decisions` / `anomalies`. Never run another workflow inside this one.
+- A reference to a helper skill that needs interactive user confirmation (e.g. `hpc-classify-axis`, executor scaffolding) cannot be completed headless — record it in `decisions` / `anomalies` and stop at that boundary for the caller to handle.
+- If the procedure advises delegating verbose steps to a fresh-context subagent, ignore that advice — you are already the delegated worker. Run every step yourself in this context; do not spawn further subagents.
+- Where it says to surface or prompt something to the user, you have no interactive user — put it in the returned JSON instead.
+
+=== BEGIN campaign PROCEDURE ===
 Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteration based on prior results. The framework provides two things — a `campaign_id` tag on every submit (carried by [submit-flow](../../docs/primitives/submit-flow.md)) and the [campaign-status](../../docs/primitives/campaign-status.md) accessor (called from inside `tasks.py`). The "loop" is repeated `submit-flow → monitor-flow → aggregate-flow` triplets sharing the same `campaign_id` slug — workflow-atom composition with no agent in the per-iteration critical path. Strategies (Optuna, RandomSearch, walk-forward, PBT) live as Python libraries the user imports in their own `tasks.py`. The framework ships **zero** strategy code.
 
 ## Step 0: Load context (run this first, every time)
@@ -25,9 +30,9 @@ The campaign loop is driven by the `hpc-campaign-driver` console script (equival
 ## When to use
 
 - The user mentions hyperparameter tuning, walk-forward backtesting, active learning, population-based training, or any pattern where iteration N's submission depends on iteration N-1's results.
-- The user has run `submit-flow` (directly or via `hpc-submit`) before and wants to follow up adaptively.
+- The user has run `submit-flow` (directly or via the submit workflow) before and wants to follow up adaptively.
 
-For one-shot parallel work with no feedback loop, use `hpc-submit` directly.
+For one-shot parallel work with no feedback loop, use the submit workflow directly.
 
 ## Two paths: manual vs strategy-driven
 
@@ -42,7 +47,7 @@ The framework doesn't care which path the user picks — `tasks.py`'s `total()` 
 
 Strategies that re-sample the same param ranges across iterations (Optuna, random-search, PBT) MUST include a unique iteration-disambiguating field in `tasks.resolve()` so each iteration's `cmd_sha` differs even when the strategy happens to pick repeat params. Idiomatic: a `_optuna_trial_number` (or equivalent) integer in the kwargs dict. Without this, two iterations with identical params would compute the same `cmd_sha`, and the second one would dedupe at submit time — collapsing the campaign into a single iteration silently.
 
-This is **not** advisory. Before every Path B submit (Step 1 of "Driving the loop"), you MUST run the `validate-campaign` gate below; an `error`-severity finding from the `validate-stochastic-marker` validator means `overall: "fail"` and you may NOT proceed to `submit-flow`. Fix the `tasks.py` and re-run.
+This is **not** advisory. Before every Path B submit (Step 1 of "Driving the loop"), you MUST run the `validate-campaign` gate below; an `error`-severity finding from the `validate-stochastic-marker` validator means `overall: "fail"` and you may NOT proceed to `submit-flow`. The caller fixes the `tasks.py` and re-invokes.
 
 For Path A (manual params), this isn't needed: the param tuple itself differs per iteration.
 
@@ -57,7 +62,7 @@ hpc-agent validate-campaign --spec validate_campaign.input.json --experiment-dir
 Spec must include `{"campaign_id": "<slug>", "expected_cmd_sha": "<cmd_sha>", ...}`. Branch on `data.overall`:
 
 - `pass` / `warn` → proceed to `submit-flow`.
-- `fail` → STOP. The `validate-stochastic-marker` finding (`code: stochastic_marker_missing`) lists the prior iteration whose `cmd_sha` collides. Apply its `suggested_fix` — add `_optuna_trial_number` (or equivalent) to `tasks.resolve()`'s output — and re-run the gate. There is no `--force`; the dedup would be silent, so the gate is hard by design.
+- `fail` → STOP. Record the `validate-stochastic-marker` finding (`code: stochastic_marker_missing`) in `decisions` with the prior iteration whose `cmd_sha` collides and the `suggested_fix` (add `_optuna_trial_number` (or equivalent) to `tasks.resolve()`'s output). There is no `--force`; the dedup would be silent, so the gate is hard by design.
 
 ## Inspection
 
@@ -92,3 +97,14 @@ Resume after a network drop or laptop sleep is trivial: there is no driver state
 - **`MAX_RUNS` retention.** Long campaigns may bump up against the per-experiment cap (default 500). Set `HPC_MAX_RUNS=<n>` in the env if `campaign-status` starts missing iterations near the start of a long run.
 - **Cluster-side queue is out of scope.** Each iteration is a separate `qsub`/`sbatch`. Workloads with thousands of sub-minute tasks may hit scheduler submit-rate limits.
 - `campaign-list` and `campaign-status` exit codes: 0 ok, 3 internal.
+=== END campaign PROCEDURE ===
+
+When the workflow is complete, return ONLY a single JSON object as your final message: {"result": <the procedure's result envelope>, "decisions": [...], "anomalies": "<free text, or empty>"}. Each `decisions` entry is {"point": "<id>", "outcome": "<what you decided>", "why": "<the deciding input>"}; record one per decision point you reach. The `campaign` workflow's decision points:
+- `path` (selection)
+- `stochastic_marker` (gate)
+- `decide` (plan)
+- `convergence` (gate)
+- `budget` (gate)
+- `concurrency` (selection)
+
+Keep verbose intermediate output — discovery transcripts, scheduler dumps, rsync logs — out of that object; it stays in your context, not the caller's.

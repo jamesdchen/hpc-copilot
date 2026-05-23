@@ -37,15 +37,22 @@ from pydantic import BaseModel, ConfigDict, field_validator
 SPAWN_KEY = "hpc_spawn"
 
 # The workflows that may be delegated. Kept consistent with
-# WORKFLOW_SKILLS by test_spawn_prompt.test_workflow_name_matches_registry.
+# WORKFLOW_PROCEDURES by test_spawn_prompt.test_workflow_name_matches_registry.
 WorkflowName = Literal["submit", "status", "aggregate", "campaign"]
 
-# workflow id → the skill the spawned subagent invokes via the Skill tool.
-WORKFLOW_SKILLS: dict[str, str] = {
-    "submit": "hpc-submit",
-    "status": "hpc-status",
-    "aggregate": "hpc-aggregate",
-    "campaign": "hpc-campaign",
+# workflow id → the worker-prompt template inlined into the spawned
+# subagent's cacheable prefix. Resolved by
+# ``hpc_agent.atoms.spawn_prompt._procedure_body`` (host: package data
+# at ``hpc_agent/worker_prompts/<name>.md``; plugins overlay via the
+# ``worker_prompt_assets`` attribute on their entry point). These are
+# *not* Claude Code skills — a headless ``claude -p --bare`` worker has
+# no Skill tool, so the procedure travels inside the prompt itself. See
+# ``docs/internals/skill-policy.md`` for the forcing rule.
+WORKFLOW_PROCEDURES: dict[str, str] = {
+    "submit": "submit",
+    "status": "status",
+    "aggregate": "aggregate",
+    "campaign": "campaign",
 }
 
 

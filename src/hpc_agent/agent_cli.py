@@ -1691,13 +1691,19 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_describe(args: argparse.Namespace) -> int:
-    """Resolve a skill or primitive name to its content from package data.
+    """Resolve a name to its content from package data.
 
     A delegated worker calls this to fetch a cross-reference it reaches
-    on its branch — a skill it is pointed at, a primitive whose contract
-    it needs — instead of the prompt pre-stitching every possible
-    reference. Skills resolve to the SKILL.md body; primitives resolve
-    to their operations-catalog contract.
+    on its branch — a worker-prompt procedure, a skill it is pointed
+    at, a primitive whose contract it needs — instead of the prompt
+    pre-stitching every possible reference. Resolution order:
+
+    1. Worker-prompt procedure (``hpc_agent/worker_prompts/<name>.md``,
+       with plugin overlay) — returns ``kind: "procedure"``.
+    2. Inline skill (``slash_commands/skills/<name>/SKILL.md``) —
+       returns ``kind: "skill"``.
+    3. Primitive in the operations catalog — returns ``kind:
+       "primitive"`` with its contract.
     """
     name = args.name
     if not (
@@ -1707,7 +1713,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
             error_code="spec_invalid",
             message=(
                 f"name {name!r} must be lowercase letters, digits, and "
-                "hyphens — a skill or primitive name"
+                "hyphens — a procedure, skill, or primitive name"
             ),
             category="user",
             retry_safe=False,
@@ -1715,11 +1721,22 @@ def cmd_describe(args: argparse.Namespace) -> int:
 
     from importlib.resources import files
 
+    from hpc_agent._schema_models.spawn_contract import WORKFLOW_PROCEDURES
+
+    if name in WORKFLOW_PROCEDURES:
+        from hpc_agent.atoms.spawn_prompt import _procedure_body
+
+        _ok({"kind": "procedure", "name": name, "content": _procedure_body(name)})
+        return EXIT_OK
+
     skill_md = files("slash_commands") / "skills" / name / "SKILL.md"
     if skill_md.is_file():
-        from hpc_agent.atoms.spawn_prompt import _skill_body
-
-        _ok({"kind": "skill", "name": name, "content": _skill_body(name)})
+        body = skill_md.read_text(encoding="utf-8")
+        if body.startswith("---"):
+            close = body.find("\n---", 3)
+            if close != -1:
+                body = body[close + 4 :]
+        _ok({"kind": "skill", "name": name, "content": body.strip()})
         return EXIT_OK
 
     from hpc_agent._internal.operations import operations_catalog

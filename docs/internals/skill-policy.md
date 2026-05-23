@@ -69,16 +69,19 @@ Three structural empties confirm the rule:
   execution. The user's chat agent invokes them via the Skill tool.
   Tolerant prose is fine; the underlying primitive (`build-executor`,
   `classify-axis`) catches LLM mistakes.
-* `hpc-submit`, `hpc-status`, `hpc-aggregate`, `hpc-campaign` — right
-  column, delegated execution. The text is **inlined** into the
-  `claude -p --bare` worker prompt by `spawn_prompt._skill_body`; the
-  worker never invokes the Skill tool. These are misnamed today —
-  they're really *worker prompts* — and they are eligible for prose
-  hardening that real skills are not: snapshot tests on the rendered
-  `cacheable_prefix`, token-budget lints, cross-reference lints
-  against `SpawnRequest` field names, banned-construct lints. A
-  future move to `src/hpc_agent/worker_prompts/` will make this
-  explicit.
+* `submit`, `status`, `aggregate`, `campaign` — right column,
+  delegated execution. The text is **inlined** into the `claude -p
+  --bare` worker prompt by `spawn_prompt._procedure_body`; the worker
+  never invokes the Skill tool. These live at
+  `src/hpc_agent/worker_prompts/<workflow>.md` — the directory name
+  reflects what they actually are. Hardening that doesn't fit real
+  skills lives here: snapshot tests on the rendered `cacheable_prefix`
+  bytes (`tests/worker_prompts/test_prefix_snapshot.py`),
+  banned-hedging-phrase lints (`test_prose_lints.py`), and
+  `hpc-agent <primitive>` reference cross-checks against the
+  operations catalog (`test_primitive_references.py`). Plugins overlay
+  a procedure by exposing a `worker_prompt_assets` attribute on their
+  entry point.
 * **Preflight migrated to setup** — the former `hpc-preflight` skill
   was environment-authority work. Under the rule, environment
   authority belongs in setup (one-time, imperative), not in a runtime

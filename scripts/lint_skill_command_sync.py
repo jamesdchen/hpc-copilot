@@ -47,13 +47,21 @@ COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
 
 # Each tuple: (skill_id, slash_command_stem). Both files must exist.
 WORKFLOW_PAIRS: list[tuple[str, str]] = [
-    ("hpc-submit", "submit-hpc"),
-    ("hpc-status", "monitor-hpc"),
-    ("hpc-aggregate", "aggregate-hpc"),
-    ("hpc-campaign", "campaign-hpc"),
     ("hpc-build-executor", "hpc-axes-init"),
     ("hpc-classify-axis", "classify-axis-hpc"),
 ]
+
+# Slash commands that route through `hpc-agent run <workflow>` to the
+# spawn pipeline rather than to a paired Skill. Their workflow lives in
+# ``src/hpc_agent/worker_prompts/<workflow>.md`` (see
+# ``docs/internals/skill-policy.md``), not in any ``SKILL.md``. The
+# routing lint below skips the skill-pair check for these.
+WORKFLOW_TRIGGER_SLASHES: set[str] = {
+    "submit-hpc",
+    "monitor-hpc",
+    "aggregate-hpc",
+    "campaign-hpc",
+}
 
 # Slash-command files allowed to have no skill counterpart (e.g.
 # scaffolding commands that don't expose a long-form skill surface).
@@ -229,19 +237,49 @@ def main() -> int:
             "two surfaces stay in sync."
         )
 
-    # Slash commands without a declared skill (and not allow-listed).
-    undeclared_slashes = slash_ids_present - declared_slashes - SLASH_ONLY_OK
+    # Workflow-trigger slash commands route to the spawn pipeline via
+    # ``hpc-agent run <workflow>`` instead of pairing with a Skill —
+    # their workflow lives in ``src/hpc_agent/worker_prompts/<name>.md``
+    # (see ``docs/internals/skill-policy.md``). Verify each exists, and
+    # carries the trigger directive.
+    for slash_stem in sorted(WORKFLOW_TRIGGER_SLASHES):
+        slash_path = COMMANDS_DIR / f"{slash_stem}.md"
+        if not slash_path.is_file():
+            errors.append(
+                f"declared workflow-trigger slash {slash_stem!r} but "
+                f"{slash_path.relative_to(REPO_ROOT)} is missing"
+            )
+            continue
+        body = slash_path.read_text(encoding="utf-8")
+        if re.search(r"hpc-agent run\b", body) is None and "hpc-campaign-driver" not in body:
+            errors.append(
+                f"{slash_path.relative_to(REPO_ROOT)} is a workflow-trigger "
+                "slash (WORKFLOW_TRIGGER_SLASHES) but does not shell "
+                "`hpc-agent run <workflow>` or `hpc-campaign-driver`. A "
+                "trigger slash must route to the code-orchestrated spawn "
+                "pipeline; see docs/internals/skill-policy.md."
+            )
+
+    # Slash commands without a declared skill, not allow-listed, and not
+    # a workflow trigger.
+    accounted = declared_slashes | SLASH_ONLY_OK | WORKFLOW_TRIGGER_SLASHES
+    undeclared_slashes = slash_ids_present - accounted
     if undeclared_slashes:
         errors.append(
-            "slash command(s) on disk with no entry in WORKFLOW_PAIRS "
-            f"and not in SLASH_ONLY_OK: {sorted(undeclared_slashes)}"
+            "slash command(s) on disk with no entry in WORKFLOW_PAIRS, "
+            "SLASH_ONLY_OK, or WORKFLOW_TRIGGER_SLASHES: "
+            f"{sorted(undeclared_slashes)}"
         )
 
     if errors:
         for err in errors:
             print(f"ERROR: {err}", file=sys.stderr)
         return 1
-    print(f"skills <-> slash_commands in sync ({len(WORKFLOW_PAIRS)} workflow pairs)")
+    print(
+        f"skills <-> slash_commands in sync "
+        f"({len(WORKFLOW_PAIRS)} skill pairs + "
+        f"{len(WORKFLOW_TRIGGER_SLASHES)} workflow triggers)"
+    )
     return 0
 
 

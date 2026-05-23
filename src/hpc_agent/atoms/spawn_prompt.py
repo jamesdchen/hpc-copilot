@@ -24,7 +24,6 @@ from __future__ import annotations
 import contextlib
 import functools
 import json
-from importlib.resources import files
 from typing import Any
 
 from pydantic import ValidationError
@@ -33,7 +32,7 @@ from hpc_agent._internal.invoke import RenderedPrompt
 from hpc_agent._schema_models.spawn_contract import (
     DECISION_POINTS,
     SPAWN_KEY,
-    WORKFLOW_SKILLS,
+    WORKFLOW_PROCEDURES,
     DecisionPoint,
     SpawnRequest,
     WorkerDecision,
@@ -44,7 +43,7 @@ from hpc_agent._schema_models.spawn_contract import (
 __all__ = [
     "DECISION_POINTS",
     "SPAWN_KEY",
-    "WORKFLOW_SKILLS",
+    "WORKFLOW_PROCEDURES",
     "DecisionPoint",
     "RenderedPrompt",
     "SpawnContractError",
@@ -84,42 +83,35 @@ def _render_decision_points(workflow: str) -> str:
 
 
 @functools.cache
-def _skill_body(skill: str) -> str:
-    """The markdown body of a bundled ``SKILL.md``, frontmatter stripped.
+def _procedure_body(workflow: str) -> str:
+    """Return the worker-prompt body for *workflow* as inert text.
 
-    Resolution order: every plugin's ``slash_command_assets`` tree
-    (first plugin to provide ``skills/<skill>/SKILL.md`` wins) is
-    checked before the host's ``slash_commands`` package data. This is
-    what lets a plugin like ``hpc-agent-pro`` ship an overriding skill
-    that the worker actually sees — plugin entry points contribute
-    primitives by design, and now their skill text reaches workers the
-    same way. With no plugin providing the skill the host's bundled
-    copy is used unchanged.
+    Resolution order: every plugin's ``worker_prompt_assets`` tree
+    (first plugin to provide ``<workflow>.md`` wins) is checked before
+    the host's ``hpc_agent.worker_prompts`` package data. This is what
+    lets a plugin like ``hpc-agent-pro`` ship an overriding procedure
+    that the worker actually sees.
 
-    Cached: skill text is process-stable (plugin set cannot change
+    Cached: procedure text is process-stable (plugin set cannot change
     in-process). Tests that swap plugins call ``cache_clear()``.
 
     The worker prompt *inlines* this rather than telling the worker to
     invoke the Skill tool: a headless ``claude -p`` worker has no skill
     discovery (``--bare`` skips it, and headless mode does not support
     user-invoked skills), so the procedure must travel inside the
-    prompt itself.
+    prompt itself. The directory name ``worker_prompts/`` reflects
+    that — these are not skills. See
+    ``docs/internals/skill-policy.md``.
     """
-    from hpc_agent._internal.plugins import plugin_slash_command_roots
+    from hpc_agent._internal.plugins import plugin_worker_prompt_roots
+    from hpc_agent.worker_prompts import read_procedure
 
-    raw: str | None = None
-    for root in plugin_slash_command_roots():
-        candidate = root / "skills" / skill / "SKILL.md"
+    for root in plugin_worker_prompt_roots():
+        candidate = root / f"{workflow}.md"
         if candidate.is_file():
-            raw = candidate.read_text(encoding="utf-8")
-            break
-    if raw is None:
-        raw = (files("slash_commands") / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
-    if raw.startswith("---"):
-        close = raw.find("\n---", 3)
-        if close != -1:
-            raw = raw[close + 4 :]
-    return raw.strip()
+            text: str = candidate.read_text(encoding="utf-8")
+            return text.strip()
+    return read_procedure(workflow).strip()
 
 
 # Splits the cacheable per-workflow prefix from the per-invocation
@@ -138,54 +130,54 @@ def render_spawn_parts(
     """Render the worker prompt split into cacheable + variable parts.
 
     Deterministic given the installed package. The ``cacheable_prefix``
-    (scaffold + inlined skill + return contract) is byte-identical for
-    every run of *workflow*; the ``variable_suffix`` carries this
+    (scaffold + inlined procedure + return contract) is byte-identical
+    for every run of *workflow*; the ``variable_suffix`` carries this
     invocation's experiment_dir and fields. The split is what lets an
     invoker prompt-cache the large prefix — see :class:`RenderedPrompt`.
     """
-    skill = WORKFLOW_SKILLS[workflow]
+    procedure = WORKFLOW_PROCEDURES[workflow]
     cacheable_prefix = (
         f"You are an isolated hpc-agent subagent executing the `{workflow}` "
         "workflow. Your context is fresh — depend only on on-disk state and "
         "the invocation context at the end of this prompt, never on any "
         "prior conversation.\n\n"
-        f"Execute the `{skill}` skill below exactly as written — it is the "
-        "canonical procedure for this workflow. Before you begin, run "
-        "`hpc-agent load-context --experiment-dir <experiment_dir>` (the "
-        "value is in the invocation context below) and treat its data as "
-        "the source of truth.\n\n"
-        "The skill below is the canonical procedure, but it is written for "
-        "an interactive, slash-command-fronted session — which you are "
-        "not. Read it with these standing adjustments:\n"
-        '- Anything it attributes to "the slash command" (parsing the '
-        "user's request, rendering prompts, running a sub-interview) has "
-        "already happened; its results are in the invocation context at "
-        "the end of this prompt. Never wait for a slash command.\n"
+        f"Execute the `{procedure}` procedure below exactly as written — it "
+        "is the canonical procedure for this workflow. Before you begin, "
+        "run `hpc-agent load-context --experiment-dir <experiment_dir>` "
+        "(the value is in the invocation context below) and treat its data "
+        "as the source of truth.\n\n"
+        "The procedure below is the canonical sequence to follow. Read it "
+        "with these standing adjustments:\n"
+        '- Anything attributed to "the slash command" or "the caller" '
+        "(parsing the user's request, rendering prompts, running a "
+        "sub-interview) has already happened; its results are in the "
+        "invocation context at the end of this prompt. Never wait for a "
+        "slash command.\n"
         "- A reference to a *primitive* (`submit-flow`, `plan-throughput`, "
         "a `docs/...` link to one) is fetchable: `hpc-agent describe "
         "<name>` prints its contract and `hpc-agent <primitive> --help` "
         "its exact CLI. Fetch what the branch you are on needs and follow "
         "it inline.\n"
-        "- A reference handing off to another *workflow* — `hpc-submit`, "
-        "`hpc-status`, `hpc-aggregate`, `hpc-campaign` — is a boundary, "
-        "not your job: that workflow is a separate run the caller starts "
-        "next. Stop, and record it as the next step in `decisions` / "
-        "`anomalies`. Never run another workflow inside this one.\n"
+        "- A reference handing off to another *workflow* — submit, status, "
+        "aggregate, campaign — is a boundary, not your job: that workflow "
+        "is a separate run the caller starts next. Stop, and record it as "
+        "the next step in `decisions` / `anomalies`. Never run another "
+        "workflow inside this one.\n"
         "- A reference to a helper skill that needs interactive user "
         "confirmation (e.g. `hpc-classify-axis`, executor scaffolding) "
         "cannot be completed headless — record it in `decisions` / "
         "`anomalies` and stop at that boundary for the caller to handle.\n"
-        "- If the skill advises delegating verbose steps to a "
+        "- If the procedure advises delegating verbose steps to a "
         "fresh-context subagent, ignore that advice — you are already the "
         "delegated worker. Run every step yourself in this context; do "
         "not spawn further subagents.\n"
         "- Where it says to surface or prompt something to the user, you "
         "have no interactive user — put it in the returned JSON instead.\n\n"
-        f"=== BEGIN {skill} SKILL ===\n"
-        f"{_skill_body(skill)}\n"
-        f"=== END {skill} SKILL ===\n\n"
+        f"=== BEGIN {procedure} PROCEDURE ===\n"
+        f"{_procedure_body(procedure)}\n"
+        f"=== END {procedure} PROCEDURE ===\n\n"
         "When the workflow is complete, return ONLY a single JSON object as "
-        'your final message: {"result": <the skill\'s result envelope>, '
+        'your final message: {"result": <the procedure\'s result envelope>, '
         '"decisions": [...], "anomalies": "<free text, or empty>"}. Each '
         '`decisions` entry is {"point": "<id>", "outcome": "<what you '
         'decided>", "why": "<the deciding input>"}; record one per decision '
