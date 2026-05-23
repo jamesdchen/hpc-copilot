@@ -114,6 +114,11 @@ DEFAULT_AUTO_RETRY_POLICY: dict[str, dict[str, Any]] = {
     "system_oom": {"max_attempts": 1, "mem_multiplier": 1.5},
     "walltime": {"max_attempts": 1, "walltime_multiplier": 2.0},
     "node_failure": {"max_attempts": 2},
+    # SSH transport blips (auth flakes, network resets) are usually
+    # transient — the cluster itself is fine, the control-plane channel
+    # isn't. Match node_failure's max_attempts: a couple of retries
+    # absorb the blip without compounding a real outage.
+    "ssh_unreachable": {"max_attempts": 2},
 }
 
 

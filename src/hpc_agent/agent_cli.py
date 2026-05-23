@@ -925,6 +925,7 @@ def cmd_campaign_init(args: argparse.Namespace) -> int:
             direction=args.direction,
             plateau_window=args.plateau_window,
             plateau_tolerance=args.plateau_tolerance,
+            plateau_mode=args.plateau_mode,
             max_jobs=args.max_jobs,
             max_tasks=args.max_tasks,
             max_walltime_sec=args.max_walltime_sec,
@@ -965,6 +966,7 @@ def cmd_campaign_converged(args: argparse.Namespace) -> int:
             direction=args.direction,
             plateau_window=args.plateau_window,
             plateau_tolerance=args.plateau_tolerance,
+            plateau_mode=args.plateau_mode,
         ),
         name="campaign-converged",
     )
@@ -1002,6 +1004,7 @@ def cmd_campaign_advance(args: argparse.Namespace) -> int:
             direction=args.direction,
             plateau_window=args.plateau_window,
             plateau_tolerance=args.plateau_tolerance,
+            plateau_mode=args.plateau_mode,
             max_jobs=args.max_jobs,
             max_tasks=args.max_tasks,
             max_walltime_sec=args.max_walltime_sec,
@@ -2506,6 +2509,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_camp_in.add_argument("--direction", choices=["minimize", "maximize"], default=None)
     p_camp_in.add_argument("--plateau-window", type=int, default=None)
     p_camp_in.add_argument("--plateau-tolerance", type=float, default=None)
+    p_camp_in.add_argument(
+        "--plateau-mode",
+        choices=["prior_window", "all_time_best"],
+        default=None,
+        help=(
+            "Plateau baseline (default ``all_time_best``). Controls whether the "
+            "recent window is compared to the all-time prior best or to the "
+            "prior window of equal size — see ``campaign-converged --help``."
+        ),
+    )
     p_camp_in.add_argument("--max-jobs", type=int, default=None)
     p_camp_in.add_argument("--max-tasks", type=int, default=None)
     p_camp_in.add_argument("--max-walltime-sec", type=int, default=None)
@@ -2539,6 +2552,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_camp_cv.add_argument("--direction", choices=["minimize", "maximize"], default=None)
     p_camp_cv.add_argument("--plateau-window", type=int, default=None)
     p_camp_cv.add_argument("--plateau-tolerance", type=float, default=None)
+    p_camp_cv.add_argument(
+        "--plateau-mode",
+        choices=["prior_window", "all_time_best"],
+        default=None,
+        help=(
+            "Plateau baseline. ``all_time_best`` (default): fires when the "
+            "recent ``--plateau-window`` iters didn't beat the all-time prior "
+            "best — 'no new record in N iters'. ``prior_window``: fires when "
+            "they didn't beat the prior window of equal size — 'improvements "
+            "have stalled'. The prior_window mode requires 2*window history."
+        ),
+    )
     p_camp_cv.set_defaults(func=cmd_campaign_converged)
 
     p_camp_bg = p_camp_sub.add_parser(
@@ -2567,6 +2592,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_camp_ad.add_argument("--direction", choices=["minimize", "maximize"], default=None)
     p_camp_ad.add_argument("--plateau-window", type=int, default=None)
     p_camp_ad.add_argument("--plateau-tolerance", type=float, default=None)
+    p_camp_ad.add_argument(
+        "--plateau-mode",
+        choices=["prior_window", "all_time_best"],
+        default=None,
+        help="See ``campaign-converged --help``.",
+    )
     p_camp_ad.add_argument("--max-jobs", type=int, default=None)
     p_camp_ad.add_argument("--max-tasks", type=int, default=None)
     p_camp_ad.add_argument("--max-walltime-sec", type=int, default=None)

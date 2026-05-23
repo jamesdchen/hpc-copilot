@@ -306,5 +306,3 @@ class InterviewResult(BaseModel):
     preview: _InterviewPreview = Field(
         description="Three sample resolve() calls. Each is a dict per hpc-agent's pre-existing tasks.py contract.",
     )
-
-

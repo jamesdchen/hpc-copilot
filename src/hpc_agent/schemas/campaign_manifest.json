@@ -208,6 +208,23 @@
           ],
           "default": null,
           "title": "Plateau Tolerance"
+        },
+        "plateau_mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "prior_window",
+                "all_time_best"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Plateau baseline. ``all_time_best`` (default): fires when the recent window failed to beat the all-time prior best — 'no new record in N iters'. ``prior_window``: fires when the recent window failed to beat the prior window of equal size — 'improvements have stalled'. See campaign_converged for the data-requirement and use-case trade-offs.",
+          "title": "Plateau Mode"
         }
       },
       "title": "_StopCriteria",

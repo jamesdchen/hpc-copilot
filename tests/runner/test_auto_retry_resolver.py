@@ -37,12 +37,18 @@ def _common_required_kwargs(run_id: str = "20260101-000000-resolve") -> dict:
 
 def test_default_policy_covers_documented_categories() -> None:
     """Defaults must cover every category that classify_failure can emit
-    so the resolver always returns useful advice without user config."""
+    so the resolver always returns useful advice without user config.
+
+    ``ssh_unreachable`` is bucketed by ``cluster_failures_by_fingerprint``
+    (not the per-stderr classifier) for entries where the SSH transport
+    failed; it's listed here because the policy applies to either path.
+    """
     assert set(DEFAULT_AUTO_RETRY_POLICY) == {
         "gpu_oom",
         "system_oom",
         "walltime",
         "node_failure",
+        "ssh_unreachable",
     }
 
 
