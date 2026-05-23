@@ -6,7 +6,7 @@ its own submodule and registers as a ``@primitive`` with
 
 * :mod:`hpc_agent.flows.submit_flow`
 * :mod:`hpc_agent.flows.monitor_flow`
-* :mod:`hpc_agent.flows.aggregate_flow`
+* :mod:`hpc_agent.ops.aggregate.flow` (moved out of flows in PR 2.2)
 * :mod:`hpc_agent.flows.resubmit_flow`
 * :mod:`hpc_agent.flows.validate_campaign`
 

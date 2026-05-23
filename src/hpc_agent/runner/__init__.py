@@ -26,13 +26,13 @@ existing call sites keep working.
 
 from __future__ import annotations
 
-from hpc_agent.runner.aggregate import (
+from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.aggregate.runner import (
     build_provenance,
     verify_combiner_artifact,
     verify_per_task_outputs,
     write_remote_provenance,
 )
-from hpc_agent.runner.combine import combine_wave
 from hpc_agent.runner.failures import (
     DEFAULT_AUTO_RETRY_POLICY,
     annotate_clusters_with_retry_advice,

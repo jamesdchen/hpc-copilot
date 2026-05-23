@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.atoms.cluster_reduce``.
+"""Tests for ``hpc_agent.ops.aggregate.cluster_reduce``.
 
 The atom SSHes into the cluster, runs the user's reducer, and pulls
 just its single output. We mock ``ssh_run`` and ``rsync_pull`` to
@@ -85,7 +85,7 @@ def _stage_pulled_output(local_dir: Path, basename: str, payload: dict) -> None:
 def test_happy_path_runs_reducer_and_returns_parsed_json(
     tmp_path: Path, journal_home: Path
 ) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -113,7 +113,7 @@ def test_happy_path_runs_reducer_and_returns_parsed_json(
 def test_aggregate_cmd_falls_back_to_sidecar(tmp_path: Path, journal_home: Path) -> None:
     """When aggregate_cmd is None, the primitive reads aggregate_defaults
     from the sidecar."""
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     _seed_sidecar(tmp_path, aggregate_cmd="python -m sidecar.reducer")
@@ -139,7 +139,7 @@ def test_aggregate_cmd_falls_back_to_sidecar(tmp_path: Path, journal_home: Path)
 
 
 def test_no_aggregate_cmd_anywhere_raises(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     with pytest.raises(errors.SpecInvalid, match="no aggregate_cmd"):
@@ -149,7 +149,7 @@ def test_no_aggregate_cmd_anywhere_raises(tmp_path: Path, journal_home: Path) ->
 def test_reducer_nonzero_exit_raises_remote_command_failed(
     tmp_path: Path, journal_home: Path
 ) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     with (
@@ -163,7 +163,7 @@ def test_reducer_nonzero_exit_raises_remote_command_failed(
 
 
 def test_rsync_pull_failure_raises(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     with (
@@ -180,7 +180,7 @@ def test_rsync_pull_failure_raises(tmp_path: Path, journal_home: Path) -> None:
 
 
 def test_invalid_json_output_raises(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -199,7 +199,7 @@ def test_invalid_json_output_raises(tmp_path: Path, journal_home: Path) -> None:
 
 
 def test_extra_env_threaded_into_remote_cmd(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -230,7 +230,7 @@ def test_extra_env_threaded_into_remote_cmd(tmp_path: Path, journal_home: Path) 
 
 
 def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     _seed(tmp_path)
     local_dir = tmp_path / "_aggregated" / "r1"
@@ -253,14 +253,14 @@ def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_
 
 
 def test_no_journal_record_raises(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     with pytest.raises(errors.SpecInvalid, match="no journal record"):
         cluster_reduce(tmp_path, run_id="missing", aggregate_cmd="x")
 
 
 def test_empty_run_id_raises(tmp_path: Path) -> None:
-    from hpc_agent.atoms.cluster_reduce import cluster_reduce
+    from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
     with pytest.raises(errors.SpecInvalid, match="run_id"):
         cluster_reduce(tmp_path, run_id="", aggregate_cmd="x")

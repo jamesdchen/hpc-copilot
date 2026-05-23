@@ -22,8 +22,8 @@ import pytest
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent._schema_models.workflows.aggregate_flow import AggregateFlowSpec
-from hpc_agent.flows import aggregate_flow as af_module
-from hpc_agent.flows.aggregate_flow import aggregate_flow
+from hpc_agent.ops.aggregate import flow as af_module
+from hpc_agent.ops.aggregate.flow import aggregate_flow
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:

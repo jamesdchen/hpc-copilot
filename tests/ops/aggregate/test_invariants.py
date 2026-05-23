@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.atoms.aggregation_invariants``."""
+"""Tests for ``hpc_agent.ops.aggregate.invariants``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
-from hpc_agent.atoms.aggregation_invariants import (
+from hpc_agent.ops.aggregate.invariants import (
     check_result_columns,
     verify_aggregation_complete,
 )
