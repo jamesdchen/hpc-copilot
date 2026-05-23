@@ -69,9 +69,7 @@ def _add_standard_args(parser: argparse.ArgumentParser, shape: CliShape) -> None
         arg.add_to(parser)
 
 
-def _bind_dispatch(
-    parser: argparse.ArgumentParser, name: str
-) -> None:
+def _bind_dispatch(parser: argparse.ArgumentParser, name: str) -> None:
     """Wire ``parser.set_defaults(func=...)`` to the generic dispatcher."""
 
     def _func(ns: argparse.Namespace, _name: str = name) -> int:
@@ -121,9 +119,7 @@ def _register_from_registry(
             if group_sub is None:
                 parent = sub.add_parser(
                     shape.group,
-                    help=_GROUP_HELP.get(
-                        shape.group, f"{shape.group} verb-group commands."
-                    ),
+                    help=_GROUP_HELP.get(shape.group, f"{shape.group} verb-group commands."),
                 )
                 group_sub = parent.add_subparsers(dest="action", required=True)
             nested_groups[shape.group] = group_sub
