@@ -18,6 +18,7 @@ from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent._schema_models.actions.resubmit import ResubmitSpec
 from hpc_agent._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
+from hpc_agent.runner.reconcile import _ssh_alive_job_ids
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -373,7 +374,7 @@ def test_sge_alive_check_returns_empty_when_qstat_silent():
         "hpc_agent.infra.remote.ssh_run",
         return_value=_completed(stdout=""),
     ) as m:
-        alive = runner._ssh_alive_job_ids(
+        alive = _ssh_alive_job_ids(
             ssh_target="user@host",
             job_ids=["123", "456"],
             scheduler="sge",
@@ -405,7 +406,7 @@ def test_sge_alive_check_filters_qstat_output_to_requested_ids():
         "hpc_agent.infra.remote.ssh_run",
         return_value=_completed(stdout=qstat_out),
     ):
-        alive = runner._ssh_alive_job_ids(
+        alive = _ssh_alive_job_ids(
             ssh_target="user@host",
             job_ids=["123", "456"],
             scheduler="sge",
@@ -427,7 +428,7 @@ def test_slurm_alive_check_skips_sacct_so_completed_jobs_drop_off():
         "hpc_agent.infra.remote.ssh_run",
         return_value=_completed(stdout=""),  # squeue: no active jobs
     ) as m:
-        alive = runner._ssh_alive_job_ids(
+        alive = _ssh_alive_job_ids(
             ssh_target="user@host",
             job_ids=["123"],
             scheduler="slurm",
@@ -446,7 +447,7 @@ def test_slurm_alive_check_accepts_squeue_output():
         "hpc_agent.infra.remote.ssh_run",
         return_value=_completed(stdout="123_4\n123_5\n"),
     ):
-        alive = runner._ssh_alive_job_ids(
+        alive = _ssh_alive_job_ids(
             ssh_target="user@host",
             job_ids=["123"],
             scheduler="slurm",

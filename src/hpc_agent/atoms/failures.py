@@ -18,6 +18,7 @@ from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.runner.status import _ssh_status_report
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -92,7 +93,7 @@ def fetch_failures(
         raise errors.JournalCorrupt(f"no journal record for run_id {run_id!r}")
 
     # Fresh poll: enumerate failed tasks.
-    report = runner._ssh_status_report(
+    report = _ssh_status_report(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
         run_id=run_id,

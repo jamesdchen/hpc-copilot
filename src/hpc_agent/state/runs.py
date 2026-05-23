@@ -220,7 +220,7 @@ def _maybe_derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str
     import yaml
 
     try:
-        from hpc_agent.planning.axes import (
+        from hpc_agent.state.axes import (
             compute_wave_map,
             pick_array_axis,
             read_axes,

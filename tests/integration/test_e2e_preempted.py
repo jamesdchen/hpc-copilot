@@ -4,7 +4,7 @@ Wires together the cluster-side dispatcher's SIGTERM trap with the
 agent-surface's failure-clustering and envelope-key path:
 
   dispatch.py exit 130 + SIGTERM stderr line
-   → runner._categorize finds the 'preempted' pattern
+   → runner.failures._categorize finds the 'preempted' pattern
    → runner.cluster_failures_by_fingerprint groups all bumped tasks
    → atoms.failures.fetch_failures surfaces preempted_count /
      preempted_task_ids on the envelope
@@ -24,6 +24,7 @@ import pytest
 from hpc_agent import runner
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
+from hpc_agent.runner.failures import _categorize
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,7 +47,7 @@ class TestCategorizeRecognisesPreemption:
             "running executor\n"
             "[hpc-agent] SIGTERM received; cluster preemption imminent\n"
         )
-        assert runner._categorize(stderr) == "preempted"
+        assert _categorize(stderr) == "preempted"
 
     def test_exit_code_130_is_a_fallback_when_stderr_clipped(self) -> None:
         """If the stderr tail was clipped before the SIGTERM line lands,
@@ -135,8 +136,11 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         session.upsert_run(experiment, record)
 
         # Mock the SSH primitives: three failed tasks, all preempted.
+        # ``_ssh_status_report`` is imported directly into atoms.failures
+        # (canonical path: hpc_agent.runner.status._ssh_status_report);
+        # patch the binding on the consuming module, not the runner facade.
         monkeypatch.setattr(
-            failures_atom.runner,
+            failures_atom,
             "_ssh_status_report",
             lambda **_: {
                 "tasks": {

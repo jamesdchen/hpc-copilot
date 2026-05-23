@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.planning.stages`` loader and JSON Schema validation."""
+"""Tests for ``hpc_agent.state.stages`` loader and JSON Schema validation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import jsonschema
 import pytest
 
-from hpc_agent.planning.stages import (
+from hpc_agent.state.stages import (
     STAGES_FILENAME,
     load_stages,
     load_stages_module,

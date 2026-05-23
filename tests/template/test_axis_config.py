@@ -6,7 +6,7 @@ import jsonschema
 import pytest
 
 from hpc_agent._schema_models.fixtures.axes import _DataAxisConfig
-from hpc_agent.planning.axes import validate_axes
+from hpc_agent.state.axes import validate_axes
 from hpc_agent.template.axis import (
     MOMENTS,
     SUM,

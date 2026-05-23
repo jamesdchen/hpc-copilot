@@ -71,7 +71,7 @@ def classify_axis(
     a ``bounded_halo`` halo expression) *before* anything is written.
 
     The entry is merged into ``executors.<run_name>`` via
-    :func:`hpc_agent.planning.axes.upsert_executor`, so any existing
+    :func:`hpc_agent.state.axes.upsert_executor`, so any existing
     ``axes`` / ``homogeneous_axes`` hints and other executors' entries
     survive. Re-running with the same spec overwrites the entry
     byte-equivalently modulo the ``classified_at`` timestamp.
@@ -84,7 +84,7 @@ def classify_axis(
     ``bounded_halo`` whose ``halo.expr`` is not safe arithmetic over the
     run's parameters.
     """
-    from hpc_agent.planning.axes import axes_path, upsert_executor
+    from hpc_agent.state.axes import axes_path, upsert_executor
     from hpc_agent.template.axis_config import HaloExprError, data_axis_from_config
 
     data_axis = spec.data_axis.model_dump(exclude_none=True, mode="json")

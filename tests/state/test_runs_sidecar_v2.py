@@ -370,7 +370,7 @@ class TestVersionMismatchWarning:
 
 def test_auto_derive_wave_map_from_axes_yaml(tmp_path: Path) -> None:
     """Caller omits wave_map; axes.yaml present → sidecar carries derived map."""
-    from hpc_agent.planning.axes import write_axes
+    from hpc_agent.state.axes import write_axes
 
     write_axes(
         tmp_path,
@@ -396,7 +396,7 @@ def test_auto_derive_skipped_when_axes_yaml_lacks_enumeration(tmp_path: Path) ->
     """axes.yaml present but no axes list → no derivation, no warning."""
     import warnings as _warnings
 
-    from hpc_agent.planning.axes import write_axes
+    from hpc_agent.state.axes import write_axes
 
     write_axes(tmp_path, homogeneous_axes=["window"])
     with _warnings.catch_warnings(record=True) as caught:
@@ -411,7 +411,7 @@ def test_auto_derive_warns_on_axes_product_mismatch(tmp_path: Path) -> None:
     """axes-product != task_count → UserWarning, no derived wave_map."""
     import warnings as _warnings
 
-    from hpc_agent.planning.axes import write_axes
+    from hpc_agent.state.axes import write_axes
 
     write_axes(
         tmp_path,
@@ -431,7 +431,7 @@ def test_auto_derive_warns_on_axes_product_mismatch(tmp_path: Path) -> None:
 
 def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
     """Caller-supplied wave_map is preserved verbatim; no axes.yaml lookup."""
-    from hpc_agent.planning.axes import write_axes
+    from hpc_agent.state.axes import write_axes
 
     write_axes(
         tmp_path,

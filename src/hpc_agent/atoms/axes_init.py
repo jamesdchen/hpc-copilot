@@ -1,6 +1,6 @@
 """``axes-init`` primitive — write the per-experiment axes config.
 
-Thin wrapper around :func:`hpc_agent.planning.axes.write_axes` with
+Thin wrapper around :func:`hpc_agent.state.axes.write_axes` with
 existence-check + ``--force`` semantics so the slash command (and any
 non-Claude-Code agent) can call this safely. The agent does the
 introspection + classification work upstream; this primitive just
@@ -118,13 +118,13 @@ def axes_init(
 
     Returns ``{axes_path, axes, homogeneous_axes, wrote, reason}``.
     """
-    from hpc_agent.planning.axes import axes_path, write_axes
+    from hpc_agent.state.axes import axes_path, write_axes
 
     target = axes_path(experiment_dir)
     if target.exists() and not force:
         # On refuse, echo the on-disk state (not the requested values) so
         # callers don't mistake the refusal for "your axes were accepted".
-        from hpc_agent.planning.axes import read_axes
+        from hpc_agent.state.axes import read_axes
 
         try:
             existing = read_axes(experiment_dir) or {}
