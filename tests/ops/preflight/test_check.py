@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.atoms.preflight.check_preflight``.
+"""Tests for ``hpc_agent.ops.preflight.check.check_preflight``.
 
 Focus on the file-transfer capability check: a missing ``rsync`` must
 NOT fail preflight when the ``scp``+``tar`` fallback transport is
@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from unittest import mock
 
-from hpc_agent.atoms import preflight
+from hpc_agent.ops.preflight import check as preflight
 
 
 def _which_for(present: set[str]) -> Callable[[str], str | None]:

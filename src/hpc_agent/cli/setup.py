@@ -69,7 +69,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     — callers branch on ``data.preflight.all_ok``.
     """
     from hpc_agent.agent_assets import install_agent_assets
-    from hpc_agent.atoms.preflight import check_preflight, write_preflight_marker
+    from hpc_agent.ops.preflight.check import check_preflight, write_preflight_marker
 
     claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
     assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)

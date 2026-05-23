@@ -45,7 +45,7 @@ agent confirmed every prior fix is sound with zero regressions.
 - `runner/logs.py` — SSH transport failure masqueraded as a missing log.
 - `runner/update_constraints.py` — unquoted `|` in `Features=` (shell metacharacter).
 - `atoms/canary_verify.py` — unknown cluster silently defaulted scheduler to `slurm`.
-- `atoms/preflight.py` — missing `host` probed loopback instead of failing.
+- `ops/preflight/check.py` — missing `host` probed loopback instead of failing.
 - `planning/throughput.py` — unparseable `max_walltime` → false "exceeds 0s" error.
 - `forecast/age_priority_climb.py` — two-point near-zero Δt manufactured huge slope.
 - `forecast/state_forecast.py` — `walltime_ask_sec` was read only off the

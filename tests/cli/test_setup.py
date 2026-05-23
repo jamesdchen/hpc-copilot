@@ -64,7 +64,7 @@ def test_setup_without_cluster_installs_assets_only(isolated_dirs: Path) -> None
 def test_setup_with_cluster_green_writes_marker(isolated_dirs: Path) -> None:
     """A green probe writes the cache marker the Step 6b gate reads."""
     with mock.patch(
-        "hpc_agent.atoms.preflight.check_preflight",
+        "hpc_agent.ops.preflight.check.check_preflight",
         return_value={"all_ok": True, "checks": []},
     ):
         env = _run_setup(isolated_dirs, cluster="hoffman2")
@@ -85,7 +85,7 @@ def test_setup_with_cluster_red_skips_marker(isolated_dirs: Path) -> None:
         "checks": [{"name": "ssh_auth_sock", "ok": False, "detail": "unset"}],
     }
     with mock.patch(
-        "hpc_agent.atoms.preflight.check_preflight",
+        "hpc_agent.ops.preflight.check.check_preflight",
         return_value=failures,
     ):
         env = _run_setup(isolated_dirs, cluster="hoffman2")
@@ -102,7 +102,7 @@ def test_setup_with_cluster_red_skips_marker(isolated_dirs: Path) -> None:
 def test_setup_with_cluster_dry_run_skips_marker(isolated_dirs: Path) -> None:
     """``--dry-run`` reports the probe outcome but writes no marker."""
     with mock.patch(
-        "hpc_agent.atoms.preflight.check_preflight",
+        "hpc_agent.ops.preflight.check.check_preflight",
         return_value={"all_ok": True, "checks": []},
     ):
         env = _run_setup(isolated_dirs, cluster="hoffman2", dry_run=True)
@@ -116,7 +116,7 @@ def test_setup_experiment_dir_scopes_marker(isolated_dirs: Path, tmp_path: Path)
     other = tmp_path / "other_experiment"
     other.mkdir()
     with mock.patch(
-        "hpc_agent.atoms.preflight.check_preflight",
+        "hpc_agent.ops.preflight.check.check_preflight",
         return_value={"all_ok": True, "checks": []},
     ):
         env = _run_setup(isolated_dirs, cluster="hoffman2", experiment_dir=str(other))
