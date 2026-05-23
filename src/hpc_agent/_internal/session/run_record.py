@@ -223,17 +223,21 @@ def _locked(target: Path) -> Iterator[None]:
         yield
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
+def _atomic_write_json(path: Path, payload: dict, *, fsync: bool = True) -> None:
     """Deprecated forwarder for :func:`hpc_agent._internal.io.atomic_write_json`.
 
     Kept so callers that import this module-level name don't break;
     new code should import ``atomic_write_json`` from
     ``hpc_agent._internal.io`` directly. This forwarder will be
     removed in a future release.
+
+    The optional ``fsync`` kwarg is forwarded so the hot-path monitor
+    tick can write a non-authoritative cache without a redundant fsync
+    — see the canonical helper's docstring for the durability tradeoff.
     """
     from hpc_agent._internal.io import atomic_write_json
 
-    atomic_write_json(path, payload)
+    atomic_write_json(path, payload, fsync=fsync)
 
 
 def _read_json(path: Path) -> dict | None:

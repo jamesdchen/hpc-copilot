@@ -534,6 +534,76 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
     assert body["complete"] == 1
 
 
+def test_record_status_cache_write_skips_fsync(journal_home, experiment):
+    """Hot-path perf: the ``last_status.json`` cache write must NOT fsync.
+
+    On a monitor tick the journal record write fsyncs (durable source of
+    truth); the cache write is a strict denormalization of that same
+    payload and would double the per-tick fsync cost on networked
+    filesystems. The cache write is best-effort and self-heals on the
+    next tick, so it passes ``fsync=False`` to ``atomic_write_json``.
+
+    Count ``os.fsync`` calls and split them by which file the underlying
+    fd points at — the cache temp file must never appear in the
+    fsync'd set.
+    """
+    import os
+
+    _seed_run(experiment)
+    payload = {"summary": {"complete": 1, "running": 0, "failed": 0, "unknown": 0}}
+
+    real_fsync = os.fsync
+    fsynced_paths: list[str] = []
+
+    def tracking_fsync(fd: int) -> None:
+        # Resolve the fd to a path so we can attribute each fsync to a
+        # specific file (NOT just count calls). The journal/index writes
+        # legitimately fsync; the cache write must not.
+        try:
+            path = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            path = "<unknown>"
+        fsynced_paths.append(path)
+        return real_fsync(fd)
+
+    with (
+        patch(
+            "hpc_agent.infra.remote.ssh_run",
+            return_value=_completed(stdout=json.dumps(payload)),
+        ),
+        patch("os.fsync", side_effect=tracking_fsync),
+    ):
+        runner.record_status(
+            experiment,
+            "ml_ridge_abcd1234",
+            ssh_target="user@host",
+            remote_path="/x",
+            job_ids=["1"],
+            job_name="job",
+        )
+
+    cache = session.runs_dir(experiment) / "ml_ridge_abcd1234.last_status.json"
+    assert cache.exists(), "cache file must still be written, just without fsync"
+
+    # Each ``atomic_write_json(fsync=True)`` call contributes exactly one
+    # file-fd fsync (the data fsync — the parent-dir fsync opens a
+    # separate fd via ``os.open`` and runs through the same hook). The
+    # journal record + index = at most 4 fsyncs (2 data + 2 dir). The
+    # cache must add ZERO. Assert the cache temp-file path never shows
+    # up in the fsynced set.
+    cache_dir = str(session.runs_dir(experiment))
+    cache_temp_fsyncs = [
+        p
+        for p in fsynced_paths
+        # mkstemp pattern: <name>.<random>.tmp inside the cache dir
+        if p.startswith(cache_dir) and ".last_status.json." in p and p.endswith(".tmp")
+    ]
+    assert cache_temp_fsyncs == [], (
+        "cache write must not fsync its temp file (hot-path perf fix); "
+        f"saw fsyncs on: {cache_temp_fsyncs}"
+    )
+
+
 # ─── aggregate verification helpers ────────────────────────────────────────
 
 
