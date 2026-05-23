@@ -40,6 +40,7 @@ from hpc_agent.atoms.validate_stochastic_marker import validate_stochastic_marke
 from hpc_agent.atoms.validate_walltime_against_history import (
     validate_walltime_against_history,
 )
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -71,7 +72,16 @@ def _aggregate_overall(findings: list[ValidatorFinding]) -> Literal["pass", "war
     side_effects=[],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-agent validate-campaign --spec <path>",
+    cli=CliShape(
+        help=(
+            "Validate a campaign spec end-to-end (executor signatures, dataset, "
+            "QoS limits, walltime history, stochastic marker)."
+        ),
+        spec_arg=True,
+        spec_model=ValidateCampaignSpec,
+        schema_ref=SchemaRef(input="validate_campaign"),
+        experiment_dir_arg=True,
+    ),
     agent_facing=True,
     exit_codes=[(0, "pass-or-warn"), (1, "fail")],
 )

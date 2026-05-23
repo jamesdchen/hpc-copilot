@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 
 
@@ -41,7 +42,18 @@ def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     verb="validate",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent preflight [--cluster <name>]",
+    cli=CliShape(
+        help="Health check: SSH agent, ssh/rsync on PATH, clusters.yaml parses.",
+        verb="preflight",
+        args=(
+            CliArg(
+                "--cluster",
+                type=str,
+                default=None,
+                help="Optional cluster name to TCP-probe on :22.",
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:

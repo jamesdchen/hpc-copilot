@@ -131,6 +131,18 @@ def _register_from_registry(
     return nested_groups
 
 
+def _register_tier3_modules(sub: argparse._SubParsersAction) -> None:
+    """Register CLI-only verb modules that have no @primitive backing.
+
+    Each Tier 3 module owns its ``register(sub)`` entry point;
+    aggregating them here keeps per-domain migration PRs additive (a
+    new module = one line here, plus the module file).
+    """
+    from hpc_agent.cli.setup import register as _register_setup
+
+    _register_setup(sub)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level ``hpc-agent`` argparse tree.
 
@@ -156,6 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     nested_groups = _register_from_registry(sub)
+
+    # Tier 3 modules — CLI-only orchestrators with no @primitive backing.
+    # Each module owns its add_parser blocks via a ``register(sub)``
+    # function. Future Tier 3 agents (spawn, ...) append a call here.
+    _register_tier3_modules(sub)
 
     # Legacy fallback — the hand-written add_parser blocks in agent_cli
     # for primitives that haven't been migrated yet. The fallback is

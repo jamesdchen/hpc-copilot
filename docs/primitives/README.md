@@ -116,7 +116,7 @@ The verb partitions primitives into bands the reader can scan independently:
 
 | Primitive | Idempotent | Side effects | CLI |
 |---|---|---|---|
-| [check-preflight](check-preflight.md) | yes | _none_ | `hpc-agent preflight [--cluster <name>]` |
+| [check-preflight](check-preflight.md) | yes | _none_ | `CliShape(help='Health check: SSH agent, ssh/rsync on PATH, clusters.yaml parses.', spec_arg=False, experiment_dir_arg=False, dry_run_arg=False, requires_ssh=False, schema_ref=None, spec_model=None, spec_required=True, spec_kwarg='spec', args=(CliArg(flag='--cluster', type=<class 'str'>, default=None, required=False, help='Optional cluster name to TCP-probe on :22.', action=None, nargs=None, choices=None, dest=None),), dry_run_passthrough_keys=(), arg_pre=None, result_post=None, handler=None, group=None, verb='preflight')` |
 | [validate-executor-signatures](validate-executor-signatures.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-input-dataset](validate-input-dataset.md) | yes | _none_ | `(none — Python-only primitive)` |
 | [validate-self-qos-limit](validate-self-qos-limit.md) | yes | _none_ | `(none — Python-only primitive)` |
@@ -162,7 +162,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [monitor-flow](monitor-flow.md) | yes | ssh: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent monitor-flow --spec <path>` |
 | [submit-flow](submit-flow.md) | yes | sync-push: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow --spec <path>` |
 | [submit-flow-batch](submit-flow-batch.md) | yes | sync-push: `<ssh_target>:<remote_path>`; scheduler-submit: `<cluster>`; writes-journal: `~/.claude/hpc/<repo_hash>/runs/<run_id>.json` | `hpc-agent submit-flow-batch --spec <path>` |
-| [validate-campaign](validate-campaign.md) | yes | _none_ | `hpc-agent validate-campaign --spec <path>` |
+| [validate-campaign](validate-campaign.md) | yes | _none_ | `CliShape(help='Validate a campaign spec end-to-end (executor signatures, dataset, QoS limits, walltime history, stochastic marker).', spec_arg=True, experiment_dir_arg=True, dry_run_arg=False, requires_ssh=False, schema_ref=SchemaRef(input='validate_campaign', output=None), spec_model=<class 'hpc_agent._schema_models.workflows.validate_campaign.ValidateCampaignSpec'>, spec_required=True, spec_kwarg='spec', args=(), dry_run_passthrough_keys=(), arg_pre=None, result_post=None, handler=None, group=None, verb=None)` |
 | [verify-canary](verify-canary.md) | yes | ssh: `<cluster>` | `hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]` |
 <!-- END PRIMITIVE CATALOG -->
 
