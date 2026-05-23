@@ -72,21 +72,22 @@ def test_capabilities_envelope_shape() -> None:
     assert isinstance(data["ssh_multiplexing"], bool)
 
 
-def test_capabilities_exposes_skill_paths_and_required_env() -> None:
-    """Programmatic introspection for integrators: skill paths + required env."""
+def test_capabilities_exposes_required_env_and_drops_skill_paths() -> None:
+    """The envelope exposes required env; skill_paths was dropped.
+
+    Content for named primitives or worker-prompt procedures is
+    fetched via ``hpc-agent describe <name>`` (which returns a JSON
+    envelope) — integrators do not file-read package data. The
+    ``skill_paths`` field was a leak of that implementation detail.
+    """
     rc, out, _ = _run_cli("capabilities")
     assert rc == 0
     data = _parse_envelope(out)["data"]
 
-    skill_paths = data["skill_paths"]
-    assert isinstance(skill_paths, dict)
-    # Source-tree installs ship five skills; wheel-only installs may ship
-    # zero. Either is acceptable, but every value must point to a real file.
-    for name, path in skill_paths.items():
-        assert name.startswith("hpc-"), name
-        assert Path(path).is_file(), f"{name} path does not exist: {path}"
-        assert path.endswith(f"skills/{name}/SKILL.md")
-
+    assert "skill_paths" not in data, (
+        "skill_paths was removed; use `hpc-agent describe <name>` to fetch "
+        "skill or procedure content as a JSON envelope"
+    )
     assert data["required_env"] == [
         "SSH_AUTH_SOCK",
         "HPC_JOURNAL_DIR",

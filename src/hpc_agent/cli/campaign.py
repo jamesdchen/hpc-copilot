@@ -1,12 +1,10 @@
 """Campaign verb-group argparse adapters.
 
-Extracted from :mod:`hpc_agent.agent_cli` (phase-1 split, see that
-module's docstring). Each ``cmd_campaign_*`` here is a thin shim around
-the corresponding ``hpc_agent.atoms.campaign_*`` primitive; the
-shared envelope helpers (``_ok``, ``_err``, ``_validate_against_schema``,
-the ``EXIT_*`` constants) are imported lazily from ``agent_cli`` inside
-each function body to break the import cycle introduced by
-``agent_cli`` re-exporting these adapters for back-compat.
+Each ``cmd_campaign_*`` is a thin shim around the corresponding
+``hpc_agent.atoms.campaign_*`` primitive. Helpers come from
+:mod:`hpc_agent.cli._helpers` (the adapter SDK) — the older
+lazy-import-from-agent_cli pattern was a workaround for an import cycle
+that ``agent_cli`` → ``cli/`` ↔ ``cli/_helpers`` cleanly resolves.
 """
 
 from __future__ import annotations
@@ -14,10 +12,11 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
+from hpc_agent.cli._helpers import EXIT_OK, _err, _ok, _validate_against_schema
+
 
 def cmd_campaign_status(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_status."""
-    from hpc_agent.agent_cli import EXIT_OK, _ok
     from hpc_agent.atoms.campaign_status import campaign_status
 
     _ok(
@@ -29,7 +28,6 @@ def cmd_campaign_status(args: argparse.Namespace) -> int:
 
 def cmd_campaign_list(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_list."""
-    from hpc_agent.agent_cli import EXIT_OK, _ok
     from hpc_agent.atoms.campaign_list import campaign_list
 
     _ok(campaign_list(experiment_dir=args.experiment_dir), name="campaign-list")
@@ -38,7 +36,6 @@ def cmd_campaign_list(args: argparse.Namespace) -> int:
 
 def cmd_campaign_init(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_init."""
-    from hpc_agent.agent_cli import EXIT_OK, _ok
     from hpc_agent.atoms.campaign_init import campaign_init
 
     _ok(
@@ -66,7 +63,6 @@ def cmd_campaign_init(args: argparse.Namespace) -> int:
 
 def cmd_campaign_replay(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_replay."""
-    from hpc_agent.agent_cli import EXIT_OK, _ok
     from hpc_agent.atoms.campaign_replay import campaign_replay
 
     _ok(
@@ -82,7 +78,6 @@ def cmd_campaign_replay(args: argparse.Namespace) -> int:
 
 def cmd_campaign_converged(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_converged."""
-    from hpc_agent.agent_cli import EXIT_OK, _ok
     from hpc_agent.atoms.campaign_converged import campaign_converged
 
     _ok(
@@ -104,7 +99,6 @@ def cmd_campaign_converged(args: argparse.Namespace) -> int:
 
 def cmd_campaign_budget(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_budget."""
-    from hpc_agent.agent_cli import EXIT_OK, _ok
     from hpc_agent.atoms.campaign_budget import campaign_budget
 
     _ok(
@@ -122,7 +116,6 @@ def cmd_campaign_budget(args: argparse.Namespace) -> int:
 
 def cmd_campaign_advance(args: argparse.Namespace) -> int:
     """Argparse adapter — primitive lives at hpc_agent.atoms.campaign_advance."""
-    from hpc_agent.agent_cli import EXIT_OK, _ok
     from hpc_agent.atoms.campaign_advance import campaign_advance
 
     _ok(
@@ -154,7 +147,6 @@ def cmd_campaign_health(args: argparse.Namespace) -> int:
     pointer in ``docs/primitives/campaign-health.md``.
     """
     from hpc_agent import errors
-    from hpc_agent.agent_cli import EXIT_OK, _err, _ok, _validate_against_schema
     from hpc_agent.atoms.campaign_health import campaign_health
 
     payload: dict[str, Any] = {}

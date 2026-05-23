@@ -32,6 +32,7 @@ __all__ = [
     "load_plugins",
     "plugin_primitive_modules",
     "plugin_slash_command_roots",
+    "plugin_worker_prompt_roots",
     "register_plugin_cli",
 ]
 
@@ -84,6 +85,28 @@ def plugin_slash_command_roots() -> tuple[Any, ...]:
     roots: list[Any] = []
     for plugin in load_plugins():
         root = getattr(plugin, "slash_command_assets", None)
+        if root is not None:
+            roots.append(root)
+    return tuple(roots)
+
+
+def plugin_worker_prompt_roots() -> tuple[Any, ...]:
+    """Return the worker-prompt asset roots contributed by plugins.
+
+    Each element is an :mod:`importlib.resources` traversable directory
+    holding ``<workflow>.md`` files (``submit.md``, ``status.md``,
+    ``aggregate.md``, ``campaign.md``), exposed by a plugin through its
+    ``worker_prompt_assets`` attribute. Resolved by
+    :func:`hpc_agent.atoms.spawn_prompt._procedure_body`: the first
+    plugin to provide ``<workflow>.md`` wins, then the host's bundled
+    procedure is used. Distinct from
+    :func:`plugin_slash_command_roots` because worker prompts and Claude
+    Code skills are different surfaces with different consumers — see
+    ``docs/internals/skill-policy.md``.
+    """
+    roots: list[Any] = []
+    for plugin in load_plugins():
+        root = getattr(plugin, "worker_prompt_assets", None)
         if root is not None:
             roots.append(root)
     return tuple(roots)

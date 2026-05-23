@@ -78,6 +78,7 @@ hpc_agent = [
     "mapreduce/templates/runtime/common/*.sh",
     "mapreduce/templates/runtime/sge/*",
     "mapreduce/templates/runtime/slurm/*",
+    "worker_prompts/*.md",
     "py.typed",
 ]
 slash_commands = [

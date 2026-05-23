@@ -1,10 +1,3 @@
----
-name: hpc-aggregate
-description: "Finalize a run's aggregated metrics: combine all waves on cluster, pull partials locally, run reduce_partials, optionally pull summary files."
-allowed-tools: Bash Read Write Task
-execution: delegated
----
-
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
 
 ## Step 0: Load context (run this first, every time)
@@ -16,13 +9,9 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
 
-## Delegating aggregation to a subagent
-
-Aggregation can pull large partial sets and emit a sizable `aggregated_metrics` dict. When you run this skill as part of a larger flow, do Steps 1–9 inside a fresh-context **subagent** (the `Task` tool) that returns **only** the `aggregate-flow` output envelope — `{ok, aggregated_metrics summary, missing_waves, missing_tasks, escalation_reason}` — and a single free-text `anomalies` string for anything off-contract. No transcript, no raw output: the `_combiner/` pull and per-task output stay in the subagent's context. The orchestrator parses fields, not prose; that field-shaped return is what keeps its next call deterministic. The subagent opens by running `hpc-agent load-context` to recover the `run_id` and SSH target.
-
 ## Steps
 
-1. **Verify the run is done** (or close enough). Invoke [poll-run-status](../../docs/primitives/poll-run-status.md); only proceed if `lifecycle_state` is `complete` (or the user explicitly wants a partial aggregate). For partial aggregation, pass `ensure_all_combined: false` to `aggregate-flow` to skip combining waves still in flight.
+1. **Verify the run is done** (or close enough). Invoke [poll-run-status](../../docs/primitives/poll-run-status.md); only proceed if `lifecycle_state` is `complete` (or the caller explicitly wants a partial aggregate via `fields.ensure_all_combined == false`). For partial aggregation, pass `ensure_all_combined: false` to `aggregate-flow` to skip combining waves still in flight.
 
 2. **Pull the run sidecar locally if missing** so `aggregate-flow` can read its `wave_map`, `result_dir_template`, `task_count`, and (if set) `aggregate_defaults`:
 
@@ -68,13 +57,13 @@ Aggregation can pull large partial sets and emit a sizable `aggregated_metrics` 
 
    The envelope's `data` carries `{ok, all_waves_combined, missing_waves, all_tasks_present, missing_tasks, unexpected_tasks, provenance_present, ...}`. Branch:
    - `ok=True` → proceed to interpretation.
-   - `ok=False` → surface the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — escalate, don't paper over.
+   - `ok=False` → record the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) in `decisions` before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — record it as `unexpected_tasks_present` in `decisions`, never paper over.
 
-8. **On `escalation_reason` non-null** in the aggregate-flow envelope, the atom completed with at least one wave failing `combiner_max_retries`. Inspect `failed_waves`; the partial `aggregated_metrics` is what DID combine. Decide whether the partial result is acceptable, or invoke [combine-wave](../../docs/primitives/combine-wave.md) directly with `force=true` for the failed waves.
+8. **On `escalation_reason` non-null** in the aggregate-flow envelope, the atom completed with at least one wave failing `combiner_max_retries`. Inspect `failed_waves`; the partial `aggregated_metrics` is what DID combine. Record `partial_aggregate` in `decisions` with the failed-wave list; the caller decides whether the partial result is acceptable, or invokes [combine-wave](../../docs/primitives/combine-wave.md) directly with `force=true` for the failed waves.
 
 9. **On error envelopes**, branch by `error_code` per the atom's frontmatter (`journal_corrupt` / `spec_invalid` / `ssh_unreachable` / `remote_command_failed`).
 
-10. **Profile-specific aggregate command**: when the per-run sidecar's `aggregate_defaults.aggregate_cmd` is set and `mode != "auto"` skipped it, the atom already ran the user-defined cluster-side command. When `mode == "combiner-only"` was forced and the user still wants the cluster-side command, run it manually after `aggregate-flow` returns — it's an arbitrary user-defined command that the framework doesn't introspect.
+10. **Profile-specific aggregate command**: when the per-run sidecar's `aggregate_defaults.aggregate_cmd` is set and `mode != "auto"` skipped it, the atom already ran the user-defined cluster-side command. When `mode == "combiner-only"` was forced and the caller still wants the cluster-side command, record `manual_aggregate_pending` in `decisions` — it's an arbitrary user-defined command that the framework doesn't introspect.
 
 ## Reduce where the data lives
 
@@ -88,8 +77,8 @@ Anti-pattern: `scp -r results/tune/*_chunk_*.csv cluster-B:...` because cluster-
 
 ## Notes
 
-- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. Run `hpc-preflight` first.
+- **SSH env passthrough**: caller must forward `SSH_AUTH_SOCK` and `SSH_AGENT_PID` in the spawned env or this call hangs on auth. The user runs `hpc-agent setup --cluster <name>` once per machine to probe the environment before submitting.
 - **Idempotency**: re-invoking `aggregate-flow` on the same `run_id` is safe and cheap. `combine-wave` skips already-combined waves; `rsync_pull` handles the diff; `reduce_partials` is a pure function over the pulled files.
 - **No cancel/abort**: `combine-wave` runs the user's combiner script on the cluster; once started, it cannot be stopped from here. Set sensible walltimes in the combiner job itself.
-- **CLI does NOT choose the combiner script or output schema.** The user's repo provides `.hpc/_hpc_combiner.py`. This skill only orchestrates the call and records outcomes via the workflow atom.
+- **CLI does NOT choose the combiner script or output schema.** The user's repo provides `.hpc/_hpc_combiner.py`. This procedure only orchestrates the call and records outcomes via the workflow atom.
 - **`mode: "auto"` is load-bearing.** It's what makes `cluster-reduce` (small JSON output) the default route and `combiner-only + pull_summaries=true` (raw per-task files) opt-in. Don't override unless the caller has a specific reason.

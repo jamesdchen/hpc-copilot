@@ -14,14 +14,14 @@ exit_codes:
 
 ## Purpose
 
-Machine-readable feature flags. Lets external orchestrators discover what subcommands this `hpc-agent` install supports, where its schemas live, which env vars it needs, and where its skill files are on disk. Pure introspection; no side effects.
+Machine-readable feature flags. Lets external orchestrators discover what subcommands this `hpc-agent` install supports, where its schemas live, and which env vars it needs. Pure introspection; no side effects.
 
 ## Compose with
 
 - **No predecessors.** Run this first when an agent encounters an unfamiliar `hpc-agent` install.
-- Common successors: any other primitive — `capabilities` is the bootstrap primitive.
+- Common successors: any other primitive — `capabilities` is the bootstrap primitive. To fetch a specific named primitive's contract, a skill's body, or a worker-prompt procedure's body, follow up with `hpc-agent describe <name>`.
 
 ## Notes
 
-- `skill_paths` returns absolute paths to the SKILL.md files. Skills ship as package data (`slash_commands/skills/hpc-*/SKILL.md`), so the paths resolve identically for a wheel install and a source-tree checkout.
+- Content for named primitives, skills, or worker-prompt procedures is fetched via `hpc-agent describe <name>` (returns the body in a JSON envelope). An earlier `skill_paths` field that exposed package-data filesystem paths was removed in favor of `describe`.
 - `required_env` lists env vars the framework expects to be set in the calling shell — agents can use this to validate their environment before invoking other primitives.

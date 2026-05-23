@@ -305,7 +305,7 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
     ]
     with (
         patch.object(cli.runner, "fetch_task_logs", return_value=fake_logs),
-        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+        patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
         rc = cli.cmd_logs(args)
 

@@ -174,7 +174,7 @@ def test_delegate_agent_step_carries_a_spawn_request(journal_home, experiment):
     assert spawn["experiment_dir"] == delegate["experiment_dir"]
     assert isinstance(spawn["fields"], dict)
     # prompt is the rendered canonical text, the same SoT as the hook.
-    assert "hpc-submit" in delegate["prompt"]
+    assert "submit PROCEDURE" in delegate["prompt"]
 
 
 def test_delegate_monitor_is_cli_kind(journal_home, experiment):

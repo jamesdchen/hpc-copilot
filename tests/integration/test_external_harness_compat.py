@@ -332,7 +332,7 @@ def test_error_code_remote_command_failed_when_ssh_returns_nonzero(
     fake_ssh = _completed(returncode=2, stdout="", stderr="status reporter: import failed")
     with (
         patch("hpc_agent.infra.remote.ssh_run", return_value=fake_ssh),
-        patch.object(agent_cli, "_emit", side_effect=_capture),
+        patch("hpc_agent.cli._helpers._emit", side_effect=_capture),
     ):
         rc = agent_cli.main(["status", "--experiment-dir", str(tmp_path), "--run-id", run_id])
 

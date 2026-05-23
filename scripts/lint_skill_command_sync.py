@@ -2,14 +2,18 @@
 """Cross-check ``skills/`` against ``src/slash_commands/commands/``.
 
 Both trees describe the same workflows (submit, monitor, aggregate,
-campaign, preflight, build-executor) in different prose. This lint
-catches the most common drift modes:
+campaign, build-executor, classify-axis) in different prose.
+Environment-authority work (the former ``hpc-preflight`` skill) moved
+to ``hpc-agent setup`` — see ``docs/internals/skill-policy.md``. This
+lint catches the most common drift modes:
 
 1. A skill exists with no matching slash command (or vice versa).
 2. A skill or slash-command file is missing required frontmatter.
 3. A skill's declared ``execution`` mode disagrees with how its
    command routes (``delegated`` ⇔ an ``hpc_spawn`` Task request or an
    ``hpc-agent run`` Bash call).
+4. A skill's declared ``category`` (the policy witness) disagrees
+   with its ``execution`` mode — see ``docs/internals/skill-policy.md``.
 
 It deliberately does **not** diff the bodies — the two surfaces have
 different audiences (agent skill vs. interactive slash-command prompt)
@@ -43,14 +47,21 @@ COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
 
 # Each tuple: (skill_id, slash_command_stem). Both files must exist.
 WORKFLOW_PAIRS: list[tuple[str, str]] = [
-    ("hpc-submit", "submit-hpc"),
-    ("hpc-status", "monitor-hpc"),
-    ("hpc-aggregate", "aggregate-hpc"),
-    ("hpc-campaign", "campaign-hpc"),
-    ("hpc-preflight", "preflight"),
     ("hpc-build-executor", "hpc-axes-init"),
     ("hpc-classify-axis", "classify-axis-hpc"),
 ]
+
+# Slash commands that route through `hpc-agent run <workflow>` to the
+# spawn pipeline rather than to a paired Skill. Their workflow lives in
+# ``src/hpc_agent/worker_prompts/<workflow>.md`` (see
+# ``docs/internals/skill-policy.md``), not in any ``SKILL.md``. The
+# routing lint below skips the skill-pair check for these.
+WORKFLOW_TRIGGER_SLASHES: set[str] = {
+    "submit-hpc",
+    "monitor-hpc",
+    "aggregate-hpc",
+    "campaign-hpc",
+}
 
 # Slash-command files allowed to have no skill counterpart (e.g.
 # scaffolding commands that don't expose a long-form skill surface).
@@ -80,6 +91,27 @@ _INVOKE_DIRECTIVE_RE = re.compile(
 # is an authored property, not a per-invocation judgement — the lint
 # below cross-checks it against how the paired command routes.
 _EXECUTION_RE = re.compile(r"^execution:\s*(delegated|inline)\s*$", re.MULTILINE)
+
+# Every workflow skill also declares its policy category — the witness
+# for docs/internals/skill-policy.md:
+#
+#   * ``experimenter-intent``  — runs inline in the user's interactive
+#     Claude Code chat; the Skill tool consumes it; tolerant prose is
+#     acceptable because the underlying primitive validates downstream.
+#   * ``worker-prompt``        — gets inlined as text into the
+#     code-rendered ``claude -p --bare`` worker prompt via
+#     ``spawn_prompt._procedure_body``; the deterministic prefix means
+#     these are eligible for prose hardening (snapshot tests, token
+#     budgets, banned-construct lints) that real skills are not.
+#
+# The category must agree with ``execution``: ``experimenter-intent``
+# ⇔ ``inline``; ``worker-prompt`` ⇔ ``delegated``. This pairing is the
+# machine-readable expression of the skill-policy rule.
+_CATEGORY_RE = re.compile(r"^category:\s*(experimenter-intent|worker-prompt)\s*$", re.MULTILINE)
+_CATEGORY_BY_EXECUTION = {
+    "inline": "experimenter-intent",
+    "delegated": "worker-prompt",
+}
 
 
 def main() -> int:
@@ -171,6 +203,30 @@ def main() -> int:
                 "routing, or mark the skill `delegated`."
             )
 
+        # Policy: every skill declares its category (see
+        # docs/internals/skill-policy.md). The category must agree with
+        # the `execution` mode — that pairing is what makes the policy
+        # machine-checkable.
+        category_match = _CATEGORY_RE.search(skill_body)
+        if category_match is None:
+            errors.append(
+                f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
+                "`category: experimenter-intent|worker-prompt` field. See "
+                "docs/internals/skill-policy.md — the category records "
+                "whether this skill is consumed by the user's chat (real "
+                "Skill tool) or inlined into a worker prompt."
+            )
+            continue
+        expected_category = _CATEGORY_BY_EXECUTION[exec_match.group(1)]
+        if category_match.group(1) != expected_category:
+            errors.append(
+                f"{skill_id!r} declares `execution: {exec_match.group(1)}` but "
+                f"`category: {category_match.group(1)}` — expected "
+                f"`category: {expected_category}`. See "
+                "docs/internals/skill-policy.md: inline execution ↔ "
+                "experimenter-intent; delegated execution ↔ worker-prompt."
+            )
+
     # Skills present on disk but not declared in the pair table.
     undeclared_skills = skill_ids_present - declared_skills
     if undeclared_skills:
@@ -181,19 +237,49 @@ def main() -> int:
             "two surfaces stay in sync."
         )
 
-    # Slash commands without a declared skill (and not allow-listed).
-    undeclared_slashes = slash_ids_present - declared_slashes - SLASH_ONLY_OK
+    # Workflow-trigger slash commands route to the spawn pipeline via
+    # ``hpc-agent run <workflow>`` instead of pairing with a Skill —
+    # their workflow lives in ``src/hpc_agent/worker_prompts/<name>.md``
+    # (see ``docs/internals/skill-policy.md``). Verify each exists, and
+    # carries the trigger directive.
+    for slash_stem in sorted(WORKFLOW_TRIGGER_SLASHES):
+        slash_path = COMMANDS_DIR / f"{slash_stem}.md"
+        if not slash_path.is_file():
+            errors.append(
+                f"declared workflow-trigger slash {slash_stem!r} but "
+                f"{slash_path.relative_to(REPO_ROOT)} is missing"
+            )
+            continue
+        body = slash_path.read_text(encoding="utf-8")
+        if re.search(r"hpc-agent run\b", body) is None and "hpc-campaign-driver" not in body:
+            errors.append(
+                f"{slash_path.relative_to(REPO_ROOT)} is a workflow-trigger "
+                "slash (WORKFLOW_TRIGGER_SLASHES) but does not shell "
+                "`hpc-agent run <workflow>` or `hpc-campaign-driver`. A "
+                "trigger slash must route to the code-orchestrated spawn "
+                "pipeline; see docs/internals/skill-policy.md."
+            )
+
+    # Slash commands without a declared skill, not allow-listed, and not
+    # a workflow trigger.
+    accounted = declared_slashes | SLASH_ONLY_OK | WORKFLOW_TRIGGER_SLASHES
+    undeclared_slashes = slash_ids_present - accounted
     if undeclared_slashes:
         errors.append(
-            "slash command(s) on disk with no entry in WORKFLOW_PAIRS "
-            f"and not in SLASH_ONLY_OK: {sorted(undeclared_slashes)}"
+            "slash command(s) on disk with no entry in WORKFLOW_PAIRS, "
+            "SLASH_ONLY_OK, or WORKFLOW_TRIGGER_SLASHES: "
+            f"{sorted(undeclared_slashes)}"
         )
 
     if errors:
         for err in errors:
             print(f"ERROR: {err}", file=sys.stderr)
         return 1
-    print(f"skills <-> slash_commands in sync ({len(WORKFLOW_PAIRS)} workflow pairs)")
+    print(
+        f"skills <-> slash_commands in sync "
+        f"({len(WORKFLOW_PAIRS)} skill pairs + "
+        f"{len(WORKFLOW_TRIGGER_SLASHES)} workflow triggers)"
+    )
     return 0
 
 

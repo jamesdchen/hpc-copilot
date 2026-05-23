@@ -11,6 +11,11 @@ File transfer is satisfied by ``rsync`` *or* the ``scp``+``tar`` pair
 -r`` pull pipeline when rsync is absent — typically Windows hosts
 without WSL/MSYS rsync), so a missing ``rsync`` alone does not fail
 preflight.
+
+Also exposes :func:`write_preflight_marker`, the one-line helper that
+writes the per-cluster 24h cache marker consumed by ``/submit-hpc``'s
+Step 6b gate. Called by ``hpc-agent setup --cluster <name>`` after a
+green probe; the gate skips its re-check while the marker is fresh.
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ import os
 import shutil
 import socket
 import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from hpc_agent._internal.primitive import primitive
@@ -133,3 +140,34 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
 
     all_ok = all(c["ok"] for c in checks)
     return {"all_ok": all_ok, "checks": checks}
+
+
+def write_preflight_marker(*, cluster: str, experiment_dir: Path | None = None) -> Path:
+    """Write the per-cluster preflight cache marker; return its path.
+
+    Populates the 24h cache that ``/submit-hpc``'s Step 6b gate reads
+    so the first submit in an experiment doesn't re-run the SSH probe.
+    Called by ``hpc-agent setup --cluster <name>`` after a green
+    :func:`check_preflight` on the same cluster.
+
+    The marker is scoped to *experiment_dir* (default: ``Path.cwd()``)
+    because the gate reads from ``JournalLayout(experiment_dir)`` —
+    the marker must land in the same per-repo journal the gate
+    consults. Setup is therefore typically run from inside the
+    experiment directory.
+    """
+    from hpc_agent._internal.io import atomic_write_json
+    from hpc_agent._internal.layout import JournalLayout
+
+    layout = JournalLayout(experiment_dir or Path.cwd())
+    marker = layout.preflight_marker(cluster)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        marker,
+        {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "all_ok": True,
+            "cluster": cluster,
+        },
+    )
+    return marker

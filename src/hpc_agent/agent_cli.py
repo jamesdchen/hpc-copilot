@@ -22,12 +22,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import functools
 import json
-import os
 import subprocess
 import sys
-from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Any
 
@@ -36,259 +33,32 @@ from pydantic import ValidationError
 import hpc_agent
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
-from hpc_agent.state.discover import discover_executors
 
-EXIT_OK = 0
-EXIT_USER_ERROR = 1
-EXIT_CLUSTER_ERROR = 2
-EXIT_INTERNAL = 3
-
-# error_code → exit code mapping. Stable contract; documented in docs/reference/cli-spec.md.
-_EXIT_CODE_BY_CATEGORY = {
-    "user": EXIT_USER_ERROR,
-    "cluster": EXIT_CLUSTER_ERROR,
-    "network": EXIT_CLUSTER_ERROR,
-    "internal": EXIT_INTERNAL,
-}
-
-
-# ─── envelope helpers ──────────────────────────────────────────────────────
-
-
-def _emit(envelope: dict[str, Any]) -> None:
-    """Print a single-line JSON envelope to stdout."""
-    print(json.dumps(envelope, sort_keys=True), flush=True)
-
-
-@functools.cache
-def _meta_idempotent(name: str) -> bool:
-    """Look up a primitive's idempotency declaration from the catalog.
-
-    B4 rewire: callers used to hardcode ``_ok(idempotent=True/False, ...)``
-    which forked the truth between the @primitive decorator (consumed by
-    docs / lint) and the runtime envelope (consumed by caller policy).
-    Routing through the catalog collapses both to the decorator.
-
-    Cached because the catalog walks every primitive's frontmatter on
-    first call. Falls back to True on miss (consistent with the
-    pre-B4 default for query-style commands; the cross-validation test
-    in tests/test_idempotency.py guards against silent drift).
-    """
-    try:
-        from hpc_agent._internal.operations import operations_catalog
-
-        for entry in operations_catalog():
-            if entry.get("name") == name:
-                return bool(entry.get("idempotent", True))
-    except (LookupError, KeyError, FileNotFoundError):
-        # Narrow catch so programmer errors (e.g. registry queried
-        # before register_primitives()) surface in main() rather than
-        # being silently coerced to ``idempotent=True``.
-        pass
-    return True
-
-
-def _ok(
-    data: dict[str, Any],
-    *,
-    idempotent: bool | None = None,
-    name: str | None = None,
-    partial_errors: list[dict[str, str]] | None = None,
-) -> None:
-    """Emit an ok-true envelope.
-
-    *idempotent* (B4 rewire): preferred spelling is to pass *name* — the
-    primitive's catalog name — and let the envelope read the
-    ``idempotent`` flag from ``operations_catalog()``. The legacy
-    ``idempotent=True/False`` kwarg is still honoured for callsites that
-    don't have a primitive mapping (e.g. cmd_aggregate which wraps a
-    pure mapreduce reduce). When both are supplied, the explicit kwarg
-    wins so callers can opt out of the catalog lookup if needed.
-
-    *partial_errors*: optional list of ``{code, detail}`` dicts surfaced
-    at the top level of the envelope — distinct from any per-primitive
-    error list that lives inside the ``data`` block.
-    Used by primitives like ``inspect-cluster`` whose underlying data
-    source can be partially degraded (qhost timed out, sacct
-    unavailable) without the operation as a whole failing.
-    """
-    if idempotent is None:
-        idempotent = _meta_idempotent(name) if name else True
-    if name:
-        from hpc_agent._internal.schema import validate_output
-
-        validate_output(data, name)
-    env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
-    if partial_errors:
-        env["partial_errors"] = list(partial_errors)
-    _emit(env)
-
-
-def _err(
-    *,
-    error_code: str,
-    message: str,
-    category: str,
-    retry_safe: bool,
-    remediation: str | None = None,
-) -> int:
-    payload = {
-        "ok": False,
-        "error_code": error_code,
-        "message": message,
-        "category": category,
-        "retry_safe": retry_safe,
-    }
-    if remediation is not None:
-        payload["remediation"] = remediation
-    _emit(payload)
-    return _EXIT_CODE_BY_CATEGORY.get(category, EXIT_INTERNAL)
-
-
-def _err_from_hpc(exc: errors.HpcError) -> int:
-    return _err(
-        error_code=exc.error_code,
-        message=str(exc),
-        category=exc.category,
-        retry_safe=exc.retry_safe,
-        remediation=exc.remediation,
-    )
-
-
-def _require_ssh_agent() -> int | None:
-    # Cluster-touching subcommands hang silently when SSH_AUTH_SOCK is
-    # missing — the most common default-empty-spawn-env failure mode
-    # for external orchestrators. Fail fast with a typed error instead
-    # of stalling on auth.
-    if os.environ.get("SSH_AUTH_SOCK"):
-        return None
-    return _err_from_hpc(
-        errors.SshUnreachable(
-            "SSH_AUTH_SOCK is not set; cannot reach the cluster.",
-            remediation=(
-                "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
-                "environment, then run `hpc-agent preflight` to verify. "
-                "See docs/integrations/CONTRACT.md for the spawn env block."
-            ),
-        )
-    )
-
-
-# ─── shared option helpers ─────────────────────────────────────────────────
-
-
-def _add_experiment_dir(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--experiment-dir",
-        type=Path,
-        default=Path.cwd(),
-        help="Path to the experiment repo (default: current working directory).",
-    )
-
-
-def _add_run_id(parser: argparse.ArgumentParser) -> None:
-    """Add the canonical ``--run-id`` argument (always required)."""
-    parser.add_argument("--run-id", required=True)
-
-
-def _add_spec_and_dry_run(
-    parser: argparse.ArgumentParser,
-    *,
-    schema_hint: str,
-    dry_run_help: str,
-) -> None:
-    """Add the ``--spec`` (required) + ``--dry-run`` pair used by the
-    workflow-flow subcommands (``submit-flow``, ``monitor-flow``,
-    ``aggregate-flow``).
-
-    *schema_hint* is the schema filename mentioned in the spec help
-    (e.g. ``"schemas/submit_flow.input.json"``); *dry_run_help* lets
-    each subcommand explain what dry-run skips.
-    """
-    parser.add_argument(
-        "--spec",
-        type=Path,
-        required=True,
-        help=f"JSON spec file ({schema_hint})",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help=dry_run_help,
-    )
-
-
-def _load_spec(spec_path: Path | None, *, schema_name: str | None = None) -> dict[str, Any]:
-    """Load and (optionally) JSON-Schema-validate ``--spec`` input.
-
-    Validation is opt-in via *schema_name* so callers without a matching
-    schema (e.g. ad-hoc dicts) still work, but every CLI subcommand that
-    has one in ``hpc_agent/schemas/<name>.input.json`` should pass
-    it.  Validation failures map to ``SpecInvalid`` with the schema
-    field path in the message — far more useful to a calling agent than
-    the Python ``int("abc")`` traceback we used to surface.
-    """
-    if spec_path is None:
-        return {}
-    try:
-        loaded = json.loads(spec_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise errors.SpecInvalid(f"--spec file not found: {spec_path}") from exc
-    except json.JSONDecodeError as exc:
-        raise errors.SpecInvalid(f"--spec is not valid JSON ({spec_path}): {exc}") from exc
-    if not isinstance(loaded, dict):
-        raise errors.SpecInvalid(f"--spec must be a JSON object; got {type(loaded).__name__}")
-    if schema_name is not None:
-        _validate_against_schema(loaded, schema_name)
-    return loaded
-
-
-def _validate_against_schema(payload: Any, schema_name: str) -> None:
-    """Validate *payload* against ``hpc_agent/schemas/<schema_name>.input.json``.
-
-    Raises :class:`errors.SpecInvalid` on schema mismatch.  When the
-    ``jsonschema`` library is unavailable (older installs that haven't
-    picked up the runtime dep), this falls back to a no-op so the CLI
-    keeps working — schema validation is defence in depth, not the only
-    line of defence (``submit_and_record`` etc. still validate inputs).
-
-    Cross-file ``$ref`` (rare post-Pydantic-migration — most
-    schemas are now self-contained with constraints inlined from
-    :mod:`hpc_agent._schema_models._shared`) resolves through the
-    shared registry in :mod:`hpc_agent._internal.schema`.
-    """
-    try:
-        import jsonschema  # type: ignore[import-untyped]  # noqa: F401
-    except ImportError:
-        # Warn once so missing-dep installs (minimal venv, broken pip
-        # state) don't silently bypass the defence-in-depth layer. The
-        # Pydantic-driven inner validation still runs.
-        import warnings as _warnings
-
-        _warnings.warn(
-            "jsonschema not installed; skipping wire-schema validation. "
-            "Install with `pip install hpc-agent[<extras>]` or `pip install jsonschema>=4.18`.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return
-    try:
-        schema_text = (
-            _resource_files("hpc_agent.schemas") / f"{schema_name}.input.json"
-        ).read_text(encoding="utf-8")
-    except (FileNotFoundError, ModuleNotFoundError):
-        return
-    schema = json.loads(schema_text)
-    from hpc_agent._internal.schema import validate as _validate
-
-    try:
-        _validate(payload, schema)
-    except jsonschema.ValidationError as exc:
-        path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
-        raise errors.SpecInvalid(
-            f"--spec failed schema {schema_name}.input.json at {path}: {exc.message}"
-        ) from exc
-
+# ─── adapter SDK ───────────────────────────────────────────────────────────
+#
+# Helpers + EXIT codes live in :mod:`hpc_agent.cli._helpers` (the
+# canonical home). Re-exported here so existing imports keep working —
+# the ``hpc-agent-pro`` plugin and a handful of tests do
+# ``from hpc_agent.agent_cli import _ok, _load_spec, ...``. New code
+# imports from ``hpc_agent.cli._helpers`` directly.
+from hpc_agent.cli._helpers import (  # noqa: F401 — re-exported public surface
+    _EXIT_CODE_BY_CATEGORY,
+    EXIT_CLUSTER_ERROR,
+    EXIT_INTERNAL,
+    EXIT_OK,
+    EXIT_USER_ERROR,
+    _add_experiment_dir,
+    _add_run_id,
+    _add_spec_and_dry_run,
+    _emit,
+    _err,
+    _err_from_hpc,
+    _load_spec,
+    _meta_idempotent,
+    _ok,
+    _require_ssh_agent,
+    _validate_against_schema,
+)
 
 # ─── campaign verb-group re-exports ────────────────────────────────────────
 #
@@ -311,6 +81,7 @@ from hpc_agent.cli.campaign import (  # noqa: E402
     cmd_campaign_replay,
     cmd_campaign_status,
 )
+from hpc_agent.state.discover import discover_executors
 
 # ─── subcommand: capabilities ──────────────────────────────────────────────
 
@@ -347,18 +118,42 @@ def cmd_install_commands(args: argparse.Namespace) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
-    """One-shot setup: install the bundled slash commands + skills.
+    """One-shot setup: install assets; optionally probe a cluster.
 
-    The single entry point a new user runs after ``pip install
-    hpc-agent``. Copies the bundled slash commands and skills into
-    ~/.claude/. Idempotent, so re-running is safe. ``--dry-run``
-    previews without writing.
+    Installs the bundled slash commands + skills into ``~/.claude/``.
+    With ``--cluster <name>``, also probes the cluster environment
+    (SSH agent, ssh + file-transfer transport on PATH, ``clusters.yaml``
+    parses, TCP :22 reachable) and — on a green probe — writes the
+    24h cache marker that ``/submit-hpc``'s Step 6b gate reads, so the
+    first submit in this experiment doesn't repeat the probe.
+
+    The marker is scoped to ``--experiment-dir`` (default: cwd)
+    because the Step 6b gate reads from ``JournalLayout(experiment_dir)``
+    — run setup from your experiment directory or pass ``--experiment-dir``.
+
+    Idempotent: re-run after fixing your SSH agent to refresh the
+    marker. Always returns ``EXIT_OK`` on a successful primitive call
+    — callers branch on ``data.preflight.all_ok``.
     """
     from hpc_agent.agent_assets import install_agent_assets
+    from hpc_agent.atoms.preflight import check_preflight, write_preflight_marker
 
     claude_dir = Path(args.claude_dir).expanduser() if args.claude_dir else None
     assets = install_agent_assets(claude_dir=claude_dir, dry_run=args.dry_run)
-    _emit({"ok": True, "idempotent": True, "data": {"assets": assets}})
+    payload: dict[str, Any] = {"assets": assets}
+
+    cluster = getattr(args, "cluster", None)
+    if cluster:
+        preflight = check_preflight(cluster=cluster)
+        payload["preflight"] = preflight
+        if preflight["all_ok"] and not args.dry_run:
+            experiment_dir = (
+                Path(args.experiment_dir).expanduser() if args.experiment_dir else Path.cwd()
+            )
+            marker = write_preflight_marker(cluster=cluster, experiment_dir=experiment_dir)
+            payload["preflight_marker"] = str(marker)
+
+    _emit({"ok": True, "idempotent": True, "data": payload})
     return EXIT_OK
 
 
@@ -1667,13 +1462,19 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_describe(args: argparse.Namespace) -> int:
-    """Resolve a skill or primitive name to its content from package data.
+    """Resolve a name to its content from package data.
 
     A delegated worker calls this to fetch a cross-reference it reaches
-    on its branch — a skill it is pointed at, a primitive whose contract
-    it needs — instead of the prompt pre-stitching every possible
-    reference. Skills resolve to the SKILL.md body; primitives resolve
-    to their operations-catalog contract.
+    on its branch — a worker-prompt procedure, a skill it is pointed
+    at, a primitive whose contract it needs — instead of the prompt
+    pre-stitching every possible reference. Resolution order:
+
+    1. Worker-prompt procedure (``hpc_agent/worker_prompts/<name>.md``,
+       with plugin overlay) — returns ``kind: "procedure"``.
+    2. Inline skill (``slash_commands/skills/<name>/SKILL.md``) —
+       returns ``kind: "skill"``.
+    3. Primitive in the operations catalog — returns ``kind:
+       "primitive"`` with its contract.
     """
     name = args.name
     if not (
@@ -1683,7 +1484,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
             error_code="spec_invalid",
             message=(
                 f"name {name!r} must be lowercase letters, digits, and "
-                "hyphens — a skill or primitive name"
+                "hyphens — a procedure, skill, or primitive name"
             ),
             category="user",
             retry_safe=False,
@@ -1691,11 +1492,22 @@ def cmd_describe(args: argparse.Namespace) -> int:
 
     from importlib.resources import files
 
+    from hpc_agent._schema_models.spawn_contract import WORKFLOW_PROCEDURES
+
+    if name in WORKFLOW_PROCEDURES:
+        from hpc_agent.atoms.spawn_prompt import _procedure_body
+
+        _ok({"kind": "procedure", "name": name, "content": _procedure_body(name)})
+        return EXIT_OK
+
     skill_md = files("slash_commands") / "skills" / name / "SKILL.md"
     if skill_md.is_file():
-        from hpc_agent.atoms.spawn_prompt import _skill_body
-
-        _ok({"kind": "skill", "name": name, "content": _skill_body(name)})
+        body = skill_md.read_text(encoding="utf-8")
+        if body.startswith("---"):
+            close = body.find("\n---", 3)
+            if close != -1:
+                body = body[close + 4 :]
+        _ok({"kind": "skill", "name": name, "content": body.strip()})
         return EXIT_OK
 
     from hpc_agent._internal.operations import operations_catalog
@@ -1791,6 +1603,26 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Override the target Claude config dir. Defaults to ~/.claude.",
+    )
+    p_setup.add_argument(
+        "--cluster",
+        type=str,
+        default=None,
+        help=(
+            "Optional cluster name. When supplied, probe the cluster's "
+            "environment (SSH agent, ssh/transport on PATH, clusters.yaml, "
+            "TCP :22) after install and write the 24h cache marker that "
+            "/submit-hpc's Step 6b gate reads."
+        ),
+    )
+    p_setup.add_argument(
+        "--experiment-dir",
+        type=str,
+        default=None,
+        help=(
+            "Experiment directory whose journal receives the preflight "
+            "cache marker. Defaults to cwd. Only used when --cluster is set."
+        ),
     )
     p_setup.set_defaults(func=cmd_setup)
 

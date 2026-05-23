@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from hpc_agent._internal.operations import operations_catalog
-from hpc_agent._schema_models.spawn_contract import DECISION_POINTS, WORKFLOW_SKILLS
+from hpc_agent._schema_models.spawn_contract import DECISION_POINTS, WORKFLOW_PROCEDURES
 
 
 def test_every_workflow_has_decision_points() -> None:
-    assert set(DECISION_POINTS) == set(WORKFLOW_SKILLS)
+    assert set(DECISION_POINTS) == set(WORKFLOW_PROCEDURES)
     for workflow, points in DECISION_POINTS.items():
         assert points, workflow
 
