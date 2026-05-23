@@ -78,7 +78,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
             "hpc_agent.runner.combine_wave",
             return_value=(False, "", "boom: missing metrics"),
         ),
-        patch.object(cli, "_emit", side_effect=fake_emit),
+        patch("hpc_agent.cli._helpers._emit", side_effect=fake_emit),
     ):
         rc = cli.cmd_aggregate(args)
 
@@ -141,7 +141,7 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
         captured.append(payload)
 
     with (
-        patch.object(cli, "_emit", side_effect=fake_emit),
+        patch("hpc_agent.cli._helpers._emit", side_effect=fake_emit),
         patch.object(cli, "cmd_capabilities", side_effect=boom),
     ):
         rc = cli.main(["capabilities"])
@@ -201,7 +201,7 @@ def test_aggregate_precondition_blocks_combine_on_missing_outputs(
             return_value=["results/metrics.1.json"],
         ),
         patch.object(cli.runner, "combine_wave") as combine_mock,
-        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+        patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
         rc = cli.cmd_aggregate(args)
 
@@ -241,7 +241,7 @@ def test_aggregate_postcondition_fails_when_combiner_artifact_missing(
             "verify_combiner_artifact",
             return_value=(False, "is missing at /exp/results/metrics.json"),
         ),
-        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+        patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
         rc = cli.cmd_aggregate(args)
 
@@ -272,7 +272,7 @@ def test_aggregate_envelope_carries_provenance_on_success(tmp_path: Path, monkey
     captured: list[dict] = []
     with (
         patch.object(cli.runner, "combine_wave", return_value=(True, "ok", "")),
-        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+        patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
         rc = cli.cmd_aggregate(args)
 
@@ -345,7 +345,7 @@ def test_aggregate_reads_sidecar_defaults_for_require_and_expect(
         patch.object(
             cli.runner, "write_remote_provenance", return_value="/exp/results/_provenance.json"
         ),
-        patch.object(cli, "_emit"),
+        patch("hpc_agent.cli._helpers._emit"),
     ):
         rc = cli.cmd_aggregate(args)
 
@@ -380,7 +380,7 @@ def test_aggregate_writes_sidecar_when_expect_output_set(tmp_path: Path, monkeyp
             "write_remote_provenance",
             return_value="/exp/results/_provenance.json",
         ),
-        patch.object(cli, "_emit", side_effect=lambda p: captured.append(p)),
+        patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
         rc = cli.cmd_aggregate(args)
 
