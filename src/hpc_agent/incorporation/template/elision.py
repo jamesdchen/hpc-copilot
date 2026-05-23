@@ -34,7 +34,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from hpc_agent.incorporation.template import series
-from hpc_agent.incorporation.template.axis import Associative, BoundedHalo, DataAxis, Independent, Sequential
+from hpc_agent.incorporation.template.axis import (
+    Associative,
+    BoundedHalo,
+    DataAxis,
+    Independent,
+    Sequential,
+)
 from hpc_agent.incorporation.template.plan import plan_tasks
 from hpc_agent.incorporation.template.reduce import reduce_monoid
 from hpc_agent.incorporation.template.series import SliceSpec
