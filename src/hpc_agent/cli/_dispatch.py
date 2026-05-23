@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import inspect
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
@@ -214,9 +215,24 @@ def cli_to_invocation_string(name: str, cli: Any) -> str | None:
 
 
 def _build_kwargs(
-    name: str, shape: CliShape, ns: argparse.Namespace
+    name: str, shape: CliShape, ns: argparse.Namespace, func: Any
 ) -> dict[str, Any]:
-    """Build the kwarg dict to pass to the primitive function."""
+    """Build the kwarg dict to pass to *func*.
+
+    The build order is: standard injectors (``experiment_dir`` from
+    ``experiment_dir_arg``), then raw per-arg values pulled off the
+    argparse namespace (so the primitive sees them as-is for the
+    common case where a ``--foo-bar`` flag maps directly to a ``foo_bar``
+    kwarg), then ``spec_arg`` loading, then ``arg_pre`` overrides
+    (so a CliArg's raw value can be re-mapped to a different kwarg
+    name or transformed into a richer Python type).
+
+    Finally, kwargs are filtered to parameters the primitive's
+    signature actually accepts. CLI-only flags (e.g. a primitive that
+    expects ``roots`` but exposes ``--root`` on the CLI) are dropped
+    after ``arg_pre`` has re-mapped them under the right kwarg name.
+    The filter is skipped when the primitive declares ``**kwargs``.
+    """
     kwargs: dict[str, Any] = {}
     if shape.experiment_dir_arg:
         kwargs["experiment_dir"] = ns.experiment_dir
@@ -231,7 +247,20 @@ def _build_kwargs(
         extra = shape.arg_pre(ns)
         if extra:
             kwargs.update(extra)
-    return kwargs
+    return _filter_to_signature(kwargs, func)
+
+
+def _filter_to_signature(kwargs: dict[str, Any], func: Any) -> dict[str, Any]:
+    """Drop kwargs the primitive doesn't accept (CLI-only flags consumed by arg_pre)."""
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return kwargs
+    params = sig.parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    accepted = {n for n, p in params.items() if p.kind is not inspect.Parameter.VAR_POSITIONAL}
+    return {k: v for k, v in kwargs.items() if k in accepted}
 
 
 def _load_and_model_validate_spec(
@@ -323,7 +352,7 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
             return rc
 
     try:
-        kwargs = _build_kwargs(name, shape, ns)
+        kwargs = _build_kwargs(name, shape, ns, meta.func)
     except errors.HpcError as exc:
         return _err_from_hpc(exc)
 

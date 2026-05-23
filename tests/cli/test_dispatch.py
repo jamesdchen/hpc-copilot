@@ -313,6 +313,71 @@ def test_handler_replaces_default_dispatch(
     assert env["data"] == {"custom": True, "x": 42}
 
 
+# ─── signature-based kwarg filtering (CLI-only flags) ─────────────────────
+
+
+def test_cli_only_flags_dropped_when_primitive_doesnt_accept_them(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A CliArg whose attr_name doesn't match a primitive kwarg is dropped.
+
+    Pattern: a primitive's Python signature is ``recall_campaigns(roots, *,
+    spec)`` but the CLI exposes ``--root``, ``--limit``, ``--task-kind``,
+    etc., builds them into a payload in ``arg_pre``, and re-maps them
+    under ``roots=`` and ``spec=``. The raw flag values must NOT be
+    forwarded to the primitive (else TypeError on unknown kwarg).
+    """
+
+    def _arg_pre(ns: argparse.Namespace) -> dict[str, Any]:
+        return {
+            "roots": [ns.root] if ns.root else [],
+            "spec": {"limit": ns.limit, "operator": ns.operator},
+        }
+
+    @primitive(
+        name="syn-filter",
+        verb="query",
+        cli=CliShape(
+            help="Re-mapped flags.",
+            args=(
+                CliArg("--root", type=str, default=None),
+                CliArg("--limit", type=int, default=10),
+                CliArg("--operator", type=str, default=None),
+            ),
+            arg_pre=_arg_pre,
+        ),
+    )
+    def syn_filter(roots: list[str], *, spec: dict[str, Any]) -> dict[str, Any]:
+        return {"roots": roots, "limit": spec["limit"]}
+
+    ns = argparse.Namespace(root="/tmp/x", limit=20, operator="me")
+    assert dispatch_primitive("syn-filter", ns) == 0
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["data"] == {"roots": ["/tmp/x"], "limit": 20}
+
+
+def test_var_keyword_primitive_receives_all_kwargs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Filtering is skipped when the primitive declares ``**kwargs``."""
+
+    @primitive(
+        name="syn-varkw",
+        verb="query",
+        cli=CliShape(
+            help="Variadic.",
+            args=(CliArg("--alpha", type=int, default=1),),
+        ),
+    )
+    def syn_varkw(**kwargs: Any) -> dict[str, Any]:
+        return {"received": sorted(kwargs.keys())}
+
+    ns = argparse.Namespace(alpha=5)
+    assert dispatch_primitive("syn-varkw", ns) == 0
+    env = _capsys_envelope(capsys.readouterr())
+    assert env["data"] == {"received": ["alpha"]}
+
+
 # ─── HpcError propagation ─────────────────────────────────────────────────
 
 
