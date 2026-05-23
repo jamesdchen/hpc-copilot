@@ -172,8 +172,8 @@ def verify_canary(
         raise errors.SpecInvalid("wait_budget_sec must be > 0")
 
     from hpc_agent._internal import session
+    from hpc_agent.ops.aggregate.runner import verify_combiner_artifact
     from hpc_agent.runner import fetch_task_logs
-    from hpc_agent.runner.aggregate import verify_combiner_artifact
     from hpc_agent.runner.status import ssh_status_report
 
     record = session.load_run(experiment_dir, canary_run_id)

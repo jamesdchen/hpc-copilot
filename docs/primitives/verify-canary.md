@@ -16,7 +16,7 @@ backed_by:
   cli: hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id>
     [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--poll-interval-sec
     <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]
-  python: hpc_agent.atoms.canary_verify.verify_canary
+  python: hpc_agent.ops.aggregate.canary_verify.verify_canary
 exit_codes:
 - 0: ok
 - 1: user-error
