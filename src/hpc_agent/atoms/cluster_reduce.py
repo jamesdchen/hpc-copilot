@@ -32,8 +32,10 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
+    import argparse
     from pathlib import Path
 
 # Default cluster-side output path under remote_path. The reducer is
@@ -118,6 +120,24 @@ def _parse_local_output(local_output: Path, *, run_id: str) -> dict:
     return parsed
 
 
+def _cluster_reduce_arg_pre(ns: argparse.Namespace) -> dict[str, Any]:
+    """Parse ``--extra-env "k=v,k=v"`` into a ``{k: v}`` dict.
+
+    Returns ``{"extra_env": None}`` when the flag is unset or empty so
+    the primitive sees its own default (no extra env), and an explicit
+    dict otherwise. Tokens without ``=`` are silently dropped — matches
+    the pre-migration cmd_cluster_reduce behaviour.
+    """
+    extra_env: dict[str, str] | None = None
+    if getattr(ns, "extra_env", None):
+        extra_env = {}
+        for tok in str(ns.extra_env).split(","):
+            if "=" in tok:
+                k, _, v = tok.partition("=")
+                extra_env[k.strip()] = v.strip()
+    return {"extra_env": extra_env}
+
+
 @primitive(
     name="cluster-reduce",
     verb="mutate",
@@ -132,7 +152,63 @@ def _parse_local_output(local_output: Path, *, run_id: str) -> dict:
     ],
     idempotent=True,
     idempotency_key="run_id",
-    cli="hpc-agent cluster-reduce --experiment-dir <path> --run-id <id> [--aggregate-cmd <cmd>]",  # noqa: E501
+    cli=CliShape(
+        help=(
+            "Run the user's reducer on the cluster, pull only its single "
+            "output JSON. Eliminates the bulk per-task rsync_pull failure "
+            "mode at /aggregate-hpc + campaign-loop time."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--run-id",
+                type=str,
+                required=True,
+                help="Run identifier (matches .hpc/runs/<run_id>.json).",
+            ),
+            CliArg(
+                "--aggregate-cmd",
+                type=str,
+                default=None,
+                help=(
+                    "Shell command to run on the cluster. Defaults to the run "
+                    "sidecar's aggregate_defaults.aggregate_cmd."
+                ),
+            ),
+            CliArg(
+                "--output-path",
+                type=str,
+                default=None,
+                help=(
+                    "Cluster-side path the reducer writes its single JSON output. "
+                    "Defaults to '_aggregated/<run_id>.json' under remote_path. "
+                    "Threaded as $HPC_AGGREGATED_OUTPUT to the reducer."
+                ),
+            ),
+            CliArg(
+                "--local-dir",
+                type=str,
+                default=None,
+                help="Local destination dir; defaults to <experiment>/_aggregated/<run_id>/.",
+            ),
+            CliArg(
+                "--extra-env",
+                type=str,
+                default=None,
+                help=(
+                    "Comma-separated KEY=VALUE pairs forwarded to the reducer "
+                    "(in addition to HPC_RUN_ID / HPC_AGGREGATED_OUTPUT)."
+                ),
+            ),
+            CliArg(
+                "--timeout-sec",
+                type=int,
+                default=1800,
+                help="Reducer timeout in seconds (default 1800 = 30 min).",
+            ),
+        ),
+        arg_pre=_cluster_reduce_arg_pre,
+    ),
     agent_facing=True,
 )
 def cluster_reduce(

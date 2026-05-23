@@ -16,15 +16,13 @@ from __future__ import annotations
 
 import ast
 import keyword
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.actions.build_tasks_py import BuildTasksPyInput
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 # Axis names whose uppercase form would shadow a real env var when the
 # dispatcher exports them. The dispatcher (mapreduce/dispatch.py) does
@@ -419,6 +417,30 @@ def resolve(task_id: int) -> dict:
 '''
 
 
+def _build_tasks_py_arg_pre(ns: Any) -> dict[str, Any]:
+    """Load + schema-validate ``--spec``, fold ``--force`` into it, return ``{"spec": model}``.
+
+    ``--force`` overrides ``spec.force`` because the dispatcher's standard
+    ``spec_arg=True`` flow would model-validate the raw spec *before* the
+    flag could be merged, leaving an explicit ``--force`` silently ignored
+    when the spec omits it. Doing the load+merge+validate dance here keeps
+    the flag's "overwrite even if spec says no" semantics intact.
+    """
+    from hpc_agent.cli._helpers import _load_spec, _validate_against_schema
+
+    raw = _load_spec(ns.spec, schema_name=None)
+    if not isinstance(raw, dict):
+        raise errors.SpecInvalid("build-tasks-py input must be a JSON object")
+    _validate_against_schema(raw, "build_tasks_py")
+    if getattr(ns, "force", False):
+        raw["force"] = True
+    try:
+        spec = BuildTasksPyInput.model_validate(raw)
+    except Exception as exc:  # noqa: BLE001 — pydantic.ValidationError
+        raise errors.SpecInvalid(str(exc)) from exc
+    return {"spec": spec}
+
+
 @primitive(
     name="build-tasks-py",
     verb="scaffold",
@@ -428,13 +450,42 @@ def resolve(task_id: int) -> dict:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-agent build-tasks-py --spec <path>",
+    cli=CliShape(
+        help=(
+            "Scaffold <experiment>/.hpc/tasks.py from the canonical "
+            "cartesian-product template (Pattern 1 of tasks_example.py). "
+            "Spec file is {axes: [{name, values}], flags_by_executor: "
+            "{module_path: [{name, type, default?}]}}. Refuses to "
+            "overwrite an existing tasks.py without --force so "
+            "hand-edited Pattern 2/3 conversions survive."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--spec",
+                type=Path,
+                required=True,
+                help=(
+                    "JSON spec file (schemas/build_tasks_py.input.json): "
+                    "{axes: [{name, values}], flags_by_executor: "
+                    "{module: [{name, type, default?}]}}."
+                ),
+            ),
+            CliArg(
+                "--force",
+                action="store_true",
+                help="Overwrite an existing .hpc/tasks.py.",
+            ),
+        ),
+        arg_pre=_build_tasks_py_arg_pre,
+    ),
     agent_facing=True,
 )
 def build_tasks_py(
     experiment_dir: Path,
     *,
     spec: BuildTasksPyInput,
+    force: bool = False,  # noqa: ARG001 — absorbs the dispatcher's --force leak; semantics live on spec.force
 ) -> dict[str, Any]:
     """Scaffold ``<experiment>/.hpc/tasks.py`` from the supplied axes + flags.
 

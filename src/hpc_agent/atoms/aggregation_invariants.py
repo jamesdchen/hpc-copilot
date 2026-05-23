@@ -17,13 +17,12 @@ from __future__ import annotations
 import csv
 import json
 import math
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 
 def _is_nan(value: str) -> bool:
@@ -147,7 +146,42 @@ def check_result_columns(
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="run_id",
-    cli="hpc-agent verify-aggregation-complete --experiment-dir <path> --run-id <id> --combiner-dir <path>",  # noqa: E501
+    cli=CliShape(
+        help=(
+            "Walk the run sidecar's wave_map + the locally-pulled "
+            "_combiner/ dir; report all_waves_combined / all_tasks_present "
+            "/ provenance_present invariants. Returns ok plus the missing "
+            "/ unexpected lists."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--run-id",
+                type=str,
+                required=True,
+                help="Run identifier (matches .hpc/runs/<run_id>.json sidecar stem).",
+            ),
+            CliArg(
+                "--combiner-dir",
+                type=Path,
+                required=True,
+                dest="combiner_dir_local",
+                help="Local path the cluster's _combiner/ was rsync_pull'd to.",
+            ),
+            CliArg(
+                "--results-dir",
+                type=Path,
+                default=None,
+                dest="results_dir_local",
+                help=(
+                    "Optional local path the cluster's per-task result files were "
+                    "pulled to. When given AND the run sidecar's `results` block "
+                    "declares expected_columns / metric_column, each CSV is "
+                    "verified for the declared columns and a non-NaN metric value."
+                ),
+            ),
+        ),
+    ),
 )
 def verify_aggregation_complete(
     experiment_dir: Path,

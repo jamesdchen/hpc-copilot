@@ -41,7 +41,7 @@ error_codes:
   category: internal
   retry_safe: false
 backed_by:
-  cli: hpc-agent failures --run-id <id> [--lines <n>]
+  cli: hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]
   python: hpc_agent.atoms.failures.fetch_failures
 exit_codes:
 - 0: ok

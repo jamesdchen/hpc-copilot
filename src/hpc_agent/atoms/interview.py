@@ -32,18 +32,25 @@ overwrites interview.json with byte-equivalent content modulo the
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.time import utcnow
 from hpc_agent._schema_models.actions.interview import InterviewSpec
+from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 
 if TYPE_CHECKING:
+    from argparse import Namespace
     from collections.abc import Mapping
-    from pathlib import Path
 
 
 __all__ = ["record_interview"]
+
+
+def _interview_arg_pre(ns: Namespace) -> dict[str, Any]:
+    """Resolve --campaign-dir to an absolute Path for record_interview."""
+    return {"campaign_dir": Path(ns.campaign_dir).resolve()}
 
 
 @primitive(
@@ -52,7 +59,29 @@ __all__ = ["record_interview"]
     side_effects=[SideEffect("file_write", "<campaign_dir>/{interview.json,meta.json}")],
     idempotent=True,
     idempotency_key="campaign_dir",
-    cli="hpc-agent interview",
+    cli=CliShape(
+        help=(
+            "Validate an agent-written tasks.py against the structured intent "
+            "from an interview, then persist intent + cmd_sha + dry-resolve "
+            "preview to <campaign-dir>/interview.json."
+        ),
+        spec_arg=True,
+        spec_model=InterviewSpec,
+        schema_ref=SchemaRef(input="interview"),
+        args=(
+            CliArg(
+                "--campaign-dir",
+                type=str,
+                required=True,
+                help=(
+                    "Campaign workdir; must already contain a tasks.py written by the "
+                    "interview agent. interview.json (and optionally meta.json) is "
+                    "written into this directory."
+                ),
+            ),
+        ),
+        arg_pre=_interview_arg_pre,
+    ),
     agent_facing=True,
 )
 def record_interview(

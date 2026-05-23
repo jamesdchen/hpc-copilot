@@ -417,19 +417,12 @@ def test_verb_group_nests_under_parent_in_parser() -> None:
     def syngrp_status(*, id: str) -> dict[str, Any]:
         return {"id": id}
 
-    # We need the legacy fallback to be a no-op (no extra add_parser).
-    # Patch _register_legacy_subcommands to a noop for this test so the
-    # registry-only walk drives the parser.
-    import hpc_agent.agent_cli as _ac
+    # Phase 3: legacy fallback is gone. Tier 3 modules are still
+    # registered though; that's fine — they live under their own
+    # top-level verbs and don't collide with the synthetic ``syngrp``.
+    from hpc_agent.cli.parser import build_parser
 
-    real_legacy = _ac._register_legacy_subcommands
-    _ac._register_legacy_subcommands = lambda sub, **_: None
-    try:
-        from hpc_agent.cli.parser import build_parser
-
-        parser = build_parser()
-    finally:
-        _ac._register_legacy_subcommands = real_legacy
+    parser = build_parser()
 
     # Top-level should have a "syngrp" verb whose nested subparser owns "status".
     sub_actions = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]

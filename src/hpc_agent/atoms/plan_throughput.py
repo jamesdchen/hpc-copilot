@@ -18,6 +18,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_constraints
 from hpc_agent.planning.throughput import WorkloadSpec, build_wave_map, compute_submission_plan
 
@@ -30,7 +31,36 @@ __all__ = ["plan_throughput"]
     side_effects=[],
     error_codes=[errors.SpecInvalid, errors.ClusterUnknown],
     idempotent=True,
-    cli="hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s <n>]",
+    cli=CliShape(
+        help=(
+            "Pack a task grid into batched submission waves. Pure-local: "
+            "reads the cluster's constraints from clusters.yaml and returns "
+            "the wave plan + wave_map for the per-run sidecar."
+        ),
+        args=(
+            CliArg(
+                "--cluster",
+                type=str,
+                required=True,
+                help="Cluster name; its constraints block in clusters.yaml supplies the limits.",
+            ),
+            CliArg(
+                "--total-tasks",
+                type=int,
+                required=True,
+                help="Total task count to pack into waves.",
+            ),
+            CliArg(
+                "--est-task-duration-s",
+                type=int,
+                default=None,
+                help=(
+                    "Estimated per-task wall seconds. When given, enables the "
+                    "walltime-feasibility check and the total-time estimate."
+                ),
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def plan_throughput(

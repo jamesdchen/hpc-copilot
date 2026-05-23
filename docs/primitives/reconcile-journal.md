@@ -24,8 +24,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent reconcile --run-id <id> --scheduler {sge|slurm} [--experiment-dir
-    <dir>]
+  cli: hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler
+    <scheduler>
   python: hpc_agent.runner.reconcile.reconcile
 exit_codes:
 - 0: ok

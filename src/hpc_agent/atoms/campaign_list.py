@@ -7,6 +7,7 @@ from collections import Counter
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -17,7 +18,11 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign list [--experiment-dir <dir>]",
+    cli=CliShape(
+        help="List every campaign with at least one sidecar in this experiment.",
+        experiment_dir_arg=True,
+        group="campaign",
+    ),
     agent_facing=True,
 )
 def campaign_list(*, experiment_dir: Path) -> dict[str, Any]:

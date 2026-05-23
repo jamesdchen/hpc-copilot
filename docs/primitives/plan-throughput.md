@@ -25,8 +25,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent plan-throughput --cluster <name> --total-tasks <n> [--est-task-duration-s
-    <n>]
+  cli: hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s
+    <est_task_duration_s>]
   python: hpc_agent.atoms.plan_throughput.plan_throughput
 exit_codes:
 - 0: ok

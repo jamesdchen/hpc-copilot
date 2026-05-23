@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import shlex
 from typing import TYPE_CHECKING
@@ -11,12 +12,26 @@ from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.session import RunRecord, _atomic_write_json
 from hpc_agent._internal.time import utcnow_iso
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.errors import RemoteCommandFailed
 from hpc_agent.infra import remote
 from hpc_agent.runner._ssh import _parse_remote_json
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _status_handler(ns: argparse.Namespace) -> int:
+    """Tier 2 escape hatch — composite envelope folds sidecar + journal data.
+
+    The hand-written body lives in :mod:`hpc_agent.cli.lifecycle` to
+    keep the runner module focused on the primitive itself; the
+    handler closure on this side is only the deferred-import shim
+    the dispatcher invokes.
+    """
+    from hpc_agent.cli.lifecycle import cmd_status
+
+    return cmd_status(ns)
 
 
 def _ssh_status_report(
@@ -81,7 +96,26 @@ ssh_status_report = _ssh_status_report
     error_codes=[errors.JournalCorrupt, errors.SshUnreachable, errors.RemoteCommandFailed],
     idempotent=True,
     idempotency_key="run_id",
-    cli="hpc-agent status --run-id <id> [--experiment-dir <dir>]",
+    cli=CliShape(
+        help="Poll cluster status for a run_id; one-shot, returns snapshot.",
+        verb="status",
+        requires_ssh=True,
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--run-id", type=str, required=True),
+            CliArg(
+                "--min-rows",
+                type=int,
+                default=0,
+                help=(
+                    "Require each task's CSV result to have at least N data rows "
+                    "beyond the header. A completed task with fewer rows is demoted "
+                    "complete -> failed. Default 0 accepts header-only CSVs."
+                ),
+            ),
+        ),
+        handler=_status_handler,
+    ),
     agent_facing=True,
 )
 def record_status(

@@ -20,7 +20,7 @@ error_codes:
   category: cluster
   retry_safe: false
 backed_by:
-  cli: hpc-agent monitor-flow --spec <path>
+  cli: hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]
   python: hpc_agent.flows.monitor_flow.monitor_flow
 ---
 

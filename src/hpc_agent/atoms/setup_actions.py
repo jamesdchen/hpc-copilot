@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,7 +62,14 @@ def _summarize_sidecar(path: Any) -> dict[str, Any]:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent suggest-setup-action --experiment-dir <path>",
+    cli=CliShape(
+        help=(
+            "Run the /submit-hpc Setup priority cascade and recommend "
+            "{action: monitor|reuse|interview|fresh, run_id, candidates}. "
+            "Replaces the priority-list-walking prose at Step 0."
+        ),
+        experiment_dir_arg=True,
+    ),
     agent_facing=True,
 )
 def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
@@ -169,7 +177,22 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="cmd_sha",
-    cli="hpc-agent find-prior-run --experiment-dir <path> --cmd-sha <hex>",
+    cli=CliShape(
+        help=(
+            "Look up a prior run by cmd_sha for /submit-hpc Step 6c "
+            "resume detection. Returns {found, run_id, is_orphan, "
+            "status, age_sec, ...}."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--cmd-sha",
+                type=str,
+                required=True,
+                help="The cmd_sha (SHA-256 hex) to match against existing sidecars.",
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def find_prior_run(

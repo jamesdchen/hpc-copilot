@@ -12,7 +12,22 @@ from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.session import RunRecord
 from hpc_agent._internal.time import utcnow_iso
 from hpc_agent._schema_models.actions.submit import SubmitSpec
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
+
+
+def _submit_spec_handler(ns):  # type: ignore[no-untyped-def]
+    """Tier 2 handler — delegates to the hand-written cmd_submit shim.
+
+    The submit-spec primitive's CLI adapter has branching that the
+    auto-dispatcher cannot model: a manual required-field check + a
+    dry-run path that emits a different envelope shape than the
+    success path. The hand-written body lives in
+    :mod:`hpc_agent.cli.submit`; this thunk wires it to the registry.
+    """
+    from hpc_agent.cli.submit import cmd_submit
+
+    return cmd_submit(ns)
 
 
 @primitive(
@@ -30,7 +45,27 @@ from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
     ],
     idempotent=True,
     idempotency_key="spec.run_id",
-    cli="hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]",
+    cli=CliShape(
+        help=(
+            "Record a submission in the journal. Idempotent on run_id: "
+            "the bundled atomic-ops layer dedups so a retry on transient "
+            "network errors does not double-submit."
+        ),
+        verb="submit",
+        requires_ssh=True,
+        spec_arg=True,
+        spec_model=None,
+        spec_required=True,
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--dry-run",
+                action="store_true",
+                help="Validate the spec and report what would be launched; no SSH/qsub.",
+            ),
+        ),
+        handler=_submit_spec_handler,
+    ),
     agent_facing=True,
 )
 def submit_and_record(

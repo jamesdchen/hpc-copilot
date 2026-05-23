@@ -7,12 +7,26 @@ from typing import TYPE_CHECKING
 from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
 
 if TYPE_CHECKING:
+    import argparse
     from pathlib import Path
 
     from hpc_agent._internal.session import RunRecord
+
+
+def _aggregate_handler(ns: argparse.Namespace) -> int:
+    """Tier 2 escape hatch — delegate to the hand-written cmd_aggregate body.
+
+    The CLI verb is ``aggregate`` (legacy name); the primitive is
+    ``combine-wave``. The handler lives in :mod:`hpc_agent.cli.aggregate`
+    so the heavy ~130-LOC body stays out of this atom file.
+    """
+    from hpc_agent.cli.aggregate import cmd_aggregate
+
+    return cmd_aggregate(ns)
 
 
 @primitive(
@@ -30,7 +44,44 @@ if TYPE_CHECKING:
     error_codes=[errors.SshUnreachable, errors.CombinerFailed, errors.JournalCorrupt],
     idempotent=True,
     idempotency_key="(run_id, wave)",
-    cli="hpc-agent aggregate --run-id <id> --wave <N> [--output-dir <path>] [--force]",
+    cli=CliShape(
+        help="Run the on-cluster combiner for one wave; records outcome to journal.",
+        verb="aggregate",
+        requires_ssh=True,
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--run-id", type=str, required=True),
+            CliArg("--wave", type=int, required=True),
+            CliArg(
+                "--force",
+                action="store_true",
+                help="Re-run the combiner even if the wave appears combined.",
+            ),
+            CliArg(
+                "--require-outputs",
+                type=str,
+                default=None,
+                help=(
+                    "Path template (with {task_id}) checked on the cluster before "
+                    "the combiner runs. Refuses to combine if any task in this "
+                    "wave is missing its expected output. Default reads from the "
+                    "run sidecar's aggregate_defaults.require_outputs."
+                ),
+            ),
+            CliArg(
+                "--expect-output",
+                type=str,
+                default=None,
+                help=(
+                    "Remote path (relative to remote_path) that the combiner must "
+                    "produce. Verified after the combiner exits 0; .json files "
+                    "are also checked for parseability. Default reads from the "
+                    "run sidecar's aggregate_defaults.expect_output."
+                ),
+            ),
+        ),
+        handler=_aggregate_handler,
+    ),
     agent_facing=True,
 )
 def combine_wave(

@@ -13,9 +13,42 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
+    import argparse
     from pathlib import Path
+
+
+def _axes_init_arg_pre(ns: argparse.Namespace) -> dict[str, Any]:
+    """Parse ``--axes "NAME:SIZE,..."`` and ``--homogeneous-axes`` into list/dict shapes.
+
+    Both flags are typed as comma-separated strings on the CLI (humans
+    type them; argparse can't natively coerce into the primitive's
+    ``list[dict]`` shape), so this hook does the comma-split + key-value
+    parse before the primitive is called.
+    """
+    homogeneous = (
+        [s.strip() for s in ns.homogeneous_axes.split(",") if s.strip()]
+        if getattr(ns, "homogeneous_axes", None)
+        else []
+    )
+    axes_list: list[dict[str, Any]] = []
+    raw_axes = getattr(ns, "axes", None)
+    if raw_axes:
+        for tok in raw_axes.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            if ":" not in tok:
+                raise errors.SpecInvalid(f"--axes entry {tok!r} must be NAME:SIZE")
+            name, _, size_s = tok.partition(":")
+            try:
+                size = int(size_s)
+            except ValueError as exc:
+                raise errors.SpecInvalid(f"--axes entry {tok!r} has non-integer size") from exc
+            axes_list.append({"name": name.strip(), "size": size})
+    return {"axes": axes_list or None, "homogeneous_axes": homogeneous}
 
 
 @primitive(
@@ -27,7 +60,40 @@ if TYPE_CHECKING:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-agent axes-init",
+    cli=CliShape(
+        help=(
+            "Write <experiment>/.hpc/axes.yaml with per-axis homogeneity "
+            "hints used by the cold-start axis_picker. The agent typically "
+            "calls this once per repo at deploy time after introspecting "
+            "tasks.py."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--axes",
+                type=str,
+                default="",
+                help=(
+                    "Comma-separated NAME:SIZE pairs for every parallel axis "
+                    "(e.g. 'model:4,data:3,window:20'). Order defines the "
+                    "cartesian-product convention; required for submit-flow's "
+                    "wave_map building."
+                ),
+            ),
+            CliArg(
+                "--homogeneous-axes",
+                type=str,
+                default="",
+                help=("Comma-separated axis names to mark homogeneous (e.g. 'window,fold')."),
+            ),
+            CliArg(
+                "--force",
+                action="store_true",
+                help=("Overwrite an existing axes.yaml. Default is refuse-without-force."),
+            ),
+        ),
+        arg_pre=_axes_init_arg_pre,
+    ),
     agent_facing=True,
 )
 def axes_init(

@@ -11,7 +11,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent export-package
+  cli: hpc-agent export-package [--experiment-dir <dir>] [--force]
   python: hpc_agent.atoms.export_package.export_package
 ---
 # export-package

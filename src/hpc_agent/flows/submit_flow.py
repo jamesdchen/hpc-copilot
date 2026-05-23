@@ -32,10 +32,38 @@ from hpc_agent import errors, runner
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
+from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends.sge_remote import RemoteSGEBackend
 from hpc_agent.infra.backends.slurm_remote import RemoteSlurmBackend
 from hpc_agent.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
 from hpc_agent.runner import submit_and_record
+
+
+def _submit_flow_handler(ns):  # type: ignore[no-untyped-def]
+    """Tier 2 handler — delegates to the hand-written cmd_submit_flow shim.
+
+    submit-flow's CLI adapter auto-routes to ``submit-flow-batch`` when
+    the spec carries a ``specs`` list, injects ``--partial-ok`` into the
+    spec, and emits a dry-run envelope whose shape diverges from the
+    success path. None of that fits the auto-dispatcher's hook surface.
+    """
+    from hpc_agent.cli.submit import cmd_submit_flow
+
+    return cmd_submit_flow(ns)
+
+
+def _submit_flow_batch_handler(ns):  # type: ignore[no-untyped-def]
+    """Tier 2 handler — delegates to the hand-written cmd_submit_flow_batch shim.
+
+    submit-flow-batch runs TWO schema passes (the outer wrapper against
+    ``submit_flow_batch.input.json`` + a per-entry pass against
+    ``submit_flow.input.json``) and the dry-run envelope diverges from
+    the success path.
+    """
+    from hpc_agent.cli.submit import cmd_submit_flow_batch
+
+    return cmd_submit_flow_batch(ns)
+
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -256,7 +284,39 @@ def _make_single_array_submission(
     idempotent=True,
     idempotency_key="run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
-    cli="hpc-agent submit-flow --spec <path>",
+    cli=CliShape(
+        help=(
+            "Workflow atom: pre-flight + rsync + deploy + qsub + record in "
+            "one shot. Auto-dispatches to submit-flow-batch when the spec "
+            "is a {specs: [...]} object — callers always invoke this one "
+            "subcommand whether the iteration emits 1 spec or N. Idempotent "
+            "on run_id (or per-spec run_id when batched)."
+        ),
+        requires_ssh=True,
+        spec_arg=True,
+        spec_required=True,
+        schema_ref=SchemaRef(input="submit_flow"),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--dry-run",
+                action="store_true",
+                help=("Validate the spec and report what would be launched; no SSH/rsync/qsub."),
+            ),
+            CliArg(
+                "--partial-ok",
+                action="store_true",
+                help=(
+                    "Tolerate per-task failures: when the wave finishes, classify "
+                    "as `complete` if at least one task succeeded; record failed "
+                    "task IDs in <run_id>.failed.json so aggregate-flow can skip "
+                    "them. Without this flag (the default), any failure aborts "
+                    "the wave with lifecycle_state=failed."
+                ),
+            ),
+        ),
+        handler=_submit_flow_handler,
+    ),
     agent_facing=True,
 )
 def submit_flow(
@@ -457,7 +517,28 @@ def _submit_one_spec(
     idempotent=True,
     idempotency_key="specs.run_id",
     exit_codes=[(0, "ok"), (1, "user-error"), (2, "cluster"), (3, "internal")],
-    cli="hpc-agent submit-flow-batch --spec <path>",
+    cli=CliShape(
+        help=(
+            "Workflow atom: rsync + deploy ONCE, then qsub N specs sharing "
+            "the same (ssh_target, remote_path). Use whenever a campaign or "
+            "sweep submits >1 specs to the same cluster — bundles 13×N ssh "
+            "handshakes into ~3 (rsync + deploy + multiplexed qsubs). Spec "
+            "file is a JSON list."
+        ),
+        requires_ssh=True,
+        spec_arg=True,
+        spec_required=True,
+        schema_ref=SchemaRef(input="submit_flow_batch"),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--dry-run",
+                action="store_true",
+                help="Validate the batch + report shared targets; no SSH/rsync/qsub.",
+            ),
+        ),
+        handler=_submit_flow_batch_handler,
+    ),
     agent_facing=True,
 )
 def submit_flow_batch(

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -32,7 +33,47 @@ if TYPE_CHECKING:
     idempotent=True,
     idempotency_key="campaign_id",
     error_codes=[errors.SpecInvalid],
-    cli="hpc-agent campaign init --campaign-id <id> --strategy <s>",
+    cli=CliShape(
+        help="Write the campaign manifest from CLI args.",
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--campaign-id", type=str, required=True),
+            CliArg("--goal", type=str, default=""),
+            CliArg("--max-iters", type=int, default=None),
+            CliArg("--metric", type=str, default=None),
+            CliArg("--target", type=float, default=None),
+            CliArg(
+                "--direction",
+                type=str,
+                default=None,
+                choices=("minimize", "maximize"),
+            ),
+            CliArg("--plateau-window", type=int, default=None),
+            CliArg("--plateau-tolerance", type=float, default=None),
+            CliArg(
+                "--plateau-mode",
+                type=str,
+                default=None,
+                choices=("prior_window", "all_time_best"),
+                help=(
+                    "Plateau baseline (default ``all_time_best``). Controls whether the "
+                    "recent window is compared to the all-time prior best or to the "
+                    "prior window of equal size — see ``campaign-converged --help``."
+                ),
+            ),
+            CliArg("--max-jobs", type=int, default=None),
+            CliArg("--max-tasks", type=int, default=None),
+            CliArg("--max-walltime-sec", type=int, default=None),
+            CliArg("--strategy-name", type=str, default=None),
+            CliArg(
+                "--strategy-params-json",
+                type=str,
+                default=None,
+                help="JSON object for strategy.params (round-tripped untouched).",
+            ),
+        ),
+        group="campaign",
+    ),
     agent_facing=True,
 )
 def campaign_init(

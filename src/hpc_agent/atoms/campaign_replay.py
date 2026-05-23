@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -22,7 +23,15 @@ if TYPE_CHECKING:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent campaign replay --campaign-id <id> [--last-n <n>]",
+    cli=CliShape(
+        help="Return the last N iterations of a campaign with reduced metrics.",
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--campaign-id", type=str, required=True),
+            CliArg("--last-n", type=int, default=5),
+        ),
+        group="campaign",
+    ),
 )
 def campaign_replay(
     *,

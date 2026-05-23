@@ -13,6 +13,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 
 
@@ -22,7 +23,7 @@ from hpc_agent.infra.clusters import load_clusters_config
     side_effects=[],
     error_codes=[errors.ConfigInvalid],
     idempotent=True,
-    cli="hpc-agent clusters list",
+    cli=CliShape(help="List all clusters.", group="clusters"),
     agent_facing=True,
 )
 def list_clusters() -> dict[str, Any]:
@@ -47,7 +48,22 @@ def list_clusters() -> dict[str, Any]:
     side_effects=[],
     error_codes=[errors.ClusterUnknown, errors.ConfigInvalid],
     idempotent=True,
-    cli="hpc-agent clusters describe <name> [--strict]",
+    cli=CliShape(
+        help="Print one cluster's config.",
+        group="clusters",
+        args=(
+            CliArg("name", type=str, help="Cluster name."),
+            CliArg(
+                "--strict",
+                action="store_true",
+                help=(
+                    "Surface yaml keys not recognized by ClusterConfig under "
+                    "data.unknown_keys. Useful for catching typos that the "
+                    "default extra='ignore' validation would silently drop."
+                ),
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def describe_cluster(*, name: str, strict: bool = False) -> dict[str, Any]:

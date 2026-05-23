@@ -36,14 +36,13 @@ import hashlib
 import json
 import re
 import subprocess
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.actions.export_package import ExportPackageInput
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 __all__ = ["export_package"]
 
@@ -100,6 +99,16 @@ def _ruff_canonicalise(path: Path) -> None:
             return
 
 
+def _export_package_arg_pre(ns: Any) -> dict[str, Any]:
+    """Translate ``--force`` into an :class:`ExportPackageInput` for the dispatcher.
+
+    The primitive's wire input is the spec model (whose ``force`` field
+    drives cache-busting); the human-facing CLI exposes ``--force``
+    directly for convenience. This pre-call hook bridges them.
+    """
+    return {"spec": ExportPackageInput(force=bool(getattr(ns, "force", False)))}
+
+
 @primitive(
     name="export-package",
     verb="scaffold",
@@ -110,13 +119,33 @@ def _ruff_canonicalise(path: Path) -> None:
     error_codes=[errors.SpecInvalid],
     idempotent=True,
     idempotency_key="experiment_dir",
-    cli="hpc-agent export-package",
+    cli=CliShape(
+        help=(
+            "Build <experiment>/src/ from the notebooks under "
+            "notebooks/{pipeline,executors,scripts}/. Convention-driven: "
+            "the output module name and the exporter (strict-AST for "
+            "@register_run executors, # export-marker for pipeline "
+            "libraries) are both derived. Content-hash caches against "
+            ".hpc/.build-cache.json — a second run with no notebook edits "
+            "is all cache hits."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--force",
+                action="store_true",
+                help="Ignore the build cache and re-export every notebook.",
+            ),
+        ),
+        arg_pre=_export_package_arg_pre,
+    ),
     agent_facing=True,
 )
 def export_package(
     experiment_dir: Path,
     *,
     spec: ExportPackageInput | None = None,
+    force: bool = False,  # noqa: ARG001 — absorbs the dispatcher's --force leak; semantics live on spec.force
 ) -> dict[str, Any]:
     """Build ``<experiment>/src/`` from the experiment's notebooks.
 

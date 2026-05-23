@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -16,7 +17,16 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign status --campaign-id <id> [--experiment-dir <dir>]",
+    cli=CliShape(
+        help=(
+            "Report per-iteration reduced metrics for one campaign. "
+            "Walks every sidecar tagged with --campaign-id, runs "
+            "reduce_metrics on each, and emits the history dict-list."
+        ),
+        experiment_dir_arg=True,
+        args=(CliArg("--campaign-id", type=str, required=True),),
+        group="campaign",
+    ),
     agent_facing=True,
 )
 def campaign_status(*, experiment_dir: Path, campaign_id: str) -> dict[str, Any]:

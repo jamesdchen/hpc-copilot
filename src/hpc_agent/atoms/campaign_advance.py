@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,7 +26,38 @@ if TYPE_CHECKING:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign advance --campaign-id <id>",
+    cli=CliShape(
+        help=(
+            "Decide the next campaign action (continue / stop_converged / "
+            "stop_over_budget / wait_in_flight)."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--campaign-id", type=str, required=True),
+            CliArg("--max-iters", type=int, default=None),
+            CliArg("--metric", type=str, default=None),
+            CliArg("--target", type=float, default=None),
+            CliArg(
+                "--direction",
+                type=str,
+                default=None,
+                choices=("minimize", "maximize"),
+            ),
+            CliArg("--plateau-window", type=int, default=None),
+            CliArg("--plateau-tolerance", type=float, default=None),
+            CliArg(
+                "--plateau-mode",
+                type=str,
+                default=None,
+                choices=("prior_window", "all_time_best"),
+                help="See ``campaign-converged --help``.",
+            ),
+            CliArg("--max-jobs", type=int, default=None),
+            CliArg("--max-tasks", type=int, default=None),
+            CliArg("--max-walltime-sec", type=int, default=None),
+        ),
+        group="campaign",
+    ),
 )
 def campaign_advance(
     *,

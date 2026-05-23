@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -80,7 +81,23 @@ def _format_diff(diff: dict[str, Any]) -> str | None:
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent monitor-summary --experiment-dir <path> --run-id <id>",
+    cli=CliShape(
+        help=(
+            "Render the canonical user-facing tick summary for a run. "
+            "Reads .hpc/runs/<run_id>.monitor.jsonl + the run journal "
+            "and returns {lifecycle_state, headline, body, armed_hint}. "
+            "Slash command prints these verbatim."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--run-id",
+                type=str,
+                required=True,
+                help="Run identifier (matches the .hpc/runs/<run_id>.json sidecar stem).",
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def monitor_summary(

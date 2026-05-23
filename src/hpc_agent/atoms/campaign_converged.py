@@ -17,6 +17,7 @@ import json
 from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent._internal.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -45,7 +46,38 @@ def _extract_metric(history: list[dict[str, Any]], metric: str) -> list[float]:
     verb="query",
     side_effects=[],
     idempotent=True,
-    cli="hpc-agent campaign converged --campaign-id <id>",
+    cli=CliShape(
+        help="Apply user-supplied stop criteria to a campaign's history.",
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--campaign-id", type=str, required=True),
+            CliArg("--max-iters", type=int, default=None),
+            CliArg("--metric", type=str, default=None),
+            CliArg("--target", type=float, default=None),
+            CliArg(
+                "--direction",
+                type=str,
+                default=None,
+                choices=("minimize", "maximize"),
+            ),
+            CliArg("--plateau-window", type=int, default=None),
+            CliArg("--plateau-tolerance", type=float, default=None),
+            CliArg(
+                "--plateau-mode",
+                type=str,
+                default=None,
+                choices=("prior_window", "all_time_best"),
+                help=(
+                    "Plateau baseline. ``all_time_best`` (default): fires when the "
+                    "recent ``--plateau-window`` iters didn't beat the all-time prior "
+                    "best — 'no new record in N iters'. ``prior_window``: fires when "
+                    "they didn't beat the prior window of equal size — 'improvements "
+                    "have stalled'. The prior_window mode requires 2*window history."
+                ),
+            ),
+        ),
+        group="campaign",
+    ),
 )
 def campaign_converged(
     *,

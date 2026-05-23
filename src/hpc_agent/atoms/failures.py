@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 
 if TYPE_CHECKING:
@@ -57,7 +58,20 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
     side_effects=[SideEffect("ssh", "<cluster>")],
     error_codes=[errors.SshUnreachable, errors.JournalCorrupt],
     idempotent=True,
-    cli="hpc-agent failures --run-id <id> [--lines <n>]",
+    cli=CliShape(
+        help="Cluster failed tasks by stderr fingerprint for triage.",
+        requires_ssh=True,
+        experiment_dir_arg=True,
+        args=(
+            CliArg("--run-id", type=str, required=True),
+            CliArg(
+                "--lines",
+                type=int,
+                default=30,
+                help="Per-task stderr tail length used for fingerprinting (default 30).",
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def fetch_failures(

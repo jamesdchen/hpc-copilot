@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.runner import record_status
 
 if TYPE_CHECKING:
@@ -59,7 +60,41 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
     error_codes=[errors.SpecInvalid, errors.SshUnreachable],
     idempotent=True,
     idempotency_key="canary_run_id",
-    cli="hpc-agent verify-canary --experiment-dir <path> --canary-run-id <id> [--expect-output <path>] [--fingerprint <relpath>]",  # noqa: E501
+    cli=CliShape(
+        help=(
+            "Wait + grep + output-check for a 1-task canary submission. "
+            "Polls until terminal, scans stderr for known failure markers, "
+            "optionally checks expect_output exists. Returns "
+            "{ok, failure_kind, details, stderr_tail}."
+        ),
+        experiment_dir_arg=True,
+        args=(
+            CliArg(
+                "--canary-run-id",
+                type=str,
+                required=True,
+                help="Run ID of the canary (typically <main_run_id>-canary).",
+            ),
+            CliArg(
+                "--expect-output",
+                type=str,
+                default=None,
+                help="Optional path (relative to remote_path) the canary should have written.",
+            ),
+            CliArg(
+                "--poll-interval-sec",
+                type=int,
+                default=30,
+                help="Seconds between status polls (default 30).",
+            ),
+            CliArg(
+                "--wait-budget-sec",
+                type=int,
+                default=1800,
+                help="Total seconds to wait for terminal before giving up (default 1800).",
+            ),
+        ),
+    ),
     agent_facing=True,
 )
 def verify_canary(

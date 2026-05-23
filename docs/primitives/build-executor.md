@@ -28,8 +28,8 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent build-executor --name <stem> [--output-dir <dir>] [--type plain]
-    [--force]
+  cli: hpc-agent build-executor --name <name> [--output-dir <output_dir>] [--type
+    <type>] [--force]
   python: hpc_agent.atoms.build_executor.build_executor
 exit_codes:
 - 0: ok

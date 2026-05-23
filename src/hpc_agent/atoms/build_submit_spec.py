@@ -27,6 +27,7 @@ from typing import Any
 from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
 from hpc_agent._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import validate_ssh_target
 
 # Canonical cluster-side template paths. The local-side rsync ships the
@@ -54,7 +55,17 @@ _DEFAULT_EXECUTOR_CMD = "python3 .hpc/_hpc_dispatch.py"
     side_effects=[],
     error_codes=[errors.SpecInvalid],
     idempotent=True,
-    cli="hpc-agent build-submit-spec --spec <path>",
+    cli=CliShape(
+        help=(
+            "Assemble + validate a submit_flow.input.json spec from "
+            "resolved interview values (profile/cluster/ssh_target/.../"
+            "cmd_sha/total_tasks). Emits the spec on stdout. Slash "
+            "commands pipe the output straight into 'submit-flow --spec'."
+        ),
+        spec_arg=True,
+        spec_model=BuildSubmitSpecInput,
+        schema_ref=SchemaRef(input="build_submit_spec"),
+    ),
     agent_facing=True,
 )
 def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
