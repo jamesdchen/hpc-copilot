@@ -132,8 +132,16 @@ def campaign_converged(
                 "iterations": n_iters,
                 "best_metric": best,
             }
-        if len(metric_values) >= window + 1:
-            prior_best = _best(metric_values[:-window], resolved_direction)
+        # Compare the recent window against the *prior window of equal
+        # size*, not against the all-time best. The all-time form lets a
+        # single record-breaking iteration far back in the history keep
+        # the plateau check from ever firing in a long campaign — once
+        # a record exists, no later window can beat it without setting a
+        # new record, so "no improvement over the last N iters" becomes
+        # "ran N iters without breaking the record" which is the wrong
+        # stop signal for a slow converger.
+        if len(metric_values) >= 2 * window:
+            prior_best = _best(metric_values[-2 * window : -window], resolved_direction)
             recent_best = _best(metric_values[-window:], resolved_direction)
             if prior_best is not None and recent_best is not None:
                 improved = (
@@ -146,7 +154,7 @@ def campaign_converged(
                         "converged": True,
                         "reason": (
                             f"plateau (last {window} iters improved by {improved:.6g} "
-                            f"<= tolerance {plateau_tolerance})"
+                            f"<= tolerance {plateau_tolerance} vs prior {window})"
                         ),
                         "iterations": n_iters,
                         "best_metric": best,

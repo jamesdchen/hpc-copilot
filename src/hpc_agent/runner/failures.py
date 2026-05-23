@@ -187,22 +187,35 @@ def cluster_failures_by_fingerprint(
     * ``task_ids``: the list of task ids
     * ``sample``: a short representative snippet (last 200 chars)
 
-    Tasks marked ``missing: True`` are bucketed into a single
-    ``"log_missing"`` cluster so they're visible in the rollup.
+    Tasks marked ``missing: True`` are split into two buckets so the
+    operator can see at a glance which entries are genuinely missing
+    logs (executor didn't write one) vs. which ones the SSH transport
+    couldn't reach (an unreachable cluster shouldn't read as a
+    code-side failure).
+
+    * ``log_missing``: ``missing=True`` with no ``ssh_error``.
+    * ``ssh_unreachable``: ``missing=True`` with an ``ssh_error`` string
+      from :func:`fetch_task_logs` (every retry hit a transport error).
     """
     by_fp: dict[tuple[str, str], dict[str, Any]] = {}
     for entry in logs:
         tid = entry.get("task_id")
         if entry.get("missing"):
-            key = ("log_missing", "")
+            ssh_error = entry.get("ssh_error")
+            category = "ssh_unreachable" if ssh_error else "log_missing"
+            key = (category, "")
             bucket = by_fp.setdefault(
                 key,
                 {
-                    "category": "log_missing",
+                    "category": category,
                     "fingerprint": "",
                     "count": 0,
                     "task_ids": [],
-                    "sample": "",
+                    # Surface the ssh_error so a single click into the
+                    # bucket shows the actual transport failure instead
+                    # of an empty sample. Truncate to keep the rollup
+                    # compact.
+                    "sample": (ssh_error or "")[:200],
                 },
             )
             bucket["count"] += 1

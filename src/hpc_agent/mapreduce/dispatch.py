@@ -536,12 +536,27 @@ def main() -> None:
         # already in place would be skipped on retry and the missing
         # outputs would never be recovered. Move metrics.json last so a
         # crash before that point leaves the task obviously incomplete.
-        entries = sorted(
-            os.listdir(wip_dir),
-            key=lambda n: (n == "metrics.json", n),
-        )
-        for fname in entries:
-            os.replace(os.path.join(wip_dir, fname), os.path.join(result_dir, fname))
+        #
+        # Walk the WIP tree recursively so an executor that writes
+        # nested subdirs (e.g. ``per_seed/seed_0/metric.csv``) promotes
+        # correctly. A flat ``os.listdir`` + ``os.replace`` would have
+        # tried to rename the subdir over an existing result-side
+        # subdir on retry and failed with ENOTEMPTY.
+        promote_pairs: list[tuple[str, str]] = []
+        for root, _dirs, fnames in os.walk(wip_dir):
+            for fname in fnames:
+                src = os.path.join(root, fname)
+                rel = os.path.relpath(src, wip_dir)
+                promote_pairs.append((src, rel))
+        # Sort: metrics.json at the top level last (it's the
+        # idempotency marker); everything else alphabetically.
+        promote_pairs.sort(key=lambda pair: (pair[1] == "metrics.json", pair[1]))
+        for src, rel in promote_pairs:
+            dst = os.path.join(result_dir, rel)
+            parent = os.path.dirname(dst)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            os.replace(src, dst)
         shutil.rmtree(wip_dir, ignore_errors=True)
         # Stamp this submission's cmd_sha so a subsequent re-entry can
         # detect "code or kwargs changed since this result was written"
