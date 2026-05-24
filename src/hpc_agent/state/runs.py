@@ -24,7 +24,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 
 __all__ = [
     "MAX_RUNS",
@@ -69,7 +69,7 @@ def _runs_dir(experiment_dir: Path) -> Path:
     callers (``find_existing_runs``, ``prune_old_runs``) already handle
     the absent-directory case by returning ``[]``.
     """
-    from hpc_agent._internal.layout import RepoLayout
+    from hpc_agent._kernel.contract.layout import RepoLayout
 
     return RepoLayout(experiment_dir).hpc / "runs"
 
@@ -82,7 +82,7 @@ def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
     (``RepoLayout`` is purely about path arithmetic; the format check is
     a submit-time guard kept here).
     """
-    from hpc_agent._internal.layout import RepoLayout
+    from hpc_agent._kernel.contract.layout import RepoLayout
 
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError(f"invalid run_id: {run_id!r}")
@@ -384,13 +384,13 @@ def write_run_sidecar(
 
 
 def _atomic_write_json(target: Path, payload: dict) -> None:
-    """Forwarder to :func:`hpc_agent._internal.io.atomic_write_json`.
+    """Forwarder to :func:`hpc_agent.infra.io.atomic_write_json`.
 
     The canonical helper handles tempfile creation, fsync, replace, and
     parent-dir fsync. Kept as a local alias so the existing call sites
     in this module don't need to change.
     """
-    from hpc_agent._internal.io import atomic_write_json
+    from hpc_agent.infra.io import atomic_write_json
 
     atomic_write_json(target, payload)
 
@@ -421,13 +421,13 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
         raise FileNotFoundError(f"run sidecar not found: {target}")
     data: dict[str, Any] = json.loads(target.read_text(encoding="utf-8"))
     # B8: route the schema-version check through the cross-domain
-    # manifest in hpc_agent._internal.version. Strict here (raises) because
+    # manifest in hpc_agent._kernel.extension.version. Strict here (raises) because
     # the sidecar shape is critical to the dispatcher / aggregator —
     # mis-reading a future v3 with a v2 reader would silently corrupt
     # the run. Writer keeps SIDECAR_SCHEMA_VERSION as the value emitted.
     sv = data.get("sidecar_schema_version")
     if isinstance(sv, int):
-        from hpc_agent._internal.version import compatibility_check as _compat
+        from hpc_agent._kernel.extension.version import compatibility_check as _compat
 
         _compat("sidecar", sv)
     # Backfill missing v2 fields so callers see a uniform shape.
@@ -610,7 +610,7 @@ def update_run_sidecar_job_ids(experiment_dir: Path, run_id: str, job_ids: list[
     # serializes against concurrent ``write_run_sidecar`` callers; every
     # sibling state writer (runtime_prior, user_profiles, cursor) uses
     # the same lock seam.
-    from hpc_agent._internal.io import atomic_locked_update
+    from hpc_agent.infra.io import atomic_locked_update
 
     new_job_ids = [str(j) for j in job_ids]
 

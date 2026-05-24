@@ -101,8 +101,8 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
-from hpc_agent._internal.layout import JournalLayout, RepoLayout
-from hpc_agent._internal.primitive import (
+from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
+from hpc_agent._kernel.registry.primitive import (
     PrimitiveMeta,
     SideEffect,
     get_meta,
@@ -175,7 +175,7 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 # ---------------------------------------------------------------------------
 # Framework subdirectory layout (.hpc/)
 #
-# Canonical home: :class:`hpc_agent._internal.layout.RepoLayout`. The three
+# Canonical home: :class:`hpc_agent._kernel.contract.layout.RepoLayout`. The three
 # functions below are back-compat forwarders kept so external callers /
 # slash commands that imported them by name continue to work. New code
 # should prefer ``RepoLayout(experiment_dir).hpc`` / ``.runs`` /

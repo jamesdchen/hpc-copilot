@@ -47,10 +47,10 @@ def load_run(experiment_dir: Path, run_id: str) -> RunRecord | None:
     if payload is None:
         return None
     # B8: route reader-side check through the cross-domain manifest in
-    # hpc_agent._internal.version. Writer still emits SCHEMA_VERSION;
+    # hpc_agent._kernel.extension.version. Writer still emits SCHEMA_VERSION;
     # the manifest declares the *supported* range so back-compat is one
     # one-line edit if/when v2 ships.
-    from hpc_agent._internal.version import is_compatible
+    from hpc_agent._kernel.extension.version import is_compatible
 
     found = payload.get("schema_version")
     if not isinstance(found, int) or not is_compatible("session", found):
@@ -138,7 +138,7 @@ def mark_run(
 ) -> RunRecord:
     """Terminal transition. Updates status (and optionally stage)."""
     # Validate against the canonical JournalStatus StrEnum (B2).
-    from hpc_agent._internal.lifecycle import JournalStatus
+    from hpc_agent._kernel.lifecycle.lifecycle import JournalStatus
 
     if status not in set(JournalStatus):
         raise ValueError(f"mark_run: invalid status {status!r}")
@@ -177,7 +177,7 @@ def _refresh_index_entry(
     """
     from hpc_agent._internal.session.run_record import _read_json as _read_run
     from hpc_agent._internal.session.run_record import _run_path
-    from hpc_agent._internal.time import utcnow_iso
+    from hpc_agent.infra.time import utcnow_iso
 
     idx_path = journal_dir(experiment_dir) / "index.json"
     with _locked(idx_path):

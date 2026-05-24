@@ -92,7 +92,7 @@ def _output_schema_for(primitive_name: str) -> dict | None:
     """Load the output JSON schema for *primitive_name*, or None if absent.
 
     Uses the same 3-candidate ladder as
-    :func:`hpc_agent._internal.operations.schema_for` so the runtime
+    :func:`hpc_agent._kernel.registry.operations.schema_for` so the runtime
     validator never disagrees with the docs/catalog about which file
     backs a given primitive — pre-v3 this only looked up
     ``<name>.output.json`` and silently no-op'd on every primitive
@@ -108,8 +108,8 @@ def _output_schema_for(primitive_name: str) -> dict | None:
     # CLI-renamed primitives (e.g. ``check-preflight`` →
     # ``preflight.output.json``) resolve too.
     try:
-        from hpc_agent._internal.operations import _cli_subcommand
-        from hpc_agent._internal.primitive import get_registry
+        from hpc_agent._kernel.registry.operations import _cli_subcommand
+        from hpc_agent._kernel.registry.primitive import get_registry
 
         meta = get_registry().get(primitive_name)
         if meta is not None and meta.cli:

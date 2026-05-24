@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
                 _reconfigure(encoding="utf-8")
 
     # Populate the primitive registry once before any subcommand dispatch.
-    from hpc_agent._internal.primitive import register_primitives
+    from hpc_agent._kernel.registry.primitive import register_primitives
 
     register_primitives()
     if argv is None:

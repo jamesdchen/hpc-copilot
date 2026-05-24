@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent._internal.invoke import get_invoker
+from hpc_agent._kernel.lifecycle.invoke import get_invoker
 from hpc_agent.atoms.spawn_prompt import (
     SpawnContractError,
     WorkerReport,

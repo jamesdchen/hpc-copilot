@@ -20,10 +20,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._internal.primitive import SideEffect, primitive
-from hpc_agent._internal.time import utcnow
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._schema_models.actions.classify_axis import ClassifyAxisInput
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.time import utcnow
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._schema_models.validators.validate_input_dataset import (
     ValidateInputDatasetResult,
     ValidateInputDatasetSpec,

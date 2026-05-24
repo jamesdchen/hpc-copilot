@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent._internal.primitive import PrimitiveMeta, get_registry, register_primitives
+from hpc_agent._kernel.registry.primitive import PrimitiveMeta, get_registry, register_primitives
 
 # Genuine exceptions go here with a comment explaining why the gate
 # does NOT apply. The default policy is "everything that touches SSH

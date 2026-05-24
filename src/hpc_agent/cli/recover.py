@@ -34,7 +34,7 @@ from hpc_agent import errors
 # B2 makes the literal redundant by sourcing from the StrEnum so the
 # drift class cannot recur. test_lifecycle.py asserts the cross-set
 # invariants (classifier emissions ⊆ accepted ⊆ FailureCategory).
-from hpc_agent._internal.lifecycle import FailureCategory as _FailureCategory
+from hpc_agent._kernel.lifecycle.lifecycle import FailureCategory as _FailureCategory
 from hpc_agent.cli._helpers import EXIT_OK, _load_spec, _ok
 
 _VALID_RESUBMIT_CATEGORIES = frozenset({fc.value for fc in _FailureCategory})

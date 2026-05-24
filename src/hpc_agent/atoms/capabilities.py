@@ -19,7 +19,7 @@ from typing import Any
 
 import hpc_agent
 from hpc_agent._internal import session
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 
 
 @primitive(
@@ -45,7 +45,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     is computed here. Content for named primitives + procedures is
     fetched via ``hpc-agent describe <name>``.
     """
-    from hpc_agent._internal.operations import operations_catalog
+    from hpc_agent._kernel.registry.operations import operations_catalog
     from hpc_agent.infra.clusters import CLUSTER_YAML_KEYS
 
     return {

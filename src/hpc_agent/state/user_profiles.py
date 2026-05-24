@@ -10,7 +10,7 @@ One file per cluster, dict keyed by username::
 
     <experiment_dir>/.hpc/user_profiles/<cluster>.json
 
-Atomic write through :func:`hpc_agent._internal.io.atomic_locked_update` so
+Atomic write through :func:`hpc_agent.infra.io.atomic_locked_update` so
 concurrent updates from multiple agent sessions are serialised.
 
 Profile fields
@@ -37,8 +37,8 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal.io import atomic_locked_update
-from hpc_agent._internal.time import parse_iso_utc_or_none
+from hpc_agent.infra.io import atomic_locked_update
+from hpc_agent.infra.time import parse_iso_utc_or_none
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -99,7 +99,7 @@ def user_profiles_path(experiment_dir: Path, cluster: str) -> Path:
     """
     if not cluster:
         raise ValueError("cluster must be non-empty")
-    from hpc_agent._internal.layout import RepoLayout
+    from hpc_agent._kernel.contract.layout import RepoLayout
 
     safe_cluster = cluster.replace("/", "_")
     base = RepoLayout(experiment_dir).hpc / "user_profiles"

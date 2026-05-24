@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent._internal.lifecycle``.
+"""Tests for ``hpc_agent._kernel.lifecycle.lifecycle``.
 
 The B2 refactor introduced four StrEnums to replace the four scattered,
 drifting string vocabularies. The cross-validation tests here exist
@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_agent._internal.lifecycle import (
+from hpc_agent._kernel.lifecycle.lifecycle import (
     TERMINAL_STATUSES,
     FailureCategory,
     JournalStatus,

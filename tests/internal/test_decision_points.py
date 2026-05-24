@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hpc_agent._internal.operations import operations_catalog
+from hpc_agent._kernel.registry.operations import operations_catalog
 from hpc_agent._schema_models.spawn_contract import DECISION_POINTS, WORKFLOW_PROCEDURES
 
 

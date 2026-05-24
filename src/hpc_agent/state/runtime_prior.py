@@ -51,8 +51,8 @@ import os
 import statistics
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal.io import atomic_locked_update
-from hpc_agent._internal.time import parse_iso_utc_or_none, utcnow_iso
+from hpc_agent.infra.io import atomic_locked_update
+from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow_iso
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -72,7 +72,7 @@ def runtime_path(experiment_dir: Path, profile: str, cluster: str) -> Path:
     cluster)``. The layout class resolves *experiment_dir* and
     sanitizes ``/`` in *profile*; both behaviors are preserved here.
     """
-    from hpc_agent._internal.layout import RepoLayout
+    from hpc_agent._kernel.contract.layout import RepoLayout
 
     return RepoLayout(experiment_dir).runtime_prior(profile, cluster)
 
@@ -152,7 +152,7 @@ def _read_doc(path: Path, profile: str, cluster: str) -> dict[str, Any]:
     # B8: cross-domain manifest check. Soft-skip on mismatch — a future
     # writer with a wider schema shouldn't poison the prior; treating
     # the file as empty makes the prior re-learn from fresh samples.
-    from hpc_agent._internal.version import is_compatible as _is_compat
+    from hpc_agent._kernel.extension.version import is_compatible as _is_compat
 
     if isinstance(doc, dict):
         sv = doc.get("schema_version")

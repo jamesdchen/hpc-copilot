@@ -97,7 +97,7 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
     blob (the ``llms-full`` dump). Documented exception to the
     stdout-is-JSON contract; analogous to ``--help``.
     """
-    from hpc_agent._internal.operations import render_llms_full
+    from hpc_agent._kernel.registry.operations import render_llms_full
     from hpc_agent.atoms.capabilities import capabilities
 
     if getattr(args, "full", False):
@@ -166,7 +166,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
         _ok({"kind": "skill", "name": name, "content": body.strip()})
         return EXIT_OK
 
-    from hpc_agent._internal.operations import operations_catalog
+    from hpc_agent._kernel.registry.operations import operations_catalog
 
     for entry in operations_catalog():
         if entry.get("name") == name:

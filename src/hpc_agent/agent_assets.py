@@ -104,7 +104,7 @@ def install_agent_assets(
 
     # Optional plugins overlay their own assets last — a plugin's
     # skills/<name>/ overrides the core copy of the same name.
-    from hpc_agent._internal.plugins import plugin_slash_command_roots
+    from hpc_agent._kernel.registry.plugins import plugin_slash_command_roots
 
     for root in plugin_slash_command_roots():
         plugin_commands, plugin_skills = _install_tree(root, target, dry_run=dry_run)

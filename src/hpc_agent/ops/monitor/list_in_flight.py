@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal import session
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliShape
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
     iso = last_status.get("checked_at")
     if not isinstance(iso, str):
         return None
-    from hpc_agent._internal.time import parse_iso_utc_or_none, utcnow
+    from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow
 
     ts = parse_iso_utc_or_none(iso)
     if ts is None:

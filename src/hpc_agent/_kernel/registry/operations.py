@@ -24,7 +24,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import hpc_agent
-from hpc_agent._internal.primitive import get_registry
+from hpc_agent._kernel.registry.primitive import get_registry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -83,7 +83,7 @@ def operations_catalog() -> list[dict[str, Any]]:
     "field not present in this entry."
 
     Source of truth: the in-process ``@primitive`` registry
-    (``hpc_agent._internal.primitive.get_registry``). Decorator
+    (``hpc_agent._kernel.registry.primitive.get_registry``). Decorator
     metadata is the canonical SoT and the only source consulted at
     runtime — the baked ``src/hpc_agent/operations.json`` exists for
     diff/discoverability via ``scripts/bake_operations_json.py`` but

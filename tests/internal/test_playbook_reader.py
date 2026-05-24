@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent._internal.playbook``.
+"""Tests for ``hpc_agent._kernel.lifecycle.playbook``.
 
 Covers the four contracts:
 
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent._internal.playbook import (
+from hpc_agent._kernel.lifecycle.playbook import (
     KnownBadCombination,
     Playbook,
     WalltimeRule,

@@ -27,7 +27,7 @@ The test asserts two properties:
    ``FailureCategoryResubmittable`` (the wire Literal must accept
    everything either classifier emits).
 2. ``FailureCategoryResubmittable`` is itself a subset of the StrEnum
-   :class:`hpc_agent._internal.lifecycle.FailureCategory` — the
+   :class:`hpc_agent._kernel.lifecycle.lifecycle.FailureCategory` — the
    StrEnum is the canonical Python home (per its docstring); the wire
    Literal must not carry values the StrEnum lacks.
 """
@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import typing
 
-from hpc_agent._internal.lifecycle import FailureCategory as FailureCategoryEnum
+from hpc_agent._kernel.lifecycle.lifecycle import FailureCategory as FailureCategoryEnum
 from hpc_agent._schema_models._shared import (
     FailureCategoryResubmittable,
 )
@@ -102,7 +102,7 @@ def test_resubmittable_covers_fingerprint_emissions() -> None:
 def test_resubmittable_subset_of_lifecycle_enum() -> None:
     """The wire Literal must not carry values the canonical StrEnum lacks.
 
-    :class:`hpc_agent._internal.lifecycle.FailureCategory` is the
+    :class:`hpc_agent._kernel.lifecycle.lifecycle.FailureCategory` is the
     canonical Python home for this vocabulary (per its docstring).
     The wire Literal exists for schema generation only and must mirror
     the enum.

@@ -62,7 +62,7 @@ def _bind_dispatch(parser: argparse.ArgumentParser, name: str) -> None:
 
 def _register_from_registry(sub: argparse._SubParsersAction) -> None:
     """Register every primitive whose ``cli`` is a :class:`CliShape`."""
-    from hpc_agent._internal.primitive import get_registry
+    from hpc_agent._kernel.registry.primitive import get_registry
 
     registry = get_registry()
     nested_groups: dict[str, argparse._SubParsersAction] = {}
@@ -133,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     _register_from_registry(sub)
     _register_tier3_modules(sub)
 
-    from hpc_agent._internal.plugins import register_plugin_cli
+    from hpc_agent._kernel.registry.plugins import register_plugin_cli
 
     register_plugin_cli(sub)
 

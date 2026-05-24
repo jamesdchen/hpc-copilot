@@ -36,7 +36,7 @@ The registry IS the canonical source for the structured metadata
 the decorator carries: ``name``, ``verb``, ``side_effects``,
 ``idempotent``, ``idempotency_key``, ``error_codes``, ``composes``,
 and ``cli`` (the shell invocation string).
-:func:`hpc_agent._internal.operations.operations_catalog` reads the
+:func:`hpc_agent._kernel.registry.operations.operations_catalog` reads the
 registry directly; nothing else reads the markdown frontmatter for
 those fields.
 
@@ -334,7 +334,7 @@ def register_primitives() -> None:
     # Optional plugin distributions contribute extra primitive modules
     # via the ``hpc_agent.plugins`` entry-point group. With none
     # installed this is an empty loop and registration is unchanged.
-    from hpc_agent._internal.plugins import plugin_primitive_modules
+    from hpc_agent._kernel.registry.plugins import plugin_primitive_modules
 
     for modname in plugin_primitive_modules():
         # Core modules above fail loudly; an optional plugin must not

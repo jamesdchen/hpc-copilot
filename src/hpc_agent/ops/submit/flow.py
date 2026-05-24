@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
-from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
@@ -553,7 +553,8 @@ def submit_flow_batch(
     # throttling stampede; see ``docs/reference/env-vars.md``.
     import os
 
-    from hpc_agent._internal import io, session
+    from hpc_agent._internal import session
+    from hpc_agent.infra import io
 
     use_lock = os.environ.get("HPC_SUBMIT_NO_LOCK") != "1"
     lock_path = session.journal_dir(experiment_dir) / ".submit_lock"

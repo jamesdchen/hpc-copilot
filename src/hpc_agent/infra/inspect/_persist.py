@@ -13,7 +13,7 @@ import os
 import tempfile
 from typing import TYPE_CHECKING
 
-from hpc_agent._internal.time import parse_iso_utc_or_none, utcnow
+from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow
 
 from ._common import ClusterSnapshot, _snapshot_from_dict
 
@@ -35,7 +35,7 @@ MAX_HISTORY_SNAPSHOTS: int = int(os.environ.get("HPC_MAX_CLUSTER_HISTORY", "1000
 
 
 def _history_dir(experiment_dir: Path, cluster: str) -> Path:
-    from hpc_agent._internal.layout import RepoLayout
+    from hpc_agent._kernel.contract.layout import RepoLayout
 
     return RepoLayout(experiment_dir).cluster_history(cluster)
 

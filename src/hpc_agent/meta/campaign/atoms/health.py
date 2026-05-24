@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._schema_models.queries.campaign_health import CampaignHealthSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 

@@ -330,7 +330,7 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
     7. Project result via ``result_post`` (or :func:`_coerce_result`),
        emit ``_ok`` envelope tagged with the primitive name.
     """
-    from hpc_agent._internal.primitive import get_meta
+    from hpc_agent._kernel.registry.primitive import get_meta
 
     meta = get_meta(name)
     shape = meta.cli

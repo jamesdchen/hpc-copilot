@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._schema_models.actions.export_package import ExportPackageInput
 from hpc_agent.cli._dispatch import CliArg, CliShape
 

@@ -31,8 +31,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from hpc_agent._internal.io import advisory_flock
-from hpc_agent._internal.lifecycle import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL
+from hpc_agent._kernel.lifecycle.lifecycle import TERMINAL_STATUSES as _LIFECYCLE_TERMINAL
+from hpc_agent.infra.io import advisory_flock
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -82,7 +82,7 @@ def _current_homedir() -> Path:
 HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
 
 # Re-exported for back-compat. Derived from the canonical
-# hpc_agent._internal.lifecycle.JournalStatus StrEnum so the literal can
+# hpc_agent._kernel.lifecycle.lifecycle.JournalStatus StrEnum so the literal can
 # no longer drift from the rest of the codebase.
 TERMINAL_STATUSES = _LIFECYCLE_TERMINAL
 
@@ -165,7 +165,7 @@ def repo_hash(experiment_dir: Path) -> str:
 
 def journal_dir(experiment_dir: Path) -> Path:
     """Return ``~/.claude/hpc/<repo_hash>/`` for *experiment_dir* (created)."""
-    from hpc_agent._internal.time import utcnow_iso
+    from hpc_agent.infra.time import utcnow_iso
 
     d = _current_homedir() / repo_hash(experiment_dir)
     d.mkdir(parents=True, exist_ok=True)
@@ -188,20 +188,20 @@ def runs_dir(experiment_dir: Path) -> Path:
     NOTE: this is the **journal** runs directory under
     ``~/.claude/hpc/<repo_hash>/runs/``, NOT the cluster sidecar runs
     directory under ``<experiment_dir>/.hpc/runs/`` — that one is
-    :attr:`hpc_agent._internal.layout.RepoLayout.runs` (also exported as
+    :attr:`hpc_agent._kernel.contract.layout.RepoLayout.runs` (also exported as
     :func:`hpc_agent.runs_subdir`). The pre-B1 collision between
     these two ``runs_*`` names was a P0 bug source; the
     ``RepoLayout`` / ``JournalLayout`` type split makes it a type
     error.
     """
-    from hpc_agent._internal.layout import JournalLayout
+    from hpc_agent._kernel.contract.layout import JournalLayout
 
     return JournalLayout(experiment_dir).runs
 
 
 def _run_path(experiment_dir: Path, run_id: str) -> Path:
     """Deprecated alias for ``JournalLayout(experiment_dir).run_record(run_id)``."""
-    from hpc_agent._internal.layout import JournalLayout
+    from hpc_agent._kernel.contract.layout import JournalLayout
 
     return JournalLayout(experiment_dir).run_record(run_id)
 
@@ -214,7 +214,7 @@ def _lock_path(target: Path) -> Path:
 def _locked(target: Path) -> Iterator[None]:
     """Acquire an exclusive flock on a sibling ``.lock`` file for *target*.
 
-    Thin wrapper around :func:`hpc_agent._internal.io.advisory_flock`
+    Thin wrapper around :func:`hpc_agent.infra.io.advisory_flock`
     that derives the lock path via :func:`_lock_path`. No-op on platforms
     without ``fcntl`` (e.g. Windows). The lock file is created on demand
     and never deleted — flock semantics handle reuse.
@@ -224,18 +224,18 @@ def _locked(target: Path) -> Iterator[None]:
 
 
 def _atomic_write_json(path: Path, payload: dict, *, fsync: bool = True) -> None:
-    """Deprecated forwarder for :func:`hpc_agent._internal.io.atomic_write_json`.
+    """Deprecated forwarder for :func:`hpc_agent.infra.io.atomic_write_json`.
 
     Kept so callers that import this module-level name don't break;
     new code should import ``atomic_write_json`` from
-    ``hpc_agent._internal.io`` directly. This forwarder will be
+    ``hpc_agent.infra.io`` directly. This forwarder will be
     removed in a future release.
 
     The optional ``fsync`` kwarg is forwarded so the hot-path monitor
     tick can write a non-authoritative cache without a redundant fsync
     — see the canonical helper's docstring for the durability tradeoff.
     """
-    from hpc_agent._internal.io import atomic_write_json
+    from hpc_agent.infra.io import atomic_write_json
 
     atomic_write_json(path, payload, fsync=fsync)
 

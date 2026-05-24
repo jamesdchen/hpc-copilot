@@ -219,7 +219,7 @@ def test_submit_input_schema_accepts_runtime() -> None:
     # runtime is optional — must not be in required list
     assert "runtime" not in schema.get("required", [])
 
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     base = {
         "profile": "p",

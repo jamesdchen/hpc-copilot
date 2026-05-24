@@ -21,7 +21,7 @@ from hpc_agent import (
     get_registry,
     primitive,
 )
-from hpc_agent._internal.primitive import _REGISTRY
+from hpc_agent._kernel.registry.primitive import _REGISTRY
 
 
 def test_decorator_registers_under_given_name() -> None:

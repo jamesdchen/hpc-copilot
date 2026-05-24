@@ -18,8 +18,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from hpc_agent._internal.io import atomic_locked_update
-from hpc_agent._internal.time import utcnow_iso
+from hpc_agent.infra.io import atomic_locked_update
+from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.meta.campaign.dirs import campaign_dir
 
 __all__ = [
@@ -62,7 +62,7 @@ def validate_manifest(data: dict[str, Any]) -> None:
     jsonschema.ValidationError
         On any schema violation.
     """
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     _validate(data, manifest_schema())
 

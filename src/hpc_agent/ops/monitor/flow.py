@@ -50,11 +50,11 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._internal import session
-from hpc_agent._internal.lifecycle import LifecycleState
-from hpc_agent._internal.primitive import SideEffect, primitive
-from hpc_agent._internal.time import utcnow_iso
+from hpc_agent._kernel.lifecycle.lifecycle import LifecycleState
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._schema_models.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.runner import combine_wave
@@ -156,7 +156,7 @@ def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
 
 
 # _flock_append was removed in favour of routing the tick-log append
-# through hpc_agent._internal.telemetry's monitor-jsonl sink, which owns
+# through hpc_agent._kernel.extension.telemetry's monitor-jsonl sink, which owns
 # the flock-guarded writer pattern (see _append_tick below).
 
 
@@ -187,12 +187,12 @@ def _append_tick(
         "console_emitted": False,
     }
     path = _tick_log_path(experiment_dir, run_id)
-    # B7: Route the JSONL append through hpc_agent._internal.telemetry,
+    # B7: Route the JSONL append through hpc_agent._kernel.extension.telemetry,
     # which owns the flock-guarded writer pattern. Telemetry's
     # monitor-jsonl sink ignores HPC_TELEMETRY_SINK because this caller
     # is the canonical producer.
     try:
-        from hpc_agent._internal.telemetry import record as _telemetry_record
+        from hpc_agent._kernel.extension.telemetry import record as _telemetry_record
 
         _telemetry_record(
             "tick",
@@ -293,7 +293,7 @@ def _write_failed_task_ids(
     write — without this, a Python-level ``write_text`` produces a
     truncate-then-write sequence that can land mid-payload.
     """
-    from hpc_agent._internal.io import atomic_write_json
+    from hpc_agent.infra.io import atomic_write_json
     from hpc_agent.state.runs import run_sidecar_path
 
     target = run_sidecar_path(experiment_dir, run_id).with_suffix(".failed.json")

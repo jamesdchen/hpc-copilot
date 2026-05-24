@@ -55,7 +55,7 @@ def test_procedure_body_resolves_plugin_override(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(spawn_prompt, "_procedure_body", _procedure_body)
     _procedure_body.cache_clear()
     monkeypatch.setattr(
-        "hpc_agent._internal.plugins.plugin_worker_prompt_roots",
+        "hpc_agent._kernel.registry.plugins.plugin_worker_prompt_roots",
         lambda: (tmp_path,),
     )
 
@@ -70,7 +70,7 @@ def test_procedure_body_falls_back_to_host_when_no_plugin_provides(monkeypatch) 
     from hpc_agent.atoms.spawn_prompt import _procedure_body
 
     monkeypatch.setattr(
-        "hpc_agent._internal.plugins.plugin_worker_prompt_roots",
+        "hpc_agent._kernel.registry.plugins.plugin_worker_prompt_roots",
         lambda: (),
     )
     _procedure_body.cache_clear()

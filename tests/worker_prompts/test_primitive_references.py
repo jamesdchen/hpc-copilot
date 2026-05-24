@@ -15,7 +15,7 @@ from importlib.resources import files
 
 import pytest
 
-from hpc_agent._internal.operations import operations_catalog
+from hpc_agent._kernel.registry.operations import operations_catalog
 from hpc_agent._schema_models.spawn_contract import WORKFLOW_PROCEDURES
 
 # CLI verbs that are real subcommands but not @primitive-registered
