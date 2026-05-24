@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/decide_monitor_arm.input.json",
   "title": "decide-monitor-arm input",
-  "description": "Run-state inputs to ``hpc_agent.atoms.monitor_arm.decide_monitor_arm``.\n\nDrives the cron / loop / none arm decision + cadence.",
+  "description": "Run-state inputs to ``hpc_agent.ops.monitor.arm.decide_monitor_arm``.\n\nDrives the cron / loop / none arm decision + cadence.",
   "type": "object",
   "required": [
     "run_id",

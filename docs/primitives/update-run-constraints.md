@@ -17,7 +17,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: (none — Python-only primitive)
-  python: hpc_agent.runner.update_constraints.update_run_constraints
+  python: hpc_agent.ops.monitor.update_constraints.update_run_constraints
 ---
 # update-run-constraints
 

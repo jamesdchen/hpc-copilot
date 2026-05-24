@@ -10,17 +10,17 @@ What it does
 ------------
 Internal poll loop:
 
-1. ``runner.record_status(...)`` — fresh status from the cluster, refresh
+1. ``record_status(...)`` — fresh status from the cluster, refresh
    the journal's ``last_status``.
 2. Detect newly-complete waves (cross-reference the per-task status against
-   the sidecar's ``wave_map``). For each, invoke ``runner.combine_wave(...)``;
+   the sidecar's ``wave_map``). For each, invoke ``combine_wave(...)``;
    on first failure, retry with ``force=True``; beyond that, mark as
    escalated and stop combining.
 3. Append one tick record to ``.hpc/runs/<run_id>.monitor.jsonl`` —
    same schema as the slash-command ``/monitor-hpc`` writes, so the
    summary mode reads both.
 4. Check for terminal conditions:
-   - All tasks complete → ``runner.mark_terminal(complete)``, return.
+   - All tasks complete → ``mark_terminal(complete)``, return.
    - Failures and no work left → return ``failed`` with an escalation
      reason (MVP does not auto-resubmit; the slash-command surface or
      the next workflow atom decides what to do).
@@ -48,14 +48,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from hpc_agent import errors, runner
+from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.lifecycle import LifecycleState
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.time import utcnow_iso
 from hpc_agent._schema_models.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.runner import mark_terminal, record_status
+from hpc_agent.ops.monitor.reconcile import mark_terminal
+from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.runner import combine_wave
 from hpc_agent.state.runs import read_run_sidecar
 
 try:
@@ -508,7 +510,7 @@ def monitor_flow(
         elapsed = _now() - started
 
         # Poll.
-        record = runner.record_status(
+        record = record_status(
             experiment_dir,
             run_id,
             ssh_target=record.ssh_target,
@@ -549,13 +551,13 @@ def monitor_flow(
             for wave in newly_done:
                 # Skip waves already escalated past combiner_max_retries
                 # (sentinel = 10**9). Without this, every tick would
-                # re-call runner.combine_wave on a permanently failed
+                # re-call combine_wave on a permanently failed
                 # wave, wasting SSH round-trips indefinitely.
                 if state.combiner_attempts.get(wave, 0) >= _COMBINER_GIVE_UP_SENTINEL:
                     continue
                 attempt = state.combiner_attempts.get(wave, 0) + 1
                 state.combiner_attempts[wave] = attempt
-                ok, _stdout, stderr = runner.combine_wave(
+                ok, _stdout, stderr = combine_wave(
                     experiment_dir,
                     run_id,
                     wave=wave,
@@ -597,7 +599,7 @@ def monitor_flow(
             partial_ok=_read_partial_ok(experiment_dir, run_id),
         )
         if terminal == LifecycleState.COMPLETE:
-            runner.mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
+            mark_terminal(experiment_dir, run_id, status=LifecycleState.COMPLETE)
             _append_tick(
                 experiment_dir,
                 run_id,
@@ -619,7 +621,7 @@ def monitor_flow(
                 escalation_reason=None,
             )
         if terminal == LifecycleState.FAILED:
-            runner.mark_terminal(experiment_dir, run_id, status=LifecycleState.FAILED)
+            mark_terminal(experiment_dir, run_id, status=LifecycleState.FAILED)
             _append_tick(
                 experiment_dir,
                 run_id,

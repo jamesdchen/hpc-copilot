@@ -18,12 +18,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from hpc_agent import runner as runner_module
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent._schema_models.workflows.monitor_flow import MonitorFlowSpec
-from hpc_agent.flows import monitor_flow as monitor_flow_module
-from hpc_agent.flows.monitor_flow import (
+from hpc_agent.ops.monitor import flow as monitor_flow_module
+from hpc_agent.ops.monitor.flow import (
     _MAX_ADAPTIVE_POLL_SECONDS,
     _UNCHANGED_POLLS_BEFORE_BACKOFF,
     monitor_flow,
@@ -94,23 +93,16 @@ def test_unchanged_status_backs_off_then_caps(
     ) -> RunRecord:
         return seed
 
-    # Patch at both the runner package level (for any other accessor) and
-    # the symbol the flow module bound at import time. The flow calls
-    # ``runner.record_status`` via the package, so patching ``runner_module``
-    # is the load-bearing one.
-    monkeypatch.setattr(runner_module, "record_status", _fake_record_status)
-    monkeypatch.setattr(monitor_flow_module.runner, "record_status", _fake_record_status)
+    # Patch the symbols the flow module bound at import time. After the
+    # PR 3.1 reorg, monitor_flow imports record_status and mark_terminal
+    # directly from hpc_agent.ops.monitor.{status,reconcile}.
+    monkeypatch.setattr(monitor_flow_module, "record_status", _fake_record_status)
 
     # Stub mark_terminal so a stray COMPLETE path can't corrupt state — but
     # with `complete=2 < total_tasks=4` and `running=2`, we should never
     # hit terminal.
     monkeypatch.setattr(
-        runner_module,
-        "mark_terminal",
-        lambda *a, **k: seed,
-    )
-    monkeypatch.setattr(
-        monitor_flow_module.runner,
+        monitor_flow_module,
         "mark_terminal",
         lambda *a, **k: seed,
     )
@@ -218,10 +210,8 @@ def test_state_change_resets_backoff(
         )
         return new
 
-    monkeypatch.setattr(runner_module, "record_status", _fake_record_status)
-    monkeypatch.setattr(monitor_flow_module.runner, "record_status", _fake_record_status)
-    monkeypatch.setattr(runner_module, "mark_terminal", lambda *a, **k: seed)
-    monkeypatch.setattr(monitor_flow_module.runner, "mark_terminal", lambda *a, **k: seed)
+    monkeypatch.setattr(monitor_flow_module, "record_status", _fake_record_status)
+    monkeypatch.setattr(monitor_flow_module, "mark_terminal", lambda *a, **k: seed)
 
     sleeps: list[float] = []
     fake_clock = {"t": 0.0}

@@ -36,7 +36,7 @@
     "input_schema": null,
     "name": "mark-run-terminal",
     "output_schema": null,
-    "python": "hpc_agent.runner.reconcile.mark_terminal",
+    "python": "hpc_agent.ops.monitor.reconcile.mark_terminal",
     "side_effects": [
       "writes-journal"
     ],
@@ -62,7 +62,7 @@
     "input_schema": null,
     "name": "reconcile-journal",
     "output_schema": "reconcile.output.json",
-    "python": "hpc_agent.runner.reconcile.reconcile",
+    "python": "hpc_agent.ops.monitor.reconcile.reconcile",
     "side_effects": [
       "ssh",
       "writes-journal"
@@ -90,7 +90,7 @@
     "input_schema": "update_run_constraints.input.json",
     "name": "update-run-constraints",
     "output_schema": "update_run_constraints.output.json",
-    "python": "hpc_agent.runner.update_constraints.update_run_constraints",
+    "python": "hpc_agent.ops.monitor.update_constraints.update_run_constraints",
     "side_effects": [
       "ssh"
     ],
@@ -213,7 +213,7 @@
     "input_schema": "decide_monitor_arm.input.json",
     "name": "decide-monitor-arm",
     "output_schema": "decide_monitor_arm.output.json",
-    "python": "hpc_agent.atoms.monitor_arm.decide_monitor_arm",
+    "python": "hpc_agent.ops.monitor.arm.decide_monitor_arm",
     "side_effects": [],
     "verb": "query"
   },
@@ -270,7 +270,7 @@
     "input_schema": null,
     "name": "list-in-flight",
     "output_schema": "list_in_flight.output.json",
-    "python": "hpc_agent.atoms.list_in_flight.list_in_flight",
+    "python": "hpc_agent.ops.monitor.list_in_flight.list_in_flight",
     "side_effects": [],
     "verb": "query"
   },
@@ -292,7 +292,7 @@
     "input_schema": null,
     "name": "logs",
     "output_schema": null,
-    "python": "hpc_agent.atoms.logs.fetch_logs",
+    "python": "hpc_agent.ops.monitor.logs_atom.fetch_logs",
     "side_effects": [
       "ssh"
     ],
@@ -305,7 +305,7 @@
     "input_schema": null,
     "name": "monitor-summary",
     "output_schema": "monitor_summary.output.json",
-    "python": "hpc_agent.atoms.monitor_summary.monitor_summary",
+    "python": "hpc_agent.ops.monitor.summary.monitor_summary",
     "side_effects": [],
     "verb": "query"
   },
@@ -327,7 +327,7 @@
     "input_schema": null,
     "name": "poll-run-status",
     "output_schema": "status.output.json",
-    "python": "hpc_agent.runner.status.record_status",
+    "python": "hpc_agent.ops.monitor.status.record_status",
     "side_effects": [
       "ssh",
       "writes-journal"
@@ -606,7 +606,7 @@
     "input_schema": "monitor_flow.input.json",
     "name": "monitor-flow",
     "output_schema": "monitor_flow.output.json",
-    "python": "hpc_agent.flows.monitor_flow.monitor_flow",
+    "python": "hpc_agent.ops.monitor.flow.monitor_flow",
     "side_effects": [
       "ssh",
       "writes-journal"

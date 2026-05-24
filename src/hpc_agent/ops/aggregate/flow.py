@@ -1,7 +1,7 @@
 """``aggregate-flow``: workflow atom that finalizes a run's aggregated metrics.
 
 Third workflow atom in the :mod:`hpc_agent.ops.submit.flow` /
-:mod:`hpc_agent.flows.monitor_flow` family. Pipeline:
+:mod:`hpc_agent.ops.monitor.flow` family. Pipeline:
 
 1. Read the per-run sidecar to discover the wave_map + remote_path.
 2. (Optional, default on) ``ensure_all_combined`` — for every wave in
@@ -193,7 +193,7 @@ def _nonempty_failing_task_ids(
 
     Pure read-only: two SSH round-trips, no cluster-side or local writes.
     """
-    from hpc_agent.runner.status import ssh_status_report
+    from hpc_agent.ops.monitor.status import ssh_status_report
 
     def _complete_ids(rows: int) -> set[int]:
         report = ssh_status_report(

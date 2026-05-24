@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>
-  python: hpc_agent.atoms.monitor_summary.monitor_summary
+  python: hpc_agent.ops.monitor.summary.monitor_summary
 exit_codes:
 - 0: ok
 - 1: user-error

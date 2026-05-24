@@ -137,7 +137,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
 
         # Mock the SSH primitives: three failed tasks, all preempted.
         # ``_ssh_status_report`` is imported directly into failures_atom
-        # (canonical path: hpc_agent.runner.status._ssh_status_report);
+        # (canonical path: hpc_agent.ops.monitor.status._ssh_status_report);
         # patch the binding on the consuming module, not the runner facade.
         monkeypatch.setattr(
             failures_atom,
