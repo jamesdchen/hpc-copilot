@@ -7,6 +7,25 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.5.0 — 2026-05-24
+
+### Removed — deprecated `RepoLayout` forwarders
+
+The 0.2.0-vintage forwarders carried an explicit "Remove in 0.4.0"
+deprecation note that the 0.4.0 cut missed:
+
+- `hpc_agent.framework_subdir(experiment_dir)` →
+  `hpc_agent._kernel.contract.layout.RepoLayout(experiment_dir).hpc`
+- `hpc_agent.runs_subdir(experiment_dir)` →
+  `RepoLayout(experiment_dir).runs`
+- `hpc_agent.tasks_path(experiment_dir)` →
+  `RepoLayout(experiment_dir).tasks`
+
+All three removed from `hpc_agent.__all__`. The boundary contract
+(`docs/reference/boundary-contract.md`) is updated to recommend
+`RepoLayout` directly. External integrators still importing these
+names need a one-line switch to `RepoLayout`.
+
 ### Added — fresh-context recovery and headless campaigns
 
 A step that lost its conversational memory (a subagent, a restarted
