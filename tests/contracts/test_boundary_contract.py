@@ -38,9 +38,6 @@ ALLOWED_EXPORTS = frozenset(
         # Framework subdirectory layout (NEW: .hpc/tasks.py model)
         "TASKS_FILENAME",
         "RUNS_SUBDIR",
-        "framework_subdir",
-        "runs_subdir",
-        "tasks_path",
         "load_tasks_module",
         # Path resolution (B1) — canonical home for the three forwarders above
         "RepoLayout",

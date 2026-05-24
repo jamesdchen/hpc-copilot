@@ -67,21 +67,24 @@ gitignored.
 - `TASKS_FILENAME` — `"tasks.py"`. The single file the user owns inside
   `.hpc/`.
 - `RUNS_SUBDIR` — `"runs"`. Per-run sidecars live here.
-- `framework_subdir` — return `experiment_dir/.hpc`, mkdir it, and
-  write `.hpc/.gitignore` (ignoring `runs/`) on first call.
-- `runs_subdir` — return `experiment_dir/.hpc/runs`, mkdir it.
-- `tasks_path` — return `experiment_dir/.hpc/tasks.py` (does not create).
+- `RepoLayout` — frozen dataclass; canonical home for the per-experiment
+  `.hpc/` layout. Use
+  `RepoLayout(experiment_dir).hpc | .runs | .tasks |
+  .run_sidecar(run_id) | .runtime_prior(profile, cluster)`. `.hpc`
+  mkdir's `.hpc/` and writes `.hpc/.gitignore` (ignoring `runs/`) on
+  first call; `.runs` mkdir's `.hpc/runs/`; `.tasks` is read-only.
 - `load_tasks_module` — importlib helper that imports a `tasks.py` from
   an arbitrary path; verifies the module exposes `total()` and
   `resolve(task_id)`.
-- `RepoLayout` — frozen dataclass; canonical home for the three
-  forwarders above. New code prefers
-  `RepoLayout(experiment_dir).hpc | .runs | .tasks |
-  .run_sidecar(run_id) | .runtime_prior(profile, cluster)`.
 - `JournalLayout` — frozen dataclass; the cross-experiment journal
   tree under `~/.claude/hpc/<repo_hash>/`. Distinct *type* from
-  `RepoLayout` so the pre-B1 `runs_dir` (journal) vs `runs_subdir`
-  (cluster sidecar) name collision is now a type error.
+  `RepoLayout` so the journal `runs` directory vs the cluster
+  sidecar `runs` directory is a type error rather than a name
+  collision.
+
+The 0.2.0-vintage forwarders `framework_subdir`, `runs_subdir`, and
+`tasks_path` were removed in 0.4.0; external callers that still
+import them by name should switch to `RepoLayout`.
 
 ### Per-run sidecars
 

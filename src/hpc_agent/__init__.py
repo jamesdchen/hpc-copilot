@@ -24,9 +24,6 @@ __all__ = [
     # Framework subdirectory layout (NEW — the .hpc/tasks.py model)
     "TASKS_FILENAME",
     "RUNS_SUBDIR",
-    "framework_subdir",
-    "runs_subdir",
-    "tasks_path",
     "load_tasks_module",
     # Path resolution (B1) — canonical home for the three forwarders above
     "RepoLayout",
@@ -175,44 +172,16 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 # ---------------------------------------------------------------------------
 # Framework subdirectory layout (.hpc/)
 #
-# Canonical home: :class:`hpc_agent._kernel.contract.layout.RepoLayout`. The three
-# functions below are back-compat forwarders kept so external callers /
-# slash commands that imported them by name continue to work. New code
-# should prefer ``RepoLayout(experiment_dir).hpc`` / ``.runs`` /
-# ``.tasks`` directly.
-#
-# back-compat: introduced 0.2.0 (RepoLayout split). Remove in 0.4.0 —
-# audit external callers via search; slash_commands/ is in-tree.
+# Canonical home: :class:`hpc_agent._kernel.contract.layout.RepoLayout`.
+# Use ``RepoLayout(experiment_dir).hpc`` / ``.runs`` / ``.tasks``
+# directly. The 0.2.0-vintage forwarders ``framework_subdir``,
+# ``runs_subdir``, and ``tasks_path`` were removed in 0.4.0 per the
+# original RepoLayout-split deprecation note; any external caller still
+# importing them by name should switch to RepoLayout.
 # ---------------------------------------------------------------------------
 
 TASKS_FILENAME: str = "tasks.py"
 RUNS_SUBDIR: str = "runs"
-
-
-def framework_subdir(experiment_dir: Path) -> Path:
-    """Deprecated forwarder for ``RepoLayout(experiment_dir).hpc``.
-
-    Returns ``experiment_dir/.hpc``, creating it idempotently and
-    writing ``.hpc/.gitignore`` on first call.
-    """
-    return RepoLayout(experiment_dir).hpc
-
-
-def runs_subdir(experiment_dir: Path) -> Path:
-    """Deprecated forwarder for ``RepoLayout(experiment_dir).runs``.
-
-    Note: this is the *cluster sidecar* runs directory under
-    ``<experiment_dir>/.hpc/runs/``, NOT the journal runs directory
-    under ``~/.claude/hpc/<repo_hash>/runs/`` — that one is
-    :attr:`JournalLayout.runs`. The pre-B1 name collision was a P0 bug
-    source; ``RepoLayout`` / ``JournalLayout`` make it a type error.
-    """
-    return RepoLayout(experiment_dir).runs
-
-
-def tasks_path(experiment_dir: Path) -> Path:
-    """Deprecated forwarder for ``RepoLayout(experiment_dir).tasks``."""
-    return RepoLayout(experiment_dir).tasks
 
 
 def load_tasks_module(tasks_py_path: Path) -> ModuleType:

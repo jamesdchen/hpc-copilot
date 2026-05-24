@@ -58,7 +58,6 @@ EXPECTED_ALL: frozenset[str] = frozenset(
         "discover_executors",
         "find_existing_runs",
         "find_run_by_cmd_sha",
-        "framework_subdir",
         "get_meta",
         "get_registry",
         "get_template_path",
@@ -86,9 +85,7 @@ EXPECTED_ALL: frozenset[str] = frozenset(
         "run_combiner",
         "run_combiner_checked",
         "run_sidecar_path",
-        "runs_subdir",
         "ssh_run",
-        "tasks_path",
         "write_metrics",
         "write_run_sidecar",
     }
