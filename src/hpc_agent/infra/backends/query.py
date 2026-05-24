@@ -363,7 +363,17 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
         # which returns the entire cluster's queue). Caller passed no
         # user and the shell has no $USER/$USERNAME; we cannot identify
         # which jobs belong to whom.
-        return {"tasks": {}, "errors": [{"phase": "qstat", "reason": "no user identity"}]}
+        # Error-list entry shape is ``{"code", "detail"}`` per the
+        # module's documented contract (line 13).
+        return {
+            "tasks": {},
+            "errors": [
+                {
+                    "code": "qstat_unavailable",
+                    "detail": "no user identity ($USER/$USERNAME unset and no `user=` arg)",
+                }
+            ],
+        }
 
     # Phase 1: single qstat call for running/pending tasks across all jobs.
     qstat_ok = False

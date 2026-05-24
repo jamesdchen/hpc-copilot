@@ -2,10 +2,11 @@
 
 The wire SoT is the JSON file (every external consumer reads it).
 The *authoring* SoT is the Pydantic model under
-``hpc_agent/_wire/``. This script bridges the two: it
+``hpc_agent/_wire/`` (core) or ``hpc_agent_pro/_schema_models/``
+(pro plugin). This script bridges the two: it
 calls ``model.model_json_schema()`` (or ``adapter.json_schema()``
 for root-array schemas) for every model auto-discovered under
-``_schema_models/`` and writes / diffs the matching JSON file.
+those packages and writes / diffs the matching JSON file.
 
 Same generator pattern as ``build_primitive_frontmatter.py``,
 ``build_primitive_index.py``, and ``build_operations_index.py``:
@@ -21,7 +22,8 @@ Usage::
 Discovery rules
 ---------------
 
-For each non-private submodule of ``hpc_agent._wire``:
+For each non-private submodule of each registered authoring package
+(``hpc_agent._wire`` for core, ``hpc_agent_pro._schema_models`` for pro):
 
 1. Hardcoded mapping (``_NON_SUFFIX_MAPPING``) handles cross-cutting
    shapes whose names don't fit the suffix convention — the three
@@ -55,14 +57,29 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT / "hpc-agent-pro" / "src"))
 
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
 import hpc_agent._wire  # noqa: E402
+import hpc_agent_pro._schema_models  # noqa: E402
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SCHEMAS_DIR = REPO_ROOT / "src" / "hpc_agent" / "schemas"
+# Authoring packages and the directory their emitted JSON schemas land in.
+# Each package is walked independently; discovered names must be unique
+# WITHIN a package (cross-package name collisions are fine since they
+# write to different directories).
+_AUTHORING_PACKAGES: tuple[tuple[Any, Path], ...] = (
+    (
+        hpc_agent._wire,
+        REPO_ROOT / "src" / "hpc_agent" / "schemas",
+    ),
+    (
+        hpc_agent_pro._schema_models,
+        REPO_ROOT / "hpc-agent-pro" / "src" / "hpc_agent_pro" / "schemas",
+    ),
+)
 
 _ID_BASE = "https://github.com/jamesdchen/hpc-agent/schemas"
 
@@ -127,16 +144,14 @@ def _filename_for(obj: Any, attr_name: str, owning_module: str) -> str | None:
     return None
 
 
-def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], str]]:
-    """Discover every (model, filename) pair in ``_schema_models/``.
+def _build_schema_registry_for(pkg: Any) -> list[tuple[type[BaseModel] | TypeAdapter[Any], str]]:
+    """Discover every (model, filename) pair under *pkg*.
 
-    Walks non-private submodules with :func:`pkgutil.iter_modules`; for
+    Walks non-private submodules with :func:`pkgutil.walk_packages`; for
     each, inspects only the symbols *defined in that module* and
     applies :func:`_filename_for`. Returned list is sorted by filename
     so callers see a stable order.
     """
-    pkg = hpc_agent._wire
-
     # Walk recursively so subpackages (workflows/, validators/,
     # fixtures/, queries/, actions/) are picked up alongside any
     # top-level helpers. ``walk_packages`` recurses into every
@@ -174,7 +189,15 @@ def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], s
     return sorted(discovered.values(), key=lambda pair: pair[1])
 
 
-SCHEMA_REGISTRY = _build_schema_registry()
+# Build a flat list of (model, fname, schemas_dir) tuples across every
+# authoring package. Each package keeps its own discovery namespace so a
+# class name shared between core and pro (e.g. an inadvertent re-import)
+# doesn't trip the collision guard.
+SCHEMA_REGISTRY: list[tuple[type[BaseModel] | TypeAdapter[Any], str, Path]] = [
+    (model, fname, schemas_dir)
+    for pkg, schemas_dir in _AUTHORING_PACKAGES
+    for model, fname in _build_schema_registry_for(pkg)
+]
 
 
 def _emit_schema(model_or_adapter: Any) -> dict[str, Any]:
@@ -228,8 +251,8 @@ def main() -> int:
     check = "--check" in sys.argv
 
     drift: list[tuple[Path, str, str]] = []  # (path, old, new)
-    for src, fname in SCHEMA_REGISTRY:
-        path = SCHEMAS_DIR / fname
+    for src, fname, schemas_dir in SCHEMA_REGISTRY:
+        path = schemas_dir / fname
         try:
             new = _emit(src, fname)
         except Exception as exc:  # noqa: BLE001

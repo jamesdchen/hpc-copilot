@@ -31,7 +31,6 @@ overwrites interview.json with byte-equivalent content modulo the
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 

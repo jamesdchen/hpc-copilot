@@ -45,8 +45,14 @@ SCHEMAS_DIR = REPO_ROOT / "src" / "hpc_agent" / "schemas"
 BUILD_SCRIPT = REPO_ROOT / "scripts" / "build_schemas.py"
 
 
-def _load_registry() -> list[tuple[Any, str]]:
-    """Import ``scripts/build_schemas.py:SCHEMA_REGISTRY`` without running ``main()``."""
+def _load_registry() -> list[tuple[Any, str, Path]]:
+    """Import ``scripts/build_schemas.py:SCHEMA_REGISTRY`` without running ``main()``.
+
+    Entries are ``(model_or_adapter, output_filename, schemas_dir)`` —
+    the ``schemas_dir`` is per-entry because the script discovers across
+    multiple authoring packages (core ``hpc_agent._wire`` + pro plugin
+    ``hpc_agent_pro._schema_models``) into different output directories.
+    """
     spec = importlib.util.spec_from_file_location("_build_schemas_for_test", BUILD_SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -59,11 +65,11 @@ REGISTRY = _load_registry()
 
 
 @pytest.mark.parametrize(
-    "src,fname",
+    "src,fname,schemas_dir",
     REGISTRY,
-    ids=[fname for _, fname in REGISTRY],
+    ids=[fname for _, fname, _ in REGISTRY],
 )
-def test_emitted_schema_matches_checked_in(src: Any, fname: str) -> None:
+def test_emitted_schema_matches_checked_in(src: Any, fname: str, schemas_dir: Path) -> None:
     """The Pydantic-emitted schema is byte-equal to the checked-in JSON file.
 
     Mirrors what ``scripts/build_schemas.py --check`` does in
@@ -78,7 +84,7 @@ def test_emitted_schema_matches_checked_in(src: Any, fname: str) -> None:
         spec.loader.exec_module(module)
 
     emitted = module._emit(src, fname)
-    on_disk = (SCHEMAS_DIR / fname).read_text(encoding="utf-8")
+    on_disk = (schemas_dir / fname).read_text(encoding="utf-8")
     assert emitted == on_disk, (
         f"{fname}: Pydantic emission drifted from checked-in JSON. "
         "Run scripts/build_schemas.py --write to regenerate."
@@ -276,11 +282,13 @@ def _try_minimal_instance(model: type[BaseModel]) -> BaseModel | None:
 
 
 @pytest.mark.parametrize(
-    "src,fname",
-    [(s, f) for s, f in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
-    ids=[f for s, f in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
+    "src,fname,schemas_dir",
+    [(s, f, d) for s, f, d in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
+    ids=[f for s, f, _ in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
 )
-def test_minimal_instance_validates_against_emitted_schema(src: Any, fname: str) -> None:
+def test_minimal_instance_validates_against_emitted_schema(
+    src: Any, fname: str, schemas_dir: Path
+) -> None:
     """A minimal valid instance of *src* must dump to JSON the emitted
     schema accepts. Catches the "Pydantic emits a schema it can't
     validate its own output against" failure mode for every model
@@ -291,7 +299,7 @@ def test_minimal_instance_validates_against_emitted_schema(src: Any, fname: str)
         f"Add a pattern fixture to ``_PATTERN_FIXTURES`` or extend "
         f"``_resolve`` to cover the new type."
     )
-    schema = json.loads((SCHEMAS_DIR / fname).read_text(encoding="utf-8"))
+    schema = json.loads((schemas_dir / fname).read_text(encoding="utf-8"))
     payload = instance.model_dump(mode="json")
     jsonschema.Draft202012Validator(schema).validate(payload)
 
@@ -442,11 +450,13 @@ def _strategy_for_model(model: type[BaseModel]) -> st.SearchStrategy:
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "src,fname",
-    [(s, f) for s, f in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
-    ids=[f for s, f in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
+    "src,fname,schemas_dir",
+    [(s, f, d) for s, f, d in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
+    ids=[f for s, f, _ in REGISTRY if isinstance(s, type) and issubclass(s, BaseModel)],
 )
-def test_fuzz_instances_validate_against_emitted_schema(src: Any, fname: str) -> None:
+def test_fuzz_instances_validate_against_emitted_schema(
+    src: Any, fname: str, schemas_dir: Path
+) -> None:
     """For every model in the registry, generate diverse valid instances
     and verify each ``model_dump`` validates against the emitted JSON
     schema. Surfaces the "Pydantic emits a schema it can't validate its
@@ -457,7 +467,7 @@ def test_fuzz_instances_validate_against_emitted_schema(src: Any, fname: str) ->
     except TypeError as exc:
         pytest.skip(f"{fname}: strategy builder doesn't handle a field type — {exc}")
 
-    schema = json.loads((SCHEMAS_DIR / fname).read_text(encoding="utf-8"))
+    schema = json.loads((schemas_dir / fname).read_text(encoding="utf-8"))
     validator = jsonschema.Draft202012Validator(schema)
 
     @given(strategy)

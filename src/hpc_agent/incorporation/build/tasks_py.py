@@ -591,12 +591,14 @@ def build_tasks_py(
             tasks_block=_render_tasks_block(axes),
         )
 
+    # Atomic + crash-durable write — same recipe as
+    # ``infra.io.atomic_write_json`` but inline because the payload is a
+    # Python source string, not JSON. The mkstemp-randomised tmp name
+    # prevents two concurrent ``build_tasks_py`` calls from racing on a
+    # shared ``.tmp`` sibling; fsync of the file + parent dir keeps the
+    # rename durable across power loss.
     target.parent.mkdir(parents=True, exist_ok=True)
-    # tempfile.mkstemp-allocated unique tmp name + fsync + replace +
-    # parent-dir fsync. Two concurrent build_tasks_py calls used to
-    # race on the same ``target.suffix + ".tmp"`` filename and could
-    # observe a torn write; mkstemp randomises so the collision is
-    # gone, and the fsync makes the rename durable across power loss.
+    import contextlib as _contextlib
     import tempfile as _tempfile
 
     fd, tmp_name = _tempfile.mkstemp(
@@ -608,16 +610,21 @@ def build_tasks_py(
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(source)
             fh.flush()
-            try:
+            with _contextlib.suppress(OSError):
                 os.fsync(fh.fileno())
-            except OSError:
-                pass
         os.replace(tmp_name, target)
-    except BaseException:
         try:
-            os.unlink(tmp_name)
+            dir_fd = os.open(str(target.parent), os.O_RDONLY)
+            try:
+                with _contextlib.suppress(OSError):
+                    os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except OSError:
             pass
+    except BaseException:
+        with _contextlib.suppress(OSError):
+            os.unlink(tmp_name)
         raise
 
     return {
