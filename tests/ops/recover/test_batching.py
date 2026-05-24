@@ -1,16 +1,16 @@
-"""Tests for hpc_agent.planning.resubmit_batching — compact ID packing and plan building."""  # noqa: E501
+"""Tests for hpc_agent.ops.recover.batching — compact ID packing and plan building."""
 
 from __future__ import annotations
 
 import pytest
 
-from hpc_agent.planning.constraints import ClusterConstraints
-from hpc_agent.planning.resubmit_batching import (
+from hpc_agent.ops.recover.batching import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
     resubmit_plan,
 )
+from hpc_agent.planning.constraints import ClusterConstraints
 
 
 class TestCompactTaskIds:
@@ -110,7 +110,7 @@ class TestFailureCategoryVocabulary:
 
     def test_classifier_categories_are_all_valid_resubmit_categories(self):
         from hpc_agent.agent_cli import _VALID_RESUBMIT_CATEGORIES
-        from hpc_agent.runner.failures import _FAILURE_CATEGORY_PATTERNS
+        from hpc_agent.ops.recover.runner_failures import _FAILURE_CATEGORY_PATTERNS
 
         emitted = {name for name, _ in _FAILURE_CATEGORY_PATTERNS}
         missing = emitted - _VALID_RESUBMIT_CATEGORIES

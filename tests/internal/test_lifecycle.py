@@ -78,7 +78,7 @@ def test_lifecycle_state_matches_reconcile_schema() -> None:
 
 def test_failure_category_includes_classifier_emissions() -> None:
     """Every category the classifier emits must round-trip through FailureCategory."""
-    from hpc_agent.runner.failures import _FAILURE_CATEGORY_PATTERNS
+    from hpc_agent.ops.recover.runner_failures import _FAILURE_CATEGORY_PATTERNS
 
     classifier_emits = {cat for cat, _ in _FAILURE_CATEGORY_PATTERNS}
     canonical = {fc.value for fc in FailureCategory}
@@ -104,7 +104,7 @@ def test_classifier_emissions_subset_of_resubmit_accepted() -> None:
     resubmit silently rejects, this fails.
     """
     from hpc_agent import agent_cli
-    from hpc_agent.runner.failures import _FAILURE_CATEGORY_PATTERNS
+    from hpc_agent.ops.recover.runner_failures import _FAILURE_CATEGORY_PATTERNS
 
     classifier_emits = {cat for cat, _ in _FAILURE_CATEGORY_PATTERNS}
     accepted = set(agent_cli._VALID_RESUBMIT_CATEGORIES)

@@ -4,9 +4,9 @@ Wires together the cluster-side dispatcher's SIGTERM trap with the
 agent-surface's failure-clustering and envelope-key path:
 
   dispatch.py exit 130 + SIGTERM stderr line
-   → runner.failures._categorize finds the 'preempted' pattern
-   → runner.cluster_failures_by_fingerprint groups all bumped tasks
-   → atoms.failures.fetch_failures surfaces preempted_count /
+   → ops.recover.runner_failures._categorize finds the 'preempted' pattern
+   → ops.recover.runner_failures.cluster_failures_by_fingerprint groups all bumped tasks
+   → ops.recover.failures_atom.fetch_failures surfaces preempted_count /
      preempted_task_ids on the envelope
    → cmd_failures (and now cmd_status) carry those keys
 
@@ -24,7 +24,7 @@ import pytest
 from hpc_agent import runner
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent.runner.failures import _categorize
+from hpc_agent.ops.recover.runner_failures import _categorize
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -97,7 +97,7 @@ class TestClusterFailuresByFingerprintGroupsPreempted:
 
 
 class TestFailuresEnvelopeSurfacesPreemptedKeys:
-    """The atoms/failures.py envelope walks the cluster set and surfaces
+    """The ops/recover/failures_atom.py envelope walks the cluster set and surfaces
     preempted_count + preempted_task_ids at the top level so a harness
     can branch without parsing per-cluster ``error_class`` strings."""
 
@@ -111,7 +111,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         This is the inverse of the previous tautological test, which
         re-implemented the production loop in the test body and never
         called the atom under test."""
-        from hpc_agent.atoms import failures as failures_atom
+        from hpc_agent.ops.recover import failures_atom
 
         # Redirect HPC_HOMEDIR for the journal write (both bindings —
         # see tests/internal/test_session.py for the rationale).
@@ -136,7 +136,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         session.upsert_run(experiment, record)
 
         # Mock the SSH primitives: three failed tasks, all preempted.
-        # ``_ssh_status_report`` is imported directly into atoms.failures
+        # ``_ssh_status_report`` is imported directly into failures_atom
         # (canonical path: hpc_agent.runner.status._ssh_status_report);
         # patch the binding on the consuming module, not the runner facade.
         monkeypatch.setattr(
@@ -152,7 +152,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         )
         sigterm_line = "[hpc-agent] SIGTERM received; cluster preemption imminent"
         monkeypatch.setattr(
-            failures_atom.runner,
+            failures_atom,
             "fetch_task_logs",
             lambda **_: [
                 _log_entry(0, content=f"trace\n{sigterm_line}\n"),

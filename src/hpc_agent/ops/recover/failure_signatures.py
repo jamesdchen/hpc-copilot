@@ -12,7 +12,7 @@ patterns (OOM, walltime); ``priority=80`` are the user-error
 patterns (import, file_not_found, permission); ``priority=10`` is the
 generic Python traceback fallback.
 
-Why a separate module from :func:`hpc_agent.runner.failures._categorize`:
+Why a separate module from :func:`hpc_agent.ops.recover.runner_failures._categorize`:
 the runner only emits a category string. ``classify()`` returns the
 full ``{error_class, suggested_fix, matched_pattern}`` triple so the
 caller can both display the error and act on the fix recommendation.
@@ -88,10 +88,10 @@ CATALOG: list[FailureSignature] = [
         # and ``signal SIGTERM.*15`` previously included here collide with
         # preemption (SLURM/SGE preemption is delivered via SIGTERM with
         # exit 143). The narrowed set matches the sibling
-        # ``failures._FAILURE_CATEGORY_PATTERNS`` so the two classifiers
-        # cannot disagree — a preempted task no longer gets
+        # ``runner_failures._FAILURE_CATEGORY_PATTERNS`` so the two
+        # classifiers cannot disagree — a preempted task no longer gets
         # ``suggested_fix=increase-walltime`` from this catalog while
-        # ``failures.py`` correctly tags it ``preempted``.
+        # ``runner_failures.py`` correctly tags it ``preempted``.
         stderr_pattern=re.compile(
             r"DUE TO TIME LIMIT|CANCELLED.*TIME LIMIT|"
             r"wall.?time.*expired|wall.?time.*exceeded|"

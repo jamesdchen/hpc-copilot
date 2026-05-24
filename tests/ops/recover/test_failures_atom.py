@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc_agent.atoms.failures import _resolve_auto_retry
+from hpc_agent.ops.recover.failures_atom import _resolve_auto_retry
 from hpc_agent.runner import DEFAULT_AUTO_RETRY_POLICY
 from hpc_agent.state.runs import write_run_sidecar
 

@@ -5,7 +5,7 @@ auto-resubmit, adjust resources, or stop and escalate to the user.  See
 ``slash_commands/commands/status.md`` for the action table keyed on these labels.
 
 Implementation note: the bulk of the (stderr -> category) regex table lives in
-:mod:`hpc_agent.runner.failure_signatures` (the newer, agent-resubmit
+:mod:`hpc_agent.ops.recover.failure_signatures` (the newer, agent-resubmit
 catalog).  This module is a thin wrapper that delegates the shared categories
 (gpu_oom, system_oom, walltime, node_failure, code_bug, unknown) to
 :func:`failure_signatures.classify` and remaps the result into the older
@@ -31,7 +31,7 @@ import re
 import typing
 
 from hpc_agent._schema_models._shared import FailureCategory
-from hpc_agent.runner.failure_signatures import classify as _classify_signature
+from hpc_agent.ops.recover.failure_signatures import classify as _classify_signature
 
 #: Valid return values, ordered roughly by specificity. Derived from the
 #: ``FailureCategory`` Literal in ``_schema_models/_shared.py`` so the

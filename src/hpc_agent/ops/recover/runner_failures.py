@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 # multiple Wave-2 subjects can share the catalog without contending for
 # this module). The high-level :func:`cluster_failures_by_fingerprint`
 # orchestrator below layers exit-code overrides and the richer
-# :func:`hpc_agent.runner.failure_signatures.classify` catalog on top.
+# :func:`hpc_agent.ops.recover.failure_signatures.classify` catalog on top.
 __all__ = [
     "_FAILURE_CATEGORY_PATTERNS",
     "_categorize",
@@ -211,8 +211,8 @@ def cluster_failures_by_fingerprint(
         # D1c: VASPilot-pattern catalog returns a suggested_fix per error
         # class so integrating agents can auto-resubmit with adjusted
         # resources rather than asking the user. Importable as
-        # ``hpc_agent.runner.failure_signatures.classify``.
-        from hpc_agent.runner.failure_signatures import classify
+        # ``hpc_agent.ops.recover.failure_signatures.classify``.
+        from hpc_agent.ops.recover.failure_signatures import classify
 
         sig = classify(content, entry.get("exit_code"))
         # The category fallback above also needs to override sig — otherwise

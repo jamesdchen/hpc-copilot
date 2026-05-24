@@ -19,12 +19,12 @@ composes:
    cluster-side work.
 3. **Cluster-side resubmission** (opt-in via ``submit_to_cluster=True``)
    — composes the *same* atoms submit_flow uses on the resubmit shape:
-   :func:`~hpc_agent.planning.resubmit_batching.resubmit_plan`
+   :func:`~hpc_agent.ops.recover.batching.resubmit_plan`
    packs the failed IDs into compact array expressions, the scheduler
    backend (Slurm/SGE) submits each batch with the caller-supplied
    overrides rendered as ``extra_flags``, and the resulting job IDs
    flow into the journal alongside the retry counters.
-4. **Journal update** — :func:`runner.resubmit_failed` records the
+4. **Journal update** — :func:`resubmit_failed` records the
    retry with the caller-supplied overrides so monitor / aggregate
    downstream see the truth. When the cluster-side step ran, the new
    job IDs land in the same call so the journal stays in sync.
@@ -44,10 +44,11 @@ import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors, runner
+from hpc_agent import errors
 from hpc_agent._internal.lifecycle import FailureCategory  # noqa: F401 — re-export
 from hpc_agent._schema_models._shared import FailureCategoryResubmittable
-from hpc_agent.planning.resubmit_batching import resubmit_plan
+from hpc_agent.ops.recover.batching import resubmit_plan
+from hpc_agent.ops.recover.runner import derive_resubmit_request_id, resubmit_failed
 from hpc_agent.state.runs import read_run_sidecar
 
 if TYPE_CHECKING:
@@ -241,7 +242,7 @@ def resubmit_flow(
                 "cannot submit_to_cluster without a journal record to "
                 "track the new jobs against."
             )
-        derived_rid = request_id or runner.derive_resubmit_request_id(
+        derived_rid = request_id or derive_resubmit_request_id(
             failed_task_ids=failed_task_ids,
             category=category,
             overrides=effective_overrides,
@@ -353,7 +354,7 @@ def resubmit_flow(
 
     from hpc_agent._schema_models.actions.resubmit import ResubmitSpec
 
-    record, deduped, rid = runner.resubmit_failed(
+    record, deduped, rid = resubmit_failed(
         experiment_dir,
         run_id,
         spec=ResubmitSpec(

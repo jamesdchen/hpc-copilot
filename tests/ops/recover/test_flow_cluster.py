@@ -18,7 +18,7 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent.flows.resubmit_flow import (
+from hpc_agent.ops.recover.flow import (
     render_overrides_to_extra_flags,
     resubmit_flow,
 )

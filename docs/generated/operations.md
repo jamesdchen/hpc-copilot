@@ -33,7 +33,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`decide-monitor-arm`](primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `hpc_agent.atoms.monitor_arm.decide_monitor_arm` | `hpc_agent/schemas/decide_monitor_arm.input.json` | `hpc_agent/schemas/decide_monitor_arm.output.json` |
 | [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `hpc_agent.state.discover.discover_executors` | — | `hpc_agent/schemas/discover.output.json` |
 | [`discover-reducers`](primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `hpc_agent.state.discover.discover_reducers` | — | — |
-| [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` | `hpc_agent.atoms.failures.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
+| [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` | `hpc_agent.ops.recover.failures_atom.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
 | [`find-prior-run`](primitives/find-prior-run.md) | ✓ | _none_ | `hpc-agent find-prior-run [--experiment-dir <dir>] --cmd-sha <cmd_sha>` | `hpc_agent.atoms.setup_actions.find_prior_run` | — | `hpc_agent/schemas/find_prior_run.output.json` |
 | [`list-in-flight`](primitives/list-in-flight.md) | ✓ | _none_ | `hpc-agent list-in-flight [--experiment-dir <dir>]` | `hpc_agent.atoms.list_in_flight.list_in_flight` | — | `hpc_agent/schemas/list_in_flight.output.json` |
 | [`load-context`](primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context [--experiment-dir <dir>]` | `hpc_agent.atoms.load_context.load_context` | — | `hpc_agent/schemas/load_context.output.json` |
@@ -71,7 +71,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`mark-run-terminal`](primitives/mark-run-terminal.md) | ✓ | writes-journal | `_(Python-only)_` | `hpc_agent.runner.reconcile.mark_terminal` | — | — |
 | [`prune-orphan-sidecars`](primitives/prune-orphan-sidecars.md) | ✓ | removes-files | `_(Python-only)_` | `hpc_agent.state.runs.prune_orphan_sidecars` | — | — |
 | [`reconcile-journal`](primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` | `hpc_agent.runner.reconcile.reconcile` | — | `hpc_agent/schemas/reconcile.output.json` |
-| [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` | `hpc_agent.runner.resubmit.resubmit_failed` | `hpc_agent/schemas/resubmit.input.json` | — |
+| [`resubmit-failed`](primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` | `hpc_agent.ops.recover.runner.resubmit_failed` | `hpc_agent/schemas/resubmit.input.json` | — |
 | [`update-run-constraints`](primitives/update-run-constraints.md) | ✓ | ssh | `_(Python-only)_` | `hpc_agent.runner.update_constraints.update_run_constraints` | `hpc_agent/schemas/update_run_constraints.input.json` | `hpc_agent/schemas/update_run_constraints.output.json` |
 
 ## `submit` (1)

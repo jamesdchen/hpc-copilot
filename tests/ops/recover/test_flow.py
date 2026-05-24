@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.flows.resubmit_flow.resubmit_flow``.
+"""Tests for ``hpc_agent.ops.recover.flow.resubmit_flow``.
 
 Covers the macro layer composing preempted-detection and the
 journal-update. The macro applies caller-supplied resource overrides
@@ -14,7 +14,7 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent.flows.resubmit_flow import (
+from hpc_agent.ops.recover.flow import (
     ResubmitFlowResult,
     resubmit_flow,
 )

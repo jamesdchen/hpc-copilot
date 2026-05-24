@@ -7,8 +7,10 @@ its own submodule and registers as a ``@primitive`` with
 * :mod:`hpc_agent.flows.submit_flow`
 * :mod:`hpc_agent.flows.monitor_flow`
 * :mod:`hpc_agent.flows.aggregate_flow`
-* :mod:`hpc_agent.flows.resubmit_flow`
 * :mod:`hpc_agent.flows.validate_campaign`
+
+The recover/resubmit pipeline moved into the ``ops/recover`` subject
+in PR 2.3 — see :mod:`hpc_agent.ops.recover.flow`.
 
 Eager re-exports here are tempting but every workflow imports atoms +
 state + infra; importing flows would chain-load most of the package
