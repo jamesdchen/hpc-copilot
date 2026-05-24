@@ -15,30 +15,15 @@ from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliShape
 
+# The canonical implementation lives in ``hpc_agent.infra.time`` so
+# ``meta/campaign/atoms/load_context.py`` can reach it without crossing
+# into this subject. Re-exported under the underscore-prefixed back-
+# compat alias for the local primitive call below; the lint allow-list
+# entry that used to gate this cross-subject hop is gone.
+from hpc_agent.infra.time import status_age_seconds as _last_status_age_seconds
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def _last_status_age_seconds(last_status: dict[str, Any] | None) -> int | None:
-    """Return age in seconds of ``last_status.checked_at``, or None.
-
-    Returns ``None`` when ``last_status`` is empty, has no ``checked_at``,
-    or the timestamp is unparseable.  Callers use this to surface
-    staleness to humans without changing the freshness contract of any
-    SSH-mutating subcommand.
-    """
-    if not isinstance(last_status, dict):
-        return None
-    iso = last_status.get("checked_at")
-    if not isinstance(iso, str):
-        return None
-    from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow
-
-    ts = parse_iso_utc_or_none(iso)
-    if ts is None:
-        return None
-    delta = utcnow() - ts
-    return max(0, int(delta.total_seconds()))
 
 
 @primitive(

@@ -46,35 +46,6 @@ ALLOWED_NON_SUBJECT_ROOTS: tuple[str, ...] = (
 )
 
 
-# Per-file allow-list of cross-subject imports that are temporarily tolerated
-# pending a proper refactor that extracts the shared dependency into
-# ``infra/``. Key = repo-relative path of the importing file; value = tuple
-# of full dotted module names whose violations get suppressed.
-# EACH ENTRY MUST CARRY A TODO COMMENT NAMING THE EXTRACTION PLAN.
-PER_FILE_ALLOWED_IMPORTS: dict[str, tuple[str, ...]] = {
-    # TODO(post-Wave-3): extract ``ssh_status_report`` to a shared
-    # ``infra/cluster_status.py`` (or similar). Both the aggregate
-    # subject (``flow``, ``canary_verify``) and recover subject
-    # (``failures_atom``) need the same SSH-driven status reporter; it
-    # has no monitor-specific state and should not live behind a subject.
-    "src/hpc_agent/ops/aggregate/flow.py": ("hpc_agent.ops.monitor.status",),
-    "src/hpc_agent/ops/aggregate/canary_verify.py": ("hpc_agent.ops.monitor.status",),
-    # TODO(post-Wave-3): same for ``fetch_task_logs`` — both recover's
-    # ``failures_atom`` and monitor's ``logs_atom`` need it. The fetcher
-    # is transport (SSH) only and belongs in ``infra/``.
-    "src/hpc_agent/ops/recover/failures_atom.py": (
-        "hpc_agent.ops.monitor.logs",
-        "hpc_agent.ops.monitor.status",
-    ),
-    # TODO(post-Wave-3): extract ``_last_status_age_seconds`` (or a
-    # broader "in-flight enumeration") to ``infra/`` so the meta/campaign
-    # ``load-context`` query can reach it without crossing into the
-    # monitor subject. The helper is a pure read over the journal and
-    # has no monitor-specific state.
-    "src/hpc_agent/meta/campaign/atoms/load_context.py": ("hpc_agent.ops.monitor.list_in_flight",),
-}
-
-
 def _subject_of(path: Path, role_root: Path) -> str | None:
     """Return the subject name for a file under ``role_root``, or None
     if the file isn't inside a subject directory (e.g. it's directly in
@@ -149,18 +120,9 @@ def lint_file(path: Path, own_role: str, own_subject: str) -> list[tuple[int, st
         tree = ast.parse(source)
     except SyntaxError:
         return []
-    # Per-file allow-list lookup. Use the repo-relative POSIX path so the
-    # dict keys are platform-independent.
-    try:
-        rel_key = path.resolve().relative_to(REPO).as_posix()
-    except ValueError:
-        rel_key = ""
-    file_allowed = PER_FILE_ALLOWED_IMPORTS.get(rel_key, ())
     findings: list[tuple[int, str]] = []
     for lineno, module in _iter_imports(tree):
         if _is_allowed_non_subject(module):
-            continue
-        if module in file_allowed or any(module.startswith(f + ".") for f in file_allowed):
             continue
         # Check both roles — a file in ``ops/foo`` may not import from
         # ``meta/bar`` either (different role still counts as a

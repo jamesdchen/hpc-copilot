@@ -193,7 +193,7 @@ def _nonempty_failing_task_ids(
 
     Pure read-only: two SSH round-trips, no cluster-side or local writes.
     """
-    from hpc_agent.ops.monitor.status import ssh_status_report
+    from hpc_agent.infra.cluster_status import ssh_status_report
 
     def _complete_ids(rows: int) -> set[int]:
         report = ssh_status_report(
