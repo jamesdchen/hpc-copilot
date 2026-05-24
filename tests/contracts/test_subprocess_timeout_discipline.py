@@ -53,8 +53,8 @@ _GRANDFATHERED: set[str] = {
     "tests/integration/test_external_harness_compat.py",
     "tests/integration/test_hpc_preamble_integration.py",
     "tests/integration/test_status_integration.py",
-    "tests/internal/test_audit_fixes.py",
-    "tests/internal/test_bake_operations_json.py",
+    "tests/infra/test_audit_fixes.py",
+    "tests/scripts/test_bake_operations_json.py",
     "tests/ops/memory/test_interview.py",
     "tests/ops/memory/test_recall.py",
 }
