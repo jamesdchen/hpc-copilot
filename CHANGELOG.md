@@ -30,14 +30,63 @@ alone instead of trusting context that may be gone.
   idle (no runs in flight), `load-context` emits
   `next_step_hint: "decide"` and a `kind="agent"` `decide` delegate
   carrying the campaign to advance.
-- **`hpc_agent.campaign.driver` — headless campaign driver** — advances
+- **`hpc_agent.meta.campaign.driver` — headless campaign driver** — advances
   exactly one campaign workflow step per invocation off the
   `load-context` `delegate` block. Installed as the `hpc-campaign-driver`
-  console script (equivalently `python -m hpc_agent.campaign.driver`).
+  console script (equivalently `python -m hpc_agent.meta.campaign.driver`).
   `kind: "cli"` steps run the matching `hpc-agent` verb directly with no
   LLM; `kind: "agent"` steps shell `claude -p` only when
   `--allow-agent-steps` is passed. Idempotent and cron-friendly — wrap
   it in cron or `/loop` to walk an unattended campaign.
+
+### Changed — internal package reorganization (wire-stable)
+
+The framework's internal layout has been reorganized into a layered
+DAG of self-contained subjects under `ops/`, `meta/`, and `models/`,
+with cross-cutting substrate at `infra/` and `state/` and the
+framework kernel under `_kernel/`. The wire surface (CLI verbs,
+envelope shapes, primitive names, JSON schemas) is **unchanged** —
+every `hpc-agent <verb>` and every envelope key keeps working
+identically. Internal Python import paths have moved; external
+integrators that `from hpc_agent.X import Y` should consult the
+new layout (`docs/architecture.md`).
+
+Highlights for plugin authors and external integrators:
+
+- **`hpc_agent._schema_models/` → `hpc_agent._wire/`** — Pydantic
+  models renamed; subpath structure preserved verbatim.
+- **`hpc_agent._internal/{primitive,operations,…}` → `hpc_agent._kernel/`** —
+  registry / contract / lifecycle / extension modules grouped under
+  the new kernel package. `_internal/{time,io}` moved to
+  `hpc_agent.infra.{time,io}`.
+- **`hpc_agent.atoms/`, `hpc_agent.flows/`, `hpc_agent.runner/`
+  (package), `hpc_agent.planning/`** — deleted. Their contents moved
+  into the matching subject under `ops/` (e.g. `flows/submit_flow.py`
+  → `ops/submit/flow.py`) or to `infra/` / `state/` where they were
+  helper-shaped. `hpc_agent.runner` survives as a single-file
+  package-root module re-exporting the previous public surface for
+  back-compat callers AND serving as the canonical bridge for
+  cross-subject primitive calls.
+- **`hpc_agent.campaign` → `hpc_agent.meta.campaign`**, including
+  the `hpc-campaign-driver` console script entry point.
+- **`hpc_agent.mapreduce` → `hpc_agent.models.mapreduce`**.
+- **`hpc_agent.worker_prompts` → `hpc_agent._kernel.extension.worker_prompts`**.
+- **`hpc_agent._internal.session` → `hpc_agent.state.session`**
+  (back-compat barrel re-exporting submodules `journal`, `run_record`,
+  `index`).
+- **New cross-subject discipline**: subjects under `ops/` and `meta/`
+  may not import from each other directly. Helper-shaped sharing goes
+  to `infra/`; cross-subject primitive *calls* route through
+  `hpc_agent.runner`. The `@primitive(composes=[...])` parameter now
+  accepts string primitive names (resolved via the registry at
+  registration time), eliminating the need to import a callable just
+  for declarative composition. CI enforces the rule via
+  `scripts/lint_subject_imports.py` (no allow-list — every cross-
+  subject reach is rejected).
+
+The `hpc-agent-pro` plugin is updated in lockstep with the reorg
+(see its own changelog entry); no version pin changes are required
+on the host.
 
 ### Changed — precondition gates on `monitor-flow` / `aggregate-flow`
 
