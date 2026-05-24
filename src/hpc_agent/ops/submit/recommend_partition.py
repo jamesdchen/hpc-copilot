@@ -1,5 +1,13 @@
 """``recommend-partition`` primitive — debug-partition routing.
 
+Agent-facing pre-submit advisor — call before constructing the submit
+spec when partition choice isn't obvious. Returns the recommended
+partition + rationale so the agent can fill the spec's ``partition``
+field with confidence (or override the recommendation when the user
+asks). Orthogonal to throughput planning (``plan-throughput`` packs
+tasks into waves) and submit orchestration (``submit-flow`` consumes
+a finished spec).
+
 Catches the lesson-4 missed opportunity: SLURM debug partitions
 typically run ``PriorityTier=10`` (vs 1 for normal), giving sub-1h
 jobs roughly 10× the backfill leverage. The opposite trap: anything
@@ -31,6 +39,7 @@ from hpc_agent._wire.queries.recommend_partition import (
     RecommendPartitionResult,
     RecommendPartitionSpec,
 )
+from hpc_agent.cli._dispatch import CliShape
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,9 +64,20 @@ def _highest_priority_non_debug(parts: list[PartitionInfo]) -> PartitionInfo | N
     verb="query",
     side_effects=[],
     idempotent=True,
-    # Composed into ``plan-throughput`` and ``submit-flow``; no independent
-    # agent surface, so the LLM/agent never targets it directly.
-    agent_facing=False,
+    cli=CliShape(
+        help=(
+            "Recommend a partition for a requested walltime against the "
+            "cluster's partition list. Returns the partition name + a "
+            "human-readable rationale (debug priority leverage, debug-"
+            "overrun refusal, user-preference honoured). Call this before "
+            "constructing the submit spec when partition choice isn't "
+            "obvious."
+        ),
+        spec_arg=True,
+        spec_model=RecommendPartitionSpec,
+        experiment_dir_arg=True,
+    ),
+    agent_facing=True,
 )
 def recommend_partition(
     experiment_dir: Path,  # noqa: ARG001 — convention: every atom takes experiment_dir

@@ -346,8 +346,8 @@
     "verb": "query"
   },
   {
-    "agent_facing": false,
-    "cli": null,
+    "agent_facing": true,
+    "cli": "hpc-agent recommend-partition --spec <path> [--experiment-dir <dir>]",
     "idempotent": true,
     "input_schema": "recommend_partition.input.json",
     "name": "recommend-partition",
