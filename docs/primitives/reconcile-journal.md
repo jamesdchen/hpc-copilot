@@ -26,7 +26,7 @@ error_codes:
 backed_by:
   cli: hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler
     <scheduler>
-  python: hpc_agent.runner.reconcile.reconcile
+  python: hpc_agent.ops.monitor.reconcile.reconcile
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable / remote_command_failed

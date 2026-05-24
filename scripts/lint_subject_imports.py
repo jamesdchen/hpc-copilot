@@ -64,6 +64,20 @@ PER_FILE_ALLOWED_IMPORTS: dict[str, tuple[str, ...]] = {
     # backend object, so the helper has no business living under
     # ops/submit/ as a private function.
     "src/hpc_agent/ops/recover/flow.py": ("hpc_agent.ops.submit.flow",),
+    # TODO(post-Wave-3): extract ``ssh_status_report`` to a shared
+    # ``infra/cluster_status.py`` (or similar). Both the aggregate
+    # subject (``flow``, ``canary_verify``) and recover subject
+    # (``failures_atom``) need the same SSH-driven status reporter; it
+    # has no monitor-specific state and should not live behind a subject.
+    "src/hpc_agent/ops/aggregate/flow.py": ("hpc_agent.ops.monitor.status",),
+    "src/hpc_agent/ops/aggregate/canary_verify.py": ("hpc_agent.ops.monitor.status",),
+    # TODO(post-Wave-3): same for ``fetch_task_logs`` — both recover's
+    # ``failures_atom`` and monitor's ``logs_atom`` need it. The fetcher
+    # is transport (SSH) only and belongs in ``infra/``.
+    "src/hpc_agent/ops/recover/failures_atom.py": (
+        "hpc_agent.ops.monitor.logs",
+        "hpc_agent.ops.monitor.status",
+    ),
 }
 
 

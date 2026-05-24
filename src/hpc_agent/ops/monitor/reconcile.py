@@ -13,7 +13,7 @@ from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._internal.time import utcnow_iso
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
-from hpc_agent.runner.status import _ssh_status_report
+from hpc_agent.ops.monitor.status import _ssh_status_report
 
 if TYPE_CHECKING:
     from hpc_agent._internal.session import RunRecord

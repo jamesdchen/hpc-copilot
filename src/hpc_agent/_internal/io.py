@@ -80,8 +80,8 @@ def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
       * ``_internal/session/run_record._atomic_write_json`` (forwarder
         below — back-compat for callers that still import it).
       * ``state/runs.py`` for per-run sidecars.
-      * ``runner/update_constraints.py`` for the journal hand-off.
-      * ``runner/status.py`` for the ``last_status.json`` cache
+      * ``ops/monitor/update_constraints.py`` for the journal hand-off.
+      * ``ops/monitor/status.py`` for the ``last_status.json`` cache
         (``fsync=False`` — see tradeoff above).
       * ``infra/inspect/_persist.py`` for the cluster-history file.
       * ``mapreduce/metrics_io.py`` for per-task metrics JSONs.

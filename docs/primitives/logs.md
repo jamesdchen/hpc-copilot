@@ -54,7 +54,7 @@ error_codes:
 backed_by:
   cli: hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>]
     [--all-failed] [--lines <lines>]
-  python: hpc_agent.atoms.logs.fetch_logs
+  python: hpc_agent.ops.monitor.logs_atom.fetch_logs
 exit_codes:
 - 0: ok
 - 1: spec_invalid

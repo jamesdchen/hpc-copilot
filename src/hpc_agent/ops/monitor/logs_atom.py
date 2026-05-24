@@ -12,12 +12,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors, runner
+from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
-from hpc_agent.runner.status import _ssh_status_report
+from hpc_agent.ops.monitor.logs import fetch_task_logs
+from hpc_agent.ops.monitor.status import _ssh_status_report
 
 if TYPE_CHECKING:
     import argparse
@@ -149,7 +150,7 @@ def fetch_logs(
 
     logs: list[dict[str, Any]] = []
     if resolved_task_ids:
-        logs = runner.fetch_task_logs(
+        logs = fetch_task_logs(
             ssh_target=record.ssh_target,
             remote_path=record.remote_path,
             job_name=record.job_name,

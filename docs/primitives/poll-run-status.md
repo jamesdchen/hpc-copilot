@@ -20,7 +20,7 @@ error_codes:
   description: The on-cluster reporter exited non-zero; surface stderr.
 backed_by:
   cli: hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]
-  python: hpc_agent.runner.status.record_status
+  python: hpc_agent.ops.monitor.status.record_status
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable / remote_command_failed (check retry_safe)

@@ -8,12 +8,11 @@ without the other (the failure mode that motivated this module).
 SSH calls and journal writes meet.
 
 Public surface is in ``__all__`` below. Private helpers (underscore-prefixed
-names like ``_ssh_status_report``) live on their canonical submodule —
-``hpc_agent.runner.status``, ``.reconcile`` — and must be imported from
-there directly. The pre-split monolith re-exported them from this
-``__init__`` so test code could write ``runner._X``; that leaked private
-surface across the package boundary and is no longer supported (post-audit
-cleanup, 2026-05).
+names like ``_ssh_status_report``) live on their canonical submodule and
+must be imported from there directly. The pre-split monolith re-exported
+them from this ``__init__`` so test code could write ``runner._X``; that
+leaked private surface across the package boundary and is no longer
+supported (post-audit cleanup, 2026-05).
 
 PR 1.5 moved the SSH JSON-parse helper (``_parse_remote_json``) to
 ``infra.remote.parse_remote_json`` and the failure-category regex
@@ -29,6 +28,16 @@ and :mod:`hpc_agent.ops.recover.runner` (``resubmit_failed`` /
 ``derive_resubmit_request_id``). Their symbols are still re-exported on
 this package for back-compat; new callers should import from
 ``hpc_agent.ops.recover`` directly.
+
+PR 3.1 (monitor subject) moved the polling / reconciliation / log-fetch
+pipeline out of ``runner/`` and into :mod:`hpc_agent.ops.monitor` — see
+:mod:`hpc_agent.ops.monitor.status` (``record_status``,
+``ssh_status_report``), :mod:`hpc_agent.ops.monitor.reconcile`
+(``reconcile``, ``mark_terminal``), :mod:`hpc_agent.ops.monitor.logs`
+(``fetch_task_logs``), and :mod:`hpc_agent.ops.monitor.update_constraints`
+(``update_run_constraints``). Their symbols are still re-exported on
+this package for back-compat; new callers should import from
+``hpc_agent.ops.monitor`` directly.
 """
 
 from __future__ import annotations
@@ -40,6 +49,12 @@ from hpc_agent.ops.aggregate.runner import (
     verify_per_task_outputs,
     write_remote_provenance,
 )
+from hpc_agent.ops.monitor.logs import fetch_task_logs
+from hpc_agent.ops.monitor.reconcile import (
+    mark_terminal,
+    reconcile,
+)
+from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.ops.recover.runner import (
     derive_resubmit_request_id,
     resubmit_failed,
@@ -51,12 +66,6 @@ from hpc_agent.ops.recover.runner_failures import (
     fingerprint_stderr_tail,
 )
 from hpc_agent.ops.submit.runner import build_job_env, submit_and_record
-from hpc_agent.runner.logs import fetch_task_logs
-from hpc_agent.runner.reconcile import (
-    mark_terminal,
-    reconcile,
-)
-from hpc_agent.runner.status import record_status
 
 __all__ = [
     "submit_and_record",

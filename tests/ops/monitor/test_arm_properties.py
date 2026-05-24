@@ -1,4 +1,4 @@
-"""Property-based tests for ``hpc_agent.atoms.monitor_arm._seconds_to_cron``.
+"""Property-based tests for ``hpc_agent.ops.monitor.arm._seconds_to_cron``.
 
 The function renders a cadence (in seconds) as a cron schedule string
 for the ``decide-monitor-arm`` primitive. The implementation is a
@@ -22,7 +22,7 @@ import re
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from hpc_agent.atoms.monitor_arm import _seconds_to_cron
+from hpc_agent.ops.monitor.arm import _seconds_to_cron
 
 # ``_seconds_to_cron`` is only called with cadences from ``_DELAY_RULES``
 # (60s..3600s today), but the function should handle arbitrary positive

@@ -18,7 +18,7 @@ from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent._schema_models.actions.resubmit import ResubmitSpec
 from hpc_agent._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
-from hpc_agent.runner.reconcile import _ssh_alive_job_ids
+from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids
 
 if TYPE_CHECKING:
     from pathlib import Path
