@@ -74,6 +74,48 @@ class TestSacctErrorShape:
         out = qmod.query_sacct(["123"])
         assert out["errors"] == []
 
+    def test_resubmit_newest_array_wins_per_task(self, monkeypatch):
+        # Resubmit-extends-job_ids contract: when ``query_sacct`` is
+        # called with both the original array and a later resubmit
+        # array, and the same task_id appears in both, the newer array's
+        # row (later position in the input list) must win — otherwise
+        # monitor would surface the prior FAILED state for a task that's
+        # currently RUNNING under the resubmit.
+        # Failure-mode this guards against:
+        #   * sacct emits oldest-first by default, so "first occurrence
+        #     wins" would lock in the FAILED row.
+        stdout = "111_3|FAILED|1:0\n222_3|RUNNING|0:0\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["111", "222"])
+        # Newest (222) wins, not oldest (111).
+        assert out["tasks"][3]["state"] == "RUNNING"
+        assert out["tasks"][3]["job_id"] == "222"
+
+    def test_resubmit_newest_wins_when_sacct_emits_newest_first(self, monkeypatch):
+        # Mirror of the above but with sacct emitting newest-first —
+        # the newer row arrives BEFORE the older one, so old-style
+        # "first occurrence wins" would have accidentally been correct
+        # here. The point of this test is to lock in that the new dedup
+        # ALSO yields the right answer when row order flips.
+        stdout = "222_3|RUNNING|0:0\n111_3|FAILED|1:0\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["111", "222"])
+        assert out["tasks"][3]["state"] == "RUNNING"
+        assert out["tasks"][3]["job_id"] == "222"
+
+    def test_main_record_still_beats_batch_step_within_same_array(self, monkeypatch):
+        # The pre-existing dedup rule ("main record comes before
+        # .batch/.extern steps") must survive the resubmit-aware
+        # rewrite. The main row's State is authoritative; .batch /
+        # .extern rows are subordinate per-step accounting.
+        stdout = "999_5|COMPLETED|0:0\n999_5.batch|CANCELLED|0:15\n"
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _cp(stdout=stdout))
+
+        out = qmod.query_sacct(["999"])
+        assert out["tasks"][5]["state"] == "COMPLETED"
+
 
 # ---------------------------------------------------------------------------
 # query_sge

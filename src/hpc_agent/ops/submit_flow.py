@@ -230,10 +230,15 @@ def _make_single_array_submission(
         SideEffect("scheduler-submit", "<cluster>"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
     ],
+    # ``SchedulerThrottled`` was declared but never raised: real
+    # throttling currently surfaces as ``RemoteCommandFailed``. Removed
+    # to stop callers wiring retry policy against a code that never
+    # fires. ``RemoteCommandFailed`` IS raised by ssh_run helpers in
+    # this primitive's transitive path.
     error_codes=[
         errors.SpecInvalid,
         errors.SshUnreachable,
-        errors.SchedulerThrottled,
+        errors.RemoteCommandFailed,
         errors.ClusterUnknown,
     ],
     idempotent=True,
@@ -463,10 +468,13 @@ def _submit_one_spec(
         SideEffect("scheduler-submit", "<cluster> (one qsub per spec)"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per spec)"),
     ],
+    # See submit-flow above: ``SchedulerThrottled`` removed because
+    # nothing actually raises it; real throttling surfaces as
+    # ``RemoteCommandFailed``.
     error_codes=[
         errors.SpecInvalid,
         errors.SshUnreachable,
-        errors.SchedulerThrottled,
+        errors.RemoteCommandFailed,
         errors.ClusterUnknown,
     ],
     idempotent=True,

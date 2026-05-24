@@ -135,9 +135,42 @@ def write_axes(
     validate_axes(payload)
     target = axes_path(experiment_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(yaml.safe_dump(payload, sort_keys=True), encoding="utf-8")
-    tmp.replace(target)
+    # Atomic + durable write — fixed-name ``.tmp`` sibling is replaced
+    # with a mkstemp-allocated unique name (two concurrent writes to
+    # the same axes.yaml don't collide on the tmp), and an explicit
+    # ``fsync`` of both file and parent dir keeps the rename durable
+    # across a kernel panic / power loss. Mirrors
+    # ``infra.io.atomic_write_json``'s recipe but for YAML output.
+    import contextlib as _contextlib
+    import os as _os
+    import tempfile as _tempfile
+
+    serialized = yaml.safe_dump(payload, sort_keys=True)
+    fd, tmp_name = _tempfile.mkstemp(
+        prefix=target.name + ".",
+        suffix=".tmp",
+        dir=str(target.parent),
+    )
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(serialized)
+            fh.flush()
+            with _contextlib.suppress(OSError):
+                _os.fsync(fh.fileno())
+        _os.replace(tmp_name, target)
+        try:
+            dir_fd = _os.open(str(target.parent), _os.O_RDONLY)
+            try:
+                with _contextlib.suppress(OSError):
+                    _os.fsync(dir_fd)
+            finally:
+                _os.close(dir_fd)
+        except OSError:
+            pass
+    except BaseException:
+        with _contextlib.suppress(OSError):
+            _os.unlink(tmp_name)
+        raise
     return target
 
 

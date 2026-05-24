@@ -230,7 +230,10 @@ def reconcile(
             "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
         ),
     ],
-    error_codes=[errors.JournalCorrupt],
+    # ``mark_terminal`` delegates to ``journal.mark_run`` which currently
+    # does not raise ``JournalCorrupt`` — leaving the prior declaration
+    # would be a phantom that callers wire retry policy against in vain.
+    error_codes=[],
     idempotent=True,
     idempotency_key="run_id",
     cli=None,  # Python-only primitive

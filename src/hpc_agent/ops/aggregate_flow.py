@@ -397,7 +397,14 @@ def aggregate_flow(
             waves_combined_this_call=[],
             combiner_dir_local=str(out),
             aggregated_metrics=(cr["reduced"] if isinstance(cr.get("reduced"), dict) else {}),
-            summaries_dir_local=str(cr["output_path_local"]),
+            # cluster-reduce performs the reduction on the cluster and
+            # pulls the single reduced output; there is no separate
+            # per-task summaries directory in this branch. The field is
+            # documented as "set when pull_summaries=true" — leaving
+            # None preserves that contract. ``output_path_local`` from
+            # ``cluster_reduce`` is the single reduced *file* and lives
+            # under ``combiner_dir_local`` already.
+            summaries_dir_local=None,
             escalation_reason=None,
         )
 

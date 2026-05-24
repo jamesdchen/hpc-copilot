@@ -156,6 +156,17 @@ def main(argv: list[str] | None = None) -> int:
         # generic handler and be mislabelled internal / exit 3.
         return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except ValueError as exc:
+        # ~30+ raise sites across ``ops/``, ``meta/``, ``_kernel/contract``
+        # use ``raise ValueError(...)`` for spec/input validation outside
+        # any Pydantic validator (so the ``ValidationError`` clause above
+        # does not catch them). Mapping the rest to ``SpecInvalid`` (exit
+        # 1) gives the user a usable error message instead of a generic
+        # ``HpcError`` (exit 3). The cost is that a stray internal
+        # ``ValueError`` (e.g. an unguarded ``int("garbage")`` from a
+        # buggy parser) is mis-classified as a user error — preferable
+        # to forcing every spec-validation site to import ``errors`` and
+        # raise ``SpecInvalid`` directly. Migrating those raise sites
+        # could justify removing this clause; until then, KEEP IT.
         return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except Exception as exc:  # noqa: BLE001 — last-resort envelope
         return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))

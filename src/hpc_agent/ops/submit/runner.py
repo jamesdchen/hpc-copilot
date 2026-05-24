@@ -37,11 +37,13 @@ def _submit_spec_handler(ns):  # type: ignore[no-untyped-def]
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
         SideEffect("scheduler-submit", "<cluster>"),
     ],
+    # ``SchedulerThrottled`` was declared phantom — nothing raises it;
+    # throttling surfaces as ``RemoteCommandFailed``. Replaced.
     error_codes=[
         errors.SpecInvalid,
         errors.ClusterUnknown,
         errors.SshUnreachable,
-        errors.SchedulerThrottled,
+        errors.RemoteCommandFailed,
     ],
     idempotent=True,
     idempotency_key="spec.run_id",
