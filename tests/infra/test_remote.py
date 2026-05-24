@@ -171,8 +171,8 @@ class TestDeployRuntime:
 
         all_calls = mock_run.call_args_list
         # Expect 11 subprocess.run invocations:
-        #   1 ssh (mkdir -p hpc_agent/mapreduce, .hpc/templates, .hpc/templates/common),
-        #   1 scp into hpc_agent/mapreduce/ (metrics_io.py),
+        #   1 ssh (mkdir -p hpc_agent/models/mapreduce, .hpc/templates, .hpc/templates/common),
+        #   1 scp into hpc_agent/models/mapreduce/ (metrics_io.py),
         #   1 scp into hpc_agent/ (executor_cli.py — for tasks.py imports),
         #   1 scp into .hpc/_hpc_dispatch.py,
         #   4 scp into .hpc/templates/ (sge cpu/gpu, slurm cpu/gpu),
@@ -188,10 +188,10 @@ class TestDeployRuntime:
         assert ".hpc/templates" in argvs[0][-1]
         assert ".hpc/templates/common" in argvs[0][-1]
 
-        # Importable stub into hpc_agent/mapreduce/
+        # Importable stub into hpc_agent/models/mapreduce/
         assert argvs[1][0] == "scp"
         assert argvs[1][1].endswith("metrics_io.py")
-        assert argvs[1][2].endswith(":/p/hpc_agent/mapreduce/metrics_io.py")
+        assert argvs[1][2].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
 
         # executor_cli stub into hpc_agent/ (so tasks.py top-level
         # ``from hpc_agent.executor_cli import ...`` resolves on cluster).

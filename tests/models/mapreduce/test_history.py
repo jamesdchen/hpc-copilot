@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.mapreduce.reduce.history``: per-campaign sidecar
+"""Tests for ``hpc_agent.models.mapreduce.reduce.history``: per-campaign sidecar
 filtering, result-dir resolution, and per-iteration reduce."""
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent.mapreduce.reduce.history import (
+from hpc_agent.models.mapreduce.reduce.history import (
     find_sidecars_by_campaign,
     prior,
     result_dirs_for_sidecar,

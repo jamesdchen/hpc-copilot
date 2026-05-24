@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from hpc_agent.mapreduce.reduce.metrics import reduce_metrics
+from hpc_agent.models.mapreduce.reduce.metrics import reduce_metrics
 from hpc_agent.state.runs import find_existing_runs, read_run_sidecar
 
 __all__ = [

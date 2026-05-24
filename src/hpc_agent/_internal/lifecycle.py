@@ -10,7 +10,7 @@ single value:
   ``"in_flight"``).
 * ``hpc_agent.ops.monitor.flow``'s ``lifecycle_state`` envelope
   field — workflow state including ``"timeout"``.
-* ``hpc_agent.mapreduce.reduce.status``'s per-task status strings.
+* ``hpc_agent.models.mapreduce.reduce.status``'s per-task status strings.
 * ``hpc_agent.runner.cluster_failures_by_fingerprint``'s emitted
   category strings vs ``hpc_agent.agent_cli._VALID_RESUBMIT_CATEGORIES``'s
   accepted set — a real bug class where the classifier could emit a
@@ -90,7 +90,7 @@ class LifecycleState(StrEnum):
 
 
 class TaskStatus(StrEnum):
-    """Per-task status reported by :mod:`hpc_agent.mapreduce.reduce.status`.
+    """Per-task status reported by :mod:`hpc_agent.models.mapreduce.reduce.status`.
 
     Distinct from :class:`JournalStatus` — a workflow can be ``in_flight``
     while individual tasks are ``complete``, ``running``, ``pending``,

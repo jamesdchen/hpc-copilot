@@ -127,15 +127,15 @@ from hpc_agent.infra.throughput import (
     build_wave_map,
     compute_submission_plan,
 )
-from hpc_agent.mapreduce.metrics_io import write_metrics
-from hpc_agent.mapreduce.reduce.classify import classify_failure
-from hpc_agent.mapreduce.reduce.metrics import (
+from hpc_agent.models.mapreduce.metrics_io import write_metrics
+from hpc_agent.models.mapreduce.reduce.classify import classify_failure
+from hpc_agent.models.mapreduce.reduce.metrics import (
     reduce_by_grid_point,
     reduce_metrics,
     reduce_partials,
     reduce_resource_usage,
 )
-from hpc_agent.mapreduce.reduce.status import (
+from hpc_agent.models.mapreduce.reduce.status import (
     check_results,
     check_results_from_tasks,
     detect_scheduler,
@@ -252,7 +252,7 @@ def load_tasks_module(tasks_py_path: Path) -> ModuleType:
     if not hasattr(module, "total") or not hasattr(module, "resolve"):
         raise AttributeError(
             f"{path} must define both total() and resolve(task_id) — "
-            "see hpc_agent/mapreduce/templates/scaffolds/tasks_example.py"
+            "see hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py"
         )
     return module
 
@@ -281,13 +281,13 @@ def get_template_path(scheduler: str, template: str) -> Path:
     from hpc_agent.infra.backends import template_ext_for
 
     ext = template_ext_for(scheduler)
-    # B7: templates moved to hpc_agent/mapreduce/templates/ as part of
-    # the package reorg. Resolve via the hpc_agent package root so this
+    # B7: templates moved to hpc_agent/models/mapreduce/templates/ as part
+    # of the package reorg. Resolve via the hpc_agent package root so this
     # forwarder keeps working until the rest of __init__.py moves over.
     import hpc_agent as _hpc_agent_pkg
 
     _hpc_agent_root = Path(_hpc_agent_pkg.__file__).resolve().parent
-    path = _hpc_agent_root / "mapreduce" / "templates" / scheduler / f"{template}{ext}"
+    path = _hpc_agent_root / "models" / "mapreduce" / "templates" / scheduler / f"{template}{ext}"
     if not path.exists():
         raise FileNotFoundError(f"Template not found: {path}")
     return path

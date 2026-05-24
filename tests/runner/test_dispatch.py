@@ -1,4 +1,4 @@
-"""Tests for hpc_agent.mapreduce.dispatch — the cluster-side framework executor.
+"""Tests for hpc_agent.models.mapreduce.dispatch — the cluster-side framework executor.
 
 The dispatcher imports the user's ``.hpc/tasks.py``, reads the per-run
 sidecar at ``.hpc/runs/<run_id>.json`` for the executor command and
@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent.mapreduce import dispatch
-from hpc_agent.mapreduce.reduce.status import check_results
+from hpc_agent.models.mapreduce import dispatch
+from hpc_agent.models.mapreduce.reduce.status import check_results
 from tests.conftest import make_sidecar_json, write_hpc_tasks
 
 if TYPE_CHECKING:

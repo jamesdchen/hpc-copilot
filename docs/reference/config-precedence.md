@@ -117,7 +117,7 @@ Notes:
 | `HPC_RUN_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py`, `.hpc/_hpc_combiner.py` | Locates `.hpc/runs/<run_id>.json`. |
 | `HPC_TASK_ID` | (none, required) | cluster-side `.hpc/_hpc_dispatch.py` | 0-based task index. `TASK_ID` is accepted as a fallback for the env-var transition. |
 | `HPC_TASKS_PATH` | sibling of `_hpc_dispatch.py` | cluster-side `.hpc/_hpc_dispatch.py` | Override path to user's `tasks.py`. |
-| `HPC_CAMPAIGN_ID` | unset | scheduler templates → cluster-side dispatcher → user `tasks.py` | When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` calls `hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to get prior iterations' reduced metrics. |
+| `HPC_CAMPAIGN_ID` | unset | scheduler templates → cluster-side dispatcher → user `tasks.py` | When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` calls `hpc_agent.models.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` to get prior iterations' reduced metrics. |
 | `HPC_WAVE` | (none) | cluster-side `.hpc/_hpc_combiner.py` | Wave index when `--wave` is absent. |
 | `HPC_RUNTIME` | unset | scheduler templates | When `uv`, the template runs `uv sync` before dispatch. |
 

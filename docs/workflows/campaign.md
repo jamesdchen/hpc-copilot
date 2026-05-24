@@ -1,15 +1,15 @@
 # Closed-loop campaigns
 
-A campaign is a sequence of `/submit` invocations sharing a `campaign_id` tag. The user's `.hpc/tasks.py` reads `hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at module-load time to learn what prior iterations produced and decide what to run next. The framework provides:
+A campaign is a sequence of `/submit` invocations sharing a `campaign_id` tag. The user's `.hpc/tasks.py` reads `hpc_agent.models.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` at module-load time to learn what prior iterations produced and decide what to run next. The framework provides:
 
 | Component | What it does |
 |---|---|
 | `campaign_id` field on run sidecars (v2 schema) | Tags every successful submit with the campaign it belongs to. |
 | `--campaign-id` field on the submit spec | Sets the tag at submit time; threaded through `hpc_agent.ops.submit.runner.submit_and_record` → `RunRecord.campaign_id`. |
 | `HPC_CAMPAIGN_ID` env var | Forwarded by every scheduler template (SGE / SLURM, CPU / GPU). The user's `tasks.py` (and the executor) read it on the cluster. |
-| `hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` | Walks matching sidecars, runs `reduce_metrics` on each iteration's result_dirs, returns the per-iteration reduced-metric dicts oldest-first. Pure local read; no SSH. |
+| `hpc_agent.models.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` | Walks matching sidecars, runs `reduce_metrics` on each iteration's result_dirs, returns the per-iteration reduced-metric dicts oldest-first. Pure local read; no SSH. |
 | `hpc_agent.meta.campaign.dirs.campaign_dir(experiment_dir, campaign_id)` | Returns `.hpc/campaigns/<cid>/`, creating it idempotently. Reserved for strategy libraries to put their state files (Optuna SQLite, PBT checkpoints, walk-forward cursor, etc.). The framework writes nothing inside. |
-| `hpc_agent.mapreduce.metrics_io.read_kw_env()` | Executor-side helper that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env var the dispatcher exported. Stdlib-only; deployed alongside the executor. |
+| `hpc_agent.models.mapreduce.metrics_io.read_kw_env()` | Executor-side helper that returns `{lowercase_name: str_value}` for every `HPC_KW_*` env var the dispatcher exported. Stdlib-only; deployed alongside the executor. |
 | `hpc-agent campaign status / list` | Read-only CLI inspection. |
 | `slash_commands/commands/campaign-hpc.md` | Operator-facing slash that scaffolds a campaign-aware `tasks.py` and arms the loop. The loop itself is driven by `hpc-campaign-driver` (a non-primitive console script) — one step per invocation, advancing off the `delegate` block emitted by `load-context`. Wrap the driver in cron / `/loop` / any external orchestrator; on-disk state is the only thing carried between ticks. Concurrency is opt-in by firing more submits before earlier ones finish. See [`docs/internals/campaign-lifecycle.md`](../internals/campaign-lifecycle.md) for the design rationale and the two prior shapes (`armed-line` Stop hook, conversation-as-state) that this replaced. |
 
@@ -22,7 +22,7 @@ All three recipes share the same bootstrap:
 ```python
 # .hpc/tasks.py — campaign-aware
 import os
-from hpc_agent.mapreduce.reduce.history import prior
+from hpc_agent.models.mapreduce.reduce.history import prior
 
 _PRIOR = prior(".", os.environ["HPC_CAMPAIGN_ID"]) if "HPC_CAMPAIGN_ID" in os.environ else []
 ```
@@ -87,7 +87,7 @@ def _study() -> optuna.Study:
 # Replay any prior reduced metrics into the Optuna study so it sees the
 # full history before proposing the next trial.
 _study_handle = _study()
-for prior_entry, run_id in zip(_PRIOR, [s["run_id"] for s in __import__("hpc_agent").mapreduce.reduce.history.find_sidecars_by_campaign(".", os.environ.get("HPC_CAMPAIGN_ID", ""))]):
+for prior_entry, run_id in zip(_PRIOR, [s["run_id"] for s in __import__("hpc_agent").models.mapreduce.reduce.history.find_sidecars_by_campaign(".", os.environ.get("HPC_CAMPAIGN_ID", ""))]):
     if not prior_entry:
         continue
     # Optuna trial numbers come from the study; we replay only metrics

@@ -60,7 +60,7 @@ def _ssh_status_report(
     job_ids_csv = ",".join(job_ids)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
-        f"python -m hpc_agent.mapreduce.reduce.status "
+        f"python -m hpc_agent.models.mapreduce.reduce.status "
         f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
         f"--job-name {shlex.quote(job_name)} "

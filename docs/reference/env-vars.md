@@ -12,7 +12,7 @@ preamble).
 | `HPC_CLUSTERS_CONFIG` | `<package>/config/clusters.yaml` | Path to a `clusters.yaml` override. Used by `hpc_agent.infra.clusters.load_clusters_config`. |
 | `HPC_JOURNAL_DIR` | `~/.claude/hpc/` | Root of the per-experiment journal tree. External harnesses set this so their state lives outside the user's `~/.claude`. |
 | `HPC_MAX_RUNS` | `500` | Max per-experiment sidecars retained before oldest-by-mtime eviction (`hpc_agent.state.runs`). |
-| `HPC_CAMPAIGN_ID` | (unset) | Threaded through to every cluster job by the scheduler templates so `tasks.py` can read the prior iteration's history via `hpc_agent.mapreduce.reduce.history.prior(...)`. |
+| `HPC_CAMPAIGN_ID` | (unset) | Threaded through to every cluster job by the scheduler templates so `tasks.py` can read the prior iteration's history via `hpc_agent.models.mapreduce.reduce.history.prior(...)`. |
 | `HPC_TELEMETRY_SINK` | `none` | One of `none` / `stderr-jsonl` / `monitor-jsonl`. Routes `hpc_agent._internal.telemetry.record` events. |
 
 ## SSH / rsync transport

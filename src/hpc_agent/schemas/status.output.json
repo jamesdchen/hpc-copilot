@@ -30,7 +30,7 @@
     },
     "last_status": {
       "additionalProperties": true,
-      "description": "Snapshot from the on-cluster status reporter; see hpc_agent.mapreduce.reduce.status.",
+      "description": "Snapshot from the on-cluster status reporter; see hpc_agent.models.mapreduce.reduce.status.",
       "title": "Last Status",
       "type": "object"
     },

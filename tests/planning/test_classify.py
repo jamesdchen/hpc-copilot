@@ -1,8 +1,8 @@
-"""Tests for hpc_agent.mapreduce.reduce.classify.classify_failure."""
+"""Tests for hpc_agent.models.mapreduce.reduce.classify.classify_failure."""
 
 from __future__ import annotations
 
-from hpc_agent.mapreduce.reduce.classify import CATEGORIES, classify_failure
+from hpc_agent.models.mapreduce.reduce.classify import CATEGORIES, classify_failure
 from hpc_agent.ops.recover.failure_signatures import classify as classify_signature
 
 

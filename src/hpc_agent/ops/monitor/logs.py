@@ -21,7 +21,7 @@ def fetch_task_logs(
     """SSH to the cluster and tail each task's stderr log.
 
     Tries the most recent ``job_id`` first, falls back through earlier
-    ones (matching :func:`hpc_agent.mapreduce.reduce.status.get_err_log_paths`
+    ones (matching :func:`hpc_agent.models.mapreduce.reduce.status.get_err_log_paths`
     semantics). Returns one dict per task; missing logs surface as
     ``{"task_id": int, "missing": True}``.
 

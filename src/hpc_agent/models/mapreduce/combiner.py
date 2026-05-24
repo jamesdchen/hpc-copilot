@@ -70,7 +70,7 @@ def _read_metrics(metrics_path):
 def _grid_key(params):
     """Deterministic string ID from kwargs values, joined by ``_``.
 
-    Mirrors ``hpc_agent.mapreduce.reduce.metrics.run_id`` semantics. Duplicated
+    Mirrors ``hpc_agent.models.mapreduce.reduce.metrics.run_id`` semantics. Duplicated
     here because the combiner is deployed standalone (no package).
 
     Sort by key so two tasks with identical params but different dict
@@ -88,7 +88,7 @@ def _neumaier_sum(values):
 
     Reduces accumulated float rounding error. Handles the case where the
     running sum is smaller than the incoming term, which classic Kahan
-    does not. Duplicated verbatim in ``hpc_agent/mapreduce/reduce/metrics.py``.
+    does not. Duplicated verbatim in ``hpc_agent/models/mapreduce/reduce/metrics.py``.
     """
     s = 0.0
     c = 0.0

@@ -36,8 +36,8 @@ bind both.
 - `_PACKAGE_ROOT` — absolute path to the **package directory**
   (`hpc_agent/`, where `__init__.py` lives). Used to resolve
   `hpc_agent/config/clusters.yaml`, the bundled job templates
-  under `hpc_agent/mapreduce/templates/runtime/<scheduler>/`, and
-  starter scaffolds under `hpc_agent/mapreduce/templates/scaffolds/`.
+  under `hpc_agent/models/mapreduce/templates/runtime/<scheduler>/`, and
+  starter scaffolds under `hpc_agent/models/mapreduce/templates/scaffolds/`.
   Note: this points at the package, **not** the repo root.
 - `__version__` — package version string, resolved at import time from
   the installed distribution metadata. Falls back to
@@ -138,10 +138,10 @@ sidecars on disk continue to load via `read_run_sidecar`'s backfill.
 
 ### Closed-loop campaigns
 
-- `hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` —
+- `hpc_agent.models.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` —
   read-only per-iteration reduced metrics for a campaign, oldest-first.
   Pure local filesystem walk. Does not import `.hpc/tasks.py`.
-- `hpc_agent.mapreduce.reduce.history.find_sidecars_by_campaign` /
+- `hpc_agent.models.mapreduce.reduce.history.find_sidecars_by_campaign` /
   `result_dirs_for_sidecar` — underlying primitives.
 - `hpc_agent.meta.campaign.dirs.campaign_dir(experiment_dir, campaign_id)` —
   return `experiment_dir/.hpc/campaigns/<campaign_id>/`, creating it
@@ -240,7 +240,7 @@ Everything outside the framework's public API. Concretely:
 - **`.hpc/tasks.py`** — the user-written Python module exposing
   `total()` and `resolve(task_id)`. Authored once via `/submit`
   Step 6's scaffolding flow (adapting the canonical example at
-  `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`), git-tracked, and
+  `hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py`), git-tracked, and
   user-editable. The bridge between the framework's task-id contract
   and whatever parallelization axis the experiment needs.
 - **`.hpc/stages.py`** (optional) — the user-written Python module
@@ -281,10 +281,10 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    third-party deps listed in `pyproject.toml`** (currently just `pyyaml`).
    No other runtime deps.
 2. **`hpc_agent/**` MUST NOT import from
-   `hpc_agent/mapreduce/templates/`.** Templates are source files
+   `hpc_agent/models/mapreduce/templates/`.** Templates are source files
    copied into experiment repos; treating them as importable modules
    would couple the framework to a fixed set of templates.
-3. **`hpc_agent/mapreduce/templates/**` MUST NOT import from
+3. **`hpc_agent/models/mapreduce/templates/**` MUST NOT import from
    `hpc_agent/**`** — with narrow exceptions. Templates ship
    into experiment repos and run there, where `hpc-agent` is
    generally not installed. The exception: a small allowlist of
@@ -294,7 +294,7 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    because they are guaranteed to be present at execution time. The current
    allowlist (kept in sync with `RUNTIME_MODULES_ALLOWED_IN_TEMPLATES` in
    `tests/contracts/test_boundary_contract.py`) is:
-   - `hpc_agent.mapreduce.metrics_io` — the `write_metrics` sidecar
+   - `hpc_agent.models.mapreduce.metrics_io` — the `write_metrics` sidecar
      writer plus the `read_kw_env` kwargs-from-env helper. Stdlib-only,
      deployed alongside `combiner.py`. Templates use a lazy import
      gated on `$RESULT_DIR` so smoke tests still run without
@@ -302,7 +302,7 @@ a framework reservation; experiment repos may use `__init__.py` freely.
    - `hpc_agent.executor_cli` — the `flag`, `generic_args`,
      `gpu_args`, and `build_parser_from_flags` helpers used by the
      canonical `tasks.py` template (see
-     `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`) and
+     `hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py`) and
      the auto-generated `.hpc/cli.py` dispatcher. Stdlib-only,
      deployed alongside `metrics_io.py` by `deploy_runtime`.
 
@@ -346,11 +346,11 @@ user.
 ### What the framework guarantees
 
 - **Per-task isolation.** Each task runs in a fresh subprocess
-  (`mapreduce/dispatch.py:Popen`); no in-process state leaks across
+  (`models/mapreduce/dispatch.py:Popen`); no in-process state leaks across
   tasks. The task's `RESULT_DIR` is a per-task `_wip_<task_id>/`
   tempdir that atomically promotes to the final dir on exit-0.
 - **Deterministic env defaults.** The cluster preamble
-  (`hpc_agent/mapreduce/templates/runtime/common/hpc_preamble.sh`) exports
+  (`hpc_agent/models/mapreduce/templates/runtime/common/hpc_preamble.sh`) exports
   `OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
   `NUMEXPR_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`,
   `PYTHONUNBUFFERED=1`, `PYTHONHASHSEED=0`,
@@ -361,7 +361,7 @@ user.
   the matching `HPC_<NAME>` env var in the spec's `job_env`; the
   empty string disables the export entirely.
 - **Order-invariant aggregation.** The combiner
-  (`mapreduce/combiner.py`) uses `sorted()` for grid-key and
+  (`models/mapreduce/combiner.py`) uses `sorted()` for grid-key and
   per-key iteration plus Neumaier-compensated summation. Re-running
   the combiner on the same per-task outputs produces bit-identical
   aggregates regardless of which task finished first.

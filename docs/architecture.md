@@ -40,8 +40,9 @@ not the other way round. New code finds its destination by asking
 │  runner/        SSH-bound mutate primitives: submit-spec,           │
 │                 record-status, combine-wave, mark-terminal,         │
 │                 update-run-constraints                              │
-│  mapreduce/     reduce-side: status, classify, history, rollup,     │
-│  └ reduce/      tui (rich-based per-task summary)                   │
+│  models/                                                            │
+│  └ mapreduce/   reduce-side: status, classify, history, rollup,     │
+│    └ reduce/    tui (rich-based per-task summary)                   │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐

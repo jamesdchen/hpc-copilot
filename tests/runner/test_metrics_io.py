@@ -1,4 +1,4 @@
-"""Tests for hpc_agent.mapreduce.metrics_io.write_metrics."""
+"""Tests for hpc_agent.models.mapreduce.metrics_io.write_metrics."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from hpc_agent.mapreduce.metrics_io import write_metrics
+from hpc_agent.models.mapreduce.metrics_io import write_metrics
 
 
 class TestWriteMetricsDestination:
@@ -89,7 +89,7 @@ class TestExecutorTemplateEmitsMetrics:
 
         template_path = (
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            + "/src/hpc_agent/mapreduce/templates/scaffolds/executor_template.py"
+            + "/src/hpc_agent/models/mapreduce/templates/scaffolds/executor_template.py"
         )
         spec = importlib.util.spec_from_file_location("executor_template_under_test", template_path)
         assert spec is not None and spec.loader is not None

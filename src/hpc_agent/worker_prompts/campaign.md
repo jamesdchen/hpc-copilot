@@ -28,7 +28,7 @@ Closed-loop campaigns split along whether `tasks.py` chooses parameters by hand 
 - **Path A — manual params**: `tasks.py` enumerates a fixed grid; iteration N submits exactly the entries the user specified. Use when the experimenter knows the search space upfront (small grid, walk-forward windows, ablations).
 - **Path B — strategy-driven**: `tasks.py` imports Optuna / RandomSearch / a custom optimizer; calls `prior(experiment_dir, campaign_id)` to read previous iterations' metrics, calls `study.tell(...)` for each one, then `study.ask()` for the next batch. Use when the search space is large and the experimenter wants adaptive sampling.
 
-The framework doesn't care which path the user picks — `tasks.py`'s `total()` + `resolve(task_id)` is the only contract. Both paths thread `campaign_id` through `submit-flow`; both read history via the same `campaign-status` primitive (or its Python form, `hpc_agent.mapreduce.reduce.history.prior`).
+The framework doesn't care which path the user picks — `tasks.py`'s `total()` + `resolve(task_id)` is the only contract. Both paths thread `campaign_id` through `submit-flow`; both read history via the same `campaign-status` primitive (or its Python form, `hpc_agent.models.mapreduce.reduce.history.prior`).
 
 ## Stochastic-marker gate (Path B only) — MANDATORY before each submit
 

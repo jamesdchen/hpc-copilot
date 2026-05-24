@@ -1,6 +1,6 @@
 """Live terminal UI for ``/status`` (opt-in ``--tui`` path).
 
-A thin wrapper around :func:`hpc_agent.mapreduce.reduce.status.report_status_from_tasks`
+A thin wrapper around :func:`hpc_agent.models.mapreduce.reduce.status.report_status_from_tasks`
 that polls the cluster on a fixed cadence and renders the result with Rich.
 The JSON / cron path in ``status.py`` is unchanged; the TUI is imported
 lazily so a user without ``rich`` installed pays zero cost for the normal
@@ -8,7 +8,7 @@ lazily so a user without ``rich`` installed pays zero cost for the normal
 
 Invoke directly::
 
-    python -m hpc_agent.mapreduce.reduce.tui --run-id <run_id> \\
+    python -m hpc_agent.models.mapreduce.reduce.tui --run-id <run_id> \\
         --job-ids 12345,12346 --poll-interval 30
 
 Keybinds (single-keystroke, non-blocking read on stdin):
@@ -88,10 +88,10 @@ def _classify_failures(report: dict, per_task_dict: dict) -> dict[str, int]:
 
     Lazy-imports classify so we don't pay for log reads when no tasks are
     failing.  Logs are read lazily via the ``err_log_paths`` mapping
-    populated by :mod:`hpc_agent.mapreduce.reduce.status`; any unreadable log
+    populated by :mod:`hpc_agent.models.mapreduce.reduce.status`; any unreadable log
     is silently bucketed as ``"unknown"``.
     """
-    from hpc_agent.mapreduce.reduce.classify import classify_failure
+    from hpc_agent.models.mapreduce.reduce.classify import classify_failure
 
     err_paths = report.get("err_log_paths") or {}
     counts: dict[str, int] = {}
@@ -159,7 +159,7 @@ def _render(state: _UiState, report: dict, per_task_dict: dict, poll_interval: i
     from rich.table import Table
     from rich.text import Text
 
-    from hpc_agent.mapreduce.reduce.status import rollup_by_grid_point
+    from hpc_agent.models.mapreduce.reduce.status import rollup_by_grid_point
 
     # Header -----------------------------------------------------------------
     run_id = per_task_dict.get("run_id") or per_task_dict.get("project") or "(unknown)"
@@ -389,7 +389,7 @@ def run_tui(
     """Run the Rich-based live monitor.
 
     Imports ``rich`` lazily so callers without the ``tui`` extra installed
-    can still import :mod:`hpc_agent.mapreduce.reduce` without side effects.
+    can still import :mod:`hpc_agent.models.mapreduce.reduce` without side effects.
     Returns an integer exit code suitable for ``sys.exit``.
     """
     try:
@@ -403,7 +403,7 @@ def run_tui(
         print(f"(import error: {exc})", file=sys.stderr)
         return 2
 
-    from hpc_agent.mapreduce.reduce.status import report_status_from_tasks
+    from hpc_agent.models.mapreduce.reduce.status import report_status_from_tasks
 
     per_task_dict_path = Path(per_task_dict_path)
     try:
@@ -535,7 +535,7 @@ def _main(argv: list[str] | None = None) -> int:
     from pathlib import Path as _P
 
     from hpc_agent import load_tasks_module
-    from hpc_agent.mapreduce.reduce.status import (
+    from hpc_agent.models.mapreduce.reduce.status import (
         _build_per_task_dict_from_sidecar,
     )
 

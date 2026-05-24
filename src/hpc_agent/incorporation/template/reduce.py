@@ -5,7 +5,7 @@ chunk emits a :class:`~hpc_agent.incorporation.template.Monoid` partial instead 
 final scalar. These helpers fold the partials back to the serial
 result.
 
-This sits next to :mod:`hpc_agent.mapreduce.reduce`, which reduces
+This sits next to :mod:`hpc_agent.models.mapreduce.reduce`, which reduces
 per-task ``metrics.json`` sidecars by *weighted mean*. Weighted mean is
 itself one specific monoid; :func:`reduce_monoid` generalises it to any
 associative summary — the sufficient statistics needed for
@@ -52,7 +52,7 @@ def reduce_monoid_sidecars(
     ``<result_dir>/<filename>`` as JSON. *decode* reconstructs the
     monoid element from the parsed JSON (e.g. ``lambda d: Moments(**d)``).
     Missing or corrupt sidecars are skipped — same tolerance as
-    :func:`hpc_agent.mapreduce.reduce.reduce_metrics`.
+    :func:`hpc_agent.models.mapreduce.reduce.reduce_metrics`.
     """
     partials: list[Any] = []
     for rdir in result_dirs:
