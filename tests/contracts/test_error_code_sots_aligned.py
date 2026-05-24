@@ -5,7 +5,7 @@ a different consumer:
 
 * **Set A** — :class:`hpc_agent.errors.HpcError` subclasses (the Python
   raise side; what the framework actually emits).
-* **Set B** — :data:`hpc_agent._schema_models._shared.ErrorCode` Literal
+* **Set B** — :data:`hpc_agent._wire._shared.ErrorCode` Literal
   (the wire-contract Pydantic alias; consumed by every output schema
   that surfaces an error code inside ``data``).
 * **Set C** — :data:`hpc_agent.integration.ERROR_CODES` frozenset (the
@@ -35,7 +35,7 @@ import typing
 from pathlib import Path
 
 from hpc_agent import errors
-from hpc_agent._schema_models import _shared
+from hpc_agent._wire import _shared
 from hpc_agent.integration import ERROR_CODES as INTEGRATION_ERROR_CODES
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

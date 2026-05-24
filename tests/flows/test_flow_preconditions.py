@@ -15,8 +15,8 @@ import pytest
 from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent._schema_models.workflows.aggregate_flow import AggregateFlowSpec
-from hpc_agent._schema_models.workflows.monitor_flow import MonitorFlowSpec
+from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
+from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.ops.aggregate.flow import aggregate_flow
 from hpc_agent.ops.monitor.flow import monitor_flow
 

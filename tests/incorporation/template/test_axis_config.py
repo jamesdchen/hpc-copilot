@@ -5,7 +5,7 @@ from __future__ import annotations
 import jsonschema
 import pytest
 
-from hpc_agent._schema_models.fixtures.axes import _DataAxisConfig
+from hpc_agent._wire.fixtures.axes import _DataAxisConfig
 from hpc_agent.incorporation.template.axis import (
     MOMENTS,
     SUM,

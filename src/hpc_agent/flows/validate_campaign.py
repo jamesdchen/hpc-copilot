@@ -17,19 +17,19 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent._schema_models.validators.validate_executor_signatures import (
+from hpc_agent._wire.validators.validate_executor_signatures import (
     ValidateExecutorSignaturesSpec,
 )
-from hpc_agent._schema_models.validators.validate_input_dataset import (
+from hpc_agent._wire.validators.validate_input_dataset import (
     ValidateInputDatasetSpec,
 )
-from hpc_agent._schema_models.validators.validate_stochastic_marker import (
+from hpc_agent._wire.validators.validate_stochastic_marker import (
     ValidateStochasticMarkerSpec,
 )
-from hpc_agent._schema_models.validators.validate_walltime_against_history import (
+from hpc_agent._wire.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistorySpec,
 )
-from hpc_agent._schema_models.workflows.validate_campaign import (
+from hpc_agent._wire.workflows.validate_campaign import (
     ValidateCampaignReport,
     ValidateCampaignSpec,
     ValidatorFinding,

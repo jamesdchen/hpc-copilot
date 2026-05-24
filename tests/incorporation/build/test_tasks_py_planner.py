@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._schema_models.actions.build_tasks_py import BuildTasksPyInput
+from hpc_agent._wire.actions.build_tasks_py import BuildTasksPyInput
 from hpc_agent.incorporation.build.tasks_py import build_tasks_py
 
 if TYPE_CHECKING:

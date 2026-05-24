@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.lifecycle.lifecycle import FailureCategory  # noqa: F401 — re-export
-from hpc_agent._schema_models._shared import FailureCategoryResubmittable
+from hpc_agent._wire._shared import FailureCategoryResubmittable
 from hpc_agent.ops.recover.batching import resubmit_plan
 from hpc_agent.ops.recover.runner import derive_resubmit_request_id, resubmit_failed
 from hpc_agent.state.runs import read_run_sidecar
@@ -352,7 +352,7 @@ def resubmit_flow(
             _save_marker(cluster_job_ids)
             _clear_marker_after = True
 
-    from hpc_agent._schema_models.actions.resubmit import ResubmitSpec
+    from hpc_agent._wire.actions.resubmit import ResubmitSpec
 
     record, deduped, rid = resubmit_failed(
         experiment_dir,

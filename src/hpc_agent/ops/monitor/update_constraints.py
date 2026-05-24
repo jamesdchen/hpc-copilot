@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
-from hpc_agent._schema_models.actions.update_run_constraints import (
+from hpc_agent._wire.actions.update_run_constraints import (
     UpdateRunConstraintsResult,
     UpdateRunConstraintsSpec,
 )

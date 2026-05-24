@@ -13,7 +13,7 @@ from importlib.resources import files
 
 import pytest
 
-from hpc_agent._schema_models.spawn_contract import WORKFLOW_PROCEDURES
+from hpc_agent._wire.spawn_contract import WORKFLOW_PROCEDURES
 
 # Phrases that signal hedging or ask the worker to make a judgement call
 # where the procedure should be telling it what to do. Each is a *word
@@ -32,7 +32,9 @@ _BANNED_PHRASES: tuple[str, ...] = (
 
 def _procedure_text(workflow: str) -> str:
     """The host's procedure body for *workflow* as a string."""
-    return (files("hpc_agent.worker_prompts") / f"{workflow}.md").read_text(encoding="utf-8")
+    return (files("hpc_agent._kernel.extension.worker_prompts") / f"{workflow}.md").read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.mark.parametrize("workflow", sorted(WORKFLOW_PROCEDURES))

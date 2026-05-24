@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
-from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
+from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
 from hpc_agent.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
@@ -68,7 +68,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-    from hpc_agent._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec
+    from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
     from hpc_agent.infra.backends import HPCBackend
 
 __all__ = ["SubmitFlowResult", "submit_flow", "submit_flow_batch"]
@@ -310,7 +310,7 @@ def submit_flow(
     classified ``complete`` (not ``failed``); aggregate-flow then skips
     the failed task IDs listed under ``<run_id>.failed.json``.
     """
-    from hpc_agent._schema_models.workflows.submit_flow_batch import (
+    from hpc_agent._wire.workflows.submit_flow_batch import (
         SubmitFlowBatchSpec as _BatchSpec,
     )
 
@@ -389,7 +389,7 @@ def _submit_one_spec(
                 job_env=canary_env,
                 cwd=experiment_dir,
             )
-            from hpc_agent._schema_models.actions.submit import SubmitSpec as _SubmitSpec
+            from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
             runner.submit_and_record(
                 experiment_dir,
@@ -414,7 +414,7 @@ def _submit_one_spec(
         job_env=job_env_full,
         cwd=experiment_dir,
     )
-    from hpc_agent._schema_models.actions.submit import SubmitSpec as _SubmitSpec
+    from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
     runner.submit_and_record(
         experiment_dir,

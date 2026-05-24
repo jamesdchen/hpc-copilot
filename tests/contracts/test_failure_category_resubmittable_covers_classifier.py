@@ -1,7 +1,7 @@
 """Contract: ``FailureCategoryResubmittable`` covers every classifier emission.
 
 The wire alias
-:data:`hpc_agent._schema_models._shared.FailureCategoryResubmittable`
+:data:`hpc_agent._wire._shared.FailureCategoryResubmittable`
 governs the values accepted by ``resubmit --spec.category``. Two
 classifiers can emit a category that the resubmit path must then
 accept:
@@ -37,7 +37,7 @@ from __future__ import annotations
 import typing
 
 from hpc_agent._kernel.lifecycle.lifecycle import FailureCategory as FailureCategoryEnum
-from hpc_agent._schema_models._shared import (
+from hpc_agent._wire._shared import (
     FailureCategoryResubmittable,
 )
 from hpc_agent.ops.recover.failure_signatures import CATALOG
@@ -79,7 +79,7 @@ def test_resubmittable_covers_catalog_emissions() -> None:
         "category that hpc_agent.ops.recover.failure_signatures.CATALOG emits "
         f"— resubmit would 400 these otherwise: {sorted(missing)}. "
         "Add the missing values to the Literal in "
-        "src/hpc_agent/_schema_models/_shared.py."
+        "src/hpc_agent/_wire/_shared.py."
     )
 
 

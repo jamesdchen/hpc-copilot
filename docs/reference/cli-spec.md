@@ -10,7 +10,7 @@ The JSON Schemas under `hpc_agent/schemas/` are the **wire contract** — agents
 constructing or validating envelopes validate against those files, not this
 markdown. Internally they are **regenerated** by
 `scripts/build_schemas.py` from Pydantic models under
-`src/hpc_agent/_schema_models/`; the Python models are the *authoring* SoT
+`src/hpc_agent/_wire/`; the Python models are the *authoring* SoT
 and the JSON files are a build artifact, the same posture
 `docs/generated/operations.md` and `docs/primitives/<name>.md` frontmatter use
 relative to the `@primitive` registry.

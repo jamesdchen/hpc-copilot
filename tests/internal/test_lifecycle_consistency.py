@@ -20,7 +20,7 @@ from hpc_agent._kernel.lifecycle.lifecycle import (
     JournalStatus,
     LifecycleState,
 )
-from hpc_agent._schema_models._shared import (
+from hpc_agent._wire._shared import (
     LifecycleStateObservable,
     LifecycleStateObservableWithTimeout,
     LifecycleStateTerminal,

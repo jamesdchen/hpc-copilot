@@ -24,7 +24,7 @@ shape, subcommand list, and exit-code contract are documented in
 [`docs/reference/cli-spec.md`](cli-spec.md) and the JSON Schemas under
 `hpc_agent/schemas/`. The JSON Schemas are themselves a build
 artifact — they're regenerated from Pydantic models under
-`src/hpc_agent/_schema_models/` by `scripts/build_schemas.py`.
+`src/hpc_agent/_wire/` by `scripts/build_schemas.py`.
 External consumers read the JSON files (that's the wire contract);
 internal contributors edit the Pydantic. The CLI calls into the same
 atomic-ops layer (`hpc_agent/runner/`) that the slash commands use,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from hpc_agent._kernel.registry.operations import operations_catalog
-from hpc_agent._schema_models.spawn_contract import DECISION_POINTS, WORKFLOW_PROCEDURES
+from hpc_agent._wire.spawn_contract import DECISION_POINTS, WORKFLOW_PROCEDURES
 
 
 def test_every_workflow_has_decision_points() -> None:

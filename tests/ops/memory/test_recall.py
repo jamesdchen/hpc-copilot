@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from hpc_agent._schema_models.queries.recall import RecallSpec
+from hpc_agent._wire.queries.recall import RecallSpec
 from hpc_agent.ops.memory import recall as recall_mod
 from hpc_agent.ops.memory.recall import recall_campaigns, resolve_roots
 

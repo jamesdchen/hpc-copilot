@@ -78,7 +78,7 @@ hpc_agent = [
     "models/mapreduce/templates/runtime/common/*.sh",
     "models/mapreduce/templates/runtime/sge/*",
     "models/mapreduce/templates/runtime/slurm/*",
-    "worker_prompts/*.md",
+    "_kernel/extension/worker_prompts/*.md",
     "py.typed",
 ]
 slash_commands = [
@@ -111,7 +111,7 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 # ARE the wire-schema text — keeping them on one line preserves the
 # diff readability that matters when the schema actually changes.
 [tool.ruff.lint.per-file-ignores]
-"src/hpc_agent/_schema_models/*.py" = ["E501"]
+"src/hpc_agent/_wire/*.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -129,7 +129,7 @@ source = ["src/hpc_agent"]
 branch = true
 omit = [
     "src/hpc_agent/schemas/*",  # generated JSON, not Python
-    "src/hpc_agent/_schema_models/*",  # schema models — covered via roundtrip
+    "src/hpc_agent/_wire/*",  # schema models — covered via roundtrip
     "src/hpc_agent/models/mapreduce/templates/*",  # user-facing template files
 ]
 

@@ -23,7 +23,7 @@ Two questions, both load-bearing:
 ### 1. Pydantic spec models
 
 If the primitive takes a wire `--spec` payload, create
-`src/hpc_agent/_schema_models/<name>.py`:
+`src/hpc_agent/_wire/<name>.py`:
 
 ```python
 from pydantic import BaseModel, ConfigDict, Field

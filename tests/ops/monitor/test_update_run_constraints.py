@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._schema_models.actions.update_run_constraints import (
+from hpc_agent._wire.actions.update_run_constraints import (
     UpdateRunConstraintsSpec,
 )
 from hpc_agent.ops.monitor.update_constraints import update_run_constraints

@@ -148,7 +148,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
 
     from importlib.resources import files
 
-    from hpc_agent._schema_models.spawn_contract import WORKFLOW_PROCEDURES
+    from hpc_agent._wire.spawn_contract import WORKFLOW_PROCEDURES
 
     if name in WORKFLOW_PROCEDURES:
         from hpc_agent.atoms.spawn_prompt import _procedure_body

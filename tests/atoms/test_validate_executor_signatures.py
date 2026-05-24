@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent._schema_models.validators.validate_executor_signatures import (
+from hpc_agent._wire.validators.validate_executor_signatures import (
     ValidateExecutorSignaturesSpec,
 )
 from hpc_agent.atoms.validate_executor_signatures import (

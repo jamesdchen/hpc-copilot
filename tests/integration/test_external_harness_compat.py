@@ -60,7 +60,7 @@ import pytest
 from hpc_agent import agent_cli, runner
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord
-from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
+from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.ops.recover.runner_failures import DEFAULT_AUTO_RETRY_POLICY
 
 if TYPE_CHECKING:
