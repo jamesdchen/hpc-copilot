@@ -41,6 +41,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "runtime_path",
     "append_sample",
+    "coerce_pos_int",  # consumed cross-package by hpc_agent_pro.forecast.calibration
     "ingest_runtime_samples_from_combiner_dir",
     "read_samples",
     "roll_up_quantiles",

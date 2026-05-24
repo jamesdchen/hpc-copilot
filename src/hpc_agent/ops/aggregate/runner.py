@@ -115,11 +115,17 @@ def verify_combiner_artifact(
     full_path = f"{remote_path.rstrip('/')}/{expect_output.lstrip('/')}"
     if expect_output.endswith(".json"):
         # python3 -c returns 0 on parse success; non-zero (with stderr) on
-        # failure.  Login nodes universally have python3.
+        # failure.  Login nodes universally have python3. The python source
+        # is built separately and shell-quoted ONCE — embedding
+        # ``json.dumps(full_path)`` inside outer single-quotes was unsafe
+        # because ``json.dumps`` doesn't escape ASCII apostrophes, so an
+        # ``expect_output`` containing ``'`` would close the outer quote
+        # and inject shell.
+        py_src = f"import json,sys; json.load(open({json.dumps(full_path)}))"
         script = (
             f"if [ ! -f {shlex.quote(full_path)} ]; then "
             f"echo MISSING; exit 0; fi; "
-            f"python3 -c 'import json,sys; json.load(open({json.dumps(full_path)}))' "
+            f"python3 -c {shlex.quote(py_src)} "
             f"&& echo OK || echo INVALID_JSON"
         )
     else:
