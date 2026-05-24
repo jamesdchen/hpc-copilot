@@ -20,7 +20,7 @@ from hpc_agent._kernel.lifecycle.lifecycle import (
     TaskStatus,
 )
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parents[3]
 SCHEMAS = REPO / "src" / "hpc_agent" / "schemas"
 
 
