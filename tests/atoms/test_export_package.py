@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._schema_models.actions.export_package import ExportPackageInput
+from hpc_agent._wire.actions.export_package import ExportPackageInput
 from hpc_agent.atoms.export_package import export_package
 
 

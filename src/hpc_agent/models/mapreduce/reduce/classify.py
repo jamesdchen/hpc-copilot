@@ -30,7 +30,7 @@ __all__ = ["classify_failure", "CATEGORIES"]
 import re
 import typing
 
-from hpc_agent._schema_models._shared import FailureCategory
+from hpc_agent._wire._shared import FailureCategory
 from hpc_agent.ops.recover.failure_signatures import classify as _classify_signature
 
 #: Valid return values, ordered roughly by specificity. Derived from the

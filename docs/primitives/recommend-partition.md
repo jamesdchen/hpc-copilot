@@ -47,7 +47,7 @@ standalone CLI verb.
 ## Coupling
 
 - Input shape: ``RecommendPartitionSpec`` (see
-  ``src/hpc_agent/_schema_models/queries/recommend_partition.py``).
+  ``src/hpc_agent/_wire/queries/recommend_partition.py``).
 - Output shape: ``RecommendPartitionResult`` with
   ``recommended_partition``, ``rationale`` (one of the four
   enumerated values), ``message``, ``leverage_estimate``.

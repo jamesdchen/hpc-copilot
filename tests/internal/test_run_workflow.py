@@ -80,7 +80,7 @@ def test_cmd_run_success_envelope(
     import json
 
     from hpc_agent import agent_cli
-    from hpc_agent._schema_models.spawn_contract import WorkerReport
+    from hpc_agent._wire.spawn_contract import WorkerReport
 
     report = WorkerReport(result={"run_id": "r1"}, anomalies="")
     monkeypatch.setattr(

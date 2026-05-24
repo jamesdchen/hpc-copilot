@@ -11,7 +11,7 @@ The primitive picks cron/loop/none + cadence + cron schedule. We test:
 
 from __future__ import annotations
 
-from hpc_agent._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
+from hpc_agent._wire.queries.decide_monitor_arm import DecideMonitorArmSpec
 from hpc_agent.ops.monitor.arm import decide_monitor_arm
 
 

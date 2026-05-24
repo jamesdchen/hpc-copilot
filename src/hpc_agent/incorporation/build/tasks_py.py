@@ -21,7 +21,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
-from hpc_agent._schema_models.actions.build_tasks_py import BuildTasksPyInput
+from hpc_agent._wire.actions.build_tasks_py import BuildTasksPyInput
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
 # Axis names whose uppercase form would shadow a real env var when the

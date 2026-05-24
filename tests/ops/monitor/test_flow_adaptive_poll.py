@@ -20,7 +20,7 @@ import pytest
 
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent._schema_models.workflows.monitor_flow import MonitorFlowSpec
+from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.ops.monitor import flow as monitor_flow_module
 from hpc_agent.ops.monitor.flow import (
     _MAX_ADAPTIVE_POLL_SECONDS,

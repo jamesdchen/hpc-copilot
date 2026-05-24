@@ -2,7 +2,7 @@
 
 The wire SoT is the JSON file (every external consumer reads it).
 The *authoring* SoT is the Pydantic model under
-``hpc_agent/_schema_models/``. This script bridges the two: it
+``hpc_agent/_wire/``. This script bridges the two: it
 calls ``model.model_json_schema()`` (or ``adapter.json_schema()``
 for root-array schemas) for every model auto-discovered under
 ``_schema_models/`` and writes / diffs the matching JSON file.
@@ -21,7 +21,7 @@ Usage::
 Discovery rules
 ---------------
 
-For each non-private submodule of ``hpc_agent._schema_models``:
+For each non-private submodule of ``hpc_agent._wire``:
 
 1. Hardcoded mapping (``_NON_SUFFIX_MAPPING``) handles cross-cutting
    shapes whose names don't fit the suffix convention — the three
@@ -59,7 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
-import hpc_agent._schema_models  # noqa: E402
+import hpc_agent._wire  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMAS_DIR = REPO_ROOT / "src" / "hpc_agent" / "schemas"
@@ -135,7 +135,7 @@ def _build_schema_registry() -> list[tuple[type[BaseModel] | TypeAdapter[Any], s
     applies :func:`_filename_for`. Returned list is sorted by filename
     so callers see a stable order.
     """
-    pkg = hpc_agent._schema_models
+    pkg = hpc_agent._wire
 
     # Walk recursively so subpackages (workflows/, validators/,
     # fixtures/, queries/, actions/) are picked up alongside any

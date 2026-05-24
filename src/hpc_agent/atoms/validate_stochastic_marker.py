@@ -20,11 +20,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent._schema_models.validators.validate_stochastic_marker import (
+from hpc_agent._wire.validators.validate_stochastic_marker import (
     ValidateStochasticMarkerResult,
     ValidateStochasticMarkerSpec,
 )
-from hpc_agent._schema_models.workflows.validate_campaign import ValidatorFinding
+from hpc_agent._wire.workflows.validate_campaign import ValidatorFinding
 
 if TYPE_CHECKING:
     from pathlib import Path

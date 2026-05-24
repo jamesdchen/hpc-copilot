@@ -13,7 +13,7 @@ import json
 from typing import TYPE_CHECKING
 
 from hpc_agent import runner
-from hpc_agent._schema_models.actions.submit import SubmitSpec as _WireSubmitSpec
+from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
 
 if TYPE_CHECKING:
     from pathlib import Path

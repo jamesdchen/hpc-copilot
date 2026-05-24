@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc_agent._schema_models.queries.recommend_partition import (
+from hpc_agent._wire.queries.recommend_partition import (
     PartitionInfo,
     RecommendPartitionSpec,
 )

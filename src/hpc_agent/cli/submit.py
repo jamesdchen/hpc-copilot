@@ -69,7 +69,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
-    from hpc_agent._schema_models.actions.submit import SubmitSpec as _SubmitSpec
+    from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
     record, deduped = runner.submit_and_record(
         args.experiment_dir,
@@ -146,7 +146,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
         )
         return EXIT_OK
 
-    from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
+    from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 
     submit_spec = SubmitFlowSpec.model_validate(spec)
     result = submit_flow(args.experiment_dir, spec=submit_spec)
@@ -168,7 +168,7 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     ssh_target and remote_path. The CLI emits one envelope wrapping
     a list of per-spec result records.
     """
-    from hpc_agent._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec
+    from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
     from hpc_agent.ops.submit.flow import submit_flow_batch
 
     raw = _load_spec(args.spec, schema_name=None)

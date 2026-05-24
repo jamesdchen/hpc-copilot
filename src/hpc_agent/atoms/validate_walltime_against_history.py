@@ -29,11 +29,11 @@ from hpc_agent._kernel.lifecycle.playbook import (
     load_playbook,
 )
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent._schema_models.validators.validate_walltime_against_history import (
+from hpc_agent._wire.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistoryResult,
     ValidateWalltimeAgainstHistorySpec,
 )
-from hpc_agent._schema_models.workflows.validate_campaign import ValidatorFinding
+from hpc_agent._wire.workflows.validate_campaign import ValidatorFinding
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -54,7 +54,7 @@ from typing import Any
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
-from hpc_agent._schema_models.workflows.aggregate_flow import AggregateFlowSpec
+from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
 from hpc_agent.models.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials

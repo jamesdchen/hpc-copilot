@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc_agent._schema_models.validators.validate_walltime_against_history import (
+from hpc_agent._wire.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistorySpec,
 )
 from hpc_agent.atoms.validate_walltime_against_history import (

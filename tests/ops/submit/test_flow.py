@@ -121,7 +121,7 @@ class TestLoadClustersConfigBubblesUp:
 
 def _spec(run_id: str, **overrides: Any):
     """Build a :class:`SubmitFlowSpec` with sensible defaults; overrides win."""
-    from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
+    from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 
     base = dict(
         profile="p",
@@ -146,7 +146,7 @@ def _batch(specs, **overrides: Any):
     The pipeline only consumes ``SubmitFlowBatchSpec`` now; this keeps
     the per-test boilerplate small.
     """
-    from hpc_agent._schema_models.workflows.submit_flow_batch import SubmitFlowBatchSpec
+    from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
 
     return SubmitFlowBatchSpec(specs=specs, **overrides)
 

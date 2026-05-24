@@ -16,7 +16,7 @@ from importlib.resources import files
 import pytest
 
 from hpc_agent._kernel.registry.operations import operations_catalog
-from hpc_agent._schema_models.spawn_contract import WORKFLOW_PROCEDURES
+from hpc_agent._wire.spawn_contract import WORKFLOW_PROCEDURES
 
 # CLI verbs that are real subcommands but not @primitive-registered
 # operations — agent_cli ships them outside the registry. Keep this
@@ -55,7 +55,9 @@ _INVOCATION_RE = re.compile(
 
 
 def _procedure_text(workflow: str) -> str:
-    return (files("hpc_agent.worker_prompts") / f"{workflow}.md").read_text(encoding="utf-8")
+    return (files("hpc_agent._kernel.extension.worker_prompts") / f"{workflow}.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def _known_primitives() -> frozenset[str]:

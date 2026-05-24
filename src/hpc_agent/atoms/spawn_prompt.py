@@ -15,7 +15,7 @@ worker returns a structured :class:`WorkerReport`, parsed back by
 This module is the single import surface for every consumer of the
 spawn contract: the contract data (registry, request model, decision
 points, report model) is re-exported from
-:mod:`hpc_agent._schema_models.spawn_contract`, and the logic over it
+:mod:`hpc_agent._wire.spawn_contract`, and the logic over it
 lives here. A consumer imports these; it does not re-declare them.
 """
 
@@ -29,7 +29,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from hpc_agent._kernel.lifecycle.invoke import RenderedPrompt
-from hpc_agent._schema_models.spawn_contract import (
+from hpc_agent._wire.spawn_contract import (
     DECISION_POINTS,
     SPAWN_KEY,
     WORKFLOW_PROCEDURES,
@@ -88,7 +88,7 @@ def _procedure_body(workflow: str) -> str:
 
     Resolution order: every plugin's ``worker_prompt_assets`` tree
     (first plugin to provide ``<workflow>.md`` wins) is checked before
-    the host's ``hpc_agent.worker_prompts`` package data. This is what
+    the host's ``hpc_agent._kernel.extension.worker_prompts`` package data. This is what
     lets a plugin like ``hpc-agent-pro`` ship an overriding procedure
     that the worker actually sees.
 
@@ -103,8 +103,8 @@ def _procedure_body(workflow: str) -> str:
     that — these are not skills. See
     ``docs/internals/skill-policy.md``.
     """
+    from hpc_agent._kernel.extension.worker_prompts import read_procedure
     from hpc_agent._kernel.registry.plugins import plugin_worker_prompt_roots
-    from hpc_agent.worker_prompts import read_procedure
 
     for root in plugin_worker_prompt_roots():
         candidate = root / f"{workflow}.md"

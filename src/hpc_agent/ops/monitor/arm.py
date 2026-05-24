@@ -30,7 +30,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent._schema_models.queries.decide_monitor_arm import DecideMonitorArmSpec
+from hpc_agent._wire.queries.decide_monitor_arm import DecideMonitorArmSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 # Adaptive delay table — lifted from /monitor-hpc Step 5's Markdown

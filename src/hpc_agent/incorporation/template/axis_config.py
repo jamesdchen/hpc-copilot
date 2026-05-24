@@ -5,7 +5,7 @@ A :data:`~hpc_agent.incorporation.template.axis.DataAxis` is a live object — a
 :class:`~hpc_agent.incorporation.template.axis.BoundedHalo` it carries a *callable*
 ``halo_fn``. To persist a classification across submits it must
 round-trip through the plain-data ``executors.<run>.data_axis`` shape
-(see :mod:`hpc_agent._schema_models.fixtures.axes`):
+(see :mod:`hpc_agent._wire.fixtures.axes`):
 
 .. code-block:: yaml
 

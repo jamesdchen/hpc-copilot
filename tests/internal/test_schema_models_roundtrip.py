@@ -303,8 +303,8 @@ def test_typeadapter_emits_self_consistent_schemas() -> None:
     but a 1-stage array passes; a discriminated envelope union
     accepts a minimal success envelope.
     """
-    from hpc_agent._schema_models.fixtures.envelope import EnvelopeAdapter, SuccessEnvelope
-    from hpc_agent._schema_models.fixtures.stages import StagesAdapter
+    from hpc_agent._wire.fixtures.envelope import EnvelopeAdapter, SuccessEnvelope
+    from hpc_agent._wire.fixtures.stages import StagesAdapter
 
     # stages: 1-element list passes
     one_stage = StagesAdapter.dump_python([{"name": "fit", "run": "python fit.py"}])

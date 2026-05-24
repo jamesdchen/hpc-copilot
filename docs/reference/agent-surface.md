@@ -30,7 +30,7 @@ hpc-agent takes a fourth path: a **POSIX-native agent surface**.
 - **JSON Schema 2020-12** for input/output validation. Standards-track; not a
   custom format.
 - **Schemas are regenerated from Pydantic models** under
-  `src/hpc_agent/_schema_models/`. External consumers still read
+  `src/hpc_agent/_wire/`. External consumers still read
   the JSON files — that's the wire contract. The Python models are
   the framework's *authoring* surface; touching them and not
   regenerating is a CI failure

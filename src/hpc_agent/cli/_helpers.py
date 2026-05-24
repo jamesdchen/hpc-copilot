@@ -251,7 +251,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
 
     Cross-file ``$ref`` (rare post-Pydantic-migration — most
     schemas are now self-contained with constraints inlined from
-    :mod:`hpc_agent._schema_models._shared`) resolves through the
+    :mod:`hpc_agent._wire._shared`) resolves through the
     shared registry in :mod:`hpc_agent._kernel.contract.schema`.
     """
     try:

@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent._schema_models.spawn_contract import WorkflowName
+from hpc_agent._wire.spawn_contract import WorkflowName
 from hpc_agent.atoms.spawn_prompt import render_spawn_parts
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"

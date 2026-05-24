@@ -14,7 +14,7 @@ import pytest
 
 from hpc_agent._internal.session import RunRecord, upsert_run
 from hpc_agent._internal.session import run_record as session_run_record
-from hpc_agent._schema_models.validators.validate_stochastic_marker import (
+from hpc_agent._wire.validators.validate_stochastic_marker import (
     ValidateStochasticMarkerSpec,
 )
 from hpc_agent.atoms.validate_stochastic_marker import validate_stochastic_marker

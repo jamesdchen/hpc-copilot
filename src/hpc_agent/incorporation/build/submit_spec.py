@@ -26,7 +26,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
+from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import validate_ssh_target
 
