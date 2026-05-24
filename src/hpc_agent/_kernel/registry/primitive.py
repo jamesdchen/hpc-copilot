@@ -134,6 +134,15 @@ class PrimitiveMeta:
 _REGISTRY: dict[str, PrimitiveMeta] = {}
 _REGISTRATION_DONE: bool = False
 
+# Pending string-name composes waiting for lazy resolution. Populated by
+# the decorator; drained by :func:`_finalize_composes` after every
+# primitive-bearing module has been imported. Lets composers reference
+# atoms by their wire name without forcing an atoms-before-composites
+# import order — the registry is the single source of truth for "name →
+# meta", so resolution can happen at the natural boundary (the end of
+# :func:`register_primitives`) instead of at decoration time.
+_PENDING_COMPOSES: dict[str, tuple[str, ...]] = {}
+
 
 def primitive(
     *,
@@ -155,15 +164,22 @@ def primitive(
     parameters carry the metadata that other layers (operations.py,
     primitive frontmatter, build_*_index.py) used to duplicate by hand.
 
-    ``composes`` accepts function references to atom primitives that
-    have already been decorated with ``@primitive(...)``; each callable
-    must carry the decorator-attached ``_primitive_meta`` attribute.
-    String names are also accepted for back-compat (looked up in the
-    live ``_REGISTRY`` at decoration time). Either way, the decorator
-    MUST be evaluated AFTER the atoms it references — see the ordering
-    convention in ``_PRIMITIVE_MODULES``. A rename of an atom function
-    becomes an import-time ``NameError`` rather than a CI test failure
-    on a stale string.
+    ``composes`` accepts either:
+
+    * **Callable references** to atom primitives that have already been
+      decorated. Each callable must carry the decorator-attached
+      ``_primitive_meta`` attribute — i.e. the atom decorator must have
+      run first. The composer's module must therefore ``import`` the
+      atom's module before its own decorator fires. Mostly used by
+      same-subject composition and plugin compose-into-core.
+
+    * **String names** — the primitive's wire name. Stashed in
+      ``_PENDING_COMPOSES`` and resolved lazily by
+      :func:`_finalize_composes` after every primitive-bearing module
+      has been imported. String-name composes are order-agnostic at the
+      module-import layer: an atom and its composer can be discovered in
+      any order; the registry IS the single source of truth for
+      ``name → meta``, and resolution happens once at that boundary.
 
     Re-registering the *same* function under the same name is a no-op
     (lets test reloads and stale __pycache__ work). Registering a
@@ -200,6 +216,7 @@ def primitive(
                 "retries genuinely aren't safe."
             )
         resolved_composes: list[PrimitiveMeta] = []
+        pending_names: list[str] = []
         for c in composes or ():
             if callable(c):
                 ref_meta = getattr(c, "_primitive_meta", None)
@@ -212,13 +229,17 @@ def primitive(
                     )
                 resolved_composes.append(ref_meta)
             elif isinstance(c, str):
-                if c not in _REGISTRY:
-                    raise ValueError(
-                        f"composes references {c!r} which is not a registered primitive"
-                    )
-                resolved_composes.append(_REGISTRY[c])
+                # Lazy: don't look up against ``_REGISTRY`` here. Stash
+                # the name; :func:`_finalize_composes` resolves it after
+                # every primitive-bearing module has been imported. That
+                # eliminates the atoms-before-composites ordering
+                # requirement on the module-import sequence — composes=
+                # by name is now order-agnostic.
+                pending_names.append(c)
             else:
                 raise ValueError(f"composes entries must be callables or names, got {c!r}")
+        if pending_names:
+            _PENDING_COMPOSES[name] = tuple(pending_names)
         meta = PrimitiveMeta(
             name=name,
             verb=verb,
@@ -240,94 +261,127 @@ def primitive(
     return decorator
 
 
-# Modules listed here are imported once by :func:`register_primitives`.
-# Each module-level @primitive(...) call registers itself on import.
-# Any new module that adds @primitive(...) MUST be appended here; a CI
-# lint (``scripts/lint_primitive_modules.py``) catches drift at lint
-# time without paying any runtime cost.
+# Top-level packages walked by :func:`register_primitives` for primitive
+# discovery. Every public ``.py`` module under one of these roots is
+# imported; any ``@primitive(...)`` decorator at module-import time
+# registers itself in ``_REGISTRY``. Modules with no decorator are
+# import-no-ops (cheap; Python caches the module).
 #
-# ORDERING: atoms must precede the composites that reference them.
-# Composite ``@primitive(composes=[atom_func, ...])`` decorators look
-# up each atom_func's ``_primitive_meta`` attribute at decoration time;
-# the atom decorator must have run first to attach it.
-_PRIMITIVE_MODULES: tuple[str, ...] = (
-    # Atoms first.
-    "hpc_agent.state.runs",
-    "hpc_agent.state.discover",
-    "hpc_agent.meta.campaign.atoms.health",
-    "hpc_agent.incorporation.axes_init",
-    "hpc_agent.ops.aggregate.invariants",
-    "hpc_agent.incorporation.build.executor",
-    "hpc_agent.incorporation.build.submit_spec",
-    "hpc_agent.incorporation.build.tasks_py",
-    "hpc_agent.incorporation.build.template",
-    "hpc_agent.ops.aggregate.cluster_reduce",
-    "hpc_agent.meta.campaign.atoms.advance",
-    "hpc_agent.meta.campaign.atoms.budget",
-    "hpc_agent.meta.campaign.atoms.converged",
-    "hpc_agent.meta.campaign.atoms.init",
-    "hpc_agent.meta.campaign.atoms.list_campaigns",
-    "hpc_agent.meta.campaign.atoms.replay",
-    "hpc_agent.meta.campaign.atoms.status",
-    "hpc_agent._kernel.extension.capabilities",
-    "hpc_agent.incorporation.classify_axis",
-    "hpc_agent.ops.clusters.list",
-    "hpc_agent.ops.clusters.describe",
-    "hpc_agent.incorporation.export_package",
-    "hpc_agent.ops.recover.failures_atom",
-    "hpc_agent.ops.memory.interview",
-    "hpc_agent.ops.monitor.list_in_flight",
-    "hpc_agent.meta.campaign.atoms.load_context",
-    "hpc_agent.ops.monitor.logs_atom",
-    "hpc_agent.ops.monitor.arm",
-    "hpc_agent.ops.monitor.summary",
-    "hpc_agent.ops.submit.plan_throughput",
-    "hpc_agent.ops.preflight.check",
-    "hpc_agent.ops.memory.recall",
-    "hpc_agent.ops.submit.recommend_partition",
-    "hpc_agent.cli.setup_actions",
-    "hpc_agent.ops.submit.plan_summary",
-    "hpc_agent.ops.validate.executor_signatures",
-    "hpc_agent.ops.validate.input_dataset",
-    "hpc_agent.ops.validate.self_qos_limit",
-    "hpc_agent.ops.validate.stochastic_marker",
-    "hpc_agent.ops.validate.walltime_against_history",
-    "hpc_agent.ops.submit.runner",
-    "hpc_agent.ops.monitor.status",
-    "hpc_agent.ops.aggregate.combine",
-    "hpc_agent.ops.recover.runner",
-    "hpc_agent.ops.monitor.reconcile",
-    "hpc_agent.ops.monitor.update_constraints",
-    # Composites — must come after every atom they reference.
-    "hpc_agent.ops.aggregate.canary_verify",
-    "hpc_agent.ops.submit.flow",
-    "hpc_agent.ops.monitor.flow",
-    "hpc_agent.ops.aggregate.flow",
-    "hpc_agent.meta.campaign.validate",
+# Replaces a hand-maintained ``_PRIMITIVE_MODULES`` tuple + a separate
+# ``scripts/lint_primitive_modules.py`` drift-detector. The package walk
+# is the SoT now; nothing to drift against.
+#
+# To add a primitive to a NEW top-level package, append the package name
+# here. (Keep this small — packages outside this list don't get scanned.)
+_PRIMITIVE_PACKAGES: tuple[str, ...] = (
+    "hpc_agent.ops",
+    "hpc_agent.meta",
+    "hpc_agent.incorporation",
+    "hpc_agent.state",
+    "hpc_agent.cli",
+    "hpc_agent._kernel.extension",
 )
 
 
+def _discover_primitive_modules() -> list[str]:
+    """Yield every importable submodule under :data:`_PRIMITIVE_PACKAGES`.
+
+    Uses :func:`pkgutil.walk_packages` so subpackages (e.g.
+    ``ops/submit/``) are recursed into. Order is deterministic but
+    irrelevant — :func:`_finalize_composes` resolves string-name
+    ``composes=`` after every module has been imported.
+    """
+    import pkgutil
+
+    out: list[str] = []
+    for pkg_name in _PRIMITIVE_PACKAGES:
+        try:
+            pkg = importlib.import_module(pkg_name)
+        except ImportError:
+            # Mainline packages are always present; tolerate absence
+            # only for forward-compat with pruned distributions.
+            continue
+        pkg_path = getattr(pkg, "__path__", None)
+        if pkg_path is None:
+            continue
+        for _finder, name, _ispkg in pkgutil.walk_packages(pkg_path, prefix=pkg_name + "."):
+            # Skip dunder / private modules; their decoration sites (if
+            # any) are intentionally not part of the surface.
+            leaf = name.rsplit(".", 1)[-1]
+            if leaf.startswith("_") and not leaf.startswith("__"):
+                continue
+            out.append(name)
+    return out
+
+
+def _finalize_composes() -> None:
+    """Resolve every pending string-name ``composes=`` against ``_REGISTRY``.
+
+    Called once at the end of :func:`register_primitives` after every
+    primitive-bearing module has been imported. Replaces each affected
+    :class:`PrimitiveMeta` (frozen) with a new instance carrying the
+    fully-resolved ``composes`` tuple, and rebinds the func's
+    ``_primitive_meta`` attribute so callable refs stay consistent.
+
+    Raises ``ValueError`` listing every unresolved string at once so a
+    typo surfaces all its sibling references in one error rather than
+    a fail-fast death-march.
+    """
+    if not _PENDING_COMPOSES:
+        return
+    unresolved: list[str] = []
+    for prim_name, pending in list(_PENDING_COMPOSES.items()):
+        existing = _REGISTRY.get(prim_name)
+        if existing is None:
+            unresolved.append(f"{prim_name}: pending composes but primitive missing from registry")
+            continue
+        extra: list[PrimitiveMeta] = []
+        for ref in pending:
+            target = _REGISTRY.get(ref)
+            if target is None:
+                unresolved.append(
+                    f"{prim_name}: composes references {ref!r}, not a registered primitive"
+                )
+                continue
+            extra.append(target)
+        if not extra:
+            continue
+        new_meta = dataclasses.replace(
+            existing,
+            composes=tuple(existing.composes) + tuple(extra),
+        )
+        _REGISTRY[prim_name] = new_meta
+        import contextlib as _ctx
+
+        with _ctx.suppress(AttributeError, TypeError):
+            new_meta.func._primitive_meta = new_meta  # type: ignore[attr-defined]
+    _PENDING_COMPOSES.clear()
+    if unresolved:
+        raise ValueError("composes resolution failed:\n  " + "\n  ".join(sorted(unresolved)))
+
+
 def register_primitives() -> None:
-    """Import every module that decorates a primitive.
+    """Import every primitive-bearing module and finalize the registry.
 
     Must be called once before the registry is queried. Idempotent —
-    re-calling is a no-op. Modules in ``_PRIMITIVE_MODULES`` are imported
-    in order; the import side-effect of each module's @primitive(...)
-    calls populates ``_REGISTRY``.
+    re-calling is a no-op.
 
-    Atoms must precede the composites that reference them in the list
-    because composites' @primitive(composes=[atom_func, ...]) decorators
-    look up the atom's ``_primitive_meta`` attribute at decoration time.
+    Walks the packages listed in :data:`_PRIMITIVE_PACKAGES`, importing
+    every public submodule. Each module-level ``@primitive(...)`` call
+    registers itself in ``_REGISTRY`` as an import side-effect. After
+    every module has been imported (core + plugins), runs
+    :func:`_finalize_composes` to resolve string-name ``composes=``
+    against the now-complete registry.
 
-    Unlike the previous auto-import path this function does NOT
-    silently swallow ``ImportError`` — a bad primitive module fails the
-    call loudly so the missing decorator surfaces immediately rather
-    than as a downstream "primitive not in registry" error.
+    Module-import errors fail loudly for core packages (a missing
+    decorator must surface immediately, not as a downstream "primitive
+    not in registry" warning); plugin modules log-and-skip per the
+    plugins.load_plugins contract.
     """
     global _REGISTRATION_DONE
     if _REGISTRATION_DONE:
         return
-    for modname in _PRIMITIVE_MODULES:
+    for modname in _discover_primitive_modules():
         importlib.import_module(modname)
     # Optional plugin distributions contribute extra primitive modules
     # via the ``hpc_agent.plugins`` entry-point group. With none
@@ -349,6 +403,7 @@ def register_primitives() -> None:
                 f"its primitives are unavailable: {exc}",
                 stacklevel=2,
             )
+    _finalize_composes()
     _REGISTRATION_DONE = True
 
 

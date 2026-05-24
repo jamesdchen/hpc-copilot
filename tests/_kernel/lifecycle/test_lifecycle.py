@@ -10,7 +10,6 @@ enum diverges from monitor_flow's literal" fails CI.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from hpc_agent._kernel.lifecycle.lifecycle import (
     TERMINAL_STATUSES,
@@ -19,9 +18,7 @@ from hpc_agent._kernel.lifecycle.lifecycle import (
     LifecycleState,
     TaskStatus,
 )
-
-REPO = Path(__file__).resolve().parents[3]
-SCHEMAS = REPO / "src" / "hpc_agent" / "schemas"
+from tests._paths import SCHEMAS_DIR as SCHEMAS
 
 
 def _load_lifecycle_enum(schema_name: str) -> set[str]:

@@ -18,8 +18,8 @@ import yaml
 
 import hpc_agent
 from hpc_agent.state.discover import _SKIP_BASENAMES, _SKIP_DIRS
+from tests._paths import REPO_ROOT
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CONTRACT_DOC = "docs/reference/boundary-contract.md"
 
 

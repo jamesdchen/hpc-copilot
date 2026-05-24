@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 
 import pytest
 
@@ -87,13 +86,9 @@ class TestExecutorTemplateEmitsMetrics:
 
         monkeypatch.setenv("RESULT_DIR", str(rdir))
 
-        # ../../../../ from tests/models/mapreduce/test_metrics_io.py → repo root
-        template_path = (
-            os.path.dirname(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            )
-            + "/src/hpc_agent/models/mapreduce/templates/scaffolds/executor_template.py"
-        )
+        from tests._paths import TEMPLATES_DIR
+
+        template_path = str(TEMPLATES_DIR / "scaffolds" / "executor_template.py")
         spec = importlib.util.spec_from_file_location("executor_template_under_test", template_path)
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)

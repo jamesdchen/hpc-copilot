@@ -10,9 +10,8 @@ doesn't depend on the registry round-trip.
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+from tests._paths import REPO_ROOT
 
 
 def _load_lint_module():

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 
@@ -80,7 +79,9 @@ def test_envelope_schema_enum_matches_subclass_inventory() -> None:
     instead of inlining the variants. Resolve the ref to find the
     error variant before reading its ``error_code`` enum.
     """
-    schema_path = Path(__file__).parent.parent / "src" / "hpc_agent" / "schemas" / "envelope.json"
+    from tests._paths import SCHEMAS_DIR
+
+    schema_path = SCHEMAS_DIR / "envelope.json"
     schema = json.loads(schema_path.read_text())
     defs = schema.get("$defs", {})
 

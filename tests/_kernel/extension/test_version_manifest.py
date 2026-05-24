@@ -16,7 +16,6 @@ versions. These tests check three things:
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
@@ -67,7 +66,8 @@ _WRITER_CONSTANTS = {
 
 
 def test_writer_constants_are_in_supported_set() -> None:
-    repo = Path(__file__).resolve().parents[3]
+    from tests._paths import REPO_ROOT as repo
+
     for domain, pairs in _WRITER_CONSTANTS.items():
         supported = version.supported_versions(domain)
         for relpath, name in pairs:
