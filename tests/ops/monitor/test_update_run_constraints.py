@@ -1,4 +1,4 @@
-"""Tests for ``runner.update_constraints``.
+"""Tests for ``ops.monitor.update_constraints``.
 
 The primitive is SSH-bound; tests mock ``ssh_run`` at the OS boundary
 (``infra.remote.subprocess.run``-equivalent), keeping the function
@@ -19,7 +19,7 @@ from hpc_agent import errors
 from hpc_agent._schema_models.actions.update_run_constraints import (
     UpdateRunConstraintsSpec,
 )
-from hpc_agent.runner.update_constraints import update_run_constraints
+from hpc_agent.ops.monitor.update_constraints import update_run_constraints
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:

@@ -132,7 +132,7 @@ def test_min_rows_surfaces_failing_task_ids(journal_home, experiment):
         mock.patch.object(af_module, "reduce_partials", return_value={}),
         mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
         mock.patch(
-            "hpc_agent.runner.status.ssh_status_report",
+            "hpc_agent.ops.monitor.status.ssh_status_report",
             side_effect=fake_ssh_status_report,
         ),
     ):
@@ -157,7 +157,7 @@ def test_min_rows_all_pass_no_failing_ids(journal_home, experiment):
         mock.patch.object(af_module, "reduce_partials", return_value={}),
         mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
         mock.patch(
-            "hpc_agent.runner.status.ssh_status_report",
+            "hpc_agent.ops.monitor.status.ssh_status_report",
             side_effect=fake_ssh_status_report,
         ),
     ):

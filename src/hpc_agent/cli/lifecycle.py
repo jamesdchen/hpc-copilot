@@ -23,15 +23,15 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors, runner
 from hpc_agent._internal import session
-from hpc_agent.atoms.list_in_flight import _last_status_age_seconds
 from hpc_agent.cli._helpers import EXIT_OK, _ok, _require_ssh_agent
+from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
 
 if TYPE_CHECKING:
     pass
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.runner.status.record_status.
+    """Argparse adapter — primitive lives at hpc_agent.ops.monitor.status.record_status.
 
     Composite envelope: loads the run record, calls ``record_status``
     (refreshes the journal's ``last_status``), and folds in

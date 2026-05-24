@@ -173,8 +173,8 @@ def verify_canary(
 
     from hpc_agent._internal import session
     from hpc_agent.ops.aggregate.runner import verify_combiner_artifact
+    from hpc_agent.ops.monitor.status import ssh_status_report
     from hpc_agent.runner import fetch_task_logs
-    from hpc_agent.runner.status import ssh_status_report
 
     record = session.load_run(experiment_dir, canary_run_id)
     if record is None:

@@ -10,7 +10,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent decide-monitor-arm --spec <path>
-  python: hpc_agent.atoms.monitor_arm.decide_monitor_arm
+  python: hpc_agent.ops.monitor.arm.decide_monitor_arm
 exit_codes:
 - 0: ok
 - 1: user-error

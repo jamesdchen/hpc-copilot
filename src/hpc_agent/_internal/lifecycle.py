@@ -8,7 +8,7 @@ single value:
 * ``hpc_agent._internal.session.RunRecord.status`` — journal record status
   (set literal ``{"complete", "failed", "abandoned"}`` plus
   ``"in_flight"``).
-* ``hpc_agent.flows.monitor_flow``'s ``lifecycle_state`` envelope
+* ``hpc_agent.ops.monitor.flow``'s ``lifecycle_state`` envelope
   field — workflow state including ``"timeout"``.
 * ``hpc_agent.mapreduce.reduce.status``'s per-task status strings.
 * ``hpc_agent.runner.cluster_failures_by_fingerprint``'s emitted

@@ -40,9 +40,6 @@ from pydantic import ValidationError
 
 from hpc_agent import errors, runner  # noqa: F401 — ``cli.runner`` access path for tests
 
-# Helper re-exports for legacy import paths in tests + the pro plugin.
-from hpc_agent.atoms.list_in_flight import _last_status_age_seconds  # noqa: E402, F401
-
 # ─── adapter SDK ───────────────────────────────────────────────────────────
 #
 # Helpers + EXIT codes live in :mod:`hpc_agent.cli._helpers` (the
@@ -97,6 +94,9 @@ from hpc_agent.cli.submit import (  # noqa: E402, F401
     cmd_submit_flow,
     cmd_submit_flow_batch,
 )
+
+# Helper re-exports for legacy import paths in tests + the pro plugin.
+from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds  # noqa: E402, F401
 
 # Back-compat shims for tests that still reach for a ``cmd_*`` name on
 # the legacy module. Tier 1 primitives flow through the dispatcher; the

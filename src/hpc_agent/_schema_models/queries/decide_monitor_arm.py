@@ -10,7 +10,7 @@ from hpc_agent._schema_models._shared import RunIdStrict
 
 
 class DecideMonitorArmSpec(BaseModel):
-    """Run-state inputs to ``hpc_agent.atoms.monitor_arm.decide_monitor_arm``.
+    """Run-state inputs to ``hpc_agent.ops.monitor.arm.decide_monitor_arm``.
 
     Drives the cron / loop / none arm decision + cadence.
     """

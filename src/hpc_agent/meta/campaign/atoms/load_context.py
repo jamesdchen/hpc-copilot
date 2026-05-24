@@ -214,9 +214,9 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
     """
     from pathlib import Path as _Path
 
-    from hpc_agent.atoms.list_in_flight import _last_status_age_seconds
     from hpc_agent.meta.campaign.atoms.list_campaigns import campaign_list
     from hpc_agent.meta.campaign.cursor import read_cursor
+    from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
     from hpc_agent.state.runs import (
         find_existing_runs,
         is_orphan_sidecar,
