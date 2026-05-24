@@ -19,7 +19,7 @@ parsing reports with
 :func:`hpc_agent._kernel.extension.spawn_prompt.parse_worker_report`; it never
 re-declares the workflow set or re-implements validation.
 
-Kept under ``_schema_models`` so wire-schema models (the ``load-context``
+Kept under ``_wire`` so wire-schema models (the ``load-context``
 ``delegate`` block) can reference :class:`SpawnRequest` without a
 logic-layer import. The logic over this contract lives in
 :mod:`hpc_agent._kernel.extension.spawn_prompt`.

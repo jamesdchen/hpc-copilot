@@ -5,7 +5,7 @@ must use :func:`validate` here so any future cross-file refs resolve
 through the shared registry.
 
 Post-Pydantic-migration the per-primitive schemas are self-contained
-(each model inlines what it needs from ``_schema_models/_shared.py``),
+(each model inlines what it needs from ``_wire/_shared.py``),
 so cross-file refs are rare — but the registry stays so that
 hand-authored payloads referencing ``envelope.json#/$defs/*`` from
 older agents still resolve.
