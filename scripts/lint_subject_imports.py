@@ -46,36 +46,6 @@ ALLOWED_NON_SUBJECT_ROOTS: tuple[str, ...] = (
 )
 
 
-# Per-file allow-list of cross-subject imports that are unavoidable —
-# the imported symbol is itself a ``@primitive`` in another subject and
-# the importing file needs to invoke or compose it. Unlike helper-shaped
-# seams, these can't be hoisted to ``infra/``: a primitive lives in its
-# subject by definition. PR #96 deleted this mechanism for the Wave-3
-# allow-list because those entries WERE helper-shaped; Wave 4 reintroduces
-# it for the primitive-composition cases below.
-PER_FILE_ALLOWED_IMPORTS: dict[str, tuple[str, ...]] = {
-    # The aggregate-flow / canary-verify workflows compose
-    # ``record_status`` (the @primitive in ops/monitor/status). Cross-
-    # subject by intent — aggregate atomically observes the monitor's
-    # cached status before reducing. No infra alternative.
-    "src/hpc_agent/ops/aggregate/flow.py": ("hpc_agent.ops.monitor.status",),
-    "src/hpc_agent/ops/aggregate/canary_verify.py": ("hpc_agent.ops.monitor.status",),
-    # ops/monitor/flow.py composes ``combine_wave`` (the @primitive in
-    # ops/aggregate/combine) after each status poll. The loop terminates
-    # in a combine. Cross-subject primitive composition.
-    "src/hpc_agent/ops/monitor/flow.py": ("hpc_agent.ops.aggregate.combine",),
-    # ``validate-campaign`` is a workflow primitive in meta/campaign/
-    # that composes the four ``validate-*`` atoms from ops/validate/.
-    # Composition across subjects is the workflow's reason for existing.
-    "src/hpc_agent/meta/campaign/validate.py": (
-        "hpc_agent.ops.validate.executor_signatures",
-        "hpc_agent.ops.validate.input_dataset",
-        "hpc_agent.ops.validate.stochastic_marker",
-        "hpc_agent.ops.validate.walltime_against_history",
-    ),
-}
-
-
 def _subject_of(path: Path, role_root: Path) -> str | None:
     """Return the subject name for a file under ``role_root``, or None
     if the file isn't inside a subject directory (e.g. it's directly in
@@ -150,18 +120,9 @@ def lint_file(path: Path, own_role: str, own_subject: str) -> list[tuple[int, st
         tree = ast.parse(source)
     except SyntaxError:
         return []
-    # Per-file allow-list lookup. Use the repo-relative POSIX path so the
-    # dict keys are platform-independent.
-    try:
-        rel_key = path.resolve().relative_to(REPO).as_posix()
-    except ValueError:
-        rel_key = ""
-    file_allowed = PER_FILE_ALLOWED_IMPORTS.get(rel_key, ())
     findings: list[tuple[int, str]] = []
     for lineno, module in _iter_imports(tree):
         if _is_allowed_non_subject(module):
-            continue
-        if module in file_allowed or any(module.startswith(f + ".") for f in file_allowed):
             continue
         # Check both roles — a file in ``ops/foo`` may not import from
         # ``meta/bar`` either (different role still counts as a

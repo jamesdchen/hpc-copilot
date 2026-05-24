@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
-from hpc_agent.ops.monitor.status import record_status
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -53,7 +52,7 @@ _DEFAULT_WAIT_BUDGET_SEC = 1800  # 30 min — long enough for a 1-task probe
 @primitive(
     name="verify-canary",
     verb="workflow",
-    composes=[record_status],
+    composes=["poll-run-status"],
     side_effects=[
         SideEffect("ssh", "<cluster> (poll status + tail stderr)"),
     ],

@@ -58,7 +58,6 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
 from hpc_agent.models.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
 from hpc_agent.ops.aggregate.combine import combine_wave
-from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.state import session
 from hpc_agent.state.runs import read_run_sidecar
 
@@ -257,7 +256,7 @@ def _combine_missing(
 @primitive(
     name="aggregate-flow",
     verb="workflow",
-    composes=[combine_wave, record_status],
+    composes=["combine-wave", "poll-run-status"],
     side_effects=[
         SideEffect("ssh", "<cluster>"),
         SideEffect("sync-pull", "<ssh_target>:<remote_path> -> <experiment_dir>/_aggregated/"),
