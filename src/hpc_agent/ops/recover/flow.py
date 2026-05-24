@@ -421,7 +421,7 @@ def _submit_resubmit_batches(
       rendered as scheduler flags.
 
     *backend_factory* is an injection seam for tests — when ``None``
-    the production :func:`~hpc_agent.ops.submit.flow._build_backend`
+    the production :func:`~hpc_agent.infra.backends.remote_factory.build_remote_backend`
     constructs a real SSH-backed scheduler client. Tests pass a stub
     that records calls without touching a network.
     """
@@ -463,15 +463,21 @@ def _submit_resubmit_batches(
     extra_flags = render_overrides_to_extra_flags(scheduler, effective_overrides)
 
     if backend_factory is None:
-        from hpc_agent.ops.submit.flow import _build_backend, _validate_ssh_target
+        from hpc_agent import errors
+        from hpc_agent.infra.backends.remote_factory import build_remote_backend
+        from hpc_agent.infra.remote import validate_ssh_target
 
-        # Validate ssh_target up front — _build_backend no longer
-        # double-validates internally (see BUG-4-10), so callers own the
-        # check. We surface the same SpecInvalid envelope the submit
-        # path uses.
-        _validate_ssh_target(ssh_target)
+        # Validate ssh_target up front — build_remote_backend doesn't
+        # double-validate (see BUG-4-10), so callers own the check. We
+        # surface SpecInvalid (the same typed envelope the submit path
+        # uses); inlined rather than imported from submit, since the
+        # subject-imports lint forbids ops/recover → ops/submit reaches.
+        try:
+            validate_ssh_target(ssh_target)
+        except ValueError as exc:
+            raise errors.SpecInvalid(str(exc)) from exc
 
-        backend_obj = _build_backend(
+        backend_obj = build_remote_backend(
             backend_name=scheduler,
             script=script,
             ssh_target=ssh_target,

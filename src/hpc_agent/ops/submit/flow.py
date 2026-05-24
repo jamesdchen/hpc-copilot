@@ -33,8 +33,7 @@ from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
-from hpc_agent.infra.backends.sge_remote import RemoteSGEBackend
-from hpc_agent.infra.backends.slurm_remote import RemoteSlurmBackend
+from hpc_agent.infra.backends.remote_factory import build_remote_backend
 from hpc_agent.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
 from hpc_agent.runner import submit_and_record
 
@@ -101,61 +100,17 @@ class SubmitFlowResult:
 
 
 def _validate_ssh_target(ssh_target: str) -> str:
-    """Wrap :func:`validate_ssh_target` to raise the surface-appropriate
-    error type. The shared helper raises ``ValueError``; this flow
-    surfaces ``SpecInvalid`` so callers see a typed envelope error.
+    """Adapt :func:`validate_ssh_target` to ``SpecInvalid`` for this
+    flow's wire surface. The shared helper raises ``ValueError``; the
+    submit flow surfaces ``SpecInvalid`` so the caller sees a typed
+    envelope error. Subject-private — ``ops/recover/flow.py`` does the
+    same inline at its single call site rather than reaching into
+    submit's source tree.
     """
     try:
         return validate_ssh_target(ssh_target)
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
-
-
-def _build_backend(
-    *,
-    backend_name: str,
-    script: str,
-    ssh_target: str,
-    remote_path: str,
-    pass_env_keys: tuple[str, ...] | None,
-    job_env_keys: tuple[str, ...],
-    slurm_account: str | None = None,
-    slurm_cluster: str | None = None,
-) -> HPCBackend:
-    """Construct the right HPCBackend for the requested scheduler.
-
-    Both SGE and SLURM go through the cluster's login node via SSH —
-    the local backends (which assume a local ``qsub``/``sbatch`` binary)
-    are never used here. submit-flow is for laptop-driven submissions
-    only.
-
-    Callers MUST validate ``ssh_target`` before calling — both internal
-    call sites (:func:`_submit_flow_batch_locked` for submit-flow,
-    :func:`hpc_agent.ops.recover.flow._submit_resubmit_batches` for
-    resubmit-flow) do so up-front so we avoid the wasteful duplicate
-    validation that used to fire once per spec inside the per-spec loop.
-    """
-
-    def ssh(cmd: str):
-        return ssh_run(cmd, ssh_target=ssh_target)
-
-    if backend_name == "sge":
-        keys = pass_env_keys if pass_env_keys is not None else job_env_keys
-        return RemoteSGEBackend(
-            script=script,
-            ssh_run=ssh,
-            remote_repo=remote_path,
-            pass_env_keys=tuple(keys),
-        )
-    if backend_name == "slurm":
-        return RemoteSlurmBackend(
-            script=script,
-            ssh_run=ssh,
-            remote_repo=remote_path,
-            account=slurm_account,
-            cluster=slurm_cluster,
-        )
-    raise errors.SpecInvalid(f"unknown backend: {backend_name!r}")
 
 
 def _preflight_probe(ssh_target: str, *, skip: bool) -> None:
@@ -398,7 +353,7 @@ def _submit_one_spec(
         campaign_id=spec.campaign_id,
         cluster=spec.cluster,
     )
-    backend_obj = _build_backend(
+    backend_obj = build_remote_backend(
         backend_name=spec.backend,
         script=spec.script,
         ssh_target=spec.ssh_target,
