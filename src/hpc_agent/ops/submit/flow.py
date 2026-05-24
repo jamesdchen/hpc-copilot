@@ -131,7 +131,7 @@ def _build_backend(
 
     Callers MUST validate ``ssh_target`` before calling — both internal
     call sites (:func:`_submit_flow_batch_locked` for submit-flow,
-    :func:`hpc_agent.flows.resubmit_flow._submit_resubmit_batches` for
+    :func:`hpc_agent.ops.recover.flow._submit_resubmit_batches` for
     resubmit-flow) do so up-front so we avoid the wasteful duplicate
     validation that used to fire once per spec inside the per-spec loop.
     """

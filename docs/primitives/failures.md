@@ -42,7 +42,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]
-  python: hpc_agent.atoms.failures.fetch_failures
+  python: hpc_agent.ops.recover.failures_atom.fetch_failures
 exit_codes:
 - 0: ok
 - 2: ssh_unreachable / remote_command_failed

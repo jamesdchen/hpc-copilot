@@ -57,7 +57,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
 
-    from hpc_agent.flows.resubmit_flow import resubmit_flow
+    from hpc_agent.ops.recover.flow import resubmit_flow
 
     # Validate per-element so a bad index surfaces with the slot
     # information rather than a bare ``ValueError: invalid literal for

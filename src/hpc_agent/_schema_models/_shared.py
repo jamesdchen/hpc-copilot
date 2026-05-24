@@ -118,17 +118,17 @@ FailureCategory = Literal[
 
 # Values accepted by the ``resubmit`` primitive's ``--spec.category``.
 # Must contain every value emitted by the classifier
-# (``runner.failure_signatures.CATALOG`` and ``runner.failures``'s
-# ``_FAILURE_CATEGORY_PATTERNS``) — five emissions (``import_error``,
-# ``file_not_found``, ``permission_denied``, ``disk_full``,
-# ``python_traceback``) were missing from this Literal before this
-# audit pass, so the up-front gate accepted them but ``ResubmitSpec``
-# rejected them later, AFTER the cluster qsub already fired. Plus
-# ``"preempted"`` (a scheduler-level state, not a stderr-fingerprint
-# match) — the agent may call resubmit with category="preempted" when
-# the cluster bumped a campus user. This Literal is the SoT for
-# ``flows.resubmit_flow._VALID_CATEGORIES`` (derived via
-# ``typing.get_args``).
+# (``ops.recover.failure_signatures.CATALOG`` and
+# ``ops.recover.runner_failures``'s ``_FAILURE_CATEGORY_PATTERNS``) —
+# five emissions (``import_error``, ``file_not_found``,
+# ``permission_denied``, ``disk_full``, ``python_traceback``) were
+# missing from this Literal before this audit pass, so the up-front gate
+# accepted them but ``ResubmitSpec`` rejected them later, AFTER the
+# cluster qsub already fired. Plus ``"preempted"`` (a scheduler-level
+# state, not a stderr-fingerprint match) — the agent may call resubmit
+# with category="preempted" when the cluster bumped a campus user. This
+# Literal is the SoT for ``ops.recover.flow._VALID_CATEGORIES`` (derived
+# via ``typing.get_args``).
 FailureCategoryResubmittable = Literal[
     "gpu_oom",
     "system_oom",

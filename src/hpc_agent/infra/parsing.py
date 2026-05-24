@@ -206,9 +206,9 @@ def parse_sacct_pipe_row(parts: list[str], format_spec: list[str]) -> dict[str, 
 # Patterns that strongly identify a failure category, ordered most-specific
 # first. Matched case-insensitively against the joined log tail.  The first
 # hit wins. Subject-level orchestration (in
-# :mod:`hpc_agent.runner.failures`) layers exit-code overrides and the
-# richer :func:`hpc_agent.runner.failure_signatures.classify` catalog on
-# top of this primitive bucket.
+# :mod:`hpc_agent.ops.recover.runner_failures`) layers exit-code overrides
+# and the richer :func:`hpc_agent.ops.recover.failure_signatures.classify`
+# catalog on top of this primitive bucket.
 FAILURE_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # The campus user got bumped, not failed. Match the dispatcher's
     # SIGTERM-trap stderr line so the cluster groups all preempted
@@ -263,7 +263,7 @@ def categorize_failure(content: str | None) -> str:
     """Map a stderr blob to one of :data:`FAILURE_CATEGORY_PATTERNS` or 'unknown'.
 
     Pure pattern match -- no exit-code awareness, no preemption override.
-    Subject-level orchestration in :mod:`hpc_agent.runner.failures` wraps
+    Subject-level orchestration in :mod:`hpc_agent.ops.recover.runner_failures` wraps
     this with the exit-code 130/143 -> ``preempted`` override and the
     richer signature-catalog classifier.
     """

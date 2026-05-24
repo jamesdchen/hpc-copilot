@@ -6,9 +6,9 @@ governs the values accepted by ``resubmit --spec.category``. Two
 classifiers can emit a category that the resubmit path must then
 accept:
 
-* :data:`hpc_agent.runner.failure_signatures.CATALOG` — the
+* :data:`hpc_agent.ops.recover.failure_signatures.CATALOG` — the
   high-priority pattern catalog (``classify()``).
-* :data:`hpc_agent.runner.failures._FAILURE_CATEGORY_PATTERNS` — the
+* :data:`hpc_agent.ops.recover.runner_failures._FAILURE_CATEGORY_PATTERNS` — the
   sibling fingerprint classifier used by
   :func:`cluster_failures_by_fingerprint`.
 
@@ -40,8 +40,8 @@ from hpc_agent._internal.lifecycle import FailureCategory as FailureCategoryEnum
 from hpc_agent._schema_models._shared import (
     FailureCategoryResubmittable,
 )
-from hpc_agent.runner.failure_signatures import CATALOG
-from hpc_agent.runner.failures import _FAILURE_CATEGORY_PATTERNS
+from hpc_agent.ops.recover.failure_signatures import CATALOG
+from hpc_agent.ops.recover.runner_failures import _FAILURE_CATEGORY_PATTERNS
 
 
 def _resubmittable_args() -> set[str]:
@@ -76,7 +76,7 @@ def test_resubmittable_covers_catalog_emissions() -> None:
     missing = catalog - resubmittable
     assert not missing, (
         "FailureCategoryResubmittable must be a superset of every "
-        "category that hpc_agent.runner.failure_signatures.CATALOG emits "
+        "category that hpc_agent.ops.recover.failure_signatures.CATALOG emits "
         f"— resubmit would 400 these otherwise: {sorted(missing)}. "
         "Add the missing values to the Literal in "
         "src/hpc_agent/_schema_models/_shared.py."
@@ -94,7 +94,7 @@ def test_resubmittable_covers_fingerprint_emissions() -> None:
     missing -= {"ssh_unreachable", "log_missing"}
     assert not missing, (
         "FailureCategoryResubmittable must be a superset of every "
-        "category that hpc_agent.runner.failures._FAILURE_CATEGORY_PATTERNS "
+        "category that hpc_agent.ops.recover.runner_failures._FAILURE_CATEGORY_PATTERNS "
         f"emits — resubmit would 400 these otherwise: {sorted(missing)}."
     )
 

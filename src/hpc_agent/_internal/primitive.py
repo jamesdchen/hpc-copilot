@@ -254,7 +254,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     # Atoms first.
     "hpc_agent.state.runs",
     "hpc_agent.state.discover",
-    "hpc_agent.planning.resubmit_batching",
+    "hpc_agent.ops.recover.batching",
     "hpc_agent.atoms.campaign_health",
     "hpc_agent.infra.clusters",
     "hpc_agent.agent_cli",
@@ -277,7 +277,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_agent.atoms.classify_axis",
     "hpc_agent.atoms.clusters",
     "hpc_agent.atoms.export_package",
-    "hpc_agent.atoms.failures",
+    "hpc_agent.ops.recover.failures_atom",
     "hpc_agent.ops.memory.interview",
     "hpc_agent.atoms.list_in_flight",
     "hpc_agent.atoms.load_context",
@@ -298,7 +298,7 @@ _PRIMITIVE_MODULES: tuple[str, ...] = (
     "hpc_agent.ops.submit.runner",
     "hpc_agent.runner.status",
     "hpc_agent.ops.aggregate.combine",
-    "hpc_agent.runner.resubmit",
+    "hpc_agent.ops.recover.runner",
     "hpc_agent.runner.reconcile",
     "hpc_agent.runner.update_constraints",
     # Composites — must come after every atom they reference.

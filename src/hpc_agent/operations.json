@@ -76,7 +76,7 @@
     "input_schema": "resubmit.input.json",
     "name": "resubmit-failed",
     "output_schema": null,
-    "python": "hpc_agent.runner.resubmit.resubmit_failed",
+    "python": "hpc_agent.ops.recover.runner.resubmit_failed",
     "side_effects": [
       "scheduler-submit",
       "writes-journal"
@@ -246,7 +246,7 @@
     "input_schema": null,
     "name": "failures",
     "output_schema": "failures.output.json",
-    "python": "hpc_agent.atoms.failures.fetch_failures",
+    "python": "hpc_agent.ops.recover.failures_atom.fetch_failures",
     "side_effects": [
       "ssh"
     ],

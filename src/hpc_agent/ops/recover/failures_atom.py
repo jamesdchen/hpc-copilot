@@ -13,11 +13,17 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors, runner
+from hpc_agent import errors
 from hpc_agent._internal import session
 from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.ops.recover.runner_failures import (
+    DEFAULT_AUTO_RETRY_POLICY,
+    annotate_clusters_with_retry_advice,
+    cluster_failures_by_fingerprint,
+)
+from hpc_agent.runner.logs import fetch_task_logs
 from hpc_agent.runner.status import _ssh_status_report
 
 if TYPE_CHECKING:
@@ -37,20 +43,20 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
     try:
         from hpc_agent.state.runs import read_run_sidecar
     except ImportError:
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+        return dict(DEFAULT_AUTO_RETRY_POLICY)
     try:
         sidecar = read_run_sidecar(experiment_dir, run_id)
     except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+        return dict(DEFAULT_AUTO_RETRY_POLICY)
     user_policy = sidecar.get("auto_retry")
     if not isinstance(user_policy, dict):
-        return dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+        return dict(DEFAULT_AUTO_RETRY_POLICY)
     valid = {
         cat: pol
         for cat, pol in user_policy.items()
         if isinstance(cat, str) and isinstance(pol, dict)
     }
-    return valid or dict(runner.DEFAULT_AUTO_RETRY_POLICY)
+    return valid or dict(DEFAULT_AUTO_RETRY_POLICY)
 
 
 @primitive(
@@ -129,7 +135,7 @@ def fetch_failures(
             f"to guess 'slurm' and risk misrouting the SGE log fetch"
         )
 
-    logs = runner.fetch_task_logs(
+    logs = fetch_task_logs(
         ssh_target=record.ssh_target,
         remote_path=record.remote_path,
         job_name=record.job_name,
@@ -138,17 +144,16 @@ def fetch_failures(
         task_ids=failed_ids,
         lines=int(lines),
     )
-    clusters = runner.cluster_failures_by_fingerprint(logs)
+    clusters = cluster_failures_by_fingerprint(logs)
 
     # Auto-retry policy: resolve per-run sidecar override + framework
-    # defaults (runner.DEFAULT_AUTO_RETRY_POLICY). Annotate each cluster
-    # with which task ids are still eligible for an automated retry per
-    # the per-category max_attempts. Purely advisory — the actual
-    # resubmit remains the caller's job (matches existing /resubmit
-    # semantics).
+    # defaults (DEFAULT_AUTO_RETRY_POLICY). Annotate each cluster with
+    # which task ids are still eligible for an automated retry per the
+    # per-category max_attempts. Purely advisory — the actual resubmit
+    # remains the caller's job (matches existing /resubmit semantics).
     auto_retry = _resolve_auto_retry(experiment_dir, run_id)
     if auto_retry:
-        clusters = runner.annotate_clusters_with_retry_advice(
+        clusters = annotate_clusters_with_retry_advice(
             clusters,
             auto_retry_policy=auto_retry,
             record=record,

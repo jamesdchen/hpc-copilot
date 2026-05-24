@@ -19,7 +19,7 @@ class _FailureCluster(BaseModel):
 class FailuresResult(BaseModel):
     """Shape of the ``data`` field on a successful ``failures`` envelope.
 
-    Source: ``hpc_agent.atoms.failures.fetch_failures``. The
+    Source: ``hpc_agent.ops.recover.failures_atom.fetch_failures``. The
     ``preempted_count`` and ``preempted_task_ids`` fields are
     present only when at least one task was preempted by the
     scheduler — they let an agent harness branch on 'campus user got
