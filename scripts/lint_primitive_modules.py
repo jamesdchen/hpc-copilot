@@ -49,14 +49,17 @@ def main() -> int:
         # Skip (match path *components* via ``p.parts``, not substrings
         # of ``str(p)`` — a substring check breaks on Windows, where
         # path components join with ``\`` not ``/``):
-        # - .git/             — git's own files
-        # - tests/, scripts/  — never registration sites
-        # - hpc-agent-pro/    — sibling plugin package; its primitives
-        #   register through the plugin seam, not _PRIMITIVE_MODULES
-        # - worktrees/        — .claude/worktrees agent-isolated copies
-        #   may shadow the real source tree and double-count primitives
-        # - .venv/, venv/, build/, dist/ — install / build artifacts
-        if set(p.parts) & {
+        # Two-tier skip:
+        # - SKIP_ANYWHERE: any path-component match suppresses scanning
+        #   (these names are unambiguously not registration sites
+        #   wherever they appear in the tree).
+        # - SKIP_AT_REPO_ROOT: only the FIRST repo-relative component
+        #   counts. ``build`` and ``dist`` are common subdirectory names
+        #   that also appear in legitimate package paths (e.g.
+        #   ``src/hpc_agent/incorporation/build/``); restricting them to
+        #   the repo root avoids false-positives that skip real primitive
+        #   modules.
+        SKIP_ANYWHERE = {
             ".git",
             "tests",
             "scripts",
@@ -64,9 +67,16 @@ def main() -> int:
             "worktrees",
             ".venv",
             "venv",
-            "build",
-            "dist",
-        }:
+            "__pycache__",
+        }
+        SKIP_AT_REPO_ROOT = {"build", "dist"}
+        if set(p.parts) & SKIP_ANYWHERE:
+            continue
+        try:
+            rel_parts = p.resolve().relative_to(REPO).parts
+        except ValueError:
+            rel_parts = ()
+        if rel_parts and rel_parts[0] in SKIP_AT_REPO_ROOT:
             continue
         if p.resolve() == self_path:
             continue
