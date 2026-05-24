@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import shlex
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
@@ -12,9 +11,6 @@ from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, _atomic_write_json
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
-from hpc_agent.errors import RemoteCommandFailed
-from hpc_agent.infra import remote
-from hpc_agent.infra.remote import parse_remote_json
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:
@@ -34,54 +30,15 @@ def _status_handler(ns: argparse.Namespace) -> int:
     return cmd_status(ns)
 
 
-def _ssh_status_report(
-    *,
-    ssh_target: str,
-    remote_path: str,
-    run_id: str,
-    job_ids: list[str],
-    job_name: str,
-    log_dir: str = "logs",
-    file_glob: str = "*",
-    min_rows: int = 0,
-) -> dict:
-    """Run the on-cluster status reporter (``--run-id``) and return parsed JSON.
+# Canonical implementation lives in ``infra/cluster_status.py`` so the
+# aggregate / recover subjects can reach it without crossing into the
+# monitor subject. Re-exported here under both the public name and the
+# underscore-prefixed back-compat alias so package-internal callers
+# (``reconcile``, the local ``record_status`` primitive below) keep
+# working unchanged.
+from hpc_agent.infra.cluster_status import ssh_status_report  # noqa: E402
 
-    The reporter reads ``.hpc/runs/<run_id>.json`` for run metadata and
-    ``.hpc/tasks.py`` for per-task kwargs, then emits the JSON envelope
-    pinned by ``docs/reference/python-api-contract.md`` (summary / tasks / rollup /
-    errors).
-
-    ``min_rows`` is forwarded to the cluster-side reporter's ``--min-rows``
-    flag: a completed task whose CSV result has fewer than ``min_rows`` data
-    rows beyond the header is demoted ``complete`` → ``failed``. The default
-    ``0`` accepts header-only CSVs (legitimately-empty results).
-    """
-    job_ids_csv = ",".join(job_ids)
-    cmd = (
-        f"cd {shlex.quote(remote_path)} && "
-        f"python -m hpc_agent.models.mapreduce.reduce.status "
-        f"--run-id {shlex.quote(run_id)} "
-        f"--job-ids {shlex.quote(job_ids_csv)} "
-        f"--job-name {shlex.quote(job_name)} "
-        f"--log-dir {shlex.quote(log_dir)} "
-        f"--file-glob {shlex.quote(file_glob)} "
-        f"--min-rows {shlex.quote(str(int(min_rows)))}"
-    )
-    proc = remote.ssh_run(cmd, ssh_target=ssh_target)
-    if proc.returncode != 0:
-        raise RemoteCommandFailed(
-            f"status reporter failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
-        )
-    return parse_remote_json(proc.stdout, source_label="status reporter")
-
-
-# Public alias — atoms / external orchestrators that need to invoke the
-# remote status reporter directly should reach for this name. The
-# underscore-prefixed original is kept for back-compat with the
-# package-internal callers (``reconcile``, ``failures``, ``logs``,
-# ``record_status``).
-ssh_status_report = _ssh_status_report
+_ssh_status_report = ssh_status_report
 
 
 @primitive(

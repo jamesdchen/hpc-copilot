@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-__all__ = ["utcnow", "utcnow_iso", "parse_iso_utc", "parse_iso_utc_or_none"]
+__all__ = [
+    "utcnow",
+    "utcnow_iso",
+    "parse_iso_utc",
+    "parse_iso_utc_or_none",
+    "status_age_seconds",
+]
 
 
 def utcnow() -> datetime:
@@ -48,3 +54,26 @@ def parse_iso_utc_or_none(s: str | None) -> datetime | None:
         return parse_iso_utc(s)
     except (TypeError, ValueError):
         return None
+
+
+def status_age_seconds(last_status: dict | None) -> int | None:
+    """Return age in seconds of ``last_status.checked_at``, or ``None``.
+
+    Returns ``None`` when *last_status* is empty, has no ``checked_at``,
+    or the timestamp is unparseable. Pure read; never raises.
+
+    Lives here so any subject that reads a journal entry's last-status
+    checkpoint (``ops/monitor`` for ``list-in-flight``; ``meta/campaign``
+    for ``load-context``'s in-flight enumeration) can compute the age
+    without crossing into another subject.
+    """
+    if not isinstance(last_status, dict):
+        return None
+    iso = last_status.get("checked_at")
+    if not isinstance(iso, str):
+        return None
+    ts = parse_iso_utc_or_none(iso)
+    if ts is None:
+        return None
+    delta = utcnow() - ts
+    return max(0, int(delta.total_seconds()))
