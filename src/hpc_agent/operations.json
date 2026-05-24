@@ -180,7 +180,7 @@
     "input_schema": null,
     "name": "capabilities",
     "output_schema": "capabilities.output.json",
-    "python": "hpc_agent.atoms.capabilities.capabilities",
+    "python": "hpc_agent._kernel.extension.capabilities.capabilities",
     "side_effects": [],
     "verb": "query"
   },
@@ -191,7 +191,7 @@
     "input_schema": null,
     "name": "clusters-describe",
     "output_schema": "clusters_describe.output.json",
-    "python": "hpc_agent.atoms.clusters.describe_cluster",
+    "python": "hpc_agent.ops.clusters.describe.describe_cluster",
     "side_effects": [],
     "verb": "query"
   },
@@ -202,7 +202,7 @@
     "input_schema": null,
     "name": "clusters-list",
     "output_schema": "clusters_list.output.json",
-    "python": "hpc_agent.atoms.clusters.list_clusters",
+    "python": "hpc_agent.ops.clusters.list.list_clusters",
     "side_effects": [],
     "verb": "query"
   },
@@ -259,7 +259,7 @@
     "input_schema": null,
     "name": "find-prior-run",
     "output_schema": "find_prior_run.output.json",
-    "python": "hpc_agent.atoms.setup_actions.find_prior_run",
+    "python": "hpc_agent.cli.setup_actions.find_prior_run",
     "side_effects": [],
     "verb": "query"
   },
@@ -352,7 +352,7 @@
     "input_schema": "recommend_partition.input.json",
     "name": "recommend-partition",
     "output_schema": "recommend_partition.output.json",
-    "python": "hpc_agent.atoms.recommend_partition.recommend_partition",
+    "python": "hpc_agent.ops.submit.recommend_partition.recommend_partition",
     "side_effects": [],
     "verb": "query"
   },
@@ -363,7 +363,7 @@
     "input_schema": null,
     "name": "suggest-setup-action",
     "output_schema": "suggest_setup_action.output.json",
-    "python": "hpc_agent.atoms.setup_actions.suggest_setup_action",
+    "python": "hpc_agent.cli.setup_actions.suggest_setup_action",
     "side_effects": [],
     "verb": "query"
   },
@@ -396,7 +396,7 @@
     "input_schema": null,
     "name": "axes-init",
     "output_schema": null,
-    "python": "hpc_agent.atoms.axes_init.axes_init",
+    "python": "hpc_agent.incorporation.axes_init.axes_init",
     "side_effects": [
       "writes-sidecar"
     ],
@@ -472,7 +472,7 @@
     "input_schema": "classify_axis.input.json",
     "name": "classify-axis",
     "output_schema": null,
-    "python": "hpc_agent.atoms.classify_axis.classify_axis",
+    "python": "hpc_agent.incorporation.classify_axis.classify_axis",
     "side_effects": [
       "writes-sidecar"
     ],
@@ -485,7 +485,7 @@
     "input_schema": "export_package.input.json",
     "name": "export-package",
     "output_schema": null,
-    "python": "hpc_agent.atoms.export_package.export_package",
+    "python": "hpc_agent.incorporation.export_package.export_package",
     "side_effects": [
       "writes-sidecar"
     ],
@@ -536,7 +536,7 @@
     "input_schema": "validate_executor_signatures.input.json",
     "name": "validate-executor-signatures",
     "output_schema": "validate_executor_signatures.output.json",
-    "python": "hpc_agent.atoms.validate_executor_signatures.validate_executor_signatures",
+    "python": "hpc_agent.ops.validate.executor_signatures.validate_executor_signatures",
     "side_effects": [],
     "verb": "validate"
   },
@@ -547,7 +547,7 @@
     "input_schema": "validate_input_dataset.input.json",
     "name": "validate-input-dataset",
     "output_schema": "validate_input_dataset.output.json",
-    "python": "hpc_agent.atoms.validate_input_dataset.validate_input_dataset",
+    "python": "hpc_agent.ops.validate.input_dataset.validate_input_dataset",
     "side_effects": [],
     "verb": "validate"
   },
@@ -558,7 +558,7 @@
     "input_schema": "validate_self_qos_limit.input.json",
     "name": "validate-self-qos-limit",
     "output_schema": "validate_self_qos_limit.output.json",
-    "python": "hpc_agent.atoms.validate_self_qos_limit.validate_self_qos_limit",
+    "python": "hpc_agent.ops.validate.self_qos_limit.validate_self_qos_limit",
     "side_effects": [],
     "verb": "validate"
   },
@@ -569,7 +569,7 @@
     "input_schema": "validate_stochastic_marker.input.json",
     "name": "validate-stochastic-marker",
     "output_schema": "validate_stochastic_marker.output.json",
-    "python": "hpc_agent.atoms.validate_stochastic_marker.validate_stochastic_marker",
+    "python": "hpc_agent.ops.validate.stochastic_marker.validate_stochastic_marker",
     "side_effects": [],
     "verb": "validate"
   },
@@ -580,7 +580,7 @@
     "input_schema": "validate_walltime_against_history.input.json",
     "name": "validate-walltime-against-history",
     "output_schema": "validate_walltime_against_history.output.json",
-    "python": "hpc_agent.atoms.validate_walltime_against_history.validate_walltime_against_history",
+    "python": "hpc_agent.ops.validate.walltime_against_history.validate_walltime_against_history",
     "side_effects": [],
     "verb": "validate"
   },
@@ -650,7 +650,7 @@
     "input_schema": "validate_campaign.input.json",
     "name": "validate-campaign",
     "output_schema": "validate_campaign.output.json",
-    "python": "hpc_agent.flows.validate_campaign.validate_campaign",
+    "python": "hpc_agent.meta.campaign.validate.validate_campaign",
     "side_effects": [],
     "verb": "workflow"
   },

@@ -14,15 +14,15 @@ module owns that shape end to end:
 
 so validation never forks across consumers. Each consumer is a thin
 adapter feeding requests to
-:func:`hpc_agent.atoms.spawn_prompt.validate_and_render_parts` and
+:func:`hpc_agent._kernel.extension.spawn_prompt.validate_and_render_parts` and
 parsing reports with
-:func:`hpc_agent.atoms.spawn_prompt.parse_worker_report`; it never
+:func:`hpc_agent._kernel.extension.spawn_prompt.parse_worker_report`; it never
 re-declares the workflow set or re-implements validation.
 
 Kept under ``_schema_models`` so wire-schema models (the ``load-context``
 ``delegate`` block) can reference :class:`SpawnRequest` without a
 logic-layer import. The logic over this contract lives in
-:mod:`hpc_agent.atoms.spawn_prompt`.
+:mod:`hpc_agent._kernel.extension.spawn_prompt`.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ WorkflowName = Literal["submit", "status", "aggregate", "campaign"]
 
 # workflow id → the worker-prompt template inlined into the spawned
 # subagent's cacheable prefix. Resolved by
-# ``hpc_agent.atoms.spawn_prompt._procedure_body`` (host: package data
+# ``hpc_agent._kernel.extension.spawn_prompt._procedure_body`` (host: package data
 # at ``hpc_agent/worker_prompts/<name>.md``; plugins overlay via the
 # ``worker_prompt_assets`` attribute on their entry point). These are
 # *not* Claude Code skills — a headless ``claude -p --bare`` worker has

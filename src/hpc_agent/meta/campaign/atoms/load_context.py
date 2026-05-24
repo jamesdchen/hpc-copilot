@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliShape
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -101,7 +101,7 @@ def _build_delegate(
     ``kind`` is the cost/determinism split: ``cli`` steps are
     deterministic and need no LLM; ``agent`` steps need judgement.
     """
-    from hpc_agent.atoms.spawn_prompt import render_spawn_prompt
+    from hpc_agent._kernel.extension.spawn_prompt import render_spawn_prompt
 
     exp = str(experiment_dir)
     if hint == "submit":

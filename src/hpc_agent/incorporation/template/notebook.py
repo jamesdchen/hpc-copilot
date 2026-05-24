@@ -155,7 +155,7 @@ def notebook_imports_runtime(ipynb: str | Path) -> bool:
     A utility check — note this is *not* a reliable "is this a runnable
     experiment" signal: pipeline-library notebooks import the runtime
     seam (``current_slice`` / ``load_series``) without applying
-    ``@register_run``. :func:`hpc_agent.atoms.export_package.export_package`
+    ``@register_run``. :func:`hpc_agent.incorporation.export_package.export_package`
     classifies notebooks by the ``@register_run`` decorator (via
     :func:`~hpc_agent.incorporation.template.discover.discover_runs`) for that reason.
     """

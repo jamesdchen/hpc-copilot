@@ -33,7 +33,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     mediates this path. See hpc_agent._internal.run_workflow.
     """
     from hpc_agent._internal.run_workflow import run_workflow
-    from hpc_agent.atoms.spawn_prompt import SpawnContractError
+    from hpc_agent._kernel.extension.spawn_prompt import SpawnContractError
 
     try:
         fields = json.loads(args.fields_json)

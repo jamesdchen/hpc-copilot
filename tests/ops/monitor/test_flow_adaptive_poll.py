@@ -18,8 +18,6 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.ops.monitor import flow as monitor_flow_module
 from hpc_agent.ops.monitor.flow import (
@@ -27,6 +25,8 @@ from hpc_agent.ops.monitor.flow import (
     _UNCHANGED_POLLS_BEFORE_BACKOFF,
     monitor_flow,
 )
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path

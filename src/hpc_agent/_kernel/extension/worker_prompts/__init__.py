@@ -3,7 +3,7 @@
 The four files in this package — ``submit.md``, ``status.md``,
 ``aggregate.md``, ``campaign.md`` — are not skills. They are
 deterministic prompt templates that
-:func:`hpc_agent.atoms.spawn_prompt._procedure_body` reads as inert text
+:func:`hpc_agent._kernel.extension.spawn_prompt._procedure_body` reads as inert text
 and inlines into the ``claude -p --bare`` worker's ``cacheable_prefix``.
 
 A headless ``claude -p --bare`` worker has no Skill tool / no skill
@@ -40,7 +40,7 @@ def read_procedure(name: str) -> str:
     inlined into the spawn pipeline's cacheable prefix as-is.
 
     Plugin overlays are resolved by
-    :func:`hpc_agent.atoms.spawn_prompt._procedure_body`; this helper
+    :func:`hpc_agent._kernel.extension.spawn_prompt._procedure_body`; this helper
     is the host-only lookup that the overlay falls back to.
     """
     return (files("hpc_agent._kernel.extension.worker_prompts") / f"{name}.md").read_text(

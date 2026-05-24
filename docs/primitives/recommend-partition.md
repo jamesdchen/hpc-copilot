@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: hpc_agent.atoms.recommend_partition.recommend_partition
+  python: hpc_agent.ops.submit.recommend_partition.recommend_partition
 ---
 # recommend-partition
 

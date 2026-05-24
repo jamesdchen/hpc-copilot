@@ -12,7 +12,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent export-package [--experiment-dir <dir>] [--force]
-  python: hpc_agent.atoms.export_package.export_package
+  python: hpc_agent.incorporation.export_package.export_package
 ---
 # export-package
 

@@ -5,7 +5,7 @@ is ``aggregate`` (legacy name retained for slash-command compatibility);
 the underlying primitive — registered in :mod:`hpc_agent.ops.aggregate.combine`
 — is ``combine-wave``.
 
-The combiner pipeline is driven by :func:`hpc_agent.runner.combine_wave`
+The combiner pipeline is driven by :func:`hpc_agent.combine_wave`
 plus the user-supplied combiner script on the cluster. The CLI wraps it
 with three optional, framework-agnostic guarantees:
 
@@ -26,9 +26,16 @@ import argparse
 import json
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors, runner
-from hpc_agent._internal import session
+from hpc_agent import errors
 from hpc_agent.cli._helpers import EXIT_OK, _err_from_hpc, _ok, _require_ssh_agent
+from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.aggregate.runner import (
+    build_provenance,
+    verify_combiner_artifact,
+    verify_per_task_outputs,
+    write_remote_provenance,
+)
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -58,7 +65,7 @@ def _sidecar_aggregate_defaults(experiment_dir: Path, run_id: str) -> dict[str, 
 
 
 def cmd_aggregate(args: argparse.Namespace) -> int:
-    # The aggregation pipeline is driven by hpc_agent.runner.combine_wave
+    # The aggregation pipeline is driven by hpc_agent.combine_wave
     # plus the user-supplied combiner script on the cluster. The CLI wraps it
     # with three optional, framework-agnostic guarantees:
     #   --require-outputs <template>  : every per-task output exists before
@@ -86,7 +93,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
 
     # Precondition: every per-task output must exist before we combine.
     if require_outputs:
-        missing = runner.verify_per_task_outputs(
+        missing = verify_per_task_outputs(
             ssh_target=record.ssh_target,
             remote_path=record.remote_path,
             run_id=args.run_id,
@@ -103,7 +110,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
                 )
             )
 
-    ok, stdout, stderr = runner.combine_wave(
+    ok, stdout, stderr = combine_wave(
         args.experiment_dir,
         args.run_id,
         wave=int(args.wave),
@@ -114,7 +121,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     if ok:
         # Postcondition: the combiner must have produced the declared file.
         if expect_output:
-            artifact_ok, detail = runner.verify_combiner_artifact(
+            artifact_ok, detail = verify_combiner_artifact(
                 ssh_target=record.ssh_target,
                 remote_path=record.remote_path,
                 expect_output=expect_output,
@@ -126,11 +133,11 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
                     )
                 )
 
-        provenance = runner.build_provenance(record, wave=int(args.wave))
+        provenance = build_provenance(record, wave=int(args.wave))
         sidecar_path: str | None = None
         if expect_output:
             try:
-                sidecar_path = runner.write_remote_provenance(
+                sidecar_path = write_remote_provenance(
                     ssh_target=record.ssh_target,
                     remote_path=record.remote_path,
                     expect_output=expect_output,

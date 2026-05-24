@@ -116,7 +116,7 @@ Each tick of the driver:
      ingests the envelope.
    - `agent`: requires `--allow-agent-steps` (spawning an LLM is a
      billable side effect we make the operator opt into); renders the
-     spawn prompt via `hpc_agent.atoms.spawn_prompt`, runs `claude
+     spawn prompt via `hpc_agent._kernel.extension.spawn_prompt`, runs `claude
      -p` through the `WorkerInvoker` transport seam, parses the
      structured `WorkerReport`.
 4. Returns. **One step per invocation.** Cron / `/loop` / a bash loop

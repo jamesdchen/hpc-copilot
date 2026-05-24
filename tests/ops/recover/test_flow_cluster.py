@@ -16,12 +16,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent.ops.recover.flow import (
     render_overrides_to_extra_flags,
     resubmit_flow,
 )
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord, run_record
 from tests.conftest import make_sidecar_json
 
 if TYPE_CHECKING:

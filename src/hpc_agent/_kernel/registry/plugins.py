@@ -106,7 +106,7 @@ def plugin_worker_prompt_roots() -> tuple[Any, ...]:
     holding ``<workflow>.md`` files (``submit.md``, ``status.md``,
     ``aggregate.md``, ``campaign.md``), exposed by a plugin through its
     ``worker_prompt_assets`` attribute. Resolved by
-    :func:`hpc_agent.atoms.spawn_prompt._procedure_body`: the first
+    :func:`hpc_agent._kernel.extension.spawn_prompt._procedure_body`: the first
     plugin to provide ``<workflow>.md`` wins, then the host's bundled
     procedure is used. Distinct from
     :func:`plugin_slash_command_roots` because worker prompts and Claude

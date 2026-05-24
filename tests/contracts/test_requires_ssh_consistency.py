@@ -47,7 +47,7 @@ _ALLOWLIST: set[str] = set()
 
 # Side-effect kinds that imply the dispatcher must gate SSH_AUTH_SOCK
 # before invoking the primitive. Matches the labels used across
-# :mod:`hpc_agent.runner` and :mod:`hpc_agent.flows`.
+# :mod:`hpc_agent.ops.*` (recover, submit, monitor, aggregate).
 _SSH_SIDE_EFFECT_KINDS: frozenset[str] = frozenset(
     {"ssh", "rsync_pull", "rsync_push", "sync-pull", "sync-push"},
 )

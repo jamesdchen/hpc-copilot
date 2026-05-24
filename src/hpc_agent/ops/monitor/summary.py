@@ -130,7 +130,7 @@ def monitor_summary(
     if not run_id:
         raise errors.SpecInvalid("run_id must be a non-empty string")
 
-    from hpc_agent._internal import session
+    from hpc_agent.state import session
 
     record = session.load_run(experiment_dir, run_id)
     if record is None:

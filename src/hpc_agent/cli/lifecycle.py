@@ -21,10 +21,11 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors, runner
-from hpc_agent._internal import session
+from hpc_agent import errors
 from hpc_agent.cli._helpers import EXIT_OK, _ok, _require_ssh_agent
 from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
+from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
     pass
@@ -48,7 +49,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         raise errors.JournalCorrupt(
             f"no journal record for run_id {args.run_id!r} in {args.experiment_dir}"
         )
-    updated = runner.record_status(
+    updated = record_status(
         args.experiment_dir,
         args.run_id,
         ssh_target=record.ssh_target,

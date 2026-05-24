@@ -1,4 +1,4 @@
-"""Tests for the per-run journal in ``hpc_agent._internal.session``."""
+"""Tests for the per-run journal in ``hpc_agent.state.session``."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent._internal.session import index as session_index
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord, run_record
+from hpc_agent.state.session import index as session_index
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect HPC_HOMEDIR into a per-test tmp directory.
 
-    HPC_HOMEDIR lives in :mod:`hpc_agent._internal.session.run_record`
+    HPC_HOMEDIR lives in :mod:`hpc_agent.state.run_record`
     after the session.py split; patching the module attribute is what
     every reader sees because callers look the name up at call time.
     """

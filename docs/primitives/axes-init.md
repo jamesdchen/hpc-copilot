@@ -12,7 +12,7 @@ error_codes:
 backed_by:
   cli: hpc-agent axes-init [--experiment-dir <dir>] [--axes <axes>] [--homogeneous-axes
     <homogeneous_axes>] [--force]
-  python: hpc_agent.atoms.axes_init.axes_init
+  python: hpc_agent.incorporation.axes_init.axes_init
 ---
 # axes-init
 

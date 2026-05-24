@@ -9,7 +9,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.actions.export_package import ExportPackageInput
-from hpc_agent.atoms.export_package import export_package
+from hpc_agent.incorporation.export_package import export_package
 
 
 def _write_nb(path: Path, cells: list[str]) -> None:

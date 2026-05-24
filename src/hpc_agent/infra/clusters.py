@@ -17,7 +17,7 @@ from typing import Any, Literal
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from hpc_agent.planning.constraints import ClusterConstraints, parse_constraints
+from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
 
 # ---------------------------------------------------------------------------
 # ClusterConfig — single Pydantic SoT for the clusters.yaml shape.

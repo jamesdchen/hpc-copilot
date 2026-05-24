@@ -14,7 +14,6 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.cluster_logs import fetch_task_logs
@@ -25,6 +24,7 @@ from hpc_agent.ops.recover.runner_failures import (
     annotate_clusters_with_retry_advice,
     cluster_failures_by_fingerprint,
 )
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
     from pathlib import Path

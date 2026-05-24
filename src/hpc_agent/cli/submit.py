@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import argparse
 
-from hpc_agent import errors, runner
+from hpc_agent import errors
 from hpc_agent.cli._helpers import (
     EXIT_OK,
     _err,
@@ -70,8 +70,9 @@ def cmd_submit(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
+    from hpc_agent.ops.submit.runner import submit_and_record
 
-    record, deduped = runner.submit_and_record(
+    record, deduped = submit_and_record(
         args.experiment_dir,
         spec=_SubmitSpec.model_validate(spec),
     )

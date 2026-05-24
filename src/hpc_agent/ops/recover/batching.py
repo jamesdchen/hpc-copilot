@@ -31,8 +31,8 @@ from __future__ import annotations
 
 import dataclasses
 
+from hpc_agent.infra.constraints import ClusterConstraints
 from hpc_agent.infra.throughput import WorkloadSpec, compute_submission_plan
-from hpc_agent.planning.constraints import ClusterConstraints
 
 __all__ = [
     "compact_task_ids",
@@ -151,7 +151,7 @@ def resubmit_plan(
         the job template.
     constraints:
         Optional cluster constraints governing batching.  Defaults to
-        :class:`~hpc_agent.planning.constraints.ClusterConstraints` (i.e.
+        :class:`~hpc_agent.infra.constraints.ClusterConstraints` (i.e.
         ``max_array_size=1000``, ``max_concurrent_jobs=10``).
 
     Returns

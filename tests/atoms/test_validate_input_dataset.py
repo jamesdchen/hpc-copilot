@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.atoms.validate_input_dataset``.
+"""Tests for ``hpc_agent.ops.validate.input_dataset``.
 
 Pattern: write a tiny dataset to ``tmp_path`` (csv or jsonl —
 parquet path is exercised separately when pyarrow is available),
@@ -20,7 +20,7 @@ import pytest
 from hpc_agent._wire.validators.validate_input_dataset import (
     ValidateInputDatasetSpec,
 )
-from hpc_agent.atoms.validate_input_dataset import validate_input_dataset
+from hpc_agent.ops.validate.input_dataset import validate_input_dataset
 
 if TYPE_CHECKING:
     from pathlib import Path

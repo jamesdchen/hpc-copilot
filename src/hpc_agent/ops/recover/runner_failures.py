@@ -13,7 +13,7 @@ from hpc_agent.infra.parsing import (
 )
 
 if TYPE_CHECKING:
-    from hpc_agent._internal.session import RunRecord
+    from hpc_agent.state.session import RunRecord
 
 # Re-exported from :mod:`hpc_agent.infra.parsing` (extracted in PR 1.5 so
 # multiple Wave-2 subjects can share the catalog without contending for

@@ -8,8 +8,8 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._internal.run_workflow import run_workflow
+from hpc_agent._kernel.extension.spawn_prompt import SpawnContractError
 from hpc_agent._kernel.lifecycle.invoke import InvocationResult, RenderedPrompt
-from hpc_agent.atoms.spawn_prompt import SpawnContractError
 
 
 class _StubInvoker:

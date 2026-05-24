@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hpc_agent.atoms.axes_init import axes_init
+from hpc_agent.incorporation.axes_init import axes_init
 from hpc_agent.state.axes import axes_path, read_axes
 
 if TYPE_CHECKING:

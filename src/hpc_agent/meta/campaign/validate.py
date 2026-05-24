@@ -34,13 +34,13 @@ from hpc_agent._wire.workflows.validate_campaign import (
     ValidateCampaignSpec,
     ValidatorFinding,
 )
-from hpc_agent.atoms.validate_executor_signatures import validate_executor_signatures
-from hpc_agent.atoms.validate_input_dataset import validate_input_dataset
-from hpc_agent.atoms.validate_stochastic_marker import validate_stochastic_marker
-from hpc_agent.atoms.validate_walltime_against_history import (
+from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.ops.validate.executor_signatures import validate_executor_signatures
+from hpc_agent.ops.validate.input_dataset import validate_input_dataset
+from hpc_agent.ops.validate.stochastic_marker import validate_stochastic_marker
+from hpc_agent.ops.validate.walltime_against_history import (
     validate_walltime_against_history,
 )
-from hpc_agent.cli._dispatch import CliShape, SchemaRef
 
 if TYPE_CHECKING:
     from collections.abc import Callable

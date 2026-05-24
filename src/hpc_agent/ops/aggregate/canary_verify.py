@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
-from hpc_agent.runner import record_status
+from hpc_agent.ops.monitor.status import record_status
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -171,10 +171,10 @@ def verify_canary(
     if int(wait_budget_sec) <= 0:
         raise errors.SpecInvalid("wait_budget_sec must be > 0")
 
-    from hpc_agent._internal import session
     from hpc_agent.infra.cluster_logs import fetch_task_logs
     from hpc_agent.infra.cluster_status import ssh_status_report
     from hpc_agent.ops.aggregate.runner import verify_combiner_artifact
+    from hpc_agent.state import session
 
     record = session.load_run(experiment_dir, canary_run_id)
     if record is None:

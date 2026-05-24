@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.submit import SubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state import session
 from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
+from hpc_agent.state.session import RunRecord
 
 
 def _submit_spec_handler(ns):  # type: ignore[no-untyped-def]

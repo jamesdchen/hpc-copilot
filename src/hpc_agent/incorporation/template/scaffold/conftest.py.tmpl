@@ -69,7 +69,7 @@ def data_axis_for(run_name: str) -> Any:
     rebuilds the live ``DataAxis``. ``None`` means the run was never
     classified — the elision test should assert on that explicitly.
     """
-    from hpc_agent.planning.axes import read_executor
+    from hpc_agent.state.axes import read_executor
     from hpc_agent.incorporation.template import data_axis_from_config
 
     entry = read_executor(_REPO_ROOT, run_name)

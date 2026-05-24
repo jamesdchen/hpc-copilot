@@ -6,7 +6,7 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent._wire.actions.classify_axis import ClassifyAxisInput
-from hpc_agent.atoms.classify_axis import classify_axis
+from hpc_agent.incorporation.classify_axis import classify_axis
 from hpc_agent.incorporation.template import data_axis_from_config, plan_tasks
 from hpc_agent.state.axes import read_axes, read_executor
 

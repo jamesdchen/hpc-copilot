@@ -1,7 +1,7 @@
 """How a code-rendered worker prompt reaches a model — the transport seam.
 
 The orchestrator owns *what* a delegated worker runs (the prompt
-rendered by :func:`hpc_agent.atoms.spawn_prompt.render_spawn_parts`).
+rendered by :func:`hpc_agent._kernel.extension.spawn_prompt.render_spawn_parts`).
 A :class:`WorkerInvoker` owns only *how* that prompt reaches a model —
 a ``claude -p`` child today, an Agent SDK / raw-API call later.
 

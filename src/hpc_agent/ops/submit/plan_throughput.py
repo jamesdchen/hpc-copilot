@@ -82,7 +82,7 @@ def plan_throughput(
     cluster:
         Cluster name; its ``constraints:`` block in ``clusters.yaml``
         supplies the scheduler limits. A cluster with no such block
-        falls back to :class:`~hpc_agent.planning.constraints.ClusterConstraints`
+        falls back to :class:`~hpc_agent.infra.constraints.ClusterConstraints`
         defaults.
     total_tasks:
         Total task count to pack (the grid cardinality).

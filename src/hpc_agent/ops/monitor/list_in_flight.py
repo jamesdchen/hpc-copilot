@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliShape
 
@@ -21,6 +20,7 @@ from hpc_agent.cli._dispatch import CliShape
 # compat alias for the local primitive call below; the lint allow-list
 # entry that used to gate this cross-subject hop is gone.
 from hpc_agent.infra.time import status_age_seconds as _last_status_age_seconds
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
     from pathlib import Path

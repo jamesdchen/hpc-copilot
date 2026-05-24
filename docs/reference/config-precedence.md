@@ -51,7 +51,7 @@ Notes:
 
 - **Default**: `~/.claude/hpc/`
 - **Override**: env var `HPC_JOURNAL_DIR=/some/dir`. Read at import
-  time in `hpc_agent/_internal/session.py:HPC_HOMEDIR`. Integrators
+  time in `hpc_agent/state/session.py:HPC_HOMEDIR`. Integrators
   that want isolated state per agent set this to a per-agent path.
 - **No CLI flag, no sidecar field** — journal location is operator
   config, not experiment config.
@@ -103,13 +103,13 @@ Notes:
   default).
 - Sidecar-level keys override cluster-level keys **field-by-field**;
   unset sidecar keys fall back to the cluster default. Implemented in
-  `hpc_agent.planning.constraints.parse_constraints`.
+  `hpc_agent.infra.constraints.parse_constraints`.
 
 ## Env vars consumed
 
 | Var | Default | Read by | Effect |
 |---|---|---|---|
-| `HPC_JOURNAL_DIR` | `~/.claude/hpc` | `hpc_agent/_internal/session.py` | Redirect journal storage. |
+| `HPC_JOURNAL_DIR` | `~/.claude/hpc` | `hpc_agent/state/session.py` | Redirect journal storage. |
 | `HPC_CLUSTERS_CONFIG` | (package default) | `hpc_agent/infra/clusters.py` | Use alternate `clusters.yaml`. |
 | `HPC_NO_SSH_MULTIPLEX` | unset | `hpc_agent/agent_cli.py:cmd_capabilities` | When `1`, disables SSH ControlMaster reuse; surfaced in `capabilities.data.ssh_multiplexing`. |
 | `SSH_AUTH_SOCK` | (set by ssh-agent) | `cmd_preflight` | Required for SSH auth; preflight fails if missing. |

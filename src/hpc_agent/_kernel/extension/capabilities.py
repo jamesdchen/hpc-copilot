@@ -18,8 +18,8 @@ import os
 from typing import Any
 
 import hpc_agent
-from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent.state import session
 
 
 @primitive(

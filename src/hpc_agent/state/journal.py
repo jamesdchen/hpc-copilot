@@ -17,7 +17,7 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal.session.run_record import (
+from hpc_agent.state.run_record import (
     _UPDATABLE_FIELDS,
     RunRecord,
     _atomic_write_json,
@@ -175,9 +175,9 @@ def _refresh_index_entry(
     helper treated a failed read as "treat the entire index as empty,"
     which clobbered every other entry with a single-key dict.
     """
-    from hpc_agent._internal.session.run_record import _read_json as _read_run
-    from hpc_agent._internal.session.run_record import _run_path
     from hpc_agent.infra.time import utcnow_iso
+    from hpc_agent.state.run_record import _read_json as _read_run
+    from hpc_agent.state.run_record import _run_path
 
     idx_path = journal_dir(experiment_dir) / "index.json"
     with _locked(idx_path):

@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.atoms.validate_walltime_against_history``.
+"""Tests for ``hpc_agent.ops.validate.walltime_against_history``.
 
 Pattern: seed runtime_prior with samples via the public
 ``append_sample`` API (real I/O via tmp_path), optionally write a
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from hpc_agent._wire.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistorySpec,
 )
-from hpc_agent.atoms.validate_walltime_against_history import (
+from hpc_agent.ops.validate.walltime_against_history import (
     validate_walltime_against_history,
 )
 from hpc_agent.state import runtime_prior as rp

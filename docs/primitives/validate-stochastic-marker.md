@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: hpc_agent.atoms.validate_stochastic_marker.validate_stochastic_marker
+  python: hpc_agent.ops.validate.stochastic_marker.validate_stochastic_marker
 ---
 # validate-stochastic-marker
 

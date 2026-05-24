@@ -7,15 +7,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.resubmit import ResubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
     import argparse
 
-    from hpc_agent._internal.session import RunRecord
+    from hpc_agent.state.session import RunRecord
 
 
 def _resubmit_handler(ns: argparse.Namespace) -> int:

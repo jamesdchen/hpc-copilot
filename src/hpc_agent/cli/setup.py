@@ -91,14 +91,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 
 def cmd_capabilities(args: argparse.Namespace) -> int:
-    """Argparse adapter — primitive lives at hpc_agent.atoms.capabilities.
+    """Argparse adapter — primitive lives at hpc_agent._kernel.extension.capabilities.
 
     ``--full`` bypasses the JSON envelope to emit a multi-section text
     blob (the ``llms-full`` dump). Documented exception to the
     stdout-is-JSON contract; analogous to ``--help``.
     """
+    from hpc_agent._kernel.extension.capabilities import capabilities
     from hpc_agent._kernel.registry.operations import render_llms_full
-    from hpc_agent.atoms.capabilities import capabilities
 
     if getattr(args, "full", False):
         # Human/LLM-mode: emit a multi-section text blob (NOT the JSON
@@ -151,7 +151,7 @@ def cmd_describe(args: argparse.Namespace) -> int:
     from hpc_agent._wire.spawn_contract import WORKFLOW_PROCEDURES
 
     if name in WORKFLOW_PROCEDURES:
-        from hpc_agent.atoms.spawn_prompt import _procedure_body
+        from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
 
         _ok({"kind": "procedure", "name": name, "content": _procedure_body(name)})
         return EXIT_OK

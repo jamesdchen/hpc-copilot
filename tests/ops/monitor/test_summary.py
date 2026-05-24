@@ -19,9 +19,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent.ops.monitor.summary import monitor_summary
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
