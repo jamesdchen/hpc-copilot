@@ -7,7 +7,7 @@ sbatch env so the template's ``uv sync`` preamble fires when
 
 from __future__ import annotations
 
-from hpc_agent.runner import build_job_env
+from hpc_agent.ops.submit.runner import build_job_env
 
 _BASE_ENV = {
     "EXECUTOR": "python3 .hpc/_hpc_dispatch.py",

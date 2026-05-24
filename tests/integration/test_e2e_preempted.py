@@ -21,8 +21,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent import runner
-from hpc_agent.ops.recover.runner_failures import _categorize
+from hpc_agent.ops.recover.runner_failures import (
+    _categorize,
+    cluster_failures_by_fingerprint,
+)
 from hpc_agent.state import run_record
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
@@ -58,7 +60,7 @@ class TestCategorizeRecognisesPreemption:
         logs = [
             _log_entry(0, content="some unrelated trailing line", exit_code=130),
         ]
-        clusters = runner.cluster_failures_by_fingerprint(logs)
+        clusters = cluster_failures_by_fingerprint(logs)
         assert len(clusters) == 1
         # The runner classifies exit-130-without-stderr as preempted via
         # the explicit fallback in cluster_failures_by_fingerprint.
@@ -75,7 +77,7 @@ class TestClusterFailuresByFingerprintGroupsPreempted:
             _log_entry(1, content=f"trace line\n{sigterm_line}\n"),
             _log_entry(2, content=f"trace line\n{sigterm_line}\n"),
         ]
-        clusters = runner.cluster_failures_by_fingerprint(logs)
+        clusters = cluster_failures_by_fingerprint(logs)
         # Find the preempted cluster (ordering by count, single bucket here).
         preempted = [c for c in clusters if c.get("category") == "preempted"]
         assert len(preempted) == 1, clusters
@@ -91,7 +93,7 @@ class TestClusterFailuresByFingerprintGroupsPreempted:
             _log_entry(1, content=f"work\n{sigterm_line}\n"),
             _log_entry(2, content=f"work\n{sigterm_line}\n"),
         ]
-        clusters = runner.cluster_failures_by_fingerprint(logs)
+        clusters = cluster_failures_by_fingerprint(logs)
         cats = {c.get("category") for c in clusters}
         assert "preempted" in cats
         assert "gpu_oom" in cats

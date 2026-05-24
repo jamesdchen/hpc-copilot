@@ -27,6 +27,7 @@ from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids
 from hpc_agent.ops.recover.runner import derive_resubmit_request_id
 from hpc_agent.ops.recover.runner_failures import (
     annotate_clusters_with_retry_advice,
+    cluster_failures_by_fingerprint,
     fingerprint_stderr_tail,
 )
 from hpc_agent.state import run_record
@@ -916,7 +917,7 @@ def test_cluster_failures_groups_same_fingerprint():
         {"task_id": 3, "content": "RuntimeError: boom"},
         {"task_id": 4, "content": "ValueError: nope"},
     ]
-    clusters = runner.cluster_failures_by_fingerprint(logs)
+    clusters = cluster_failures_by_fingerprint(logs)
     assert len(clusters) == 2
     # Sorted by count desc → biggest cluster first.
     assert clusters[0]["count"] == 3
@@ -937,7 +938,7 @@ def test_cluster_failures_categorizes_known_modes():
         },
         {"task_id": 3, "content": "ImportError: No module named 'foo'"},
     ]
-    clusters = runner.cluster_failures_by_fingerprint(logs)
+    clusters = cluster_failures_by_fingerprint(logs)
     cats = {c["category"] for c in clusters}
     assert {"gpu_oom", "walltime", "import_error"}.issubset(cats)
 
@@ -962,7 +963,7 @@ def test_cluster_failures_groups_preempted_tasks():
         # One task where the stderr was clipped but exit code is 130.
         {"task_id": 3, "content": "", "exit_code": 130},
     ]
-    clusters = runner.cluster_failures_by_fingerprint(logs)
+    clusters = cluster_failures_by_fingerprint(logs)
     preempted_clusters = [c for c in clusters if c["category"] == "preempted"]
     # All three tasks land under the preempted category (possibly
     # split across two clusters by fingerprint, since the empty-stderr
@@ -978,7 +979,7 @@ def test_cluster_failures_buckets_missing_logs():
         {"task_id": 7, "missing": True},
         {"task_id": 8, "missing": True},
     ]
-    clusters = runner.cluster_failures_by_fingerprint(logs)
+    clusters = cluster_failures_by_fingerprint(logs)
     assert len(clusters) == 1
     assert clusters[0]["category"] == "log_missing"
     assert sorted(clusters[0]["task_ids"]) == [7, 8]

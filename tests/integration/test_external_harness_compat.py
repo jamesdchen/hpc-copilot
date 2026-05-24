@@ -57,11 +57,12 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_agent import agent_cli, runner
+from hpc_agent import agent_cli
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.ops.recover.runner_failures import (
     DEFAULT_AUTO_RETRY_POLICY,
     annotate_clusters_with_retry_advice,
+    cluster_failures_by_fingerprint,
 )
 from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.run_record import RunRecord
@@ -385,7 +386,7 @@ def test_cluster_failures_rollup_covers_all_four_categories_with_retry_advice(
         # (no Traceback prefix, no OOM/walltime/preempt marker).
         {"task_id": 4, "content": "something went sideways but we can't tell what"},
     ]
-    clusters = runner.cluster_failures_by_fingerprint(logs)
+    clusters = cluster_failures_by_fingerprint(logs)
     categories = {c["category"] for c in clusters}
     assert {"gpu_oom", "ssh_unreachable", "walltime", "unknown"}.issubset(categories), (
         f"missing categories in rollup: {sorted(categories)}"

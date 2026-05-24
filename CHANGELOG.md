@@ -7,6 +7,123 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.6.0 — 2026-05-24
+
+### Removed — `hpc_agent.state.session` back-compat barrel (BREAKING)
+
+The Wave-4 reorg split `hpc_agent.state.session` into three canonical
+submodules: `state.run_record`, `state.journal`, `state.index`. The
+barrel was kept as a re-export shim through 0.5.0 so 60+ legacy import
+sites kept working. 0.6.0 deletes the barrel.
+
+External integrators using `from hpc_agent.state import session` (or
+`from hpc_agent.state.session import RunRecord`, etc.) need to import
+from the canonical submodule directly. Mapping:
+
+- `RunRecord`, `HPC_HOMEDIR`, `SCHEMA_VERSION`, `TERMINAL_STATUSES`,
+  `journal_dir`, `repo_hash`, `runs_dir`, `_atomic_write_json`,
+  `_lock_path`, `_locked`, `_read_json`, `_run_path`, `_UPDATABLE_FIELDS`
+  → `hpc_agent.state.run_record`
+- `load_run`, `mark_run`, `update_run_record`, `update_run_status`,
+  `upsert_run`, `_refresh_index_entry`
+  → `hpc_agent.state.journal`
+- `find_in_flight_runs`, `find_runs_by_campaign`, `prune_terminal_runs`,
+  `_all_run_files`, `_index_is_stale`, `_read_index`, `_rebuild_index`
+  → `hpc_agent.state.index`
+
+### Removed — `hpc_agent.runner` legacy helper re-exports
+
+Eleven helpers re-exported through `hpc_agent.runner` for back-compat
+have been dropped. Functions still exist at their canonical homes;
+update imports to point there:
+
+- `annotate_clusters_with_retry_advice`, `fingerprint_stderr_tail`,
+  `cluster_failures_by_fingerprint`, `DEFAULT_AUTO_RETRY_POLICY`
+  → `hpc_agent.ops.recover.runner_failures`
+- `build_provenance`, `verify_combiner_artifact`,
+  `verify_per_task_outputs`, `write_remote_provenance`
+  → `hpc_agent.ops.aggregate.runner`
+- `derive_resubmit_request_id`
+  → `hpc_agent.ops.recover.runner`
+- `fetch_task_logs`
+  → `hpc_agent.infra.cluster_logs`
+- `build_job_env`
+  → `hpc_agent.ops.submit.runner`
+
+The `_BACK_COMPAT_NONPRIMITIVES` allow-list in
+`scripts/lint_runner_shim.py` is also removed: `runner.py` now
+re-exports only `@primitive`-decorated symbols, full stop.
+
+### Changed — workflows-at-root structural move
+
+Each workflow file moves from `ops/<subject>/flow.py` to
+`ops/<subject>_flow.py` at the role root, alongside subject
+directories. Files at role root aren't subjects per the existing
+subject-imports lint (`parts < 2` short-circuits to `None`), so the
+existing rule handles them naturally.
+
+Moves (importer paths change, no behavior change):
+
+- `hpc_agent.ops.aggregate.flow` → `hpc_agent.ops.aggregate_flow`
+- `hpc_agent.ops.monitor.flow` → `hpc_agent.ops.monitor_flow`
+- `hpc_agent.ops.submit.flow` → `hpc_agent.ops.submit_flow`
+- `hpc_agent.ops.recover.flow` → `hpc_agent.ops.recover_flow`
+- `hpc_agent.ops.aggregate.canary_verify` → `hpc_agent.ops.verify_canary`
+- `hpc_agent.meta.campaign.validate` → `hpc_agent.meta.validate_campaign`
+
+Five cross-subject seams that previously routed through
+`hpc_agent.runner` (`monitor_flow.combine_wave`,
+`validate_campaign.validate_*`) become direct imports — workflows at
+role root can reach into subject dirs without crossing the lint.
+
+### Added — `submit-and-verify` workflow
+
+Composes `submit-flow` + `verify-canary` under one envelope. Submits a
+run plus its 1-task canary, then waits for the canary to land terminal
+before returning, so the caller branches once on `verified` instead of
+orchestrating both halves. CLI: `hpc-agent submit-and-verify --spec
+<path>`. Wire shape:
+[`submit_and_verify.input.json`](src/hpc_agent/schemas/submit_and_verify.input.json),
+[`submit_and_verify.output.json`](src/hpc_agent/schemas/submit_and_verify.output.json).
+
+### Added — `recommend-partition` surfaced agent-facing
+
+The function existed at `ops/submit/recommend_partition.py` with
+non-trivial routing logic (priority tiers, debug-partition rules,
+walltime-fit ranking), tests, a Pydantic spec/result, schemas — but
+no agents could reach it. Flipped `agent_facing=False` → `True`, added
+a `CliShape` so `hpc-agent recommend-partition --spec <path>` is now
+a callable verb. Pre-submit advisor: agents call it standalone to
+decide what to put in a submit spec's `partition` field.
+
+### Added — pro plugin demos cross-package composition
+
+Four new primitives in `hpc-agent-pro` exercise the
+plugin-composes-core path:
+
+- `plan-resubmit-overrides` (query) — promotes
+  `plan_resubmit_overrides` to a wire-callable primitive.
+- `smart-resubmit-flow` (workflow) — composes
+  `plan-resubmit-overrides` (pro) + `resubmit-failed` (core); proves
+  the cross-package compose path via lazy resolution against the
+  merged registry.
+- `apply-smart-submit-plan` (workflow) — code-ifies Step 4c-B of
+  pro's `submit.md`: applies auto-pick + auto-apply rules from a
+  `score-submit-plan` envelope, surfaces `walltime_split_confirm`
+  as a pending decision when applicable.
+- `run-pre-submit-gates` (workflow) — chains `check-preflight` +
+  `validate-campaign` + `predict-start-time` under one envelope;
+  short-circuits on the first failure.
+
+### Changed — documentation refresh
+
+- `docs/architecture.md` "Cross-subject composition" section rewritten
+  to reflect the post-workflows-at-root state. Stale
+  `runner.py` re-export table removed; non-goals subsection
+  added.
+- `docs/reference/config-precedence.md`: two `state/session.py`
+  references updated to canonical homes.
+
 ## 0.5.0 — 2026-05-24
 
 ### Removed — deprecated `RepoLayout` forwarders

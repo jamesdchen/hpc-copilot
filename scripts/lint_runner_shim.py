@@ -3,18 +3,23 @@ symbols.
 
 The package-root ``runner.py`` lives outside any subject and is therefore
 permitted by ``lint_subject_imports`` as the cross-subject primitive
-bridge — workflows in one subject can ``from hpc_agent.runner import X``
-to call a primitive that lives in another subject. The bridge is honest
+bridge — atoms in one subject can ``from hpc_agent.runner import X`` to
+call a primitive that lives in another subject. The bridge is honest
 only if everything re-exported through it is itself a wire-callable
 ``@primitive``; if helpers / dataclasses / constants accumulate there
 the shim becomes a generic cross-subject leak instead.
 
 This lint walks the ``from hpc_agent.<subject>.<module> import …``
 statements in ``runner.py`` and asserts every imported name is a
-``@primitive``-decorated function in its source module. Constants and
-dataclasses re-exported for back-compat with the legacy ``hpc_agent.runner``
-package surface (e.g. ``DEFAULT_AUTO_RETRY_POLICY``) are allow-listed
-explicitly with a one-line rationale each.
+``@primitive``-decorated function in its source module.
+
+History: the previous incarnation of this lint maintained a
+``_BACK_COMPAT_NONPRIMITIVES`` allow-list for legacy helpers re-exported
+through ``runner.py``. P1 + the post-P4 cleanup migrated every helper
+caller to canonical-home imports; the allow-list was retired in the
+same change. New cross-subject primitive surfaces should add themselves
+to ``runner.py`` by writing the ``@primitive`` decorator on the function
+in its canonical home — never as bare helpers.
 """
 
 from __future__ import annotations
@@ -26,19 +31,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 RUNNER_PY = REPO / "src" / "hpc_agent" / "runner.py"
-
-# Back-compat re-exports that are NOT primitives but were on the legacy
-# ``hpc_agent.runner`` package surface. Each entry must carry a rationale
-# (why it can't move) so the next reader knows why the exception exists.
-_BACK_COMPAT_NONPRIMITIVES: dict[str, str] = {
-    # The retry-policy framework default. Used by the failures atom +
-    # the resubmit flow; lives in ops/recover/runner_failures.py but
-    # is public-surface enough that the legacy import path is preserved.
-    "DEFAULT_AUTO_RETRY_POLICY": "ops.recover.runner_failures default policy dict",
-    "cluster_failures_by_fingerprint": "ops.recover.runner_failures helper",
-    # build_job_env: env-var augmentation helper from ops/submit/runner.py
-    "build_job_env": "ops.submit.runner helper (env augmentation)",
-}
 
 
 def main() -> int:
@@ -52,7 +44,6 @@ def main() -> int:
             continue
         if not node.module or not node.module.startswith("hpc_agent."):
             continue
-        # Re-import the source module; query each imported name.
         try:
             mod = importlib.import_module(node.module)
         except ImportError as exc:
@@ -64,17 +55,13 @@ def main() -> int:
             if obj is None:
                 violations.append(f"runner.py L{node.lineno}: {node.module}.{sym} resolves to None")
                 continue
-            is_primitive = getattr(obj, "_primitive_meta", None) is not None
-            if is_primitive:
-                continue
-            if sym in _BACK_COMPAT_NONPRIMITIVES:
+            if getattr(obj, "_primitive_meta", None) is not None:
                 continue
             violations.append(
-                f"runner.py L{node.lineno}: {node.module}.{sym} is neither a "
-                "@primitive nor a back-compat allow-list entry. "
-                "If it's a primitive, decorate it. If it's a helper, "
-                "either move it to infra/ (preferred) or add it to "
-                "_BACK_COMPAT_NONPRIMITIVES with a rationale."
+                f"runner.py L{node.lineno}: {node.module}.{sym} is not "
+                "an @primitive. Either decorate it as a primitive in its "
+                "canonical home, or move it to infra/ if it's a shared "
+                "helper. Bare back-compat re-exports are no longer permitted."
             )
 
     if violations:
