@@ -61,7 +61,7 @@ def main() -> int:
     # ``slash_command_assets``); the host's
     # ``spawn_prompt._procedure_body`` checks plugin overlays first
     # and falls back to the bundled ``hpc_agent/worker_prompts/<name>.md``.
-    from hpc_agent.atoms.spawn_prompt import _procedure_body
+    from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
 
     _procedure_body.cache_clear()
     body = _procedure_body("submit")
