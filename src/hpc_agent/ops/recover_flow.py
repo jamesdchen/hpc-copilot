@@ -9,7 +9,7 @@ expression" dance — diverging on which survival atoms fire and how
 overrides reach the scheduler.
 
 :func:`resubmit_flow` is the macro that closes the loop. It mirrors
-:func:`~hpc_agent.ops.submit.flow.submit_flow`'s shape —
+:func:`~hpc_agent.ops.submit_flow.submit_flow`'s shape —
 frozen result dataclass, keyword-only args, raises typed errors — and
 composes:
 
@@ -527,7 +527,7 @@ def _submit_one_batch(
 ) -> str:
     """Submit one batch with a precomputed array expression. Returns the job id.
 
-    Mirrors :func:`~hpc_agent.ops.submit.flow._make_single_array_submission`
+    Mirrors :func:`~hpc_agent.ops.submit_flow._make_single_array_submission`
     but accepts an arbitrary ``task_range`` (e.g., ``"3,7,12-14"``)
     instead of hardcoding ``"1-N"``, and threads ``extra_flags`` so the
     planner-adjusted overrides land on the qsub command line.

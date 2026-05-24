@@ -20,8 +20,8 @@ from unittest import mock
 import pytest
 
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
-from hpc_agent.ops.aggregate import flow as af_module
-from hpc_agent.ops.aggregate.flow import aggregate_flow
+from hpc_agent.ops import aggregate_flow as af_module
+from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.state import session
 from hpc_agent.state.runs import write_run_sidecar
 from hpc_agent.state.session import RunRecord, run_record

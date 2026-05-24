@@ -103,7 +103,7 @@ def _validate_ssh_target(ssh_target: str) -> str:
     """Adapt :func:`validate_ssh_target` to ``SpecInvalid`` for this
     flow's wire surface. The shared helper raises ``ValueError``; the
     submit flow surfaces ``SpecInvalid`` so the caller sees a typed
-    envelope error. Subject-private — ``ops/recover/flow.py`` does the
+    envelope error. Workflow-private — ``ops/recover_flow.py`` does the
     same inline at its single call site rather than reaching into
     submit's source tree.
     """

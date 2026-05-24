@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
-from hpc_agent.ops.monitor import flow as monitor_flow_module
-from hpc_agent.ops.monitor.flow import (
+from hpc_agent.ops import monitor_flow as monitor_flow_module
+from hpc_agent.ops.monitor_flow import (
     _MAX_ADAPTIVE_POLL_SECONDS,
     _UNCHANGED_POLLS_BEFORE_BACKOFF,
     monitor_flow,

@@ -3,7 +3,7 @@
 These author ``schemas/submit_flow.input.json`` and
 ``schemas/submit_flow.output.json`` via
 ``scripts/build_schemas.py``. The atom signature itself
-(``ops/submit/flow.py``) is still keyword-arg + frozen-dataclass
+(``ops/submit_flow.py``) is still keyword-arg + frozen-dataclass
 today; switching to consume ``SubmitFlowSpec`` directly is a
 follow-up to this canary.
 """

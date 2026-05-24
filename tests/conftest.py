@@ -114,7 +114,7 @@ def _register_primitives_once() -> None:
     where a test module's top-level imports trigger a primitive
     decorator whose ``composes=[...]`` uses string names \u2014 the
     registry must already be populated when that decoration runs.
-    Without it, e.g. ``from hpc_agent.ops.aggregate import flow``
+    Without it, e.g. ``from hpc_agent.ops import aggregate_flow``
     fails at collection with ``ValueError: composes references
     'poll-run-status' which is not a registered primitive``.
     """

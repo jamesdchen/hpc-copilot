@@ -22,8 +22,8 @@ from unittest import mock
 import pytest
 
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
-from hpc_agent.ops.aggregate import flow as af_module
-from hpc_agent.ops.aggregate.flow import (
+from hpc_agent.ops import aggregate_flow as af_module
+from hpc_agent.ops.aggregate_flow import (
     _incremental_include_patterns,
     aggregate_flow,
 )

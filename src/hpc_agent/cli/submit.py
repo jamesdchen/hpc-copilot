@@ -110,7 +110,7 @@ def cmd_submit_flow(args: argparse.Namespace) -> int:
     if isinstance(spec, dict) and isinstance(spec.get("specs"), list):
         return cmd_submit_flow_batch(args)
 
-    from hpc_agent.ops.submit.flow import submit_flow
+    from hpc_agent.ops.submit_flow import submit_flow
 
     # Surface --partial-ok at the CLI in addition to spec.partial_ok so a
     # caller can opt in via either path. Flag wins over spec when both
@@ -170,7 +170,7 @@ def cmd_submit_flow_batch(args: argparse.Namespace) -> int:
     a list of per-spec result records.
     """
     from hpc_agent._wire.workflows.submit_flow_batch import SubmitFlowBatchSpec
-    from hpc_agent.ops.submit.flow import submit_flow_batch
+    from hpc_agent.ops.submit_flow import submit_flow_batch
 
     raw = _load_spec(args.spec, schema_name=None)
     # Wrapper-shape validation (object with `specs` array, per-entry

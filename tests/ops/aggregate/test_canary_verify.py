@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.ops.aggregate.canary_verify``.
+"""Tests for ``hpc_agent.ops.verify_canary``.
 
 verify_canary is a workflow atom that wraps a polling SSH loop, so we
 mock ``_ssh_status_report`` / ``fetch_task_logs`` /
@@ -31,7 +31,7 @@ def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch: pytest.MonkeyPatch):
     """Skip time.sleep so the polling loop runs at memory speed."""
-    monkeypatch.setattr("hpc_agent.ops.aggregate.canary_verify.time.sleep", lambda _: None)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.sleep", lambda _: None)
 
 
 def _seed_canary(experiment: Path, run_id: str = "r1-canary") -> RunRecord:
@@ -52,7 +52,7 @@ def _seed_canary(experiment: Path, run_id: str = "r1-canary") -> RunRecord:
 
 
 def test_happy_path_no_failure_markers(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
     with (
@@ -71,7 +71,7 @@ def test_happy_path_no_failure_markers(tmp_path: Path, journal_home: Path) -> No
 
 
 def test_dispatcher_failed_marker(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
     with (
@@ -91,7 +91,7 @@ def test_dispatcher_failed_marker(tmp_path: Path, journal_home: Path) -> None:
 
 
 def test_traceback_marker(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
     with (
@@ -112,7 +112,7 @@ def test_traceback_marker(tmp_path: Path, journal_home: Path) -> None:
 
 def test_import_error_more_specific_than_traceback(tmp_path: Path, journal_home: Path) -> None:
     """ImportError should be reported as import_error, not generic traceback."""
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
     with (
@@ -135,7 +135,7 @@ def test_import_error_more_specific_than_traceback(tmp_path: Path, journal_home:
 
 
 def test_oom_killed(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
     with (
@@ -153,7 +153,7 @@ def test_oom_killed(tmp_path: Path, journal_home: Path) -> None:
 
 
 def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     _seed_canary(tmp_path)
     with (
@@ -181,14 +181,14 @@ def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_h
 
 
 def test_no_journal_record_raises(tmp_path: Path, journal_home: Path) -> None:
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     with pytest.raises(errors.SpecInvalid, match="no journal record"):
         verify_canary(tmp_path, canary_run_id="missing")
 
 
 def test_empty_canary_run_id_raises(tmp_path: Path) -> None:
-    from hpc_agent.ops.aggregate.canary_verify import verify_canary
+    from hpc_agent.ops.verify_canary import verify_canary
 
     with pytest.raises(errors.SpecInvalid, match="canary_run_id"):
         verify_canary(tmp_path, canary_run_id="")

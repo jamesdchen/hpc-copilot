@@ -128,7 +128,7 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     -------
     A dict matching ``schemas/submit_flow.input.json``, validated
     before return. Pass it straight to
-    :func:`hpc_agent.ops.submit.flow.submit_flow` or write it to a
+    :func:`hpc_agent.ops.submit_flow.submit_flow` or write it to a
     JSON file and call ``hpc-agent submit-flow --spec <file>``.
 
     Raises

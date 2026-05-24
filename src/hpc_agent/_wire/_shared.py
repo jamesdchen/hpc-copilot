@@ -127,7 +127,7 @@ FailureCategory = Literal[
 # cluster qsub already fired. Plus ``"preempted"`` (a scheduler-level
 # state, not a stderr-fingerprint match) — the agent may call resubmit
 # with category="preempted" when the cluster bumped a campus user. This
-# Literal is the SoT for ``ops.recover.flow._VALID_CATEGORIES`` (derived
+# Literal is the SoT for ``ops.recover_flow._VALID_CATEGORIES`` (derived
 # via ``typing.get_args``).
 FailureCategoryResubmittable = Literal[
     "gpu_oom",

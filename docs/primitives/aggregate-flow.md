@@ -25,7 +25,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]
-  python: hpc_agent.ops.aggregate.flow.aggregate_flow
+  python: hpc_agent.ops.aggregate_flow.aggregate_flow
 ---
 
 ## Purpose

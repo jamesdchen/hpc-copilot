@@ -14,11 +14,13 @@ Two roles:
    This module re-exports the previous public surface from the new homes
    so those callers keep working.
 
-2. **Cross-subject primitive bridge** — when a workflow primitive needs
-   to *call* a primitive from another subject (e.g.
-   ``ops/monitor/flow.py`` calls ``combine_wave`` from ``ops/aggregate/``),
-   the subject-imports lint correctly flags a direct
+2. **Cross-subject primitive bridge** — when code inside a subject (e.g.
+   an atom in ``ops/recover/``) needs to *call* a primitive from another
+   subject, the subject-imports lint correctly flags a direct
    ``from hpc_agent.ops.X.Y import ...`` as a cross-subject reach.
+   (Workflows post-P5a live at the ``ops/`` and ``meta/`` role roots
+   as sibling files, so workflow-to-atom calls no longer need this
+   bridge — workflows import atoms directly.)
    The principled escape hatch is to route the call through this module:
    it lives at the package root (not inside any subject) so the lint
    permits the import. Conceptually it mirrors what the registry already

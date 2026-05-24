@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
-from hpc_agent.ops.recover.flow import (
+from hpc_agent.ops.recover_flow import (
     render_overrides_to_extra_flags,
     resubmit_flow,
 )

@@ -10,7 +10,7 @@ and is readable, the requested wall-time / array size fits the
 self-QoS limit, stochastic experiments carry the seed marker, and the
 requested walltime is sane against the cluster's historical
 distribution. The composite `validate-campaign` workflow (which lives
-in `meta/campaign/validate.py`) runs every applicable validator and
+in `meta/validate_campaign.py`) runs every applicable validator and
 aggregates findings into one envelope; per-skill flows pick individual
 validators à la carte.
 
@@ -31,7 +31,7 @@ A validator that crashes is itself a finding (`validator_crashed`).
 
 ## Composition with `validate-campaign`
 
-`meta/campaign/validate.py` calls four of these (input_dataset,
+`meta/validate_campaign.py` calls four of these (input_dataset,
 stochastic_marker, walltime_against_history, executor_signatures) by
 routing through `hpc_agent.runner` (the cross-subject primitive
 bridge — see the architecture doc's "Cross-subject composition"

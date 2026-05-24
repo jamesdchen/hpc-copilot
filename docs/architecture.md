@@ -28,12 +28,12 @@ rules.
 │  Workflow primitives (verb="workflow" — multi-step orchestration    │
 │  composed declaratively via @primitive(composes=[...]))             │
 │                                                                     │
-│  ops/submit/flow.py        submit-flow                              │
-│  ops/monitor/flow.py       monitor-flow                             │
-│  ops/aggregate/flow.py     aggregate-flow                           │
-│  ops/aggregate/canary_verify.py  verify-canary                      │
-│  ops/recover/flow.py       recover-flow                             │
-│  meta/campaign/validate.py validate-campaign                        │
+│  ops/submit_flow.py        submit-flow                              │
+│  ops/monitor_flow.py       monitor-flow                             │
+│  ops/aggregate_flow.py     aggregate-flow                           │
+│  ops/verify_canary.py      verify-canary                            │
+│  ops/recover_flow.py       recover-flow                             │
+│  meta/validate_campaign.py validate-campaign                        │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -41,23 +41,24 @@ rules.
 │  classifiers). No cross-subject imports; see "Cross-subject         │
 │  composition" below.                                                │
 │                                                                     │
-│  ops/        operational subjects                                   │
-│   ├ aggregate/  combine, canary_verify, cluster_reduce,             │
-│   │            invariants, flow, runner                             │
+│  ops/        operational subjects (atoms only — workflows sit at    │
+│              ops/ root as sibling files; see above)                 │
+│   ├ aggregate/  combine, cluster_reduce, invariants, runner         │
 │   ├ clusters/   list, describe                                      │
 │   ├ memory/     recall, interview                                   │
-│   ├ monitor/    flow, status, reconcile, logs, list_in_flight,      │
-│   │            arm, summary, update_constraints, logs_atom          │
+│   ├ monitor/    status, reconcile, logs, list_in_flight, arm,       │
+│   │            summary, update_constraints, logs_atom               │
 │   ├ preflight/  check                                               │
-│   ├ recover/    flow, runner, batching, failure_signatures,         │
+│   ├ recover/    runner, batching, failure_signatures,               │
 │   │            failures_atom, runner_failures                       │
-│   ├ submit/     flow, runner, plan_summary, plan_throughput,        │
+│   ├ submit/     runner, plan_summary, plan_throughput,              │
 │   │            recommend_partition                                  │
 │   └ validate/   executor_signatures, input_dataset, self_qos_limit, │
 │                stochastic_marker, walltime_against_history          │
 │                                                                     │
-│  meta/       "operations about operations"                          │
-│   └ campaign/   driver, cursor, dirs, manifest, validate, atoms/    │
+│  meta/       "operations about operations" — workflows at root,     │
+│              subject dirs hold atoms                                │
+│   └ campaign/   driver, cursor, dirs, manifest, atoms/              │
 │                (atoms/ holds advance, budget, converged, init,      │
 │                health, list_campaigns, load_context, replay,        │
 │                status — the per-tick steps load-context spawns)     │
@@ -360,10 +361,16 @@ patterns, in order of preference:
    the live registry. This is purely metadata and stays lint-clean.
 
 3. **Callable cross-subject composition → `hpc_agent.runner`.**
-   When a workflow primitive needs to *call* a primitive from another
-   subject (e.g. `ops/monitor/flow.py` calling `combine_wave` from
-   `ops/aggregate/`), routing the call through `hpc_agent.runner`
-   is the principled escape hatch. That module lives at the package
+   When code inside a subject (e.g. an atom in `ops/recover/`) needs
+   to call a primitive from another subject, routing the call through
+   `hpc_agent.runner` is the principled escape hatch.
+
+   Note: post-P5a, workflows live at the `ops/` and `meta/` role roots
+   as sibling files (`ops/aggregate_flow.py`, `meta/validate_campaign.py`)
+   rather than inside subject dirs, so workflow-to-atom cross-subject
+   calls no longer need this bridge — workflows can import atoms
+   directly. `hpc_agent.runner` remains for legitimate atom-to-atom
+   cross-subject calls and as a back-compat surface. That module lives at the package
    root (not inside any subject), so the subject-imports lint
    permits the import. Conceptually it mirrors what `composes=` does
    at the metadata layer — `composes=["combine-wave"]` is the
