@@ -57,11 +57,11 @@ def test_happy_path_no_failure_markers(tmp_path: Path, journal_home: Path) -> No
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "hpc_agent.ops.monitor.status.ssh_status_report",
+            "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "hpc_agent.ops.monitor.logs.fetch_task_logs",
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
         ),
     ):
@@ -76,11 +76,11 @@ def test_dispatcher_failed_marker(tmp_path: Path, journal_home: Path) -> None:
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "hpc_agent.ops.monitor.status.ssh_status_report",
+            "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.ops.monitor.logs.fetch_task_logs",
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "[dispatch] FAILED (exit 1)\n"}],
         ),
     ):
@@ -96,11 +96,11 @@ def test_traceback_marker(tmp_path: Path, journal_home: Path) -> None:
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "hpc_agent.ops.monitor.status.ssh_status_report",
+            "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.ops.monitor.logs.fetch_task_logs",
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
             return_value=[
                 {"task_id": 0, "content": 'Traceback (most recent call last):\n  File "..."\n'}
             ],
@@ -117,11 +117,11 @@ def test_import_error_more_specific_than_traceback(tmp_path: Path, journal_home:
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "hpc_agent.ops.monitor.status.ssh_status_report",
+            "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.ops.monitor.logs.fetch_task_logs",
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
             return_value=[
                 {
                     "task_id": 0,
@@ -140,11 +140,11 @@ def test_oom_killed(tmp_path: Path, journal_home: Path) -> None:
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "hpc_agent.ops.monitor.status.ssh_status_report",
+            "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={"summary": {"complete": 0, "running": 0, "pending": 0, "failed": 1}},
         ),
         mock.patch(
-            "hpc_agent.ops.monitor.logs.fetch_task_logs",
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "Out of memory: kill process\n"}],
         ),
     ):
@@ -158,11 +158,11 @@ def test_missing_output_when_expect_output_not_present(tmp_path: Path, journal_h
     _seed_canary(tmp_path)
     with (
         mock.patch(
-            "hpc_agent.ops.monitor.status.ssh_status_report",
+            "hpc_agent.infra.cluster_status.ssh_status_report",
             return_value={"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}},
         ),
         mock.patch(
-            "hpc_agent.ops.monitor.logs.fetch_task_logs",
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
             return_value=[{"task_id": 0, "content": "[dispatch] OK\n"}],
         ),
         mock.patch(
