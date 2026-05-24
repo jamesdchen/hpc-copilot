@@ -101,7 +101,8 @@ in a single pass once every module has been imported.
 
 ### 5. CLI handler (only if exposing a new subcommand)
 
-In `src/hpc_agent/agent_cli.py`:
+In the appropriate `src/hpc_agent/cli/<module>.py` (e.g. `cli/submit.py`,
+`cli/lifecycle.py`):
 
 ```python
 def cmd_<name>(args: argparse.Namespace) -> int:

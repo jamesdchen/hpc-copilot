@@ -79,8 +79,8 @@ def test_cmd_run_success_envelope(
     import argparse
     import json
 
-    from hpc_agent import agent_cli
     from hpc_agent._wire.spawn_contract import WorkerReport
+    from hpc_agent.cli.spawn import cmd_run
 
     report = WorkerReport(result={"run_id": "r1"}, anomalies="")
     # cmd_run does `from hpc_agent._kernel.lifecycle.run import run_workflow`
@@ -89,9 +89,7 @@ def test_cmd_run_success_envelope(
         "hpc_agent._kernel.lifecycle.run.run_workflow",
         lambda **kwargs: (report, 0),
     )
-    rc = agent_cli.cmd_run(
-        argparse.Namespace(workflow="submit", experiment_dir=Path("."), fields_json="{}")
-    )
+    rc = cmd_run(argparse.Namespace(workflow="submit", experiment_dir=Path("."), fields_json="{}"))
     assert rc == 0
     env = json.loads(capsys.readouterr().out.strip())
     assert env["ok"] is True

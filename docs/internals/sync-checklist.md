@@ -135,7 +135,7 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 
 - **Documented in**: `docs/reference/cli-spec.md` ("Exit code → error_code
   mapping" section).
-- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `hpc_agent/agent_cli.py`.
+- **Source of truth**: `_EXIT_CODE_BY_CATEGORY` in `hpc_agent/cli/_helpers.py`.
 
 ### Last-status cache file
 

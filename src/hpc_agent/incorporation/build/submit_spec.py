@@ -226,9 +226,9 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
 def _validate(spec: dict[str, Any]) -> None:
     """Schema-validate *spec*. Raises :class:`errors.SpecInvalid` on miss.
 
-    Inline rather than going through agent_cli's helper so the primitive
-    works headless (a non-Claude-Code orchestrator wouldn't import the
-    CLI module).
+    Inline rather than going through the CLI adapter helper so the
+    primitive works headless (a non-Claude-Code orchestrator wouldn't
+    import the CLI module).
     """
     try:
         import jsonschema  # type: ignore[import-untyped]

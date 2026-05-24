@@ -1,4 +1,4 @@
-"""Cross-validation: agent_cli ``_meta_idempotent`` vs the catalog.
+"""Cross-validation: cli._helpers ``_meta_idempotent`` vs the catalog.
 
 B4 rewire guard. Asserts:
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from hpc_agent._kernel.registry.operations import operations_catalog
-from hpc_agent.agent_cli import _meta_idempotent
+from hpc_agent.cli._helpers import _meta_idempotent
 
 
 def test_meta_idempotent_matches_catalog() -> None:

@@ -14,8 +14,9 @@ of the engine subpackages (``runner/``, ``planning/``, ``state/``,
 Decorate that function directly with ``@primitive(...)``.
 
 Some primitives have no inner Python helper — their behavior lives in
-the ``cmd_*`` dispatcher in ``agent_cli.py`` (e.g. ``capabilities``,
-``check-preflight``). For those, decorate the ``cmd_*`` function. The
+the ``cmd_*`` dispatchers under ``hpc_agent/cli/`` (e.g.
+``capabilities``, ``check-preflight``). For those, decorate the
+``cmd_*`` function. The
 registry treats both shapes uniformly; downstream consumers should not
 assume ``meta.func`` is always at the primitives layer.
 

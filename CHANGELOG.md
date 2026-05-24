@@ -9,6 +9,46 @@ on the wire surface enumerated in
 
 ## 0.6.0 — 2026-05-24
 
+### Removed — `hpc_agent.agent_cli` back-compat shim (BREAKING)
+
+The CLI orchestrator and per-domain ``cmd_*`` adapters moved out of
+``hpc_agent/agent_cli.py`` during the PR-5c decomposition into
+``hpc_agent.cli.<domain>``. The original module was kept as a re-export
+shim so the ``hpc-agent-pro`` plugin and a handful of legacy import
+sites kept working. 0.6.0 deletes the shim.
+
+External integrators using ``from hpc_agent.agent_cli import X`` (or
+``from hpc_agent import agent_cli`` + ``agent_cli.X``) need to import
+from the canonical submodule directly. Mapping:
+
+- ``_EXIT_CODE_BY_CATEGORY``, ``EXIT_CLUSTER_ERROR``, ``EXIT_INTERNAL``,
+  ``EXIT_OK``, ``EXIT_USER_ERROR``, ``_add_experiment_dir``,
+  ``_add_run_id``, ``_add_spec_and_dry_run``, ``_emit``, ``_err``,
+  ``_err_from_hpc``, ``_load_spec``, ``_meta_idempotent``, ``_ok``,
+  ``_require_ssh_agent``, ``_validate_against_schema``
+  → ``hpc_agent.cli._helpers``
+- ``cmd_aggregate``
+  → ``hpc_agent.cli.aggregate``
+- ``_VERB_GROUPS``, ``_live_subcommands``, ``_print_group_help``,
+  ``_strip_verb_group``, ``build_parser``, ``cmd_logs``, ``main``
+  → ``hpc_agent.cli.dispatch``
+- ``_preempted_summary_from_sidecar``, ``cmd_status``
+  → ``hpc_agent.cli.lifecycle``
+- ``_VALID_RESUBMIT_CATEGORIES``, ``cmd_resubmit``
+  → ``hpc_agent.cli.recover``
+- ``cmd_capabilities``, ``cmd_describe``, ``cmd_install_commands``,
+  ``cmd_setup``
+  → ``hpc_agent.cli.setup``
+- ``cmd_run``
+  → ``hpc_agent.cli.spawn``
+- ``cmd_submit``, ``cmd_submit_flow``, ``cmd_submit_flow_batch``
+  → ``hpc_agent.cli.submit``
+- ``_last_status_age_seconds``
+  → ``hpc_agent.ops.monitor.list_in_flight``
+
+The ``hpc-agent`` console-script entry point (``pyproject.toml``)
+already targets ``hpc_agent.cli.dispatch:main`` — no change there.
+
 ### Removed — `hpc_agent.state.session` back-compat barrel (BREAKING)
 
 The Wave-4 reorg split `hpc_agent.state.session` into three canonical

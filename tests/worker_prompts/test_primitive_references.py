@@ -19,9 +19,9 @@ from hpc_agent._kernel.registry.operations import operations_catalog
 from hpc_agent._wire.spawn_contract import WORKFLOW_PROCEDURES
 
 # CLI verbs that are real subcommands but not @primitive-registered
-# operations — agent_cli ships them outside the registry. Keep this
-# list tight; every entry is a hand-maintained exception to the
-# operations-catalog cross-check.
+# operations — the CLI dispatcher ships them outside the registry.
+# Keep this list tight; every entry is a hand-maintained exception to
+# the operations-catalog cross-check.
 _CLI_VERBS_NOT_PRIMITIVES: frozenset[str] = frozenset(
     {
         "describe",

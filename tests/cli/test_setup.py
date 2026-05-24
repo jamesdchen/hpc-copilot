@@ -35,7 +35,7 @@ def _run_setup(
     experiment_dir: str | None = None,
 ) -> dict:
     """Invoke ``cmd_setup`` in-process; return the parsed envelope."""
-    from hpc_agent.agent_cli import cmd_setup
+    from hpc_agent.cli.setup import cmd_setup
 
     args = argparse.Namespace(
         claude_dir=str(isolated_dirs / "claude"),

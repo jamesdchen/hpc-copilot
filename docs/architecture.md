@@ -19,7 +19,7 @@ rules.
 │  user-typed entry points         agent-callable workflows           │
 │  (thin redirects to skills)      (one SKILL.md per workflow)        │
 │                                  ↓                                  │
-│  agent_cli.py (`hpc-agent` console script — main())                 │
+│  cli/dispatch.py (`hpc-agent` console script — main())              │
 │    └ delegates to cli/parser.py + cli/_dispatch.py                  │
 │  argparse + verb groups (validate/build/clusters) + flat aliases    │
 └──────────────────────────────────┬──────────────────────────────────┘
@@ -95,12 +95,12 @@ rules.
 │   ├ backends/  sge, slurm      ├ journal.py     per-run journal     │
 │   ├ inspect/   qstat/scontrol  ├ run_record.py  RunRecord shape     │
 │   ├ clusters.py  YAML loader   ├ index.py       discovery index     │
-│   ├ gpu.py    GPU selection    ├ session/       SessionContext      │
-│   ├ throughput.py   planner    ├ discover.py    executor discovery  │
-│   ├ constraints.py             ├ runtime_prior  walltime/n_samples  │
-│   ├ cluster_status.py SSH      ├ stages.py      multi-stage DAG     │
-│   ├ cluster_logs.py   tail     ├ axes.py        axis manifest       │
-│   ├ time.py   canonical UTC    └ user_profiles  per-user knobs      │
+│   ├ gpu.py    GPU selection    ├ discover.py    executor discovery  │
+│   ├ throughput.py   planner    ├ runtime_prior  walltime/n_samples  │
+│   ├ constraints.py             ├ stages.py      multi-stage DAG     │
+│   ├ cluster_status.py SSH      ├ axes.py        axis manifest       │
+│   ├ cluster_logs.py   tail     └ user_profiles  per-user knobs      │
+│   ├ time.py   canonical UTC                                         │
 │   ├ io.py     atomic flock                                          │
 │   ├ parsing.py                                                      │
 │   └ cache.py                                                        │
@@ -284,7 +284,7 @@ fails CI. Editing a `@primitive(...)` decorator without re-running
 
 ## CLI surface
 
-`hpc-agent` (entry point: `hpc_agent.agent_cli:main`, per
+`hpc-agent` (entry point: `hpc_agent.cli.dispatch:main`, per
 `pyproject.toml`) exposes every primitive as a subcommand. The
 parser is built by walking the registry — each primitive's `cli=`
 field is a `CliShape` consumed by `hpc_agent.cli._dispatch`. Tier-3
@@ -293,9 +293,7 @@ verbs that don't have a `@primitive` backing (`run`, `capabilities`,
 `register(sub)` function in `cli/<module>.py` and are aggregated by
 `cli/parser.py`. The `cli/main.py` module re-exports `main` so
 external callers can `from hpc_agent.cli import main`; the canonical
-entry remains `hpc_agent.agent_cli:main` (decomposition into
-`cli/dispatch.py` is in flight but `pyproject.toml` still points at
-`agent_cli`).
+entry is `hpc_agent.cli.dispatch:main`.
 
 Subcommands can be invoked flat (`hpc-agent validate-campaign ...`)
 or under a verb group (`hpc-agent validate validate-campaign ...`);

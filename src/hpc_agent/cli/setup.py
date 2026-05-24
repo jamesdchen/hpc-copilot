@@ -18,10 +18,6 @@ into the parent subparser.
 * ``describe`` — 3-source resolution (procedure → skill → primitive);
   the branching reads from package data, not from a single primitive
   call.
-
-Re-exported from :mod:`hpc_agent.agent_cli` so existing imports
-(``from hpc_agent.agent_cli import cmd_setup``) and tests + plugins
-keep resolving.
 """
 
 from __future__ import annotations
@@ -108,10 +104,9 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
         sys.stdout.flush()
         return EXIT_OK
 
-    # Lazy-import to avoid a circular import: dispatch imports from this
-    # module (the back-compat re-export at the bottom) and
-    # _live_subcommands() walks the argparse tree built by
-    # hpc_agent.cli.parser.
+    # Lazy-import to avoid a circular import: _live_subcommands() walks
+    # the argparse tree built by hpc_agent.cli.parser, which transitively
+    # imports this module to wire setup's verbs into the tree.
     from hpc_agent.cli.dispatch import _live_subcommands
 
     _ok(capabilities(subcommands=_live_subcommands()), name="capabilities")

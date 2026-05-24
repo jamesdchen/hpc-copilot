@@ -111,7 +111,7 @@ def record_interview(
 
     Returns the envelope ``data`` block from ``schemas/interview.output.json``.
 
-    Raises ``ValueError`` (mapped by the agent_cli adapter to spec_invalid):
+    Raises ``ValueError`` (mapped by the CLI adapter to spec_invalid):
     - validate mode: tasks.py missing from campaign_dir
     - either mode: ``tasks.total() != intent.task_count``
     - either mode: ``tasks.total() < 1``

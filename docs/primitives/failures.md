@@ -55,7 +55,7 @@ Re-poll status, fetch stderr for every failed task, and group them by
 fingerprint so 40 failures with the same root cause show up as one
 cluster instead of 40 logs to read. Each cluster carries an inferred
 `category` from the canonical failure-category vocabulary (see
-`hpc_agent/agent_cli.py::_VALID_RESUBMIT_CATEGORIES`).
+`hpc_agent/cli/recover.py::_VALID_RESUBMIT_CATEGORIES`).
 
 When an auto-retry policy is configured for the run, each cluster is
 annotated with which task ids are still eligible for an automated

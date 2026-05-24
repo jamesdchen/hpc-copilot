@@ -23,7 +23,7 @@ from __future__ import annotations
 import pytest
 
 from hpc_agent._kernel.registry.operations import operations_catalog
-from hpc_agent.agent_cli import build_parser
+from hpc_agent.cli.dispatch import build_parser
 
 # Primitives whose CLI verb differs from their catalog name. Each entry
 # is a deliberate alias documented at the relevant adapter.

@@ -10,7 +10,7 @@ points ``handler`` at this function via a lazy lookup; the dispatcher
 delegates entirely once it sees ``handler is not None``.
 
 Helpers come from :mod:`hpc_agent.cli._helpers` (the adapter SDK) so
-the module has no dependency on ``agent_cli`` — that import direction
+the module has no dependency on the dispatcher — that import direction
 would re-introduce the cycle the migration is unwinding.
 """
 

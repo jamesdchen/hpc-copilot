@@ -159,9 +159,9 @@ class RecallResult(BaseModel):
     pre-computes cross-campaign aggregations.
 
     The outer ``{ok, data}`` envelope is supplied by ``_ok`` in
-    ``agent_cli.py``; the shipped ``recall.output.json`` matches THIS
-    data-block shape, not the envelope (every other primitive's
-    Result/Data model follows the same convention).
+    ``hpc_agent.cli._helpers``; the shipped ``recall.output.json``
+    matches THIS data-block shape, not the envelope (every other
+    primitive's Result/Data model follows the same convention).
     """
 
     model_config = ConfigDict(extra="forbid", title="recall output")

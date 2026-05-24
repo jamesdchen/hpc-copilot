@@ -17,33 +17,10 @@ from hpc_agent import __version__
 # (substring, relative_module, remove_in, hint)
 _FORWARDERS: list[tuple[str, str, str, str]] = [
     (
-        "_SKILL_NAMES",
-        "agent_cli.py",
-        "0.4.0",
-        "drop the back-compat re-export; tests should import "
-        "from hpc_agent._kernel.extension.capabilities directly",
-    ),
-    (
-        "_resolve_auto_retry",
-        "agent_cli.py",
-        "0.4.0",
-        "drop the back-compat re-export; tests should import "
-        "from hpc_agent.ops.recover.failures_atom directly",
-    ),
-    (
         "HPC_SUBDIR",
         "__init__.py",
         "0.4.0",
         "drop the back-compat forwarder; callers should use RepoLayout(experiment_dir).hpc",
-    ),
-    (
-        "data.errors",  # B3 legacy partial-errors shape
-        "agent_cli.py",
-        "0.4.0",
-        "strip the legacy ``errors`` key from snap.to_dict() now that "
-        "B3 partial_errors is the wire contract — pushed from 0.3.0 to "
-        "0.4.0 because removing the field is itself a wire-shape "
-        "breaking change and warrants its own tagged release",
     ),
 ]
 

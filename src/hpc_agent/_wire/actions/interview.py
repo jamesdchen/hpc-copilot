@@ -277,8 +277,8 @@ class InterviewResult(BaseModel):
     operator before submit.
 
     The outer ``{ok, data}`` envelope is supplied by ``_ok`` in
-    ``agent_cli.py``; the shipped ``interview.output.json`` matches
-    THIS data-block shape, not the envelope.
+    ``hpc_agent.cli._helpers``; the shipped ``interview.output.json``
+    matches THIS data-block shape, not the envelope.
     """
 
     model_config = ConfigDict(extra="forbid", title="interview output")

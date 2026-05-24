@@ -57,8 +57,8 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_agent import agent_cli
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
+from hpc_agent.cli.dispatch import main as _cli_main
 from hpc_agent.ops.recover.runner_failures import (
     DEFAULT_AUTO_RETRY_POLICY,
     annotate_clusters_with_retry_advice,
@@ -338,7 +338,7 @@ def test_error_code_remote_command_failed_when_ssh_returns_nonzero(
         patch("hpc_agent.infra.remote.ssh_run", return_value=fake_ssh),
         patch("hpc_agent.cli._helpers._emit", side_effect=_capture),
     ):
-        rc = agent_cli.main(["status", "--experiment-dir", str(tmp_path), "--run-id", run_id])
+        rc = _cli_main(["status", "--experiment-dir", str(tmp_path), "--run-id", run_id])
 
     assert rc == 2, f"remote_command_failed maps to cluster category (exit 2); got {rc}"
     assert captured, "no envelope emitted"

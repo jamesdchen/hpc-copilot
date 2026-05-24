@@ -208,7 +208,7 @@ class ClusterPartiallyDegraded(HpcError):
     operation succeeded with partial data.
 
     Carries a ``partial_errors`` list attribute of ``{code, detail}``
-    dicts so the agent_cli can surface the per-source failures to the
+    dicts so the CLI dispatcher can surface the per-source failures to the
     envelope's top-level ``partial_errors`` key. The operation that
     raises this still set ok:true cluster-side; the exception is the
     typed channel for surfacing what was missed.
