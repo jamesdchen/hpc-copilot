@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
 from hpc_agent._internal import session
-from hpc_agent._internal.primitive import SideEffect, primitive
+from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.ops.monitor.logs import fetch_task_logs

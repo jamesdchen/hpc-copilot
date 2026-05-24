@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 
@@ -168,8 +168,8 @@ def write_preflight_marker(*, cluster: str, experiment_dir: Path | None = None) 
     consults. Setup is therefore typically run from inside the
     experiment directory.
     """
-    from hpc_agent._internal.io import atomic_write_json
-    from hpc_agent._internal.layout import JournalLayout
+    from hpc_agent._kernel.contract.layout import JournalLayout
+    from hpc_agent.infra.io import atomic_write_json
 
     layout = JournalLayout(experiment_dir or Path.cwd())
     marker = layout.preflight_marker(cluster)

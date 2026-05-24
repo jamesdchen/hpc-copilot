@@ -145,7 +145,7 @@ def test_campaign_status_envelope_validates_against_schema(tmp_path: Path) -> No
     )
     assert rc == 0
     env = _parse_envelope(out)
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     _validate(env["data"], schema)
 
@@ -159,6 +159,6 @@ def test_campaign_list_envelope_validates_against_schema(tmp_path: Path) -> None
     rc, out, _ = _run_cli("campaign", "list", "--experiment-dir", str(tmp_path))
     assert rc == 0
     env = _parse_envelope(out)
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     _validate(env["data"], schema)

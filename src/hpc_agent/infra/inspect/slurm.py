@@ -11,7 +11,6 @@ import re
 import shlex
 from typing import Any
 
-from hpc_agent._internal.time import utcnow_iso
 from hpc_agent.infra.parsing import (
     parse_mem_to_gb as _parse_mem_to_gb,
 )
@@ -27,6 +26,7 @@ from hpc_agent.infra.parsing import (
 from hpc_agent.infra.parsing import (
     to_int_or_none as _to_int_or_none,
 )
+from hpc_agent.infra.time import utcnow_iso
 
 from ._common import (
     ClusterSnapshot,

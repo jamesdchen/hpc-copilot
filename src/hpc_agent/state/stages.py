@@ -65,7 +65,7 @@ def validate_stages(stages: list[dict[str, Any]]) -> None:
     ValueError
         If names collide or ``depends_on`` references an unknown stage.
     """
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     _validate(stages, stages_schema())
     names = [s["name"] for s in stages]

@@ -72,7 +72,7 @@ def _meta_idempotent(name: str) -> bool:
     in tests/test_idempotency.py guards against silent drift).
     """
     try:
-        from hpc_agent._internal.operations import operations_catalog
+        from hpc_agent._kernel.registry.operations import operations_catalog
 
         for entry in operations_catalog():
             if entry.get("name") == name:
@@ -112,7 +112,7 @@ def _ok(
     if idempotent is None:
         idempotent = _meta_idempotent(name) if name else True
     if name:
-        from hpc_agent._internal.schema import validate_output
+        from hpc_agent._kernel.contract.schema import validate_output
 
         validate_output(data, name)
     env: dict[str, Any] = {"ok": True, "idempotent": idempotent, "data": data}
@@ -252,7 +252,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     Cross-file ``$ref`` (rare post-Pydantic-migration — most
     schemas are now self-contained with constraints inlined from
     :mod:`hpc_agent._schema_models._shared`) resolves through the
-    shared registry in :mod:`hpc_agent._internal.schema`.
+    shared registry in :mod:`hpc_agent._kernel.contract.schema`.
     """
     try:
         import jsonschema  # type: ignore[import-untyped]  # noqa: F401
@@ -276,7 +276,7 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     try:
         _validate(payload, schema)

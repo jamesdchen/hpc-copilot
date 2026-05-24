@@ -1,4 +1,4 @@
-"""Tests for :mod:`hpc_agent._internal.version`.
+"""Tests for :mod:`hpc_agent._kernel.extension.version`.
 
 The manifest is the cross-domain source of truth for supported schema
 versions. These tests check three things:
@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._internal import version
+from hpc_agent._kernel.extension import version
 
 
 def test_compatibility_check_silent_on_supported() -> None:

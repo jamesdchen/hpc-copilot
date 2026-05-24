@@ -18,8 +18,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal.io import atomic_locked_update
-from hpc_agent._internal.time import utcnow_iso
+from hpc_agent.infra.io import atomic_locked_update
+from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.meta.campaign.dirs import campaign_dir
 
 if TYPE_CHECKING:

@@ -259,7 +259,7 @@ class SchemaIncompat(HpcError):
     """An on-disk JSON file declared a ``schema_version`` outside our
     supported range for that domain.
 
-    Raised by :func:`hpc_agent._internal.version.compatibility_check` so the
+    Raised by :func:`hpc_agent._kernel.extension.version.compatibility_check` so the
     five readers in the codebase (session, blacklist, runtime_prior,
     calibration prediction, status rollup, per-run sidecar) all surface
     the same error code.

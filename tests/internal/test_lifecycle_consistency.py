@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import typing
 
-from hpc_agent._internal.lifecycle import (
+from hpc_agent._kernel.lifecycle.lifecycle import (
     TERMINAL_STATUSES,
     JournalStatus,
     LifecycleState,

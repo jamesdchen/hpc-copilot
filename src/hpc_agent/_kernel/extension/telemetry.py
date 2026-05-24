@@ -38,7 +38,7 @@ Why we don't migrate ``dispatch.py`` / ``combiner.py``
 
 Those modules execute on the cluster where the framework package is
 not installed (they ship as standalone Python files inside the
-``.hpc/`` payload). Importing :mod:`hpc_agent._internal.telemetry` would
+``.hpc/`` payload). Importing :mod:`hpc_agent._kernel.extension.telemetry` would
 break that constraint. They keep their existing
 ``print(..., stderr)`` calls; if a future callsite needs JSONL it
 should inline a tiny ``_record`` helper rather than pull in this
@@ -53,7 +53,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal.io import advisory_flock
+from hpc_agent.infra.io import advisory_flock
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -69,7 +69,7 @@ _ENV_VAR = "HPC_TELEMETRY_SINK"
 def flock_append(target: Path):
     """Yield with an exclusive flock on a sibling ``.lock`` file for *target*.
 
-    Thin wrapper around :func:`hpc_agent._internal.io.advisory_flock`
+    Thin wrapper around :func:`hpc_agent.infra.io.advisory_flock`
     that derives the lock path (``<target>.lock``). Ensures all writers
     to ``<run_id>.monitor.jsonl`` serialise their appends — without the
     flock, a concurrent monitor_flow tick and slash-command poll can

@@ -72,7 +72,7 @@ def validate_axes(data: dict[str, Any]) -> None:
 
     Raises :class:`jsonschema.ValidationError` on any schema violation.
     """
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     _validate(data, axes_schema())
 
@@ -302,7 +302,7 @@ def pick_array_axis_warm(
         return None, "no axes.yaml or no axes enumeration"
 
     try:
-        from hpc_agent._internal.layout import RepoLayout
+        from hpc_agent._kernel.contract.layout import RepoLayout
     except ImportError:
         return None, "runtime_prior not importable"
 

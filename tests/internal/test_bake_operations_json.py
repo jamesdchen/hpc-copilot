@@ -24,8 +24,8 @@ import sys
 from pathlib import Path
 
 import hpc_agent
-from hpc_agent._internal.operations import operations_catalog
-from hpc_agent._internal.primitive import get_registry, register_primitives
+from hpc_agent._kernel.registry.operations import operations_catalog
+from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PACKAGE_ROOT = Path(hpc_agent.__file__).parent

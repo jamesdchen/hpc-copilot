@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-import hpc_agent._internal.invoke as invoke_mod
-from hpc_agent._internal.invoke import (
+import hpc_agent._kernel.lifecycle.invoke as invoke_mod
+from hpc_agent._kernel.lifecycle.invoke import (
     ClaudeCliInvoker,
     InvocationResult,
     RenderedPrompt,

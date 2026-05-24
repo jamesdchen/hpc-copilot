@@ -25,7 +25,7 @@ from importlib.resources import files as _resource_files
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._schema_models.actions.build_submit_spec import BuildSubmitSpecInput
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import validate_ssh_target
@@ -241,7 +241,7 @@ def _validate(spec: dict[str, Any]) -> None:
     except (FileNotFoundError, ModuleNotFoundError):
         return
     schema = json.loads(schema_text)
-    from hpc_agent._internal.schema import validate as _validate
+    from hpc_agent._kernel.contract.schema import validate as _validate
 
     try:
         _validate(spec, schema)

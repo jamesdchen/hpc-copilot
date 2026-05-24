@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from hpc_agent._internal.invoke import RenderedPrompt
+from hpc_agent._kernel.lifecycle.invoke import RenderedPrompt
 from hpc_agent._schema_models.spawn_contract import (
     DECISION_POINTS,
     SPAWN_KEY,
@@ -103,7 +103,7 @@ def _procedure_body(workflow: str) -> str:
     that — these are not skills. See
     ``docs/internals/skill-policy.md``.
     """
-    from hpc_agent._internal.plugins import plugin_worker_prompt_roots
+    from hpc_agent._kernel.registry.plugins import plugin_worker_prompt_roots
     from hpc_agent.worker_prompts import read_procedure
 
     for root in plugin_worker_prompt_roots():

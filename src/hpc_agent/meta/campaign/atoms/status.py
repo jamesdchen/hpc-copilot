@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent._internal import session
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 
 if TYPE_CHECKING:

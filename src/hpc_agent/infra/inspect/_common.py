@@ -13,8 +13,8 @@ import dataclasses
 import subprocess
 from typing import Any
 
-from hpc_agent._internal.time import parse_iso_utc_or_none, utcnow
 from hpc_agent.infra.cache import TTLCache
+from hpc_agent.infra.time import parse_iso_utc_or_none, utcnow
 
 __all__ = [
     "NodeSnapshot",

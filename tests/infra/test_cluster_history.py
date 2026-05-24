@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 
-from hpc_agent._internal.layout import RepoLayout
+from hpc_agent._kernel.contract.layout import RepoLayout
 from hpc_agent.infra import inspect as ic
 
 

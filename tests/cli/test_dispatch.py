@@ -25,8 +25,8 @@ import pytest
 from pydantic import BaseModel, Field
 
 from hpc_agent import errors
-from hpc_agent._internal import primitive as _prim_mod
-from hpc_agent._internal.primitive import primitive, register_primitives
+from hpc_agent._kernel.registry import primitive as _prim_mod
+from hpc_agent._kernel.registry.primitive import primitive, register_primitives
 from hpc_agent.cli._dispatch import (
     CliArg,
     CliShape,

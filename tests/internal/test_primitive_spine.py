@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent._internal.primitive import (
+from hpc_agent._kernel.registry.primitive import (
     PrimitiveMeta,
     get_registry,
 )

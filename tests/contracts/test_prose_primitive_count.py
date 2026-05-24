@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent._internal.primitive import PrimitiveMeta, get_registry, register_primitives
+from hpc_agent._kernel.registry.primitive import PrimitiveMeta, get_registry, register_primitives
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 

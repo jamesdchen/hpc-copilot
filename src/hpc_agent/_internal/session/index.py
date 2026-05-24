@@ -87,7 +87,7 @@ def _index_is_stale(experiment_dir: Path) -> bool:
 
 
 def _rebuild_index(experiment_dir: Path) -> dict:
-    from hpc_agent._internal.version import is_compatible
+    from hpc_agent._kernel.extension.version import is_compatible
 
     idx_path = journal_dir(experiment_dir) / "index.json"
     # Hold the index lock for the entire scan+write so concurrent
@@ -117,7 +117,7 @@ def _rebuild_index(experiment_dir: Path) -> dict:
                     .isoformat(timespec="seconds")
                 )
             except OSError:
-                from hpc_agent._internal.time import utcnow_iso as _utcnow_iso
+                from hpc_agent.infra.time import utcnow_iso as _utcnow_iso
 
                 mtime_iso = _utcnow_iso()
             entries[run_id] = {

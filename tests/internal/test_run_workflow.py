@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._internal.invoke import InvocationResult, RenderedPrompt
 from hpc_agent._internal.run_workflow import run_workflow
+from hpc_agent._kernel.lifecycle.invoke import InvocationResult, RenderedPrompt
 from hpc_agent.atoms.spawn_prompt import SpawnContractError
 
 

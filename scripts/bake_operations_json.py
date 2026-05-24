@@ -1,6 +1,6 @@
 """Bake the operations catalog to ``hpc_agent/operations.json``.
 
-:func:`hpc_agent._internal.operations.operations_catalog` projects the
+:func:`hpc_agent._kernel.registry.operations.operations_catalog` projects the
 live ``@primitive`` registry into the catalog dict; the registry is
 the only runtime source of truth. This script writes a redundant
 on-disk snapshot at ``src/hpc_agent/operations.json`` so the catalog
@@ -33,8 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from hpc_agent._internal.operations import operations_catalog  # noqa: E402
-from hpc_agent._internal.primitive import register_primitives  # noqa: E402
+from hpc_agent._kernel.registry.operations import operations_catalog  # noqa: E402
+from hpc_agent._kernel.registry.primitive import register_primitives  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_ROOT = REPO_ROOT / "src" / "hpc_agent"

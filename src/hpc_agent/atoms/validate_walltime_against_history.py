@@ -22,13 +22,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent._internal.playbook import (
+from hpc_agent._kernel.lifecycle.playbook import (
     KnownBadCombination,
     Playbook,
     WalltimeRule,
     load_playbook,
 )
-from hpc_agent._internal.primitive import primitive
+from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._schema_models.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistoryResult,
     ValidateWalltimeAgainstHistorySpec,

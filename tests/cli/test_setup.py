@@ -93,7 +93,7 @@ def test_setup_with_cluster_red_skips_marker(isolated_dirs: Path) -> None:
     assert env["data"]["preflight"] == failures
     assert "preflight_marker" not in env["data"]
     # The journal dir may or may not exist; the marker file itself must not.
-    from hpc_agent._internal.layout import JournalLayout
+    from hpc_agent._kernel.contract.layout import JournalLayout
 
     expected = JournalLayout(isolated_dirs).preflight_marker("hoffman2")
     assert not expected.exists()
@@ -123,7 +123,7 @@ def test_setup_experiment_dir_scopes_marker(isolated_dirs: Path, tmp_path: Path)
 
     marker_path = Path(env["data"]["preflight_marker"])
     # Marker hash derives from *other*, not cwd.
-    from hpc_agent._internal.layout import JournalLayout
+    from hpc_agent._kernel.contract.layout import JournalLayout
 
     expected = JournalLayout(other).preflight_marker("hoffman2")
     assert marker_path == expected
