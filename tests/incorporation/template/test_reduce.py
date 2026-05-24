@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_agent.incorporation.template import MOMENTS, SUM, Moments, reduce_monoid, reduce_monoid_sidecars
+from hpc_agent.incorporation.template import (
+    MOMENTS,
+    SUM,
+    Moments,
+    reduce_monoid,
+    reduce_monoid_sidecars,
+)
 
 
 def test_reduce_monoid_sum() -> None:

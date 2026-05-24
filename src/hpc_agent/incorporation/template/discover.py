@@ -14,7 +14,8 @@ It resolves every spelling of the decorator:
 
 - bare — ``from hpc_agent.incorporation.template import register_run`` → ``@register_run``
 - aliased — ``... import register_run as rr`` → ``@rr``
-- attribute — ``import hpc_agent.incorporation.template`` → ``@hpc_agent.incorporation.template.register_run``
+- attribute — ``import hpc_agent.incorporation.template`` →
+  ``@hpc_agent.incorporation.template.register_run``
 - module-aliased — ``from hpc_agent import template`` → ``@template.register_run``
 
 and the parameterised call form ``@register_run(gpu=True)``.

@@ -378,7 +378,7 @@ def aggregate_flow(
                 "mode='cluster-reduce' requires aggregate_cmd= or "
                 "aggregate_defaults.aggregate_cmd on the run sidecar."
             )
-        from hpc_agent.atoms.cluster_reduce import cluster_reduce
+        from hpc_agent.ops.aggregate.cluster_reduce import cluster_reduce
 
         cr = cluster_reduce(
             experiment_dir,
@@ -554,7 +554,7 @@ def aggregate_flow(
         raw_metric = results_block.get("metric_column")
         metric_column = raw_metric if isinstance(raw_metric, str) and raw_metric else None
         if expected_columns or metric_column:
-            from hpc_agent.atoms.aggregation_invariants import check_result_columns
+            from hpc_agent.ops.aggregate.invariants import check_result_columns
 
             summary_pattern = results_block.get("summary_pattern")
             file_glob = (

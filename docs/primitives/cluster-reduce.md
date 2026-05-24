@@ -20,7 +20,7 @@ backed_by:
   cli: hpc-agent cluster-reduce [--experiment-dir <dir>] --run-id <run_id> [--aggregate-cmd
     <aggregate_cmd>] [--output-path <output_path>] [--local-dir <local_dir>] [--extra-env
     <extra_env>] [--timeout-sec <timeout_sec>]
-  python: hpc_agent.atoms.cluster_reduce.cluster_reduce
+  python: hpc_agent.ops.aggregate.cluster_reduce.cluster_reduce
 exit_codes:
 - 0: ok
 - 1: user-error

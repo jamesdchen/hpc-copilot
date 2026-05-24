@@ -39,7 +39,7 @@ error_codes:
 backed_by:
   cli: hpc-agent aggregate [--experiment-dir <dir>] --run-id <run_id> --wave <wave>
     [--force] [--require-outputs <require_outputs>] [--expect-output <expect_output>]
-  python: hpc_agent.runner.combine.combine_wave
+  python: hpc_agent.ops.aggregate.combine.combine_wave
 exit_codes:
 - 0: combined successfully
 - 1: spec_invalid

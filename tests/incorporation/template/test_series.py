@@ -11,7 +11,11 @@ from hpc_agent.incorporation.template import (
     set_series_loader,
     trim_emission,
 )
-from hpc_agent.incorporation.template.series import SeriesNotConfigured, activate_slice, deactivate_slice
+from hpc_agent.incorporation.template.series import (
+    SeriesNotConfigured,
+    activate_slice,
+    deactivate_slice,
+)
 
 _SERIES = list(range(100))
 
