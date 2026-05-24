@@ -57,7 +57,7 @@ for the full contract: the spawn env block,
 
 The canonical reference for `.hpc/tasks.py` is shipped inside the
 package at
-[`src/hpc_agent/mapreduce/templates/scaffolds/tasks_example.py`](src/hpc_agent/mapreduce/templates/scaffolds/tasks_example.py).
+[`src/hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py`](src/hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py).
 It demonstrates three patterns (Cartesian product, chunking by row
 count, date-window backtests) inline. Integrators locate it at runtime
 via `from hpc_agent import _PACKAGE_ROOT` or `rglob("tasks_example.py")`.
