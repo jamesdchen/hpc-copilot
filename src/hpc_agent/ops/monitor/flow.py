@@ -54,9 +54,9 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.runner import combine_wave
 from hpc_agent.state import session
 from hpc_agent.state.runs import read_run_sidecar
 
@@ -391,7 +391,7 @@ def _is_terminal(
 @primitive(
     name="monitor-flow",
     verb="workflow",
-    composes=[record_status, mark_terminal],
+    composes=["poll-run-status", "mark-run-terminal"],
     side_effects=[
         SideEffect("ssh", "<cluster>"),
         SideEffect(
