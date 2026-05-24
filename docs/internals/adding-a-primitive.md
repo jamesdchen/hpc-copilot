@@ -38,7 +38,7 @@ class <Name>Spec(BaseModel):
 
 If the primitive returns a structured `data` block, define a
 `<Name>Result` similarly. Reuse aliases from
-`_schema_models/_shared.py` (`RunIdStrict`, `Scheduler`,
+`_wire/_shared.py` (`RunIdStrict`, `Scheduler`,
 `LifecycleStateTerminal`, `ErrorCode`, etc.) — that's how the
 inline-vs-cross-file-`$ref` decision stays automatic.
 
@@ -58,7 +58,10 @@ regenerated.
 
 ### 3. Decorate the atom
 
-In the appropriate module (`atoms/`, `runner/`, `flows/`, etc.):
+In the appropriate subject module under `ops/<subject>/`,
+`meta/<subject>/`, or `incorporation/` (atoms, runner modules, and
+flow composites all live together inside the subject — there is no
+top-level `atoms/`, `runner/`, or `flows/` package any more):
 
 ```python
 @primitive(
@@ -78,15 +81,18 @@ def <name>(experiment_dir: Path, *, spec: <Name>Spec) -> <Name>Result:
 ```
 
 The `cli=` and `agent_facing=` fields are read by
-`_internal/operations.py::operations_catalog()` and projected into
-the `capabilities` envelope plus `docs/generated/operations.md`.
+`_kernel/registry/operations.py::operations_catalog()` and projected
+into the `capabilities` envelope plus `docs/generated/operations.md`.
 
 ### 4. Add to `_PRIMITIVE_MODULES`
 
 If your atom's module is new, add it to `_PRIMITIVE_MODULES` in
-`src/hpc_agent/_internal/_primitive.py` (the explicit registration
-ordering). `lint_primitive_modules.py` greps `@primitive(` and
-catches missing entries.
+`src/hpc_agent/_kernel/registry/primitive.py` (the explicit
+registration ordering). Atoms must precede the composites that
+reference them — composite `@primitive(composes=[atom_func, ...])`
+decorators look up the atom's `_primitive_meta` at decoration time.
+`scripts/lint_primitive_modules.py` greps `@primitive(` and catches
+missing entries.
 
 ### 5. CLI handler (only if exposing a new subcommand)
 
@@ -205,5 +211,5 @@ will fail unless you set `agent_facing=True`.
 - Edit `docs/generated/operations.md`, `docs/primitives/README.md`,
   or any per-primitive frontmatter — the regen scripts own those.
 - Mirror your enum values in multiple places —
-  `_schema_models/_shared.py` is the SoT for shared constraints
+  `_wire/_shared.py` is the SoT for shared constraints
   (run_id, scheduler, lifecycle, error codes); import the alias.
