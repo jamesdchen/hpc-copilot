@@ -84,15 +84,20 @@ The `cli=` and `agent_facing=` fields are read by
 `_kernel/registry/operations.py::operations_catalog()` and projected
 into the `capabilities` envelope plus `docs/generated/operations.md`.
 
-### 4. Add to `_PRIMITIVE_MODULES`
+### 4. Discovery is automatic
 
-If your atom's module is new, add it to `_PRIMITIVE_MODULES` in
-`src/hpc_agent/_kernel/registry/primitive.py` (the explicit
-registration ordering). Atoms must precede the composites that
-reference them — composite `@primitive(composes=[atom_func, ...])`
-decorators look up the atom's `_primitive_meta` at decoration time.
-`scripts/lint_primitive_modules.py` greps `@primitive(` and catches
-missing entries.
+You don't need to touch any module list. `register_primitives()` walks
+every public module under `_PRIMITIVE_PACKAGES` (in
+`src/hpc_agent/_kernel/registry/primitive.py`) — `hpc_agent.ops`,
+`hpc_agent.meta`, `hpc_agent.incorporation`, `hpc_agent.state`,
+`hpc_agent.cli`, `hpc_agent._kernel.extension` — and your
+`@primitive(...)` decorator registers itself on import. Adding a
+primitive in a brand-new top-level package is the only case that
+requires a one-line change to `_PRIMITIVE_PACKAGES`.
+
+`composes=["primitive-name"]` is order-agnostic — atoms and their
+composers can be discovered in any order; the registry is finalized
+in a single pass once every module has been imported.
 
 ### 5. CLI handler (only if exposing a new subcommand)
 
@@ -195,8 +200,8 @@ Minimum:
   call, assert on result).
 - The existing `test_primitive_registry.py` and
   `test_primitive_frontmatter.py` parametrize over the registry, so
-  adding to `_PRIMITIVE_MODULES` automatically gets you registry-level
-  coverage.
+  the auto-discovery walk picks up your primitive and you get
+  registry-level coverage for free.
 - The `test_schema_models_roundtrip.py` round-trip test
   parametrizes over `SCHEMA_REGISTRY` — your new schema gets
   emit-byte-equal coverage automatically.

@@ -27,13 +27,12 @@ def registry() -> dict[str, PrimitiveMeta]:
     return get_registry()
 
 
-# Item #2 — orphan-module detection moved to a CI lint
-# (``scripts/lint_primitive_modules.py``). The lint catches the
-# failure mode where someone adds a new primitive in a new module and
-# forgets to add the module to ``_PRIMITIVE_MODULES`` — the registry
-# would silently miss it on cold import. ``test_lint_primitive_modules``
-# subprocess-invokes the script so test runs catch drift even without
-# CI.
+# Item #2 — orphan-module detection is intrinsic to the registry:
+# :func:`register_primitives` walks every module under
+# :data:`_PRIMITIVE_PACKAGES` automatically. A new primitive in a new
+# file under one of those packages is picked up with zero config; the
+# registry's invariants catch any composing primitive that references
+# an unregistered atom.
 
 
 # Item #3 — composes references must resolve.

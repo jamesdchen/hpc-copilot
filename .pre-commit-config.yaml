@@ -17,19 +17,26 @@ repos:
 
   - repo: local
     hooks:
-      - id: lint-primitive-modules
-        name: lint primitive module list
-        entry: python scripts/lint_primitive_modules.py
-        language: system
-        pass_filenames: false
-        files: '^src/hpc_agent/.*\.py$'
-
       - id: lint-text-io-encoding
         name: text I/O must pass encoding='utf-8' (TIO001)
         entry: python scripts/lint_text_io_encoding.py
         language: system
         pass_filenames: false
         files: '^(src/hpc_agent/.*\.py|hpc-agent-pro/src/.*\.py|scripts/[^/]+\.py)$'
+
+      - id: lint-runner-shim
+        name: hpc_agent.runner re-exports only @primitive symbols
+        entry: python scripts/lint_runner_shim.py
+        language: system
+        pass_filenames: false
+        files: '^src/hpc_agent/(runner\.py|ops/.*\.py|meta/.*\.py|infra/.*\.py)$'
+
+      - id: lint-subject-init
+        name: subject __init__.py must be docstring-only
+        entry: python scripts/lint_subject_init.py
+        language: system
+        pass_filenames: false
+        files: '^src/hpc_agent/(ops|meta)/.*/__init__\.py$'
 
       - id: build-primitive-frontmatter
         name: regenerate primitive frontmatter

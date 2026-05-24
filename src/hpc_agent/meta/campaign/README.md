@@ -26,8 +26,8 @@ driver is intentionally not a `@primitive`.
 
 ## Public vs internal
 
-- **Public primitive modules** (registered in
-  `_internal/primitive.py::_PRIMITIVE_MODULES`):
+- **Public primitive modules** (auto-discovered by
+  `_kernel/registry/primitive.py::register_primitives`):
   `atoms/advance.py`, `atoms/budget.py`, `atoms/converged.py`,
   `atoms/health.py`, `atoms/init.py`, `atoms/list_campaigns.py`
   (the name avoids shadowing the `list` builtin),
