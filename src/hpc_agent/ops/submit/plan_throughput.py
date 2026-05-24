@@ -20,7 +20,7 @@ from hpc_agent import errors
 from hpc_agent._internal.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_constraints
-from hpc_agent.planning.throughput import WorkloadSpec, build_wave_map, compute_submission_plan
+from hpc_agent.ops.submit.throughput import WorkloadSpec, build_wave_map, compute_submission_plan
 
 __all__ = ["plan_throughput"]
 

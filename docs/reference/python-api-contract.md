@@ -88,4 +88,4 @@ The framework also ships three cluster-side Python entry points that downstream 
 - `python3 .hpc/_hpc_dispatch.py` — backs the array-job execution. Reads `.hpc/tasks.py`, dispatches one task per `SGE_TASK_ID` / `SLURM_ARRAY_TASK_ID`.
 - `python3 .hpc/_hpc_combiner.py` — backs `combine-wave`'s remote call. Aggregates per-task partial reduce JSONs into a wave-level partial.
 
-Implementation lives in `hpc_agent/mapreduce/reduce/`, `hpc_agent/runner/`, and `hpc_agent/runner/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.
+Implementation lives in `hpc_agent/mapreduce/reduce/`, `hpc_agent/runner/`, and `hpc_agent/ops/aggregate/combine.py` respectively. Treat the source as the contract; these scripts are not version-pinned across releases.

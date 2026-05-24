@@ -1,6 +1,6 @@
 """``monitor-flow``: workflow atom that polls a run to terminal.
 
-Pairs with :func:`hpc_agent.flows.submit_flow.submit_flow` to give
+Pairs with :func:`hpc_agent.ops.submit.flow.submit_flow` to give
 higher-level workflows (campaigns, sweeps) a clean composition path:
 ``submit-flow → monitor-flow → next iteration``. Both atoms expose the
 same envelope shape, so the campaign loop's per-iteration code is just

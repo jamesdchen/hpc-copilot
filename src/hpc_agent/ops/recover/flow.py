@@ -9,7 +9,7 @@ expression" dance — diverging on which survival atoms fire and how
 overrides reach the scheduler.
 
 :func:`resubmit_flow` is the macro that closes the loop. It mirrors
-:func:`~hpc_agent.flows.submit_flow.submit_flow`'s shape —
+:func:`~hpc_agent.ops.submit.flow.submit_flow`'s shape —
 frozen result dataclass, keyword-only args, raises typed errors — and
 composes:
 
@@ -421,7 +421,7 @@ def _submit_resubmit_batches(
       rendered as scheduler flags.
 
     *backend_factory* is an injection seam for tests — when ``None``
-    the production :func:`~hpc_agent.flows.submit_flow._build_backend`
+    the production :func:`~hpc_agent.ops.submit.flow._build_backend`
     constructs a real SSH-backed scheduler client. Tests pass a stub
     that records calls without touching a network.
     """
@@ -463,7 +463,7 @@ def _submit_resubmit_batches(
     extra_flags = render_overrides_to_extra_flags(scheduler, effective_overrides)
 
     if backend_factory is None:
-        from hpc_agent.flows.submit_flow import _build_backend, _validate_ssh_target
+        from hpc_agent.ops.submit.flow import _build_backend, _validate_ssh_target
 
         # Validate ssh_target up front — _build_backend no longer
         # double-validates internally (see BUG-4-10), so callers own the
@@ -521,7 +521,7 @@ def _submit_one_batch(
 ) -> str:
     """Submit one batch with a precomputed array expression. Returns the job id.
 
-    Mirrors :func:`~hpc_agent.flows.submit_flow._make_single_array_submission`
+    Mirrors :func:`~hpc_agent.ops.submit.flow._make_single_array_submission`
     but accepts an arbitrary ``task_range`` (e.g., ``"3,7,12-14"``)
     instead of hardcoding ``"1-N"``, and threads ``extra_flags`` so the
     planner-adjusted overrides land on the qsub command line.

@@ -6,7 +6,7 @@
     "input_schema": null,
     "name": "cluster-reduce",
     "output_schema": "cluster_reduce.output.json",
-    "python": "hpc_agent.atoms.cluster_reduce.cluster_reduce",
+    "python": "hpc_agent.ops.aggregate.cluster_reduce.cluster_reduce",
     "side_effects": [
       "ssh",
       "sync-pull"
@@ -20,7 +20,7 @@
     "input_schema": null,
     "name": "combine-wave",
     "output_schema": "combine_wave.output.json",
-    "python": "hpc_agent.runner.combine.combine_wave",
+    "python": "hpc_agent.ops.aggregate.combine.combine_wave",
     "side_effects": [
       "runs",
       "ssh",
@@ -316,7 +316,7 @@
     "input_schema": null,
     "name": "plan-throughput",
     "output_schema": null,
-    "python": "hpc_agent.atoms.plan_throughput.plan_throughput",
+    "python": "hpc_agent.ops.submit.plan_throughput.plan_throughput",
     "side_effects": [],
     "verb": "query"
   },
@@ -374,7 +374,7 @@
     "input_schema": null,
     "name": "summarize-submit-plan",
     "output_schema": "summarize_submit_plan.output.json",
-    "python": "hpc_agent.atoms.submit_plan_summary.summarize_submit_plan",
+    "python": "hpc_agent.ops.submit.plan_summary.summarize_submit_plan",
     "side_effects": [],
     "verb": "query"
   },
@@ -385,7 +385,7 @@
     "input_schema": null,
     "name": "verify-aggregation-complete",
     "output_schema": "verify_aggregation_complete.output.json",
-    "python": "hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete",
+    "python": "hpc_agent.ops.aggregate.invariants.verify_aggregation_complete",
     "side_effects": [],
     "verb": "query"
   },
@@ -511,7 +511,7 @@
     "input_schema": "submit.input.json",
     "name": "submit-spec",
     "output_schema": "submit.output.json",
-    "python": "hpc_agent.runner.submit.submit_and_record",
+    "python": "hpc_agent.ops.submit.runner.submit_and_record",
     "side_effects": [
       "scheduler-submit",
       "writes-journal"
@@ -591,7 +591,7 @@
     "input_schema": "aggregate_flow.input.json",
     "name": "aggregate-flow",
     "output_schema": "aggregate_flow.output.json",
-    "python": "hpc_agent.flows.aggregate_flow.aggregate_flow",
+    "python": "hpc_agent.ops.aggregate.flow.aggregate_flow",
     "side_effects": [
       "ssh",
       "sync-pull",
@@ -620,7 +620,7 @@
     "input_schema": "submit_flow.input.json",
     "name": "submit-flow",
     "output_schema": "submit_flow.output.json",
-    "python": "hpc_agent.flows.submit_flow.submit_flow",
+    "python": "hpc_agent.ops.submit.flow.submit_flow",
     "side_effects": [
       "scheduler-submit",
       "sync-push",
@@ -635,7 +635,7 @@
     "input_schema": "submit_flow_batch.input.json",
     "name": "submit-flow-batch",
     "output_schema": "submit_flow_batch.output.json",
-    "python": "hpc_agent.flows.submit_flow.submit_flow_batch",
+    "python": "hpc_agent.ops.submit.flow.submit_flow_batch",
     "side_effects": [
       "scheduler-submit",
       "sync-push",
@@ -661,7 +661,7 @@
     "input_schema": null,
     "name": "verify-canary",
     "output_schema": "verify_canary.output.json",
-    "python": "hpc_agent.atoms.canary_verify.verify_canary",
+    "python": "hpc_agent.ops.aggregate.canary_verify.verify_canary",
     "side_effects": [
       "ssh"
     ],

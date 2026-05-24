@@ -107,7 +107,7 @@ class TestSSHWrappedCommand:
     def test_wave_dependency_hold_jid_in_ssh_command(self, tmp_path):
         """When submit_plan runs a second wave, the remote qsub must carry
         ``-hold_jid`` with the prior wave's job IDs joined by commas."""
-        from hpc_agent.planning.throughput import JobBatch, SubmissionPlan
+        from hpc_agent.ops.submit.throughput import JobBatch, SubmissionPlan
 
         plan = SubmissionPlan(
             batches=[
@@ -181,7 +181,7 @@ class TestStdoutParsing:
     def test_parses_first_integer_as_job_id(self, tmp_path):
         """submit_plan picks the first integer in stdout — verify that the
         canonical ``Your job-array 42.1-10:1`` format yields ``"42"``."""
-        from hpc_agent.planning.throughput import JobBatch, SubmissionPlan
+        from hpc_agent.ops.submit.throughput import JobBatch, SubmissionPlan
 
         plan = SubmissionPlan(
             batches=[

@@ -63,7 +63,11 @@ from hpc_agent.incorporation.template.axis_config import (
     eval_halo_expr,
 )
 from hpc_agent.incorporation.template.discover import RunInfo, discover_runs
-from hpc_agent.incorporation.template.elision import ElisionReport, assert_elision_equivalent, check_elision
+from hpc_agent.incorporation.template.elision import (
+    ElisionReport,
+    assert_elision_equivalent,
+    check_elision,
+)
 from hpc_agent.incorporation.template.notebook import (
     export_notebook,
     export_notebook_markers,
@@ -80,7 +84,11 @@ from hpc_agent.incorporation.template.series import (
     set_series_loader,
     trim_emission,
 )
-from hpc_agent.incorporation.template.signature import flags_for_run, flags_from_ast, flags_from_signature
+from hpc_agent.incorporation.template.signature import (
+    flags_for_run,
+    flags_from_ast,
+    flags_from_signature,
+)
 
 __all__ = [
     # Layer 1 — notebook / CLI helpers

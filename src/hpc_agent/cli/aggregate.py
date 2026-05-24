@@ -2,7 +2,7 @@
 
 Hand-written CLI body for the ``combine-wave`` primitive. The CLI verb
 is ``aggregate`` (legacy name retained for slash-command compatibility);
-the underlying primitive — registered in :mod:`hpc_agent.runner.combine`
+the underlying primitive — registered in :mod:`hpc_agent.ops.aggregate.combine`
 — is ``combine-wave``.
 
 The combiner pipeline is driven by :func:`hpc_agent.runner.combine_wave`

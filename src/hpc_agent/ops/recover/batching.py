@@ -4,19 +4,19 @@
 When a grid job finishes with some failed tasks, ``/status`` (and the LLM)
 needs to resubmit exactly those task IDs — possibly under adjusted resources
 (more memory, a longer walltime) — without duplicating the on-cluster
-batching logic that lives in :mod:`hpc_agent.planning.throughput`.
+batching logic that lives in :mod:`hpc_agent.ops.submit.throughput`.
 
 This module provides:
 
 * :func:`compact_task_ids` — pack a sorted list of task IDs into an
   ``sbatch``/``qsub`` array expression (``"3,7,12-14"`` etc.).
 * :class:`ResubmitPlan` / :class:`ResubmitBatch` — the resubmission
-  analogue of :class:`~hpc_agent.planning.throughput.SubmissionPlan`, whose
+  analogue of :class:`~hpc_agent.ops.submit.throughput.SubmissionPlan`, whose
   ``task_range`` strings can be *non-contiguous* since the failed IDs are
   arbitrary.
 * :func:`resubmit_plan` — build a :class:`ResubmitPlan` from a known task
   count and a list of failed task IDs, reusing
-  :func:`~hpc_agent.planning.throughput.compute_submission_plan` to split the
+  :func:`~hpc_agent.ops.submit.throughput.compute_submission_plan` to split the
   failures into batches that honour the cluster's ``max_array_size`` and
   ``max_concurrent_jobs`` limits.
 
@@ -31,8 +31,8 @@ from __future__ import annotations
 
 import dataclasses
 
+from hpc_agent.ops.submit.throughput import WorkloadSpec, compute_submission_plan
 from hpc_agent.planning.constraints import ClusterConstraints
-from hpc_agent.planning.throughput import WorkloadSpec, compute_submission_plan
 
 __all__ = [
     "compact_task_ids",
@@ -80,7 +80,7 @@ def compact_task_ids(ids: list[int]) -> str:
 class ResubmitBatch:
     """One batch within a resubmission plan.
 
-    Unlike :class:`~hpc_agent.planning.throughput.JobBatch`, the task IDs in
+    Unlike :class:`~hpc_agent.ops.submit.throughput.JobBatch`, the task IDs in
     a resubmit batch are arbitrary (non-contiguous), so ``task_range`` is
     produced by :func:`compact_task_ids` rather than a simple
     ``"start-end"`` formatter.
@@ -170,8 +170,8 @@ def resubmit_plan(
     Notes
     -----
     Batching is delegated to
-    :func:`~hpc_agent.planning.throughput.compute_submission_plan`: we
-    submit a :class:`~hpc_agent.planning.throughput.WorkloadSpec` with
+    :func:`~hpc_agent.ops.submit.throughput.compute_submission_plan`: we
+    submit a :class:`~hpc_agent.ops.submit.throughput.WorkloadSpec` with
     ``total_tasks = len(failed_task_ids)``, then map each resulting
     ``JobBatch``'s contiguous ``task_start..task_end`` window (1-based
     indexes into the sorted failed list) back to the original task IDs.

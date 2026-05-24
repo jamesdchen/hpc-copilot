@@ -7,7 +7,8 @@ that import cycle on first ``import hpc_agent``. Reach for the specific
 submodule:
 
 * :mod:`hpc_agent.planning.constraints` — cluster constraint parsing.
-* :mod:`hpc_agent.planning.throughput` — batch a task grid into waves.
+* :mod:`hpc_agent.ops.submit.throughput` — batch a task grid into waves
+  (moved to ops/submit/ in the Wave 2 reorg).
 
 The failed-task batcher lives in :mod:`hpc_agent.ops.recover.batching`
 (``compact_task_ids``, ``ResubmitPlan``, ``resubmit_plan``) — it moved

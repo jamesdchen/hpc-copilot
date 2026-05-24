@@ -46,6 +46,27 @@ ALLOWED_NON_SUBJECT_ROOTS: tuple[str, ...] = (
 )
 
 
+# Per-file allow-list of cross-subject imports that are temporarily tolerated
+# pending a proper refactor that extracts the shared dependency into
+# ``infra/``. Key = repo-relative path of the importing file; value = tuple
+# of full dotted module names whose violations get suppressed.
+# EACH ENTRY MUST CARRY A TODO COMMENT NAMING THE EXTRACTION PLAN.
+PER_FILE_ALLOWED_IMPORTS: dict[str, tuple[str, ...]] = {
+    # TODO(post-Wave-2): extract ``WorkloadSpec`` + ``compute_submission_plan``
+    # from ``ops/submit/throughput.py`` to ``infra/throughput.py`` so the
+    # recover-side batcher can reach them without crossing into the submit
+    # subject. These are pure-Python (@pure: no-io) and have no submit-
+    # specific state — they should never have lived under a subject.
+    "src/hpc_agent/ops/recover/batching.py": ("hpc_agent.ops.submit.throughput",),
+    # TODO(post-Wave-2): extract ``_build_backend`` + ``_validate_ssh_target``
+    # to ``infra/backends/factory.py`` (or similar). They are the backend
+    # construction seam — both submit and recover need to build the same
+    # backend object, so the helper has no business living under
+    # ops/submit/ as a private function.
+    "src/hpc_agent/ops/recover/flow.py": ("hpc_agent.ops.submit.flow",),
+}
+
+
 def _subject_of(path: Path, role_root: Path) -> str | None:
     """Return the subject name for a file under ``role_root``, or None
     if the file isn't inside a subject directory (e.g. it's directly in
@@ -120,9 +141,18 @@ def lint_file(path: Path, own_role: str, own_subject: str) -> list[tuple[int, st
         tree = ast.parse(source)
     except SyntaxError:
         return []
+    # Per-file allow-list lookup. Use the repo-relative POSIX path so the
+    # dict keys are platform-independent.
+    try:
+        rel_key = path.resolve().relative_to(REPO).as_posix()
+    except ValueError:
+        rel_key = ""
+    file_allowed = PER_FILE_ALLOWED_IMPORTS.get(rel_key, ())
     findings: list[tuple[int, str]] = []
     for lineno, module in _iter_imports(tree):
         if _is_allowed_non_subject(module):
+            continue
+        if module in file_allowed or any(module.startswith(f + ".") for f in file_allowed):
             continue
         # Check both roles — a file in ``ops/foo`` may not import from
         # ``meta/bar`` either (different role still counts as a

@@ -143,13 +143,13 @@ from hpc_agent.ops.recover.batching import (
     compact_task_ids,
     resubmit_plan,
 )
-from hpc_agent.planning.constraints import ClusterConstraints, parse_constraints
-from hpc_agent.planning.throughput import (
+from hpc_agent.ops.submit.throughput import (
     SubmissionPlan,
     WorkloadSpec,
     build_wave_map,
     compute_submission_plan,
 )
+from hpc_agent.planning.constraints import ClusterConstraints, parse_constraints
 from hpc_agent.state.discover import (
     ExecutorInfo,
     discover_executors,

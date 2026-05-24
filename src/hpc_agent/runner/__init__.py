@@ -33,6 +33,13 @@ this package for back-compat; new callers should import from
 
 from __future__ import annotations
 
+from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.aggregate.runner import (
+    build_provenance,
+    verify_combiner_artifact,
+    verify_per_task_outputs,
+    write_remote_provenance,
+)
 from hpc_agent.ops.recover.runner import (
     derive_resubmit_request_id,
     resubmit_failed,
@@ -43,20 +50,13 @@ from hpc_agent.ops.recover.runner_failures import (
     cluster_failures_by_fingerprint,
     fingerprint_stderr_tail,
 )
-from hpc_agent.runner.aggregate import (
-    build_provenance,
-    verify_combiner_artifact,
-    verify_per_task_outputs,
-    write_remote_provenance,
-)
-from hpc_agent.runner.combine import combine_wave
+from hpc_agent.ops.submit.runner import build_job_env, submit_and_record
 from hpc_agent.runner.logs import fetch_task_logs
 from hpc_agent.runner.reconcile import (
     mark_terminal,
     reconcile,
 )
 from hpc_agent.runner.status import record_status
-from hpc_agent.runner.submit import build_job_env, submit_and_record
 
 __all__ = [
     "submit_and_record",

@@ -24,8 +24,8 @@ import pytest
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent._schema_models.workflows.aggregate_flow import AggregateFlowSpec
-from hpc_agent.flows import aggregate_flow as af_module
-from hpc_agent.flows.aggregate_flow import (
+from hpc_agent.ops.aggregate import flow as af_module
+from hpc_agent.ops.aggregate.flow import (
     _incremental_include_patterns,
     aggregate_flow,
 )

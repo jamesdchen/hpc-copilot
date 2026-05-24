@@ -27,7 +27,7 @@ error_codes:
 backed_by:
   cli: hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s
     <est_task_duration_s>]
-  python: hpc_agent.atoms.plan_throughput.plan_throughput
+  python: hpc_agent.ops.submit.plan_throughput.plan_throughput
 exit_codes:
 - 0: ok
 - 1: spec_invalid / cluster_unknown

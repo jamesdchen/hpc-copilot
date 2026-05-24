@@ -30,7 +30,7 @@ error_codes:                              # what callers should handle
     retry_safe: true
 backed_by:                                # implementation + field-level contract source
   cli: hpc-agent submit --spec <path>
-  python: hpc_agent.runner.submit_and_record
+  python: hpc_agent.ops.submit.runner.submit_and_record
 ---
 ```
 
