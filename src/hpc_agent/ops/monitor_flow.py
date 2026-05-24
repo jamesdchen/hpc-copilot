@@ -57,7 +57,8 @@ from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run
+from hpc_agent.state.run_record import runs_dir
 from hpc_agent.state.runs import read_run_sidecar
 
 try:
@@ -152,7 +153,7 @@ def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
     regardless of whether monitoring was driven by repeated slash-command
     invocations or by one long monitor-flow call.
     """
-    return session.runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
+    return runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
 
 
 # _flock_append was removed in favour of routing the tick-log append
@@ -457,7 +458,7 @@ def monitor_flow(
     combiner_max_retries = spec.combiner_max_retries
     file_glob = spec.file_glob
 
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(
             f"no journal record for {run_id!r}; cannot monitor an unknown run"

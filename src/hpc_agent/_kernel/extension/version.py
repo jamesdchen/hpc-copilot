@@ -4,7 +4,7 @@ Three JSON shapes in the codebase carry a ``schema_version`` field and
 three readers each implement a private "I read N, what does the doc
 say?" check:
 
-* ``slash_commands/session.py`` — session journal (``SCHEMA_VERSION = 1``)
+* ``hpc_agent/state/run_record.py`` — session journal (``SCHEMA_VERSION = 1``)
 * ``hpc_agent/state/runtime_prior.py`` — runtime priors (``SCHEMA_VERSION = 1``)
 * ``hpc_agent/models/mapreduce/reduce/status.py`` — status rollup (``schema_version = 2`` literal)
 

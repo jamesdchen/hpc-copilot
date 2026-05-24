@@ -35,7 +35,7 @@ from hpc_agent.ops.aggregate.runner import (
     verify_per_task_outputs,
     write_remote_provenance,
 )
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -78,7 +78,7 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     # ``aggregate_defaults`` block, populated by /submit. CLI flags win.
     if (rc := _require_ssh_agent()) is not None:
         return rc
-    record = session.load_run(args.experiment_dir, args.run_id)
+    record = load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")
     if args.wave is None:

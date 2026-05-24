@@ -19,7 +19,7 @@ from typing import Any
 
 import hpc_agent
 from hpc_agent._kernel.registry.primitive import primitive
-from hpc_agent.state import session
+from hpc_agent.state.run_record import HPC_HOMEDIR
 
 
 @primitive(
@@ -53,7 +53,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
         "subcommands": list(subcommands),
         "supported_schedulers": ["sge", "slurm"],
         "schemas_dir": str(hpc_agent._PACKAGE_ROOT / "schemas"),
-        "journal_dir": str(session.HPC_HOMEDIR),
+        "journal_dir": str(HPC_HOMEDIR),
         "ssh_multiplexing": os.environ.get("HPC_NO_SSH_MULTIPLEX") != "1",
         "required_env": [
             "SSH_AUTH_SOCK",

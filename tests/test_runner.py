@@ -29,8 +29,10 @@ from hpc_agent.ops.recover.runner_failures import (
     annotate_clusters_with_retry_advice,
     fingerprint_stderr_tail,
 )
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord, run_record
+from hpc_agent.state import run_record
+from hpc_agent.state.index import find_in_flight_runs
+from hpc_agent.state.journal import load_run, upsert_run
+from hpc_agent.state.run_record import RunRecord, runs_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -40,7 +42,6 @@ if TYPE_CHECKING:
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 
 
@@ -66,7 +67,7 @@ def _seed_run(experiment: Path, **overrides) -> RunRecord:
     }
     base.update(overrides)
     record = RunRecord(**base)
-    session.upsert_run(experiment, record)
+    upsert_run(experiment, record)
     return record
 
 
@@ -93,7 +94,7 @@ def test_submit_and_record_writes_journal(journal_home, experiment):
     assert record.status == "in_flight"
     assert record.stage == "monitor"
 
-    loaded = session.load_run(experiment, record.run_id)
+    loaded = load_run(experiment, record.run_id)
     assert loaded is not None
     assert loaded.job_ids == ["12345678"]
     assert loaded.total_tasks == 100
@@ -139,7 +140,7 @@ def test_combine_wave_records_success(journal_home, experiment):
         )
     assert ok is True
     m.assert_called_once()
-    final = session.load_run(experiment, "ml_ridge_abcd1234")
+    final = load_run(experiment, "ml_ridge_abcd1234")
     assert final.combined_waves == [2]
     assert final.failed_waves == []
 
@@ -155,7 +156,7 @@ def test_combine_wave_records_failure(journal_home, experiment):
             remote_path="/u/scratch/exp",
         )
     assert ok is False
-    final = session.load_run(experiment, "ml_ridge_abcd1234")
+    final = load_run(experiment, "ml_ridge_abcd1234")
     assert final.combined_waves == []
     assert final.failed_waves == [3]
 
@@ -179,7 +180,7 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
             remote_path="/x",
             force=True,
         )
-    final = session.load_run(experiment, "ml_ridge_abcd1234")
+    final = load_run(experiment, "ml_ridge_abcd1234")
     assert final.combined_waves == [4]
     assert final.failed_waves == []
 
@@ -197,7 +198,7 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
             new_job_ids=["99999999"],
         ),
     )
-    after_one = session.load_run(experiment, "ml_ridge_abcd1234")
+    after_one = load_run(experiment, "ml_ridge_abcd1234")
     assert after_one.retries == {
         "3": {"attempts": 1, "category": "system_oom", "overrides": {"mem": "32G"}},
         "7": {"attempts": 1, "category": "system_oom", "overrides": {"mem": "32G"}},
@@ -213,7 +214,7 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
             overrides={"mem": "64G"},
         ),
     )
-    after_two = session.load_run(experiment, "ml_ridge_abcd1234")
+    after_two = load_run(experiment, "ml_ridge_abcd1234")
     assert after_two.retries["3"] == {
         "attempts": 2,
         "category": "system_oom",
@@ -323,7 +324,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
         record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert record.status == "abandoned"
-    assert session.find_in_flight_runs(experiment) == []
+    assert find_in_flight_runs(experiment) == []
 
 
 def test_reconcile_idempotent(journal_home, experiment):
@@ -349,7 +350,7 @@ def test_reconcile_idempotent(journal_home, experiment):
 def test_mark_terminal_pass_through(journal_home, experiment):
     _seed_run(experiment)
     runner.mark_terminal(experiment, "ml_ridge_abcd1234", status="complete", stage="done")
-    record = session.load_run(experiment, "ml_ridge_abcd1234")
+    record = load_run(experiment, "ml_ridge_abcd1234")
     assert record.status == "complete"
     assert record.stage == "done"
 
@@ -540,7 +541,7 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
             job_ids=["1"],
             job_name="job",
         )
-    cache = session.runs_dir(experiment) / "ml_ridge_abcd1234.last_status.json"
+    cache = runs_dir(experiment) / "ml_ridge_abcd1234.last_status.json"
     assert cache.exists()
     # Round-trip parse — would raise on a half-written file.
     body = json.loads(cache.read_text())
@@ -595,7 +596,7 @@ def test_record_status_cache_write_skips_fsync(journal_home, experiment):
             job_name="job",
         )
 
-    cache = session.runs_dir(experiment) / "ml_ridge_abcd1234.last_status.json"
+    cache = runs_dir(experiment) / "ml_ridge_abcd1234.last_status.json"
     assert cache.exists(), "cache file must still be written, just without fsync"
 
     # Each ``atomic_write_json(fsync=True)`` call contributes exactly one
@@ -604,7 +605,7 @@ def test_record_status_cache_write_skips_fsync(journal_home, experiment):
     # journal record + index = at most 4 fsyncs (2 data + 2 dir). The
     # cache must add ZERO. Assert the cache temp-file path never shows
     # up in the fsynced set.
-    cache_dir = str(session.runs_dir(experiment))
+    cache_dir = str(runs_dir(experiment))
     cache_temp_fsyncs = [
         p
         for p in fsynced_paths
@@ -805,7 +806,7 @@ def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
     assert dedup2 is True
     assert rid2 == rid1
     # Counter must NOT have incremented.
-    after = session.load_run(experiment, "ml_ridge_abcd1234")
+    after = load_run(experiment, "ml_ridge_abcd1234")
     assert after.retries["3"]["attempts"] == 1
 
 

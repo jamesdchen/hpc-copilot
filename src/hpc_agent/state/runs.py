@@ -565,7 +565,7 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
     Used by :func:`find_run_by_cmd_sha` (opt-in skip during resume
     detection) and :func:`prune_orphan_sidecars` (delete them).
     """
-    from hpc_agent.state import session
+    from hpc_agent.state.journal import load_run
 
     # Sidecar-side signal: was finalize_run_sidecar_job_ids ever called?
     sidecar_path = run_sidecar_path(experiment_dir, run_id)
@@ -580,7 +580,7 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
 
     # Journal-side signal: did submit_and_record run to completion?
     try:
-        record = session.load_run(experiment_dir, run_id)
+        record = load_run(experiment_dir, run_id)
     except Exception:  # noqa: BLE001 — journal corruption == treat as orphan
         record = None
 

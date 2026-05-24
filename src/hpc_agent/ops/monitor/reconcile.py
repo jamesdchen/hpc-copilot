@@ -13,10 +13,10 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.status import _ssh_status_report
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run, mark_run, update_run_status
 
 if TYPE_CHECKING:
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.run_record import RunRecord
 
 
 def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:
@@ -142,7 +142,7 @@ def reconcile(
     All three SSH calls run concurrently. Writes the reconciled record
     back atomically and returns it.
     """
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no run record for {run_id!r}")
 
@@ -209,12 +209,12 @@ def reconcile(
         # Drop any failed_waves entries that are now combined.
         "failed_waves": [w for w in record.failed_waves if w not in set(combined)],
     }
-    updated = session.update_run_status(experiment_dir, run_id, **fields)
+    updated = update_run_status(experiment_dir, run_id, **fields)
 
     # Only mark abandoned when the alive check actually ran and found
     # nothing — never on SSH failure of the alive check itself.
     if record.job_ids and not alive and not alive_check_failed:
-        updated = session.mark_run(experiment_dir, run_id, status="abandoned")
+        updated = mark_run(experiment_dir, run_id, status="abandoned")
     return updated
 
 
@@ -239,5 +239,5 @@ def mark_terminal(
     status: str,
     stage: str | None = None,
 ) -> RunRecord:
-    """Thin pass-through to ``session.mark_run`` for symmetry."""
-    return session.mark_run(experiment_dir, run_id, status=status, stage=stage)
+    """Thin pass-through to ``journal.mark_run`` for symmetry."""
+    return mark_run(experiment_dir, run_id, status=status, stage=stage)

@@ -42,8 +42,8 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
     import argparse
     from unittest.mock import patch
 
-    from hpc_agent.state import session as session_mod
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
@@ -61,7 +61,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
     )
-    session_mod.upsert_run(tmp_path, rec)
+    upsert_run(tmp_path, rec)
 
     args = argparse.Namespace(
         experiment_dir=tmp_path,
@@ -160,8 +160,8 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
 
 def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
     """Helper: seed a journal record so cmd_aggregate gets past lookup."""
-    from hpc_agent.state import session as session_mod
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
 
     rec = RunRecord(
         run_id=run_id,
@@ -175,7 +175,7 @@ def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
     )
-    session_mod.upsert_run(tmp_path, rec)
+    upsert_run(tmp_path, rec)
     return rec
 
 

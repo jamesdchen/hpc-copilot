@@ -13,9 +13,10 @@ import pytest
 
 from hpc_agent.meta.campaign.atoms.load_context import load_context
 from hpc_agent.meta.campaign.cursor import advance_cursor
-from hpc_agent.state import session
+from hpc_agent.state import run_record
+from hpc_agent.state.journal import upsert_run
+from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
-from hpc_agent.state.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,7 +27,6 @@ def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect the journal home into a per-test tmp directory."""
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 
 
@@ -118,7 +118,7 @@ def test_orphan_sidecar_emits_warning(journal_home, experiment):
 
 
 def test_in_flight_run_hints_monitor(journal_home, experiment):
-    session.upsert_run(experiment, _make_record("20260521-120000-aaa", stage="monitor"))
+    upsert_run(experiment, _make_record("20260521-120000-aaa", stage="monitor"))
     ctx = load_context(experiment_dir=experiment)
     assert len(ctx["in_flight"]) == 1
     row = ctx["in_flight"][0]
@@ -130,7 +130,7 @@ def test_in_flight_run_hints_monitor(journal_home, experiment):
 
 
 def test_in_flight_past_monitor_hints_aggregate(journal_home, experiment):
-    session.upsert_run(experiment, _make_record("20260521-120000-aaa", stage="aggregate"))
+    upsert_run(experiment, _make_record("20260521-120000-aaa", stage="aggregate"))
     ctx = load_context(experiment_dir=experiment)
     assert ctx["next_step_hint"] == "aggregate"
 
@@ -178,7 +178,7 @@ def test_delegate_agent_step_carries_a_spawn_request(journal_home, experiment):
 
 
 def test_delegate_monitor_is_cli_kind(journal_home, experiment):
-    session.upsert_run(experiment, _make_record("20260521-120000-aaa", stage="monitor"))
+    upsert_run(experiment, _make_record("20260521-120000-aaa", stage="monitor"))
     delegate = load_context(experiment_dir=experiment)["delegate"]
     assert delegate["kind"] == "cli"
     assert delegate["step"] == "monitor"
@@ -188,7 +188,7 @@ def test_delegate_monitor_is_cli_kind(journal_home, experiment):
 
 
 def test_delegate_aggregate_picks_non_monitor_run(journal_home, experiment):
-    session.upsert_run(experiment, _make_record("20260521-120000-aaa", stage="aggregate"))
+    upsert_run(experiment, _make_record("20260521-120000-aaa", stage="aggregate"))
     delegate = load_context(experiment_dir=experiment)["delegate"]
     assert delegate["kind"] == "cli"
     assert delegate["step"] == "aggregate"

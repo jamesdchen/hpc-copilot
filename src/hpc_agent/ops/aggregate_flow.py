@@ -58,7 +58,8 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
 from hpc_agent.models.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
 from hpc_agent.ops.aggregate.combine import combine_wave
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run
+from hpc_agent.state.run_record import TERMINAL_STATUSES
 from hpc_agent.state.runs import read_run_sidecar
 
 __all__ = ["aggregate_flow", "AggregateFlowResult"]
@@ -328,7 +329,7 @@ def aggregate_flow(
     summary_glob = spec.summary_glob
     results_subdir = spec.results_subdir
 
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for {run_id!r}; submit the run first")
 
@@ -337,7 +338,7 @@ def aggregate_flow(
     # reporting plausible-but-wrong metrics. ``ensure_all_combined=false``
     # is the documented opt-in for a deliberate partial aggregate, so it
     # bypasses the gate.
-    if ensure_all_combined and record.status not in session.TERMINAL_STATUSES:
+    if ensure_all_combined and record.status not in TERMINAL_STATUSES:
         raise errors.PreconditionFailed(
             f"run {run_id!r} is {record.status!r}, not terminal; monitor-flow "
             "has not driven it to complete/failed/abandoned. Aggregating now "
@@ -425,7 +426,7 @@ def aggregate_flow(
                 max_retries=combiner_max_retries,
             )
             # Re-read after combine-wave updated the journal.
-            record = session.load_run(experiment_dir, run_id)
+            record = load_run(experiment_dir, run_id)
             if record is None:  # pragma: no cover — defensive
                 raise errors.JournalCorrupt(f"record vanished for {run_id!r}")
 

@@ -11,9 +11,9 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.submit import SubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run, upsert_run
+from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import find_run_by_cmd_sha, read_run_sidecar
-from hpc_agent.state.session import RunRecord
 
 
 def _submit_spec_handler(ns):  # type: ignore[no-untyped-def]
@@ -83,7 +83,7 @@ def submit_and_record(
     monitoring without re-asking the user for cluster / job_ids.
 
     *campaign_id* tags the run as part of a closed-loop campaign so
-    :func:`session.find_runs_by_campaign` can pick it up on resume.
+    :func:`hpc_agent.state.index.find_runs_by_campaign` can pick it up on resume.
     Defaults to an empty string for open-loop submits.
 
     Returns ``(record, deduped)`` where ``deduped`` is True if a record
@@ -103,7 +103,7 @@ def submit_and_record(
     total_tasks = spec.total_tasks
     campaign_id = spec.campaign_id or ""
 
-    existing = session.load_run(experiment_dir, run_id)
+    existing = load_run(experiment_dir, run_id)
     if existing is not None:
         return existing, True
 
@@ -142,7 +142,7 @@ def submit_and_record(
                 )
                 # Repair the journal so future load_run calls hit it
                 # directly without re-doing the cmd_sha scan.
-                session.upsert_run(experiment_dir, reconstructed)
+                upsert_run(experiment_dir, reconstructed)
                 return reconstructed, True
 
     record = RunRecord(
@@ -158,7 +158,7 @@ def submit_and_record(
         experiment_dir=str(Path(experiment_dir).resolve()),
         campaign_id=campaign_id,
     )
-    session.upsert_run(experiment_dir, record)
+    upsert_run(experiment_dir, record)
     # Post-qsub finalize: stamp the per-experiment sidecar with the job_ids
     # we just got back. This is what distinguishes a real run from the
     # half-baked sidecar Step 6d of /submit-hpc writes before rsync — see

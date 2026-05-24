@@ -20,8 +20,9 @@ from hpc_agent.ops.recover_flow import (
     render_overrides_to_extra_flags,
     resubmit_flow,
 )
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord, run_record
+from hpc_agent.state import run_record
+from hpc_agent.state.journal import load_run, upsert_run
+from hpc_agent.state.run_record import RunRecord
 from tests.conftest import make_sidecar_json
 
 if TYPE_CHECKING:
@@ -36,7 +37,6 @@ RUN_ID = "ml_ridge_abcd1234"
 def journal_home(tmp_path, monkeypatch):
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return tmp_path
 
 
@@ -60,7 +60,7 @@ def _seed(experiment: Path, *, total_tasks: int = 100) -> RunRecord:
         submitted_at="2026-04-26T17:00:00+00:00",
         experiment_dir=str(experiment.resolve()),
     )
-    session.upsert_run(experiment, record)
+    upsert_run(experiment, record)
     make_sidecar_json(
         experiment,
         run_id=RUN_ID,
@@ -248,7 +248,7 @@ class TestClusterSubmission:
         assert "--mem=32000M" in build_calls[0]["extra_flags"]
         assert "--time=04:00:00" in build_calls[0]["extra_flags"]
         # journal got the new job_id
-        record = session.load_run(experiment, RUN_ID)
+        record = load_run(experiment, RUN_ID)
         assert result.new_job_ids[0] in record.job_ids
 
     def test_skips_qsub_on_dedupe(self, journal_home, experiment, tmp_path, monkeypatch):

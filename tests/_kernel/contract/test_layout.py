@@ -96,8 +96,7 @@ def test_journal_layout_root_honors_env(tmp_path: Path, monkeypatch: pytest.Monk
     # every call (v3 fix for the test-leak bug class), so the prior
     # ``importlib.reload`` dance is no longer needed — and was itself
     # buggy: the finally-block reload ran while monkeypatch's env value
-    # was still live, leaving ``session.HPC_HOMEDIR`` /
-    # ``run_record.HPC_HOMEDIR`` permanently bound to tmp_path across
+    # was still live, leaving ``run_record.HPC_HOMEDIR`` permanently bound to tmp_path across
     # the rest of the session (v3 BUG-8V3-2/6).
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     journal = JournalLayout(tmp_path)

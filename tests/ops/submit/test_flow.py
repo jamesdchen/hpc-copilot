@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 
 from hpc_agent.infra.clusters import get_nfs_data_dir
+from hpc_agent.state.journal import upsert_run
 
 
 def _resolve_nfs_dir_for_cluster(cluster: str, full_clusters: dict[str, Any]):
@@ -154,12 +155,10 @@ def _batch(specs, **overrides: Any):
 @pytest.fixture
 def _journal_home(tmp_path, monkeypatch):
     """Redirect ~/.claude/hpc/ to tmp_path so journal writes don't pollute home."""
-    from hpc_agent.state import session
-    from hpc_agent.state.session import run_record
+    from hpc_agent.state import run_record
 
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
 
 
 class TestSubmitFlowBatch:
@@ -208,8 +207,7 @@ class TestSubmitFlowBatch:
         """If every spec is already on the journal, NO ssh / rsync runs."""
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
-        from hpc_agent.state import session
-        from hpc_agent.state.session import RunRecord
+        from hpc_agent.state.run_record import RunRecord
 
         # Seed the journal with both run_ids.
         for rid in ("r0", "r1"):
@@ -225,7 +223,7 @@ class TestSubmitFlowBatch:
                 submitted_at="2026-01-01T00:00:00+00:00",
                 experiment_dir=str(tmp_path.resolve()),
             )
-            session.upsert_run(tmp_path, rec)
+            upsert_run(tmp_path, rec)
 
         specs = [_spec("r0"), _spec("r1")]
         with (
@@ -285,10 +283,9 @@ class TestSubmitFlowBatch:
         """Half the specs are already journaled — only the fresh ones get qsubbed."""
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
-        from hpc_agent.state import session
-        from hpc_agent.state.session import RunRecord
+        from hpc_agent.state.run_record import RunRecord
 
-        session.upsert_run(
+        upsert_run(
             tmp_path,
             RunRecord(
                 run_id="r0",

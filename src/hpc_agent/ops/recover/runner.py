@@ -10,12 +10,12 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.resubmit import ResubmitSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run, update_run_status
 
 if TYPE_CHECKING:
     import argparse
 
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.run_record import RunRecord
 
 
 def _resubmit_handler(ns: argparse.Namespace) -> int:
@@ -111,7 +111,7 @@ def resubmit_failed(
     new_job_ids = list(spec.new_job_ids) if spec.new_job_ids is not None else None
     request_id = spec.request_id
 
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no run record for {run_id!r}")
 
@@ -151,5 +151,5 @@ def resubmit_failed(
     }
     if new_job_ids is not None:
         fields["job_ids"] = list(new_job_ids)
-    updated = session.update_run_status(experiment_dir, run_id, **fields)
+    updated = update_run_status(experiment_dir, run_id, **fields)
     return updated, False, rid

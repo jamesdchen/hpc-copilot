@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
-from hpc_agent.state import session
+from hpc_agent.state.index import find_runs_by_campaign
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -41,7 +41,7 @@ def campaign_status(*, experiment_dir: Path, campaign_id: str) -> dict[str, Any]
 
     sidecars = find_sidecars_by_campaign(experiment_dir, campaign_id)
     history = prior(experiment_dir, campaign_id)
-    in_flight_records = session.find_runs_by_campaign(experiment_dir, campaign_id)
+    in_flight_records = find_runs_by_campaign(experiment_dir, campaign_id)
     in_flight = sum(1 for r in in_flight_records if r.status == "in_flight")
     return {
         "campaign_id": campaign_id,

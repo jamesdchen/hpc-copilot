@@ -5,7 +5,7 @@ drifted independently — every CHANGELOG-grade bug we shipped in this
 area boiled down to two of those vocabularies disagreeing about a
 single value:
 
-* ``hpc_agent.state.session.RunRecord.status`` — journal record status
+* ``hpc_agent.state.run_record.RunRecord.status`` — journal record status
   (set literal ``{"complete", "failed", "abandoned"}`` plus
   ``"in_flight"``).
 * ``hpc_agent.ops.monitor_flow``'s ``lifecycle_state`` envelope
@@ -51,7 +51,7 @@ __all__ = [
 
 
 class JournalStatus(StrEnum):
-    """Status field on :class:`hpc_agent.state.session.RunRecord`.
+    """Status field on :class:`hpc_agent.state.run_record.RunRecord`.
 
     ``in_flight`` while the run is being monitored; transitions to one
     of the three terminal values when the workflow ends.
@@ -64,7 +64,7 @@ class JournalStatus(StrEnum):
 
 
 # Convenience set of terminal :class:`JournalStatus` values.
-# ``hpc_agent.state.session`` historically exposed this same set as a
+# ``hpc_agent.state.run_record`` historically exposed this same set as a
 # module-level ``TERMINAL_STATUSES = frozenset({...})``. Now derived
 # from the StrEnum so it cannot drift.
 TERMINAL_STATUSES = frozenset(

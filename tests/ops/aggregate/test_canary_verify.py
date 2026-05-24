@@ -13,8 +13,9 @@ from unittest import mock
 import pytest
 
 from hpc_agent import errors
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord, run_record
+from hpc_agent.state import run_record
+from hpc_agent.state.journal import upsert_run
+from hpc_agent.state.run_record import RunRecord
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,7 +25,6 @@ if TYPE_CHECKING:
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 
 
@@ -47,7 +47,7 @@ def _seed_canary(experiment: Path, run_id: str = "r1-canary") -> RunRecord:
         submitted_at="2026-01-01T00:00:00+00:00",
         experiment_dir=str(experiment.resolve()),
     )
-    session.upsert_run(experiment, record)
+    upsert_run(experiment, record)
     return record
 
 

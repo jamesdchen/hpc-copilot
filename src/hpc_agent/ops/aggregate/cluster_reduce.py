@@ -278,9 +278,9 @@ def cluster_reduce(
     from pathlib import Path as _Path
 
     from hpc_agent.infra.remote import rsync_pull, ssh_run
-    from hpc_agent.state import session
+    from hpc_agent.state.journal import load_run
 
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.SpecInvalid(f"no journal record for run_id={run_id!r}")
 

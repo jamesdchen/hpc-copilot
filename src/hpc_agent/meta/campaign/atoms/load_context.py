@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliShape
-from hpc_agent.state import session
+from hpc_agent.state.index import find_in_flight_runs
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -260,7 +260,7 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
 
     # --- in-flight journal records ---
     in_flight: list[dict[str, Any]] = []
-    for record in session.find_in_flight_runs(experiment_dir):
+    for record in find_in_flight_runs(experiment_dir):
         in_flight.append(
             {
                 "run_id": record.run_id,

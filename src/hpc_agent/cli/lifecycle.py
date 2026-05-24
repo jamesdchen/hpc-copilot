@@ -25,7 +25,7 @@ from hpc_agent import errors
 from hpc_agent.cli._helpers import EXIT_OK, _ok, _require_ssh_agent
 from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
 from hpc_agent.ops.monitor.status import record_status
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run
 
 if TYPE_CHECKING:
     pass
@@ -44,7 +44,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     """
     if (rc := _require_ssh_agent()) is not None:
         return rc
-    record = session.load_run(args.experiment_dir, args.run_id)
+    record = load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(
             f"no journal record for run_id {args.run_id!r} in {args.experiment_dir}"

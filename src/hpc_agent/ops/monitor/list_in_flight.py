@@ -1,7 +1,7 @@
 """``list-in-flight`` primitive — enumerate runs still in flight.
 
 Pure-dispatch primitive: walks the local journal under
-*experiment_dir* and projects each in-flight :class:`session.RunRecord`
+*experiment_dir* and projects each in-flight :class:`RunRecord`
 to a JSON-friendly row, including a freshness annotation
 (``last_status_age_seconds``) derived from the cached
 ``last_status.checked_at`` timestamp. No SSH, no scheduler.
@@ -20,10 +20,12 @@ from hpc_agent.cli._dispatch import CliShape
 # compat alias for the local primitive call below; the lint allow-list
 # entry that used to gate this cross-subject hop is gone.
 from hpc_agent.infra.time import status_age_seconds as _last_status_age_seconds
-from hpc_agent.state import session
+from hpc_agent.state.index import find_in_flight_runs
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from hpc_agent.state.run_record import RunRecord
 
 
 @primitive(
@@ -44,9 +46,9 @@ def list_in_flight(*, experiment_dir: Path) -> dict[str, Any]:
     ``total_tasks``, ``submitted_at``, ``last_status``,
     ``last_status_age_seconds``, and (when set) ``campaign_id``.
     """
-    records = session.find_in_flight_runs(experiment_dir)
+    records = find_in_flight_runs(experiment_dir)
 
-    def _row(r: session.RunRecord) -> dict[str, Any]:
+    def _row(r: RunRecord) -> dict[str, Any]:
         d: dict[str, Any] = {
             "run_id": r.run_id,
             "profile": r.profile,

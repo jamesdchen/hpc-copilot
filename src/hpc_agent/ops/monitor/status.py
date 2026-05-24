@@ -10,8 +10,8 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.time import utcnow_iso
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord, _atomic_write_json
+from hpc_agent.state.journal import update_run_status
+from hpc_agent.state.run_record import RunRecord, _atomic_write_json, runs_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -117,10 +117,10 @@ def record_status(
     # cluster-side reporter emitted one (sidecar carried a wave_map).
     if isinstance(report.get("waves"), dict) and report["waves"]:
         summary["waves"] = report["waves"]
-    record = session.update_run_status(experiment_dir, run_id, last_status=summary)
+    record = update_run_status(experiment_dir, run_id, last_status=summary)
     # Cache the snapshot for cheap external reads. Best-effort: a write
     # failure here must not roll back the journal update.
-    cache_path = session.runs_dir(experiment_dir) / f"{run_id}.last_status.json"
+    cache_path = runs_dir(experiment_dir) / f"{run_id}.last_status.json"
     # Atomic write so a concurrent reader never sees a half-written
     # file.  ``Path.write_text`` truncates in place; readers that
     # race with the writer would otherwise observe a JSONDecodeError.

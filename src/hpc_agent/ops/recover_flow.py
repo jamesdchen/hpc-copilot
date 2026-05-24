@@ -229,9 +229,9 @@ def resubmit_flow(
             raise errors.SpecInvalid(
                 "submit_to_cluster=True requires script, backend, and job_name kwargs"
             )
-        from hpc_agent.state import session as _session
+        from hpc_agent.state.journal import load_run as _load_run
 
-        existing = _session.load_run(experiment_dir, run_id)
+        existing = _load_run(experiment_dir, run_id)
         if existing is None:
             # No journal record means the post-submit `resubmit_failed`
             # bookkeeping would raise JournalCorrupt — and we'd already
@@ -273,7 +273,7 @@ def resubmit_flow(
             cluster_job_ids = list(existing.job_ids or [])
             cluster_submitted = True
         if not already_done:
-            from hpc_agent.state import session as _session_mod
+            from hpc_agent.state.journal import update_run_status as _update_run_status
 
             # On resume, rebuild the batch plan from the failed_task_ids
             # / overrides recorded at the *first* attempt — not the
@@ -300,7 +300,7 @@ def resubmit_flow(
                 # resume sees the resubmit array jobs that already
                 # landed — they would otherwise live only inside
                 # pending_resubmit, which monitor does not read.
-                _session_mod.update_run_status(
+                _update_run_status(
                     experiment_dir,
                     run_id,
                     job_ids=list(ids),
@@ -370,10 +370,10 @@ def resubmit_flow(
         # Resubmit completed and resubmit_failed stamped the request_id
         # — drop the resume marker. Best-effort: if this write fails the
         # stale marker only makes a later replay resume to a no-op.
-        from hpc_agent.state import session as _session_mod
+        from hpc_agent.state.journal import update_run_status as _update_run_status
 
         with contextlib.suppress(Exception):
-            _session_mod.update_run_status(experiment_dir, run_id, pending_resubmit={})
+            _update_run_status(experiment_dir, run_id, pending_resubmit={})
 
     return ResubmitFlowResult(
         run_id=record.run_id,

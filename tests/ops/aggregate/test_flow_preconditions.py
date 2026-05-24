@@ -17,8 +17,9 @@ from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.ops.aggregate_flow import aggregate_flow
 from hpc_agent.ops.monitor_flow import monitor_flow
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord, run_record
+from hpc_agent.state import run_record
+from hpc_agent.state.journal import upsert_run
+from hpc_agent.state.run_record import RunRecord
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,7 +31,6 @@ _RUN_ID = "20260521-120000-aaa"
 def journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 
 
@@ -59,7 +59,7 @@ def _record(**overrides) -> RunRecord:
 
 
 def test_monitor_flow_rejects_run_with_no_job_ids(journal_home, experiment):
-    session.upsert_run(experiment, _record(job_ids=[]))
+    upsert_run(experiment, _record(job_ids=[]))
     with pytest.raises(errors.PreconditionFailed, match="no scheduler job ids"):
         monitor_flow(experiment, spec=MonitorFlowSpec(run_id=_RUN_ID))
 
@@ -70,7 +70,7 @@ def test_monitor_flow_unknown_run_is_journal_corrupt(journal_home, experiment):
 
 
 def test_aggregate_flow_rejects_non_terminal_run(journal_home, experiment):
-    session.upsert_run(experiment, _record(status="in_flight"))
+    upsert_run(experiment, _record(status="in_flight"))
     with pytest.raises(errors.PreconditionFailed, match="not terminal"):
         aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
 
@@ -80,7 +80,7 @@ def test_aggregate_flow_partial_opt_in_bypasses_terminal_gate(journal_home, expe
     # opt-in and must bypass the terminal-state gate. The empty
     # ssh_target makes the call fail fast at ssh validation — a step
     # AFTER the gate — which proves the gate itself did not fire.
-    session.upsert_run(experiment, _record(status="in_flight", ssh_target=""))
+    upsert_run(experiment, _record(status="in_flight", ssh_target=""))
     spec = AggregateFlowSpec(run_id=_RUN_ID, ensure_all_combined=False)
     with pytest.raises(errors.HpcError) as exc_info:
         aggregate_flow(experiment, spec=spec)
@@ -91,7 +91,7 @@ def test_aggregate_flow_allows_terminal_run_past_gate(journal_home, experiment):
     # A terminal run passes the gate; the empty ssh_target then fails it
     # at ssh validation — again, anything but PreconditionFailed proves
     # the gate let a terminal run through.
-    session.upsert_run(experiment, _record(status="complete", ssh_target=""))
+    upsert_run(experiment, _record(status="complete", ssh_target=""))
     with pytest.raises(errors.HpcError) as exc_info:
         aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
     assert not isinstance(exc_info.value, errors.PreconditionFailed)

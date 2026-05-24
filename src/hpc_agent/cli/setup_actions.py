@@ -110,12 +110,12 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
     if experiment_dir is None:
         raise errors.SpecInvalid("experiment_dir is required")
 
-    from hpc_agent.state import session
+    from hpc_agent.state.index import find_in_flight_runs
     from hpc_agent.state.runs import find_existing_runs
 
     # Priority 0 — in-flight runs.
     try:
-        in_flight = session.find_in_flight_runs(experiment_dir)
+        in_flight = find_in_flight_runs(experiment_dir)
     except (OSError, ValueError):
         in_flight = []
     if in_flight:

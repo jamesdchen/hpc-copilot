@@ -23,8 +23,9 @@ import pytest
 
 from hpc_agent import runner
 from hpc_agent.ops.recover.runner_failures import _categorize
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord, run_record
+from hpc_agent.state import run_record
+from hpc_agent.state.journal import upsert_run
+from hpc_agent.state.run_record import RunRecord
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -117,7 +118,6 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         # see tests/internal/test_session.py for the rationale).
         home = tmp_path / "home_hpc"
         monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-        monkeypatch.setattr(session, "HPC_HOMEDIR", home)
 
         experiment = tmp_path / "exp"
         experiment.mkdir()
@@ -133,7 +133,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
             submitted_at="2026-01-01T00:00:00+00:00",
             experiment_dir=str(experiment.resolve()),
         )
-        session.upsert_run(experiment, record)
+        upsert_run(experiment, record)
 
         # Mock the SSH primitives: three failed tasks, all preempted.
         # ``_ssh_status_report`` is imported directly into failures_atom

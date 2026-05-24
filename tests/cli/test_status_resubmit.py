@@ -269,8 +269,8 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake.sock")
 
     # Seed a run.
-    from hpc_agent.state import session as session_mod
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
 
     rec = RunRecord(
         run_id="ml_abcd1234",
@@ -284,7 +284,7 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
     )
-    session_mod.upsert_run(tmp_path, rec)
+    upsert_run(tmp_path, rec)
 
     args = argparse.Namespace(
         experiment_dir=tmp_path,

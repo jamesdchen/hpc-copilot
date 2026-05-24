@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from hpc_agent.state.journal import upsert_run
 from hpc_agent.state.runs import (
     SIDECAR_SCHEMA_VERSION,
     read_run_sidecar,
@@ -452,19 +453,16 @@ def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
 
 @pytest.fixture
 def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent.state import session
-    from hpc_agent.state.session import run_record
+    from hpc_agent.state import run_record
 
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return home
 
 
 def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
     """Write a journal RunRecord matching *run_id* with the given job_ids."""
-    from hpc_agent.state import session
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.run_record import RunRecord
 
     record = RunRecord(
         run_id=run_id,
@@ -478,7 +476,7 @@ def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
         submitted_at="2026-01-01T00:00:00+00:00",
         experiment_dir=str(experiment.resolve()),
     )
-    session.upsert_run(experiment, record)
+    upsert_run(experiment, record)
 
 
 def test_is_orphan_when_no_journal_record(_journal_home: Path, tmp_path: Path) -> None:

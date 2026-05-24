@@ -18,7 +18,7 @@ from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.ops.monitor.logs import fetch_task_logs
 from hpc_agent.ops.monitor.status import _ssh_status_report
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run
 
 if TYPE_CHECKING:
     import argparse
@@ -107,7 +107,7 @@ def fetch_logs(
     ``note`` field is set when *all_failed* is True but no failed tasks
     were found in the current status report.
     """
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for run_id {run_id!r}")
 

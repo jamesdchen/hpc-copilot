@@ -173,9 +173,9 @@ def verify_canary(
     from hpc_agent.infra.cluster_logs import fetch_task_logs
     from hpc_agent.infra.cluster_status import ssh_status_report
     from hpc_agent.ops.aggregate.runner import verify_combiner_artifact
-    from hpc_agent.state import session
+    from hpc_agent.state.journal import load_run
 
-    record = session.load_run(experiment_dir, canary_run_id)
+    record = load_run(experiment_dir, canary_run_id)
     if record is None:
         raise errors.SpecInvalid(f"no journal record for canary run_id={canary_run_id!r}")
     if int(record.total_tasks) <= 0:

@@ -16,8 +16,9 @@ from hpc_agent.ops.recover_flow import (
     ResubmitFlowResult,
     resubmit_flow,
 )
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord, run_record
+from hpc_agent.state import run_record
+from hpc_agent.state.journal import load_run, upsert_run
+from hpc_agent.state.run_record import RunRecord
 from tests.conftest import make_sidecar_json
 
 if TYPE_CHECKING:
@@ -32,7 +33,6 @@ RUN_ID = "ml_ridge_abcd1234"
 def journal_home(tmp_path, monkeypatch):
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
-    monkeypatch.setattr(session, "HPC_HOMEDIR", home)
     return tmp_path
 
 
@@ -58,7 +58,7 @@ def _seed(experiment: Path, **overrides) -> RunRecord:
     )
     base.update(overrides)
     record = RunRecord(**base)
-    session.upsert_run(experiment, record)
+    upsert_run(experiment, record)
     make_sidecar_json(
         experiment,
         run_id=RUN_ID,
@@ -163,7 +163,7 @@ class TestOverridePassThrough:
             category="system_oom",
             overrides={"mem_mb": 16_000},
         )
-        record = session.load_run(experiment, RUN_ID)
+        record = load_run(experiment, RUN_ID)
         assert record.retries["1"]["overrides"]["mem_mb"] == 16_000
 
 

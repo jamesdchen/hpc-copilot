@@ -63,8 +63,8 @@ from hpc_agent.ops.recover.runner_failures import (
     DEFAULT_AUTO_RETRY_POLICY,
     annotate_clusters_with_retry_advice,
 )
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord
+from hpc_agent.state.journal import upsert_run
+from hpc_agent.state.run_record import RunRecord
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -323,7 +323,7 @@ def test_error_code_remote_command_failed_when_ssh_returns_nonzero(
         submitted_at="2026-05-23T00:00:00+00:00",
         experiment_dir=str(tmp_path.resolve()),
     )
-    session.upsert_run(tmp_path, record)
+    upsert_run(tmp_path, record)
 
     captured: list[dict] = []
 

@@ -24,7 +24,7 @@ from hpc_agent.ops.recover.runner_failures import (
     annotate_clusters_with_retry_advice,
     cluster_failures_by_fingerprint,
 )
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -94,7 +94,7 @@ def fetch_failures(
     with retry advice from the resolved auto-retry policy and surfaces
     preempted tasks at the top level for harness branching.
     """
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for run_id {run_id!r}")
 
