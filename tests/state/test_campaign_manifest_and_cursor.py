@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 import jsonschema
 import pytest
 
-from hpc_agent.campaign.cursor import (
+from hpc_agent.meta.campaign.cursor import (
     advance_cursor,
     cursor_path,
     read_cursor,
 )
-from hpc_agent.campaign.manifest import (
+from hpc_agent.meta.campaign.manifest import (
     MANIFEST_FILENAME,
     manifest_path,
     read_manifest,
@@ -144,7 +144,7 @@ def test_read_rejects_newer_schema_version(tmp_path: Path) -> None:
     # be loud, not silently mis-parsed.
     import json as _json
 
-    from hpc_agent.campaign.cursor import CURSOR_SCHEMA_VERSION
+    from hpc_agent.meta.campaign.cursor import CURSOR_SCHEMA_VERSION
 
     path = cursor_path(tmp_path, "camp_x")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +167,7 @@ def test_read_accepts_lower_or_equal_schema_version(tmp_path: Path) -> None:
     # version) round-trips without error. Future bumps land migrations.
     import json as _json
 
-    from hpc_agent.campaign.cursor import CURSOR_SCHEMA_VERSION
+    from hpc_agent.meta.campaign.cursor import CURSOR_SCHEMA_VERSION
 
     path = cursor_path(tmp_path, "camp_y")
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -13,8 +13,8 @@ import pytest
 
 from hpc_agent._internal import session
 from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent.atoms.load_context import load_context
-from hpc_agent.campaign.cursor import advance_cursor
+from hpc_agent.meta.campaign.atoms.load_context import load_context
+from hpc_agent.meta.campaign.cursor import advance_cursor
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:

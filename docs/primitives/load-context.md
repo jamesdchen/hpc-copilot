@@ -11,7 +11,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent load-context [--experiment-dir <dir>]
-  python: hpc_agent.atoms.load_context.load_context
+  python: hpc_agent.meta.campaign.atoms.load_context.load_context
 exit_codes:
 - 0: ok
 ---

@@ -16,7 +16,7 @@ backed_by:
     <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks
     <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--strategy-name <strategy_name>]
     [--strategy-params-json <strategy_params_json>]
-  python: hpc_agent.atoms.campaign_init.campaign_init
+  python: hpc_agent.meta.campaign.atoms.init.campaign_init
 ---
 # campaign-init
 

@@ -85,9 +85,9 @@ def campaign_advance(
     Returns the underlying ``status``, ``converged``, and ``budget``
     payloads so the agent can drill in without a second CLI call.
     """
-    from hpc_agent.atoms.campaign_budget import campaign_budget
-    from hpc_agent.atoms.campaign_converged import campaign_converged
-    from hpc_agent.atoms.campaign_status import campaign_status
+    from hpc_agent.meta.campaign.atoms.budget import campaign_budget
+    from hpc_agent.meta.campaign.atoms.converged import campaign_converged
+    from hpc_agent.meta.campaign.atoms.status import campaign_status
 
     status = campaign_status(experiment_dir=experiment_dir, campaign_id=campaign_id)
     budget = campaign_budget(

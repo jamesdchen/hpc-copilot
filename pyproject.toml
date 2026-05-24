@@ -62,7 +62,7 @@ Issues = "https://github.com/jamesdchen/hpc-agent/issues"
 
 [project.scripts]
 hpc-agent = "hpc_agent.agent_cli:main"
-hpc-campaign-driver = "hpc_agent.campaign.driver:main"
+hpc-campaign-driver = "hpc_agent.meta.campaign.driver:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
