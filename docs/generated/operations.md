@@ -39,12 +39,12 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`load-context`](primitives/load-context.md) | ✓ | _none_ | `hpc-agent load-context [--experiment-dir <dir>]` | `hpc_agent.atoms.load_context.load_context` | — | `hpc_agent/schemas/load_context.output.json` |
 | [`logs`](primitives/logs.md) | ✓ | ssh | `hpc-agent logs [--experiment-dir <dir>] --run-id <run_id> [--task-id <task_ids>] [--all-failed] [--lines <lines>]` | `hpc_agent.atoms.logs.fetch_logs` | — | — |
 | [`monitor-summary`](primitives/monitor-summary.md) | ✓ | _none_ | `hpc-agent monitor-summary [--experiment-dir <dir>] --run-id <run_id>` | `hpc_agent.atoms.monitor_summary.monitor_summary` | — | `hpc_agent/schemas/monitor_summary.output.json` |
-| [`plan-throughput`](primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>]` | `hpc_agent.atoms.plan_throughput.plan_throughput` | — | — |
+| [`plan-throughput`](primitives/plan-throughput.md) | ✓ | _none_ | `hpc-agent plan-throughput --cluster <cluster> --total-tasks <total_tasks> [--est-task-duration-s <est_task_duration_s>]` | `hpc_agent.ops.submit.plan_throughput.plan_throughput` | — | — |
 | [`poll-run-status`](primitives/poll-run-status.md) | ✓ | ssh; writes-journal | `hpc-agent status [--experiment-dir <dir>] --run-id <run_id> [--min-rows <min_rows>]` | `hpc_agent.runner.status.record_status` | — | `hpc_agent/schemas/status.output.json` |
 | [`recall`](primitives/recall.md) | ✓ | _none_ | `hpc-agent recall [--limit <limit>] [--include-runtime] [--include-generator-stats] [--root <root>] [--task-kind <task_kind>] [--operator <operator>] [--since <since>]` | `hpc_agent.ops.memory.recall.recall_campaigns` | `hpc_agent/schemas/recall.input.json` | `hpc_agent/schemas/recall.output.json` |
 | [`recommend-partition`](primitives/recommend-partition.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.atoms.recommend_partition.recommend_partition` | `hpc_agent/schemas/recommend_partition.input.json` | `hpc_agent/schemas/recommend_partition.output.json` |
 | [`suggest-setup-action`](primitives/suggest-setup-action.md) | ✓ | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` | `hpc_agent.atoms.setup_actions.suggest_setup_action` | — | `hpc_agent/schemas/suggest_setup_action.output.json` |
-| [`summarize-submit-plan`](primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `hpc_agent.atoms.submit_plan_summary.summarize_submit_plan` | — | `hpc_agent/schemas/summarize_submit_plan.output.json` |
+| [`summarize-submit-plan`](primitives/summarize-submit-plan.md) | ✓ | _none_ | `hpc-agent summarize-submit-plan --spec <path>` | `hpc_agent.ops.submit.plan_summary.summarize_submit_plan` | — | `hpc_agent/schemas/summarize_submit_plan.output.json` |
 | [`verify-aggregation-complete`](primitives/verify-aggregation-complete.md) | ✓ | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> --combiner-dir <combiner_dir_local> [--results-dir <results_dir_local>]` | `hpc_agent.atoms.aggregation_invariants.verify_aggregation_complete` | — | `hpc_agent/schemas/verify_aggregation_complete.output.json` |
 
 ## `validate` (6)
@@ -80,7 +80,7 @@ Records a new submission (sidecar write + journal entry).
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.runner.submit.submit_and_record` | `hpc_agent/schemas/submit.input.json` | `hpc_agent/schemas/submit.output.json` |
+| [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.ops.submit.runner.submit_and_record` | `hpc_agent/schemas/submit.input.json` | `hpc_agent/schemas/submit.output.json` |
 
 ## `scaffold` (9)
 
@@ -106,8 +106,8 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 |---|---|---|---|---|---|---|
 | [`aggregate-flow`](primitives/aggregate-flow.md) | ✓ | ssh; sync-pull; writes-journal | `hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.flows.aggregate_flow.aggregate_flow` | `hpc_agent/schemas/aggregate_flow.input.json` | `hpc_agent/schemas/aggregate_flow.output.json` |
 | [`monitor-flow`](primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.flows.monitor_flow.monitor_flow` | `hpc_agent/schemas/monitor_flow.input.json` | `hpc_agent/schemas/monitor_flow.output.json` |
-| [`submit-flow`](primitives/submit-flow.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok]` | `hpc_agent.flows.submit_flow.submit_flow` | `hpc_agent/schemas/submit_flow.input.json` | `hpc_agent/schemas/submit_flow.output.json` |
-| [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow-batch --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.flows.submit_flow.submit_flow_batch` | `hpc_agent/schemas/submit_flow_batch.input.json` | `hpc_agent/schemas/submit_flow_batch.output.json` |
+| [`submit-flow`](primitives/submit-flow.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok]` | `hpc_agent.ops.submit.flow.submit_flow` | `hpc_agent/schemas/submit_flow.input.json` | `hpc_agent/schemas/submit_flow.output.json` |
+| [`submit-flow-batch`](primitives/submit-flow-batch.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow-batch --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.ops.submit.flow.submit_flow_batch` | `hpc_agent/schemas/submit_flow_batch.input.json` | `hpc_agent/schemas/submit_flow_batch.output.json` |
 | [`validate-campaign`](primitives/validate-campaign.md) | ✓ | _none_ | `hpc-agent validate-campaign --spec <path> [--experiment-dir <dir>]` | `hpc_agent.flows.validate_campaign.validate_campaign` | `hpc_agent/schemas/validate_campaign.input.json` | `hpc_agent/schemas/validate_campaign.output.json` |
 | [`verify-canary`](primitives/verify-canary.md) | ✓ | ssh | `hpc-agent verify-canary [--experiment-dir <dir>] --canary-run-id <canary_run_id> [--expect-output <expect_output>] [--fingerprint <fingerprint>] [--poll-interval-sec <poll_interval_sec>] [--wait-budget-sec <wait_budget_sec>]` | `hpc_agent.atoms.canary_verify.verify_canary` | — | `hpc_agent/schemas/verify_canary.output.json` |
 

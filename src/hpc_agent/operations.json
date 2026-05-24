@@ -316,7 +316,7 @@
     "input_schema": null,
     "name": "plan-throughput",
     "output_schema": null,
-    "python": "hpc_agent.atoms.plan_throughput.plan_throughput",
+    "python": "hpc_agent.ops.submit.plan_throughput.plan_throughput",
     "side_effects": [],
     "verb": "query"
   },
@@ -374,7 +374,7 @@
     "input_schema": null,
     "name": "summarize-submit-plan",
     "output_schema": "summarize_submit_plan.output.json",
-    "python": "hpc_agent.atoms.submit_plan_summary.summarize_submit_plan",
+    "python": "hpc_agent.ops.submit.plan_summary.summarize_submit_plan",
     "side_effects": [],
     "verb": "query"
   },
@@ -511,7 +511,7 @@
     "input_schema": "submit.input.json",
     "name": "submit-spec",
     "output_schema": "submit.output.json",
-    "python": "hpc_agent.runner.submit.submit_and_record",
+    "python": "hpc_agent.ops.submit.runner.submit_and_record",
     "side_effects": [
       "scheduler-submit",
       "writes-journal"
@@ -620,7 +620,7 @@
     "input_schema": "submit_flow.input.json",
     "name": "submit-flow",
     "output_schema": "submit_flow.output.json",
-    "python": "hpc_agent.flows.submit_flow.submit_flow",
+    "python": "hpc_agent.ops.submit.flow.submit_flow",
     "side_effects": [
       "scheduler-submit",
       "sync-push",
@@ -635,7 +635,7 @@
     "input_schema": "submit_flow_batch.input.json",
     "name": "submit-flow-batch",
     "output_schema": "submit_flow_batch.output.json",
-    "python": "hpc_agent.flows.submit_flow.submit_flow_batch",
+    "python": "hpc_agent.ops.submit.flow.submit_flow_batch",
     "side_effects": [
       "scheduler-submit",
       "sync-push",

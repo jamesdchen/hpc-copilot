@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from hpc_agent.infra.backends.sge import SGEBackend
 from hpc_agent.infra.backends.slurm import SlurmBackend
-from hpc_agent.planning.throughput import JobBatch, SubmissionPlan
+from hpc_agent.ops.submit.throughput import JobBatch, SubmissionPlan
 
 # ---------------------------------------------------------------------------
 # fixtures / helpers

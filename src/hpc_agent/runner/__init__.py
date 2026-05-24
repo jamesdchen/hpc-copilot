@@ -26,6 +26,7 @@ existing call sites keep working.
 
 from __future__ import annotations
 
+from hpc_agent.ops.submit.runner import build_job_env, submit_and_record
 from hpc_agent.runner.aggregate import (
     build_provenance,
     verify_combiner_artifact,
@@ -49,7 +50,6 @@ from hpc_agent.runner.resubmit import (
     resubmit_failed,
 )
 from hpc_agent.runner.status import record_status
-from hpc_agent.runner.submit import build_job_env, submit_and_record
 
 __all__ = [
     "submit_and_record",

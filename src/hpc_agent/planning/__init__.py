@@ -9,7 +9,8 @@ submodule:
 * :mod:`hpc_agent.planning.constraints` — cluster constraint parsing.
 * :mod:`hpc_agent.planning.resubmit_batching` — pack failed task IDs
   into compact scheduler array expressions.
-* :mod:`hpc_agent.planning.throughput` — batch a task grid into waves.
+* :mod:`hpc_agent.ops.submit.throughput` — batch a task grid into waves
+  (moved to ops/submit/ in the Wave 2 reorg).
 
 Per-experiment on-disk state (``axes.yaml`` reader/writer, ``stages.py``
 loader) lives in :mod:`hpc_agent.state.axes` / :mod:`hpc_agent.state.stages`

@@ -1,6 +1,6 @@
 """``aggregate-flow``: workflow atom that finalizes a run's aggregated metrics.
 
-Third workflow atom in the :mod:`hpc_agent.flows.submit_flow` /
+Third workflow atom in the :mod:`hpc_agent.ops.submit.flow` /
 :mod:`hpc_agent.flows.monitor_flow` family. Pipeline:
 
 1. Read the per-run sidecar to discover the wave_map + remote_path.
