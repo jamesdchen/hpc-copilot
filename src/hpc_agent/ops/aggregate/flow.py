@@ -51,14 +51,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hpc_agent import errors, runner
-from hpc_agent._internal import session
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
 from hpc_agent.models.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
-from hpc_agent.runner import combine_wave, record_status
+from hpc_agent.ops.aggregate.combine import combine_wave
+from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.state import session
 from hpc_agent.state.runs import read_run_sidecar
 
 __all__ = ["aggregate_flow", "AggregateFlowResult"]
@@ -236,7 +237,7 @@ def _combine_missing(
     failures: list[tuple[int, str]] = []
     for wave in waves:
         for attempt in range(1, max_retries + 2):  # initial + max_retries
-            ok, _stdout, stderr = runner.combine_wave(
+            ok, _stdout, stderr = combine_wave(
                 experiment_dir,
                 run_id,
                 wave=wave,

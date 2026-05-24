@@ -38,7 +38,7 @@ import sys
 
 from pydantic import ValidationError
 
-from hpc_agent import errors, runner  # noqa: F401 — ``cli.runner`` access path for tests
+from hpc_agent import errors
 
 # ─── adapter SDK ───────────────────────────────────────────────────────────
 #

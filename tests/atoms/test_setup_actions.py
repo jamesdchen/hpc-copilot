@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.atoms.setup_actions``."""
+"""Tests for ``hpc_agent.cli.setup_actions``."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, run_record
-from hpc_agent.atoms.setup_actions import find_prior_run, suggest_setup_action
+from hpc_agent.cli.setup_actions import find_prior_run, suggest_setup_action
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path

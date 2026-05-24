@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
+from hpc_agent.infra.constraints import ClusterConstraints
 from hpc_agent.infra.throughput import (
     WorkloadSpec,
     build_wave_map,
     compute_submission_plan,
 )
-from hpc_agent.planning.constraints import ClusterConstraints
 
 
 class TestExactFit:

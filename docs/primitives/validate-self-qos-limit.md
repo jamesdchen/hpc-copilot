@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: hpc_agent.atoms.validate_self_qos_limit.validate_self_qos_limit
+  python: hpc_agent.ops.validate.self_qos_limit.validate_self_qos_limit
 ---
 # validate-self-qos-limit
 

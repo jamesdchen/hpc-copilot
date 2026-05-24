@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from hpc_agent.infra.constraints import ClusterConstraints
 from hpc_agent.ops.recover.batching import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
     resubmit_plan,
 )
-from hpc_agent.planning.constraints import ClusterConstraints
 
 
 class TestCompactTaskIds:

@@ -58,10 +58,10 @@ from unittest.mock import patch
 import pytest
 
 from hpc_agent import agent_cli, runner
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.ops.recover.runner_failures import DEFAULT_AUTO_RETRY_POLICY
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -229,7 +229,7 @@ def resubmit_flow(
             raise errors.SpecInvalid(
                 "submit_to_cluster=True requires script, backend, and job_name kwargs"
             )
-        from hpc_agent._internal import session as _session
+        from hpc_agent.state import session as _session
 
         existing = _session.load_run(experiment_dir, run_id)
         if existing is None:
@@ -273,7 +273,7 @@ def resubmit_flow(
             cluster_job_ids = list(existing.job_ids or [])
             cluster_submitted = True
         if not already_done:
-            from hpc_agent._internal import session as _session_mod
+            from hpc_agent.state import session as _session_mod
 
             # On resume, rebuild the batch plan from the failed_task_ids
             # / overrides recorded at the *first* attempt — not the
@@ -370,7 +370,7 @@ def resubmit_flow(
         # Resubmit completed and resubmit_failed stamped the request_id
         # — drop the resume marker. Best-effort: if this write fails the
         # stale marker only makes a later replay resume to a no-op.
-        from hpc_agent._internal import session as _session_mod
+        from hpc_agent.state import session as _session_mod
 
         with contextlib.suppress(Exception):
             _session_mod.update_run_status(experiment_dir, run_id, pending_resubmit={})
@@ -425,7 +425,7 @@ def _submit_resubmit_batches(
     constructs a real SSH-backed scheduler client. Tests pass a stub
     that records calls without touching a network.
     """
-    from hpc_agent.planning.constraints import ClusterConstraints
+    from hpc_agent.infra.constraints import ClusterConstraints
 
     # When the caller didn't pass constraints, load them from the
     # sidecar's cluster's yaml entry. Symmetric with submit_flow, which

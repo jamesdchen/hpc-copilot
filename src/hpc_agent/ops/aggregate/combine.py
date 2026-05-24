@@ -5,16 +5,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
-from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
     import argparse
     from pathlib import Path
 
-    from hpc_agent._internal.session import RunRecord
+    from hpc_agent.state.session import RunRecord
 
 
 def _aggregate_handler(ns: argparse.Namespace) -> int:

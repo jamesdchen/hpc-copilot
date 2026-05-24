@@ -19,13 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent._kernel.lifecycle.invoke import get_invoker
-from hpc_agent.atoms.spawn_prompt import (
+from hpc_agent._kernel.extension.spawn_prompt import (
     SpawnContractError,
     WorkerReport,
     parse_worker_report,
     validate_and_render_parts,
 )
+from hpc_agent._kernel.lifecycle.invoke import get_invoker
 
 
 def run_workflow(

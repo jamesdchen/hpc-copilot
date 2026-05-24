@@ -11,7 +11,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent clusters list
-  python: hpc_agent.atoms.clusters.list_clusters
+  python: hpc_agent.ops.clusters.list.list_clusters
 exit_codes:
 - 0: ok
 - 1: config_invalid

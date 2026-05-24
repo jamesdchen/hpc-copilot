@@ -14,11 +14,11 @@ from unittest.mock import patch
 import pytest
 
 from hpc_agent import runner
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent._wire.actions.resubmit import ResubmitSpec
 from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
 from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path

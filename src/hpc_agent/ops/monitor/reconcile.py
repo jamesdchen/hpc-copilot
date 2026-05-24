@@ -8,15 +8,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent._internal import session
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.monitor.status import _ssh_status_report
+from hpc_agent.state import session
 
 if TYPE_CHECKING:
-    from hpc_agent._internal.session import RunRecord
+    from hpc_agent.state.session import RunRecord
 
 
 def _ssh_list_combined_waves(*, ssh_target: str, remote_path: str) -> list[int]:

@@ -84,7 +84,7 @@ Possible values of `RunRecord.status`:
 - `abandoned` — terminal, no `job_ids` are alive on the scheduler
   (set by `runner.reconcile`).
 
-Defined in `hpc_agent/_internal/session/` (`TERMINAL_STATUSES`
+Defined in `hpc_agent/state/` (`TERMINAL_STATUSES`
 frozenset lives in `run_record.py`; default `status="in_flight"` is
 set on `RunRecord` there too). Validated in `mark_run` (in
 `journal.py`).
@@ -92,7 +92,7 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 ### Journal `schema_version`
 
 - **Current value**: `1` (the constant `SCHEMA_VERSION` in
-  `hpc_agent/_internal/session/run_record.py`).
+  `hpc_agent/state/run_record.py`).
 - Records with a mismatched `schema_version` are skipped (warned, not
   raised) by `load_run`. Bumping requires a migration story.
 
@@ -124,7 +124,7 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 - **Lives in**: `<experiment>/.hpc/stages.py` (Python file exposing
   `def stages() -> list[dict]`).
 - **JSON Schema**: `hpc_agent/schemas/stages.input.json`.
-- **Loader**: `hpc_agent.planning.stages.load_stages` (validates against
+- **Loader**: `hpc_agent.state.stages.load_stages` (validates against
   the schema and enforces unique names + resolved `depends_on`).
 
 ### Exit-code → error_code mapping
@@ -170,7 +170,7 @@ graph that used to hold them together is gone.
 |---|---|---|
 | `error_code` enum | `_schema_models/_shared.py:ErrorCode` + `errors.py` HpcError subclasses | `schemas/envelope.json`, every Pydantic model that types `error_code` |
 | `failure_category` enum | `models/mapreduce/reduce/classify.py:CATEGORIES` (still hand-mirrored — see below) | `schemas/resubmit.input.json` (Pydantic alias `ResubmitCategory`) |
-| Lifecycle states | `_internal/session/run_record.py:TERMINAL_STATUSES` (Python frozenset) + `_schema_models/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
+| Lifecycle states | `state/run_record.py:TERMINAL_STATUSES` (Python frozenset) + `_schema_models/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
 | `run_id` shape | `_schema_models/_shared.py:RunIdStrict` (input), `RunIdLoose` (output) | every input/output schema that types a run_id |
 | Scheduler / GpuType / Runtime / BackendName | `_schema_models/_shared.py` aliases | every consumer model |
 | `@primitive` decorator metadata (name, verb, side_effects, idempotent, idempotency_key, error_codes, composes, cli, agent_facing, exit_codes) | `_internal/primitive.py` registry | `docs/primitives/<name>.md` frontmatter, `docs/primitives/README.md` table, `docs/generated/operations.md` |

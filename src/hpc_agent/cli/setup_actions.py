@@ -110,7 +110,7 @@ def suggest_setup_action(experiment_dir: Path) -> dict[str, Any]:
     if experiment_dir is None:
         raise errors.SpecInvalid("experiment_dir is required")
 
-    from hpc_agent._internal import session
+    from hpc_agent.state import session
     from hpc_agent.state.runs import find_existing_runs
 
     # Priority 0 — in-flight runs.

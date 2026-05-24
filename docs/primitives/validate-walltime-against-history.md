@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: hpc_agent.atoms.validate_walltime_against_history.validate_walltime_against_history
+  python: hpc_agent.ops.validate.walltime_against_history.validate_walltime_against_history
 ---
 # validate-walltime-against-history
 

@@ -12,7 +12,7 @@ import pytest
 from hpc_agent._wire.validators.validate_self_qos_limit import (
     ValidateSelfQosLimitSpec,
 )
-from hpc_agent.atoms.validate_self_qos_limit import validate_self_qos_limit
+from hpc_agent.ops.validate.self_qos_limit import validate_self_qos_limit
 
 if TYPE_CHECKING:
     from pathlib import Path

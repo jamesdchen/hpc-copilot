@@ -2,7 +2,7 @@
 
 Owns the RunRecord dataclass + the layout / locking / atomic-write
 primitives that every higher-level helper in
-``hpc_agent._internal.session`` builds on.
+``hpc_agent.state`` builds on.
 
 Storage layout (one tree per experiment cwd)::
 

@@ -1,10 +1,11 @@
-"""Cluster-config query atoms (``clusters-list``, ``clusters-describe``).
+"""``clusters-describe`` primitive — print one cluster's config.
 
-Both are pure-dispatch primitives — they read ``clusters.yaml`` and
-project it to the envelope shape. Splitting them out of
-``agent_cli.py`` puts the @primitive registration on a primitive-layer
-function (vs an argparse adapter), which is what the C′ design
-intended for the operations catalog.
+Pure-dispatch: reads ``clusters.yaml``, returns the resolved
+``ClusterConfig`` dict, and (when ``--strict``) reports yaml keys not
+recognized by ``ClusterConfig`` under ``data.unknown_keys``.
+``ClusterConfig`` itself stays ``extra="ignore"`` for back-compat (a
+default flip would break every user with a stale field), so the
+strict pass is opt-in.
 """
 
 from __future__ import annotations
@@ -15,31 +16,6 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
-
-
-@primitive(
-    name="clusters-list",
-    verb="query",
-    side_effects=[],
-    error_codes=[errors.ConfigInvalid],
-    idempotent=True,
-    cli=CliShape(help="List all clusters.", group="clusters"),
-    agent_facing=True,
-)
-def list_clusters() -> dict[str, Any]:
-    """Return the list of configured clusters.
-
-    Each entry: ``{name, host, scheduler}``. Reads ``clusters.yaml``
-    under the package's normal config-discovery path (see
-    :func:`hpc_agent.infra.clusters.load_clusters_config`).
-    """
-    clusters = load_clusters_config()
-    return {
-        "clusters": [
-            {"name": name, "host": cfg.get("host"), "scheduler": cfg.get("scheduler")}
-            for name, cfg in clusters.items()
-        ]
-    }
 
 
 @primitive(

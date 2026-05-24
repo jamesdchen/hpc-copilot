@@ -565,7 +565,7 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
     Used by :func:`find_run_by_cmd_sha` (opt-in skip during resume
     detection) and :func:`prune_orphan_sidecars` (delete them).
     """
-    from hpc_agent._internal import session
+    from hpc_agent.state import session
 
     # Sidecar-side signal: was finalize_run_sidecar_job_ids ever called?
     sidecar_path = run_sidecar_path(experiment_dir, run_id)

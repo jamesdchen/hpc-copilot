@@ -17,7 +17,7 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING
 
-from hpc_agent._internal.session.run_record import (
+from hpc_agent.state.run_record import (
     RunRecord,
     _atomic_write_json,
     _lock_path,
@@ -134,8 +134,8 @@ def find_in_flight_runs(experiment_dir: Path) -> list[RunRecord]:
     Cross-checks the index against on-disk run files; rebuilds the index
     if it's missing or stale.
     """
-    from hpc_agent._internal.session.journal import load_run
-    from hpc_agent._internal.session.run_record import _current_homedir, _run_path
+    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.run_record import _current_homedir, _run_path
 
     if not _current_homedir().exists() or not journal_dir(experiment_dir).exists():
         return []
@@ -167,8 +167,8 @@ def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRec
     set without re-asking the user. Empty *campaign_id* returns ``[]`` —
     open-loop submits never match a campaign.
     """
-    from hpc_agent._internal.session.journal import load_run
-    from hpc_agent._internal.session.run_record import _current_homedir
+    from hpc_agent.state.journal import load_run
+    from hpc_agent.state.run_record import _current_homedir
 
     if not campaign_id:
         return []

@@ -452,8 +452,8 @@ def test_explicit_wave_map_skips_auto_derive(tmp_path: Path) -> None:
 
 @pytest.fixture
 def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from hpc_agent._internal import session
-    from hpc_agent._internal.session import run_record
+    from hpc_agent.state import session
+    from hpc_agent.state.session import run_record
 
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
@@ -463,8 +463,8 @@ def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _seed_journal(experiment: Path, run_id: str, *, job_ids: list[str]) -> None:
     """Write a journal RunRecord matching *run_id* with the given job_ids."""
-    from hpc_agent._internal import session
-    from hpc_agent._internal.session import RunRecord
+    from hpc_agent.state import session
+    from hpc_agent.state.session import RunRecord
 
     record = RunRecord(
         run_id=run_id,

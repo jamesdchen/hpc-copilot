@@ -111,6 +111,7 @@ from hpc_agent._kernel.registry.primitive import (
     register_primitives,
 )
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
 from hpc_agent.infra.gpu import pick_gpu
 from hpc_agent.infra.inspect import inspect_cluster
 from hpc_agent.infra.remote import (
@@ -149,7 +150,6 @@ from hpc_agent.ops.recover.batching import (
     compact_task_ids,
     resubmit_plan,
 )
-from hpc_agent.planning.constraints import ClusterConstraints, parse_constraints
 from hpc_agent.state.discover import (
     ExecutorInfo,
     discover_executors,

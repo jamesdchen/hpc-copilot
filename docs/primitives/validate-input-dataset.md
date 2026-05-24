@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: hpc_agent.atoms.validate_input_dataset.validate_input_dataset
+  python: hpc_agent.ops.validate.input_dataset.validate_input_dataset
 ---
 # validate-input-dataset
 

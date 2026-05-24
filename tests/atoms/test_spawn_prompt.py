@@ -6,7 +6,7 @@ from typing import get_args
 
 import pytest
 
-from hpc_agent.atoms.spawn_prompt import (
+from hpc_agent._kernel.extension.spawn_prompt import (
     DECISION_POINTS,
     WORKFLOW_PROCEDURES,
     SpawnContractError,
@@ -34,7 +34,7 @@ def test_render_names_the_workflow_procedure() -> None:
 def test_render_inlines_the_procedure_body() -> None:
     # The worker prompt carries the procedure inline — a headless
     # claude -p worker cannot invoke the Skill tool.
-    from hpc_agent.atoms.spawn_prompt import _procedure_body
+    from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
 
     prompt = render_spawn_prompt(workflow="aggregate", experiment_dir="/e", fields={})
     assert "=== BEGIN aggregate PROCEDURE ===" in prompt
@@ -46,8 +46,8 @@ def test_procedure_body_resolves_plugin_override(tmp_path, monkeypatch) -> None:
     # SoT for the worker when that plugin is installed — this is the
     # symmetry that lets a plugin (e.g. hpc-agent-pro) extend the
     # worker's behavior, not just the interactive context.
-    from hpc_agent.atoms import spawn_prompt
-    from hpc_agent.atoms.spawn_prompt import _procedure_body
+    from hpc_agent._kernel.extension import spawn_prompt
+    from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
 
     plugin_proc = tmp_path / "submit.md"
     plugin_proc.write_text("PLUGIN-PROVIDED submit procedure body.\n", encoding="utf-8")
@@ -67,7 +67,7 @@ def test_procedure_body_resolves_plugin_override(tmp_path, monkeypatch) -> None:
 
 
 def test_procedure_body_falls_back_to_host_when_no_plugin_provides(monkeypatch) -> None:
-    from hpc_agent.atoms.spawn_prompt import _procedure_body
+    from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
 
     monkeypatch.setattr(
         "hpc_agent._kernel.registry.plugins.plugin_worker_prompt_roots",
@@ -96,7 +96,7 @@ def test_render_frames_the_bare_procedure_for_headless_use() -> None:
 def test_render_prefix_is_stable_across_invocations() -> None:
     # The cacheable prefix — everything before the invocation context —
     # must be byte-identical regardless of experiment_dir / fields.
-    from hpc_agent.atoms.spawn_prompt import _SUFFIX_MARKER
+    from hpc_agent._kernel.extension.spawn_prompt import _SUFFIX_MARKER
 
     a = render_spawn_prompt(workflow="submit", experiment_dir="/exp/a", fields={"x": 1})
     b = render_spawn_prompt(workflow="submit", experiment_dir="/exp/b", fields={"y": 2})
@@ -106,7 +106,7 @@ def test_render_prefix_is_stable_across_invocations() -> None:
 
 
 def test_render_spawn_parts_splits_prefix_and_suffix() -> None:
-    from hpc_agent.atoms.spawn_prompt import render_spawn_parts
+    from hpc_agent._kernel.extension.spawn_prompt import render_spawn_parts
 
     ed = "/tmp/zzz-unique-experiment-dir"
     parts = render_spawn_parts(workflow="submit", experiment_dir=ed, fields={"x": 1})

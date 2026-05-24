@@ -154,8 +154,8 @@ def _batch(specs, **overrides: Any):
 @pytest.fixture
 def _journal_home(tmp_path, monkeypatch):
     """Redirect ~/.claude/hpc/ to tmp_path so journal writes don't pollute home."""
-    from hpc_agent._internal import session
-    from hpc_agent._internal.session import run_record
+    from hpc_agent.state import session
+    from hpc_agent.state.session import run_record
 
     home = tmp_path / "home_hpc"
     monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
@@ -206,10 +206,10 @@ class TestSubmitFlowBatch:
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
         """If every spec is already on the journal, NO ssh / rsync runs."""
-        from hpc_agent._internal import session
-        from hpc_agent._internal.session import RunRecord
         from hpc_agent.ops.submit import flow as sf_module
         from hpc_agent.ops.submit.flow import submit_flow_batch
+        from hpc_agent.state import session
+        from hpc_agent.state.session import RunRecord
 
         # Seed the journal with both run_ids.
         for rid in ("r0", "r1"):
@@ -283,10 +283,10 @@ class TestSubmitFlowBatch:
 
     def test_partial_dedup_only_fresh_specs_run(self, tmp_path: Any, _journal_home: Any) -> None:
         """Half the specs are already journaled — only the fresh ones get qsubbed."""
-        from hpc_agent._internal import session
-        from hpc_agent._internal.session import RunRecord
         from hpc_agent.ops.submit import flow as sf_module
         from hpc_agent.ops.submit.flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent.state import session
+        from hpc_agent.state.session import RunRecord
 
         session.upsert_run(
             tmp_path,

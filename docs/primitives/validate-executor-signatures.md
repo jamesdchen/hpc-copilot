@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
-  python: hpc_agent.atoms.validate_executor_signatures.validate_executor_signatures
+  python: hpc_agent.ops.validate.executor_signatures.validate_executor_signatures
 ---
 # validate-executor-signatures
 

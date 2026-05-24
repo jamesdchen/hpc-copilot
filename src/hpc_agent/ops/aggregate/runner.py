@@ -19,7 +19,7 @@ from hpc_agent.infra.remote import parse_remote_json
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:
-    from hpc_agent._internal.session import RunRecord
+    from hpc_agent.state.session import RunRecord
 
 
 def _read_remote_sidecar(*, ssh_target: str, remote_path: str, run_id: str) -> dict[str, Any]:

@@ -11,7 +11,7 @@ from hpc_agent._wire.queries.recommend_partition import (
     PartitionInfo,
     RecommendPartitionSpec,
 )
-from hpc_agent.atoms.recommend_partition import recommend_partition
+from hpc_agent.ops.submit.recommend_partition import recommend_partition
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -208,7 +208,7 @@ surface gains a workflow without the other.
   key needs schema-checking.
 - **Adding a backend?** → `infra/backends/` has one module per
   scheduler; the registry pattern is `get_backend_class(scheduler)`.
-- **Splitting a file?** → `_internal/session/` is the pattern: package
+- **Splitting a file?** → `state/` is the pattern: package
   with `__init__.py` re-exporting + per-concern submodules.
 - **Naming a config knob?** → `HPC_*` env-vars listed in
   `docs/reference/env-vars.md`; per-cluster YAML keys in

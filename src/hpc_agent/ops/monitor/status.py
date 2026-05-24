@@ -7,11 +7,11 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, _atomic_write_json
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.time import utcnow_iso
+from hpc_agent.state import session
+from hpc_agent.state.session import RunRecord, _atomic_write_json
 
 if TYPE_CHECKING:
     from pathlib import Path

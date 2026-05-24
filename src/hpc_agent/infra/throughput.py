@@ -13,7 +13,7 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from hpc_agent.planning.constraints import ClusterConstraints
+    from hpc_agent.infra.constraints import ClusterConstraints
 
 __all__ = [
     "WorkloadSpec",

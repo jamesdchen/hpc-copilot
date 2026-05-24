@@ -11,7 +11,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent classify-axis --spec <path> [--experiment-dir <dir>]
-  python: hpc_agent.atoms.classify_axis.classify_axis
+  python: hpc_agent.incorporation.classify_axis.classify_axis
 ---
 # classify-axis
 

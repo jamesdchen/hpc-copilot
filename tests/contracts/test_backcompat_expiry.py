@@ -21,7 +21,7 @@ _FORWARDERS: list[tuple[str, str, str, str]] = [
         "agent_cli.py",
         "0.4.0",
         "drop the back-compat re-export; tests should import "
-        "from hpc_agent.atoms.capabilities directly",
+        "from hpc_agent._kernel.extension.capabilities directly",
     ),
     (
         "_resolve_auto_retry",

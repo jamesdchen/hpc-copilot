@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent._internal import session
-from hpc_agent._internal.session import RunRecord, run_record
 from hpc_agent.meta.campaign.atoms.load_context import load_context
 from hpc_agent.meta.campaign.cursor import advance_cursor
+from hpc_agent.state import session
 from hpc_agent.state.runs import write_run_sidecar
+from hpc_agent.state.session import RunRecord, run_record
 
 if TYPE_CHECKING:
     from pathlib import Path

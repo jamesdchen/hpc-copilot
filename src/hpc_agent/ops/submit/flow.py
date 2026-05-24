@@ -28,14 +28,14 @@ import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors, runner
-from hpc_agent._internal import session
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
 from hpc_agent.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
-from hpc_agent.runner import submit_and_record
+from hpc_agent.ops.submit.runner import submit_and_record
+from hpc_agent.state import session
 
 
 def _submit_flow_handler(ns):  # type: ignore[no-untyped-def]
@@ -391,7 +391,7 @@ def _submit_one_spec(
             )
             from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
-            runner.submit_and_record(
+            submit_and_record(
                 experiment_dir,
                 spec=_SubmitSpec(
                     profile=spec.profile,
@@ -416,7 +416,7 @@ def _submit_one_spec(
     )
     from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
-    runner.submit_and_record(
+    submit_and_record(
         experiment_dir,
         spec=_SubmitSpec(
             profile=spec.profile,
@@ -553,8 +553,8 @@ def submit_flow_batch(
     # throttling stampede; see ``docs/reference/env-vars.md``.
     import os
 
-    from hpc_agent._internal import session
     from hpc_agent.infra import io
+    from hpc_agent.state import session
 
     use_lock = os.environ.get("HPC_SUBMIT_NO_LOCK") != "1"
     lock_path = session.journal_dir(experiment_dir) / ".submit_lock"

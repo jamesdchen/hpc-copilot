@@ -109,7 +109,7 @@ def test_submit_persists_campaign_id_to_journal(
     # setting the env var here is sufficient — no module attribute
     # patching needed.
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(journal))
-    from hpc_agent._internal import session
+    from hpc_agent.state import session
 
     matched = session.find_runs_by_campaign(tmp_path, "ml_ridge_q1")
     assert len(matched) == 1
