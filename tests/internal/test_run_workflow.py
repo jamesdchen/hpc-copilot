@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from hpc_agent import errors
-from hpc_agent._internal.run_workflow import run_workflow
 from hpc_agent._kernel.extension.spawn_prompt import SpawnContractError
 from hpc_agent._kernel.lifecycle.invoke import InvocationResult, RenderedPrompt
+from hpc_agent._kernel.lifecycle.run import run_workflow
 
 
 class _StubInvoker:
@@ -26,7 +26,7 @@ class _StubInvoker:
 
 
 def _use(monkeypatch: pytest.MonkeyPatch, stub: _StubInvoker) -> None:
-    monkeypatch.setattr("hpc_agent._internal.run_workflow.get_invoker", lambda name=None: stub)
+    monkeypatch.setattr("hpc_agent._kernel.lifecycle.run.get_invoker", lambda name=None: stub)
 
 
 def test_run_workflow_parses_a_valid_report(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,8 +83,10 @@ def test_cmd_run_success_envelope(
     from hpc_agent._wire.spawn_contract import WorkerReport
 
     report = WorkerReport(result={"run_id": "r1"}, anomalies="")
+    # cmd_run does `from hpc_agent._kernel.lifecycle.run import run_workflow`
+    # at call time, so patch the symbol there (its canonical home).
     monkeypatch.setattr(
-        "hpc_agent._internal.run_workflow.run_workflow",
+        "hpc_agent._kernel.lifecycle.run.run_workflow",
         lambda **kwargs: (report, 0),
     )
     rc = agent_cli.cmd_run(

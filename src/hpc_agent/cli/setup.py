@@ -108,10 +108,11 @@ def cmd_capabilities(args: argparse.Namespace) -> int:
         sys.stdout.flush()
         return EXIT_OK
 
-    # Lazy-import to avoid a circular import: agent_cli imports from this
-    # module (the re-export at the bottom) and _live_subcommands() walks
-    # the argparse tree which is built by hpc_agent.cli.parser.
-    from hpc_agent.agent_cli import _live_subcommands
+    # Lazy-import to avoid a circular import: dispatch imports from this
+    # module (the back-compat re-export at the bottom) and
+    # _live_subcommands() walks the argparse tree built by
+    # hpc_agent.cli.parser.
+    from hpc_agent.cli.dispatch import _live_subcommands
 
     _ok(capabilities(subcommands=_live_subcommands()), name="capabilities")
     return EXIT_OK

@@ -30,10 +30,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     The code-orchestrated entrypoint: validates the fields, renders the
     canonical worker prompt, invokes a worker, and returns its parsed
     report. The spawn is emitted by code here — no PreToolUse hook
-    mediates this path. See hpc_agent._internal.run_workflow.
+    mediates this path. See hpc_agent._kernel.lifecycle.run.
     """
-    from hpc_agent._internal.run_workflow import run_workflow
     from hpc_agent._kernel.extension.spawn_prompt import SpawnContractError
+    from hpc_agent._kernel.lifecycle.run import run_workflow
 
     try:
         fields = json.loads(args.fields_json)
