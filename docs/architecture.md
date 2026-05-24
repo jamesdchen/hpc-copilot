@@ -68,9 +68,11 @@ rules.
 │      submit_spec, tasks_py, template}                               │
 │                                                                     │
 │  Cross-subject primitive bridge:                                    │
-│      runner.py (package-root) re-exports the canonical primitive    │
-│      surface from each subject so workflow primitives can call      │
-│      across subjects without violating the subject-imports lint.    │
+│      runner.py (package-root) re-exports a small back-compat        │
+│      surface for atom-to-atom cross-subject calls. Most workflow    │
+│      composition is now direct: workflows live at ops/ + meta/ root │
+│      (sibling to subjects) and import atoms inside subjects without │
+│      a bridge.                                                      │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -344,65 +346,76 @@ Allowed cross-cutting roots (these are substrate, not subjects):
 - `hpc_agent.infra.*`
 - `hpc_agent.state.*`
 
-When two subjects genuinely need to share code, there are three
-patterns, in order of preference:
+When two subjects genuinely need to share code, three patterns apply,
+in order of preference:
 
-1. **Helper-shaped shared code → `infra/`.** If two subjects need a
-   parser, a transport helper, or a planning function, extract it to
-   `hpc_agent.infra.<name>` and let both subjects import it. PR #90
-   moved the throughput planner + remote backend factory under
-   `infra/throughput.py` for exactly this reason; PR #96 did the same
-   for `cluster_status.py` and `cluster_logs.py`.
+1. **Helper-shaped shared code → `infra/`.** A parser, transport
+   helper, or planning function used by more than one subject lives
+   under `hpc_agent.infra.<name>`. PR #90 moved the throughput planner
+   + remote backend factory there; PR #96 did the same for
+   `cluster_status.py` and `cluster_logs.py`. The subject-imports lint
+   permits `from hpc_agent.infra.* import …` from any subject.
 
-2. **Declarative cross-subject composition → `composes=` with string
-   names.** A composite that just *names* atoms from another subject
-   in its `@primitive(composes=[...])` metadata doesn't need to
-   import the target callable — string names are resolved against
-   the live registry. This is purely metadata and stays lint-clean.
+2. **Declarative composition → `composes=` with string names.**
+   A composite that just *names* a primitive from another subject in
+   its `@primitive(composes=[...])` metadata doesn't import the target
+   callable — string names resolve against the live registry. Pure
+   metadata, lint-clean, also drives the agent-readable workflow graph
+   in the operations catalog. Cross-package composition works the same
+   way: a plugin primitive can compose a core primitive by wire name
+   (see `hpc-agent-pro/src/hpc_agent_pro/smart_resubmit_flow.py`).
 
-3. **Callable cross-subject composition → `hpc_agent.runner`.**
-   When code inside a subject (e.g. an atom in `ops/recover/`) needs
-   to call a primitive from another subject, routing the call through
-   `hpc_agent.runner` is the principled escape hatch.
+3. **Callable cross-subject calls → workflow at role root, OR
+   `hpc_agent.runner`.** Two cases:
 
-   Note: post-P5a, workflows live at the `ops/` and `meta/` role roots
-   as sibling files (`ops/aggregate_flow.py`, `meta/validate_campaign.py`)
-   rather than inside subject dirs, so workflow-to-atom cross-subject
-   calls no longer need this bridge — workflows can import atoms
-   directly. `hpc_agent.runner` remains for legitimate atom-to-atom
-   cross-subject calls and as a back-compat surface. That module lives at the package
-   root (not inside any subject), so the subject-imports lint
-   permits the import. Conceptually it mirrors what `composes=` does
-   at the metadata layer — `composes=["combine-wave"]` is the
+   - **Workflow needs to call atoms from multiple subjects** — keep
+     the workflow file at the `ops/` or `meta/` *role root*
+     (`ops/aggregate_flow.py`, `meta/validate_campaign.py`). The
+     subject-imports lint short-circuits to `None` for files directly
+     under the role root (`len(parts) < 2`), so the workflow can
+     `from hpc_agent.ops.<other_subject>.<atom> import …` directly.
+     This is the dominant pattern post-P5a; all six host workflows
+     use it.
+
+   - **An atom inside one subject needs to call a primitive in
+     another** — route the call through `hpc_agent.runner`, the
+     package-root bridge. `runner.py` lives outside every subject so
+     the lint permits the import. `scripts/lint_runner_shim.py` gates
+     what crosses: only `@primitive`-decorated symbols plus a small
+     explicit allow-list of legacy back-compat helpers
+     (`DEFAULT_AUTO_RETRY_POLICY`, `cluster_failures_by_fingerprint`,
+     `build_job_env` — each carries a rationale in the lint).
+
+   Conceptually `hpc_agent.runner` mirrors what `composes=` does at
+   the metadata layer — `composes=["combine-wave"]` is the
    declarative form, `from hpc_agent.runner import combine_wave` is
-   the callable form. `runner.py` re-exports the canonical surface
-   of each subject's runner module:
-
-   ```
-   ops.aggregate.combine        → runner.combine_wave
-   ops.aggregate.runner         → runner.{build_provenance,
-                                          verify_combiner_artifact,
-                                          verify_per_task_outputs,
-                                          write_remote_provenance}
-   ops.monitor.{logs,reconcile,status}
-                                → runner.{fetch_task_logs, mark_terminal,
-                                          reconcile, record_status}
-   ops.recover.{runner,runner_failures}
-                                → runner.{resubmit_failed,
-                                          cluster_failures_by_fingerprint, …}
-   ops.submit.runner            → runner.{submit_and_record, build_job_env}
-   ops.validate.*               → runner.validate_*
-   ```
-
-   New cross-subject primitive surfaces should add themselves to
-   `runner.py` rather than punching new holes in the lint.
+   the callable form.
 
 The rationale for keeping this strict (vs. a permissive allow-list,
 which is what the codebase had through PR #97): allow-listed
 exceptions accrete; principled extraction to `infra/` keeps the
-architecture honest. PR #98 eradicated the allow-list and moved every
-genuine cross-subject call onto the `runner.py` bridge or
-`composes=` strings.
+architecture honest. PR #98 eradicated the allow-list; PR #108 added
+lazy resolution so string-name `composes=` is order-agnostic; P5a
+pulled workflows up to the role root so most cross-subject seams
+disappeared entirely.
+
+### Non-goals
+
+- **Don't propose collapsing cross-subject composition into
+  per-subject inlining.** If two subjects share a helper, that's a
+  candidate for `infra/`, not duplication. If a workflow names atoms
+  from multiple subjects, that's the workflow doing its job, not a
+  violation.
+
+- **Don't re-introduce a permissive `PER_FILE_ALLOWED_IMPORTS`
+  allow-list.** Cross-subject reach is either `infra/` (helper),
+  `composes=` (metadata), workflow-at-role-root (workflow), or
+  `hpc_agent.runner` (atom-to-atom primitive call). Anything else is
+  a smell.
+
+- **Don't move workflow files back into subject dirs.** P5a moved
+  them to the role root deliberately so workflow→atom cross-subject
+  calls become trivial direct imports.
 
 ## When in doubt
 
