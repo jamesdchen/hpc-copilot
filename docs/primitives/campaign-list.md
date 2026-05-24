@@ -7,7 +7,7 @@ idempotency_key: none
 error_codes: []
 backed_by:
   cli: hpc-agent campaign list [--experiment-dir <dir>]
-  python: hpc_agent.atoms.campaign_list.campaign_list
+  python: hpc_agent.meta.campaign.atoms.list_campaigns.campaign_list
 exit_codes:
 - 0: ok
 ---

@@ -1,6 +1,6 @@
 """``campaign-init`` primitive — write the campaign manifest.
 
-Thin CLI wrapper around :func:`hpc_agent.campaign.manifest.write_manifest`.
+Thin CLI wrapper around :func:`hpc_agent.meta.campaign.manifest.write_manifest`.
 The agent typically calls this once at campaign creation; later
 primitives (``campaign-advance``, ``campaign-budget``,
 ``campaign-converged``) auto-default missing args from the manifest.
@@ -101,7 +101,7 @@ def campaign_init(
     different args overwrites — the agent is expected to treat
     campaign-init as a one-shot at creation, not an in-flight mutator.
     """
-    from hpc_agent.campaign.manifest import manifest_path, write_manifest
+    from hpc_agent.meta.campaign.manifest import manifest_path, write_manifest
 
     budget: dict[str, Any] | None = None
     if any(v is not None for v in (max_jobs, max_tasks, max_walltime_sec)):

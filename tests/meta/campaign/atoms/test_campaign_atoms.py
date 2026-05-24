@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpc_agent.atoms.campaign_advance import campaign_advance
-from hpc_agent.atoms.campaign_budget import campaign_budget
-from hpc_agent.atoms.campaign_converged import campaign_converged
-from hpc_agent.atoms.campaign_replay import campaign_replay
+from hpc_agent.meta.campaign.atoms.advance import campaign_advance
+from hpc_agent.meta.campaign.atoms.budget import campaign_budget
+from hpc_agent.meta.campaign.atoms.converged import campaign_converged
+from hpc_agent.meta.campaign.atoms.replay import campaign_replay
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
@@ -159,7 +159,7 @@ def test_advance_continue_when_no_criteria(campaign_with_history: Path) -> None:
 
 
 def test_budget_defaults_from_manifest(campaign_with_history: Path) -> None:
-    from hpc_agent.campaign.manifest import write_manifest
+    from hpc_agent.meta.campaign.manifest import write_manifest
 
     write_manifest(
         campaign_with_history,
@@ -172,7 +172,7 @@ def test_budget_defaults_from_manifest(campaign_with_history: Path) -> None:
 
 
 def test_cli_arg_wins_over_manifest_budget(campaign_with_history: Path) -> None:
-    from hpc_agent.campaign.manifest import write_manifest
+    from hpc_agent.meta.campaign.manifest import write_manifest
 
     write_manifest(
         campaign_with_history,
@@ -189,7 +189,7 @@ def test_cli_arg_wins_over_manifest_budget(campaign_with_history: Path) -> None:
 
 
 def test_converged_defaults_from_manifest(campaign_with_history: Path) -> None:
-    from hpc_agent.campaign.manifest import write_manifest
+    from hpc_agent.meta.campaign.manifest import write_manifest
 
     write_manifest(
         campaign_with_history,
@@ -202,7 +202,7 @@ def test_converged_defaults_from_manifest(campaign_with_history: Path) -> None:
 
 
 def test_advance_uses_manifest_for_both_blocks(campaign_with_history: Path) -> None:
-    from hpc_agent.campaign.manifest import write_manifest
+    from hpc_agent.meta.campaign.manifest import write_manifest
 
     write_manifest(
         campaign_with_history,
@@ -215,7 +215,7 @@ def test_advance_uses_manifest_for_both_blocks(campaign_with_history: Path) -> N
 
 
 def test_corrupt_manifest_does_not_tank(campaign_with_history: Path) -> None:
-    from hpc_agent.campaign.manifest import manifest_path
+    from hpc_agent.meta.campaign.manifest import manifest_path
 
     path = manifest_path(campaign_with_history, "camp_a")
     path.write_text("{not valid json")
@@ -227,8 +227,8 @@ def test_corrupt_manifest_does_not_tank(campaign_with_history: Path) -> None:
 
 
 def test_campaign_init_writes_manifest(tmp_path: Path) -> None:
-    from hpc_agent.atoms.campaign_init import campaign_init
-    from hpc_agent.campaign.manifest import read_manifest
+    from hpc_agent.meta.campaign.atoms.init import campaign_init
+    from hpc_agent.meta.campaign.manifest import read_manifest
 
     out = campaign_init(
         experiment_dir=tmp_path,
@@ -252,8 +252,8 @@ def test_campaign_init_writes_manifest(tmp_path: Path) -> None:
 
 
 def test_campaign_init_minimal(tmp_path: Path) -> None:
-    from hpc_agent.atoms.campaign_init import campaign_init
-    from hpc_agent.campaign.manifest import read_manifest
+    from hpc_agent.meta.campaign.atoms.init import campaign_init
+    from hpc_agent.meta.campaign.manifest import read_manifest
 
     campaign_init(experiment_dir=tmp_path, campaign_id="camp_z")
     manifest = read_manifest(tmp_path, "camp_z")
@@ -265,7 +265,7 @@ def test_campaign_init_minimal(tmp_path: Path) -> None:
 
 def test_campaign_init_rejects_non_object_strategy_params(tmp_path: Path) -> None:
     from hpc_agent import errors
-    from hpc_agent.atoms.campaign_init import campaign_init
+    from hpc_agent.meta.campaign.atoms.init import campaign_init
 
     # campaign-init declares error_codes=[SpecInvalid]; the legacy
     # bare-ValueError raise was rewrapped as part of BUG-2V2-9.

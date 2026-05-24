@@ -12,7 +12,7 @@ Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY
 
 If a value you need is absent here, derive it from the run sidecar on disk — never from memory.
 
-The campaign loop is driven by the `hpc-campaign-driver` console script (equivalently `python -m hpc_agent.campaign.driver`), not by an in-session agent orchestrator. It advances exactly one step per invocation off the `delegate` block — `kind: "cli"` steps run the matching workflow atom directly; `kind: "agent"` steps run in a fresh-context worker (code-rendered prompt, no hand-written prose) and require the `--allow-agent-steps` flag, since spawning an LLM is a billable side effect. Wrap the driver in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
+The campaign loop is driven by the `hpc-campaign-driver` console script (equivalently `python -m hpc_agent.meta.campaign.driver`), not by an in-session agent orchestrator. It advances exactly one step per invocation off the `delegate` block — `kind: "cli"` steps run the matching workflow atom directly; `kind: "agent"` steps run in a fresh-context worker (code-rendered prompt, no hand-written prose) and require the `--allow-agent-steps` flag, since spawning an LLM is a billable side effect. Wrap the driver in cron or `/loop` to walk the campaign; on-disk state is the only thing carried between ticks.
 
 ## When to use
 

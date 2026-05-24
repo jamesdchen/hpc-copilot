@@ -11,7 +11,7 @@ backed_by:
     <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>]
     [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>]
     [--max-walltime-sec <max_walltime_sec>]
-  python: hpc_agent.atoms.campaign_advance.campaign_advance
+  python: hpc_agent.meta.campaign.atoms.advance.campaign_advance
 ---
 # campaign-advance
 
