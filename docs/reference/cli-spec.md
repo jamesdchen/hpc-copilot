@@ -34,7 +34,7 @@ contributors edit the Pydantic. Pre-commit's `build-schemas`
 
 Cross-file `$ref` is rare post-Pydantic-migration; most schemas
 inline shared constraints (run_id pattern, scheduler enum, lifecycle
-states, error codes) from `_schema_models/_shared.py`. When a
+states, error codes) from `_wire/_shared.py`. When a
 shared constraint changes, edit the Python alias and regenerate —
 every consumer schema updates in lock-step.
 

@@ -1,8 +1,10 @@
 # Surface Sync Checklist
 
-Both surfaces share the atomic-ops layer (`hpc_agent/runner/`)
-for any mutating op. Anything below MUST stay aligned across the two
-surfaces; changing it is a breaking change requiring a version bump.
+Both surfaces share the per-subject runner modules (`ops/submit/runner.py`,
+`ops/aggregate/runner.py`, `ops/monitor/{status,reconcile,logs}.py`,
+`ops/recover/runner.py`) for any mutating op, reached via the package-root
+`hpc_agent.runner` bridge. Anything below MUST stay aligned across the
+two surfaces; changing it is a breaking change requiring a version bump.
 
 The list is exhaustive for the v0.2.0 contract. When you add a new
 shared invariant, add it here in the same PR; when you change one,
@@ -19,8 +21,9 @@ update both surfaces and bump the version.
 - **Validation**: `hpc_agent.state.runs.run_sidecar_path` accepts any
   string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
   sidecars sorted chronologically by mtime ↔ filename.
-- **Defined in**: `hpc_agent/runner/:submit_and_record` —
-  `run_id` is a required keyword.
+- **Defined in**: `hpc_agent/ops/submit/runner.py:submit_and_record`
+  (re-exported as `hpc_agent.runner.submit_and_record`) — `run_id` is
+  a required keyword.
 - **Public contract**: external orchestrators may key state on
   this. Renaming the format breaks every downstream consumer.
 
@@ -49,7 +52,7 @@ The full set of 15 values that may appear in an error envelope's
 | `internal` | `HpcError` (base / catch-all) | internal | no |
 
 The same enum appears in `hpc_agent/schemas/envelope.json` —
-generated from `_schema_models/_shared.py:ErrorCode` so adding
+generated from `_wire/_shared.py:ErrorCode` so adding
 a value is a one-place edit (Python alias) followed by
 `scripts/build_schemas.py --write`.
 
@@ -82,7 +85,8 @@ Possible values of `RunRecord.status`:
   finished.
 - `failed` — terminal, run aborted with unrecoverable failure.
 - `abandoned` — terminal, no `job_ids` are alive on the scheduler
-  (set by `runner.reconcile`).
+  (set by `ops.monitor.reconcile.reconcile`, re-exported as
+  `hpc_agent.runner.reconcile`).
 
 Defined in `hpc_agent/state/` (`TERMINAL_STATUSES`
 frozenset lives in `run_record.py`; default `status="in_flight"` is
@@ -136,7 +140,8 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 ### Last-status cache file
 
 - **Path**: `<HPC_JOURNAL_DIR>/<repo_hash>/runs/<run_id>.last_status.json`.
-- **Writer**: `hpc_agent/runner/:record_status` (best-effort;
+- **Writer**: `hpc_agent/ops/monitor/status.py:record_status`
+  (re-exported as `hpc_agent.runner.record_status`; best-effort —
   a write failure does not roll back the journal update).
 - **Reader**: any consumer — agent, human, `jq` pipeline, file
   watcher. Mtime tells the caller how stale the snapshot is.
@@ -168,13 +173,13 @@ graph that used to hold them together is gone.
 
 | Invariant | Python SoT | Generated artifacts |
 |---|---|---|
-| `error_code` enum | `_schema_models/_shared.py:ErrorCode` + `errors.py` HpcError subclasses | `schemas/envelope.json`, every Pydantic model that types `error_code` |
+| `error_code` enum | `_wire/_shared.py:ErrorCode` + `errors.py` HpcError subclasses | `schemas/envelope.json`, every Pydantic model that types `error_code` |
 | `failure_category` enum | `models/mapreduce/reduce/classify.py:CATEGORIES` (still hand-mirrored — see below) | `schemas/resubmit.input.json` (Pydantic alias `ResubmitCategory`) |
-| Lifecycle states | `state/run_record.py:TERMINAL_STATUSES` (Python frozenset) + `_schema_models/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
-| `run_id` shape | `_schema_models/_shared.py:RunIdStrict` (input), `RunIdLoose` (output) | every input/output schema that types a run_id |
-| Scheduler / GpuType / Runtime / BackendName | `_schema_models/_shared.py` aliases | every consumer model |
-| `@primitive` decorator metadata (name, verb, side_effects, idempotent, idempotency_key, error_codes, composes, cli, agent_facing, exit_codes) | `_internal/primitive.py` registry | `docs/primitives/<name>.md` frontmatter, `docs/primitives/README.md` table, `docs/generated/operations.md` |
-| Wire envelope shape | `_schema_models/envelope.py:EnvelopeAdapter` | `schemas/envelope.json` |
+| Lifecycle states | `state/run_record.py:TERMINAL_STATUSES` (Python frozenset) + `_wire/_shared.py:LifecycleState{Terminal,Observable,…}` (Pydantic Literal) | every Pydantic model that types lifecycle |
+| `run_id` shape | `_wire/_shared.py:RunIdStrict` (input), `RunIdLoose` (output) | every input/output schema that types a run_id |
+| Scheduler / GpuType / Runtime / BackendName | `_wire/_shared.py` aliases | every consumer model |
+| `@primitive` decorator metadata (name, verb, side_effects, idempotent, idempotency_key, error_codes, composes, cli, agent_facing, exit_codes) | `_kernel/registry/primitive.py` registry | `docs/primitives/<name>.md` frontmatter, `docs/primitives/README.md` table, `docs/generated/operations.md` |
+| Wire envelope shape | `_wire/envelope.py:EnvelopeAdapter` | `schemas/envelope.json` |
 
 ## How to extend
 
@@ -200,7 +205,7 @@ When you add a new invariant or change one of the above:
 `CATEGORIES` in `hpc_agent/models/mapreduce/reduce/classify.py` is still
 the hand-authored Python source for failure categories; the
 `ResubmitCategory` Literal in
-`_schema_models/resubmit.py` mirrors it manually. Adding a new
+`_wire/resubmit.py` mirrors it manually. Adding a new
 failure category requires updating both. Future cleanup: lift
-`CATEGORIES` into `_schema_models/_shared.py` and re-export from
+`CATEGORIES` into `_wire/_shared.py` and re-export from
 `classify.py` so there's one definition.

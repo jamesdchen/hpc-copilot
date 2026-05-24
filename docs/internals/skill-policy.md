@@ -73,10 +73,11 @@ Three structural empties confirm the rule:
   delegated execution. The text is **inlined** into the `claude -p
   --bare` worker prompt by `spawn_prompt._procedure_body`; the worker
   never invokes the Skill tool. These live at
-  `src/hpc_agent/worker_prompts/<workflow>.md` — the directory name
-  reflects what they actually are. Hardening that doesn't fit real
-  skills lives here: snapshot tests on the rendered `cacheable_prefix`
-  bytes (`tests/worker_prompts/test_prefix_snapshot.py`),
+  `src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`
+  (loaded via `importlib.resources`; the directory name reflects what
+  they actually are). Hardening that doesn't fit real skills lives
+  here: snapshot tests on the rendered `cacheable_prefix` bytes
+  (`tests/worker_prompts/test_prefix_snapshot.py`),
   banned-hedging-phrase lints (`test_prose_lints.py`), and
   `hpc-agent <primitive>` reference cross-checks against the
   operations catalog (`test_primitive_references.py`). Plugins overlay

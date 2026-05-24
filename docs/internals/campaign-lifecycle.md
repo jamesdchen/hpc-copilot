@@ -134,10 +134,10 @@ features:
 
 | Subsystem | Why Shape 3 needs it |
 |---|---|
-| `load-context` primitive (`atoms/load_context.py`) | Single source of truth across processes. |
+| `load-context` primitive (`meta/campaign/atoms/load_context.py`) | Single source of truth across processes. |
 | `delegate` block on load-context output | The driver's input contract. |
-| `spawn_prompt` rendering (`atoms/spawn_prompt.py`) | Deterministic prompt for `kind: agent` steps; cache-hit by hash. |
-| `WorkerInvoker` transport seam (`_internal/invoke.py`) | Lets the driver swap `claude -p` for a mock in tests / for a different LLM transport in production. |
+| `spawn_prompt` rendering (`_kernel/extension/spawn_prompt.py`) | Deterministic prompt for `kind: agent` steps; cache-hit by hash. |
+| `WorkerInvoker` transport seam (`_kernel/lifecycle/invoke.py`) | Lets the driver swap `claude -p` for a mock in tests / for a different LLM transport in production. |
 | `hpc-agent describe` (`d25cc40`) | Workers fetch primitive contracts per-branch instead of inheriting them from parent context. |
 | Plugin skill resolution in `_skill_body` (`01edb63`) | Plugin overrides reach delegated workers, not just in-conversation skills. |
 | `campaign_id` on the run sidecar v2 schema | Cross-iter linkage that the driver reads via `mapreduce.reduce.history.prior(...)`. |
@@ -199,6 +199,6 @@ them is at risk, the new shape is probably re-running an old mistake.
   primitive contract.
 - [`docs/architecture.md`](../architecture.md) — layering rules; the
   driver lives above flows, below the slash-command surface.
-- `src/hpc_agent/campaign/driver.py` — the script. ~200 LOC.
+- `src/hpc_agent/meta/campaign/driver.py` — the script. ~200 LOC.
 - `src/slash_commands/skills/hpc-campaign/SKILL.md` — the operator-side
   walkthrough that pairs with the driver.
