@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
+from hpc_agent.infra.io import atomic_locked_update, atomic_write_json
 from hpc_agent.infra.time import utcnow
 
 if TYPE_CHECKING:
@@ -172,9 +173,10 @@ def record_interview(
             "total_tasks": total_tasks,
         },
     }
-    interview_path.write_text(
-        json.dumps(interview_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    # Atomic write: a SIGINT or crash during a plain ``write_text``
+    # would leave half a JSON file that downstream readers
+    # (``load_context``, monitor flow) crash on.
+    atomic_write_json(interview_path, interview_doc)
     artifacts.append("interview.json")
 
     if _maybe_update_meta(intent=intent, campaign_dir=campaign_dir, total_tasks=total_tasks):
@@ -208,17 +210,19 @@ def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_t
     if not meta_updates:
         return False
     meta_path = campaign_dir / "meta.json"
-    existing: dict[str, Any] = {}
-    if meta_path.exists():
-        try:
-            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            loaded = {}
-        if isinstance(loaded, dict):
-            existing = loaded
-    merged = {**meta_updates, **existing}
-    merged["total_tasks"] = total_tasks
-    meta_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        prior = existing or {}
+        # Existing meta.json keys win on conflict EXCEPT total_tasks,
+        # which is always authoritative (must match tasks.total()).
+        merged = {**meta_updates, **prior}
+        merged["total_tasks"] = total_tasks
+        return merged
+
+    # ``atomic_locked_update`` serializes concurrent interview runs
+    # against the same campaign dir — without it the read/merge/write
+    # window loses updates (a parallel agent + driver scenario).
+    atomic_locked_update(meta_path, _mutate)
     return True
 
 

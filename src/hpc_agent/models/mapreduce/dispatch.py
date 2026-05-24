@@ -457,7 +457,13 @@ def main() -> None:
 
     if os.path.isdir(wip_dir):
         # On retry, preserve prior failed WIP for forensic inspection.
-        stale_target = os.path.join(result_dir, f"_wip_{task_id}_failed_{int(time.time())}")
+        # ``time.time_ns()`` (nanosecond) instead of ``int(time.time())``
+        # — two retries within the same wall-clock second would
+        # otherwise produce the same stale_target and the second
+        # ``os.rename`` would fail with ENOTEMPTY, falling through to
+        # the ``rmtree`` cleanup path that destroys the second
+        # failure's forensic state.
+        stale_target = os.path.join(result_dir, f"_wip_{task_id}_failed_{time.time_ns()}")
         try:
             os.rename(wip_dir, stale_target)
             print(f"[dispatch] preserved prior failed WIP at {stale_target}/")
@@ -597,8 +603,16 @@ def main() -> None:
                 or os.environ.get("HOST")
                 or ""
             ),
+            # gpu_preamble.sh uses ${HPC_GPU_TYPE+set} to distinguish
+            # *unset* (auto-detect) from *explicitly empty* (operator
+            # opt-out: "leave it unset / skip auto-detect"). The naive
+            # ``or`` chain treats "" as falsy and falls through to
+            # $SLURM_JOB_PARTITION, silently overriding the operator's
+            # intent. Honor presence-not-truthiness here.
             "gpu_type": (
-                os.environ.get("HPC_GPU_TYPE") or os.environ.get("SLURM_JOB_PARTITION") or ""
+                os.environ["HPC_GPU_TYPE"]
+                if "HPC_GPU_TYPE" in os.environ
+                else (os.environ.get("SLURM_JOB_PARTITION") or "")
             ),
             # axis_bindings = the dict the warm picker groups by. ``kwargs``
             # is whatever ``tasks.resolve(task_id)`` returned — exactly the

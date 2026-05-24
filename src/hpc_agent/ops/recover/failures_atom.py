@@ -63,7 +63,7 @@ def _resolve_auto_retry(experiment_dir: Path, run_id: str) -> dict[str, dict[str
     name="failures",
     verb="query",
     side_effects=[SideEffect("ssh", "<cluster>")],
-    error_codes=[errors.SshUnreachable, errors.JournalCorrupt],
+    error_codes=[errors.SshUnreachable, errors.JournalCorrupt, errors.SpecInvalid],
     idempotent=True,
     cli=CliShape(
         help="Cluster failed tasks by stderr fingerprint for triage.",

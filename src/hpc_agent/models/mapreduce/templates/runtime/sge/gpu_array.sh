@@ -67,9 +67,12 @@ source "$REPO_DIR/.hpc/templates/common/gpu_preamble.sh"
 # override before falling back to the scheduler-allocated core count;
 # without this precedence, a user's HPC_OMP_NUM_THREADS=4 would be
 # silently overridden by NSLOTS on multi-threaded array jobs and the
-# run would oversubscribe its cgroup until OOM-killed.
-export OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-${NSLOTS:-8}}"
-export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${NSLOTS:-8}}"
+# run would oversubscribe its cgroup until OOM-killed. The terminal
+# fallback (when $NSLOTS itself is unset — rare, non-PE jobs) is 1
+# to match the SLURM template — defaulting to 8 here would silently
+# oversubscribe whereas the safer default is "no oversubscribe".
+export OMP_NUM_THREADS="${HPC_OMP_NUM_THREADS:-${NSLOTS:-1}}"
+export MKL_NUM_THREADS="${HPC_MKL_NUM_THREADS:-${NSLOTS:-1}}"
 
 # --- Prepare Output ---
 mkdir -p "$RESULT_DIR"

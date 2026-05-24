@@ -19,11 +19,8 @@ same final feature set produces the same on-cluster state.
 
 from __future__ import annotations
 
-import json
-import os
 import re
 import shlex
-import tempfile
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
@@ -32,6 +29,7 @@ from hpc_agent._wire.actions.update_run_constraints import (
     UpdateRunConstraintsResult,
     UpdateRunConstraintsSpec,
 )
+from hpc_agent.infra.io import atomic_locked_update
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -139,32 +137,24 @@ def update_run_constraints(
 
     # Persist the new feature set on the sidecar (best-effort; the
     # cluster-side update succeeded for `updated` jobs regardless of
-    # whether the local mirror lands).
+    # whether the local mirror lands). ``atomic_locked_update`` re-reads
+    # the sidecar under flock, applies only the constraints diff, and
+    # writes atomically. The earlier hand-rolled read/mutate/tempfile
+    # path lost concurrent updates from monitor_flow / status writes
+    # because it locked nothing.
     if updated:
-        # ``constraints`` may be backfilled to None on a v1 sidecar; coerce
-        # to a dict before assigning so the persisted shape matches v2.
-        cstr = sidecar.get("constraints")
-        if not isinstance(cstr, dict):
-            cstr = {}
-        cstr["features"] = new_features
-        sidecar["constraints"] = cstr
         target = run_sidecar_path(experiment_dir, spec.run_id)
-        # Atomic write: tempfile + fsync + replace. Plain write_text
-        # leaves the file truncated/corrupt if interrupted mid-write.
-        payload = json.dumps(sidecar, indent=2, sort_keys=True)
-        with tempfile.NamedTemporaryFile(
-            "w",
-            delete=False,
-            dir=str(target.parent),
-            prefix=target.name + ".",
-            suffix=".tmp",
-            encoding="utf-8",
-        ) as tmp:
-            tmp.write(payload)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-            tmp_name = tmp.name
-        os.replace(tmp_name, target)
+
+        def _apply(doc: dict | None) -> dict:
+            base = dict(doc) if isinstance(doc, dict) else dict(sidecar)
+            cstr = base.get("constraints")
+            if not isinstance(cstr, dict):
+                cstr = {}
+            cstr["features"] = new_features
+            base["constraints"] = cstr
+            return base
+
+        atomic_locked_update(target, _apply)
 
     return UpdateRunConstraintsResult(
         run_id=spec.run_id,

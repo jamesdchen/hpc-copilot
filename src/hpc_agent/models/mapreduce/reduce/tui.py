@@ -52,7 +52,11 @@ from typing import Any
 class _UiState:
     """Mutable state that survives across refresh ticks."""
 
-    start_ts: float = field(default_factory=time.time)
+    # ``time.monotonic`` (not wall-clock ``time.time``) so the elapsed
+    # display + the poll-interval check stay sane across NTP corrections
+    # / suspend-resume / manual clock changes — wall-clock can step
+    # backwards, leading to negative elapsed strings and stalled polls.
+    start_ts: float = field(default_factory=time.monotonic)
     focused_failing: bool = False
     last_report: dict | None = None
     last_per_task_dict: dict | None = None
@@ -165,7 +169,7 @@ def _render(state: _UiState, report: dict, per_task_dict: dict, poll_interval: i
     run_id = per_task_dict.get("run_id") or per_task_dict.get("project") or "(unknown)"
     cluster = per_task_dict.get("cluster") or "(unknown)"
     scheduler = report.get("scheduler", "?")
-    wall = _fmt_elapsed(time.time() - state.start_ts)
+    wall = _fmt_elapsed(time.monotonic() - state.start_ts)
 
     summary = report.get("summary") or {}
     header_tbl = Table.grid(padding=(0, 2))
@@ -450,7 +454,7 @@ def run_tui(
             screen=False,
         ) as live,
     ):
-        last_poll = time.time()
+        last_poll = time.monotonic()
         while True:
             # Poll keys in short slices so the UI feels responsive even when
             # the scheduler side-call is slow.
@@ -463,7 +467,7 @@ def run_tui(
                     _render(state, _poll(), state.last_per_task_dict or {}, poll_interval),
                     refresh=True,
                 )
-                last_poll = time.time()
+                last_poll = time.monotonic()
                 continue
             if key == "f":
                 state.focused_failing = not state.focused_failing
@@ -488,12 +492,12 @@ def run_tui(
                     _open_log(ssh_target, log_path, live)
                 continue
 
-            if time.time() - last_poll >= poll_interval:
+            if time.monotonic() - last_poll >= poll_interval:
                 live.update(
                     _render(state, _poll(), state.last_per_task_dict or {}, poll_interval),
                     refresh=True,
                 )
-                last_poll = time.time()
+                last_poll = time.monotonic()
 
     return 0
 
@@ -557,11 +561,14 @@ def _main(argv: list[str] | None = None) -> int:
         return 2
     # Atomic write: a SIGINT mid-write would otherwise leave a
     # truncated JSON file, which the next TUI launch reads as `{}` and
-    # silently shows every task as `unknown`.
+    # silently shows every task as `unknown`. ``atomic_write_json``
+    # uses a mkstemp-randomised tmp name so two concurrent TUI launches
+    # against the same run can't collide on a shared ``.tmp`` sibling,
+    # and adds a fsync for crash durability.
     per_task_dict_path = sidecar_path.with_suffix(".per-task-dict.json")
-    _tmp = per_task_dict_path.with_suffix(per_task_dict_path.suffix + ".tmp")
-    _tmp.write_text(json.dumps(per_task_dict, sort_keys=True), encoding="utf-8")
-    _tmp.replace(per_task_dict_path)
+    from hpc_agent.infra.io import atomic_write_json as _atomic_write_json
+
+    _atomic_write_json(per_task_dict_path, per_task_dict)
 
     job_ids = [j for j in args.job_ids.split(",") if j.strip()]
     return run_tui(

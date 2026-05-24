@@ -269,6 +269,8 @@ def _combine_missing(
         errors.OutputsMissing,
         errors.JournalCorrupt,
         errors.PreconditionFailed,
+        errors.SpecInvalid,  # mode/spec validation, ssh-target check
+        errors.RemoteCommandFailed,  # rsync failure in the cluster-reduce path
     ],
     idempotent=True,
     idempotency_key="run_id",

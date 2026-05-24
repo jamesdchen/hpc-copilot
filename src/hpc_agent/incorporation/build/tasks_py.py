@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import keyword
+import os
 from pathlib import Path
 from typing import Any
 
@@ -591,9 +592,33 @@ def build_tasks_py(
         )
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(source, encoding="utf-8")
-    tmp.replace(target)
+    # tempfile.mkstemp-allocated unique tmp name + fsync + replace +
+    # parent-dir fsync. Two concurrent build_tasks_py calls used to
+    # race on the same ``target.suffix + ".tmp"`` filename and could
+    # observe a torn write; mkstemp randomises so the collision is
+    # gone, and the fsync makes the rename durable across power loss.
+    import tempfile as _tempfile
+
+    fd, tmp_name = _tempfile.mkstemp(
+        prefix=target.name + ".",
+        suffix=".tmp",
+        dir=str(target.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(source)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        os.replace(tmp_name, target)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
     return {
         "path": str(target),
