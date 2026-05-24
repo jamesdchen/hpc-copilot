@@ -13,9 +13,12 @@ Layout:
 * :mod:`.parser` — :func:`build_parser`, the argparse orchestrator that
   calls each domain module's ``register(sub)`` and finally
   ``register_plugin_cli(sub)``.
-* :mod:`.main` — :func:`main`, the entry point. ``pyproject.toml``'s
-  ``hpc-agent`` script flows through ``hpc_agent.agent_cli:main``
-  which re-exports this for back-compat.
+* :mod:`.dispatch` — :func:`main`, the entry point, plus the
+  argv-preprocessor for verb groups. ``pyproject.toml``'s ``hpc-agent``
+  script flows through ``hpc_agent.cli.dispatch:main``; the legacy
+  ``hpc_agent.agent_cli`` shim re-exports the same symbol for
+  back-compat.
+* :mod:`.main` — public re-export alias of :func:`dispatch.main`.
 
 Domain modules (one per CLI section):
 
@@ -44,8 +47,8 @@ shapes the split: pick the *user mental model* axis for surfaces, the
 
 Note: :func:`main` is intentionally not re-exported from this package's
 ``__init__`` to avoid a circular import (``cli/__init__`` →
-``cli/main`` → ``agent_cli`` → ``cli/_helpers`` triggers ``cli/__init__``
-again). Import it explicitly via ``from hpc_agent.cli.main import
-main`` or via the back-compat alias ``from hpc_agent.agent_cli import
-main`` (the ``pyproject.toml`` entry-point path).
+``cli/dispatch`` → ``cli/_helpers`` triggers ``cli/__init__`` again).
+Import it explicitly via ``from hpc_agent.cli.dispatch import main``
+(the ``pyproject.toml`` entry-point path) or via the back-compat
+alias ``from hpc_agent.agent_cli import main``.
 """

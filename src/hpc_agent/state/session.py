@@ -17,11 +17,10 @@ Prefer direct submodule imports for new code:
 
 from __future__ import annotations
 
-# Submodules re-exported by name so legacy call sites that did
-# ``from hpc_agent._internal.session import run_record`` keep working
-# via the rewritten ``from hpc_agent.state.session import run_record``
-# path. Tests in particular monkeypatch attributes on the module
-# object (``monkeypatch.setattr(run_record, "HPC_HOMEDIR", ...)``).
+# Submodules re-exported by name so callers can do
+# ``from hpc_agent.state.session import run_record`` and so tests can
+# monkeypatch attributes on the module object
+# (``monkeypatch.setattr(run_record, "HPC_HOMEDIR", ...)``).
 from hpc_agent.state import index, journal, run_record  # noqa: F401 — re-export
 from hpc_agent.state.index import (
     _all_run_files,

@@ -42,7 +42,7 @@ def main() -> int:
     # which references @primitive(...) prose) is never a registration
     # site; skip explicitly so the regex doesn't pick up docstring
     # mentions.
-    self_path = (REPO / "src" / "hpc_agent" / "_internal" / "primitive.py").resolve()
+    self_path = (REPO / "src" / "hpc_agent" / "_kernel" / "registry" / "primitive.py").resolve()
 
     found: set[str] = set()
     for p in REPO.rglob("*.py"):
@@ -104,7 +104,7 @@ def main() -> int:
         print("ERROR: modules with @primitive(...) not in _PRIMITIVE_MODULES:")
         for m in sorted(missing):
             print(f"  {m}")
-        print("\nAdd them to _PRIMITIVE_MODULES in hpc_agent/_internal/primitive.py.")
+        print("\nAdd them to _PRIMITIVE_MODULES in hpc_agent/_kernel/registry/primitive.py.")
         return 1
     stale = expected - found
     if stale:

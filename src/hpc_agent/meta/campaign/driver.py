@@ -144,13 +144,13 @@ def _run_agent_step(spawn_request: dict[str, Any], experiment_dir: Path) -> int:
 
     *spawn_request* is the delegate block's ``spawn_request`` — a
     ``{workflow, experiment_dir, fields}`` dict. It is handed to
-    :func:`hpc_agent._internal.run_workflow.run_workflow`, the same
+    :func:`hpc_agent._kernel.lifecycle.run.run_workflow`, the same
     code-orchestrated entrypoint ``hpc-agent run`` uses: it validates
     and renders the request into the canonical worker prompt, invokes a
     fresh-context worker, and parses the worker's report. The parsed
     report is printed so a cron/`/loop` tick leaves a record of the step.
     """
-    from hpc_agent._internal.run_workflow import run_workflow
+    from hpc_agent._kernel.lifecycle.run import run_workflow
 
     report, exit_code = run_workflow(
         workflow=spawn_request["workflow"],
