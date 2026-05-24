@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent import errors
-from hpc_agent.atoms.plan_throughput import plan_throughput
+from hpc_agent.ops.submit.plan_throughput import plan_throughput
 
 if TYPE_CHECKING:
     from pathlib import Path

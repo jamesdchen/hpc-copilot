@@ -33,6 +33,7 @@ from hpc_agent.ops.aggregate.runner import (
     verify_per_task_outputs,
     write_remote_provenance,
 )
+from hpc_agent.ops.submit.runner import build_job_env, submit_and_record
 from hpc_agent.runner.failures import (
     DEFAULT_AUTO_RETRY_POLICY,
     annotate_clusters_with_retry_advice,
@@ -49,7 +50,6 @@ from hpc_agent.runner.resubmit import (
     resubmit_failed,
 )
 from hpc_agent.runner.status import record_status
-from hpc_agent.runner.submit import build_job_env, submit_and_record
 
 __all__ = [
     "submit_and_record",

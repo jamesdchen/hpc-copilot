@@ -137,18 +137,18 @@ from hpc_agent.mapreduce.reduce.status import (
     report_status_from_tasks,
     rollup_by_grid_point,
 )
+from hpc_agent.ops.submit.throughput import (
+    SubmissionPlan,
+    WorkloadSpec,
+    build_wave_map,
+    compute_submission_plan,
+)
 from hpc_agent.planning.constraints import ClusterConstraints, parse_constraints
 from hpc_agent.planning.resubmit_batching import (
     ResubmitBatch,
     ResubmitPlan,
     compact_task_ids,
     resubmit_plan,
-)
-from hpc_agent.planning.throughput import (
-    SubmissionPlan,
-    WorkloadSpec,
-    build_wave_map,
-    compute_submission_plan,
 )
 from hpc_agent.state.discover import (
     ExecutorInfo,

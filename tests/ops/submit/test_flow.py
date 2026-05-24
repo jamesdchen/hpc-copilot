@@ -1,5 +1,5 @@
 """Unit tests for the cluster-config / NFS-staging resolution branch in
-``hpc_agent.flows.submit_flow``.
+``hpc_agent.ops.submit.flow``.
 
 These don't exercise the full submit pipeline (which needs a live
 cluster). They isolate the small bit of logic that decides whether
@@ -167,7 +167,7 @@ class TestSubmitFlowBatch:
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
         from hpc_agent import errors
-        from hpc_agent.flows.submit_flow import submit_flow_batch
+        from hpc_agent.ops.submit.flow import submit_flow_batch
 
         a = _spec("r1", ssh_target="u@a", remote_path="/p")
         b = _spec("r2", ssh_target="u@b", remote_path="/p")
@@ -178,8 +178,8 @@ class TestSubmitFlowBatch:
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
         """The whole point of the batch: rsync + deploy fire once, qsub fires N."""
-        from hpc_agent.flows import submit_flow as sf_module
-        from hpc_agent.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent.ops.submit import flow as sf_module
+        from hpc_agent.ops.submit.flow import SubmitFlowResult, submit_flow_batch
 
         specs = [_spec(f"r{i}") for i in range(5)]
         with (
@@ -208,8 +208,8 @@ class TestSubmitFlowBatch:
         """If every spec is already on the journal, NO ssh / rsync runs."""
         from hpc_agent._internal import session
         from hpc_agent._internal.session import RunRecord
-        from hpc_agent.flows import submit_flow as sf_module
-        from hpc_agent.flows.submit_flow import submit_flow_batch
+        from hpc_agent.ops.submit import flow as sf_module
+        from hpc_agent.ops.submit.flow import submit_flow_batch
 
         # Seed the journal with both run_ids.
         for rid in ("r0", "r1"):
@@ -244,8 +244,8 @@ class TestSubmitFlowBatch:
     def test_auto_prunes_orphan_sidecars_at_start(self, tmp_path: Any, _journal_home: Any) -> None:
         """Half-baked sidecars from a prior failed batch are silently swept
         before the next batch starts — no manual /prune-orphan-sidecars call."""
-        from hpc_agent.flows import submit_flow as sf_module
-        from hpc_agent.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent.ops.submit import flow as sf_module
+        from hpc_agent.ops.submit.flow import SubmitFlowResult, submit_flow_batch
         from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 
         # Seed a half-baked sidecar (no job_ids, no journal record).
@@ -285,8 +285,8 @@ class TestSubmitFlowBatch:
         """Half the specs are already journaled — only the fresh ones get qsubbed."""
         from hpc_agent._internal import session
         from hpc_agent._internal.session import RunRecord
-        from hpc_agent.flows import submit_flow as sf_module
-        from hpc_agent.flows.submit_flow import SubmitFlowResult, submit_flow_batch
+        from hpc_agent.ops.submit import flow as sf_module
+        from hpc_agent.ops.submit.flow import SubmitFlowResult, submit_flow_batch
 
         session.upsert_run(
             tmp_path,

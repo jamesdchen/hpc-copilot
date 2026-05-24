@@ -30,7 +30,7 @@ Two responsibilities:
    ``cmd_sha`` (when supplied).
 
 This module's responsibilities are distinct from
-``hpc_agent.planning.throughput``: throughput.py turns a single
+``hpc_agent.ops.submit.throughput``: throughput.py turns a single
 duration estimate + cluster constraints into a wave-packed plan, while
 this module *produces* the duration estimate from history.
 """
