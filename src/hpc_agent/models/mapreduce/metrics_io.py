@@ -6,7 +6,7 @@ alongside ``combiner.py`` by :func:`hpc_agent.infra.remote.deploy_runtime`.
 
 Executors call :func:`write_metrics` at the end of their run to drop a
 ``metrics.json`` sidecar into ``$RESULT_DIR``.  The combiner
-(``hpc_agent/mapreduce/combiner.py``) reads that sidecar per task to
+(``hpc_agent/models/mapreduce/combiner.py``) reads that sidecar per task to
 aggregate metrics per grid point.
 """
 
@@ -50,7 +50,7 @@ def read_kw_env() -> dict[str, str]:
 def write_metrics(metrics: dict, *, result_dir: str | None = None) -> str:
     """Write ``metrics.json`` atomically into *result_dir* (default ``$RESULT_DIR``).
 
-    The dispatcher (``hpc_agent/mapreduce/dispatch.py``) sets ``RESULT_DIR`` to
+    The dispatcher (``hpc_agent/models/mapreduce/dispatch.py``) sets ``RESULT_DIR`` to
     the per-task WIP directory, so writing there means the sidecar is
     promoted atomically with the rest of the task's raw outputs on success.
     If the task crashes after the sidecar is written, the WIP dir is

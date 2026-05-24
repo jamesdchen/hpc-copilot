@@ -40,7 +40,7 @@ def _neumaier_sum(values: Iterable[float]) -> float:
 
     Keeps reductions order-invariant within one ULP across task counts and
     dynamic ranges that would drift under plain ``sum``. Kept in sync with
-    the copy in ``hpc_agent/mapreduce/combiner.py``; the combiner runs
+    the copy in ``hpc_agent/models/mapreduce/combiner.py``; the combiner runs
     standalone on the cluster and cannot import from this package.
     """
     s = 0.0
@@ -62,7 +62,7 @@ def _coerce_weight(value, fallback):
     may be a string/list/negative value; ``v * w`` on a bad weight would
     raise and abort the whole reduce. ``bool`` is excluded so ``True`` is
     not silently treated as the weight ``1``. Kept in sync with the copy
-    in ``hpc_agent/mapreduce/combiner.py``.
+    in ``hpc_agent/models/mapreduce/combiner.py``.
     """
     if isinstance(value, bool):
         return fallback
@@ -152,7 +152,7 @@ def reduce_by_grid_point(tasks_data: dict) -> dict[str, dict]:
         Per-task dict with ``tasks.<tid>.params`` and
         ``tasks.<tid>.result_dir`` fields. Typically the synthetic dict
         produced from a per-run sidecar + ``.hpc/tasks.py`` by
-        :func:`hpc_agent.mapreduce.reduce.status._build_per_task_dict_from_sidecar`.
+        :func:`hpc_agent.models.mapreduce.reduce.status._build_per_task_dict_from_sidecar`.
         Tasks are grouped by their ``params`` dict (via the inlined
         ``run_id`` helper); any additional task-level keys are ignored.
 

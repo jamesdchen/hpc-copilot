@@ -57,7 +57,7 @@ from hpc_agent._internal.primitive import SideEffect, primitive
 from hpc_agent._schema_models.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
-from hpc_agent.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
+from hpc_agent.models.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
 from hpc_agent.runner import combine_wave, record_status
 from hpc_agent.state.runs import read_run_sidecar
 
@@ -123,7 +123,7 @@ def _missing_waves(wave_map_keys: list[str], already_combined: list[int]) -> lis
 
 
 # Matches a combiner partial file name (``wave_<N>.json``) — same shape
-# the reducer enforces in :mod:`hpc_agent.mapreduce.reduce.metrics`.
+# the reducer enforces in :mod:`hpc_agent.models.mapreduce.reduce.metrics`.
 # Anchored so ``wave_3.runtime.json`` does not slip through.
 _WAVE_PARTIAL_NAME_RE = re.compile(r"^wave_(\d+)\.json$")
 

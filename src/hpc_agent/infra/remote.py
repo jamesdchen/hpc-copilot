@@ -714,9 +714,9 @@ def deploy_runtime(
 
     Two payloads:
 
-    1. **Importable stubs** in ``{remote_path}/hpc_agent/mapreduce/``:
+    1. **Importable stubs** in ``{remote_path}/hpc_agent/models/mapreduce/``:
        ``metrics_io.py`` so user executors can do
-       ``from hpc_agent.mapreduce.metrics_io import write_metrics`` on
+       ``from hpc_agent.models.mapreduce.metrics_io import write_metrics`` on
        compute nodes without installing the full package.
     2. **Framework artifacts** in ``{remote_path}/.hpc/``: the framework
        executor (``_hpc_dispatch.py``), the combiner
@@ -739,11 +739,11 @@ def deploy_runtime(
     pkg_dir = Path(__file__).parent.parent
 
     ssh_run(
-        f"mkdir -p {remote_path_q}/hpc_agent/mapreduce"
+        f"mkdir -p {remote_path_q}/hpc_agent/models/mapreduce"
         f" {remote_path_q}/.hpc/templates"
         f" {remote_path_q}/.hpc/templates/common"
         f" && touch {remote_path_q}/hpc_agent/__init__.py"
-        f" && touch {remote_path_q}/hpc_agent/mapreduce/__init__.py",
+        f" && touch {remote_path_q}/hpc_agent/models/mapreduce/__init__.py",
         ssh_target=ssh_target,
     )
 
@@ -776,7 +776,7 @@ def deploy_runtime(
     # Importable stubs (used inside cluster jobs by user code).
     #
     # Cluster-side imports we have to support:
-    #   - ``from hpc_agent.mapreduce.metrics_io import write_metrics``
+    #   - ``from hpc_agent.models.mapreduce.metrics_io import write_metrics``
     #     in user executor scripts (executor_template.py).
     #   - ``from hpc_agent.executor_cli import flag, generic_args, gpu_args``
     #     in user .hpc/tasks.py (tasks_example.py). The dispatcher loads
@@ -786,11 +786,14 @@ def deploy_runtime(
     #
     # Both modules are stdlib-only (verified via AST scan) so they ship
     # safely without dragging in the rest of the package.
-    _scp(pkg_dir / "mapreduce" / "metrics_io.py", "hpc_agent/mapreduce/metrics_io.py")
+    _scp(
+        pkg_dir / "models" / "mapreduce" / "metrics_io.py",
+        "hpc_agent/models/mapreduce/metrics_io.py",
+    )
     _scp(pkg_dir / "executor_cli.py", "hpc_agent/executor_cli.py")
 
     # Framework executor + combiner inside .hpc/.
-    _scp(pkg_dir / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
+    _scp(pkg_dir / "models" / "mapreduce" / "dispatch.py", ".hpc/_hpc_dispatch.py")
 
     # Job templates inside .hpc/templates/.
     # B5-PR2: drop the inline ``if sched == 'sge'`` ladder; the backend
@@ -802,7 +805,7 @@ def deploy_runtime(
         ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):
             _scp(
-                pkg_dir / "mapreduce" / "templates" / sched / f"{kind}.{ext}",
+                pkg_dir / "models" / "mapreduce" / "templates" / sched / f"{kind}.{ext}",
                 f".hpc/templates/{kind}.{ext}",
             )
 
@@ -812,13 +815,13 @@ def deploy_runtime(
     # resolve to .hpc/templates/runtime/common/<name>.sh on the cluster.
     for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
         _scp(
-            pkg_dir / "mapreduce" / "templates" / "runtime" / "common" / common_name,
+            pkg_dir / "models" / "mapreduce" / "templates" / "runtime" / "common" / common_name,
             f".hpc/templates/runtime/common/{common_name}",
         )
 
     # Combiner is the last scp; return its CompletedProcess so callers
     # can inspect the trailing returncode.
-    return _scp(pkg_dir / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
+    return _scp(pkg_dir / "models" / "mapreduce" / "combiner.py", ".hpc/_hpc_combiner.py")
 
 
 def run_combiner(

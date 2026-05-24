@@ -73,11 +73,11 @@ hpc_agent = [
     "config/*.yaml",
     "schemas/*.json",
     "operations.json",
-    "mapreduce/templates/scaffolds/*.py",
+    "models/mapreduce/templates/scaffolds/*.py",
     "incorporation/template/scaffold/*",
-    "mapreduce/templates/runtime/common/*.sh",
-    "mapreduce/templates/runtime/sge/*",
-    "mapreduce/templates/runtime/slurm/*",
+    "models/mapreduce/templates/runtime/common/*.sh",
+    "models/mapreduce/templates/runtime/sge/*",
+    "models/mapreduce/templates/runtime/slurm/*",
     "worker_prompts/*.md",
     "py.typed",
 ]
@@ -130,7 +130,7 @@ branch = true
 omit = [
     "src/hpc_agent/schemas/*",  # generated JSON, not Python
     "src/hpc_agent/_schema_models/*",  # schema models — covered via roundtrip
-    "src/hpc_agent/mapreduce/templates/*",  # user-facing template files
+    "src/hpc_agent/models/mapreduce/templates/*",  # user-facing template files
 ]
 
 [tool.coverage.report]

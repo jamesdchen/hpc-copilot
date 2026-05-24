@@ -117,7 +117,7 @@ def campaign_converged(
       record isn't the answer. Requires ``2 * window`` history points.
     """
     from hpc_agent.campaign.manifest import read_manifest
-    from hpc_agent.mapreduce.reduce.history import prior
+    from hpc_agent.models.mapreduce.reduce.history import prior
 
     manifest_stop: dict[str, Any] = {}
     try:

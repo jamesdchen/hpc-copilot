@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from hpc_agent.mapreduce.reduce.status import (
+from hpc_agent.models.mapreduce.reduce.status import (
     check_results_from_tasks,
     report_status_from_tasks,
     rollup_by_grid_point,
@@ -111,7 +111,7 @@ def test_report_status_from_tasks_integrates(tmp_path):
     (rdir / "done.json").write_text("{}")
 
     with (
-        patch("hpc_agent.mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
+        patch("hpc_agent.models.mapreduce.reduce.status.detect_scheduler", return_value="slurm"),
         patch("hpc_agent.infra.backends.query.query_sacct", return_value={}),
     ):
         report = report_status_from_tasks(

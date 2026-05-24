@@ -7,7 +7,7 @@ import math
 import random
 from typing import TYPE_CHECKING
 
-from hpc_agent.mapreduce.reduce.metrics import (
+from hpc_agent.models.mapreduce.reduce.metrics import (
     _neumaier_sum,
     reduce_by_grid_point,
     reduce_metrics,

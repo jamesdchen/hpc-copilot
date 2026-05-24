@@ -1,7 +1,7 @@
 """Job status checking, result validation, and status reporting.
 
 This module drives the LLM-orchestrator's ``/status`` loop.  The CLI entry
-point (``python -m hpc_agent.mapreduce.reduce.status --run-id <id>``) emits JSON
+point (``python -m hpc_agent.models.mapreduce.reduce.status --run-id <id>``) emits JSON
 to stdout.  **Schema contract** (pinned; all four top-level keys ALWAYS
 present, never ``None``)::
 
@@ -54,7 +54,7 @@ from pathlib import Path
 
 from hpc_agent._internal.lifecycle import TaskStatus
 from hpc_agent._internal.time import utcnow_iso
-from hpc_agent.mapreduce.reduce.rollup import (
+from hpc_agent.models.mapreduce.reduce.rollup import (
     _grid_point_key,
     rollup_by_grid_point,
     rollup_by_wave,
@@ -335,7 +335,7 @@ def report_status(
     )
     err_paths = {str(tid): all_err[tid] for tid in failed_or_unknown if tid in all_err}
 
-    from hpc_agent.mapreduce.reduce.metrics import reduce_resource_usage
+    from hpc_agent.models.mapreduce.reduce.metrics import reduce_resource_usage
 
     report: dict = {
         "result_dir": str(Path(result_dir).resolve()),
@@ -521,7 +521,7 @@ def report_status_from_tasks(
     )
     err_paths = {str(tid): all_err[tid] for tid in failed_or_unknown if tid in all_err}
 
-    from hpc_agent.mapreduce.reduce.metrics import reduce_resource_usage
+    from hpc_agent.models.mapreduce.reduce.metrics import reduce_resource_usage
 
     report: dict = {
         "total_tasks": total,
@@ -538,7 +538,7 @@ def report_status_from_tasks(
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point - `python -m hpc_agent.mapreduce.reduce.status`
+# CLI entry point - `python -m hpc_agent.models.mapreduce.reduce.status`
 # ---------------------------------------------------------------------------
 
 

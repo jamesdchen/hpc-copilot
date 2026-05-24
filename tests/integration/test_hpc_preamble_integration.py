@@ -22,7 +22,9 @@ from hpc_agent import _PACKAGE_ROOT
 if TYPE_CHECKING:
     from pathlib import Path
 
-PREAMBLE = _PACKAGE_ROOT / "mapreduce" / "templates" / "runtime" / "common" / "hpc_preamble.sh"
+PREAMBLE = (
+    _PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "runtime" / "common" / "hpc_preamble.sh"
+)
 
 _BASH = shutil.which("bash")
 _RSYNC = shutil.which("rsync")

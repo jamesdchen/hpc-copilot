@@ -21,7 +21,7 @@ Report per-iteration reduced metrics for one closed-loop campaign. Walks every s
 This primitive exposes the same operation through two surfaces, intentionally:
 
 - **CLI envelope** (`hpc-agent campaign status --campaign-id <id>`) — wraps the data in the standard `{"ok": ..., "data": {...}}` envelope. Use from agents, slash commands, external orchestrators, anything that consumes the framework over a shell boundary.
-- **Python callable** (`from hpc_agent.mapreduce.reduce.history import prior`) — returns the `history` list directly (just `list[dict]`, no envelope). Use from inside `.hpc/tasks.py` at module-load time, where shelling out to a subprocess from inside a Python module being loaded by another Python process would be wasteful (and recursive — `tasks.py` is itself loaded by the framework). The `prior()` Python entry point is the primary call site for closed-loop strategies (Optuna, walk-forward) that read history each iteration.
+- **Python callable** (`from hpc_agent.models.mapreduce.reduce.history import prior`) — returns the `history` list directly (just `list[dict]`, no envelope). Use from inside `.hpc/tasks.py` at module-load time, where shelling out to a subprocess from inside a Python module being loaded by another Python process would be wasteful (and recursive — `tasks.py` is itself loaded by the framework). The `prior()` Python entry point is the primary call site for closed-loop strategies (Optuna, walk-forward) that read history each iteration.
 
 Both surfaces walk the same sidecars and produce the same per-iteration reduced metrics. The Python form's contract is the schema (`schemas/campaign.output.json#/$defs/status_data`)'s `history` field unwrapped from the envelope.
 

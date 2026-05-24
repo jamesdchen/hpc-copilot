@@ -1,11 +1,11 @@
 """Reduce-phase modules: metrics aggregation and status reporting."""
 
-from hpc_agent.mapreduce.reduce.metrics import (
+from hpc_agent.models.mapreduce.reduce.metrics import (
     reduce_by_grid_point,
     reduce_metrics,
     reduce_partials,
 )
-from hpc_agent.mapreduce.reduce.status import (
+from hpc_agent.models.mapreduce.reduce.status import (
     check_results,
     detect_scheduler,
     get_err_log_paths,

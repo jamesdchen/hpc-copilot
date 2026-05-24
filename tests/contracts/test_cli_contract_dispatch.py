@@ -1,4 +1,4 @@
-"""Stderr/exit-code contract tests for ``hpc_agent.mapreduce.dispatch``.
+"""Stderr/exit-code contract tests for ``hpc_agent.models.mapreduce.dispatch``.
 
 Pins the behaviours that ``/status`` and other observers rely on. Each
 test drives the dispatcher as a subprocess (matching cluster execution)
@@ -57,7 +57,7 @@ def _stub_layout(
     )
 
     dispatch_dst = hpc / "_hpc_dispatch.py"
-    pkg_dispatch = Path(hpc_agent.__file__).parent / "mapreduce" / "dispatch.py"
+    pkg_dispatch = Path(hpc_agent.__file__).parent / "models" / "mapreduce" / "dispatch.py"
     shutil.copyfile(pkg_dispatch, dispatch_dst)
     return dispatch_dst
 

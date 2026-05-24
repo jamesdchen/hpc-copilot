@@ -1,7 +1,7 @@
 """Closed-loop campaign primitive: tagged sequence of ``/submit`` invocations.
 
 A campaign is a sequence of submits sharing a ``campaign_id`` tag. The
-user's ``tasks.py`` reads :func:`hpc_agent.mapreduce.reduce.history.prior` to
+user's ``tasks.py`` reads :func:`hpc_agent.models.mapreduce.reduce.history.prior` to
 learn what prior iterations of the same campaign produced and decides
 what to run next.
 
@@ -9,7 +9,7 @@ The framework's surface is intentionally tiny:
 
 * ``HPC_CAMPAIGN_ID`` env var threaded through scheduler templates;
 * the per-run sidecar's ``campaign_id`` field;
-* :func:`hpc_agent.mapreduce.reduce.history.prior` for reading per-iteration
+* :func:`hpc_agent.models.mapreduce.reduce.history.prior` for reading per-iteration
   reduced metrics back;
 * :func:`campaign_dir` for strategy libraries that want to drop their
   state files (Optuna SQLite, PBT checkpoints, etc.) under a canonical

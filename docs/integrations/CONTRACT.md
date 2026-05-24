@@ -144,7 +144,7 @@ The **eager-materialization convention** —
 `resolve(i)` indexes — gives free `cmd_sha` derivation, submit-time
 error catching, and laptop-side inspectability. The canonical
 reference at
-[`tasks_example.py`](../../src/hpc_agent/mapreduce/templates/scaffolds/tasks_example.py)
+[`tasks_example.py`](../../src/hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py)
 shows three usage patterns inline (Cartesian product, chunking by row
 count, date-window backtests). Pick whichever matches your sweep.
 
@@ -160,9 +160,9 @@ Templates copied into experiment repos may import from a narrow
 allowlist of "runtime modules" that `deploy_runtime` stages on the
 compute node alongside the executor. The current allowlist:
 
-- `hpc_agent.mapreduce.metrics_io.write_metrics` — per-task sidecar
+- `hpc_agent.models.mapreduce.metrics_io.write_metrics` — per-task sidecar
   writer. Stdlib-only.
-- `hpc_agent.mapreduce.metrics_io.read_kw_env` — kwargs-from-env
+- `hpc_agent.models.mapreduce.metrics_io.read_kw_env` — kwargs-from-env
   helper for executors that consume the dispatcher's `HPC_KW_*`
   exports.
 - `hpc_agent.executor_cli.flag` — single-flag declaration helper for
@@ -173,7 +173,7 @@ compute node alongside the executor. The current allowlist:
   builder for the auto-generated `.hpc/cli.py`.
 
 Nothing else from `hpc_agent` is importable from
-`hpc_agent/mapreduce/templates/**`. The boundary is enforced by
+`hpc_agent/models/mapreduce/templates/**`. The boundary is enforced by
 `tests/test_boundary_contract.py`. To extend it, the new module must
 (a) be deployed by `deploy_runtime`, (b) be stdlib-only or
 self-contained, and (c) be added to both the allowlist constant in
@@ -192,7 +192,7 @@ must not change across releases:
 | `LOCAL_DATA_DIR` | Optional cluster-side data root. Templates honor it when set; executors that read data files key off it. |
 | `HPC_TASK_ID` | 0-based task index. |
 | `HPC_RUN_ID` | The current run_id. Locates `.hpc/runs/<run_id>.json`. |
-| `HPC_CAMPAIGN_ID` | Optional. When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` can read this to call `hpc_agent.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` for prior iterations. |
+| `HPC_CAMPAIGN_ID` | Optional. When set, marks the run as part of a closed-loop campaign. The user's `tasks.py` can read this to call `hpc_agent.models.mapreduce.reduce.history.prior(experiment_dir, campaign_id)` for prior iterations. |
 | `HPC_RUNTIME` | Optional. When `uv`, the template runs `uv sync` before dispatch. |
 
 Constants are also exposed as Python attributes under
