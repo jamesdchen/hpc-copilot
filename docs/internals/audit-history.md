@@ -53,7 +53,7 @@ agent confirmed every prior fix is sound with zero regressions.
   forecast was a silent no-op. Now falls back to the owning user's profile
   median (`median_walltime_ask_sec`) — the source `queue_simulator_inputs`
   already uses; an unprofiled user still degrades to "treated as running".
-- `agent_cli.py` — pydantic v2 `ValidationError` (not a `ValueError`) → bad `--spec`
+- `cli/_helpers.py` — pydantic v2 `ValidationError` (not a `ValueError`) → bad `--spec`
   mislabelled internal/exit-3 instead of user-error/exit-1; `submit-flow --dry-run`
   `KeyError` on a missing field.
 - `infra/remote.py` — `_tar_ssh_push` leaked the tar stdout FD + zombie on timeout.

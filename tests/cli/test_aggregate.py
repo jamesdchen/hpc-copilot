@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_agent import agent_cli as cli
 from hpc_agent.cli import aggregate as agg_mod
+from hpc_agent.cli._helpers import EXIT_INTERNAL
+from hpc_agent.cli.aggregate import cmd_aggregate
+from hpc_agent.cli.dispatch import main as _cli_main
 
 from ._helpers import SUBMIT_SPEC
 from ._helpers import env_without_ssh_agent as _env_without_ssh_agent
@@ -42,8 +44,8 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
     import argparse
     from unittest.mock import patch
 
-    from hpc_agent.state import session as session_mod
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
 
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake-agent.sock")
@@ -61,7 +63,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
     )
-    session_mod.upsert_run(tmp_path, rec)
+    upsert_run(tmp_path, rec)
 
     args = argparse.Namespace(
         experiment_dir=tmp_path,
@@ -81,7 +83,7 @@ def test_aggregate_failure_emits_error_envelope(tmp_path: Path, monkeypatch) -> 
         ),
         patch("hpc_agent.cli._helpers._emit", side_effect=fake_emit),
     ):
-        rc = cli.cmd_aggregate(args)
+        rc = cmd_aggregate(args)
 
     assert rc != 0  # exit code reflects failure
     payload = json.loads(captured[-1])
@@ -150,8 +152,8 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
         patch("hpc_agent.cli._helpers._emit", side_effect=fake_emit),
         patch("hpc_agent.cli.setup.cmd_capabilities", side_effect=boom),
     ):
-        rc = cli.main(["capabilities"])
-    assert rc == cli.EXIT_INTERNAL
+        rc = _cli_main(["capabilities"])
+    assert rc == EXIT_INTERNAL
     assert captured[-1]["error_code"] == "internal"
 
 
@@ -160,8 +162,8 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
 
 def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
     """Helper: seed a journal record so cmd_aggregate gets past lookup."""
-    from hpc_agent.state import session as session_mod
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
 
     rec = RunRecord(
         run_id=run_id,
@@ -175,7 +177,7 @@ def _seed_aggregate_run(tmp_path: Path, run_id: str = "ml_abcd1234"):
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
     )
-    session_mod.upsert_run(tmp_path, rec)
+    upsert_run(tmp_path, rec)
     return rec
 
 
@@ -209,7 +211,7 @@ def test_aggregate_precondition_blocks_combine_on_missing_outputs(
         patch.object(agg_mod, "combine_wave") as combine_mock,
         patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
-        rc = cli.cmd_aggregate(args)
+        rc = cmd_aggregate(args)
 
     combine_mock.assert_not_called(), "combiner must not run when outputs missing"
     assert rc != 0
@@ -249,7 +251,7 @@ def test_aggregate_postcondition_fails_when_combiner_artifact_missing(
         ),
         patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
-        rc = cli.cmd_aggregate(args)
+        rc = cmd_aggregate(args)
 
     assert rc != 0
     payload = captured[-1]
@@ -280,7 +282,7 @@ def test_aggregate_envelope_carries_provenance_on_success(tmp_path: Path, monkey
         patch.object(agg_mod, "combine_wave", return_value=(True, "ok", "")),
         patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
-        rc = cli.cmd_aggregate(args)
+        rc = cmd_aggregate(args)
 
     assert rc == 0
     payload = captured[-1]
@@ -353,7 +355,7 @@ def test_aggregate_reads_sidecar_defaults_for_require_and_expect(
         ),
         patch("hpc_agent.cli._helpers._emit"),
     ):
-        rc = cli.cmd_aggregate(args)
+        rc = cmd_aggregate(args)
 
     assert rc == 0, "sidecar-defaulted aggregate should succeed"
     assert seen_template == ["results/metrics.{task_id}.json"]
@@ -388,7 +390,7 @@ def test_aggregate_writes_sidecar_when_expect_output_set(tmp_path: Path, monkeyp
         ),
         patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
-        rc = cli.cmd_aggregate(args)
+        rc = cmd_aggregate(args)
 
     assert rc == 0
     payload = captured[-1]

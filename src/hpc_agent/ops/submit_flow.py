@@ -35,7 +35,7 @@ from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
 from hpc_agent.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
 from hpc_agent.ops.submit.runner import submit_and_record
-from hpc_agent.state import session
+from hpc_agent.state.journal import load_run
 
 
 def _submit_flow_handler(ns):  # type: ignore[no-untyped-def]
@@ -103,7 +103,7 @@ def _validate_ssh_target(ssh_target: str) -> str:
     """Adapt :func:`validate_ssh_target` to ``SpecInvalid`` for this
     flow's wire surface. The shared helper raises ``ValueError``; the
     submit flow surfaces ``SpecInvalid`` so the caller sees a typed
-    envelope error. Subject-private — ``ops/recover/flow.py`` does the
+    envelope error. Workflow-private — ``ops/recover_flow.py`` does the
     same inline at its single call site rather than reaching into
     submit's source tree.
     """
@@ -324,7 +324,7 @@ def submit_flow(
 
 def _dedup_existing(experiment_dir: Path, spec: SubmitFlowSpec) -> SubmitFlowResult | None:
     """Return a deduped SubmitFlowResult if a journal record already exists."""
-    existing = session.load_run(experiment_dir, spec.run_id)
+    existing = load_run(experiment_dir, spec.run_id)
     if existing is None:
         return None
     return SubmitFlowResult(
@@ -369,7 +369,7 @@ def _submit_one_spec(
     canary_done = False
     if spec.canary:
         canary_run_id = f"{spec.run_id}-canary"
-        existing_canary = session.load_run(experiment_dir, canary_run_id)
+        existing_canary = load_run(experiment_dir, canary_run_id)
         if existing_canary is not None:
             # Replay: a prior call landed the canary but failed before
             # recording the main run, so the main-run dedup check (keyed
@@ -554,10 +554,10 @@ def submit_flow_batch(
     import os
 
     from hpc_agent.infra import io
-    from hpc_agent.state import session
+    from hpc_agent.state.run_record import journal_dir
 
     use_lock = os.environ.get("HPC_SUBMIT_NO_LOCK") != "1"
-    lock_path = session.journal_dir(experiment_dir) / ".submit_lock"
+    lock_path = journal_dir(experiment_dir) / ".submit_lock"
     lock_ctx = io.advisory_flock(lock_path) if use_lock else _noop_lock_ctx()
     with lock_ctx:
         return _submit_flow_batch_locked(

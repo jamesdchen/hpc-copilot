@@ -159,14 +159,14 @@ def mark_run(
 def _refresh_index_entry(
     experiment_dir: Path,
     run_id: str,
-    status: str,  # noqa: ARG001 — kept for back-compat callers
+    status: str,
 ) -> None:
     """Bump a single ``index.json`` entry; called after every successful write.
 
     Re-reads the run file under the index lock and uses its freshly-read
-    status (instead of the caller-supplied ``status`` argument). This
-    closes a lost-update race: two writers A and B that each release the
-    per-run lock before grabbing the index lock could otherwise install
+    status (falling back to *status* only if the per-run file read fails).
+    This closes a lost-update race: two writers A and B that each release
+    the per-run lock before grabbing the index lock could otherwise install
     A's stale status over B's terminal-transition write.
 
     If the index read fails (transient OSError, partial-write torn JSON)

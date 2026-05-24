@@ -69,8 +69,9 @@ def validate(payload: Any, schema: dict) -> None:
 # Switched on under pytest (autodetected) and any time
 # ``CLAUDE_HPC_VALIDATE_OUTPUTS`` is set to a truthy value. In production
 # the gate is off by default — outputs are validated in CI, not on the
-# hot path. Failure surfaces as ``OutputSchemaDrift`` which the agent_cli
-# error handler turns into an ``error_code=internal`` envelope.
+# hot path. Failure surfaces as ``OutputSchemaDrift`` which the
+# :mod:`hpc_agent.cli.dispatch` error handler turns into an
+# ``error_code=internal`` envelope.
 
 
 class OutputSchemaDrift(RuntimeError):

@@ -5,14 +5,14 @@ drifted independently — every CHANGELOG-grade bug we shipped in this
 area boiled down to two of those vocabularies disagreeing about a
 single value:
 
-* ``hpc_agent.state.session.RunRecord.status`` — journal record status
+* ``hpc_agent.state.run_record.RunRecord.status`` — journal record status
   (set literal ``{"complete", "failed", "abandoned"}`` plus
   ``"in_flight"``).
-* ``hpc_agent.ops.monitor.flow``'s ``lifecycle_state`` envelope
+* ``hpc_agent.ops.monitor_flow``'s ``lifecycle_state`` envelope
   field — workflow state including ``"timeout"``.
 * ``hpc_agent.models.mapreduce.reduce.status``'s per-task status strings.
 * ``hpc_agent.runner.cluster_failures_by_fingerprint``'s emitted
-  category strings vs ``hpc_agent.agent_cli._VALID_RESUBMIT_CATEGORIES``'s
+  category strings vs ``hpc_agent.cli.recover._VALID_RESUBMIT_CATEGORIES``'s
   accepted set — a real bug class where the classifier could emit a
   category the resubmit path silently rejected.
 
@@ -51,7 +51,7 @@ __all__ = [
 
 
 class JournalStatus(StrEnum):
-    """Status field on :class:`hpc_agent.state.session.RunRecord`.
+    """Status field on :class:`hpc_agent.state.run_record.RunRecord`.
 
     ``in_flight`` while the run is being monitored; transitions to one
     of the three terminal values when the workflow ends.
@@ -64,7 +64,7 @@ class JournalStatus(StrEnum):
 
 
 # Convenience set of terminal :class:`JournalStatus` values.
-# ``hpc_agent.state.session`` historically exposed this same set as a
+# ``hpc_agent.state.run_record`` historically exposed this same set as a
 # module-level ``TERMINAL_STATUSES = frozenset({...})``. Now derived
 # from the StrEnum so it cannot drift.
 TERMINAL_STATUSES = frozenset(
@@ -109,7 +109,7 @@ class FailureCategory(StrEnum):
     """Failure-fingerprint vocabulary, shared by the auto-classifier
     in :func:`hpc_agent.runner.cluster_failures_by_fingerprint`
     and the resubmit path's ``--spec.category`` validation in
-    :mod:`hpc_agent.agent_cli`.
+    :mod:`hpc_agent.cli.recover`.
 
     Pre-B2 the two sets disagreed asymmetrically:
 

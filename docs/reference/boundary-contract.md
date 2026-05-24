@@ -19,7 +19,7 @@ package. Groupings mirror those in
 [`hpc_agent/__init__.py`](../src/hpc_agent/__init__.py).
 
 The public boundary also now includes the **shell CLI** at
-`hpc_agent/agent_cli.py` (entry point `hpc-agent`). Its envelope
+`hpc_agent/cli/dispatch.py` (entry point `hpc-agent`). Its envelope
 shape, subcommand list, and exit-code contract are documented in
 [`docs/reference/cli-spec.md`](cli-spec.md) and the JSON Schemas under
 `hpc_agent/schemas/`. The JSON Schemas are themselves a build

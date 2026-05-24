@@ -5,7 +5,7 @@ describing each operation: its verb tier, idempotency, side effects,
 CLI invocation, Python entry point, and the schema files that pin its
 input/output shapes (where they exist).
 
-Used by :func:`hpc_agent.agent_cli.cmd_capabilities` to expose the
+Used by :func:`hpc_agent.cli.setup.cmd_capabilities` to expose the
 operation catalog over the JSON envelope, so external agents can
 discover what's invokable without reading any docs. The same data
 drives ``docs/generated/operations.md`` via

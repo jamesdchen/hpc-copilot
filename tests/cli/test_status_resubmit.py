@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_agent import agent_cli as cli
+from hpc_agent.cli._dispatch import dispatch_primitive
+from hpc_agent.cli.lifecycle import _preempted_summary_from_sidecar
+from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
 
 from ._helpers import SUBMIT_SPEC
 from ._helpers import env_without_ssh_agent as _env_without_ssh_agent
@@ -35,7 +37,7 @@ def test_status_helper_returns_none_when_no_preempt_marks(tmp_path: Path) -> Non
     }
     (runs_dir / "rid.json").write_text(json.dumps(sidecar))
 
-    assert cli._preempted_summary_from_sidecar(tmp_path, "rid") is None
+    assert _preempted_summary_from_sidecar(tmp_path, "rid") is None
 
 
 def test_status_helper_aggregates_preempted_task_ids(tmp_path: Path) -> None:
@@ -60,7 +62,7 @@ def test_status_helper_aggregates_preempted_task_ids(tmp_path: Path) -> None:
     }
     (runs_dir / "rid.json").write_text(json.dumps(sidecar))
 
-    summary = cli._preempted_summary_from_sidecar(tmp_path, "rid")
+    summary = _preempted_summary_from_sidecar(tmp_path, "rid")
     assert summary == (2, [0, 2])
 
 
@@ -68,7 +70,7 @@ def test_status_helper_returns_none_on_missing_sidecar(tmp_path: Path) -> None:
     """No sidecar file → None (treated as 'nothing to surface', not an
     error). Keeps cmd_status robust when called against a run that
     hasn't completed its first wave yet."""
-    assert cli._preempted_summary_from_sidecar(tmp_path, "missing_run") is None
+    assert _preempted_summary_from_sidecar(tmp_path, "missing_run") is None
 
 
 # ─── A-M3: cmd_resubmit surfaces Preempted at envelope level ──────────────
@@ -269,8 +271,8 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/fake.sock")
 
     # Seed a run.
-    from hpc_agent.state import session as session_mod
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
 
     rec = RunRecord(
         run_id="ml_abcd1234",
@@ -284,7 +286,7 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
         submitted_at="2026-04-28T00:00:00+00:00",
         experiment_dir=str(tmp_path),
     )
-    session_mod.upsert_run(tmp_path, rec)
+    upsert_run(tmp_path, rec)
 
     args = argparse.Namespace(
         experiment_dir=tmp_path,
@@ -310,7 +312,7 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
         ),
         patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
-        rc = cli.cmd_logs(args)
+        rc = dispatch_primitive("logs", args)
 
     assert rc == 0
     payload = captured[-1]
@@ -327,20 +329,20 @@ def test_last_status_age_seconds_is_recent_for_now_stamp() -> None:
     from datetime import datetime, timezone
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    age = cli._last_status_age_seconds({"checked_at": now_iso})
+    age = _last_status_age_seconds({"checked_at": now_iso})
     assert age is not None
     assert 0 <= age < 5
 
 
 def test_last_status_age_seconds_handles_missing_checked_at() -> None:
-    assert cli._last_status_age_seconds({}) is None
-    assert cli._last_status_age_seconds(None) is None  # type: ignore[arg-type]
-    assert cli._last_status_age_seconds({"checked_at": "garbage"}) is None
+    assert _last_status_age_seconds({}) is None
+    assert _last_status_age_seconds(None) is None  # type: ignore[arg-type]
+    assert _last_status_age_seconds({"checked_at": "garbage"}) is None
 
 
 def test_last_status_age_seconds_is_old_for_distant_past() -> None:
     """A timestamp from a year ago should yield a very large age."""
-    age = cli._last_status_age_seconds({"checked_at": "2024-01-01T00:00:00+00:00"})
+    age = _last_status_age_seconds({"checked_at": "2024-01-01T00:00:00+00:00"})
     assert age is not None
     assert age > 60 * 60 * 24 * 30  # at least 30 days
 

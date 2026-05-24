@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent import agent_cli as cli
+from hpc_agent.cli.dispatch import main as _cli_main
 
 from ._helpers import SUBMIT_SPEC
 from ._helpers import parse_envelope as _parse_envelope
@@ -197,7 +197,7 @@ def test_every_envelope_has_required_keys() -> None:
 
 def test_internal_main_function_returns_zero_on_capabilities() -> None:
     """The cli.main() entry can be called in-process for fast tests."""
-    rc = cli.main(["capabilities"])
+    rc = _cli_main(["capabilities"])
     assert rc == 0
 
 

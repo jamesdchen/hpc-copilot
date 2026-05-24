@@ -8,13 +8,13 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra import remote
-from hpc_agent.state import session
+from hpc_agent.state.journal import update_run_record
 
 if TYPE_CHECKING:
     import argparse
     from pathlib import Path
 
-    from hpc_agent.state.session import RunRecord
+    from hpc_agent.state.run_record import RunRecord
 
 
 def _aggregate_handler(ns: argparse.Namespace) -> int:
@@ -123,7 +123,7 @@ def combine_wave(
             record.failed_waves = sorted({*record.failed_waves, wave})
 
     try:
-        session.update_run_record(experiment_dir, run_id, _apply)
+        update_run_record(experiment_dir, run_id, _apply)
     except FileNotFoundError as exc:
         raise errors.JournalCorrupt(f"no run record for {run_id!r}") from exc
     return ok, stdout, stderr

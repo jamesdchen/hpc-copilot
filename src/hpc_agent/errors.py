@@ -208,7 +208,7 @@ class ClusterPartiallyDegraded(HpcError):
     operation succeeded with partial data.
 
     Carries a ``partial_errors`` list attribute of ``{code, detail}``
-    dicts so the agent_cli can surface the per-source failures to the
+    dicts so the CLI dispatcher can surface the per-source failures to the
     envelope's top-level ``partial_errors`` key. The operation that
     raises this still set ok:true cluster-side; the exception is the
     typed channel for surfacing what was missed.
@@ -276,5 +276,5 @@ class SchemaIncompat(HpcError):
         "The on-disk JSON was written by a newer (or older, foreign) "
         "hpc-agent version than this one supports. Upgrade the package "
         "or migrate the file. The supported version set is declared in "
-        "``hpc_agent/_internal/version.py:_MANIFEST``."
+        "``hpc_agent/_kernel/extension/version.py:_MANIFEST``."
     )

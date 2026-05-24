@@ -10,7 +10,7 @@ points ``handler`` at this function via a lazy lookup; the dispatcher
 delegates entirely once it sees ``handler is not None``.
 
 Helpers come from :mod:`hpc_agent.cli._helpers` (the adapter SDK) so
-the module has no dependency on ``agent_cli`` — that import direction
+the module has no dependency on the dispatcher — that import direction
 would re-introduce the cycle the migration is unwinding.
 """
 
@@ -57,7 +57,7 @@ def cmd_resubmit(args: argparse.Namespace) -> int:
             f"--spec.category must be one of {sorted(_VALID_RESUBMIT_CATEGORIES)}; got {category!r}"
         )
 
-    from hpc_agent.ops.recover.flow import resubmit_flow
+    from hpc_agent.ops.recover_flow import resubmit_flow
 
     # Validate per-element so a bad index surfaces with the slot
     # information rather than a bare ``ValueError: invalid literal for

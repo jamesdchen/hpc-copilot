@@ -234,7 +234,7 @@ class TestInspectClusterEntry:
 
     def test_unknown_cluster_raises(self, tmp_path, monkeypatch):
         # Regression: inspect_cluster used to raise a bare KeyError, which
-        # the agent_cli envelope translator surfaced as `error_code:
+        # the CLI envelope translator surfaced as `error_code:
         # internal`. The primitive doc declares `cluster_unknown` as the
         # correct code, so the raise is now typed.
         from hpc_agent import errors

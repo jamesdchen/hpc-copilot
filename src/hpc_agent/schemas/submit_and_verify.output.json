@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_and_verify.output.json",
+  "title": "submit-and-verify output data",
+  "description": "Shape of the ``data`` field on a successful envelope.\n\nAlways carries the submit half; the verify half is None when the\ncanary was skipped (``submit.canary=False``) or when the submit\nwas a deduped replay (no fresh canary to wait on).",
+  "type": "object",
+  "required": [
+    "run_id",
+    "job_ids",
+    "total_tasks",
+    "deduped",
+    "verified"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "description": "Main run id (mirrors submit-flow's run_id).",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "job_ids": {
+      "description": "Main array job ids from submit-flow.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Job Ids",
+      "type": "array"
+    },
+    "total_tasks": {
+      "minimum": 1,
+      "title": "Total Tasks",
+      "type": "integer"
+    },
+    "deduped": {
+      "description": "True when the submit half was a deduped replay.",
+      "title": "Deduped",
+      "type": "boolean"
+    },
+    "canary_run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Run id of the canary sibling sidecar. None when canary was skipped (submit.canary=False) or on a deduped replay.",
+      "title": "Canary Run Id"
+    },
+    "canary_job_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Scheduler ids for the canary. None when canary skipped.",
+      "title": "Canary Job Ids"
+    },
+    "verified": {
+      "description": "True iff verify-canary returned ok=True. False on any canary-side failure AND when canary verification was skipped (no canary fired).",
+      "title": "Verified",
+      "type": "boolean"
+    },
+    "failure_kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "dispatcher_failed",
+            "import_error",
+            "module_not_found",
+            "traceback",
+            "oom_killed",
+            "segfault",
+            "missing_output",
+            "timeout",
+            "abandoned"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Pass-through from verify-canary. None on success, None when canary was skipped.",
+      "title": "Failure Kind"
+    },
+    "verify_result": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerifyCanaryResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Full verify-canary envelope when verification ran; None when canary was skipped or submit was deduped."
+    }
+  },
+  "$defs": {
+    "VerifyCanaryResult": {
+      "additionalProperties": false,
+      "description": "Result of the wait + grep + output-check protocol for a 1-task canary.\n\nCaller branches on ``ok``: True → main array submit; False →\nsurface stderr_tail to the user verbatim.",
+      "properties": {
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "failure_kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "dispatcher_failed",
+                "import_error",
+                "module_not_found",
+                "traceback",
+                "oom_killed",
+                "segfault",
+                "missing_output",
+                "timeout",
+                "abandoned"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Kind"
+        },
+        "details": {
+          "description": "One-line human-readable summary the slash command surfaces above the raw stderr_tail.",
+          "title": "Details",
+          "type": "string"
+        },
+        "stderr_tail": {
+          "description": "Last ~50 lines of the canary's stderr log (or empty string when not retrievable).",
+          "title": "Stderr Tail",
+          "type": "string"
+        },
+        "metrics_fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional sha256 of the canary's expected output file when the caller asked for a fingerprint. None on every failure path and when fingerprinting is skipped or fails.",
+          "title": "Metrics Fingerprint"
+        }
+      },
+      "required": [
+        "ok",
+        "details",
+        "stderr_tail"
+      ],
+      "title": "verify-canary output",
+      "type": "object"
+    }
+  }
+}

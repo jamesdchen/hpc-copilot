@@ -130,9 +130,9 @@ def monitor_summary(
     if not run_id:
         raise errors.SpecInvalid("run_id must be a non-empty string")
 
-    from hpc_agent.state import session
+    from hpc_agent.state.journal import load_run
 
-    record = session.load_run(experiment_dir, run_id)
+    record = load_run(experiment_dir, run_id)
     if record is None:
         # No journal — fall back to 'abandoned' (closest semantic match
         # in the canonical lifecycle_state_observable_with_timeout set)

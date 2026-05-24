@@ -21,7 +21,7 @@ error_codes:
   retry_safe: false
 backed_by:
   cli: hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]
-  python: hpc_agent.ops.monitor.flow.monitor_flow
+  python: hpc_agent.ops.monitor_flow.monitor_flow
 ---
 
 ## Purpose

@@ -1,6 +1,6 @@
 # `hpc-agent` CLI Specification
 
-Cross-cutting contract for the shell CLI shipped at `hpc_agent/agent_cli.py` (entry point `hpc-agent`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
+Cross-cutting contract for the shell CLI shipped at `hpc_agent/cli/dispatch.py` (entry point `hpc-agent`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
 
 The slash-command surface in `slash_commands/commands/` is documented elsewhere; both surfaces compose from the primitive layer.
 
@@ -85,7 +85,7 @@ Source of truth: `hpc_agent/schemas/envelope.json` and the `HpcError` hierarchy 
 
 ## Exit code → error_code mapping
 
-Wired in `hpc_agent/agent_cli.py` (`_EXIT_CODE_BY_CATEGORY`).
+Wired in `hpc_agent/cli/_helpers.py` (`_EXIT_CODE_BY_CATEGORY`).
 
 | Exit | Category | Meaning | error_codes that map here |
 |---|---|---|---|

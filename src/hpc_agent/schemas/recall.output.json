@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/jamesdchen/hpc-agent/schemas/recall.output.json",
   "title": "recall output",
-  "description": "Data block returned by ``hpc-agent recall``.\n\nEach campaign summary projects the prior-decision fields the\nnext interviewer would compare against. The rollup block\npre-computes cross-campaign aggregations.\n\nThe outer ``{ok, data}`` envelope is supplied by ``_ok`` in\n``agent_cli.py``; the shipped ``recall.output.json`` matches THIS\ndata-block shape, not the envelope (every other primitive's\nResult/Data model follows the same convention).",
+  "description": "Data block returned by ``hpc-agent recall``.\n\nEach campaign summary projects the prior-decision fields the\nnext interviewer would compare against. The rollup block\npre-computes cross-campaign aggregations.\n\nThe outer ``{ok, data}`` envelope is supplied by ``_ok`` in\n``hpc_agent.cli._helpers``; the shipped ``recall.output.json``\nmatches THIS data-block shape, not the envelope (every other\nprimitive's Result/Data model follows the same convention).",
   "type": "object",
   "required": [
     "campaigns",

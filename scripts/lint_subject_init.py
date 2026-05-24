@@ -7,7 +7,7 @@ most a module docstring. NO eager re-exports — callers reach the leaf
 module directly. The reasons:
 
 * The cross-subject-imports lint relies on imports naming the leaf
-  module (``hpc_agent.ops.monitor.flow``) so it can attribute every
+  module (``hpc_agent.ops.monitor.status``) so it can attribute every
   symbol to a subject. Re-exports in ``__init__.py`` collapse that
   to ``hpc_agent.ops.monitor`` and break attribution.
 * Registry registration runs by *importing* each primitive module, so

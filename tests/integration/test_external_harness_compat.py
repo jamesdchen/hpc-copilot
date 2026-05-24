@@ -57,11 +57,15 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_agent import agent_cli, runner
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
-from hpc_agent.ops.recover.runner_failures import DEFAULT_AUTO_RETRY_POLICY
-from hpc_agent.state import session
-from hpc_agent.state.session import RunRecord
+from hpc_agent.cli.dispatch import main as _cli_main
+from hpc_agent.ops.recover.runner_failures import (
+    DEFAULT_AUTO_RETRY_POLICY,
+    annotate_clusters_with_retry_advice,
+    cluster_failures_by_fingerprint,
+)
+from hpc_agent.state.journal import upsert_run
+from hpc_agent.state.run_record import RunRecord
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -320,7 +324,7 @@ def test_error_code_remote_command_failed_when_ssh_returns_nonzero(
         submitted_at="2026-05-23T00:00:00+00:00",
         experiment_dir=str(tmp_path.resolve()),
     )
-    session.upsert_run(tmp_path, record)
+    upsert_run(tmp_path, record)
 
     captured: list[dict] = []
 
@@ -334,7 +338,7 @@ def test_error_code_remote_command_failed_when_ssh_returns_nonzero(
         patch("hpc_agent.infra.remote.ssh_run", return_value=fake_ssh),
         patch("hpc_agent.cli._helpers._emit", side_effect=_capture),
     ):
-        rc = agent_cli.main(["status", "--experiment-dir", str(tmp_path), "--run-id", run_id])
+        rc = _cli_main(["status", "--experiment-dir", str(tmp_path), "--run-id", run_id])
 
     assert rc == 2, f"remote_command_failed maps to cluster category (exit 2); got {rc}"
     assert captured, "no envelope emitted"
@@ -382,7 +386,7 @@ def test_cluster_failures_rollup_covers_all_four_categories_with_retry_advice(
         # (no Traceback prefix, no OOM/walltime/preempt marker).
         {"task_id": 4, "content": "something went sideways but we can't tell what"},
     ]
-    clusters = runner.cluster_failures_by_fingerprint(logs)
+    clusters = cluster_failures_by_fingerprint(logs)
     categories = {c["category"] for c in clusters}
     assert {"gpu_oom", "ssh_unreachable", "walltime", "unknown"}.issubset(categories), (
         f"missing categories in rollup: {sorted(categories)}"
@@ -406,7 +410,7 @@ def test_cluster_failures_rollup_covers_all_four_categories_with_retry_advice(
         experiment_dir=str(tmp_path.resolve()),
         retries={"1": {"attempts": 1, "category": "gpu_oom", "overrides": {}}},
     )
-    annotated = runner.annotate_clusters_with_retry_advice(
+    annotated = annotate_clusters_with_retry_advice(
         clusters,
         auto_retry_policy=DEFAULT_AUTO_RETRY_POLICY,
         record=record,

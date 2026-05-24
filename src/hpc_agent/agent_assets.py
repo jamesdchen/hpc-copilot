@@ -1,7 +1,7 @@
 """Install hpc-agent's bundled slash commands and skills into ``~/.claude/``.
 
 The CLI surface is ``hpc-agent install-commands`` and lives in
-``agent_cli.py``; this module provides the copy logic so a pip-only
+:mod:`hpc_agent.cli.setup`; this module provides the copy logic so a pip-only
 install (no repo checkout) can still wire the agent assets into Claude
 Code's user-global config directory.
 

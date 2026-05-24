@@ -19,7 +19,7 @@ rules.
 │  user-typed entry points         agent-callable workflows           │
 │  (thin redirects to skills)      (one SKILL.md per workflow)        │
 │                                  ↓                                  │
-│  agent_cli.py (`hpc-agent` console script — main())                 │
+│  cli/dispatch.py (`hpc-agent` console script — main())              │
 │    └ delegates to cli/parser.py + cli/_dispatch.py                  │
 │  argparse + verb groups (validate/build/clusters) + flat aliases    │
 └──────────────────────────────────┬──────────────────────────────────┘
@@ -28,12 +28,12 @@ rules.
 │  Workflow primitives (verb="workflow" — multi-step orchestration    │
 │  composed declaratively via @primitive(composes=[...]))             │
 │                                                                     │
-│  ops/submit/flow.py        submit-flow                              │
-│  ops/monitor/flow.py       monitor-flow                             │
-│  ops/aggregate/flow.py     aggregate-flow                           │
-│  ops/aggregate/canary_verify.py  verify-canary                      │
-│  ops/recover/flow.py       recover-flow                             │
-│  meta/campaign/validate.py validate-campaign                        │
+│  ops/submit_flow.py        submit-flow                              │
+│  ops/monitor_flow.py       monitor-flow                             │
+│  ops/aggregate_flow.py     aggregate-flow                           │
+│  ops/verify_canary.py      verify-canary                            │
+│  ops/recover_flow.py       recover-flow                             │
+│  meta/validate_campaign.py validate-campaign                        │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -41,23 +41,24 @@ rules.
 │  classifiers). No cross-subject imports; see "Cross-subject         │
 │  composition" below.                                                │
 │                                                                     │
-│  ops/        operational subjects                                   │
-│   ├ aggregate/  combine, canary_verify, cluster_reduce,             │
-│   │            invariants, flow, runner                             │
+│  ops/        operational subjects (atoms only — workflows sit at    │
+│              ops/ root as sibling files; see above)                 │
+│   ├ aggregate/  combine, cluster_reduce, invariants, runner         │
 │   ├ clusters/   list, describe                                      │
 │   ├ memory/     recall, interview                                   │
-│   ├ monitor/    flow, status, reconcile, logs, list_in_flight,      │
-│   │            arm, summary, update_constraints, logs_atom          │
+│   ├ monitor/    status, reconcile, logs, list_in_flight, arm,       │
+│   │            summary, update_constraints, logs_atom               │
 │   ├ preflight/  check                                               │
-│   ├ recover/    flow, runner, batching, failure_signatures,         │
+│   ├ recover/    runner, batching, failure_signatures,               │
 │   │            failures_atom, runner_failures                       │
-│   ├ submit/     flow, runner, plan_summary, plan_throughput,        │
+│   ├ submit/     runner, plan_summary, plan_throughput,              │
 │   │            recommend_partition                                  │
 │   └ validate/   executor_signatures, input_dataset, self_qos_limit, │
 │                stochastic_marker, walltime_against_history          │
 │                                                                     │
-│  meta/       "operations about operations"                          │
-│   └ campaign/   driver, cursor, dirs, manifest, validate, atoms/    │
+│  meta/       "operations about operations" — workflows at root,     │
+│              subject dirs hold atoms                                │
+│   └ campaign/   driver, cursor, dirs, manifest, atoms/              │
 │                (atoms/ holds advance, budget, converged, init,      │
 │                health, list_campaigns, load_context, replay,        │
 │                status — the per-tick steps load-context spawns)     │
@@ -67,9 +68,11 @@ rules.
 │      submit_spec, tasks_py, template}                               │
 │                                                                     │
 │  Cross-subject primitive bridge:                                    │
-│      runner.py (package-root) re-exports the canonical primitive    │
-│      surface from each subject so workflow primitives can call      │
-│      across subjects without violating the subject-imports lint.    │
+│      runner.py (package-root) re-exports a small back-compat        │
+│      surface for atom-to-atom cross-subject calls. Most workflow    │
+│      composition is now direct: workflows live at ops/ + meta/ root │
+│      (sibling to subjects) and import atoms inside subjects without │
+│      a bridge.                                                      │
 └──────────────────────────────────┬──────────────────────────────────┘
                                    ↓
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -92,12 +95,12 @@ rules.
 │   ├ backends/  sge, slurm      ├ journal.py     per-run journal     │
 │   ├ inspect/   qstat/scontrol  ├ run_record.py  RunRecord shape     │
 │   ├ clusters.py  YAML loader   ├ index.py       discovery index     │
-│   ├ gpu.py    GPU selection    ├ session/       SessionContext      │
-│   ├ throughput.py   planner    ├ discover.py    executor discovery  │
-│   ├ constraints.py             ├ runtime_prior  walltime/n_samples  │
-│   ├ cluster_status.py SSH      ├ stages.py      multi-stage DAG     │
-│   ├ cluster_logs.py   tail     ├ axes.py        axis manifest       │
-│   ├ time.py   canonical UTC    └ user_profiles  per-user knobs      │
+│   ├ gpu.py    GPU selection    ├ discover.py    executor discovery  │
+│   ├ throughput.py   planner    ├ runtime_prior  walltime/n_samples  │
+│   ├ constraints.py             ├ stages.py      multi-stage DAG     │
+│   ├ cluster_status.py SSH      ├ axes.py        axis manifest       │
+│   ├ cluster_logs.py   tail     └ user_profiles  per-user knobs      │
+│   ├ time.py   canonical UTC                                         │
 │   ├ io.py     atomic flock                                          │
 │   ├ parsing.py                                                      │
 │   └ cache.py                                                        │
@@ -281,7 +284,7 @@ fails CI. Editing a `@primitive(...)` decorator without re-running
 
 ## CLI surface
 
-`hpc-agent` (entry point: `hpc_agent.agent_cli:main`, per
+`hpc-agent` (entry point: `hpc_agent.cli.dispatch:main`, per
 `pyproject.toml`) exposes every primitive as a subcommand. The
 parser is built by walking the registry — each primitive's `cli=`
 field is a `CliShape` consumed by `hpc_agent.cli._dispatch`. Tier-3
@@ -290,9 +293,7 @@ verbs that don't have a `@primitive` backing (`run`, `capabilities`,
 `register(sub)` function in `cli/<module>.py` and are aggregated by
 `cli/parser.py`. The `cli/main.py` module re-exports `main` so
 external callers can `from hpc_agent.cli import main`; the canonical
-entry remains `hpc_agent.agent_cli:main` (decomposition into
-`cli/dispatch.py` is in flight but `pyproject.toml` still points at
-`agent_cli`).
+entry is `hpc_agent.cli.dispatch:main`.
 
 Subcommands can be invoked flat (`hpc-agent validate-campaign ...`)
 or under a verb group (`hpc-agent validate validate-campaign ...`);
@@ -343,59 +344,76 @@ Allowed cross-cutting roots (these are substrate, not subjects):
 - `hpc_agent.infra.*`
 - `hpc_agent.state.*`
 
-When two subjects genuinely need to share code, there are three
-patterns, in order of preference:
+When two subjects genuinely need to share code, three patterns apply,
+in order of preference:
 
-1. **Helper-shaped shared code → `infra/`.** If two subjects need a
-   parser, a transport helper, or a planning function, extract it to
-   `hpc_agent.infra.<name>` and let both subjects import it. PR #90
-   moved the throughput planner + remote backend factory under
-   `infra/throughput.py` for exactly this reason; PR #96 did the same
-   for `cluster_status.py` and `cluster_logs.py`.
+1. **Helper-shaped shared code → `infra/`.** A parser, transport
+   helper, or planning function used by more than one subject lives
+   under `hpc_agent.infra.<name>`. PR #90 moved the throughput planner
+   + remote backend factory there; PR #96 did the same for
+   `cluster_status.py` and `cluster_logs.py`. The subject-imports lint
+   permits `from hpc_agent.infra.* import …` from any subject.
 
-2. **Declarative cross-subject composition → `composes=` with string
-   names.** A composite that just *names* atoms from another subject
-   in its `@primitive(composes=[...])` metadata doesn't need to
-   import the target callable — string names are resolved against
-   the live registry. This is purely metadata and stays lint-clean.
+2. **Declarative composition → `composes=` with string names.**
+   A composite that just *names* a primitive from another subject in
+   its `@primitive(composes=[...])` metadata doesn't import the target
+   callable — string names resolve against the live registry. Pure
+   metadata, lint-clean, also drives the agent-readable workflow graph
+   in the operations catalog. Cross-package composition works the same
+   way: a plugin primitive can compose a core primitive by wire name
+   (see `hpc-agent-pro/src/hpc_agent_pro/smart_resubmit_flow.py`).
 
-3. **Callable cross-subject composition → `hpc_agent.runner`.**
-   When a workflow primitive needs to *call* a primitive from another
-   subject (e.g. `ops/monitor/flow.py` calling `combine_wave` from
-   `ops/aggregate/`), routing the call through `hpc_agent.runner`
-   is the principled escape hatch. That module lives at the package
-   root (not inside any subject), so the subject-imports lint
-   permits the import. Conceptually it mirrors what `composes=` does
-   at the metadata layer — `composes=["combine-wave"]` is the
+3. **Callable cross-subject calls → workflow at role root, OR
+   `hpc_agent.runner`.** Two cases:
+
+   - **Workflow needs to call atoms from multiple subjects** — keep
+     the workflow file at the `ops/` or `meta/` *role root*
+     (`ops/aggregate_flow.py`, `meta/validate_campaign.py`). The
+     subject-imports lint short-circuits to `None` for files directly
+     under the role root (`len(parts) < 2`), so the workflow can
+     `from hpc_agent.ops.<other_subject>.<atom> import …` directly.
+     This is the dominant pattern post-P5a; all six host workflows
+     use it.
+
+   - **An atom inside one subject needs to call a primitive in
+     another** — route the call through `hpc_agent.runner`, the
+     package-root bridge. `runner.py` lives outside every subject so
+     the lint permits the import. `scripts/lint_runner_shim.py` gates
+     what crosses: only `@primitive`-decorated symbols plus a small
+     explicit allow-list of legacy back-compat helpers
+     (`DEFAULT_AUTO_RETRY_POLICY`, `cluster_failures_by_fingerprint`,
+     `build_job_env` — each carries a rationale in the lint).
+
+   Conceptually `hpc_agent.runner` mirrors what `composes=` does at
+   the metadata layer — `composes=["combine-wave"]` is the
    declarative form, `from hpc_agent.runner import combine_wave` is
-   the callable form. `runner.py` re-exports the canonical surface
-   of each subject's runner module:
-
-   ```
-   ops.aggregate.combine        → runner.combine_wave
-   ops.aggregate.runner         → runner.{build_provenance,
-                                          verify_combiner_artifact,
-                                          verify_per_task_outputs,
-                                          write_remote_provenance}
-   ops.monitor.{logs,reconcile,status}
-                                → runner.{fetch_task_logs, mark_terminal,
-                                          reconcile, record_status}
-   ops.recover.{runner,runner_failures}
-                                → runner.{resubmit_failed,
-                                          cluster_failures_by_fingerprint, …}
-   ops.submit.runner            → runner.{submit_and_record, build_job_env}
-   ops.validate.*               → runner.validate_*
-   ```
-
-   New cross-subject primitive surfaces should add themselves to
-   `runner.py` rather than punching new holes in the lint.
+   the callable form.
 
 The rationale for keeping this strict (vs. a permissive allow-list,
 which is what the codebase had through PR #97): allow-listed
 exceptions accrete; principled extraction to `infra/` keeps the
-architecture honest. PR #98 eradicated the allow-list and moved every
-genuine cross-subject call onto the `runner.py` bridge or
-`composes=` strings.
+architecture honest. PR #98 eradicated the allow-list; PR #108 added
+lazy resolution so string-name `composes=` is order-agnostic; P5a
+pulled workflows up to the role root so most cross-subject seams
+disappeared entirely.
+
+### Non-goals
+
+- **Don't propose collapsing cross-subject composition into
+  per-subject inlining.** If two subjects share a helper, that's a
+  candidate for `infra/`, not duplication. If a workflow names atoms
+  from multiple subjects, that's the workflow doing its job, not a
+  violation.
+
+- **Don't re-introduce a permissive `PER_FILE_ALLOWED_IMPORTS`
+  allow-list.** Cross-subject reach is either `infra/` (helper),
+  `composes=` (metadata), workflow-at-role-root (workflow), or
+  `hpc_agent.runner` (atom-to-atom primitive call). Anything else is
+  a smell.
+
+- **Don't move workflow files back into subject dirs.** P5a moved
+  them to the role root deliberately so workflow→atom cross-subject
+  calls become trivial direct imports.
 
 ## When in doubt
 

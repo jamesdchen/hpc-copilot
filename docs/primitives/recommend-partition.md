@@ -6,61 +6,71 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: (none — Python-only primitive)
+  cli: hpc-agent recommend-partition --spec <path> [--experiment-dir <dir>]
   python: hpc_agent.ops.submit.recommend_partition.recommend_partition
 ---
-# recommend-partition
+## Purpose
 
-Route a job to the best partition using a four-rule priority system.
-SLURM debug partitions often run at a much higher priority tier (10×
-vs 1×) but cap walltime at one hour; this primitive honours user
-preference, routes short jobs to debug for leverage, refuses long
-jobs to debug (which would be killed), and recommends the best
-fallback. Each decision includes a ``rationale`` and
-``leverage_estimate`` so the composing primitive can surface the
-tradeoff.
+Pre-submit advisor: pick a partition for a requested walltime
+against the cluster's partition list. Call this before constructing
+a submit spec when partition choice isn't obvious — the result's
+`recommended_partition` is what you put in the spec's `partition`
+field.
 
-## Composers
+Four routing rules: honour an explicit user preference verbatim;
+route short jobs to a debug partition for priority leverage (often
+10× the backfill probability of `normal`); refuse to route long
+jobs to debug (they'd be killed at the cap) and pick the
+highest-priority non-debug instead; fall back to the highest-priority
+partition if no debug exists.
 
-Called by:
+## Inputs
 
-- ``plan-throughput`` — uses the recommendation when packing a
-  task grid into batched submission waves.
-- ``submit-flow`` — uses it implicitly via ``plan-throughput``.
+A `RecommendPartitionSpec` JSON spec with:
 
-Not invoked by the agent directly; ``agent_facing=False`` and no
-standalone CLI verb.
+- `requested_walltime_sec` (int) — the walltime you intend to ask
+  for, in seconds.
+- `partitions` (list) — each entry: `{name, is_debug,
+  walltime_cap_sec, priority_tier}`. `walltime_cap_sec=null` means
+  no cap. Typically read from `clusters.yaml`.
+- `user_preferred_partition` (optional str) — if set and present
+  in the list, the recommendation honours it verbatim.
 
-## Invariants
+## Outputs
 
-- Pure local routing logic — no SSH, no filesystem, no scheduler
-  query.
-- Calling twice with the same inputs produces the same output
-  (``idempotency_key`` is intentionally absent; the function is
-  stateless).
-- The four routing rules are exhaustive; rule 4 is the default
-  fallback so a recommendation always comes back.
-- ``leverage_estimate`` is the ratio
-  ``debug.priority_tier / fallback.priority_tier`` when
-  recommending debug; otherwise ``1.0``.
+A `RecommendPartitionResult` envelope with:
 
-## Coupling
+- `recommended_partition` (str) — the chosen partition name, or
+  empty when no safe routing exists.
+- `rationale` — one of `user_preference_honoured`,
+  `debug_short_walltime`, `debug_overrun_refused`,
+  `no_debug_partition_available`, `only_debug_available_walltime_too_long`,
+  `no_partitions_declared`.
+- `message` (str) — a one-line human-readable explanation.
+- `leverage_estimate` (float) — `debug.priority_tier /
+  fallback.priority_tier` when routing to debug, else `1.0`.
 
-- Input shape: ``RecommendPartitionSpec`` (see
-  ``src/hpc_agent/_wire/queries/recommend_partition.py``).
-- Output shape: ``RecommendPartitionResult`` with
-  ``recommended_partition``, ``rationale`` (one of the four
-  enumerated values), ``message``, ``leverage_estimate``.
-- Cluster partition definitions flow in via the spec; the primitive
-  doesn't read clusters.yaml itself — that's the composer's
-  responsibility.
-
-## Failure modes
+## Errors
 
 None declared. Spec validation errors raise
-``pydantic.ValidationError`` at the boundary; with a valid spec the
-primitive always returns a ``RecommendPartitionResult``.
+`pydantic.ValidationError` at the boundary; with a valid spec the
+primitive always returns a `RecommendPartitionResult` (a refusal
+is encoded as an empty `recommended_partition` + a `rationale`
+explaining why).
+
+## Idempotency
+
+Pure function — no SSH, no filesystem, no scheduler query. Calling
+twice with the same input yields the same output.
+
+## Usage
+
+Slash commands and agents call this as a standalone advisor before
+filling the submit spec's `partition` field. It is intentionally
+not composed into `submit-flow` or `plan-throughput`: partition
+choice is a routing concern, orthogonal to the throughput concern
+of packing tasks into waves.
 
 **Schemas:**
-[``recommend_partition.input.json``](../../src/hpc_agent/schemas/recommend_partition.input.json),
-[``recommend_partition.output.json``](../../src/hpc_agent/schemas/recommend_partition.output.json).
+[`recommend_partition.input.json`](../../src/hpc_agent/schemas/recommend_partition.input.json),
+[`recommend_partition.output.json`](../../src/hpc_agent/schemas/recommend_partition.output.json).

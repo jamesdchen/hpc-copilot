@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from hpc_agent._wire.workflows.validate_campaign import ValidateCampaignSpec
-from hpc_agent.meta.campaign.validate import validate_campaign
+from hpc_agent.meta.validate_campaign import validate_campaign
 from hpc_agent.state import runtime_prior as rp
 
 if TYPE_CHECKING:

@@ -68,7 +68,7 @@ The Python surface that slash commands and library callers invoke:
 | Reconcile journal vs cluster | [reconcile-journal](primitives/reconcile-journal.md) | `hpc_agent.ops.monitor.reconcile.reconcile` |
 | Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `hpc_agent.ops.monitor.reconcile.mark_terminal` |
 | Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `hpc_agent.models.mapreduce.reduce.history.prior` |
-| List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `hpc_agent.state.session.find_in_flight_runs` |
+| List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `hpc_agent.state.index.find_in_flight_runs` |
 | Discover executors | [discover-executors](primitives/discover-executors.md) | `hpc_agent.state.discover.discover_executors` |
 
 The framework also exposes two library-only helpers that are not

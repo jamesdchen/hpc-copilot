@@ -35,10 +35,10 @@ from hpc_agent._wire.workflows.validate_campaign import (
     ValidatorFinding,
 )
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.runner import (
-    validate_executor_signatures,
-    validate_input_dataset,
-    validate_stochastic_marker,
+from hpc_agent.ops.validate.executor_signatures import validate_executor_signatures
+from hpc_agent.ops.validate.input_dataset import validate_input_dataset
+from hpc_agent.ops.validate.stochastic_marker import validate_stochastic_marker
+from hpc_agent.ops.validate.walltime_against_history import (
     validate_walltime_against_history,
 )
 

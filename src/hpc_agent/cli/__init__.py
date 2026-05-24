@@ -15,9 +15,7 @@ Layout:
   ``register_plugin_cli(sub)``.
 * :mod:`.dispatch` — :func:`main`, the entry point, plus the
   argv-preprocessor for verb groups. ``pyproject.toml``'s ``hpc-agent``
-  script flows through ``hpc_agent.cli.dispatch:main``; the legacy
-  ``hpc_agent.agent_cli`` shim re-exports the same symbol for
-  back-compat.
+  script flows through ``hpc_agent.cli.dispatch:main``.
 * :mod:`.main` — public re-export alias of :func:`dispatch.main`.
 
 Domain modules (one per CLI section):
@@ -49,6 +47,5 @@ Note: :func:`main` is intentionally not re-exported from this package's
 ``__init__`` to avoid a circular import (``cli/__init__`` →
 ``cli/dispatch`` → ``cli/_helpers`` triggers ``cli/__init__`` again).
 Import it explicitly via ``from hpc_agent.cli.dispatch import main``
-(the ``pyproject.toml`` entry-point path) or via the back-compat
-alias ``from hpc_agent.agent_cli import main``.
+(the ``pyproject.toml`` entry-point path).
 """
