@@ -99,7 +99,7 @@ The two ideas that made the third shape work:
      renders deterministically from on-disk state. Pinned by hash so
      the same disk state always produces byte-identical worker input.
 
-`hpc_agent.campaign.driver` (the `hpc-campaign-driver` console script)
+`hpc_agent.meta.campaign.driver` (the `hpc-campaign-driver` console script)
 is **non-primitive** — it doesn't appear in `capabilities`, doesn't
 emit the standard envelope, and isn't composable with the atom layer.
 It is one of the only intentional non-primitives in the codebase, on

@@ -52,18 +52,6 @@ ALLOWED_NON_SUBJECT_ROOTS: tuple[str, ...] = (
 # of full dotted module names whose violations get suppressed.
 # EACH ENTRY MUST CARRY A TODO COMMENT NAMING THE EXTRACTION PLAN.
 PER_FILE_ALLOWED_IMPORTS: dict[str, tuple[str, ...]] = {
-    # TODO(post-Wave-2): extract ``WorkloadSpec`` + ``compute_submission_plan``
-    # from ``ops/submit/throughput.py`` to ``infra/throughput.py`` so the
-    # recover-side batcher can reach them without crossing into the submit
-    # subject. These are pure-Python (@pure: no-io) and have no submit-
-    # specific state — they should never have lived under a subject.
-    "src/hpc_agent/ops/recover/batching.py": ("hpc_agent.ops.submit.throughput",),
-    # TODO(post-Wave-2): extract ``_build_backend`` + ``_validate_ssh_target``
-    # to ``infra/backends/factory.py`` (or similar). They are the backend
-    # construction seam — both submit and recover need to build the same
-    # backend object, so the helper has no business living under
-    # ops/submit/ as a private function.
-    "src/hpc_agent/ops/recover/flow.py": ("hpc_agent.ops.submit.flow",),
     # TODO(post-Wave-3): extract ``ssh_status_report`` to a shared
     # ``infra/cluster_status.py`` (or similar). Both the aggregate
     # subject (``flow``, ``canary_verify``) and recover subject
@@ -78,6 +66,12 @@ PER_FILE_ALLOWED_IMPORTS: dict[str, tuple[str, ...]] = {
         "hpc_agent.ops.monitor.logs",
         "hpc_agent.ops.monitor.status",
     ),
+    # TODO(post-Wave-3): extract ``_last_status_age_seconds`` (or a
+    # broader "in-flight enumeration") to ``infra/`` so the meta/campaign
+    # ``load-context`` query can reach it without crossing into the
+    # monitor subject. The helper is a pure read over the journal and
+    # has no monitor-specific state.
+    "src/hpc_agent/meta/campaign/atoms/load_context.py": ("hpc_agent.ops.monitor.list_in_flight",),
 }
 
 

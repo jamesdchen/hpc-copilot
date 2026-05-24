@@ -1,6 +1,6 @@
 """Pydantic model for the ``load-context`` query primitive's output.
 
-Mirrors the dict returned by :func:`hpc_agent.atoms.load_context.load_context`.
+Mirrors the dict returned by :func:`hpc_agent.meta.campaign.atoms.load_context.load_context`.
 The nested objects (``latest_run``, ``in_flight`` rows, ``campaigns`` rows)
 carry ``extra="allow"`` because their key set is driven by sidecar /
 journal schema versions that evolve independently — the model pins the

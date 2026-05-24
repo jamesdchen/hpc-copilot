@@ -7,8 +7,9 @@ that import cycle on first ``import hpc_agent``. Reach for the specific
 submodule:
 
 * :mod:`hpc_agent.planning.constraints` — cluster constraint parsing.
-* :mod:`hpc_agent.ops.submit.throughput` — batch a task grid into waves
-  (moved to ops/submit/ in the Wave 2 reorg).
+* :mod:`hpc_agent.infra.throughput` — batch a task grid into waves
+  (the @pure: no-io packing algorithm; lives in infra/ so both submit
+  and recover can reach it without crossing subjects).
 
 The failed-task batcher lives in :mod:`hpc_agent.ops.recover.batching`
 (``compact_task_ids``, ``ResubmitPlan``, ``resubmit_plan``) — it moved

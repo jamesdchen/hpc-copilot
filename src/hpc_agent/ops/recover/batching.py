@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from hpc_agent.ops.submit.throughput import WorkloadSpec, compute_submission_plan
+from hpc_agent.infra.throughput import WorkloadSpec, compute_submission_plan
 from hpc_agent.planning.constraints import ClusterConstraints
 
 __all__ = [

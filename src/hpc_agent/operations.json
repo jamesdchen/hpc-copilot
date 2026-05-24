@@ -103,7 +103,7 @@
     "input_schema": null,
     "name": "campaign-advance",
     "output_schema": "campaign.output.json",
-    "python": "hpc_agent.atoms.campaign_advance.campaign_advance",
+    "python": "hpc_agent.meta.campaign.atoms.advance.campaign_advance",
     "side_effects": [],
     "verb": "query"
   },
@@ -114,7 +114,7 @@
     "input_schema": null,
     "name": "campaign-budget",
     "output_schema": "campaign.output.json",
-    "python": "hpc_agent.atoms.campaign_budget.campaign_budget",
+    "python": "hpc_agent.meta.campaign.atoms.budget.campaign_budget",
     "side_effects": [],
     "verb": "query"
   },
@@ -125,7 +125,7 @@
     "input_schema": null,
     "name": "campaign-converged",
     "output_schema": "campaign.output.json",
-    "python": "hpc_agent.atoms.campaign_converged.campaign_converged",
+    "python": "hpc_agent.meta.campaign.atoms.converged.campaign_converged",
     "side_effects": [],
     "verb": "query"
   },
@@ -136,7 +136,7 @@
     "input_schema": "campaign_health.input.json",
     "name": "campaign-health",
     "output_schema": "campaign_health.output.json",
-    "python": "hpc_agent.atoms.campaign_health.campaign_health",
+    "python": "hpc_agent.meta.campaign.atoms.health.campaign_health",
     "side_effects": [],
     "verb": "query"
   },
@@ -147,7 +147,7 @@
     "input_schema": null,
     "name": "campaign-list",
     "output_schema": null,
-    "python": "hpc_agent.atoms.campaign_list.campaign_list",
+    "python": "hpc_agent.meta.campaign.atoms.list_campaigns.campaign_list",
     "side_effects": [],
     "verb": "query"
   },
@@ -158,7 +158,7 @@
     "input_schema": null,
     "name": "campaign-replay",
     "output_schema": "campaign.output.json",
-    "python": "hpc_agent.atoms.campaign_replay.campaign_replay",
+    "python": "hpc_agent.meta.campaign.atoms.replay.campaign_replay",
     "side_effects": [],
     "verb": "query"
   },
@@ -169,7 +169,7 @@
     "input_schema": null,
     "name": "campaign-status",
     "output_schema": null,
-    "python": "hpc_agent.atoms.campaign_status.campaign_status",
+    "python": "hpc_agent.meta.campaign.atoms.status.campaign_status",
     "side_effects": [],
     "verb": "query"
   },
@@ -281,7 +281,7 @@
     "input_schema": null,
     "name": "load-context",
     "output_schema": "load_context.output.json",
-    "python": "hpc_agent.atoms.load_context.load_context",
+    "python": "hpc_agent.meta.campaign.atoms.load_context.load_context",
     "side_effects": [],
     "verb": "query"
   },
@@ -459,7 +459,7 @@
     "input_schema": null,
     "name": "campaign-init",
     "output_schema": "campaign.output.json",
-    "python": "hpc_agent.atoms.campaign_init.campaign_init",
+    "python": "hpc_agent.meta.campaign.atoms.init.campaign_init",
     "side_effects": [
       "writes-sidecar"
     ],
