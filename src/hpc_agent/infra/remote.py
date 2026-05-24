@@ -753,7 +753,10 @@ def deploy_runtime(
         def _run() -> subprocess.CompletedProcess[str]:
             try:
                 return subprocess.run(
-                    ["scp", str(src), dst],
+                    # ``-o BatchMode=yes`` fails fast on missing
+                    # credentials instead of blocking on a password
+                    # prompt — matches ``_scp_pull`` and ``ssh_run``.
+                    ["scp", "-o", "BatchMode=yes", str(src), dst],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",

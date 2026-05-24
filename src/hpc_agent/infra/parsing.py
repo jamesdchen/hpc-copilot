@@ -116,7 +116,9 @@ def parse_mem_to_gb(s: str | None, *, cpus: int | None = None) -> float | None:
     """
     if not s:
         return None
-    m = re.match(r"(\d+(?:\.\d+)?)\s*([KMGTkmgt])?[bB]?([cn])?", s.strip())
+    # ``fullmatch`` so trailing garbage rejects rather than silently parsing
+    # as a numeric prefix (``5days`` previously parsed as 5MB).
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMGTkmgt])?[bB]?([cn])?", s.strip())
     if not m:
         return None
     val = float(m.group(1))

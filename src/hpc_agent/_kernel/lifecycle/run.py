@@ -46,6 +46,19 @@ def run_workflow(
     try:
         report = parse_worker_report(invocation.output, workflow=workflow)
     except SpawnContractError as exc:
+        # Include the worker's stderr tail (when present) so the error
+        # surfaces what the worker actually said before crashing —
+        # otherwise debugging a malformed-report failure means "rerun
+        # the worker manually and hope it repros".
+        stderr_tail = (invocation.stderr or "").strip()
+        if stderr_tail:
+            # Cap at a sensible length to keep envelopes readable.
+            if len(stderr_tail) > 2000:
+                stderr_tail = "…" + stderr_tail[-2000:]
+            raise errors.HpcError(
+                f"the {workflow!r} worker did not return a valid report "
+                f"(exit {invocation.exit_code}): {exc}\nworker stderr: {stderr_tail}"
+            ) from exc
         raise errors.HpcError(
             f"the {workflow!r} worker did not return a valid report "
             f"(exit {invocation.exit_code}): {exc}"

@@ -188,33 +188,35 @@ class TestDeployRuntime:
         assert ".hpc/templates" in argvs[0][-1]
         assert ".hpc/templates/common" in argvs[0][-1]
 
+        # Each scp call carries ``-o BatchMode=yes`` before src/dst so a
+        # missing key fails fast instead of blocking on a password prompt.
+        # Layout per call: ["scp", "-o", "BatchMode=yes", src, dst].
+        assert all(
+            argv[:3] == ["scp", "-o", "BatchMode=yes"] for argv in argvs[1:]
+        ), [argv[:3] for argv in argvs[1:]]
+
         # Importable stub into hpc_agent/models/mapreduce/
-        assert argvs[1][0] == "scp"
-        assert argvs[1][1].endswith("metrics_io.py")
-        assert argvs[1][2].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
+        assert argvs[1][3].endswith("metrics_io.py")
+        assert argvs[1][4].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
 
         # executor_cli stub into hpc_agent/ (so tasks.py top-level
         # ``from hpc_agent.executor_cli import ...`` resolves on cluster).
-        assert argvs[2][0] == "scp"
-        assert argvs[2][1].endswith("executor_cli.py")
-        assert argvs[2][2].endswith(":/p/hpc_agent/executor_cli.py")
+        assert argvs[2][3].endswith("executor_cli.py")
+        assert argvs[2][4].endswith(":/p/hpc_agent/executor_cli.py")
 
         # Framework executor into .hpc/
-        assert argvs[3][0] == "scp"
-        assert argvs[3][1].endswith("dispatch.py")
-        assert argvs[3][2].endswith(":/p/.hpc/_hpc_dispatch.py")
+        assert argvs[3][3].endswith("dispatch.py")
+        assert argvs[3][4].endswith(":/p/.hpc/_hpc_dispatch.py")
 
         # Four templates into .hpc/templates/
-        template_dsts = {argv[2] for argv in argvs[4:8]}
-        assert all(argv[0] == "scp" for argv in argvs[4:8])
+        template_dsts = {argv[4] for argv in argvs[4:8]}
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
 
         # Two shared preambles into .hpc/templates/runtime/common/
-        common_dsts = {argv[2] for argv in argvs[8:10]}
-        assert all(argv[0] == "scp" for argv in argvs[8:10])
+        common_dsts = {argv[4] for argv in argvs[8:10]}
         assert any(
             d.endswith(":/p/.hpc/templates/runtime/common/hpc_preamble.sh") for d in common_dsts
         )
@@ -223,9 +225,8 @@ class TestDeployRuntime:
         )
 
         # Combiner is last
-        assert argvs[10][0] == "scp"
-        assert argvs[10][1].endswith("combiner.py")
-        assert argvs[10][2].endswith(":/p/.hpc/_hpc_combiner.py")
+        assert argvs[10][3].endswith("combiner.py")
+        assert argvs[10][4].endswith(":/p/.hpc/_hpc_combiner.py")
 
 
 # ---------------------------------------------------------------------------

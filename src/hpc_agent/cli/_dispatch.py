@@ -304,10 +304,14 @@ def _emit_dry_run(name: str, shape: CliShape, kwargs: dict[str, Any]) -> int:
     payload: dict[str, Any] = {"dry_run": True}
     spec_obj = kwargs.get(shape.spec_kwarg) if shape.spec_arg else None
     for key in shape.dry_run_passthrough_keys:
-        if spec_obj is not None and hasattr(spec_obj, key):
-            payload[key] = getattr(spec_obj, key)
-        elif spec_obj is not None and isinstance(spec_obj, dict) and key in spec_obj:
+        # Check ``isinstance(dict)`` first: ``hasattr(d, "items")`` and
+        # similar return True for dict method names, so a passthrough
+        # key colliding with a dict method (``items``, ``keys``,
+        # ``get``) would otherwise resolve to a bound method.
+        if isinstance(spec_obj, dict) and key in spec_obj:
             payload[key] = spec_obj[key]
+        elif spec_obj is not None and not isinstance(spec_obj, dict) and hasattr(spec_obj, key):
+            payload[key] = getattr(spec_obj, key)
         elif key in kwargs:
             payload[key] = kwargs[key]
     _ok(payload, name=name)

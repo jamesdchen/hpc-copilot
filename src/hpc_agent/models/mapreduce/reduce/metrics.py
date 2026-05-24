@@ -270,16 +270,20 @@ def reduce_resource_usage(tasks: dict[str, dict] | dict[int, dict]) -> dict:
             "tasks_counted": int, # number of tasks that contributed nonzero elapsed_s
         }
     """
-    total_cpu_s = 0
-    total_gpu_s = 0
-    total_elapsed_s = 0
+    total_cpu_s = 0.0
+    total_gpu_s = 0.0
+    total_elapsed_s = 0.0
     counted = 0
     for info in (tasks or {}).values():
         if not isinstance(info, dict):
             continue
-        elapsed = int(info.get("elapsed_s", 0) or 0)
-        cpu = int(info.get("cpu_s", 0) or 0)
-        gpu = int(info.get("gpu_s", 0) or 0)
+        # Per-task resource values can be fractional (sub-second tasks,
+        # GPU-seconds during partial allocation windows). Coercing to
+        # int at the task level truncates the fraction before summing
+        # and silently under-counts. Sum as float; round at the end.
+        elapsed = float(info.get("elapsed_s", 0) or 0)
+        cpu = float(info.get("cpu_s", 0) or 0)
+        gpu = float(info.get("gpu_s", 0) or 0)
         total_elapsed_s += elapsed
         total_cpu_s += cpu
         total_gpu_s += gpu

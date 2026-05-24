@@ -127,7 +127,7 @@ def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
     if not repo_dir.is_dir():
         raise errors.SpecInvalid(f"repo-dir {repo_dir} does not exist or is not a directory")
 
-    scaffold_dir = hpc_agent._PACKAGE_ROOT / "template" / "scaffold"
+    scaffold_dir = hpc_agent._PACKAGE_ROOT / "incorporation" / "template" / "scaffold"
 
     def _asset(name: str) -> str:
         return (scaffold_dir / name).read_text(encoding="utf-8")

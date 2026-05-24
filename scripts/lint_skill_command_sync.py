@@ -181,10 +181,11 @@ def main() -> int:
             continue
         routes_via_spawn = (
             "hpc_spawn" in body
-            # Match ``hpc-agent run`` at a word boundary so a body that
-            # wraps it in backticks (``\`hpc-agent run\```) or starts a
-            # new line with it (``\nhpc-agent run\n``) still counts.
-            or re.search(r"hpc-agent run\b", body) is not None
+            # Match ``hpc-agent run`` followed by whitespace / end /
+            # backtick / quote. Plain ``\b`` matches between ``run``
+            # and ``-`` because ``-`` is non-word, so it falsely
+            # accepted ``hpc-agent run-time`` and similar typos.
+            or re.search(r"hpc-agent run(?![\w-])", body) is not None
             or "hpc-campaign-driver" in body
         )
         if exec_match.group(1) == "delegated" and not routes_via_spawn:

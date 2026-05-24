@@ -357,6 +357,13 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
     task_info: dict[int, dict] = {}
     errors: list[dict] = []
     sge_user = user or os.environ.get("USER") or os.environ.get("USERNAME") or ""
+    if not sge_user:
+        # Refuse to call ``qstat -u ""`` — SGE interprets that
+        # inconsistently across versions (some treat it as "no filter",
+        # which returns the entire cluster's queue). Caller passed no
+        # user and the shell has no $USER/$USERNAME; we cannot identify
+        # which jobs belong to whom.
+        return {"tasks": {}, "errors": [{"phase": "qstat", "reason": "no user identity"}]}
 
     # Phase 1: single qstat call for running/pending tasks across all jobs.
     qstat_ok = False
