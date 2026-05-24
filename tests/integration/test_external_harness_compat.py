@@ -59,7 +59,10 @@ import pytest
 
 from hpc_agent import agent_cli, runner
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
-from hpc_agent.ops.recover.runner_failures import DEFAULT_AUTO_RETRY_POLICY
+from hpc_agent.ops.recover.runner_failures import (
+    DEFAULT_AUTO_RETRY_POLICY,
+    annotate_clusters_with_retry_advice,
+)
 from hpc_agent.state import session
 from hpc_agent.state.session import RunRecord
 
@@ -406,7 +409,7 @@ def test_cluster_failures_rollup_covers_all_four_categories_with_retry_advice(
         experiment_dir=str(tmp_path.resolve()),
         retries={"1": {"attempts": 1, "category": "gpu_oom", "overrides": {}}},
     )
-    annotated = runner.annotate_clusters_with_retry_advice(
+    annotated = annotate_clusters_with_retry_advice(
         clusters,
         auto_retry_policy=DEFAULT_AUTO_RETRY_POLICY,
         record=record,

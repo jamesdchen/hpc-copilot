@@ -31,26 +31,11 @@ RUNNER_PY = REPO / "src" / "hpc_agent" / "runner.py"
 # ``hpc_agent.runner`` package surface. Each entry must carry a rationale
 # (why it can't move) so the next reader knows why the exception exists.
 _BACK_COMPAT_NONPRIMITIVES: dict[str, str] = {
-    # The retry-policy framework default and the two helper functions
-    # that operate on it. Used by the failures atom + the resubmit flow;
-    # all three live in ops/recover/runner_failures.py but are public-
-    # surface enough that the legacy import path is preserved.
+    # The retry-policy framework default. Used by the failures atom +
+    # the resubmit flow; lives in ops/recover/runner_failures.py but
+    # is public-surface enough that the legacy import path is preserved.
     "DEFAULT_AUTO_RETRY_POLICY": "ops.recover.runner_failures default policy dict",
-    "annotate_clusters_with_retry_advice": "ops.recover.runner_failures helper",
     "cluster_failures_by_fingerprint": "ops.recover.runner_failures helper",
-    "fingerprint_stderr_tail": "ops.recover.runner_failures helper",
-    # Provenance / output verification helpers — published surface from
-    # ops/aggregate/runner.py used by external aggregate harnesses.
-    "build_provenance": "ops.aggregate.runner helper",
-    "verify_combiner_artifact": "ops.aggregate.runner helper",
-    "verify_per_task_outputs": "ops.aggregate.runner helper",
-    "write_remote_provenance": "ops.aggregate.runner helper",
-    # Per-task stderr tailer; used by recover/failures_atom AND by
-    # external harnesses that diagnose failures.
-    "fetch_task_logs": "infra.cluster_logs re-export wrapping the moved helper",
-    # Resubmit-request id derivation — pure helper. Surface area is
-    # public-ish; lives in ops/recover/runner.py.
-    "derive_resubmit_request_id": "ops.recover.runner helper",
     # build_job_env: env-var augmentation helper from ops/submit/runner.py
     "build_job_env": "ops.submit.runner helper (env augmentation)",
 }

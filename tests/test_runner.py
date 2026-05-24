@@ -16,7 +16,19 @@ import pytest
 from hpc_agent import runner
 from hpc_agent._wire.actions.resubmit import ResubmitSpec
 from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
+from hpc_agent.infra.cluster_logs import fetch_task_logs
+from hpc_agent.ops.aggregate.runner import (
+    build_provenance,
+    verify_combiner_artifact,
+    verify_per_task_outputs,
+    write_remote_provenance,
+)
 from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids
+from hpc_agent.ops.recover.runner import derive_resubmit_request_id
+from hpc_agent.ops.recover.runner_failures import (
+    annotate_clusters_with_retry_advice,
+    fingerprint_stderr_tail,
+)
 from hpc_agent.state import session
 from hpc_agent.state.session import RunRecord, run_record
 
@@ -626,7 +638,7 @@ def test_verify_per_task_outputs_returns_missing_paths(journal_home, experiment)
         return _completed(stdout="MISSING:results/metrics.1.json\n", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        missing = runner.verify_per_task_outputs(
+        missing = verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
             run_id="run_abcd1234",
@@ -647,7 +659,7 @@ def test_verify_per_task_outputs_returns_empty_when_all_present(journal_home, ex
         return _completed(stdout="", returncode=0)  # nothing missing
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        missing = runner.verify_per_task_outputs(
+        missing = verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
             run_id="run_x",
@@ -671,7 +683,7 @@ def test_verify_per_task_outputs_falls_back_to_all_tasks_without_wave_map(journa
         return _completed(stdout="", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        runner.verify_per_task_outputs(
+        verify_per_task_outputs(
             ssh_target="user@host",
             remote_path="/exp",
             run_id="run_x",
@@ -689,7 +701,7 @@ def test_verify_combiner_artifact_ok_for_valid_json():
         return _completed(stdout="OK\n", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        ok, detail = runner.verify_combiner_artifact(
+        ok, detail = verify_combiner_artifact(
             ssh_target="user@host",
             remote_path="/exp",
             expect_output="results/metrics.json",
@@ -703,7 +715,7 @@ def test_verify_combiner_artifact_missing():
         return _completed(stdout="MISSING\n", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        ok, detail = runner.verify_combiner_artifact(
+        ok, detail = verify_combiner_artifact(
             ssh_target="user@host",
             remote_path="/exp",
             expect_output="results/metrics.json",
@@ -717,7 +729,7 @@ def test_verify_combiner_artifact_invalid_json():
         return _completed(stdout="INVALID_JSON\n", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        ok, detail = runner.verify_combiner_artifact(
+        ok, detail = verify_combiner_artifact(
             ssh_target="user@host",
             remote_path="/exp",
             expect_output="results/metrics.json",
@@ -728,7 +740,7 @@ def test_verify_combiner_artifact_invalid_json():
 
 def test_build_provenance_carries_run_metadata(experiment):
     record = _seed_run(experiment, run_id="r_42", profile="prof", cluster="hoffman2")
-    prov = runner.build_provenance(record, wave=2)
+    prov = build_provenance(record, wave=2)
     assert prov["run_id"] == "r_42"
     assert prov["profile"] == "prof"
     assert prov["cluster"] == "hoffman2"
@@ -739,12 +751,12 @@ def test_build_provenance_carries_run_metadata(experiment):
 
 def test_derive_resubmit_request_id_is_deterministic():
     """Same input → same id, regardless of dict-key order in overrides."""
-    a = runner.derive_resubmit_request_id(
+    a = derive_resubmit_request_id(
         failed_task_ids=[3, 7, 1],  # unsorted
         category="system_oom",
         overrides={"mem": "32G", "walltime": "2:00:00"},
     )
-    b = runner.derive_resubmit_request_id(
+    b = derive_resubmit_request_id(
         failed_task_ids=[1, 3, 7],
         category="system_oom",
         overrides={"walltime": "2:00:00", "mem": "32G"},  # reordered
@@ -754,10 +766,10 @@ def test_derive_resubmit_request_id_is_deterministic():
 
 
 def test_derive_resubmit_request_id_differs_on_overrides():
-    a = runner.derive_resubmit_request_id(
+    a = derive_resubmit_request_id(
         failed_task_ids=[3], category="walltime", overrides={"walltime": "2:00:00"}
     )
-    b = runner.derive_resubmit_request_id(
+    b = derive_resubmit_request_id(
         failed_task_ids=[3], category="walltime", overrides={"walltime": "4:00:00"}
     )
     assert a != b
@@ -844,7 +856,7 @@ def test_annotate_clusters_with_retry_advice_tags_eligible_and_blocked(journal_h
             "task_ids": [3, 7, 12],  # 12 has no prior attempts -> eligible
         },
     ]
-    annotated = runner.annotate_clusters_with_retry_advice(
+    annotated = annotate_clusters_with_retry_advice(
         clusters,
         auto_retry_policy={"gpu_oom": {"max_attempts": 1, "mem_multiplier": 1.5}},
         record=record,
@@ -861,7 +873,7 @@ def test_annotate_clusters_skips_categories_without_policy(journal_home, experim
         {"category": "walltime", "task_ids": [1, 2], "count": 2},
         {"category": "gpu_oom", "task_ids": [3], "count": 1},
     ]
-    annotated = runner.annotate_clusters_with_retry_advice(
+    annotated = annotate_clusters_with_retry_advice(
         clusters,
         auto_retry_policy={"gpu_oom": {"max_attempts": 1}},  # walltime not configured
         record=record,
@@ -884,16 +896,16 @@ def test_fingerprint_strips_volatile_noise():
         "    raise RuntimeError('boom')\n"
         "RuntimeError: boom"
     )
-    fp_a = runner.fingerprint_stderr_tail(line_a)
-    fp_b = runner.fingerprint_stderr_tail(line_b)
+    fp_a = fingerprint_stderr_tail(line_a)
+    fp_b = fingerprint_stderr_tail(line_b)
     assert fp_a == fp_b
     assert "RuntimeError: boom" in fp_a
 
 
 def test_fingerprint_returns_empty_for_empty_input():
-    assert runner.fingerprint_stderr_tail("") == ""
-    assert runner.fingerprint_stderr_tail(None) == ""
-    assert runner.fingerprint_stderr_tail("   \n  ") == ""
+    assert fingerprint_stderr_tail("") == ""
+    assert fingerprint_stderr_tail(None) == ""
+    assert fingerprint_stderr_tail("   \n  ") == ""
 
 
 def test_cluster_failures_groups_same_fingerprint():
@@ -981,7 +993,7 @@ def test_fetch_task_logs_returns_content_for_slurm():
         return _completed(stdout="FOUND\nline1\nline2\nline3\n", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        logs = runner.fetch_task_logs(
+        logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
             job_name="ml",
@@ -1004,7 +1016,7 @@ def test_fetch_task_logs_marks_missing_when_all_job_ids_have_no_log():
         return _completed(stdout="MISSING\n", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        logs = runner.fetch_task_logs(
+        logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
             job_name="ml",
@@ -1027,7 +1039,7 @@ def test_fetch_task_logs_falls_back_to_earlier_job_id():
         return sequence.pop(0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        logs = runner.fetch_task_logs(
+        logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
             job_name="ml",
@@ -1048,7 +1060,7 @@ def test_fetch_task_logs_uses_sge_path_for_sge_scheduler():
         return _completed(stdout="FOUND\nbody\n", returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        logs = runner.fetch_task_logs(
+        logs = fetch_task_logs(
             ssh_target="user@host",
             remote_path="/exp",
             job_name="ml",
@@ -1068,7 +1080,7 @@ def test_write_remote_provenance_writes_sidecar_path():
         return _completed(returncode=0)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh_run):
-        path = runner.write_remote_provenance(
+        path = write_remote_provenance(
             ssh_target="user@host",
             remote_path="/exp",
             expect_output="results/metrics.json",
