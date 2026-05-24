@@ -29,6 +29,17 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+# Populate the primitive registry at conftest IMPORT time so test
+# modules whose top-level imports trigger ``@primitive(composes=[...])``
+# decorators with string-name composes find the dependency primitives
+# already registered. Pytest fixtures (including the session-scoped
+# autouse one below) run during execution; collection is too late for
+# import-time decorator errors. The call is idempotent.
+from hpc_agent import register_primitives as _register_primitives_at_collection_time  # noqa: E402
+
+_register_primitives_at_collection_time()
+
+
 # Default sidecar fields reproduced verbatim from the seven existing
 # call sites. Test overrides take precedence; anything not overridden
 # matches the historical fixture.
@@ -97,6 +108,15 @@ def _register_primitives_once() -> None:
     on first registry query; ``register_primitives()`` must be called
     explicitly. Tests that exercise ``get_registry`` / ``get_meta``
     would otherwise hit the new RuntimeError. Idempotent.
+
+    The duplicate top-level call below (executed at conftest IMPORT
+    time, before pytest collection scans test files) covers the case
+    where a test module's top-level imports trigger a primitive
+    decorator whose ``composes=[...]`` uses string names \u2014 the
+    registry must already be populated when that decoration runs.
+    Without it, e.g. ``from hpc_agent.ops.aggregate import flow``
+    fails at collection with ``ValueError: composes references
+    'poll-run-status' which is not a registered primitive``.
     """
     from hpc_agent import register_primitives
 
