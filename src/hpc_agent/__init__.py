@@ -121,6 +121,12 @@ from hpc_agent.infra.remote import (
     run_combiner_checked,
     ssh_run,
 )
+from hpc_agent.infra.throughput import (
+    SubmissionPlan,
+    WorkloadSpec,
+    build_wave_map,
+    compute_submission_plan,
+)
 from hpc_agent.models.mapreduce.metrics_io import write_metrics
 from hpc_agent.models.mapreduce.reduce.classify import classify_failure
 from hpc_agent.models.mapreduce.reduce.metrics import (
@@ -142,12 +148,6 @@ from hpc_agent.ops.recover.batching import (
     ResubmitPlan,
     compact_task_ids,
     resubmit_plan,
-)
-from hpc_agent.ops.submit.throughput import (
-    SubmissionPlan,
-    WorkloadSpec,
-    build_wave_map,
-    compute_submission_plan,
 )
 from hpc_agent.planning.constraints import ClusterConstraints, parse_constraints
 from hpc_agent.state.discover import (

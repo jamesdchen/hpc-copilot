@@ -11,7 +11,7 @@ error_codes:
 backed_by:
   cli: hpc-agent campaign replay [--experiment-dir <dir>] --campaign-id <campaign_id>
     [--last-n <last_n>]
-  python: hpc_agent.atoms.campaign_replay.campaign_replay
+  python: hpc_agent.meta.campaign.atoms.replay.campaign_replay
 ---
 # campaign-replay
 

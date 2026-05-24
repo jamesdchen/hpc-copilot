@@ -7,7 +7,7 @@ it is the testable core of the driver. The subprocess-spawning halves
 
 from __future__ import annotations
 
-from hpc_agent.campaign.driver import plan_action
+from hpc_agent.meta.campaign.driver import plan_action
 
 
 def test_cli_monitor_step_maps_to_monitor_flow():

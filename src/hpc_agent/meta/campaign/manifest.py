@@ -20,7 +20,7 @@ from typing import Any
 
 from hpc_agent._internal.io import atomic_locked_update
 from hpc_agent._internal.time import utcnow_iso
-from hpc_agent.campaign.dirs import campaign_dir
+from hpc_agent.meta.campaign.dirs import campaign_dir
 
 __all__ = [
     "MANIFEST_FILENAME",
@@ -35,7 +35,9 @@ __all__ = [
 MANIFEST_SCHEMA_VERSION: int = 1
 MANIFEST_FILENAME: str = "manifest.json"
 
-_SCHEMA_PATH: Path = Path(__file__).resolve().parent.parent / "schemas" / "campaign_manifest.json"
+_SCHEMA_PATH: Path = (
+    Path(__file__).resolve().parent.parent.parent / "schemas" / "campaign_manifest.json"
+)
 
 
 def manifest_schema() -> dict[str, Any]:

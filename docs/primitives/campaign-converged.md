@@ -10,7 +10,7 @@ backed_by:
     [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction
     <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>]
     [--plateau-mode <plateau_mode>]
-  python: hpc_agent.atoms.campaign_converged.campaign_converged
+  python: hpc_agent.meta.campaign.atoms.converged.campaign_converged
 ---
 # campaign-converged
 

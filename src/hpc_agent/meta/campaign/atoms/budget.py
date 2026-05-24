@@ -71,7 +71,7 @@ def campaign_budget(
     matching field under ``budget`` in ``<campaign_dir>/manifest.json``
     if the manifest exists. Explicit CLI args always win.
     """
-    from hpc_agent.campaign.manifest import read_manifest
+    from hpc_agent.meta.campaign.manifest import read_manifest
     from hpc_agent.models.mapreduce.reduce.history import find_sidecars_by_campaign
 
     manifest_budget: dict[str, Any] = {}

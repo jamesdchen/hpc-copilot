@@ -24,9 +24,9 @@ thing carried between ticks.
 
 Usage::
 
-    python -m hpc_agent.campaign.driver --experiment-dir .
-    python -m hpc_agent.campaign.driver --experiment-dir . --dry-run
-    python -m hpc_agent.campaign.driver --experiment-dir . --allow-agent-steps
+    python -m hpc_agent.meta.campaign.driver --experiment-dir .
+    python -m hpc_agent.meta.campaign.driver --experiment-dir . --dry-run
+    python -m hpc_agent.meta.campaign.driver --experiment-dir . --allow-agent-steps
 """
 
 from __future__ import annotations
