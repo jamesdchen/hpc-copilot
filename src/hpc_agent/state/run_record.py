@@ -188,10 +188,10 @@ def runs_dir(experiment_dir: Path) -> Path:
     NOTE: this is the **journal** runs directory under
     ``~/.claude/hpc/<repo_hash>/runs/``, NOT the cluster sidecar runs
     directory under ``<experiment_dir>/.hpc/runs/`` — that one is
-    :attr:`hpc_agent._kernel.contract.layout.RepoLayout.runs` (also exported as
-    :func:`hpc_agent.runs_subdir`). The pre-B1 collision between
-    these two ``runs_*`` names was a P0 bug source; the
-    ``RepoLayout`` / ``JournalLayout`` type split makes it a type
+    :attr:`hpc_agent._kernel.contract.layout.RepoLayout.runs`. The
+    pre-B1 collision between these two ``runs_*`` names was a P0 bug
+    source; the ``RepoLayout`` / ``JournalLayout`` type split makes
+    it a type
     error.
     """
     from hpc_agent._kernel.contract.layout import JournalLayout

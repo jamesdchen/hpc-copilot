@@ -318,7 +318,8 @@ def verify_aggregation_complete(
     if aggregated_metrics is not None and aggregated_keying == "grid_point":
         import re as _re
 
-        from hpc_agent import load_tasks_module, tasks_path
+        from hpc_agent import load_tasks_module
+        from hpc_agent._kernel.contract.layout import RepoLayout
 
         # ``aggregated_metrics`` keys are produced by
         # ``reduce_by_grid_point._run_id`` (bare-values, sanitised). The
@@ -331,7 +332,7 @@ def verify_aggregation_complete(
             return _re.sub(r"[^a-zA-Z0-9.\-]", "_", raw)
 
         try:
-            tasks = load_tasks_module(tasks_path(experiment_dir))
+            tasks = load_tasks_module(RepoLayout(experiment_dir).tasks)
             total = int(tasks.total())
             expected_grid_points = {_metrics_key(tasks.resolve(i) or {}) for i in range(total)}
             keys = set(aggregated_metrics.keys())
