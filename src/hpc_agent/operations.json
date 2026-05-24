@@ -615,6 +615,20 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent submit-and-verify --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "submit_and_verify.input.json",
+    "name": "submit-and-verify",
+    "output_schema": "submit_and_verify.output.json",
+    "python": "hpc_agent.ops.submit_and_verify.submit_and_verify",
+    "side_effects": [
+      "scheduler-submit",
+      "ssh"
+    ],
+    "verb": "workflow"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok]",
     "idempotent": true,
     "input_schema": "submit_flow.input.json",

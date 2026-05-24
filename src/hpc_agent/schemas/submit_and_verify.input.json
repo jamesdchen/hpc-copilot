@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/submit_and_verify.input.json",
+  "title": "submit-and-verify input spec",
+  "description": "Spec passed to ``hpc-agent submit-and-verify --spec <file>``.",
+  "type": "object",
+  "required": [
+    "submit"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "submit": {
+      "$ref": "#/$defs/SubmitFlowSpec",
+      "description": "The submit-flow spec the run will execute. Must have canary=True for verification to run; canary=False makes the workflow degenerate to a bare submit-flow call."
+    },
+    "expect_output": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path (relative to remote_path or absolute) the canary should have written. Forwarded to verify-canary; None skips the output-existence check.",
+      "title": "Expect Output"
+    },
+    "fingerprint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Relative path under the canary's result_dir of a file to SHA256 over SSH. Forwarded to verify-canary; None skips fingerprinting.",
+      "title": "Fingerprint"
+    },
+    "poll_interval_sec": {
+      "default": 10,
+      "description": "Adaptive poll interval for the canary wait, in seconds.",
+      "minimum": 1,
+      "title": "Poll Interval Sec",
+      "type": "integer"
+    },
+    "wait_budget_sec": {
+      "default": 1800,
+      "description": "Total seconds to wait for the canary to land terminal before giving up with failure_kind='timeout'.",
+      "minimum": 1,
+      "title": "Wait Budget Sec",
+      "type": "integer"
+    },
+    "log_dir": {
+      "default": "logs",
+      "description": "Cluster-side log directory for the canary stderr scan.",
+      "title": "Log Dir",
+      "type": "string"
+    },
+    "file_glob": {
+      "default": "*",
+      "description": "Cluster-side log file glob for the canary stderr scan.",
+      "title": "File Glob",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "SubmitFlowSpec": {
+      "additionalProperties": false,
+      "description": "Spec passed to ``hpc-agent submit-flow --spec <file>``.\n\nWorkflow atom that does pre-flight + rsync + deploy + optional\ncanary + qsub + record in one shot. All judgment (which\nconstraint, which walltime, which executor, scaffold tasks.py)\nis the caller's responsibility — this atom takes resolved values\nand executes.",
+      "properties": {
+        "profile": {
+          "minLength": 1,
+          "title": "Profile",
+          "type": "string"
+        },
+        "cluster": {
+          "minLength": 1,
+          "title": "Cluster",
+          "type": "string"
+        },
+        "ssh_target": {
+          "pattern": "^[^@]+@[^@]+$",
+          "title": "Ssh Target",
+          "type": "string"
+        },
+        "remote_path": {
+          "minLength": 1,
+          "title": "Remote Path",
+          "type": "string"
+        },
+        "job_name": {
+          "minLength": 1,
+          "title": "Job Name",
+          "type": "string"
+        },
+        "run_id": {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "total_tasks": {
+          "minimum": 1,
+          "title": "Total Tasks",
+          "type": "integer"
+        },
+        "backend": {
+          "enum": [
+            "sge",
+            "slurm"
+          ],
+          "title": "Backend",
+          "type": "string"
+        },
+        "script": {
+          "description": "Path to the job script ON THE CLUSTER (e.g. .hpc/templates/cpu_array.sh). deploy_runtime places these under remote_path/.hpc/templates/.",
+          "title": "Script",
+          "type": "string"
+        },
+        "job_env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Env vars forwarded into the cluster job. Caller is responsible for setting EXECUTOR, HPC_RUN_ID, HPC_CMD_SHA, HPC_TASK_COUNT, REPO_DIR, MODULES, CONDA_SOURCE/CONDA_ENV (as needed), HPC_RUNTIME (if uv), HPC_CAMPAIGN_ID (if part of a campaign).",
+          "title": "Job Env",
+          "type": "object"
+        },
+        "pass_env_keys": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SGE-only: which job_env keys to forward via qsub -v. Null = forward every key in job_env. Ignored for SLURM (slurm forwards everything in job_env automatically via --export ALL,...).",
+          "title": "Pass Env Keys"
+        },
+        "slurm_account": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SLURM-only: account to charge (sbatch --account). Defaults to whatever SLURM picks for the user.",
+          "title": "Slurm Account"
+        },
+        "slurm_cluster": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SLURM-only: cluster name for federated SLURM installations (sbatch --clusters=). Most installs don't need this.",
+          "title": "Slurm Cluster"
+        },
+        "tasks_per_array": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Batch tasks into arrays of this size. Null = single array of total_tasks.",
+          "title": "Tasks Per Array"
+        },
+        "canary": {
+          "default": true,
+          "description": "Submit a 1-task canary first; abort if it fails. Skip when caller has just smoke-tested or knows the pipeline is good.",
+          "title": "Canary",
+          "type": "boolean"
+        },
+        "campaign_id": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9._\\-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Campaign Id"
+        },
+        "runtime": {
+          "anyOf": [
+            {
+              "const": "uv",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Runtime"
+        },
+        "rsync_excludes": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",
+          "title": "Rsync Excludes"
+        },
+        "skip_preflight": {
+          "default": false,
+          "description": "Skip the pre-flight check (caller has just run it; saves one SSH probe). Use with caution.",
+          "title": "Skip Preflight",
+          "type": "boolean"
+        },
+        "partial_ok": {
+          "default": false,
+          "description": "When true, the sidecar records partial_ok=True under the `extra` pocket. monitor-flow consults this on terminal classification: a wave with at least one success is reported as `complete` (instead of `failed`) when partial_ok=true, and a `<run_id>.failed.json` ledger lists the failed task IDs. aggregate-flow honors the same ledger by skipping those task IDs and reporting `partial_failures`.",
+          "title": "Partial Ok",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "profile",
+        "cluster",
+        "ssh_target",
+        "remote_path",
+        "job_name",
+        "run_id",
+        "total_tasks",
+        "backend",
+        "script",
+        "job_env"
+      ],
+      "title": "submit-flow input spec",
+      "type": "object"
+    }
+  }
+}
