@@ -34,7 +34,7 @@ from hpc_agent._wire._shared import FailureCategory
 from hpc_agent.ops.recover.failure_signatures import classify as _classify_signature
 
 #: Valid return values, ordered roughly by specificity. Derived from the
-#: ``FailureCategory`` Literal in ``_schema_models/_shared.py`` so the
+#: ``FailureCategory`` Literal in ``_wire/_shared.py`` so the
 #: ``resubmit.input.json`` enum and this tuple stay in lock-step
 #: automatically — adding a new category is a one-place edit.
 CATEGORIES: tuple[str, ...] = typing.get_args(FailureCategory)

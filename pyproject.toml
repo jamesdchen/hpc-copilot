@@ -100,13 +100,13 @@ line-length = 100
 [tool.ruff.lint]
 # TCH (move-imports-into-TYPE_CHECKING) is dropped: this codebase
 # routes Pydantic specs through atom signatures (``def atom(spec:
-# FooSpec)``), and our ``_schema_models/*.py`` re-export shared types
+# FooSpec)``), and our ``_wire/*.py`` re-export shared types
 # whose runtime presence is required even though the static analyzer
 # can't see it. The rule generates false positives on every wire-input
 # atom + every shared-type re-export, drowning out the rare real hit.
 select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 
-# ``_schema_models/`` Field(description=...) and module docstrings
+# ``_wire/`` Field(description=...) and module docstrings
 # routinely exceed the 100-char line limit because the descriptions
 # ARE the wire-schema text — keeping them on one line preserves the
 # diff readability that matters when the schema actually changes.
