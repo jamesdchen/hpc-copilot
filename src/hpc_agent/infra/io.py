@@ -77,8 +77,8 @@ def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
     still-durable journal record.
 
     Used by:
-      * ``_internal/session/run_record._atomic_write_json`` (forwarder
-        below — back-compat for callers that still import it).
+      * ``state/run_record._atomic_write_json`` (deprecated forwarder
+        — back-compat for callers that still import it).
       * ``state/runs.py`` for per-run sidecars.
       * ``ops/monitor/update_constraints.py`` for the journal hand-off.
       * ``ops/monitor/status.py`` for the ``last_status.json`` cache

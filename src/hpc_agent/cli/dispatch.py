@@ -9,8 +9,6 @@ This module is the canonical home for the top-level CLI orchestrator:
 * :func:`_strip_verb_group` / :func:`_print_group_help` — argv
   preprocessing for verb groups (``hpc-agent build build-executor`` →
   ``hpc-agent build-executor``).
-* :func:`cmd_logs` — Tier-1 dispatcher shim kept for tests that import
-  ``cli.cmd_logs`` directly.
 * :func:`_live_subcommands` — introspects the live argparse tree, used
   by ``capabilities`` to enumerate verbs.
 
@@ -39,13 +37,6 @@ from pydantic import ValidationError
 
 from hpc_agent import errors
 from hpc_agent.cli._helpers import _err_from_hpc
-
-
-def cmd_logs(args: argparse.Namespace) -> int:
-    """Dispatcher shim — back-compat for tests that call ``cli.cmd_logs``."""
-    from hpc_agent.cli._dispatch import dispatch_primitive
-
-    return dispatch_primitive("logs", args)
 
 
 def _live_subcommands() -> list[str]:

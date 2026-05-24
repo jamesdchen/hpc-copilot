@@ -276,5 +276,5 @@ class SchemaIncompat(HpcError):
         "The on-disk JSON was written by a newer (or older, foreign) "
         "hpc-agent version than this one supports. Upgrade the package "
         "or migrate the file. The supported version set is declared in "
-        "``hpc_agent/_internal/version.py:_MANIFEST``."
+        "``hpc_agent/_kernel/extension/version.py:_MANIFEST``."
     )

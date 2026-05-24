@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_agent.cli.dispatch import cmd_logs
+from hpc_agent.cli._dispatch import dispatch_primitive
 from hpc_agent.cli.lifecycle import _preempted_summary_from_sidecar
 from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
 
@@ -312,7 +312,7 @@ def test_logs_envelope_carries_logs_field(tmp_path: Path, monkeypatch) -> None:
         ),
         patch("hpc_agent.cli._helpers._emit", side_effect=lambda p: captured.append(p)),
     ):
-        rc = cmd_logs(args)
+        rc = dispatch_primitive("logs", args)
 
     assert rc == 0
     payload = captured[-1]
