@@ -29,10 +29,9 @@ Exits 1 (with one ``path:lineno: <hint>`` per offender) if any annotated
 file violates the contract; exits 0 when clean. Files without the
 annotation are ignored entirely.
 
-Today (PR 0b) no source files are annotated except the three pure
-planning helpers (``constraints.py``, ``resubmit_batching.py``,
-``throughput.py``); Phase 1 subject PRs will annotate the rest of the
-``planning/`` move target.
+Today no source files are annotated except the three pure planning
+helpers (``infra/constraints.py``, ``ops/recover/batching.py``,
+``infra/throughput.py``).
 """
 
 from __future__ import annotations
