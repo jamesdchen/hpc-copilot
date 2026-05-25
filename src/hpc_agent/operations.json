@@ -175,7 +175,7 @@
   },
   {
     "agent_facing": true,
-    "cli": null,
+    "cli": "hpc-agent capabilities [--full]",
     "idempotent": true,
     "input_schema": null,
     "name": "capabilities",
@@ -214,6 +214,17 @@
     "name": "decide-monitor-arm",
     "output_schema": "decide_monitor_arm.output.json",
     "python": "hpc_agent.ops.monitor.arm.decide_monitor_arm",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent describe <name>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "describe",
+    "output_schema": null,
+    "python": "hpc_agent.cli.setup.describe",
     "side_effects": [],
     "verb": "query"
   },
@@ -493,6 +504,19 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent install-commands [--dry-run] [--claude-dir <claude_dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "install-commands",
+    "output_schema": null,
+    "python": "hpc_agent.cli.setup.install_commands",
+    "side_effects": [
+      "filesystem"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent interview --spec <path> --campaign-dir <campaign_dir>",
     "idempotent": true,
     "input_schema": "interview.input.json",
@@ -501,6 +525,20 @@
     "python": "hpc_agent.ops.memory.interview.record_interview",
     "side_effects": [
       "file_write"
+    ],
+    "verb": "scaffold"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>]",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "setup",
+    "output_schema": null,
+    "python": "hpc_agent.cli.setup.setup",
+    "side_effects": [
+      "filesystem",
+      "ssh"
     ],
     "verb": "scaffold"
   },

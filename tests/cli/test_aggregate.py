@@ -143,14 +143,15 @@ def test_main_routes_unrelated_exception_to_internal(monkeypatch) -> None:
     def fake_emit(payload):
         captured.append(payload)
 
-    # ``cmd_capabilities`` now lives in :mod:`hpc_agent.cli.setup`
-    # (Tier 3 — no @primitive backing); patch at the canonical home so
-    # the argparse parser's ``set_defaults(func=cmd_capabilities)``
-    # binding (created in ``setup.register()`` at parser-build time)
-    # actually sees the override.
+    # ``capabilities`` is now a registry-driven primitive; the
+    # CliShape's ``handler`` (``_capabilities_handler``) calls the
+    # module-level :func:`capabilities` to build the envelope. Patch the
+    # callable at module-scope so the handler's name lookup picks up the
+    # swap and the exception propagates through ``dispatch_primitive``
+    # to the top-level CLI error router.
     with (
         patch("hpc_agent.cli._helpers._emit", side_effect=fake_emit),
-        patch("hpc_agent.cli.setup.cmd_capabilities", side_effect=boom),
+        patch("hpc_agent._kernel.extension.capabilities.capabilities", side_effect=boom),
     ):
         rc = _cli_main(["capabilities"])
     assert rc == EXIT_INTERNAL

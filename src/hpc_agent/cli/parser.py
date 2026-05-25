@@ -99,12 +99,13 @@ def _register_tier3_modules(sub: argparse._SubParsersAction) -> None:
     """Register CLI-only verb modules that have no @primitive backing.
 
     Each Tier 3 module owns its ``register(sub)`` entry point;
-    aggregating them here keeps the surface in one place.
+    aggregating them here keeps the surface in one place. ``run`` is
+    the only remaining Tier 3 verb post-Item-2 — capabilities, setup,
+    describe, and install-commands are now ``@primitive`` entries
+    picked up by :func:`_register_from_registry`.
     """
-    from hpc_agent.cli.setup import register as _register_setup
     from hpc_agent.cli.spawn import register as _register_spawn
 
-    _register_setup(sub)
     _register_spawn(sub)
 
 

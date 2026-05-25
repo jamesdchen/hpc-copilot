@@ -44,7 +44,16 @@ from tests._registry_helpers import core_only_registry
 # must declare requires_ssh"; entries here document the rare case
 # where the primitive's SSH usage is conditional and the gate would be
 # user-hostile (e.g. a dry-run path that doesn't actually ssh).
-_ALLOWLIST: set[str] = set()
+_ALLOWLIST: set[str] = {
+    # ``setup`` declares an ssh side_effect because its ``--cluster``
+    # branch invokes check_preflight (which TCP-probes the cluster host
+    # and runs ssh-add -l). The ssh-touching path is opt-in via
+    # ``--cluster``; gating SSH_AUTH_SOCK unconditionally would block
+    # the common ``hpc-agent setup`` flow that just installs slash
+    # commands. The check_preflight call itself reports a structured
+    # failure when the agent is unset.
+    "setup",
+}
 
 # Side-effect kinds that imply the dispatcher must gate SSH_AUTH_SOCK
 # before invoking the primitive. Matches the labels used across
