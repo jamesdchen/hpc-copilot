@@ -7,6 +7,37 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Removed — `hpc_agent.runner` cross-subject re-export bridge (BREAKING)
+
+`src/hpc_agent/runner.py` and `scripts/lint_runner_shim.py` are gone.
+The bridge existed so an atom in one subject could call a primitive
+from another by routing through the package root; once every such seam
+was either pulled into a workflow file at the `ops/` or `meta/` role
+root (workflows are exempt from the subject-imports lint) or extracted
+to `infra/`, the shim was carrying no live callers. The pre-commit
+hook (`lint-runner-shim`) and CI job that policed its contents are
+removed in the same change, along with the `runner.py` block in
+`docs/architecture.md` and the `hpc_agent.runner.*` cross-references
+sprinkled through docstrings, `docs/internals/sync-checklist.md`,
+`docs/reference/boundary-contract.md`, and the per-subject READMEs.
+
+External integrators importing `from hpc_agent.runner import X` (or
+`from hpc_agent import runner` + `runner.X`) must switch to the
+canonical home:
+
+| `hpc_agent.runner` re-export | Canonical home |
+|---|---|
+| `combine_wave` | `hpc_agent.ops.aggregate.combine.combine_wave` |
+| `mark_terminal` | `hpc_agent.ops.monitor.reconcile.mark_terminal` |
+| `reconcile` | `hpc_agent.ops.monitor.reconcile.reconcile` |
+| `record_status` | `hpc_agent.ops.monitor.status.record_status` |
+| `resubmit_failed` | `hpc_agent.ops.recover.runner.resubmit_failed` |
+| `submit_and_record` | `hpc_agent.ops.submit.runner.submit_and_record` |
+| `validate_executor_signatures` | `hpc_agent.ops.validate.executor_signatures.validate_executor_signatures` |
+| `validate_input_dataset` | `hpc_agent.ops.validate.input_dataset.validate_input_dataset` |
+| `validate_stochastic_marker` | `hpc_agent.ops.validate.stochastic_marker.validate_stochastic_marker` |
+| `validate_walltime_against_history` | `hpc_agent.ops.validate.walltime_against_history.validate_walltime_against_history` |
+
 ## 0.6.0 — 2026-05-24
 
 ### Removed — `hpc_agent.agent_cli` back-compat shim (BREAKING)

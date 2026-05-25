@@ -14,9 +14,9 @@ error_codes:
 - code: ssh_unreachable
   category: network
   retry_safe: true
-- code: scheduler_throttled
+- code: remote_command_failed
   category: cluster
-  retry_safe: true
+  retry_safe: false
 - code: cluster_unknown
   category: user
   retry_safe: false

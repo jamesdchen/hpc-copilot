@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from hpc_agent import runner
 from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
+from hpc_agent.ops.submit.runner import submit_and_record
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -57,7 +57,7 @@ def test_cmd_sha_dedup_short_circuits_when_sidecar_exists(tmp_path: Path) -> Non
         campaign_id="",
     )
 
-    record, deduped = runner.submit_and_record(
+    record, deduped = submit_and_record(
         tmp_path,
         spec=_WireSubmitSpec(
             profile="gpu-a100",
@@ -82,7 +82,7 @@ def test_cmd_sha_dedup_short_circuits_when_sidecar_exists(tmp_path: Path) -> Non
 def test_cmd_sha_dedup_no_op_when_no_match(tmp_path: Path) -> None:
     """Sidecar with DIFFERENT cmd_sha must not short-circuit."""
     _write_sidecar(tmp_path, "20260101-000000-other00", cmd_sha="b" * 64)
-    record, deduped = runner.submit_and_record(
+    record, deduped = submit_and_record(
         tmp_path,
         spec=_WireSubmitSpec(
             profile="cpu",
@@ -102,7 +102,7 @@ def test_cmd_sha_dedup_no_op_when_no_match(tmp_path: Path) -> None:
 
 def test_cmd_sha_param_is_optional(tmp_path: Path) -> None:
     """Existing callers that do not pass cmd_sha must keep working."""
-    record, deduped = runner.submit_and_record(
+    record, deduped = submit_and_record(
         tmp_path,
         spec=_WireSubmitSpec(
             profile="cpu",

@@ -23,6 +23,12 @@ error_codes:
 - code: precondition_failed
   category: user
   retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
+- code: remote_command_failed
+  category: cluster
+  retry_safe: false
 backed_by:
   cli: hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]
   python: hpc_agent.ops.aggregate_flow.aggregate_flow

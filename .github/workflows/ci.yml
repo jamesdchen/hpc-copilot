@@ -47,8 +47,6 @@ jobs:
         run: python scripts/lint_subject_imports.py
       - name: Lint subject __init__.py is docstring-only
         run: python scripts/lint_subject_init.py
-      - name: Lint hpc_agent.runner re-exports only @primitive symbols
-        run: python scripts/lint_runner_shim.py
       - name: Check JSON schemas regenerated from Pydantic
         run: python scripts/build_schemas.py --check
       - name: Check baked operations.json is up to date

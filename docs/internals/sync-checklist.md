@@ -2,9 +2,11 @@
 
 Both surfaces share the per-subject runner modules (`ops/submit/runner.py`,
 `ops/aggregate/runner.py`, `ops/monitor/{status,reconcile,logs}.py`,
-`ops/recover/runner.py`) for any mutating op, reached via the package-root
-`hpc_agent.runner` bridge. Anything below MUST stay aligned across the
-two surfaces; changing it is a breaking change requiring a version bump.
+`ops/recover/runner.py`) for any mutating op. Workflows at the
+`ops/`/`meta/` role root invoke them directly; the prior
+`hpc_agent.runner` package-root re-export bridge has been removed.
+Anything below MUST stay aligned across the two surfaces; changing it
+is a breaking change requiring a version bump.
 
 The list is exhaustive for the v0.2.0 contract. When you add a new
 shared invariant, add it here in the same PR; when you change one,
@@ -22,8 +24,7 @@ update both surfaces and bump the version.
   string matching `[A-Za-z0-9._\-]+`; the recommended format keeps
   sidecars sorted chronologically by mtime ↔ filename.
 - **Defined in**: `hpc_agent/ops/submit/runner.py:submit_and_record`
-  (re-exported as `hpc_agent.runner.submit_and_record`) — `run_id` is
-  a required keyword.
+  — `run_id` is a required keyword.
 - **Public contract**: external orchestrators may key state on
   this. Renaming the format breaks every downstream consumer.
 
@@ -86,8 +87,7 @@ Possible values of `RunRecord.status`:
   finished.
 - `failed` — terminal, run aborted with unrecoverable failure.
 - `abandoned` — terminal, no `job_ids` are alive on the scheduler
-  (set by `ops.monitor.reconcile.reconcile`, re-exported as
-  `hpc_agent.runner.reconcile`).
+  (set by `ops.monitor.reconcile.reconcile`).
 
 Defined in `hpc_agent/state/` (`TERMINAL_STATUSES`
 frozenset lives in `run_record.py`; default `status="in_flight"` is
@@ -142,8 +142,7 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 
 - **Path**: `<HPC_JOURNAL_DIR>/<repo_hash>/runs/<run_id>.last_status.json`.
 - **Writer**: `hpc_agent/ops/monitor/status.py:record_status`
-  (re-exported as `hpc_agent.runner.record_status`; best-effort —
-  a write failure does not roll back the journal update).
+  (best-effort — a write failure does not roll back the journal update).
 - **Reader**: any consumer — agent, human, `jq` pipeline, file
   watcher. Mtime tells the caller how stale the snapshot is.
 - **Shape**: same as `RunRecord.last_status` plus a `checked_at`

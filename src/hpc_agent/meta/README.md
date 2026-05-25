@@ -14,7 +14,8 @@ meta-level, not an `ops/` subject.
 Each immediate subdirectory of `meta/` is a self-contained subject
 following the same rules as `ops/` subjects (no sideways imports;
 cross-subject helpers go through `infra/`, cross-subject primitive
-calls go through `hpc_agent.runner`). Current inventory:
+calls happen in workflow files at the `meta/` role root). Current
+inventory:
 
 - **[`meta/campaign/`](campaign/README.md)** — the campaign lifecycle
   subject. Eight per-step primitives (`campaign-init`, `-list`,

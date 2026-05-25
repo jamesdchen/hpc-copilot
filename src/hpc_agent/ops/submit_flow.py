@@ -2,7 +2,7 @@
 
 A workflow atom (vs a primitive atom) chains multiple SSH/scheduler/disk
 operations into one composable unit with a single envelope output. Where
-:func:`hpc_agent.runner.submit_and_record` is the bookkeeping
+:func:`hpc_agent.ops.submit.runner.submit_and_record` is the bookkeeping
 primitive (writes a sidecar; never touches the cluster), ``submit_flow``
 is the end-to-end pipeline: it actually rsyncs, deploys framework files,
 optionally fires a 1-task canary, qsubs the array, and records to the

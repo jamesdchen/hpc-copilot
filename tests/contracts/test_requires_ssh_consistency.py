@@ -3,7 +3,7 @@
 The CLI dispatcher gates the ``SSH_AUTH_SOCK`` precondition based on
 ``CliShape.requires_ssh``. A primitive whose body invokes
 :func:`hpc_agent.infra.remote.ssh_run` / ``rsync_push`` / ``rsync_pull``
-(directly OR via a ``hpc_agent.runner.*`` re-export) but whose CLI
+(directly OR via the per-subject runner modules) but whose CLI
 declaration omits ``requires_ssh=True`` will silently bypass the gate
 and fail late with an opaque ``ssh: connect to host`` error instead of
 the surface's ``SshUnreachable`` envelope.
@@ -37,7 +37,6 @@ from pathlib import Path
 import pytest
 
 from hpc_agent._kernel.registry.primitive import PrimitiveMeta
-
 from tests._registry_helpers import core_only_registry
 
 # Genuine exceptions go here with a comment explaining why the gate

@@ -11,7 +11,7 @@ single value:
 * ``hpc_agent.ops.monitor_flow``'s ``lifecycle_state`` envelope
   field — workflow state including ``"timeout"``.
 * ``hpc_agent.models.mapreduce.reduce.status``'s per-task status strings.
-* ``hpc_agent.runner.cluster_failures_by_fingerprint``'s emitted
+* ``hpc_agent.ops.recover.runner_failures.cluster_failures_by_fingerprint``'s emitted
   category strings vs ``hpc_agent.cli.recover._VALID_RESUBMIT_CATEGORIES``'s
   accepted set — a real bug class where the classifier could emit a
   category the resubmit path silently rejected.
@@ -107,7 +107,7 @@ class TaskStatus(StrEnum):
 
 class FailureCategory(StrEnum):
     """Failure-fingerprint vocabulary, shared by the auto-classifier
-    in :func:`hpc_agent.runner.cluster_failures_by_fingerprint`
+    in :func:`hpc_agent.ops.recover.runner_failures.cluster_failures_by_fingerprint`
     and the resubmit path's ``--spec.category`` validation in
     :mod:`hpc_agent.cli.recover`.
 

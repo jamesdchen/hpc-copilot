@@ -40,6 +40,9 @@ error_codes:
 - code: journal_corrupt
   category: internal
   retry_safe: false
+- code: spec_invalid
+  category: user
+  retry_safe: false
 backed_by:
   cli: hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]
   python: hpc_agent.ops.recover.failures_atom.fetch_failures

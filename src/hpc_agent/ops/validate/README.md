@@ -32,8 +32,8 @@ A validator that crashes is itself a finding (`validator_crashed`).
 ## Composition with `validate-campaign`
 
 `meta/validate_campaign.py` calls four of these (input_dataset,
-stochastic_marker, walltime_against_history, executor_signatures) by
-routing through `hpc_agent.runner` (the cross-subject primitive
-bridge — see the architecture doc's "Cross-subject composition"
-section). New validators are added here; the campaign workflow
-opt-in surfaces them as its skill scope grows.
+stochastic_marker, walltime_against_history, executor_signatures)
+directly — workflow files at the `meta/` role root are exempt from
+the subject-imports lint (see the architecture doc's "Cross-subject
+composition" section). New validators are added here; the campaign
+workflow opt-in surfaces them as its skill scope grows.

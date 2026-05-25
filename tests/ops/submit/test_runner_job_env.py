@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.runner.build_job_env``.
+"""Tests for ``hpc_agent.ops.submit.runner.build_job_env``.
 
 The helper threads the spec's ``runtime`` field into the qsub /
 sbatch env so the template's ``uv sync`` preamble fires when
