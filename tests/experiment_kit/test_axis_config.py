@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.incorporation.template.axis_config`` and the v2 axes schema."""
+"""Tests for ``hpc_agent.experiment_kit.axis_config`` and the v2 axes schema."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import jsonschema
 import pytest
 
 from hpc_agent._wire.fixtures.axes import _DataAxisConfig
-from hpc_agent.incorporation.template.axis import (
+from hpc_agent.experiment_kit.axis import (
     MOMENTS,
     SUM,
     Associative,
@@ -14,7 +14,7 @@ from hpc_agent.incorporation.template.axis import (
     Independent,
     Sequential,
 )
-from hpc_agent.incorporation.template.axis_config import (
+from hpc_agent.experiment_kit.axis_config import (
     HaloExprError,
     config_from_data_axis,
     data_axis_from_config,

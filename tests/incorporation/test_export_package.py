@@ -35,7 +35,7 @@ def _experiment(tmp_path: Path) -> Path:
     _write_nb(
         nbs / "executors" / "ml_ridge.ipynb",
         [
-            "from hpc_agent.incorporation.template import register_run\n\n"
+            "from hpc_agent.experiment_kit import register_run\n\n"
             "@register_run\ndef run(alpha: float = 0.1):\n    return [alpha]\n"
         ],
     )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from hpc_agent import errors
-from hpc_agent.incorporation.template import (
+from hpc_agent.experiment_kit import (
     BoundedHalo,
     Independent,
     Sequential,

@@ -14,7 +14,7 @@ returning plausible-but-wrong numbers. Drive it from the *classified*
 axis recorded in ``.hpc/axes.yaml`` via :func:`data_axis_for` — don't
 hard-code the axis::
 
-    from hpc_agent.incorporation.template import assert_elision_equivalent
+    from hpc_agent.experiment_kit import assert_elision_equivalent
     from conftest import data_axis_for
     from src.my_experiment import run
 
@@ -26,11 +26,11 @@ hard-code the axis::
 If an experiment registers no such test, the gate is simply absent — CI
 warns (nothing to check) rather than blocking.
 
-If your experiments call ``hpc_agent.incorporation.template.load_series``, register a
+If your experiments call ``hpc_agent.experiment_kit.load_series``, register a
 loader once here::
 
     import pytest
-    from hpc_agent.incorporation.template import set_series_loader
+    from hpc_agent.experiment_kit import set_series_loader
 
     @pytest.fixture(autouse=True)
     def _series_loader() -> None:
@@ -70,7 +70,7 @@ def data_axis_for(run_name: str) -> Any:
     classified — the elision test should assert on that explicitly.
     """
     from hpc_agent.state.axes import read_executor
-    from hpc_agent.incorporation.template import data_axis_from_config
+    from hpc_agent.experiment_kit import data_axis_from_config
 
     entry = read_executor(_REPO_ROOT, run_name)
     if entry is None:

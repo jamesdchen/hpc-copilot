@@ -68,7 +68,11 @@ rules.
 │                                                                     │
 │  incorporation/  scaffolding primitives                             │
 │      axes_init, classify_axis, export_package, build/{executor,     │
-│      submit_spec, tasks_py, template}                               │
+│      submit_spec, tasks_py, template, scaffolds/}                   │
+│                                                                     │
+│  experiment_kit/  researcher-facing planner + runtime               │
+│      register, axis, plan, reduce, series, signature, discover,     │
+│      elision, notebook, _runtime                                    │
 │                                                                     │
 │  Cross-subject composition:                                         │
 │      Workflows live at ops/ + meta/ root (sibling to subjects) and  │

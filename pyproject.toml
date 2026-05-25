@@ -74,7 +74,7 @@ hpc_agent = [
     "schemas/*.json",
     "operations.json",
     "models/mapreduce/templates/scaffolds/*.py",
-    "incorporation/template/scaffold/*",
+    "incorporation/build/scaffolds/*",
     "models/mapreduce/templates/runtime/common/*.sh",
     "models/mapreduce/templates/runtime/sge/*",
     "models/mapreduce/templates/runtime/slurm/*",

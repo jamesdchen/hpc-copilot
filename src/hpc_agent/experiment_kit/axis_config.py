@@ -1,8 +1,8 @@
 """(De)serialize a classified :data:`DataAxis` to / from the ``axes.yaml``
 ``executors`` block.
 
-A :data:`~hpc_agent.incorporation.template.axis.DataAxis` is a live object — and for
-:class:`~hpc_agent.incorporation.template.axis.BoundedHalo` it carries a *callable*
+A :data:`~hpc_agent.experiment_kit.axis.DataAxis` is a live object — and for
+:class:`~hpc_agent.experiment_kit.axis.BoundedHalo` it carries a *callable*
 ``halo_fn``. To persist a classification across submits it must
 round-trip through the plain-data ``executors.<run>.data_axis`` shape
 (see :mod:`hpc_agent._wire.fixtures.axes`):
@@ -24,7 +24,7 @@ numeric literals, the ``+`` ``-`` ``*`` ``//`` operators, and calls to
 ``__import__``, a comprehension — raises :class:`HaloExprError`.
 
 This module is **submit-side** — it is *not* inlined into executors.
-It uses only the stdlib (:mod:`ast`) and :mod:`hpc_agent.incorporation.template.axis`
+It uses only the stdlib (:mod:`ast`) and :mod:`hpc_agent.experiment_kit.axis`
 (itself stdlib-only).
 """
 
@@ -35,7 +35,7 @@ from collections.abc import Callable
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent.incorporation.template.axis import (
+from hpc_agent.experiment_kit.axis import (
     MOMENTS,
     SUM,
     Associative,
@@ -73,7 +73,7 @@ def _eval_node(node: ast.AST, params: dict[str, Any]) -> float:
 
     if isinstance(node, ast.Constant):
         # bool is an int subclass; exclude it so `True * 48` can't sneak in.
-        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+        if isinstance(node.value, bool) or not isinstance(node.value, int | float):
             raise HaloExprError(f"halo expr literal must be numeric, got {node.value!r}")
         return node.value
 
@@ -84,7 +84,7 @@ def _eval_node(node: ast.AST, params: dict[str, Any]) -> float:
                 f"(available: {sorted(params)})"
             )
         value = params[node.id]
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, int | float):
             raise HaloExprError(f"halo expr parameter {node.id!r} is not numeric: {value!r}")
         return float(value)
 
@@ -148,10 +148,10 @@ def _validate_halo_expr(expr: str) -> None:
     except SyntaxError as exc:
         raise HaloExprError(f"halo expr is not a valid Python expression: {expr!r}") from exc
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Expression, ast.Load)):
+        if isinstance(node, ast.Expression | ast.Load):
             continue
         if isinstance(node, ast.Constant):
-            if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            if isinstance(node.value, bool) or not isinstance(node.value, int | float):
                 raise HaloExprError(f"halo expr literal must be numeric, got {node.value!r}")
             continue
         if isinstance(node, ast.Name):
@@ -216,7 +216,7 @@ def config_from_data_axis(axis: DataAxis) -> dict[str, Any]:
     """Serialize a live :data:`DataAxis` to the ``data_axis`` block shape.
 
     The inverse of :func:`data_axis_from_config`. A
-    :class:`~hpc_agent.incorporation.template.axis.BoundedHalo` only round-trips if its
+    :class:`~hpc_agent.experiment_kit.axis.BoundedHalo` only round-trips if its
     ``halo_fn`` was produced by :func:`data_axis_from_config` (which
     carries the source ``expr`` on the closure); a hand-built
     ``BoundedHalo(lambda p: ...)`` cannot be serialized and raises.

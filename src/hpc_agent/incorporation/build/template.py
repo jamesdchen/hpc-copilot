@@ -1,7 +1,7 @@
 """``build-template`` — inject the experiment-template scaffold.
 
 The experiment-template scaffold lives *inside* hpc-agent
-(``hpc_agent/template/scaffold/``); there is no separate template repo
+(``hpc_agent/incorporation/build/scaffolds/``); there is no separate template repo
 to clone. ``build-template`` injects it into a target repo — extending
 what hpc-agent already does with single files (``build-executor``,
 ``build-tasks-py``, the ``.hpc/cli.py`` copy) to a whole-project
@@ -28,7 +28,7 @@ Two tiers, with different overwrite discipline:
   ``pyproject.toml`` is left untouched and the fragment is dropped
   under ``.hpc/`` for a hand-merge).
 
-The ``hpc_agent.incorporation.template`` library itself is **not** injected — it is a
+The ``hpc_agent.experiment_kit`` library itself is **not** injected — it is a
 ``pip install hpc-agent`` dependency, imported, never vendored.
 """
 
@@ -127,7 +127,7 @@ def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
     if not repo_dir.is_dir():
         raise errors.SpecInvalid(f"repo-dir {repo_dir} does not exist or is not a directory")
 
-    scaffold_dir = hpc_agent._PACKAGE_ROOT / "incorporation" / "template" / "scaffold"
+    scaffold_dir = hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds"
 
     def _asset(name: str) -> str:
         return (scaffold_dir / name).read_text(encoding="utf-8")

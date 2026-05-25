@@ -6,19 +6,19 @@ the ``compute(args)`` wrapper it injects, plus the halo-aware
 ``load_series`` seam and ``save_artifact``.
 
 It is deliberately **stdlib-only** and imports nothing from
-``hpc_agent`` — so :func:`hpc_agent.incorporation.template.export_notebook` can inline
+``hpc_agent`` — so :func:`hpc_agent.experiment_kit.export_notebook` can inline
 this file's source verbatim into an exported executor. The exported
 ``.py`` then runs on a stdlib-only cluster with no ``hpc-agent``
 install, exactly the way ``.hpc/cli.py`` carries an inlined copy of
 ``Flag``.
 
 Because the export inlines *this exact source*, there is no second copy
-to keep in lock-step — the authoring API (``hpc_agent.incorporation.template``) and
+to keep in lock-step — the authoring API (``hpc_agent.experiment_kit``) and
 the inlined cluster runtime are the same bytes by construction.
 
 The richer authoring surface — flag synthesis, the parallelization
 planner, the notebook exporter, the serial-elision harness — lives in
-the other ``hpc_agent.incorporation.template`` submodules and is **not** part of this
+the other ``hpc_agent.experiment_kit`` submodules and is **not** part of this
 runtime.
 """
 
@@ -160,7 +160,7 @@ class RunSpec:
     """Metadata recorded for one ``@register_run`` function.
 
     Flag synthesis is an authoring concern (see
-    ``hpc_agent.incorporation.template.flags_for_run``) and deliberately not eager
+    ``hpc_agent.experiment_kit.flags_for_run``) and deliberately not eager
     here — keeping this dataclass dependency-free is what lets the
     runtime stay inline-able.
     """

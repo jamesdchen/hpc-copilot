@@ -1,21 +1,21 @@
 """``discover_runs`` — find ``@register_run`` functions without importing.
 
-The agent-facing counterpart to :func:`hpc_agent.incorporation.template.register_run`.
+The agent-facing counterpart to :func:`hpc_agent.experiment_kit.register_run`.
 A repo's executors may import ``torch`` / ``pandas`` / a private CUDA
 build; importing them just to enumerate experiment entry points is slow
 and fragile. :func:`discover_runs` instead walks each ``.py`` file —
 and each ``.ipynb`` notebook — with :mod:`ast`, so it runs in a
 stdlib-only environment. Notebooks are scanned natively because an
 *exported* executor inlines the runtime and no longer carries the
-``hpc_agent.incorporation.template`` import the decorator-alias resolver keys off; the
+``hpc_agent.experiment_kit`` import the decorator-alias resolver keys off; the
 notebook is the source of truth for "what experiments exist".
 
 It resolves every spelling of the decorator:
 
-- bare — ``from hpc_agent.incorporation.template import register_run`` → ``@register_run``
+- bare — ``from hpc_agent.experiment_kit import register_run`` → ``@register_run``
 - aliased — ``... import register_run as rr`` → ``@rr``
-- attribute — ``import hpc_agent.incorporation.template`` →
-  ``@hpc_agent.incorporation.template.register_run``
+- attribute — ``import hpc_agent.experiment_kit`` →
+  ``@hpc_agent.experiment_kit.register_run``
 - module-aliased — ``from hpc_agent import template`` → ``@template.register_run``
 
 and the parameterised call form ``@register_run(gpu=True)``.
@@ -30,14 +30,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from hpc_agent.executor_cli import Flag
-from hpc_agent.incorporation.template.signature import flags_from_ast
+from hpc_agent.experiment_kit.signature import flags_from_ast
 
 __all__ = ["RunInfo", "discover_runs", "run_signature_sha"]
 
 _SKIP_DIRS = frozenset({".hpc", ".git", "__pycache__", ".mypy_cache"})
 _DECORATOR_NAME = "register_run"
 # Module paths a `register_run` import may come from.
-_SOURCE_MODULES = ("hpc_agent.incorporation.template", "hpc_agent.incorporation.template.register")
+_SOURCE_MODULES = ("hpc_agent.experiment_kit", "hpc_agent.experiment_kit.register")
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ class RunInfo:
     flags:
         The CLI :class:`~hpc_agent.executor_cli.Flag` list synthesised
         from the function signature (see
-        :func:`hpc_agent.incorporation.template.flags_from_ast`).
+        :func:`hpc_agent.experiment_kit.flags_from_ast`).
     run_signature_sha:
         A stable SHA-256 over the synthesised :attr:`flags` — the
         run's *parallelization-relevant* fingerprint. A stored
@@ -98,7 +98,7 @@ def discover_runs(src_dir: str | Path) -> list[RunInfo]:
             continue
         bare, modules = _decorator_aliases(tree)
         for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
             for dec in node.decorator_list:
                 gpu = _decorator_gpu(dec, bare, modules)
@@ -149,7 +149,7 @@ def _read_source(path: Path) -> str:
     """Return Python source for *path* — a ``.py`` file or ``.ipynb`` notebook.
 
     For a notebook the code cells are concatenated in order, so the
-    ``@register_run`` decorator and its ``hpc_agent.incorporation.template`` import
+    ``@register_run`` decorator and its ``hpc_agent.experiment_kit`` import
     appear as ordinary top-level nodes for the AST walk.
     """
     if path.suffix == ".ipynb":

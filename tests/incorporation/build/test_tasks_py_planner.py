@@ -1,7 +1,7 @@
 """Planner-mode tests for ``build-tasks-py`` (the ``data_axis`` branch).
 
 When the spec carries a ``data_axis``, ``build-tasks-py`` emits a
-``hpc_agent.incorporation.template.plan_tasks``-driven ``tasks.py`` — the deterministic
+``hpc_agent.experiment_kit.plan_tasks``-driven ``tasks.py`` — the deterministic
 materialisation of the /submit-hpc Step 3 ``DataAxis`` inference.
 """
 
@@ -137,7 +137,7 @@ def test_planner_rejects_non_arithmetic_halo_expr(tmp_path: Path) -> None:
 
 def test_planner_tasks_py_carries_no_template_import(tmp_path: Path) -> None:
     # The generated tasks.py is imported cluster-side by the stdlib-only
-    # dispatcher; it must NOT import hpc_agent.incorporation.template (not a deployed
+    # dispatcher; it must NOT import hpc_agent.experiment_kit (not a deployed
     # runtime module). The plan is materialised, not re-computed.
     import ast
 
@@ -163,6 +163,6 @@ def test_planner_tasks_py_carries_no_template_import(tmp_path: Path) -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
     # Same runtime footprint as a cartesian tasks.py — no
-    # hpc_agent.incorporation.template import (the docstring may mention it as prose,
+    # hpc_agent.experiment_kit import (the docstring may mention it as prose,
     # but nothing is imported beyond executor_cli).
     assert imported <= {"__future__", "hpc_agent.executor_cli"}

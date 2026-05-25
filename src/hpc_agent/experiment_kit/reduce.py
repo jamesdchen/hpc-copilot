@@ -1,7 +1,7 @@
-"""Monoid-reduce glue for :class:`~hpc_agent.incorporation.template.Associative` axes.
+"""Monoid-reduce glue for :class:`~hpc_agent.experiment_kit.Associative` axes.
 
-When a series axis is :class:`~hpc_agent.incorporation.template.Associative`, each
-chunk emits a :class:`~hpc_agent.incorporation.template.Monoid` partial instead of a
+When a series axis is :class:`~hpc_agent.experiment_kit.Associative`, each
+chunk emits a :class:`~hpc_agent.experiment_kit.Monoid` partial instead of a
 final scalar. These helpers fold the partials back to the serial
 result.
 
@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-from hpc_agent.incorporation.template.axis import Monoid
+from hpc_agent.experiment_kit.axis import Monoid
 
 __all__ = ["reduce_monoid", "reduce_monoid_sidecars"]
 

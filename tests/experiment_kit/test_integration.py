@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from hpc_agent.incorporation.template import export_notebook
+from hpc_agent.experiment_kit import export_notebook
 
 
 def _notebook_json() -> str:
@@ -18,7 +18,7 @@ def _notebook_json() -> str:
                 {"cell_type": "markdown", "source": "# vol forecast experiment"},
                 {
                     "cell_type": "code",
-                    "source": "from hpc_agent.incorporation.template import register_run\n",
+                    "source": "from hpc_agent.experiment_kit import register_run\n",
                 },
                 {"cell_type": "code", "source": "SCALE_BASE = 10\n"},
                 {

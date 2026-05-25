@@ -70,6 +70,6 @@ executors' entries and the scheduling-axis hints survive every call.
 
 A classification is a program-analysis judgment and can be wrong — a
 misclassified axis runs fine and returns plausible-but-wrong numbers.
-`/submit-hpc` runs `hpc_agent.incorporation.template.assert_elision_equivalent` (whole
+`/submit-hpc` runs `hpc_agent.experiment_kit.assert_elision_equivalent` (whole
 run vs split run, assert equality) as a pre-submit gate; recommend the
 experiment repo wire it into CI as a required check.

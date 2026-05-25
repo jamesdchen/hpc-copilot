@@ -6,7 +6,7 @@ The output :class:`TaskPlan` exposes ``total()`` and ``resolve(task_id)``
 
 .. code-block:: python
 
-    from hpc_agent.incorporation.template import plan_tasks, BoundedHalo
+    from hpc_agent.experiment_kit import plan_tasks, BoundedHalo
 
     _PLAN = plan_tasks(
         sweep=[{"alpha": a} for a in (0.1, 1.0, 10.0)],
@@ -23,7 +23,7 @@ The output :class:`TaskPlan` exposes ``total()`` and ``resolve(task_id)``
 
 Each resolved task dict carries the sweep point's params plus the
 slice keys ``start`` / ``end`` / ``halo`` that
-:func:`hpc_agent.incorporation.template.load_series` consumes.
+:func:`hpc_agent.experiment_kit.load_series` consumes.
 
 Stdlib-only — safe to import at dispatch time.
 """
@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent.incorporation.template.axis import (
+from hpc_agent.experiment_kit.axis import (
     Associative,
     BoundedHalo,
     DataAxis,
@@ -112,9 +112,7 @@ def plan_tasks(
     if not points:
         raise errors.SpecInvalid("plan_tasks requires at least one sweep point")
     if series_length < 0:
-        raise errors.SpecInvalid(
-            f"series_length must be non-negative; got {series_length}"
-        )
+        raise errors.SpecInvalid(f"series_length must be non-negative; got {series_length}")
 
     sequential = isinstance(data_axis, Sequential)
     if sequential:
@@ -142,7 +140,7 @@ def _halo_for(data_axis: DataAxis, point: dict[str, Any], start: int) -> int:
         requested = int(data_axis.halo_fn(point))
         return max(0, min(requested, start))
     # Independent / Associative / Sequential carry no halo.
-    if isinstance(data_axis, (Independent, Associative, Sequential)):
+    if isinstance(data_axis, Independent | Associative | Sequential):
         return 0
     raise TypeError(f"unknown DataAxis type: {type(data_axis).__name__}")
 

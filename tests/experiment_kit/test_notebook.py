@@ -6,7 +6,7 @@ import ast
 import json
 from pathlib import Path
 
-from hpc_agent.incorporation.template import export_notebook
+from hpc_agent.experiment_kit import export_notebook
 
 
 def _notebook(*code_cells: str, markdown: str = "intro") -> dict:
@@ -23,7 +23,7 @@ def test_keeps_surface_and_inlines_the_runtime(tmp_path: Path) -> None:
     nb.write_text(
         json.dumps(
             _notebook(
-                "import numpy as np\nfrom hpc_agent.incorporation.template import register_run\n",
+                "import numpy as np\nfrom hpc_agent.experiment_kit import register_run\n",
                 "WINDOW = 48\nTRAIN_DAYS = 30\n",
                 # Exploratory scratch — must all be dropped.
                 "df = np.zeros(10)\nprint(df)\ndf.mean()\n",
@@ -52,9 +52,9 @@ def test_keeps_surface_and_inlines_the_runtime(tmp_path: Path) -> None:
     assert "df.mean()" not in text
     assert "run(alpha=2.0)" not in text
 
-    # Inline mode: the hpc_agent.incorporation.template import is replaced by the
+    # Inline mode: the hpc_agent.experiment_kit import is replaced by the
     # verbatim runtime source, so the executor is self-contained.
-    assert "from hpc_agent.incorporation.template import register_run" not in text
+    assert "from hpc_agent.experiment_kit import register_run" not in text
     assert "def register_run(" in text  # provided by the inlined runtime
     assert "def load_series(" in text
 

@@ -12,11 +12,11 @@ does. The output module name is the notebook stem with a leading
 ``\\d+[a-z]?_`` ordering prefix stripped — ``01_loading.ipynb`` →
 ``src/loading.py``. The exporter is auto-picked: a notebook that
 *applies* the ``@register_run`` decorator is a runnable executor →
-strict-AST :func:`~hpc_agent.incorporation.template.export_notebook` (runtime inlined);
+strict-AST :func:`~hpc_agent.experiment_kit.export_notebook` (runtime inlined);
 everything else — including pipeline-library notebooks that merely
 import the runtime seam — uses the ``# export``-marker
-:func:`~hpc_agent.incorporation.template.export_notebook_markers`. Detection is the
-``@register_run`` decorator, not the ``hpc_agent.incorporation.template`` import:
+:func:`~hpc_agent.experiment_kit.export_notebook_markers`. Detection is the
+``@register_run`` decorator, not the ``hpc_agent.experiment_kit`` import:
 library notebooks import the runtime (``current_slice`` /
 ``load_series``) without being experiments.
 
@@ -163,8 +163,8 @@ def export_package(
     Raises ``errors.SpecInvalid`` when two notebooks map to the same
     ``src/`` module name, or a stem is not a valid Python identifier.
     """
-    from hpc_agent.incorporation.template.discover import discover_runs
-    from hpc_agent.incorporation.template.notebook import export_notebook, export_notebook_markers
+    from hpc_agent.experiment_kit.discover import discover_runs
+    from hpc_agent.experiment_kit.notebook import export_notebook, export_notebook_markers
 
     if spec is None:
         spec = ExportPackageInput()
@@ -208,7 +208,7 @@ def export_package(
         raise errors.SpecInvalid(f"notebook output-path collisions in src/: {detail}")
 
     # Template-vs-marker is decided by the @register_run *decorator*, not
-    # by importing hpc_agent.incorporation.template — pipeline library notebooks import
+    # by importing hpc_agent.experiment_kit — pipeline library notebooks import
     # the runtime seam (current_slice / load_series) without being
     # runnable experiments, and the strict-AST exporter would mangle them.
     # discover_runs resolves every decorator spelling (bare/aliased/attr).
