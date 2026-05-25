@@ -127,7 +127,7 @@ def test_clusters_list_returns_known_clusters() -> None:
     env = _parse_envelope(out)
     assert env["ok"] is True
     names = [c["name"] for c in env["data"]["clusters"]]
-    assert names, "no clusters defined; check hpc_mapreduce/config/clusters.yaml"
+    assert names, "no clusters defined; check hpc_agent/config/clusters.yaml"
 
 
 # ─── error envelope shape and exit codes ───────────────────────────────────

@@ -1,4 +1,4 @@
-"""Tests for the on-cluster combiner (hpc_mapreduce/map/combiner.py).
+"""Tests for the on-cluster combiner (hpc_agent/models/mapreduce/combiner.py).
 
 The combiner imports the user's ``.hpc/tasks.py`` and reads the per-run
 sidecar at ``.hpc/runs/<run_id>.json`` for the wave_map and result_dir
