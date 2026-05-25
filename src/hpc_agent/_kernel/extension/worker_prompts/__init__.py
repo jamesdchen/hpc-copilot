@@ -35,7 +35,7 @@ __all__ = ["read_procedure"]
 def read_procedure(name: str) -> str:
     """Return the bundled worker-prompt body for *name* as a string.
 
-    Reads ``hpc_agent/worker_prompts/<name>.md`` from package data.
+    Reads ``hpc_agent/_kernel/extension/worker_prompts/<name>.md`` from package data.
     Procedures carry no frontmatter — the file is the body verbatim,
     inlined into the spawn pipeline's cacheable prefix as-is.
 
