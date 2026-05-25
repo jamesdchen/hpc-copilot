@@ -36,7 +36,9 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent._kernel.registry.primitive import PrimitiveMeta, get_registry, register_primitives
+from hpc_agent._kernel.registry.primitive import PrimitiveMeta
+
+from tests._registry_helpers import core_only_registry
 
 # Genuine exceptions go here with a comment explaining why the gate
 # does NOT apply. The default policy is "everything that touches SSH
@@ -73,8 +75,10 @@ _SSH_SOURCE_NEEDLES: tuple[str, ...] = (
 
 @pytest.fixture(scope="module")
 def registry() -> dict[str, PrimitiveMeta]:
-    register_primitives()
-    return get_registry()
+    # Filter to core-only: the requires_ssh gate this test pins is a
+    # core-CLI concern. Plugins implement their own CLI registration and
+    # are responsible for their own SSH-gate consistency.
+    return core_only_registry()
 
 
 def _declares_ssh_side_effect(meta: PrimitiveMeta) -> bool:

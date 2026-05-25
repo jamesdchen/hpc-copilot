@@ -24,8 +24,8 @@ import sys
 from pathlib import Path
 
 import hpc_agent
-from hpc_agent._kernel.registry.operations import operations_catalog
-from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
+
+from tests._registry_helpers import core_only_operations_catalog, core_only_registry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PACKAGE_ROOT = Path(hpc_agent.__file__).parent
@@ -48,11 +48,11 @@ def test_baked_file_is_non_empty_list():
 def test_baked_lists_every_registered_primitive():
     """Every primitive in the live registry appears in the baked JSON.
 
-    The bake script is run as a subprocess so we don't pollute this
-    test process's registry — we just compare names.
+    The baked artifact is core's ``operations.json``; plugin primitives
+    (when ``hpc-agent-pro`` is co-installed) are filtered out so the
+    comparison is core-vs-core.
     """
-    register_primitives()
-    registry_names = {meta.name for meta in get_registry().values()}
+    registry_names = {meta.name for meta in core_only_registry().values()}
     baked = json.loads(BAKED.read_text(encoding="utf-8"))
     baked_names = {entry["name"] for entry in baked}
     missing = registry_names - baked_names
@@ -66,8 +66,7 @@ def test_baked_lists_every_registered_primitive():
 
 def test_baked_entry_shape_matches_registry():
     """Each baked entry has the same keys as the registry projection."""
-    register_primitives()
-    live = {entry["name"]: entry for entry in operations_catalog()}
+    live = {entry["name"]: entry for entry in core_only_operations_catalog()}
     baked = {entry["name"]: entry for entry in json.loads(BAKED.read_text(encoding="utf-8"))}
     for name, live_entry in live.items():
         assert name in baked, f"baked missing {name}"

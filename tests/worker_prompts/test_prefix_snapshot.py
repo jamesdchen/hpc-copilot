@@ -28,8 +28,18 @@ import pytest
 from hpc_agent._kernel.extension.spawn_prompt import render_spawn_parts
 from hpc_agent._wire.spawn_contract import WorkflowName
 
+from tests._registry_helpers import is_pro_installed
+
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 WORKFLOWS: tuple[WorkflowName, ...] = ("submit", "status", "aggregate", "campaign")
+
+# Workflows whose worker-prompt body is overlaid by ``hpc-agent-pro``'s
+# ``worker_prompt_assets`` plugin attribute. The fixtures in this directory
+# are core-only; when the plugin is installed in the same env, the rendered
+# prefix is the plugin's overlay and the snapshot mismatch is expected.
+# Keep this list in sync with the ``worker_prompts/`` directory under
+# ``hpc-agent-pro/src/hpc_agent_pro/``.
+_PRO_OVERRIDDEN_WORKFLOWS: frozenset[WorkflowName] = frozenset({"submit"})
 
 
 def _fixture_path(workflow: str) -> Path:
@@ -39,6 +49,11 @@ def _fixture_path(workflow: str) -> Path:
 @pytest.mark.parametrize("workflow", WORKFLOWS)
 def test_cacheable_prefix_matches_fixture(workflow: WorkflowName) -> None:
     """The rendered prefix bytes equal the committed fixture, verbatim."""
+    if is_pro_installed() and workflow in _PRO_OVERRIDDEN_WORKFLOWS:
+        pytest.skip(
+            f"hpc-agent-pro overlays the {workflow!r} worker prompt; "
+            "the core fixture doesn't apply when pro is installed in the same env"
+        )
     actual = render_spawn_parts(
         workflow=workflow, experiment_dir="/exp", fields={}
     ).cacheable_prefix

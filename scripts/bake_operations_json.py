@@ -34,7 +34,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from hpc_agent._kernel.registry.operations import operations_catalog  # noqa: E402
-from hpc_agent._kernel.registry.primitive import register_primitives  # noqa: E402
+from hpc_agent._kernel.registry.primitive import get_registry, register_primitives  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_ROOT = REPO_ROOT / "src" / "hpc_agent"
@@ -42,9 +42,23 @@ OUTPUT_PATH = PACKAGE_ROOT / "operations.json"
 
 
 def _emit() -> str:
-    """Render the catalog as a stable, sorted JSON document."""
+    """Render the catalog as a stable, sorted JSON document.
+
+    Filters to core-only primitives — the baked artifact lives inside
+    the core package (``src/hpc_agent/operations.json``) and CI bakes
+    it without ``hpc-agent-pro`` installed. When a dev has the plugin
+    installed in the same env, its primitives are skipped so the
+    artifact stays stable. Plugins publish their primitives at runtime
+    via the ``hpc_agent.plugins`` entry-point group; baking their
+    catalog (if needed) is each plugin's responsibility.
+    """
     register_primitives()
-    catalog = operations_catalog()
+    core_names = {
+        name
+        for name, meta in get_registry().items()
+        if (getattr(meta.func, "__module__", "") or "").startswith("hpc_agent.")
+    }
+    catalog = [entry for entry in operations_catalog() if entry["name"] in core_names]
     # Already sorted by (verb, name) inside operations_catalog; serialise
     # with sort_keys so within each entry the field order is deterministic.
     return json.dumps(catalog, indent=2, sort_keys=True, ensure_ascii=False) + "\n"

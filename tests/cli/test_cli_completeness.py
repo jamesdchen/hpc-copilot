@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import pytest
 
-from hpc_agent._kernel.registry.operations import operations_catalog
 from hpc_agent.cli.dispatch import build_parser
+
+from tests._registry_helpers import core_only_operations_catalog
 
 # Primitives whose CLI verb differs from their catalog name. Each entry
 # is a deliberate alias documented at the relevant adapter.
@@ -105,7 +106,10 @@ def cli_verbs() -> set[str]:
 def test_every_agent_facing_primitive_has_a_cli_subcommand(cli_verbs: set[str]) -> None:
     """Pin: agent-facing primitives are reachable via the CLI."""
     missing: list[str] = []
-    for entry in operations_catalog():
+    # Filter to core-only: hpc-agent-pro primitives are wired into the CLI by
+    # the plugin itself (separate cli_register entry point); the core CLI parser
+    # this test inspects intentionally only sees core verbs.
+    for entry in core_only_operations_catalog():
         if not entry.get("agent_facing"):
             continue
         name = entry["name"]
@@ -133,7 +137,7 @@ def test_every_agent_facing_primitive_has_a_cli_subcommand(cli_verbs: set[str]) 
 
 def test_no_dead_aliases_in_primitive_to_cli_verb() -> None:
     """Pin: every entry in _PRIMITIVE_TO_CLI_VERB names a real primitive."""
-    known = {e["name"] for e in operations_catalog()}
+    known = {e["name"] for e in core_only_operations_catalog()}
     dead = sorted(set(_PRIMITIVE_TO_CLI_VERB) - known)
     assert not dead, (
         "_PRIMITIVE_TO_CLI_VERB entries name primitives that no longer exist: "

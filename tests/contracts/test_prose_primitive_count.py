@@ -23,7 +23,9 @@ from pathlib import Path
 
 import pytest
 
-from hpc_agent._kernel.registry.primitive import PrimitiveMeta, get_registry, register_primitives
+from hpc_agent._kernel.registry.primitive import PrimitiveMeta
+
+from tests._registry_helpers import core_only_registry
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -71,8 +73,10 @@ _PROSE_RE = re.compile(r"~?\b(\d+)\s+primitives?\b")
 
 @pytest.fixture(scope="module")
 def registry() -> dict[str, PrimitiveMeta]:
-    register_primitives()
-    return get_registry()
+    # Filter to core-only: the prose docs scanned below describe core's
+    # primitive surface. When hpc-agent-pro is also installed, its primitives
+    # show up in the live registry but the prose counts don't track them.
+    return core_only_registry()
 
 
 def _file_is_auto_generated(text: str) -> bool:
