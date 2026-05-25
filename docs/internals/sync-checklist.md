@@ -29,7 +29,7 @@ update both surfaces and bump the version.
 
 ### `error_code` enum
 
-The full set of 15 values that may appear in an error envelope's
+The full set of 16 values that may appear in an error envelope's
 `error_code` field. Defined as `HpcError` subclasses in
 `hpc_agent/errors.py`.
 
@@ -40,6 +40,7 @@ The full set of 15 values that may appear in an error envelope's
 | `spec_invalid` | `SpecInvalid` | user | no |
 | `executor_not_found` | `ExecutorNotFound` | user | no |
 | `cluster_unknown` | `ClusterUnknown` | user | no |
+| `precondition_failed` | `PreconditionFailed` | user | no |
 | `journal_corrupt` | `JournalCorrupt` | internal | no |
 | `remote_command_failed` | `RemoteCommandFailed` | cluster | no |
 | `config_invalid` | `ConfigInvalid` | user | no |
@@ -151,10 +152,13 @@ set on `RunRecord` there too). Validated in `mark_run` (in
 ### Per-run sidecar layout
 
 - **Path**: `.hpc/runs/<run_id>.json` inside the experiment repo.
-- **Schema**: `sidecar_schema_version` (currently `1`), `run_id`,
+- **Schema**: `sidecar_schema_version` (currently `2`), `run_id`,
   `cmd_sha`, `hpc_agent_version`, `submitted_at`, `executor`,
   `result_dir_template`, `task_count`, `tasks_py_sha`, optional
-  `wave_map` and `extra` pocket.
+  `wave_map` and `extra` pocket, plus the v2 config-snapshot block
+  (`cluster`, `profile`, `campaign_id`, `project`, `remote_path`,
+  `resources`, `env`, `env_group`, `constraints`, `gpu_fallback`,
+  `max_retries`, `runtime`, `auto_retry`, `aggregate_defaults`).
 - **Helpers**: `hpc_agent.state.runs.{write,read}_run_sidecar`,
   `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`,
   `compute_cmd_sha`, `run_sidecar_path`. All re-exported at package

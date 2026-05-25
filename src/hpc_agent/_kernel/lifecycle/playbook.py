@@ -136,8 +136,8 @@ def load_playbook(experiment_dir: Path) -> Playbook:
 
     Missing file → defaults-empty Playbook (every validator path
     short-circuits cleanly). Malformed YAML or schema violation
-    raises ``ValueError`` so the calling validator can surface it
-    as one ``error`` finding.
+    raises :class:`errors.SpecInvalid` so the calling validator can
+    surface it as one ``error`` finding.
     """
     path = experiment_dir / ".hpc" / "playbook.yaml"
     if not path.is_file():

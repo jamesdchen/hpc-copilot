@@ -139,7 +139,7 @@ The boundary between hpc-agent and your experiment repo is documented in [`docs/
 
 ### Parallelism Model
 
-The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_agent/mapreduce/templates/scaffolds/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
+The parallelization axis lives entirely in user code (`.hpc/tasks.py`). The framework is agnostic to whether you're doing a Cartesian grid, chunking by row count, date-window backtests, or something else — it just calls `total()` and `resolve(i)`. The canonical reference at `hpc_agent/models/mapreduce/templates/scaffolds/tasks_example.py` shows three patterns inline; the agent helps you keep whichever applies and delete the rest.
 
 ### Memory across campaigns
 
@@ -232,8 +232,8 @@ Claude remembers your preferences (cluster, executor directory, environment, res
 
 | Template | SGE | SLURM |
 |----------|-----|-------|
-| CPU array | `hpc_agent/mapreduce/templates/runtime/sge/cpu_array.sh` | `hpc_agent/mapreduce/templates/runtime/slurm/cpu_array.slurm` |
-| GPU array | `hpc_agent/mapreduce/templates/runtime/sge/gpu_array.sh` | `hpc_agent/mapreduce/templates/runtime/slurm/gpu_array.slurm` |
+| CPU array | `hpc_agent/models/mapreduce/templates/runtime/sge/cpu_array.sh` | `hpc_agent/models/mapreduce/templates/runtime/slurm/cpu_array.slurm` |
+| GPU array | `hpc_agent/models/mapreduce/templates/runtime/sge/gpu_array.sh` | `hpc_agent/models/mapreduce/templates/runtime/slurm/gpu_array.slurm` |
 
 Templates are parameterized via environment variables injected at submission time. Resolve paths via `hpc_agent.get_template_path(scheduler, template)`. The GPU template is used when the configured resources include `gpus`; otherwise the CPU template is used.
 

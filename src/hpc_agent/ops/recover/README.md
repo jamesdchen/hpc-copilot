@@ -39,14 +39,14 @@ All six modules are agent-facing primitive modules:
 - `runner.py` — the `resubmit-failed` mutate primitive
   (`resubmit_failed`, `derive_resubmit_request_id`): records a
   resubmission attempt in the journal, deduping on `request_id`.
-- `flow.py` — the `resubmit_flow` macro (`ResubmitFlowResult`,
-  `render_overrides_to_extra_flags`, `resubmit_flow`): the closed-loop
-  pipeline that combines preempted-detection, the cluster-side
-  qsub-per-batch, and the journal update.
 - `batching.py` — pure, no-IO planner (`compact_task_ids`,
   `ResubmitBatch`, `ResubmitPlan`, `resubmit_plan`) that packs failed
   task IDs into compact `sbatch`/`qsub` array expressions and splits
   them into batches per cluster constraints. Retains its `# @pure: no-io`
   header (enforced by `scripts/lint_pure_files.py`).
+
+The `resubmit-flow` workflow (composite) lives at `ops/recover_flow.py`
+(role-root sibling per P5a) — it composes the atoms above plus
+preempted-detection and the cluster-side qsub-per-batch loop.
 
 No internal-only files in this subject.

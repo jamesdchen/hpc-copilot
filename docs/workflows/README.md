@@ -9,7 +9,7 @@ compose. Read these to use the framework; read
 
 | Doc | Purpose | Pairs with |
 |---|---|---|
-| [`campaign.md`](campaign.md) | The campaign loop — closed-loop iteration over a tasks.py, scaffolded by `/campaign-hpc`, driven by `hpc-campaign-driver`. | [skills/hpc-campaign](../../src/slash_commands/skills/hpc-campaign/SKILL.md) · [internals/campaign-lifecycle](../internals/campaign-lifecycle.md) |
+| [`campaign.md`](campaign.md) | The campaign loop — closed-loop iteration over a tasks.py, scaffolded by `/campaign-hpc`, driven by `hpc-campaign-driver`. | [worker-prompt: campaign](../../src/hpc_agent/_kernel/extension/worker_prompts/campaign.md) · [internals/campaign-lifecycle](../internals/campaign-lifecycle.md) |
 | [`memory-across-campaigns.md`](memory-across-campaigns.md) | The `interview` ↔ `recall` loop — how each campaign's intent persists into structured artifacts that ground the next campaign's interview. | [primitives/recall](../primitives/recall.md) · [primitives/interview](../primitives/interview.md) |
 | [`migration-from-hpc-yaml.md`](migration-from-hpc-yaml.md) | One-page upgrade guide for users coming from the pre-primitive `.hpc.yaml` config style. | [reference/cli-spec](../reference/cli-spec.md) |
 

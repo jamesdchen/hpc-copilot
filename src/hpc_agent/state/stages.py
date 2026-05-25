@@ -64,7 +64,7 @@ def validate_stages(stages: list[dict[str, Any]]) -> None:
     ------
     jsonschema.ValidationError
         If the schema check fails.
-    ValueError
+    errors.SpecInvalid
         If names collide or ``depends_on`` references an unknown stage.
     """
     from hpc_agent._kernel.contract.schema import validate as _validate

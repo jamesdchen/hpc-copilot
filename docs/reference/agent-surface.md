@@ -21,7 +21,7 @@ hpc-agent takes a fourth path: a **POSIX-native agent surface**.
 - **One stdout shape**: a single-line JSON envelope.
   - Success: `{"ok": true, "idempotent": <bool>, "data": {...}}`
   - Failure: `{"ok": false, "error_code": "...", "category": "...", "retry_safe": <bool>, "remediation": "..."}`
-  - See [`schemas/envelope.json`](../src/hpc_agent/schemas/envelope.json) and
+  - See [`schemas/envelope.json`](../../src/hpc_agent/schemas/envelope.json) and
     [`docs/reference/cli-spec.md`](cli-spec.md).
 - **Stable exit codes**: 0 ok, 1 user error, 2 cluster/network, 3 internal.
   An agent harness can dispatch on the exit code BEFORE parsing JSON.
@@ -50,7 +50,7 @@ hpc-agent takes a fourth path: a **POSIX-native agent surface**.
   fields are removed, the breaking change is visible in the schema diff. We
   don't break the wire contract silently.
 - **Observability**: every primitive is also a documented operation in
-  [`docs/primitives/`](primitives/). The catalog (`hpc-agent capabilities`)
+  [`docs/primitives/`](../primitives/). The catalog (`hpc-agent capabilities`)
   enumerates every tool the agent has, with idempotency, side-effects, and
   error codes inline.
 
@@ -81,4 +81,4 @@ hpc-agent takes a fourth path: a **POSIX-native agent surface**.
 
 If you want the design rationale in more depth, see
 [`docs/reference/cli-spec.md`](cli-spec.md) for the contract and
-[`docs/primitives/`](primitives/) for the per-operation reference.
+[`docs/primitives/`](../primitives/) for the per-operation reference.
