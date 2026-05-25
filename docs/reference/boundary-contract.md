@@ -14,9 +14,20 @@ here.
 
 ## What hpc-agent owns (public API allowlist)
 
-The exports below are the entire public surface of the `hpc_agent`
-package. Groupings mirror those in
+The exports below are the entire root-level public surface of the
+`hpc_agent` package. Groupings mirror those in
 [`hpc_agent/__init__.py`](../src/hpc_agent/__init__.py).
+
+**Item 6 (post-reorg cleanup):** the root namespace was trimmed to the
+15-name integrator surface listed below. The 37 names that left the
+root (per-run sidecars, remote execution, status / reduce helpers,
+GPU selection, discovery, constraints, throughput, smart-submit,
+resubmit, the per-task metrics writer) are still importable from the
+root for one release via a `__getattr__` shim that emits a
+`DeprecationWarning` pointing at the canonical home. New callers
+should import each from its canonical module path; see the
+"hpc_agent root namespace trim" section in
+[`CHANGELOG.md`](../../CHANGELOG.md) for the full move table.
 
 The public boundary also now includes the **shell CLI** at
 `hpc_agent/cli/dispatch.py` (entry point `hpc-agent`). Its envelope

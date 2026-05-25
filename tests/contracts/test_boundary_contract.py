@@ -32,74 +32,17 @@ ALLOWED_EXPORTS = frozenset(
         # Package root
         "_PACKAGE_ROOT",
         "__version__",
-        # Config & discovery
-        "load_clusters_config",
-        "get_template_path",
-        # Framework subdirectory layout (NEW: .hpc/tasks.py model)
-        "TASKS_FILENAME",
-        "RUNS_SUBDIR",
-        "load_tasks_module",
-        # Path resolution (B1) — canonical home for the three forwarders above
-        "RepoLayout",
+        # Path resolution — canonical home for the .hpc/ layout
         "JournalLayout",
-        # Per-run sidecars (NEW)
-        "MAX_RUNS",
-        "SIDECAR_SCHEMA_VERSION",
-        "compute_cmd_sha",
-        "compute_tasks_py_sha",
-        "find_existing_runs",
-        "find_run_by_cmd_sha",
-        "prune_old_runs",
-        "read_run_sidecar",
-        "run_sidecar_path",
-        "write_run_sidecar",
-        # Remote execution
-        "ssh_run",
-        "rsync_push",
-        "rsync_pull",
-        "deploy_runtime",
-        # Job status & results
-        "check_results",
-        "check_results_from_tasks",
-        "report_status",
-        "report_status_from_tasks",
-        "rollup_by_grid_point",
-        "detect_scheduler",
-        # GPU selection
-        "pick_gpu",
-        # Reduce
-        "reduce_metrics",
-        "reduce_by_grid_point",
-        "reduce_partials",
-        "reduce_resource_usage",
-        "classify_failure",
-        # Executor discovery
-        "ExecutorInfo",
-        "discover_executors",
-        "is_executor_source",
-        # Cluster constraints
-        "ClusterConstraints",
-        "parse_constraints",
-        # Throughput optimizer
-        "WorkloadSpec",
-        "SubmissionPlan",
-        "compute_submission_plan",
-        "build_wave_map",
-        # Smart-submit data layer
-        "inspect_cluster",
-        "append_runtime_sample",
-        "roll_up_runtime_quantiles",
-        # Resubmit
-        "compact_task_ids",
-        "ResubmitBatch",
-        "ResubmitPlan",
-        "resubmit_plan",
-        # Combiner
-        "run_combiner",
-        "run_combiner_checked",
-        # Per-task metrics sidecar
-        "write_metrics",
-        # Primitive registry (C′ — implementation + schemas as SoT)
+        "RepoLayout",
+        # Config & discovery
+        "get_template_path",
+        "load_clusters_config",
+        # Framework subdirectory layout (the .hpc/tasks.py model)
+        "RUNS_SUBDIR",
+        "TASKS_FILENAME",
+        "load_tasks_module",
+        # Primitive registry — the agent-extension surface
         "PrimitiveMeta",
         "SideEffect",
         "get_meta",

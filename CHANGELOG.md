@@ -7,6 +7,42 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — `hpc_agent` root namespace trim (one-release deprecation)
+
+The root `__all__` was trimmed from 52 names to 15 — the integrator
+surface enumerated in `docs/reference/boundary-contract.md`. The
+remaining 37 names (per-run sidecars, remote execution, status /
+reduce helpers, GPU selection, discovery, constraints, throughput,
+smart-submit data layer, resubmit batching, per-task metrics writer)
+are still importable from the root via a `__getattr__` deprecation
+shim that emits a `DeprecationWarning` pointing at the canonical
+home. The shim survives one release; a future PR will drop it.
+
+External callers should migrate `from hpc_agent import X` →
+`from hpc_agent.<canonical>.<module> import X`. The move table:
+
+| Moved | Canonical home |
+|---|---|
+| `MAX_RUNS`, `SIDECAR_SCHEMA_VERSION`, `compute_cmd_sha`, `compute_tasks_py_sha`, `find_existing_runs`, `find_run_by_cmd_sha`, `prune_old_runs`, `read_run_sidecar`, `run_sidecar_path`, `write_run_sidecar` | `hpc_agent.state.runs` |
+| `ssh_run`, `rsync_push`, `rsync_pull`, `deploy_runtime`, `run_combiner`, `run_combiner_checked` | `hpc_agent.infra.remote` |
+| `check_results`, `check_results_from_tasks`, `report_status`, `report_status_from_tasks`, `rollup_by_grid_point`, `detect_scheduler` | `hpc_agent.models.mapreduce.reduce.status` |
+| `pick_gpu` | `hpc_agent.infra.gpu` |
+| `reduce_metrics`, `reduce_by_grid_point`, `reduce_partials`, `reduce_resource_usage` | `hpc_agent.models.mapreduce.reduce.metrics` |
+| `classify_failure` | `hpc_agent.models.mapreduce.reduce.classify` |
+| `ExecutorInfo`, `discover_executors`, `is_executor_source` | `hpc_agent.state.discover` |
+| `ClusterConstraints`, `parse_constraints` | `hpc_agent.infra.constraints` |
+| `WorkloadSpec`, `SubmissionPlan`, `compute_submission_plan`, `build_wave_map` | `hpc_agent.infra.throughput` |
+| `inspect_cluster` | `hpc_agent.infra.inspect` |
+| `append_runtime_sample`, `roll_up_runtime_quantiles` | `hpc_agent.state.runtime_prior` (as `append_sample`, `roll_up_quantiles`) |
+| `compact_task_ids`, `ResubmitBatch`, `ResubmitPlan`, `resubmit_plan` | `hpc_agent.ops.recover.batching` |
+| `write_metrics` | `hpc_agent.models.mapreduce.metrics_io` |
+
+The 15 names retained at root: `_PACKAGE_ROOT`, `__version__`,
+`RepoLayout`, `JournalLayout`, `get_template_path`,
+`load_clusters_config`, `RUNS_SUBDIR`, `TASKS_FILENAME`,
+`load_tasks_module`, `PrimitiveMeta`, `SideEffect`, `get_meta`,
+`get_registry`, `primitive`, `register_primitives`.
+
 ### Changed — `hpc_agent.incorporation.template` → `hpc_agent.experiment_kit`
 
 The researcher-facing notebook/parallelization surface (`@register_run`,
