@@ -18,74 +18,17 @@ __all__ = [
     # Package root
     "_PACKAGE_ROOT",
     "__version__",
-    # Config & discovery
-    "load_clusters_config",
-    "get_template_path",
-    # Framework subdirectory layout (NEW — the .hpc/tasks.py model)
-    "TASKS_FILENAME",
-    "RUNS_SUBDIR",
-    "load_tasks_module",
-    # Path resolution (B1) — canonical home for the three forwarders above
-    "RepoLayout",
+    # Path resolution — canonical home for the .hpc/ layout
     "JournalLayout",
-    # Per-run sidecars (NEW)
-    "MAX_RUNS",
-    "SIDECAR_SCHEMA_VERSION",
-    "compute_cmd_sha",
-    "compute_tasks_py_sha",
-    "find_existing_runs",
-    "find_run_by_cmd_sha",
-    "prune_old_runs",
-    "read_run_sidecar",
-    "run_sidecar_path",
-    "write_run_sidecar",
-    # Remote execution
-    "ssh_run",
-    "rsync_push",
-    "rsync_pull",
-    "deploy_runtime",
-    # Job status & results
-    "check_results",
-    "check_results_from_tasks",
-    "report_status",
-    "report_status_from_tasks",
-    "rollup_by_grid_point",
-    "detect_scheduler",
-    # GPU selection
-    "pick_gpu",
-    # Reduce
-    "reduce_metrics",
-    "reduce_by_grid_point",
-    "reduce_partials",
-    "reduce_resource_usage",
-    "classify_failure",
-    # Executor discovery
-    "ExecutorInfo",
-    "discover_executors",
-    "is_executor_source",
-    # Cluster constraints
-    "ClusterConstraints",
-    "parse_constraints",
-    # Throughput optimizer
-    "WorkloadSpec",
-    "SubmissionPlan",
-    "compute_submission_plan",
-    "build_wave_map",
-    # Smart-submit data layer
-    "inspect_cluster",
-    "append_runtime_sample",
-    "roll_up_runtime_quantiles",
-    # Resubmit
-    "compact_task_ids",
-    "ResubmitBatch",
-    "ResubmitPlan",
-    "resubmit_plan",
-    # Remote
-    "run_combiner",
-    "run_combiner_checked",
-    # Per-task metrics sidecar
-    "write_metrics",
-    # Primitive registry (C′ — implementation + schemas as SoT)
+    "RepoLayout",
+    # Config & discovery
+    "get_template_path",
+    "load_clusters_config",
+    # Framework subdirectory layout (the .hpc/tasks.py model)
+    "RUNS_SUBDIR",
+    "TASKS_FILENAME",
+    "load_tasks_module",
+    # Primitive registry — the agent-extension surface
     "PrimitiveMeta",
     "SideEffect",
     "get_meta",
@@ -94,9 +37,77 @@ __all__ = [
     "register_primitives",
 ]
 
+# Names moved out of the root namespace. The ``__getattr__`` shim below
+# resolves each one with a ``DeprecationWarning`` for one release;
+# external callers should switch to the canonical home. Keep this
+# table in sync with the move table in CHANGELOG.md + the
+# ``ALLOWED_EXPORTS`` allowlist in
+# ``tests/contracts/test_boundary_contract.py``.
+_MOVED: dict[str, str] = {
+    # Per-run sidecars → hpc_agent.state.runs
+    "MAX_RUNS": "hpc_agent.state.runs.MAX_RUNS",
+    "SIDECAR_SCHEMA_VERSION": "hpc_agent.state.runs.SIDECAR_SCHEMA_VERSION",
+    "compute_cmd_sha": "hpc_agent.state.runs.compute_cmd_sha",
+    "compute_tasks_py_sha": "hpc_agent.state.runs.compute_tasks_py_sha",
+    "find_existing_runs": "hpc_agent.state.runs.find_existing_runs",
+    "find_run_by_cmd_sha": "hpc_agent.state.runs.find_run_by_cmd_sha",
+    "prune_old_runs": "hpc_agent.state.runs.prune_old_runs",
+    "read_run_sidecar": "hpc_agent.state.runs.read_run_sidecar",
+    "run_sidecar_path": "hpc_agent.state.runs.run_sidecar_path",
+    "write_run_sidecar": "hpc_agent.state.runs.write_run_sidecar",
+    # Remote execution → hpc_agent.infra.remote
+    "deploy_runtime": "hpc_agent.infra.remote.deploy_runtime",
+    "rsync_pull": "hpc_agent.infra.remote.rsync_pull",
+    "rsync_push": "hpc_agent.infra.remote.rsync_push",
+    "run_combiner": "hpc_agent.infra.remote.run_combiner",
+    "run_combiner_checked": "hpc_agent.infra.remote.run_combiner_checked",
+    "ssh_run": "hpc_agent.infra.remote.ssh_run",
+    # Job status & results → hpc_agent.models.mapreduce.reduce.status
+    "check_results": "hpc_agent.models.mapreduce.reduce.status.check_results",
+    "check_results_from_tasks": "hpc_agent.models.mapreduce.reduce.status.check_results_from_tasks",
+    "detect_scheduler": "hpc_agent.models.mapreduce.reduce.status.detect_scheduler",
+    "report_status": "hpc_agent.models.mapreduce.reduce.status.report_status",
+    "report_status_from_tasks": "hpc_agent.models.mapreduce.reduce.status.report_status_from_tasks",
+    "rollup_by_grid_point": "hpc_agent.models.mapreduce.reduce.status.rollup_by_grid_point",
+    # GPU selection
+    "pick_gpu": "hpc_agent.infra.gpu.pick_gpu",
+    # Reduce
+    "classify_failure": "hpc_agent.models.mapreduce.reduce.classify.classify_failure",
+    "reduce_by_grid_point": "hpc_agent.models.mapreduce.reduce.metrics.reduce_by_grid_point",
+    "reduce_metrics": "hpc_agent.models.mapreduce.reduce.metrics.reduce_metrics",
+    "reduce_partials": "hpc_agent.models.mapreduce.reduce.metrics.reduce_partials",
+    "reduce_resource_usage": "hpc_agent.models.mapreduce.reduce.metrics.reduce_resource_usage",
+    # Executor discovery
+    "ExecutorInfo": "hpc_agent.state.discover.ExecutorInfo",
+    "discover_executors": "hpc_agent.state.discover.discover_executors",
+    "is_executor_source": "hpc_agent.state.discover.is_executor_source",
+    # Cluster constraints
+    "ClusterConstraints": "hpc_agent.infra.constraints.ClusterConstraints",
+    "parse_constraints": "hpc_agent.infra.constraints.parse_constraints",
+    # Throughput optimizer
+    "SubmissionPlan": "hpc_agent.infra.throughput.SubmissionPlan",
+    "WorkloadSpec": "hpc_agent.infra.throughput.WorkloadSpec",
+    "build_wave_map": "hpc_agent.infra.throughput.build_wave_map",
+    "compute_submission_plan": "hpc_agent.infra.throughput.compute_submission_plan",
+    # Smart-submit data layer
+    "append_runtime_sample": "hpc_agent.state.runtime_prior.append_sample",
+    "inspect_cluster": "hpc_agent.infra.inspect.inspect_cluster",
+    "roll_up_runtime_quantiles": "hpc_agent.state.runtime_prior.roll_up_quantiles",
+    # Resubmit
+    "ResubmitBatch": "hpc_agent.ops.recover.batching.ResubmitBatch",
+    "ResubmitPlan": "hpc_agent.ops.recover.batching.ResubmitPlan",
+    "compact_task_ids": "hpc_agent.ops.recover.batching.compact_task_ids",
+    "resubmit_plan": "hpc_agent.ops.recover.batching.resubmit_plan",
+    # Per-task metrics sidecar
+    "write_metrics": "hpc_agent.models.mapreduce.metrics_io.write_metrics",
+}
+
+import importlib
 import importlib.util
+import warnings
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
 from hpc_agent._kernel.registry.primitive import (
@@ -108,64 +119,30 @@ from hpc_agent._kernel.registry.primitive import (
     register_primitives,
 )
 from hpc_agent.infra.clusters import load_clusters_config
-from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
-from hpc_agent.infra.gpu import pick_gpu
-from hpc_agent.infra.inspect import inspect_cluster
-from hpc_agent.infra.remote import (
-    deploy_runtime,
-    rsync_pull,
-    rsync_push,
-    run_combiner,
-    run_combiner_checked,
-    ssh_run,
-)
-from hpc_agent.infra.throughput import (
-    SubmissionPlan,
-    WorkloadSpec,
-    build_wave_map,
-    compute_submission_plan,
-)
-from hpc_agent.models.mapreduce.metrics_io import write_metrics
-from hpc_agent.models.mapreduce.reduce.classify import classify_failure
-from hpc_agent.models.mapreduce.reduce.metrics import (
-    reduce_by_grid_point,
-    reduce_metrics,
-    reduce_partials,
-    reduce_resource_usage,
-)
-from hpc_agent.models.mapreduce.reduce.status import (
-    check_results,
-    check_results_from_tasks,
-    detect_scheduler,
-    report_status,
-    report_status_from_tasks,
-    rollup_by_grid_point,
-)
-from hpc_agent.ops.recover.batching import (
-    ResubmitBatch,
-    ResubmitPlan,
-    compact_task_ids,
-    resubmit_plan,
-)
-from hpc_agent.state.discover import (
-    ExecutorInfo,
-    discover_executors,
-    is_executor_source,
-)
-from hpc_agent.state.runs import (
-    MAX_RUNS,
-    SIDECAR_SCHEMA_VERSION,
-    compute_cmd_sha,
-    compute_tasks_py_sha,
-    find_existing_runs,
-    find_run_by_cmd_sha,
-    prune_old_runs,
-    read_run_sidecar,
-    run_sidecar_path,
-    write_run_sidecar,
-)
-from hpc_agent.state.runtime_prior import append_sample as append_runtime_sample
-from hpc_agent.state.runtime_prior import roll_up_quantiles as roll_up_runtime_quantiles
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve a moved-out name from its canonical home.
+
+    Item 6 trimmed the root :data:`__all__` to the integrator surface
+    documented in ``docs/reference/boundary-contract.md``. The 37
+    historical attributes that left the root are listed in
+    :data:`_MOVED`; importing one through ``hpc_agent.<name>`` (or
+    ``from hpc_agent import <name>``) still works for one release but
+    emits a :class:`DeprecationWarning` pointing the caller at the
+    canonical module path. Drop the shim in a future release.
+    """
+    target = _MOVED.get(name)
+    if target is None:
+        raise AttributeError(f"module 'hpc_agent' has no attribute {name!r}")
+    warnings.warn(
+        f"{name!r} moved out of the hpc_agent root namespace; " f"import from {target} instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module_path, _, attr = target.rpartition(".")
+    return getattr(importlib.import_module(module_path), attr)
+
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent
 
