@@ -79,7 +79,7 @@ def _has_text_true(call: ast.Call) -> bool:
 
 def _call_name(call: ast.Call) -> str | None:
     """Return ``open`` / ``read_text`` / ``write_text`` / ``subprocess.run``
-    for matchable calls, else None."""
+    / ``os.fdopen`` for matchable calls, else None."""
     func = call.func
     if isinstance(func, ast.Name):
         if func.id == "open":
@@ -98,6 +98,16 @@ def _call_name(call: ast.Call) -> str | None:
             and func.value.id == "subprocess"
         ):
             return "subprocess.run"
+        # ``os.fdopen(fd, mode, ...)`` defaults to the platform locale
+        # encoding when no ``encoding=`` is passed — same hazard as
+        # bare ``open()`` and the reason JSON sidecars cp1252-rot on
+        # non-UTF-8 hosts.
+        if (
+            func.attr == "fdopen"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "os"
+        ):
+            return "os.fdopen"
         return None
     return None
 
@@ -124,8 +134,11 @@ def _check_call(call: ast.Call, name: str) -> str | None:
         if _has_text_true(call) and not _has_encoding_kwarg(call):
             return "subprocess.run(text=True, ...) without encoding=...; pass encoding='utf-8'"
         return None
-    # File I/O: open(), .open(), .read_text(), .write_text()
+    # File I/O: open(), .open(), .read_text(), .write_text(), os.fdopen()
     if name == "open":
+        mode = _mode_arg(call, mode_pos=1)
+    elif name == "os.fdopen":
+        # ``os.fdopen(fd, mode, buffering, encoding, ...)`` — mode is positional 1.
         mode = _mode_arg(call, mode_pos=1)
     elif name in {"read_text", "write_text"}:
         # ``Path.read_text(encoding=..., errors=...)`` — no mode arg.
@@ -138,6 +151,8 @@ def _check_call(call: ast.Call, name: str) -> str | None:
         return None
     if name == "open":
         return "open(...) without encoding=...; pass encoding='utf-8' (or open in binary mode)"
+    if name == "os.fdopen":
+        return "os.fdopen(...) without encoding=...; pass encoding='utf-8' (or open in binary mode)"
     return f"{name}(...) without encoding=...; pass encoding='utf-8'"
 
 

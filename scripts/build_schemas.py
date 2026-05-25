@@ -210,6 +210,34 @@ def _emit_schema(model_or_adapter: Any) -> dict[str, Any]:
     raise TypeError(f"unexpected schema source: {model_or_adapter!r}")
 
 
+def _lowercase_bool_discriminator_keys(node: Any) -> Any:
+    """Rewrite Pydantic's ``"True"``/``"False"`` discriminator map keys to ``"true"``/``"false"``.
+
+    Pydantic v2 builds ``discriminator.mapping`` for a ``Literal[True]`` /
+    ``Literal[False]`` union by calling ``str(value)`` on each variant's
+    literal — which produces Python's ``"True"``/``"False"`` instead of
+    the JSON forms ``"true"``/``"false"``. JSON Schema's discriminator
+    convention (and every external validator we ship to) expects the
+    JSON-serialized form. Walk the schema tree once after emission and
+    rewrite any ``mapping`` keys that round-trip back to a Python bool.
+    """
+    if isinstance(node, dict):
+        if "mapping" in node and isinstance(node["mapping"], dict) and "propertyName" in node:
+            remapped: dict[str, Any] = {}
+            for k, v in node["mapping"].items():
+                if k == "True":
+                    remapped["true"] = v
+                elif k == "False":
+                    remapped["false"] = v
+                else:
+                    remapped[k] = v
+            node["mapping"] = remapped
+        return {k: _lowercase_bool_discriminator_keys(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_lowercase_bool_discriminator_keys(v) for v in node]
+    return node
+
+
 def _normalize(schema: dict, schema_id: str) -> dict:
     """Inject ``$schema`` / ``$id`` and reorder top-level keys.
 
@@ -218,7 +246,7 @@ def _normalize(schema: dict, schema_id: str) -> dict:
     carry both. We add them and reorder the top-level keys so the
     diff stays readable.
     """
-    schema = dict(schema)
+    schema = _lowercase_bool_discriminator_keys(dict(schema))
     schema.setdefault("$schema", "https://json-schema.org/draft/2020-12/schema")
     schema["$id"] = schema_id
     preferred_order = (
