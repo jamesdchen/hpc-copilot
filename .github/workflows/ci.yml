@@ -82,7 +82,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install host + plugin with dev extras
-        # Install the host first so the plugin's hpc-agent>=0.3,<0.4
+        # Install the host first so the plugin's hpc-agent>=0.4
         # requirement resolves against the local checkout rather than
         # the package registry.
         run: |

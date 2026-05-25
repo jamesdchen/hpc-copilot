@@ -8,7 +8,7 @@ This document is the single source of truth for the boundary between the
 reserves inside experiment repos, (c) the allowed import directions, and (d)
 the split between cluster-infrastructure config and per-experiment config. The
 allowlist-style lint test in
-[`tests/test_boundary_contract.py`](../tests/test_boundary_contract.py)
+[`tests/contracts/test_boundary_contract.py`](../../tests/contracts/test_boundary_contract.py)
 enforces these lists; any drift fails CI with an actionable diff pointing back
 here.
 
@@ -16,7 +16,7 @@ here.
 
 The exports below are the entire root-level public surface of the
 `hpc_agent` package. Groupings mirror those in
-[`hpc_agent/__init__.py`](../src/hpc_agent/__init__.py).
+[`hpc_agent/__init__.py`](../../src/hpc_agent/__init__.py).
 
 **Item 6 (post-reorg cleanup):** the root namespace was trimmed to the
 15-name integrator surface listed below. The 37 names that left the
@@ -282,7 +282,7 @@ directory `.hpc/`**:
 The framework reserves the **`.hpc/` directory** inside experiment
 repos. The discovery scanner skips this directory wholesale via
 `_SKIP_DIRS` in
-[`hpc_agent/state/discover.py`](../src/hpc_agent/state/discover.py), so
+[`hpc_agent/state/discover.py`](../../src/hpc_agent/state/discover.py), so
 nothing inside it is misclassified as an executor. Experiment authors
 must not place user-code files (executors, libraries) under `.hpc/`.
 
@@ -336,7 +336,7 @@ framework, and adding a new cluster never requires touching any experiment.
 - **`hpc_agent/config/clusters.yaml`** — cluster infrastructure
   (host, scheduler, scratch path, modules, conda envs, GPU types,
   throughput constraints). Ships with `hpc-agent`. See
-  [`README.md`](../README.md).
+  [`README.md`](../../README.md).
 - **Per-run sidecars at `.hpc/runs/<run_id>.json`** — the v2 schema
   captures the full per-experiment config snapshot (resources, env,
   constraints, profile name, runtime, auto_retry, aggregate defaults)
@@ -435,7 +435,7 @@ no framework-induced divergence; any gap traces back to one of the
 ## How to extend
 
 When adding a new public export, a new reserved filename, or a new template,
-update **this document and `tests/test_boundary_contract.py`** in the same
+update **this document and `tests/contracts/test_boundary_contract.py`** in the same
 PR as the code change. The lint test compares its allowlist constants
 against the live module attributes; any unannounced addition or removal will
 fail with a diff that points back here.

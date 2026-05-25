@@ -60,7 +60,8 @@ def main() -> int:
     # exposes ``worker_prompt_assets`` (a sibling of
     # ``slash_command_assets``); the host's
     # ``spawn_prompt._procedure_body`` checks plugin overlays first
-    # and falls back to the bundled ``hpc_agent/worker_prompts/<name>.md``.
+    # and falls back to the bundled
+    # ``hpc_agent/_kernel/extension/worker_prompts/<name>.md``.
     from hpc_agent._kernel.extension.spawn_prompt import _procedure_body
 
     _procedure_body.cache_clear()

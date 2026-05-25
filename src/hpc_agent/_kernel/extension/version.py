@@ -26,7 +26,7 @@ v2 reader of the per-run sidecar should accept v1 too (back-compat) but
 v3 only after an explicit reader update. The manifest stores the full
 *supported* tuple so this stays declarative.
 
-The check raises :class:`slash_commands.errors.SchemaIncompat` (a typed
+The check raises :class:`hpc_agent.errors.SchemaIncompat` (a typed
 HpcError so the CLI maps it to ``ok:false`` with
 ``error_code="schema_incompat"``) on mismatch. Soft-warn variants live
 in the per-module readers — those are advisory and shouldn't tank the

@@ -117,7 +117,7 @@ class TestFailuresEnvelopeSurfacesPreemptedKeys:
         from hpc_agent.ops.recover import failures_atom
 
         # Redirect HPC_HOMEDIR for the journal write (both bindings —
-        # see tests/internal/test_session.py for the rationale).
+        # see tests/state/test_session.py for the rationale).
         home = tmp_path / "home_hpc"
         monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
 

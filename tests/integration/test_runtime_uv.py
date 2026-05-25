@@ -205,9 +205,10 @@ def test_template_thread_reexport_honors_user_env_override(template: Path) -> No
 def test_submit_input_schema_accepts_runtime() -> None:
     """The submit.input.json schema accepts an optional runtime field.
 
-    The schema is now Pydantic-emitted (see _schema_models/submit.py),
-    so ``runtime`` renders as ``anyOf: [{"const": "uv"}, {"type":
-    "null"}]`` rather than the older ``enum: ["uv", null]``. Test
+    The schema is now Pydantic-emitted (see
+    src/hpc_agent/_wire/actions/submit.py), so ``runtime`` renders as
+    ``anyOf: [{"const": "uv"}, {"type": "null"}]`` rather than the
+    older ``enum: ["uv", null]``. Test
     behaviorally — actually validate ``runtime: "uv"`` and ``runtime:
     None`` payloads — instead of pinning the encoding.
     """

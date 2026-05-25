@@ -20,7 +20,7 @@ context for a fresh interview agent.
 ## Inputs
 
 The full input schema is at `hpc_agent/schemas/recall.input.json`
-(Pydantic-emitted from `_schema_models/recall.py:RecallSpec`). All
+(Pydantic-emitted from `_wire/queries/recall.py:RecallSpec`). All
 fields optional:
 
 - `root` (str) — filesystem directory to walk recursively. When

@@ -214,16 +214,27 @@ def test_templates_do_not_import_core() -> None:
     ``RUNTIME_MODULES_ALLOWED_IN_TEMPLATES``). New entries require a matching
     update to ``docs/reference/boundary-contract.md``.
 
-    Only the *deployed* template subdirectories (sge/, slurm/, common/,
-    starters/) are scanned; ``tasks_example.py`` and ``cli_dispatcher.py``
-    are user-facing reference files copied by the user and never pushed
-    to the cluster, so the boundary applies on the deployed subset.
+    Only the *deployed* runtime template subdirectories
+    (``templates/runtime/{sge,slurm,common}/``) are scanned; the
+    ``templates/scaffolds/`` files are deployed by code-paths that
+    handle their own import boundary (``deploy_runtime`` for
+    ``cli_dispatcher`` / ``executor_template`` patterns; the user's
+    submit flow for ``tasks_example``), so the deployed-runtime
+    boundary applies only on the runtime subdirectory.
     """
-    templates_root = REPO_ROOT / "src" / "hpc_agent" / "models" / "mapreduce" / "templates"
-    deployed_subdirs = ("sge", "slurm", "common", "starters")
+    templates_root = (
+        REPO_ROOT / "src" / "hpc_agent" / "models" / "mapreduce" / "templates" / "runtime"
+    )
+    deployed_subdirs = ("sge", "slurm", "common")
     offenders: list[tuple[str, list[str]]] = []
     for subdir in deployed_subdirs:
-        for path in _walk_python_files(templates_root / subdir):
+        subdir_path = templates_root / subdir
+        if not subdir_path.is_dir():
+            raise AssertionError(
+                f"expected deployed-runtime subdir {subdir_path} to exist; "
+                f"the boundary scanner has nothing to check. See {CONTRACT_DOC}."
+            )
+        for path in _walk_python_files(subdir_path):
             imported = _imported_dotted_modules(path)
             bad = sorted(
                 m

@@ -20,24 +20,23 @@ Layout:
 
 Domain modules (one per CLI section):
 
-* :mod:`.setup` — install + capabilities + describe + preflight +
-  validate-campaign (introspection + validators).
-* :mod:`.submit` — submit + submit-flow + submit-flow-batch +
-  build-submit-spec + summarize-submit-plan + verify-canary.
-* :mod:`.lifecycle` — status + monitor-flow + monitor-summary +
-  decide-monitor-arm + logs + failures.
-* :mod:`.aggregate` — aggregate + aggregate-flow + cluster-reduce +
-  verify-aggregation-complete.
+* :mod:`.setup` — install-commands + setup + describe + capabilities
+  (Tier-3 verbs converted to ``@primitive`` decorators that the
+  registry-driven parser picks up; ``cli/setup.py:register`` is now a
+  no-op back-compat shim).
+* :mod:`.submit` — submit (record) + the submit verb group's helpers.
+* :mod:`.lifecycle` — status / monitor / logs / failures helpers.
+* :mod:`.aggregate` — aggregate (combine-wave) helpers.
 * :mod:`.recover` — resubmit + reconcile.
-* :mod:`.discover` — discover + discover-reducers + clusters-list +
-  clusters-describe + list-in-flight + load-context + find-prior-run +
-  suggest-setup-action + plan-throughput.
-* :mod:`.template` — build-executor + build-template + build-tasks-py +
-  export-package + axes-init + classify-axis.
-* :mod:`.memory` — interview + recall.
-* :mod:`.spawn` — run (workflow spawn pipeline entry point).
-* :mod:`.campaign` — campaign verb group (init/list/status/replay/
-  converged/budget/advance/health).
+* :mod:`.setup_actions` — suggest-setup-action + find-prior-run.
+* :mod:`.spawn` — ``run`` (workflow spawn pipeline entry point) — the
+  one remaining Tier-3 verb without a ``@primitive`` backing.
+
+Every other verb (validators, scaffolds, queries, the campaign verb
+group, build-*, plan-throughput, recall, interview, etc.) flows through
+``cli/parser.py:_register_from_registry`` — the parser walks the
+``@primitive`` registry and emits an argparse subparser for each
+``CliShape``. There is no per-verb file for those.
 
 See ``docs/internals/skill-policy.md`` for the broader rule that
 shapes the split: pick the *user mental model* axis for surfaces, the

@@ -47,7 +47,7 @@ Each campaign summary now carries `data_axes: {run_name: {kind, halo_expr?, mono
 
 ### 4. Read `run()` and walk the decision tree
 
-Read the run's source. The single question that classifies every axis (from `hpc_agent/template/axis.py`): **is there carried state across the series, and is its transition associative?**
+Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
 
 1. **Does each row's result depend on rows computed before it?**
    No → **`Independent`**. The loop body is a pure function of its row (a DOALL loop) — split anywhere.

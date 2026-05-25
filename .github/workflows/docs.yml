@@ -43,4 +43,4 @@ jobs:
       - name: Primitive frontmatter smoke
         # Every docs/primitives/*.md has parseable YAML + the required
         # behavioral fields + a valid verb. Cheap (~0.3s) drift gate.
-        run: pytest -q tests/internal/test_primitive_frontmatter.py
+        run: pytest -q tests/scripts/test_primitive_frontmatter.py

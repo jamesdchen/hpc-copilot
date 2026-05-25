@@ -152,9 +152,9 @@ _PACKAGE_ROOT = Path(__file__).resolve().parent
 # Canonical home: :class:`hpc_agent._kernel.contract.layout.RepoLayout`.
 # Use ``RepoLayout(experiment_dir).hpc`` / ``.runs`` / ``.tasks``
 # directly. The 0.2.0-vintage forwarders ``framework_subdir``,
-# ``runs_subdir``, and ``tasks_path`` were removed in 0.4.0 per the
-# original RepoLayout-split deprecation note; any external caller still
-# importing them by name should switch to RepoLayout.
+# ``runs_subdir``, and ``tasks_path`` were removed in 0.5.0 (the 0.4.0
+# cut had missed them despite the deprecation note); any external
+# caller still importing them by name should switch to RepoLayout.
 # ---------------------------------------------------------------------------
 
 TASKS_FILENAME: str = "tasks.py"
@@ -233,7 +233,15 @@ def get_template_path(scheduler: str, template: str) -> Path:
     import hpc_agent as _hpc_agent_pkg
 
     _hpc_agent_root = Path(_hpc_agent_pkg.__file__).resolve().parent
-    path = _hpc_agent_root / "models" / "mapreduce" / "templates" / scheduler / f"{template}{ext}"
+    path = (
+        _hpc_agent_root
+        / "models"
+        / "mapreduce"
+        / "templates"
+        / "runtime"
+        / scheduler
+        / f"{template}{ext}"
+    )
     if not path.exists():
         raise FileNotFoundError(f"Template not found: {path}")
     return path

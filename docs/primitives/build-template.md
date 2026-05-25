@@ -16,8 +16,6 @@ backed_by:
 ---
 # build-template
 
-# build-template
-
 Inject the experiment-template scaffold (Makefile, pre-commit config,
 GitHub Actions workflow, `.hpc/` framework files, etc.) into a target
 repo. Two tiers of files:

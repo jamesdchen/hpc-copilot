@@ -52,7 +52,7 @@ no opinion about defaults).
 
 ## Coupling
 
-- Trigger semantics mirror `_schema_models/campaign_manifest.py:_StopCriteria`.
+- Trigger semantics mirror `_wire/fixtures/campaign_manifest.py:_StopCriteria`.
   Adding a new stop criterion means: extending the dataclass,
   updating the manifest schema, threading the kwarg through
   `campaign-converged` and `campaign-advance`, and surfacing the

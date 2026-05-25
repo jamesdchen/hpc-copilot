@@ -820,18 +820,20 @@ def deploy_runtime(
         ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):
             _scp(
-                pkg_dir / "models" / "mapreduce" / "templates" / sched / f"{kind}.{ext}",
+                pkg_dir / "models" / "mapreduce" / "templates" / "runtime" / sched / f"{kind}.{ext}",
                 f".hpc/templates/{kind}.{ext}",
             )
 
-    # Shared preambles sourced by the templates above
-    # (templates/runtime/common/hpc_preamble.sh + templates/runtime/common/gpu_preamble.sh).
-    # The per-template ``source "$(dirname "$0")/common/<name>.sh"`` calls
-    # resolve to .hpc/templates/runtime/common/<name>.sh on the cluster.
+    # Shared preambles sourced by the templates above. Source layout is
+    # ``templates/runtime/common/<name>.sh`` (per the templates split);
+    # deploy destination is ``.hpc/templates/common/<name>.sh`` to match
+    # the ``source "$REPO_DIR/.hpc/templates/common/<name>.sh"`` line in
+    # each per-template body and the ``mkdir -p .hpc/templates/common``
+    # above.
     for common_name in ("hpc_preamble.sh", "gpu_preamble.sh"):
         _scp(
             pkg_dir / "models" / "mapreduce" / "templates" / "runtime" / "common" / common_name,
-            f".hpc/templates/runtime/common/{common_name}",
+            f".hpc/templates/common/{common_name}",
         )
 
     # Combiner is the last scp; return its CompletedProcess so callers

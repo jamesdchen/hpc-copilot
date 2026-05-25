@@ -45,7 +45,7 @@ opaque round-tripped context.
   humans/agents only. Validates as JSON if supplied.
 
 The full schema is at `hpc_agent/schemas/campaign_manifest.json`
-(Pydantic-emitted from `_schema_models/campaign_manifest.py:CampaignManifest`).
+(Pydantic-emitted from `_wire/fixtures/campaign_manifest.py:CampaignManifest`).
 
 ## Outputs
 

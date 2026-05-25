@@ -42,7 +42,7 @@ operation succeeded but a sub-system was degraded
 ```json
 {
   "ok": false,
-  "error_code": "<one of 15>",
+  "error_code": "<one of 16>",
   "message": "<human-readable>",
   "category": "user|cluster|network|internal",
   "retry_safe": <bool>,
@@ -113,8 +113,10 @@ Source of truth: `src/hpc_agent/errors.py`. Full list also in
 | `cluster_unknown` | user | false | Surface; run `clusters list` to recover. |
 | `config_invalid` | user | false | Surface; clusters.yaml is malformed. |
 | `outputs_missing` | user | false | Surface; the executor produced no per-task outputs. Inspect logs. |
+| `precondition_failed` | user | false | Surface; a workflow gate (`monitor-flow` / `aggregate-flow`) was invoked on a run not in a valid state for the step. Inspect the envelope's `precondition` block, fix the state, retry. |
 | `journal_corrupt` | internal | false | Surface; investigate `$HPC_JOURNAL_DIR`. |
 | `schema_incompat` | internal | false | Surface; the sidecar / runtime-prior schema version isn't supported by this hpc-agent. Pin hpc-agent and the cluster runtime to compatible versions. |
+| `internal` | internal | false | Surface; uncategorized internal failure. Capture the envelope's `message` and file a bug. |
 
 ## The `.hpc/tasks.py` boundary
 

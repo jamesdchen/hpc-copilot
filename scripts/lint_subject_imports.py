@@ -17,11 +17,11 @@ Allowed cross-cutting roots (these aren't subjects, they're substrate):
 * ``hpc_agent.infra.*``
 * ``hpc_agent.state.*``
 
-The script handles absent directories gracefully — today (PR 0b) neither
-``ops/`` nor ``meta/`` exists, so the script is a no-op (exit 0) until
-Phase 1 subject PRs land. Once subjects move in, every per-file import
-violation gets a ``path:lineno: cross-subject import: ...`` line and the
-script exits 1.
+The script handles absent role roots gracefully (post-reorg both
+``ops/`` and ``meta/`` exist; the absent-role branch survives so the
+script stays useful if a future role root is added late). Every
+per-file import violation surfaces a ``path:lineno: cross-subject
+import: ...`` line and the script exits 1.
 """
 
 from __future__ import annotations

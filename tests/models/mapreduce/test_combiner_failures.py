@@ -1,4 +1,4 @@
-"""Failure-mode coverage for the on-cluster combiner (``hpc_mapreduce/map/combiner.py``).
+"""Failure-mode coverage for the on-cluster combiner (``hpc_agent/models/mapreduce/combiner.py``).
 
 The combiner is exercised as a fresh subprocess (matching cluster execution).
 The new model uses ``--run-id`` + a sidecar at ``.hpc/runs/<id>.json`` plus

@@ -8,8 +8,10 @@ stochastic model boundary, but the prompt construction does not.
 The fixture for each workflow lives at
 ``tests/worker_prompts/fixtures/<workflow>.prefix.txt`` and is the
 authoritative record of the bytes shipped to the worker. Any prose
-change to ``src/hpc_agent/worker_prompts/<workflow>.md`` (or to the
-scaffold prefix in ``hpc_agent._kernel.extension.spawn_prompt.render_spawn_parts``)
+change to
+``src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`` (or
+to the scaffold prefix in
+``hpc_agent._kernel.extension.spawn_prompt.render_spawn_parts``)
 deliberately changes the fixture. To accept the change, regenerate:
 
     WORKER_PROMPT_SNAPSHOT_UPDATE=1 uv run pytest tests/worker_prompts/test_prefix_snapshot.py
