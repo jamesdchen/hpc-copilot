@@ -277,7 +277,7 @@ def describe(*, name: str) -> dict[str, Any]:
 
     Resolution order:
 
-    1. Worker-prompt procedure (``hpc_agent/worker_prompts/<name>.md``,
+    1. Worker-prompt procedure (``hpc_agent/_kernel/extension/worker_prompts/<name>.md``,
        with plugin overlay) — returns ``kind: "procedure"``.
     2. Inline skill (``slash_commands/skills/<name>/SKILL.md``) —
        returns ``kind: "skill"``.

@@ -1,7 +1,7 @@
 """Registry-driven CLI dispatcher.
 
 This module defines :class:`CliShape` (the per-primitive CLI declaration
-that lives on the ``@primitive`` decorator in ``atoms/<x>.py``) and
+that lives on the ``@primitive`` decorator in the subject modules under ``ops/``, ``meta/``, ``incorporation/``, etc.) and
 :func:`dispatch_primitive` (the generic adapter that reads a primitive's
 ``CliShape`` from the registry, builds kwargs from an
 ``argparse.Namespace``, invokes the primitive, and emits a JSON
@@ -124,7 +124,7 @@ class SchemaRef:
 class CliShape:
     """Per-primitive CLI declaration; consumed by :func:`dispatch_primitive`.
 
-    Lives on the ``@primitive`` decorator in ``atoms/<x>.py`` — the
+    Lives on the ``@primitive`` decorator in the subject modules under ``ops/``, ``meta/``, ``incorporation/``, etc. — the
     decorator metadata is the single source of truth (rather than
     forking a string description into a hand-written ``cmd_*``).
     """
