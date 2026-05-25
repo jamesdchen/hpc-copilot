@@ -1,6 +1,6 @@
 # `hpc-agent` CLI Specification
 
-Cross-cutting contract for the shell CLI shipped at `hpc_agent/cli/dispatch.py` (entry point `hpc-agent`). Per-subcommand contracts live in **[`docs/primitives/`](primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
+Cross-cutting contract for the shell CLI shipped at `hpc_agent/cli/dispatch.py` (entry point `hpc-agent`). Per-subcommand contracts live in **[`docs/primitives/`](../primitives/)** — one file per operation, with full input/output/error/idempotency contracts in YAML frontmatter. This file documents only what's shared across every subcommand: stdout envelope shape, exit-code mapping, and the schemas list.
 
 The slash-command surface in `slash_commands/commands/` is documented elsewhere; both surfaces compose from the primitive layer.
 
@@ -100,28 +100,28 @@ Per-primitive exit-code overrides live in each primitive's frontmatter (`exit_co
 
 ## Subcommands
 
-Every subcommand is documented as a primitive in [`docs/primitives/`](primitives/). The catalog table at `docs/primitives/README.md` lists them with one-line summaries; click through for the full contract.
+Every subcommand is documented as a primitive in [`docs/primitives/`](../primitives/). The catalog table at `docs/primitives/README.md` lists them with one-line summaries; click through for the full contract.
 
 CLI ↔ primitive mapping:
 
 | CLI | Primitive |
 |---|---|
-| `hpc-agent capabilities` | [capabilities](primitives/capabilities.md) |
-| `hpc-agent preflight` | [check-preflight](primitives/check-preflight.md) |
-| `hpc-agent clusters list` | [clusters-list](primitives/clusters-list.md) |
-| `hpc-agent clusters describe <name> [--strict]` | [clusters-describe](primitives/clusters-describe.md) |
-| `hpc-agent discover` | [discover-executors](primitives/discover-executors.md) |
-| `hpc-agent list-in-flight` | [list-in-flight](primitives/list-in-flight.md) |
-| `hpc-agent campaign status` | [campaign-status](primitives/campaign-status.md) |
-| `hpc-agent campaign list` | [campaign-list](primitives/campaign-list.md) |
-| `hpc-agent status --run-id <id>` | [poll-run-status](primitives/poll-run-status.md) |
-| `hpc-agent submit --spec <path>` | [submit-spec](primitives/submit-spec.md) |
-| `hpc-agent aggregate --run-id <id> --wave <N>` | [combine-wave](primitives/combine-wave.md) |
-| `hpc-agent resubmit --run-id <id> --spec <path>` | [resubmit-failed](primitives/resubmit-failed.md) |
-| `hpc-agent reconcile --run-id <id>` | [reconcile-journal](primitives/reconcile-journal.md) |
-| `hpc-agent build-executor --name <stem>` | [build-executor](primitives/build-executor.md) |
-| `hpc-agent summarize-submit-plan --spec <path>` | [summarize-submit-plan](primitives/summarize-submit-plan.md) |
-| `hpc-agent decide-monitor-arm --spec <path>` | [decide-monitor-arm](primitives/decide-monitor-arm.md) |
+| `hpc-agent capabilities` | [capabilities](../primitives/capabilities.md) |
+| `hpc-agent preflight` | [check-preflight](../primitives/check-preflight.md) |
+| `hpc-agent clusters list` | [clusters-list](../primitives/clusters-list.md) |
+| `hpc-agent clusters describe <name> [--strict]` | [clusters-describe](../primitives/clusters-describe.md) |
+| `hpc-agent discover` | [discover-executors](../primitives/discover-executors.md) |
+| `hpc-agent list-in-flight` | [list-in-flight](../primitives/list-in-flight.md) |
+| `hpc-agent campaign status` | [campaign-status](../primitives/campaign-status.md) |
+| `hpc-agent campaign list` | [campaign-list](../primitives/campaign-list.md) |
+| `hpc-agent status --run-id <id>` | [poll-run-status](../primitives/poll-run-status.md) |
+| `hpc-agent submit --spec <path>` | [submit-spec](../primitives/submit-spec.md) |
+| `hpc-agent aggregate --run-id <id> --wave <N>` | [combine-wave](../primitives/combine-wave.md) |
+| `hpc-agent resubmit --run-id <id> --spec <path>` | [resubmit-failed](../primitives/resubmit-failed.md) |
+| `hpc-agent reconcile --run-id <id>` | [reconcile-journal](../primitives/reconcile-journal.md) |
+| `hpc-agent build-executor --name <stem>` | [build-executor](../primitives/build-executor.md) |
+| `hpc-agent summarize-submit-plan --spec <path>` | [summarize-submit-plan](../primitives/summarize-submit-plan.md) |
+| `hpc-agent decide-monitor-arm --spec <path>` | [decide-monitor-arm](../primitives/decide-monitor-arm.md) |
 
 The CLI subcommand name and the primitive name sometimes differ — the
 primitive name is the canonical identifier used in `hpc-agent
