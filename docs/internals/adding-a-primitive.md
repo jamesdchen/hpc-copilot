@@ -113,10 +113,10 @@ def cmd_<name>(args: argparse.Namespace) -> int:
     return EXIT_OK
 ```
 
-Wire into `_main_parser()` alongside the other subcommands. The
-existing `_validate_against_schema` call provides
-diagnostic-quality error messages on top of Pydantic's own
-validation (kept for the better error path).
+Wire into `build_parser()` in `cli/parser.py` alongside the other
+subcommands. The existing `_validate_against_schema` call (in
+`cli/_helpers.py`) provides diagnostic-quality error messages on top of
+Pydantic's own validation (kept for the better error path).
 
 ### 6. Write the doc
 
@@ -187,11 +187,10 @@ uv run python scripts/build_primitive_frontmatter.py --write
 uv run python scripts/build_primitive_index.py
 uv run python scripts/build_operations_index.py
 uv run python scripts/build_schemas.py --write
-uv run python scripts/lint_primitive_modules.py
 uv run python scripts/lint_primitive_doc_templates.py
 ```
 
-Pre-commit runs all six. CI's `--check` mode trips on any drift.
+Pre-commit runs all five. CI's `--check` mode trips on any drift.
 
 ### 8. Tests
 

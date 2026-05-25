@@ -61,11 +61,6 @@ from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import runs_dir
 from hpc_agent.state.runs import read_run_sidecar
 
-try:
-    import fcntl as _fcntl
-except ImportError:
-    _fcntl = None  # type: ignore[assignment]
-
 from pathlib import Path
 
 __all__ = ["monitor_flow", "MonitorFlowResult"]

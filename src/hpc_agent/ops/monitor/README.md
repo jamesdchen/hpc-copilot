@@ -21,11 +21,10 @@ already says every task is done).
 
 ## Public vs internal
 
-All nine modules are agent-facing primitive modules:
+All eight modules in this directory are agent-facing primitive modules
+(the `monitor-flow` workflow itself lives at `ops/monitor_flow.py`,
+role-root sibling per P5a):
 
-- `flow.py` — registers `monitor-flow`: the workflow atom that polls a
-  run to terminal-or-budget, auto-combines newly-complete waves, and
-  writes the `<run_id>.monitor.jsonl` tick log.
 - `status.py` — registers `poll-run-status` (`record_status`); also
   exports `ssh_status_report` / `_ssh_status_report` as the canonical
   SSH-driven status reporter used cross-subject by `aggregate` and

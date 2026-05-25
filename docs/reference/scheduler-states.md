@@ -1,6 +1,6 @@
 # Scheduler job states
 
-Reference for [`/submit-hpc`](../../skills/hpc-submit/SKILL.md) Step 8b — after
+Reference for [`/submit-hpc`](../../src/hpc_agent/_kernel/extension/worker_prompts/submit.md) Step 8b — after
 `qsub` / `sbatch` returns a job ID, the job ID alone does not mean the array is
 running. Classify each returned job ID against the live queue and the
 accounting record before reporting success.

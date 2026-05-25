@@ -10,9 +10,9 @@
 
 ## Public vs internal
 
-- `flow.py` — agent-facing primitive module (registers `aggregate-flow`).
 - `runner.py` — agent-facing primitive module (combiner preconditions / postconditions / provenance helpers).
 - `combine.py` — agent-facing primitive module (registers `combine-wave`).
-- `canary_verify.py` — agent-facing primitive module (registers `verify-canary`).
 - `cluster_reduce.py` — agent-facing primitive module (registers `cluster-reduce`).
 - `invariants.py` — agent-facing pure helper module (registers `verify-aggregation-complete` plus the pure `check_result_columns` helper).
+
+The `aggregate-flow` workflow (composite) lives at `ops/aggregate_flow.py` (role-root sibling, per P5a), and the `verify-canary` atom lives at `ops/verify_canary.py` — both reach into this subject for atoms but sit one level up so the subject-imports lint short-circuits cleanly.

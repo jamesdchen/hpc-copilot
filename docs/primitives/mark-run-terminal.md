@@ -37,8 +37,8 @@ exit_codes:
 
 Flip a run's `lifecycle_state` to a terminal value (`complete`,
 `failed`, or `abandoned`). Thin pass-through to
-`session.mark_run` for symmetry with the rest of the runner
-layer.
+`hpc_agent.state.journal.mark_run` for symmetry with the rest of
+the runner layer.
 
 ## Composers
 
@@ -58,7 +58,7 @@ layer.
   writes race with `poll-run-status` and `reconcile-journal`.
 - **Terminal is terminal.** A subsequent `poll-run-status` call
   on the same `run_id` will refuse to flip the state back to
-  `in_flight` (`session.mark_run` enforces).
+  `in_flight` (`hpc_agent.state.journal.mark_run` enforces).
 - **Idempotent on `(run_id, status)`.** Calling twice with the
   same status is a no-op; calling twice with conflicting
   statuses raises (lifecycle integrity).
@@ -69,8 +69,8 @@ layer.
   must stay aligned with `_shared.py:LifecycleStateTerminal`
   (which the workflow output schemas use). Adding a terminal
   state means: extending the Literal, threading through
-  `session.mark_run`, updating the wire schemas (auto), and
-  reviewing every consumer that branches on the enum.
+  `hpc_agent.state.journal.mark_run`, updating the wire schemas
+  (auto), and reviewing every consumer that branches on the enum.
 
 ## Failure modes
 

@@ -49,7 +49,7 @@ exit_codes:
 
 ## Purpose
 
-Run the on-cluster combiner for one wave: aggregate per-task partial reduce JSONs into a wave-level partial, ready for final cross-wave aggregation. The wrapper records `combined_waves` / `failed_waves` to the journal atomically — slash commands MUST go through this primitive rather than calling `runner.update_run_status` directly for those fields.
+Run the on-cluster combiner for one wave: aggregate per-task partial reduce JSONs into a wave-level partial, ready for final cross-wave aggregation. The wrapper records `combined_waves` / `failed_waves` to the journal atomically — slash commands MUST go through this primitive rather than calling `state.journal.update_run_status` directly for those fields.
 
 ## Compose with
 

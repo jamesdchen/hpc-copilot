@@ -44,12 +44,11 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-
-from hpc_agent import errors
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
+from hpc_agent import errors
 from hpc_agent.errors import RemoteCommandFailed
 
 if TYPE_CHECKING:

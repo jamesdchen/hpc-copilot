@@ -25,7 +25,7 @@ One-time setup: install the package, copy the bundled slash commands and skills,
    - `ssh_on_path == false` — install OpenSSH via the system package manager (`apt install openssh-client`, `brew install openssh`, etc.).
    - `file_transfer_on_path == false` — no file-transfer transport found. Install `rsync` (preferred), or ensure `scp` + `tar` are both on PATH (the runtime falls back to a `tar`/`scp` pipeline when `rsync` is absent — typical for Windows hosts without WSL/MSYS rsync).
    - `clusters_yaml_parses == false` — surface the parse error from `detail` and stop. Point the user at `hpc_agent/config/clusters.yaml` (or whatever `HPC_CLUSTERS_CONFIG` points at).
-   - `cluster_known == false` — wrong cluster name; run `hpc-agent clusters-list` and have the user pick from the available names.
+   - `cluster_known == false` — wrong cluster name; run `hpc-agent clusters list` and have the user pick from the available names.
    - `cluster_tcp_22 == false` — cluster offline, behind a VPN, or hostname wrong. Verify the user is on the institution's network (or VPN), then re-run.
 
    On green (`data.preflight.all_ok == true`), the response includes `data.preflight_marker` — the absolute path of the cache marker that was written. Report that path to the user so they know the gate will skip its re-check for the next 24h.

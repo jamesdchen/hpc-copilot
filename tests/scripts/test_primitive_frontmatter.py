@@ -60,12 +60,15 @@ def test_every_registered_primitive_has_a_doc() -> None:
     forgets to create the doc file. ``scripts/build_primitive_frontmatter.py
     --write`` auto-scaffolds missing docs; this test fails CI when the
     scaffold step was skipped.
-    """
-    from hpc_agent._kernel.registry.primitive import get_registry, register_primitives
 
-    register_primitives()
+    Filters to core-only primitives — ``docs/primitives/`` ships with the
+    core package and plugins (``hpc-agent-pro``) own their own per-plugin
+    docs trees. The filter is a no-op when no plugin is installed.
+    """
+    from tests._registry_helpers import core_only_registry
+
     docs = {p.stem for p in _primitive_files()}
-    missing = sorted(name for name in get_registry() if name not in docs)
+    missing = sorted(name for name in core_only_registry() if name not in docs)
     assert not missing, (
         "primitives in the @primitive registry have no docs/primitives/<name>.md: "
         f"{missing}. Run scripts/build_primitive_frontmatter.py --write to scaffold."

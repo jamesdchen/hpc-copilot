@@ -31,7 +31,7 @@ def _notebook_root(root: Path) -> Path:
 def _cmd_new(name: str) -> int:
     from hpc_agent import _PACKAGE_ROOT
 
-    skeleton = _PACKAGE_ROOT / "template" / "scaffold" / "experiment.ipynb.tmpl"
+    skeleton = _PACKAGE_ROOT / "incorporation" / "template" / "scaffold" / "experiment.ipynb.tmpl"
     dest = Path("notebooks") / "executors" / f"{name}.ipynb"
     if dest.exists():
         print(f"refusing to overwrite {dest}", file=sys.stderr)
