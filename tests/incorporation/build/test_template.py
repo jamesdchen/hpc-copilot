@@ -112,8 +112,8 @@ def test_notebook_skeleton_is_a_discoverable_register_run(tmp_path: Path) -> Non
     skeleton = (
         hpc_agent._PACKAGE_ROOT
         / "incorporation"
-        / "template"
-        / "scaffold"
+        / "build"
+        / "scaffolds"
         / "experiment.ipynb.tmpl"
     )
     nb = tmp_path / "experiment.ipynb"
