@@ -19,11 +19,9 @@ error_codes:
   category: network
   retry_safe: true
   description: SSH to the cluster failed. Re-run check-preflight; retry after fix.
-- code: scheduler_throttled
+- code: remote_command_failed
   category: cluster
-  retry_safe: true
-  description: Scheduler rate limit hit. Wait ≥1s, retry the same spec (idempotency
-    protects against double-submit).
+  retry_safe: false
 backed_by:
   cli: hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]
   python: hpc_agent.ops.submit.runner.submit_and_record

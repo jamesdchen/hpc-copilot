@@ -22,7 +22,7 @@ from pathlib import Path
 from hpc_agent import errors
 
 # Canonical failure-category vocabulary. Must be the UNION of:
-#   - the auto-classifier in hpc_agent.runner.cluster_failures_by_fingerprint
+#   - the auto-classifier in hpc_agent.ops.recover.runner_failures.cluster_failures_by_fingerprint
 #     (gpu_oom, system_oom, walltime, node_failure, import_error,
 #      file_not_found, permission_denied, disk_full, python_traceback)
 #   - the human-supplied taxonomy here (segv, queue_stall, code_bug, unknown)
@@ -30,7 +30,7 @@ from hpc_agent import errors
 # category outside this set.
 # B2: derived from the canonical FailureCategory StrEnum.
 # Pre-B2 this was a literal frozenset that drifted from the classifier
-# emissions in hpc_agent.runner; A4 landed the union as a literal,
+# emissions in the recover-subject classifier; A4 landed the union as a literal,
 # B2 makes the literal redundant by sourcing from the StrEnum so the
 # drift class cannot recur. test_lifecycle.py asserts the cross-set
 # invariants (classifier emissions ⊆ accepted ⊆ FailureCategory).

@@ -1,4 +1,4 @@
-"""Tests for ``hpc_agent.runner`` — the bundled mapreduce + journal ops.
+"""Tests for the bundled mapreduce + journal ops.
 
 SSH primitives are mocked so the tests exercise the wiring (journal-update
 ordering, retry counting, drift reconciliation) without touching a network.
@@ -13,23 +13,25 @@ from unittest.mock import patch
 
 import pytest
 
-from hpc_agent import runner
 from hpc_agent._wire.actions.resubmit import ResubmitSpec
 from hpc_agent._wire.actions.submit import SubmitSpec as _WireSubmitSpec
 from hpc_agent.infra.cluster_logs import fetch_task_logs
+from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.aggregate.runner import (
     build_provenance,
     verify_combiner_artifact,
     verify_per_task_outputs,
     write_remote_provenance,
 )
-from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids
-from hpc_agent.ops.recover.runner import derive_resubmit_request_id
+from hpc_agent.ops.monitor.reconcile import _ssh_alive_job_ids, mark_terminal, reconcile
+from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.ops.recover.runner import derive_resubmit_request_id, resubmit_failed
 from hpc_agent.ops.recover.runner_failures import (
     annotate_clusters_with_retry_advice,
     cluster_failures_by_fingerprint,
     fingerprint_stderr_tail,
 )
+from hpc_agent.ops.submit.runner import submit_and_record
 from hpc_agent.state import run_record
 from hpc_agent.state.index import find_in_flight_runs
 from hpc_agent.state.journal import load_run, upsert_run
@@ -77,7 +79,7 @@ def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
 
 
 def test_submit_and_record_writes_journal(journal_home, experiment):
-    record, deduped = runner.submit_and_record(
+    record, deduped = submit_and_record(
         experiment,
         spec=_WireSubmitSpec(
             profile="ml_ridge",
@@ -112,7 +114,7 @@ def test_submit_and_record_dedups_replay(journal_home, experiment):
         run_id="ml_ridge_abcd1234",
         total_tasks=100,
     )
-    first, first_dedup = runner.submit_and_record(
+    first, first_dedup = submit_and_record(
         experiment,
         spec=_WireSubmitSpec(**base, job_ids=["12345678"]),
     )
@@ -120,7 +122,7 @@ def test_submit_and_record_dedups_replay(journal_home, experiment):
 
     # Replay with new job_ids should be ignored — dedup means the existing
     # record is returned untouched, so retries can't double-submit.
-    second, second_dedup = runner.submit_and_record(
+    second, second_dedup = submit_and_record(
         experiment,
         spec=_WireSubmitSpec(**base, job_ids=["99999999"]),
     )
@@ -132,7 +134,7 @@ def test_submit_and_record_dedups_replay(journal_home, experiment):
 def test_combine_wave_records_success(journal_home, experiment):
     _seed_run(experiment)
     with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(True, "ok", "")) as m:
-        ok, _, _ = runner.combine_wave(
+        ok, _, _ = combine_wave(
             experiment,
             "ml_ridge_abcd1234",
             wave=2,
@@ -149,7 +151,7 @@ def test_combine_wave_records_success(journal_home, experiment):
 def test_combine_wave_records_failure(journal_home, experiment):
     _seed_run(experiment)
     with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(False, "", "boom")):
-        ok, _, _ = runner.combine_wave(
+        ok, _, _ = combine_wave(
             experiment,
             "ml_ridge_abcd1234",
             wave=3,
@@ -165,7 +167,7 @@ def test_combine_wave_records_failure(journal_home, experiment):
 def test_combine_wave_failed_then_success_clears_failure(journal_home, experiment):
     _seed_run(experiment)
     with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(False, "", "boom")):
-        runner.combine_wave(
+        combine_wave(
             experiment,
             "ml_ridge_abcd1234",
             wave=4,
@@ -173,7 +175,7 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
             remote_path="/x",
         )
     with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(True, "ok", "")):
-        runner.combine_wave(
+        combine_wave(
             experiment,
             "ml_ridge_abcd1234",
             wave=4,
@@ -189,7 +191,7 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
 def test_resubmit_failed_increments_retries(journal_home, experiment):
     _seed_run(experiment)
 
-    runner.resubmit_failed(
+    resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
         spec=ResubmitSpec(
@@ -210,7 +212,7 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
     # array. Order: oldest first → newest last.
     assert after_one.job_ids == ["12345678", "99999999"]
 
-    runner.resubmit_failed(
+    resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
         spec=ResubmitSpec(
@@ -237,7 +239,7 @@ def test_record_status_sets_checked_at(journal_home, experiment):
         "hpc_agent.infra.remote.ssh_run",
         return_value=_completed(stdout=json.dumps(payload)),
     ):
-        record = runner.record_status(
+        record = record_status(
             experiment,
             "ml_ridge_abcd1234",
             ssh_target="user@hoffman2.idre.ucla.edu",
@@ -260,7 +262,7 @@ def test_record_status_threads_min_rows_to_cluster_cmd(journal_home, experiment)
         return _completed(stdout=json.dumps(payload))
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
-        runner.record_status(
+        record_status(
             experiment,
             "ml_ridge_abcd1234",
             ssh_target="user@hoffman2.idre.ucla.edu",
@@ -284,7 +286,7 @@ def test_record_status_min_rows_defaults_to_zero(journal_home, experiment):
         return _completed(stdout=json.dumps(payload))
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
-        runner.record_status(
+        record_status(
             experiment,
             "ml_ridge_abcd1234",
             ssh_target="user@hoffman2.idre.ucla.edu",
@@ -309,7 +311,7 @@ def test_reconcile_overwrites_drifted_combined_waves(journal_home, experiment):
         return _completed(stdout=alive_squeue)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
-        record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+        record = reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.combined_waves == [0, 2]
     assert record.failed_waves == []
@@ -328,7 +330,7 @@ def test_reconcile_marks_abandoned_when_no_jobs_alive(journal_home, experiment):
         return _completed(stdout="")
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
-        record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+        record = reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert record.status == "abandoned"
     assert find_in_flight_runs(experiment) == []
 
@@ -347,15 +349,15 @@ def test_reconcile_idempotent(journal_home, experiment):
         return _completed(stdout=alive)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
-        first = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
-        second = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+        first = reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+        second = reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
     assert first.combined_waves == [0, 1]
     assert second.combined_waves == [0, 1]
 
 
 def test_mark_terminal_pass_through(journal_home, experiment):
     _seed_run(experiment)
-    runner.mark_terminal(experiment, "ml_ridge_abcd1234", status="complete", stage="done")
+    mark_terminal(experiment, "ml_ridge_abcd1234", status="complete", stage="done")
     record = load_run(experiment, "ml_ridge_abcd1234")
     assert record.status == "complete"
     assert record.stage == "done"
@@ -495,7 +497,7 @@ def test_reconcile_falls_back_when_wave_listing_ssh_fails(journal_home, experime
         return _completed(stdout=alive_squeue)
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
-        record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+        record = reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.combined_waves == [5]  # unchanged, fallback used
     assert "warnings" in record.last_status
@@ -519,7 +521,7 @@ def test_reconcile_does_not_mark_abandoned_when_alive_check_ssh_fails(journal_ho
         raise OSError("alive check ssh failed")
 
     with patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh):
-        record = runner.reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
+        record = reconcile(experiment, "ml_ridge_abcd1234", scheduler="slurm")
 
     assert record.status == "in_flight"  # NOT abandoned
     assert "warnings" in record.last_status
@@ -540,7 +542,7 @@ def test_record_status_cache_is_atomic(journal_home, experiment, tmp_path):
         "hpc_agent.infra.remote.ssh_run",
         return_value=_completed(stdout=json.dumps(payload)),
     ):
-        runner.record_status(
+        record_status(
             experiment,
             "ml_ridge_abcd1234",
             ssh_target="user@host",
@@ -594,7 +596,7 @@ def test_record_status_cache_write_skips_fsync(journal_home, experiment):
         ),
         patch("os.fsync", side_effect=tracking_fsync),
     ):
-        runner.record_status(
+        record_status(
             experiment,
             "ml_ridge_abcd1234",
             ssh_target="user@host",
@@ -788,7 +790,7 @@ def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
     retry counters."""
     _seed_run(experiment)
 
-    rec1, dedup1, rid1 = runner.resubmit_failed(
+    rec1, dedup1, rid1 = resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
         spec=ResubmitSpec(
@@ -801,7 +803,7 @@ def test_resubmit_failed_dedupes_on_repeat(journal_home, experiment):
     assert rec1.retries["3"]["attempts"] == 1
 
     # Same spec again — should dedupe.
-    rec2, dedup2, rid2 = runner.resubmit_failed(
+    rec2, dedup2, rid2 = resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
         spec=ResubmitSpec(
@@ -821,7 +823,7 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     """Caller-supplied request_id is honored for dedupe."""
     _seed_run(experiment)
 
-    _, dedup1, rid1 = runner.resubmit_failed(
+    _, dedup1, rid1 = resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
         spec=ResubmitSpec(
@@ -833,7 +835,7 @@ def test_resubmit_failed_explicit_request_id_dedupes(journal_home, experiment):
     assert dedup1 is False
     assert rid1 == "rs_explicit_abc"
 
-    _, dedup2, rid2 = runner.resubmit_failed(
+    _, dedup2, rid2 = resubmit_failed(
         experiment,
         "ml_ridge_abcd1234",
         spec=ResubmitSpec(

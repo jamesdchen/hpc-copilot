@@ -2,7 +2,7 @@
 
 The resolver combines a per-run sidecar override (populated at /submit
 time when the user supplies a custom policy) with framework defaults
-defined in ``hpc_agent.runner.DEFAULT_AUTO_RETRY_POLICY``.
+defined in ``hpc_agent.ops.recover.runner_failures.DEFAULT_AUTO_RETRY_POLICY``.
 """
 
 from __future__ import annotations

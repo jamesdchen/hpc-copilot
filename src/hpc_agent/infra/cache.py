@@ -8,7 +8,7 @@ the same 60-second TTL:
   re-pay the SSH cost.
 * ``job.backfill._PROBE_CACHE`` — caches :class:`BackfillProbe` by
   ``(cluster, constraint, walltime_minute)``.
-* (Not migrated.) ``hpc_agent.runner`` last-status snapshot is
+* (Not migrated.) ``hpc_agent.ops.monitor.status`` last-status snapshot is
   file-based with a multi-hour horizon; different lifetime, different
   storage. We deliberately leave that one alone.
 

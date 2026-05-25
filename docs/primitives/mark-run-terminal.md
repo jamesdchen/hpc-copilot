@@ -19,10 +19,7 @@ side_effects:
 - writes-journal: ~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)
 idempotent: true
 idempotency_key: run_id
-error_codes:
-- code: journal_corrupt
-  category: internal
-  retry_safe: false
+error_codes: []
 backed_by:
   cli: (none — Python-only primitive)
   python: hpc_agent.ops.monitor.reconcile.mark_terminal

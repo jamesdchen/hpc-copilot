@@ -23,6 +23,9 @@ error_codes:
 - code: cluster_unknown
   category: user
   retry_safe: false
+- code: journal_corrupt
+  category: internal
+  retry_safe: false
 backed_by:
   cli: hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler
     <scheduler>

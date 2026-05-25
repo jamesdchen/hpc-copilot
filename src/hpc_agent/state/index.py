@@ -43,7 +43,7 @@ def _all_run_files(experiment_dir: Path) -> list[Path]:
     if not rdir.exists():
         return []
     # Exclude ``*.last_status.json`` cache snapshots written by
-    # ``hpc_agent.runner.record_status`` — they share the runs/
+    # ``hpc_agent.ops.monitor.status.record_status`` — they share the runs/
     # directory but are not journal records.  Including them here
     # made every status poll touch the directory's mtime and force
     # a full index rebuild on the next ``find_in_flight_runs``.

@@ -17,7 +17,7 @@ Storage layout (one tree per experiment cwd)::
 
 ``repo_hash`` is ``sha256(experiment_dir.resolve())[:12]``. Pure I/O;
 no SSH, no mapreduce imports — composition with cluster-mutating ops
-lives in :mod:`hpc_agent.runner`.
+lives in the per-subject runners under :mod:`hpc_agent.ops`.
 """
 
 from __future__ import annotations
