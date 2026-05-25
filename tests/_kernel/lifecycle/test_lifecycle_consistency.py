@@ -1,5 +1,5 @@
-"""Cross-source consistency between ``_internal/lifecycle.py`` StrEnums
-and ``_schema_models/_shared.py`` Pydantic Literals.
+"""Cross-source consistency between ``_kernel/lifecycle/lifecycle.py``
+StrEnums and ``_wire/_shared.py`` Pydantic Literals.
 
 The runtime code uses StrEnums for type-safe equality checks
 (``state == LifecycleState.COMPLETE``) while Pydantic models use

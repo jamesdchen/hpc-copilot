@@ -1,4 +1,4 @@
-"""Tests for the axes-init primitive (atoms/axes_init.py)."""
+"""Tests for the axes-init primitive (incorporation/axes_init.py)."""
 
 from __future__ import annotations
 
