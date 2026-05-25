@@ -95,7 +95,7 @@ def _atomic_write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
     try:
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh)
             fh.flush()
             os.fsync(fh.fileno())
@@ -625,7 +625,7 @@ def main() -> None:
         # sample for this task", which is the right fallback.
         fd, tmp = tempfile.mkstemp(prefix="_runtime.", suffix=".tmp", dir=result_dir)
         try:
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 # default=str so numpy ints / datetimes / Path objects /
                 # any other non-JSON-native value coming back from
                 # ``tasks.resolve(task_id)`` falls back to repr instead of

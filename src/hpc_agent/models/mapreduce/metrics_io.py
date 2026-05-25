@@ -92,7 +92,7 @@ def write_metrics(metrics: dict, *, result_dir: str | None = None) -> str:
 
     fd, tmp = tempfile.mkstemp(prefix=".metrics.", suffix=".json", dir=rdir)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(metrics, f)
             # fsync before replace — a node-level crash between the
             # rename and the OS page-cache writeback would otherwise

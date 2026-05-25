@@ -363,7 +363,7 @@ def main(max_workers=None, argv=None):
     # ``wave_<N>.json`` *existence* as the "wave combined" success marker.
     fd, tmp = tempfile.mkstemp(prefix="wave_", suffix=".json.tmp", dir=out_dir)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2)
             f.flush()
             with contextlib.suppress(OSError):
@@ -390,7 +390,7 @@ def main(max_workers=None, argv=None):
         }
         fd, tmp = tempfile.mkstemp(prefix="wave_", suffix=".runtime.json.tmp", dir=out_dir)
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(runtime_payload, f, indent=2, sort_keys=True)
                 f.flush()
                 with contextlib.suppress(OSError):

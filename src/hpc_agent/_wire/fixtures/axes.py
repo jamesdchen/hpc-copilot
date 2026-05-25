@@ -92,8 +92,11 @@ class _DataAxisConfig(BaseModel):
             raise ValueError(f"data_axis kind {self.kind!r} must not carry a 'halo' block")
         if self.kind != "associative" and self.monoid is not None:
             raise ValueError(f"data_axis kind {self.kind!r} must not carry a 'monoid'")
+        # An 'associative' axis without an explicit monoid defaults to
+        # 'moments' — store it on self so the recorded block is unambiguous
+        # and the downstream consumer in classify_axis sees the same value.
         if self.kind == "associative" and self.monoid is None:
-            raise ValueError("data_axis kind 'associative' requires a 'monoid'")
+            self.monoid = "moments"
         return self
 
 
