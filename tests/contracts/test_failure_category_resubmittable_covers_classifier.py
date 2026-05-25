@@ -114,6 +114,6 @@ def test_resubmittable_subset_of_lifecycle_enum() -> None:
         "FailureCategoryResubmittable carries values the canonical "
         f"FailureCategory StrEnum lacks: {sorted(extras)}. Either add "
         "the values to the StrEnum (canonical SoT in "
-        "src/hpc_agent/_internal/lifecycle.py) or remove them from the "
-        "Literal."
+        "src/hpc_agent/_kernel/lifecycle/lifecycle.py) or remove them "
+        "from the Literal."
     )

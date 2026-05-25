@@ -2,11 +2,10 @@
 
 Cases:
 
-1. **Happy path on the real tree** — exits 0. Today the repo has neither
-   ``src/hpc_agent/ops/`` nor ``src/hpc_agent/meta/``, so the script's
-   target-iterator returns empty and exits 0 trivially. The same path
-   stays green once Phase 1 lands real subjects, *provided* those
-   subjects respect the rule.
+1. **Happy path on the real tree** — exits 0. Both ``src/hpc_agent/ops/``
+   and ``src/hpc_agent/meta/`` exist post-reorg; the lint actively scans
+   their subject subdirectories and the test pins the contract that
+   every subject in-tree respects the cross-subject import rule.
 2. **Fixture violation** — build a tiny ``ops/<a>/`` + ``ops/<b>/`` tree
    under a temp dir, have a file in ``ops/a/`` import from ``ops.b``,
    and assert non-zero exit with the cross-subject diagnostic.
@@ -38,8 +37,12 @@ def _driver(scan_root: Path) -> str:
 
 
 def test_lint_subject_imports_passes_on_current_tree() -> None:
-    """On ``main`` today, ``ops/`` and ``meta/`` don't exist — the
-    script must short-circuit to exit 0."""
+    """The script must exit 0 on the current tree.
+
+    Both ``ops/`` and ``meta/`` exist post-reorg and carry real subjects;
+    this test pins that every in-tree subject respects the cross-subject
+    import rule.
+    """
     proc = subprocess.run(
         [sys.executable, str(SCRIPT)],
         capture_output=True,
