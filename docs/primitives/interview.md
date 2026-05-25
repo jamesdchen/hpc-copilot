@@ -22,7 +22,7 @@ recipe has drifted.
 ## Inputs
 
 The full input schema is at `hpc_agent/schemas/interview.input.json`
-(Pydantic-emitted from `_schema_models/interview.py:InterviewSpec`).
+(Pydantic-emitted from `_wire/actions/interview.py:InterviewSpec`).
 Required:
 
 - `goal` (non-empty str) — campaign goal in ~one sentence
