@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 import pytest
 
-from hpc_agent.incorporation.template import flags_for_run, flags_from_signature
+from hpc_agent.experiment_kit import flags_for_run, flags_from_signature
 
 
 def _by_name(flags: list) -> dict:
@@ -41,7 +41,7 @@ def test_bool_default_true_is_store_false() -> None:
 
 
 def test_optional_unwraps_and_is_not_required() -> None:
-    def run(x: Optional[int] = None) -> dict:  # noqa: UP045
+    def run(x: int | None = None) -> dict:  # noqa: UP045
         return {}
 
     flag = flags_from_signature(run)[0]
@@ -102,7 +102,7 @@ def test_flags_for_run_dedupes_against_generic_args() -> None:
 def test_string_annotations_are_classified_not_degraded() -> None:
     # When `eval_str=True` cannot resolve an annotation it arrives as a
     # string; it must still be classified, not silently become `str`.
-    from hpc_agent.incorporation.template.signature import _runtime_flag
+    from hpc_agent.experiment_kit.signature import _runtime_flag
 
     assert _runtime_flag("x", "int", False, None).type is int
     assert _runtime_flag("xs", "list[int]", False, None).nargs == "+"

@@ -57,7 +57,7 @@ Read the run's source. The single question that classifies every axis (from `hpc
    Yes → **`BoundedHalo`**. Elicit the halo as an arithmetic expression over `run()`'s parameters (bare names), e.g. `train_window * 48`. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
 4. **Otherwise, or "unsure" → `Sequential`.** This is the fail-safe default. From `axis.py`: *"When in doubt, classify as Sequential: the fail-safe outcome is slow, not wrong."*
 
-The halo expression is restricted: only bare parameter names, numeric literals, `+ - * //`, and `min()`/`max()`. It is **never `eval()`'d** — `hpc_agent.incorporation.template.axis_config` walks it with a restricted AST interpreter.
+The halo expression is restricted: only bare parameter names, numeric literals, `+ - * //`, and `min()`/`max()`. It is **never `eval()`'d** — `hpc_agent.experiment_kit.axis_config` walks it with a restricted AST interpreter.
 
 ### 5. Propose, then confirm
 
@@ -109,7 +109,7 @@ So the reasoning is durable, persist the interview transcript via the existing [
 
 ### 8. The elision gate is mandatory before submit
 
-A classification is a human (or LLM) program-analysis judgment — and program analysis is sometimes wrong. A misclassified axis runs fine and returns **plausible-but-wrong** numbers. `/submit-hpc` runs `hpc_agent.incorporation.template.assert_elision_equivalent` (whole run vs split run, assert equality) as a pre-submit gate. Tell the experimenter: if they register an experiment fixture, the gate catches a wrong answer here before any cluster time is spent; with no fixture the gate warns rather than blocks.
+A classification is a human (or LLM) program-analysis judgment — and program analysis is sometimes wrong. A misclassified axis runs fine and returns **plausible-but-wrong** numbers. `/submit-hpc` runs `hpc_agent.experiment_kit.assert_elision_equivalent` (whole run vs split run, assert equality) as a pre-submit gate. Tell the experimenter: if they register an experiment fixture, the gate catches a wrong answer here before any cluster time is spent; with no fixture the gate warns rather than blocks.
 
 ## Notes
 

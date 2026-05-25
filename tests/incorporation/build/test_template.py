@@ -10,8 +10,8 @@ import yaml
 
 import hpc_agent
 from hpc_agent import errors
+from hpc_agent.experiment_kit import discover_runs, export_notebook
 from hpc_agent.incorporation.build.template import build_template
-from hpc_agent.incorporation.template import discover_runs, export_notebook
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -120,7 +120,7 @@ def test_notebook_skeleton_is_a_discoverable_register_run(tmp_path: Path) -> Non
     nb.write_text(skeleton.read_text(encoding="utf-8"), encoding="utf-8")
 
     # discover_runs scans the notebook natively (the exported .py inlines
-    # the runtime and no longer carries the hpc_agent.incorporation.template import).
+    # the runtime and no longer carries the hpc_agent.experiment_kit import).
     runs = discover_runs(nb)
     assert [r.name for r in runs] == ["run"]
 

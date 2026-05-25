@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from hpc_agent.incorporation.template import (
+from hpc_agent.experiment_kit import (
     MOMENTS,
     SUM,
     Associative,

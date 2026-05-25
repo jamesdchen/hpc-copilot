@@ -17,12 +17,12 @@ silently corrupting results.
 
 Contract for the ``run`` callable: it takes the experiment's own kwargs
 (never ``start`` / ``end`` / ``halo``), calls
-:func:`hpc_agent.incorporation.template.load_series` for its data, and returns either
+:func:`hpc_agent.experiment_kit.load_series` for its data, and returns either
 
 - a per-row output **sequence covering its loaded (haloed) slice** — for
   :class:`Independent` / :class:`BoundedHalo` axes; the harness trims the
   warm-up prefix itself — or
-- a :class:`~hpc_agent.incorporation.template.Monoid` partial — for an
+- a :class:`~hpc_agent.experiment_kit.Monoid` partial — for an
   :class:`Associative` axis.
 """
 
@@ -33,17 +33,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from hpc_agent.incorporation.template import series
-from hpc_agent.incorporation.template.axis import (
+from hpc_agent.experiment_kit import series
+from hpc_agent.experiment_kit.axis import (
     Associative,
     BoundedHalo,
     DataAxis,
     Independent,
     Sequential,
 )
-from hpc_agent.incorporation.template.plan import plan_tasks
-from hpc_agent.incorporation.template.reduce import reduce_monoid
-from hpc_agent.incorporation.template.series import SliceSpec
+from hpc_agent.experiment_kit.plan import plan_tasks
+from hpc_agent.experiment_kit.reduce import reduce_monoid
+from hpc_agent.experiment_kit.series import SliceSpec
 
 __all__ = ["ElisionReport", "check_elision", "assert_elision_equivalent"]
 
@@ -169,7 +169,7 @@ def _run_one(run: Callable[..., Any], spec: SliceSpec, kwargs: dict[str, Any]) -
 def _combine(pieces: list[tuple[SliceSpec, Any]], data_axis: DataAxis) -> Any:
     if isinstance(data_axis, Associative):
         return reduce_monoid([out for _, out in pieces], data_axis.monoid)
-    if isinstance(data_axis, (Independent, BoundedHalo)):
+    if isinstance(data_axis, Independent | BoundedHalo):
         out: list[Any] = []
         for spec, piece in pieces:
             trimmed = piece[spec.halo :] if spec.halo > 0 else piece
@@ -185,13 +185,13 @@ def _approx_equal(a: Any, b: Any, tol: float) -> bool:
         b = dataclasses.asdict(b)
     if isinstance(a, bool) or isinstance(b, bool):
         return bool(a == b)
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+    if isinstance(a, int | float) and isinstance(b, int | float):
         return abs(a - b) <= tol
     if isinstance(a, str) or isinstance(b, str):
         return bool(a == b)
     if isinstance(a, dict) and isinstance(b, dict):
         return a.keys() == b.keys() and all(_approx_equal(a[k], b[k], tol) for k in a)
-    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
         if len(a) != len(b):
             return False
         return all(_approx_equal(x, y, tol) for x, y in zip(a, b, strict=True))

@@ -7,6 +7,37 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — `hpc_agent.incorporation.template` → `hpc_agent.experiment_kit`
+
+The researcher-facing notebook/parallelization surface (`@register_run`,
+`DataAxis`, `plan_tasks`, `load_series`, `check_elision`, `Monoid`,
+`save_artifact`, `export_notebook`, `discover_runs`, …) moved out from
+under the architectural `incorporation/` namespace into its own
+top-level package, `hpc_agent.experiment_kit`. Burying the user-
+facing layer inside the framework scaffolding directory obscured it;
+the new name advertises what it is.
+
+Framework-internal scaffolding (`incorporation/build/`,
+`axes_init.py`, `classify_axis.py`, `export_package.py`) stays under
+`incorporation/`. The nine `.tmpl` files that `build-template`
+injects into a target repo moved from
+`incorporation/template/scaffold/*.tmpl` to
+`incorporation/build/scaffolds/*.tmpl` so they live next to the
+framework code that injects them (`build/template.py`) rather than
+mixed in with researcher-facing modules.
+
+The `experiment.ipynb.tmpl` lookup inside the injected
+`.hpc/scaffold.py` and inside `build/template.py` itself was repointed
+at the new path. The exported notebook runtime inliner
+(`experiment_kit/notebook.py`) reads its own
+`_runtime.py` via `Path(__file__).resolve().parent` — no path
+constant to keep in sync.
+
+A back-compat shim at `hpc_agent/incorporation/template/__init__.py`
+re-exports the new package and emits a `DeprecationWarning`. External
+callers should switch to `from hpc_agent.experiment_kit import ...`;
+the shim will be removed in a future release.
+
 ### Changed — Tier-3 CLI verbs folded into the primitive registry
 
 `capabilities`, `install-commands`, `setup`, and `describe` used to be

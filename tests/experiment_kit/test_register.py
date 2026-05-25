@@ -17,7 +17,7 @@ def _exec_module(src: str, name: str = "hpc_tmpl_test_mod") -> types.ModuleType:
 
 def test_register_run_injects_compute_and_registry() -> None:
     mod = _exec_module(
-        "from hpc_agent.incorporation.template import register_run\n"
+        "from hpc_agent.experiment_kit import register_run\n"
         "\n"
         "@register_run\n"
         "def run(alpha: float = 1.0):\n"
@@ -30,7 +30,7 @@ def test_register_run_injects_compute_and_registry() -> None:
 
 def test_injected_compute_dumps_dict_return_to_output_file(tmp_path: Path) -> None:
     mod = _exec_module(
-        "from hpc_agent.incorporation.template import register_run\n"
+        "from hpc_agent.experiment_kit import register_run\n"
         "\n"
         "@register_run\n"
         "def run(alpha: float = 1.0):\n"
@@ -46,7 +46,7 @@ def test_compute_forwards_only_matching_kwargs(tmp_path: Path) -> None:
     # ``args`` carries generic-args extras (seed, start, ...) the run
     # never declared; compute must not forward them.
     mod = _exec_module(
-        "from hpc_agent.incorporation.template import register_run\n"
+        "from hpc_agent.experiment_kit import register_run\n"
         "\n"
         "@register_run\n"
         "def run(alpha: float = 1.0):\n"
@@ -61,7 +61,7 @@ def test_compute_forwards_only_matching_kwargs(tmp_path: Path) -> None:
 
 def test_save_artifact_writes_next_to_output_file(tmp_path: Path) -> None:
     mod = _exec_module(
-        "from hpc_agent.incorporation.template import register_run, save_artifact\n"
+        "from hpc_agent.experiment_kit import register_run, save_artifact\n"
         "\n"
         "@register_run\n"
         "def run(n: int = 1):\n"
@@ -77,7 +77,7 @@ def test_save_artifact_writes_next_to_output_file(tmp_path: Path) -> None:
 
 def test_register_run_gpu_flag() -> None:
     mod = _exec_module(
-        "from hpc_agent.incorporation.template import register_run\n"
+        "from hpc_agent.experiment_kit import register_run\n"
         "\n"
         "@register_run(gpu=True)\n"
         "def run(epochs: int = 10):\n"

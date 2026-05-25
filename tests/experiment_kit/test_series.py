@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from hpc_agent.incorporation.template import (
+from hpc_agent.experiment_kit import (
     SliceSpec,
     current_slice,
     load_series,
     set_series_loader,
     trim_emission,
 )
-from hpc_agent.incorporation.template.series import (
+from hpc_agent.experiment_kit.series import (
     SeriesNotConfigured,
     activate_slice,
     deactivate_slice,
@@ -72,7 +72,7 @@ def test_trim_emission_drops_warmup_prefix() -> None:
 
 def test_missing_loader_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
     # The loader global lives in the self-contained _runtime module.
-    import hpc_agent.incorporation.template._runtime as runtime_mod
+    import hpc_agent.experiment_kit._runtime as runtime_mod
 
     monkeypatch.setattr(runtime_mod, "_series_loader", None)
     monkeypatch.delenv("LOCAL_DATA_DIR", raising=False)

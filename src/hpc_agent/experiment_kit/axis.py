@@ -48,7 +48,7 @@ class Monoid:
     """An associative reduction with an identity element.
 
     A monoid lets :class:`Associative` chunks be combined in any order:
-    each chunk emits a partial summary, and :func:`hpc_agent.incorporation.template.reduce_monoid`
+    each chunk emits a partial summary, and :func:`hpc_agent.experiment_kit.reduce_monoid`
     folds them. Non-associative aggregates (mean, variance, Sharpe,
     QLIKE) are recovered by carrying *sufficient statistics* — see
     :class:`Moments`.

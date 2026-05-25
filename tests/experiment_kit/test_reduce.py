@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hpc_agent.incorporation.template import (
+from hpc_agent.experiment_kit import (
     MOMENTS,
     SUM,
     Moments,

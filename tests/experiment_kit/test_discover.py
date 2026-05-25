@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from hpc_agent.incorporation.template import discover_runs
+from hpc_agent.experiment_kit import discover_runs
 
 
 def test_discovers_bare_decorator(tmp_path: Path) -> None:
     (tmp_path / "exp.py").write_text(
-        "from hpc_agent.incorporation.template import register_run\n"
+        "from hpc_agent.experiment_kit import register_run\n"
         "\n"
         "@register_run\n"
         "def run(alpha: float = 1.0, mode: str = 'am'):\n"
@@ -25,7 +25,7 @@ def test_discovers_bare_decorator(tmp_path: Path) -> None:
 
 def test_discovers_aliased_decorator(tmp_path: Path) -> None:
     (tmp_path / "exp.py").write_text(
-        "from hpc_agent.incorporation.template import register_run as rr\n"
+        "from hpc_agent.experiment_kit import register_run as rr\n"
         "\n"
         "@rr(gpu=True)\n"
         "def run(epochs: int = 10):\n"
@@ -38,9 +38,9 @@ def test_discovers_aliased_decorator(tmp_path: Path) -> None:
 
 def test_discovers_attribute_decorator(tmp_path: Path) -> None:
     (tmp_path / "exp.py").write_text(
-        "import hpc_agent.incorporation.template\n"
+        "import hpc_agent.experiment_kit\n"
         "\n"
-        "@hpc_agent.incorporation.template.register_run\n"
+        "@hpc_agent.experiment_kit.register_run\n"
         "def run(x: int = 1):\n"
         "    return {}\n"
     )
@@ -74,7 +74,7 @@ def test_ignores_unrelated_and_undecorated(tmp_path: Path) -> None:
 
 def test_ast_signature_flag_mapping(tmp_path: Path) -> None:
     (tmp_path / "exp.py").write_text(
-        "from hpc_agent.incorporation.template import register_run\n"
+        "from hpc_agent.experiment_kit import register_run\n"
         "from typing import Literal\n"
         "\n"
         "@register_run\n"

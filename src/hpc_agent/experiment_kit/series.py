@@ -1,15 +1,15 @@
-"""The halo-aware series loader — ``hpc_agent.incorporation.template.series`` import path.
+"""The halo-aware series loader — ``hpc_agent.experiment_kit.series`` import path.
 
-The implementation lives in :mod:`hpc_agent.incorporation.template._runtime`, the
+The implementation lives in :mod:`hpc_agent.experiment_kit._runtime`, the
 self-contained stdlib-only cluster runtime that
-:func:`hpc_agent.incorporation.template.export_notebook` inlines verbatim. This module
-keeps the historical ``hpc_agent.incorporation.template.series`` import path stable
+:func:`hpc_agent.experiment_kit.export_notebook` inlines verbatim. This module
+keeps the historical ``hpc_agent.experiment_kit.series`` import path stable
 and is a pure re-export.
 """
 
 from __future__ import annotations
 
-from hpc_agent.incorporation.template._runtime import (
+from hpc_agent.experiment_kit._runtime import (
     SeriesNotConfigured,
     SliceSpec,
     activate_slice,

@@ -35,7 +35,7 @@ class _DataAxisSpec(BaseModel):
     """The classified series axis — drives planner-mode codegen.
 
     When present on :class:`BuildTasksPyInput`, ``build-tasks-py`` emits a
-    ``hpc_agent.incorporation.template.plan_tasks``-based ``tasks.py`` (the deterministic
+    ``hpc_agent.experiment_kit.plan_tasks``-based ``tasks.py`` (the deterministic
     materialisation of the ``/submit-hpc`` Step 3 ``DataAxis`` inference)
     instead of a cartesian-product one. The cartesian ``axes`` become the
     *sweep* and the series axis is partitioned by the planner.
@@ -54,7 +54,7 @@ class _DataAxisSpec(BaseModel):
             "'sequential': unbounded or order-dependent state — not splittable, and the "
             "fail-safe default whenever the dependency structure is not unambiguous. The "
             "classification must be verified with the serial-elision gate "
-            "(hpc_agent.incorporation.template.check_elision) before submitting — a misclassified axis "
+            "(hpc_agent.experiment_kit.check_elision) before submitting — a misclassified axis "
             "returns plausible-but-wrong numbers."
         ),
     )
@@ -101,7 +101,7 @@ class BuildTasksPyInput(BaseModel):
     * **cartesian** (``data_axis`` omitted) — ``axes`` is a cartesian
       product, one independent task per cell.
     * **planner** (``data_axis`` present) — ``axes`` is the *sweep* and
-      the series axis is partitioned by ``hpc_agent.incorporation.template.plan_tasks``
+      the series axis is partitioned by ``hpc_agent.experiment_kit.plan_tasks``
       per the classified ``DataAxis``.
     """
 

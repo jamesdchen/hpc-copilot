@@ -31,7 +31,9 @@ def _notebook_root(root: Path) -> Path:
 def _cmd_new(name: str) -> int:
     from hpc_agent import _PACKAGE_ROOT
 
-    skeleton = _PACKAGE_ROOT / "incorporation" / "template" / "scaffold" / "experiment.ipynb.tmpl"
+    skeleton = (
+        _PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.ipynb.tmpl"
+    )
     dest = Path("notebooks") / "executors" / f"{name}.ipynb"
     if dest.exists():
         print(f"refusing to overwrite {dest}", file=sys.stderr)
@@ -43,7 +45,7 @@ def _cmd_new(name: str) -> int:
 
 
 def _cmd_discover() -> int:
-    from hpc_agent.incorporation.template import discover_runs
+    from hpc_agent.experiment_kit import discover_runs
 
     runs = discover_runs(_notebook_root(Path(".")))
     if not runs:

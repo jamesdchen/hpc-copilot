@@ -3,9 +3,9 @@
 Two entry points share one rule set:
 
 - :func:`flags_from_signature` introspects a live function object via
-  :mod:`inspect`. Used by :func:`hpc_agent.incorporation.template.register_run`.
+  :mod:`inspect`. Used by :func:`hpc_agent.experiment_kit.register_run`.
 - :func:`flags_from_ast` reads an :class:`ast.FunctionDef` without
-  importing the module. Used by :func:`hpc_agent.incorporation.template.discover_runs`,
+  importing the module. Used by :func:`hpc_agent.experiment_kit.discover_runs`,
   which must run in a stdlib-only environment that lacks the
   experiment's heavy dependencies (``torch`` / ``pandas`` / …).
 
