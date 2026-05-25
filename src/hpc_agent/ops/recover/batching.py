@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import dataclasses
 
+from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints
 from hpc_agent.infra.throughput import WorkloadSpec, compute_submission_plan
 
@@ -57,7 +58,7 @@ def compact_task_ids(ids: list[int]) -> str:
         If ``ids`` is empty.
     """
     if not ids:
-        raise ValueError("compact_task_ids requires at least one task id")
+        raise errors.SpecInvalid("compact_task_ids requires at least one task id")
 
     sorted_ids = sorted(ids)
     runs: list[tuple[int, int]] = []
@@ -177,13 +178,13 @@ def resubmit_plan(
     indexes into the sorted failed list) back to the original task IDs.
     """
     if not failed_task_ids:
-        raise ValueError("resubmit_plan requires at least one failed task id")
+        raise errors.SpecInvalid("resubmit_plan requires at least one failed task id")
     if task_count < 0:
-        raise ValueError(f"task_count must be non-negative, got {task_count}")
+        raise errors.SpecInvalid(f"task_count must be non-negative, got {task_count}")
 
     unknown = [tid for tid in failed_task_ids if not 0 <= int(tid) < task_count]
     if unknown:
-        raise ValueError(f"failed_task_ids out of range [0, {task_count}): {unknown}")
+        raise errors.SpecInvalid(f"failed_task_ids out of range [0, {task_count}): {unknown}")
 
     # Dedup: a caller passing duplicate tids would otherwise produce a
     # malformed scheduler array spec like ``"1,1-3"`` (two ``1``s before

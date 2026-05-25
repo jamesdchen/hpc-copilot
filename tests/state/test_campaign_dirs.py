@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.meta.campaign.dirs import campaign_dir
 
 if TYPE_CHECKING:
@@ -30,16 +31,16 @@ def test_campaign_dir_accepts_str_experiment_dir(tmp_path: Path) -> None:
 
 
 def test_campaign_dir_rejects_empty_id(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(errors.SpecInvalid, match="non-empty"):
         campaign_dir(tmp_path, "")
 
 
 def test_campaign_dir_rejects_path_separator(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="filesystem-safe"):
+    with pytest.raises(errors.SpecInvalid, match="filesystem-safe"):
         campaign_dir(tmp_path, "evil/../../escape")
 
 
 def test_campaign_dir_rejects_dot_segments(tmp_path: Path) -> None:
     for bad in (".", ".."):
-        with pytest.raises(ValueError, match="filesystem-safe"):
+        with pytest.raises(errors.SpecInvalid, match="filesystem-safe"):
             campaign_dir(tmp_path, bad)

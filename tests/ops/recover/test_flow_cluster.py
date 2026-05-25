@@ -178,7 +178,7 @@ class TestRenderOverridesToExtraFlags:
         assert render_overrides_to_extra_flags("slurm", {}) == []
 
     def test_unknown_scheduler_raises(self):
-        with pytest.raises(ValueError, match="unknown scheduler"):
+        with pytest.raises(errors.SpecInvalid, match="unknown scheduler"):
             render_overrides_to_extra_flags("kubernetes", {"mem_mb": 1024})
 
     def test_walltime_pads_to_hh_mm_ss(self):

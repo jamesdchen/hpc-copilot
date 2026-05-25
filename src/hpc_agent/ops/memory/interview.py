@@ -34,6 +34,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
@@ -129,7 +130,7 @@ def record_interview(
         generator = intent["task_generator"]
         expected = _expected_count(generator)
         if expected != declared:
-            raise ValueError(
+            raise errors.SpecInvalid(
                 f"task_generator would produce {expected} tasks but "
                 f"intent.task_count = {declared}; recipe and stated count "
                 f"disagree (refusing to write tasks.py)"
@@ -137,7 +138,7 @@ def record_interview(
         _materialize_tasks_py(generator, tasks_py)
         artifacts.append("tasks.py")
     elif not tasks_py.is_file():
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"campaign_dir is missing tasks.py: {tasks_py}. Either the "
             f"interview agent must produce tasks.py before invoking this "
             f"primitive, or intent.task_generator must specify a recipe."
@@ -148,10 +149,12 @@ def record_interview(
     tasks_mod = load_tasks_module(tasks_py)
     total_tasks = int(tasks_mod.total())
     if total_tasks < 1:
-        raise ValueError(f"tasks.total() = {total_tasks}; campaign has no tasks to dispatch")
+        raise errors.SpecInvalid(
+            f"tasks.total() = {total_tasks}; campaign has no tasks to dispatch"
+        )
 
     if declared != total_tasks:
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"intent.task_count = {declared} but tasks.total() = {total_tasks}; "
             f"interview agent's stated count disagrees with the produced tasks.py"
         )
@@ -256,7 +259,7 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
             # axes mapping silently produces the degenerate `n=1` "one
             # empty-kwargs task" outcome. Reject up-front so the
             # interview cross-check catches it.
-            raise ValueError("cartesian_product requires at least one axis")
+            raise errors.SpecInvalid("cartesian_product requires at least one axis")
         n = 1
         for axis_values in axes.values():
             n *= len(axis_values)
@@ -265,7 +268,7 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
         return len(params["items"]) * len(params["seeds"])
     if kind in ("numeric_logspace", "numeric_linspace"):
         return int(params["n"])
-    raise ValueError(f"unknown task_generator.kind: {kind!r}")
+    raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
 
 
 def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
@@ -329,5 +332,5 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
             f"def resolve(i: int) -> dict: return _TASKS[i]\n"
         )
     else:
-        raise ValueError(f"unknown task_generator.kind: {kind!r}")
+        raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
     path.write_text(_GENERATED_HEADER + "\n" + body, encoding="utf-8")

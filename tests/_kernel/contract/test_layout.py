@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
 
 
@@ -71,9 +72,9 @@ def test_repo_layout_runtime_prior_sanitizes_slash(tmp_path: Path) -> None:
 
 def test_repo_layout_runtime_prior_rejects_empty(tmp_path: Path) -> None:
     layout = RepoLayout(tmp_path)
-    with pytest.raises(ValueError):
+    with pytest.raises(errors.SpecInvalid):
         layout.runtime_prior("", "c")
-    with pytest.raises(ValueError):
+    with pytest.raises(errors.SpecInvalid):
         layout.runtime_prior("p", "")
 
 
@@ -141,5 +142,5 @@ def test_journal_layout_preflight_marker_rejects_empty(
 ) -> None:
     monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
     journal = JournalLayout(tmp_path)
-    with pytest.raises(ValueError, match="cluster must be non-empty"):
+    with pytest.raises(errors.SpecInvalid, match="cluster must be non-empty"):
         journal.preflight_marker("")

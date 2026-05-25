@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints
 from hpc_agent.ops.recover.batching import (
     ResubmitBatch,
@@ -24,7 +25,7 @@ class TestCompactTaskIds:
         assert compact_task_ids([5]) == "5"
 
     def test_compact_task_ids_empty(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(errors.SpecInvalid):
             compact_task_ids([])
 
     def test_compact_task_ids_unsorted_input(self):
@@ -69,11 +70,11 @@ class TestResubmitPlanBasic:
 
 class TestResubmitPlanValidation:
     def test_resubmit_plan_rejects_unknown_id(self):
-        with pytest.raises(ValueError, match="out of range"):
+        with pytest.raises(errors.SpecInvalid, match="out of range"):
             resubmit_plan(task_count=60, failed_task_ids=[999])
 
     def test_resubmit_plan_rejects_empty(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(errors.SpecInvalid):
             resubmit_plan(task_count=60, failed_task_ids=[])
 
 

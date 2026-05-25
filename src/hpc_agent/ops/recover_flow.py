@@ -131,7 +131,7 @@ def render_overrides_to_extra_flags(
         return []
     s = (scheduler or "").lower()
     if s not in {"slurm", "sge"}:
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"render_overrides_to_extra_flags: unknown scheduler {scheduler!r}; "
             "expected 'slurm' or 'sge'"
         )

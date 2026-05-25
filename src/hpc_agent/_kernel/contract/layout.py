@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from hpc_agent import errors
+
 __all__ = ["RepoLayout", "JournalLayout"]
 
 
@@ -93,9 +95,9 @@ class RepoLayout:
         ``_`` so the resulting filename is portable.
         """
         if not profile:
-            raise ValueError("profile must be non-empty")
+            raise errors.SpecInvalid("profile must be non-empty")
         if not cluster:
-            raise ValueError("cluster must be non-empty")
+            raise errors.SpecInvalid("cluster must be non-empty")
         safe_profile = profile.replace("/", "_")
         return self.runtimes / f"{safe_profile}.{cluster}.json"
 
@@ -109,7 +111,7 @@ class RepoLayout:
         :attr:`runs`.
         """
         if not cluster:
-            raise ValueError("cluster must be non-empty")
+            raise errors.SpecInvalid("cluster must be non-empty")
         # Sanitize separators in case a caller passes a path-like cluster
         # name; the historical naming has only used flat tokens but this
         # keeps us tolerant if that changes.
@@ -185,7 +187,7 @@ class JournalLayout:
         literal — keep them in step with this method.
         """
         if not cluster:
-            raise ValueError("cluster must be non-empty")
+            raise errors.SpecInvalid("cluster must be non-empty")
         # Sanitize separators so a path-like cluster token can't escape the
         # journal root — same defensive substitution as ``cluster_history``.
         safe_cluster = cluster.replace("/", "_")

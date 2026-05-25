@@ -139,13 +139,13 @@ features:
 | `spawn_prompt` rendering (`_kernel/extension/spawn_prompt.py`) | Deterministic prompt for `kind: agent` steps; cache-hit by hash. |
 | `WorkerInvoker` transport seam (`_kernel/lifecycle/invoke.py`) | Lets the driver swap `claude -p` for a mock in tests / for a different LLM transport in production. |
 | `hpc-agent describe` (`d25cc40`) | Workers fetch primitive contracts per-branch instead of inheriting them from parent context. |
-| Plugin skill resolution in `_skill_body` (`01edb63`) | Plugin overrides reach delegated workers, not just in-conversation skills. |
+| Plugin worker-prompt resolution in `_procedure_body` (`01edb63`, renamed in `7a39b5e`) | Plugin overrides reach delegated workers, not just in-conversation skills. |
 | `campaign_id` on the run sidecar v2 schema | Cross-iter linkage that the driver reads via `mapreduce.reduce.history.prior(...)`. |
 | `validate-stochastic-marker` (`b61c309`) | Driver-enforced gate that catches cmd_sha collisions before they silently dedup. |
 
 The order they landed is roughly the order they were forced:
 load-context first, then the spawn pipeline, then the marker gate,
-then plugin-skill resolution. The README in `docs/internals/` lists
+then plugin worker-prompt resolution. The README in `docs/internals/` lists
 the current set without the history; this doc is the history.
 
 ## Failure modes the current shape still has
@@ -158,18 +158,20 @@ first two.
    there's no per-campaign budget cap on agent spawns yet. An
    operator who sets the cron interval too tight and forgets the flag
    gates can burn real money.
-2. **Skill body must travel inside the spawn prompt.** Headless
+2. **Worker-prompt body must travel inside the spawn prompt.** Headless
    `claude -p --bare` doesn't have skill discovery, so
-   `spawn_prompt._skill_body` inlines the SKILL.md verbatim. If a
-   skill grows past the model's prompt-cache sweet spot, the
+   `spawn_prompt._procedure_body` inlines
+   `_kernel/extension/worker_prompts/<workflow>.md` verbatim. If a
+   prompt grows past the model's prompt-cache sweet spot, the
    per-tick cost climbs.
 3. **No driver self-watchdog.** If the driver process is killed
    mid-step (e.g. between firing `submit-flow` and writing the
    resulting run sidecar), the next tick has to detect the orphan
    via `find_in_flight_runs` rather than via a driver-side journal.
    The state-on-disk discipline mostly absorbs this, but it's load-bearing.
-4. **Plugin skills are first-write-wins.** `_skill_body` picks the
-   first plugin to provide a `skills/<name>/SKILL.md`; two plugins
+4. **Plugin worker prompts are first-write-wins.** `_procedure_body`
+   picks the first plugin to provide a `worker_prompts/<name>.md`
+   (via the `worker_prompt_assets` attribute); two plugins
    that both ship `/submit-hpc` would race on entry-point order.
 
 ## When to change the surface again
@@ -200,5 +202,9 @@ them is at risk, the new shape is probably re-running an old mistake.
 - [`docs/architecture.md`](../architecture.md) — layering rules; the
   driver lives above flows, below the slash-command surface.
 - `src/hpc_agent/meta/campaign/driver.py` — the script. ~200 LOC.
-- `src/slash_commands/skills/hpc-campaign/SKILL.md` — the operator-side
-  walkthrough that pairs with the driver.
+- `src/hpc_agent/_kernel/extension/worker_prompts/campaign.md` — the
+  deterministic worker prompt the driver's `kind: agent` steps inline
+  into `cacheable_prefix`.
+- `src/slash_commands/commands/campaign-hpc.md` — the user-typed
+  slash command that routes through `hpc-agent run campaign` to the
+  worker prompt above.

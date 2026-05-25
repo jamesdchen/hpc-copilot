@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent._wire.queries.recall import RecallSpec
 from hpc_agent.ops.memory import recall as recall_mod
 from hpc_agent.ops.memory.recall import recall_campaigns, resolve_roots
@@ -399,12 +400,12 @@ def test_malformed_interview_json_is_skipped(tmp_path: Path) -> None:
 
 
 def test_invalid_root_raises(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="not a directory"):
+    with pytest.raises(errors.SpecInvalid, match="not a directory"):
         recall_campaigns([tmp_path / "does-not-exist"])
 
 
 def test_empty_roots_list_raises() -> None:
-    with pytest.raises(ValueError, match="no roots to walk"):
+    with pytest.raises(errors.SpecInvalid, match="no roots to walk"):
         recall_campaigns([])
 
 

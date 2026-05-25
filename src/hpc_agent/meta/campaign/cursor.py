@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
 from hpc_agent.infra.io import atomic_locked_update
 from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.meta.campaign.dirs import campaign_dir
@@ -83,13 +84,14 @@ def read_cursor(experiment_dir: Path | str, campaign_id: str) -> dict[str, Any] 
         data["cursor_schema_version"] = 1
     elif not isinstance(on_disk_version, int):
         # Non-int value (string, null after JSON manual edit, etc.) is
-        # corruption; refuse rather than silently mis-typing downstream.
-        raise ValueError(
+        # state corruption — surface as ``JournalCorrupt`` so callers
+        # branch the same way they do for a torn run record.
+        raise errors.JournalCorrupt(
             f"cursor at {path} declares non-integer cursor_schema_version="
             f"{on_disk_version!r}; wipe the cursor or fix the file"
         )
     if on_disk_version > CURSOR_SCHEMA_VERSION:
-        raise ValueError(
+        raise errors.JournalCorrupt(
             f"cursor at {path} declares cursor_schema_version={on_disk_version}, "
             f"newer than this framework's CURSOR_SCHEMA_VERSION={CURSOR_SCHEMA_VERSION}; "
             f"upgrade hpc-agent to read this cursor"
