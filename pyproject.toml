@@ -113,6 +113,14 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 [tool.ruff.lint.per-file-ignores]
 "src/hpc_agent/_wire/*.py" = ["E501"]
 
+# ``hpc_agent_pro`` is a sibling monorepo package living under
+# ``hpc-agent-pro/src/`` — ruff's default src-layout detection only
+# sees ``src/`` and would otherwise classify it as third-party,
+# producing churned import order in files (scripts/, tests, plugin
+# modules) that import both.
+[tool.ruff.lint.isort]
+known-first-party = ["hpc_agent", "hpc_agent_pro"]
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true

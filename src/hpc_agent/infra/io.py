@@ -155,9 +155,13 @@ def atomic_locked_update(
     returning it is also fine.
 
     The atomic-replace path uses :class:`tempfile.NamedTemporaryFile`
-    + :func:`os.fsync` + :func:`os.replace` so a crash mid-write leaves
-    either the previous doc or the new doc on disk, never a partial
-    one.
+    + :func:`os.fsync` (file + parent dir) + :func:`os.replace` so a
+    crash mid-write leaves either the previous doc or the new doc on
+    disk, never a partial one. The parent-dir fsync mirrors the
+    :func:`atomic_write_json` recipe — without it, a power loss between
+    ``os.replace`` and the kernel's background dirent flush could
+    silently revert the rename, surfacing as a lost campaign-cursor
+    bump / lost sidecar mutation / lost runtime-prior sample.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
@@ -185,6 +189,16 @@ def atomic_locked_update(
             os.fsync(tmp.fileno())
             tmp.close()
             os.replace(tmp.name, path)
+            try:
+                dir_fd = os.open(str(path.parent), os.O_RDONLY)
+                try:
+                    with contextlib.suppress(OSError):
+                        os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                # NFS / some network FSes refuse dir fsync; best-effort.
+                pass
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(tmp.name)
