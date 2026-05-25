@@ -192,7 +192,7 @@ if [ -n "${HPC_NFS_DATA_DIR:-}" ]; then
     # WRONG dataset and silently produce garbage. md5sum is universally
     # available on HPC clusters; 8 hex chars is plenty of entropy for
     # campus-scale dataset paths.
-    _hpc_data_tag="$(printf '%s' "${HPC_NFS_DATA_DIR}" | md5sum | cut -c1-8)"
+    _hpc_data_tag="$(printf '%s' "${HPC_NFS_DATA_DIR}" | md5sum | awk '{print $1}' | cut -c1-8)"
     export LOCAL_DATA_DIR="${_hpc_stage_root}/hpc_agent_data_${_hpc_data_tag}"
     unset _hpc_stage_root _hpc_data_tag
     mkdir -p "$LOCAL_DATA_DIR"
@@ -218,7 +218,7 @@ if [ -n "${HPC_NFS_DATA_DIR:-}" ]; then
                 rsync -a "$HPC_NFS_DATA_DIR/" "$LOCAL_DATA_DIR/"
                 rc=$?
                 if [ "$rc" -ne 0 ]; then
-                    echo "[hpc-agent] NFS staging from \$HPC_NFS_DATA_DIR=$HPC_NFS_DATA_DIR" >&2
+                    echo "[hpc-agent] NFS staging from \$HPC_NFS_DATA_DIR=${HPC_NFS_DATA_DIR}" >&2
                     echo "[hpc-agent]   to \$LOCAL_DATA_DIR=$LOCAL_DATA_DIR failed (rsync exit $rc)." >&2
                     echo "[hpc-agent]   Check the source path exists, the destination has space," >&2
                     echo "[hpc-agent]   and the NFS server is reachable from this compute node." >&2

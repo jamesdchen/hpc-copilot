@@ -4,7 +4,7 @@ Both surfaces share the per-subject runner modules (`ops/submit/runner.py`,
 `ops/aggregate/runner.py`, `ops/monitor/{status,reconcile,logs}.py`,
 `ops/recover/runner.py`) for any mutating op. Workflows at the
 `ops/`/`meta/` role root invoke them directly; the prior
-`hpc_agent.runner` package-root re-export bridge has been removed.
+`hpc_agent.runner` package-root re-export bridge was removed in 0.6.0.
 Anything below MUST stay aligned across the two surfaces; changing it
 is a breaking change requiring a version bump.
 
