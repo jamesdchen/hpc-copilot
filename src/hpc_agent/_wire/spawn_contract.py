@@ -43,8 +43,9 @@ WorkflowName = Literal["submit", "status", "aggregate", "campaign"]
 # workflow id → the worker-prompt template inlined into the spawned
 # subagent's cacheable prefix. Resolved by
 # ``hpc_agent._kernel.extension.spawn_prompt._procedure_body`` (host: package data
-# at ``hpc_agent/worker_prompts/<name>.md``; plugins overlay via the
-# ``worker_prompt_assets`` attribute on their entry point). These are
+# at ``hpc_agent/_kernel/extension/worker_prompts/<name>.md``; plugins
+# overlay via the ``worker_prompt_assets`` attribute on their entry
+# point). These are
 # *not* Claude Code skills — a headless ``claude -p --bare`` worker has
 # no Skill tool, so the procedure travels inside the prompt itself. See
 # ``docs/internals/skill-policy.md`` for the forcing rule.

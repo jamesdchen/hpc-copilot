@@ -15,7 +15,7 @@ Pre-commit + CI run ``build_schemas.py --check`` so an edit to a
 Pydantic model without regenerating the JSON is a CI failure.
 ``--write`` regenerates.
 
-All 73 wire schemas now author through Pydantic (run
+Every wire schema authors through Pydantic (run
 ``python scripts/build_schemas.py --check`` to verify the JSON is up
 to date with the models). To add a new schema, define the model
 here and append a ``(model, json_path)`` entry to
