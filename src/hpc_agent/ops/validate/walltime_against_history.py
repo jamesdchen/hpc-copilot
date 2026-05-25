@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.lifecycle.playbook import (
     KnownBadCombination,
     Playbook,
@@ -165,7 +166,7 @@ def validate_walltime_against_history(
     findings: list[ValidatorFinding] = []
     try:
         playbook: Playbook = load_playbook(experiment_dir)
-    except ValueError as exc:
+    except errors.SpecInvalid as exc:
         return ValidateWalltimeAgainstHistoryResult(
             findings=[
                 ValidatorFinding(

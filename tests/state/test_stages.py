@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import jsonschema
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.state.stages import (
     STAGES_FILENAME,
     load_stages,
@@ -121,7 +122,7 @@ def test_validate_rejects_empty_list() -> None:
 
 
 def test_validate_rejects_duplicate_names() -> None:
-    with pytest.raises(ValueError, match="duplicate stage names"):
+    with pytest.raises(errors.SpecInvalid, match="duplicate stage names"):
         validate_stages(
             [
                 {"name": "a", "run": "echo a"},
@@ -131,7 +132,7 @@ def test_validate_rejects_duplicate_names() -> None:
 
 
 def test_validate_rejects_unknown_dependency() -> None:
-    with pytest.raises(ValueError, match="unknown stage"):
+    with pytest.raises(errors.SpecInvalid, match="unknown stage"):
         validate_stages(
             [
                 {"name": "a", "run": "echo a", "depends_on": "ghost"},
@@ -140,7 +141,7 @@ def test_validate_rejects_unknown_dependency() -> None:
 
 
 def test_validate_rejects_unknown_dependency_in_list() -> None:
-    with pytest.raises(ValueError, match="unknown stage"):
+    with pytest.raises(errors.SpecInvalid, match="unknown stage"):
         validate_stages(
             [
                 {"name": "a", "run": "echo a"},
@@ -199,7 +200,7 @@ def test_load_stages_propagates_validation_error(tmp_path: Path) -> None:
         tmp_path,
         "def stages():\n    return [{'name': 'a', 'run': 'echo a', 'depends_on': 'ghost'}]\n",
     )
-    with pytest.raises(ValueError, match="unknown stage"):
+    with pytest.raises(errors.SpecInvalid, match="unknown stage"):
         load_stages(tmp_path)
 
 

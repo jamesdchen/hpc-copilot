@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from hpc_agent import errors
+
 
 @dataclass(frozen=True)
 class RenderedPrompt:
@@ -139,5 +141,7 @@ def get_invoker(name: str | None = None) -> WorkerInvoker:
     chosen = name or os.environ.get("HPC_AGENT_INVOKER") or DEFAULT_INVOKER
     factory = _INVOKERS.get(chosen)
     if factory is None:
-        raise ValueError(f"unknown worker invoker {chosen!r}; registered: {sorted(_INVOKERS)}")
+        raise errors.SpecInvalid(
+            f"unknown worker invoker {chosen!r}; registered: {sorted(_INVOKERS)}"
+        )
     return factory()

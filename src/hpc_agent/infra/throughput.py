@@ -12,6 +12,8 @@ import dataclasses
 import math
 from typing import TYPE_CHECKING
 
+from hpc_agent import errors
+
 if TYPE_CHECKING:
     from hpc_agent.infra.constraints import ClusterConstraints
 
@@ -78,19 +80,21 @@ def compute_submission_plan(
     """
     total = workload.total_tasks
     if total <= 0:
-        raise ValueError(f"total_tasks must be >= 1 to build a submission plan; got {total}.")
+        raise errors.SpecInvalid(
+            f"total_tasks must be >= 1 to build a submission plan; got {total}."
+        )
     # ``wave = i // max_concurrent_jobs`` and ``ceil(n_batches /
     # max_concurrent_jobs)`` both divide by this; a malformed
     # clusters.yaml with ``max_concurrent_jobs: 0`` would otherwise crash
     # the planner with a low-signal ZeroDivisionError instead of a
     # user-friendly contract error (v3 BUG-4V3-9).
     if constraints.max_concurrent_jobs <= 0:
-        raise ValueError(
+        raise errors.SpecInvalid(
             "max_concurrent_jobs must be >= 1 to build a submission plan; "
             f"got {constraints.max_concurrent_jobs}."
         )
     if constraints.max_array_size <= 0:
-        raise ValueError(
+        raise errors.SpecInvalid(
             "max_array_size must be >= 1 to build a submission plan; "
             f"got {constraints.max_array_size}."
         )
@@ -109,7 +113,7 @@ def compute_submission_plan(
         # (parse_walltime_to_sec is permissive and returns 0); skip the
         # check rather than raise a misleading "exceeds 0s" error.
         if walltime_limit > 0 and effective_time > walltime_limit:
-            raise ValueError(
+            raise errors.SpecInvalid(
                 f"A single task ({effective_time}s incl. spin-up) exceeds "
                 f"max walltime ({walltime_limit}s). Consider splitting the "
                 f"task into smaller sub-tasks or requesting a longer walltime."

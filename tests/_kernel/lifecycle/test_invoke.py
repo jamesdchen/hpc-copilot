@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import hpc_agent._kernel.lifecycle.invoke as invoke_mod
+from hpc_agent import errors
 from hpc_agent._kernel.lifecycle.invoke import (
     ClaudeCliInvoker,
     InvocationResult,
@@ -20,7 +21,7 @@ def test_get_invoker_default() -> None:
 
 
 def test_get_invoker_unknown_raises() -> None:
-    with pytest.raises(ValueError, match="unknown worker invoker"):
+    with pytest.raises(errors.SpecInvalid, match="unknown worker invoker"):
         get_invoker("does-not-exist")
 
 
@@ -28,7 +29,7 @@ def test_get_invoker_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPC_AGENT_INVOKER", "claude-cli")
     assert get_invoker().name == "claude-cli"
     monkeypatch.setenv("HPC_AGENT_INVOKER", "bogus")
-    with pytest.raises(ValueError, match="unknown worker invoker"):
+    with pytest.raises(errors.SpecInvalid, match="unknown worker invoker"):
         get_invoker()
 
 

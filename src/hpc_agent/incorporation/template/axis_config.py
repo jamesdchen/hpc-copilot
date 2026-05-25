@@ -34,6 +34,7 @@ import ast
 from collections.abc import Callable
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent.incorporation.template.axis import (
     MOMENTS,
     SUM,
@@ -200,7 +201,7 @@ def data_axis_from_config(cfg: dict[str, Any]) -> DataAxis:
     if kind == "associative":
         monoid = cfg.get("monoid") or "moments"
         if monoid not in ("sum", "moments"):
-            raise ValueError(f"unknown associative monoid: {monoid!r}")
+            raise errors.SpecInvalid(f"unknown associative monoid: {monoid!r}")
         return Associative(SUM if monoid == "sum" else MOMENTS)
     if kind == "bounded_halo":
         halo = cfg.get("halo") or {}
@@ -208,7 +209,7 @@ def data_axis_from_config(cfg: dict[str, Any]) -> DataAxis:
         if not expr:
             raise HaloExprError("data_axis kind 'bounded_halo' requires halo.expr")
         return BoundedHalo(_make_halo_fn(expr))
-    raise ValueError(f"unknown data_axis kind: {kind!r}")
+    raise errors.SpecInvalid(f"unknown data_axis kind: {kind!r}")
 
 
 def config_from_data_axis(axis: DataAxis) -> dict[str, Any]:

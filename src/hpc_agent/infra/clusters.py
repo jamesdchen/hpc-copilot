@@ -17,6 +17,7 @@ from typing import Any, Literal
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
 
 # ---------------------------------------------------------------------------
@@ -238,8 +239,6 @@ def validate_clusters_config(clusters: dict[str, Any]) -> None:
     construct partial dicts (for gpu-loader / fairshare-loader edge
     cases) keep working.
     """
-    from hpc_agent import errors
-
     for cluster_name, cluster_cfg in list(clusters.items()):
         if not isinstance(cluster_cfg, dict):
             continue
@@ -288,9 +287,11 @@ def get_cold_start_mem_buffer(
     try:
         val = float(raw)
     except (TypeError, ValueError) as e:
-        raise ValueError(f"cold_start_mem_buffer must be a number, got {raw!r}") from e
+        raise errors.SpecInvalid(
+            f"cold_start_mem_buffer must be a number, got {raw!r}"
+        ) from e
     if val < 0:
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"cold_start_mem_buffer must be non-negative (it grows the ask, "
             f"never shrinks it), got {val}"
         )
@@ -311,7 +312,9 @@ def get_nfs_data_dir(cluster_config: dict[str, Any]) -> str | None:
     if raw is None:
         return None
     if not isinstance(raw, str) or not raw.strip():
-        raise ValueError(f"nfs_data_dir must be a non-empty string when set, got {raw!r}")
+        raise errors.SpecInvalid(
+            f"nfs_data_dir must be a non-empty string when set, got {raw!r}"
+        )
     return raw
 
 
@@ -334,7 +337,9 @@ def get_walltime_arbitrage(
     """
     raw = cluster_config.get("walltime_arbitrage", default)
     if not isinstance(raw, bool):
-        raise ValueError(f"walltime_arbitrage must be a bool, got {raw!r} ({type(raw).__name__})")
+        raise errors.SpecInvalid(
+            f"walltime_arbitrage must be a bool, got {raw!r} ({type(raw).__name__})"
+        )
     return raw
 
 
@@ -362,7 +367,7 @@ def get_auto_daisy_chain(cluster_config: dict[str, Any]) -> bool | None:
     if raw is None:
         return None
     if not isinstance(raw, bool):
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"auto_daisy_chain must be a bool when set, got {raw!r} ({type(raw).__name__})"
         )
     return raw
@@ -391,11 +396,11 @@ def get_max_node_mem_mb(cluster_config: dict[str, Any]) -> int | None:
     if raw is None:
         return None
     if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"max_node_mem_mb must be a positive int when set, got {raw!r} ({type(raw).__name__})"
         )
     if raw <= 0:
-        raise ValueError(f"max_node_mem_mb must be positive, got {raw}")
+        raise errors.SpecInvalid(f"max_node_mem_mb must be positive, got {raw}")
     return int(raw)
 
 
@@ -416,9 +421,9 @@ def get_max_walltime_sec(
     """
     raw = cluster_config.get("max_walltime_sec", default)
     if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"max_walltime_sec must be a positive int, got {raw!r} ({type(raw).__name__})"
         )
     if raw <= 0:
-        raise ValueError(f"max_walltime_sec must be positive, got {raw}")
+        raise errors.SpecInvalid(f"max_walltime_sec must be positive, got {raw}")
     return int(raw)

@@ -178,7 +178,13 @@ def _augment_job_env(
     cluster_cfg = load_clusters_config().get(cluster, {})
     try:
         nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
-    except (ValueError, TypeError):
+    except (errors.SpecInvalid, TypeError):
+        # Treat a malformed nfs_data_dir as "no NFS staging" rather
+        # than failing the whole submission — the rest of the cluster
+        # config (scheduler, cold_start_mem_buffer, ...) is still
+        # usable. Pre-migration this caught the underlying
+        # ``ValueError``; the typed migration replaced it with
+        # ``SpecInvalid``.
         nfs_dir = None
     if nfs_dir:
         out.setdefault("HPC_NFS_DATA_DIR", nfs_dir)

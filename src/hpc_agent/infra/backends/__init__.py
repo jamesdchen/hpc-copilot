@@ -29,6 +29,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -307,7 +309,9 @@ class HPCBackend(abc.ABC):
     ) -> list[tuple[str, str]]:
         """Core batching loop shared by submit_array and submit_array_tracked."""
         if tasks_per_array < 1:
-            raise ValueError(f"tasks_per_array must be >= 1, got {tasks_per_array}")
+            raise errors.SpecInvalid(
+                f"tasks_per_array must be >= 1, got {tasks_per_array}"
+            )
         cwd = cwd or Path.cwd()
         self._setup_log_dir()
         submissions: list[tuple[str, str]] = []
@@ -367,7 +371,9 @@ def get_backend(name: str = "slurm", **kwargs: object) -> HPCBackend:
     """Instantiate a backend by name.  *kwargs* are forwarded to the constructor."""
     _populate_registry()
     if name not in _REGISTRY:
-        raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")
+        raise errors.SpecInvalid(
+            f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}"
+        )
     return _REGISTRY[name](**kwargs)
 
 
@@ -383,7 +389,9 @@ def get_backend_class(name: str) -> type[HPCBackend]:
     """
     _populate_registry()
     if name not in _REGISTRY:
-        raise ValueError(f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}")
+        raise errors.SpecInvalid(
+            f"Unknown backend {name!r}. Available: {sorted(_REGISTRY)}"
+        )
     return _REGISTRY[name]
 
 

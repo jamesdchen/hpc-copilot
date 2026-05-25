@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from hpc_agent import errors
 from hpc_agent.infra import gpu as gpu_module
 from hpc_agent.infra import remote as remote_module
 
@@ -97,14 +98,14 @@ class TestLoadGpuConfigForCluster:
 
     def test_rejects_non_dict_gpu_queues(self, fake_clusters_yaml):
         fake_clusters_yaml({"carc": {"gpu_queues": ["not", "a", "dict"]}})
-        with pytest.raises(ValueError, match="must be a mapping"):
+        with pytest.raises(errors.SpecInvalid, match="must be a mapping"):
             gpu_module.load_gpu_config_for_cluster("carc")
 
     def test_rejects_entry_missing_required_keys(self, fake_clusters_yaml):
         fake_clusters_yaml(
             {"carc": {"gpu_queues": {"gpu_a40": {"name": "A40"}}}}  # missing 'perf'
         )
-        with pytest.raises(ValueError, match="must be a mapping with 'name' and 'perf'"):
+        with pytest.raises(errors.SpecInvalid, match="must be a mapping with 'name' and 'perf'"):
             gpu_module.load_gpu_config_for_cluster("carc")
 
 
@@ -130,12 +131,12 @@ class TestExcludedPrefixes:
 
     def test_rejects_non_list(self, fake_clusters_yaml):
         fake_clusters_yaml({"carc": {"excluded_gpu_queue_prefixes": "gpu_legacy"}})
-        with pytest.raises(ValueError, match="must be a list of strings"):
+        with pytest.raises(errors.SpecInvalid, match="must be a list of strings"):
             gpu_module._excluded_prefixes_for_cluster("carc")
 
     def test_rejects_non_string_items(self, fake_clusters_yaml):
         fake_clusters_yaml({"carc": {"excluded_gpu_queue_prefixes": [1, 2, 3]}})
-        with pytest.raises(ValueError, match="must be a list of strings"):
+        with pytest.raises(errors.SpecInvalid, match="must be a list of strings"):
             gpu_module._excluded_prefixes_for_cluster("carc")
 
 

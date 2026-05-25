@@ -370,11 +370,12 @@ def test_validate_ssh_target_accepts_alias_and_userhost():
 
 
 def test_validate_ssh_target_rejects_empty_and_shell_chars():
+    from hpc_agent import errors
     from hpc_agent.infra.remote import validate_ssh_target
 
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(errors.SpecInvalid, match="non-empty"):
         validate_ssh_target("")
-    with pytest.raises(ValueError, match="disallowed"):
+    with pytest.raises(errors.SpecInvalid, match="disallowed"):
         validate_ssh_target("alice@host; rm -rf /")
 
 

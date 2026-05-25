@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.incorporation.template import (
     BoundedHalo,
     Independent,
@@ -41,7 +42,7 @@ def test_chunks_clamped_so_no_empty_chunk() -> None:
 
 
 def test_empty_sweep_raises() -> None:
-    with pytest.raises(ValueError, match="at least one sweep point"):
+    with pytest.raises(errors.SpecInvalid, match="at least one sweep point"):
         plan_tasks([], Independent(), chunks=2, series_length=10)
 
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent._kernel.extension import telemetry
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ def test_stderr_jsonl_emits_one_line(capsys) -> None:
 
 
 def test_monitor_jsonl_requires_path() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(errors.SpecInvalid):
         telemetry.record("tick", {"run_id": "x"}, sink="monitor-jsonl")
 
 

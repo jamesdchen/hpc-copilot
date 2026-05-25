@@ -24,6 +24,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 
 __all__ = [
@@ -85,7 +86,7 @@ def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
     from hpc_agent._kernel.contract.layout import RepoLayout
 
     if not _RUN_ID_RE.fullmatch(run_id):
-        raise ValueError(f"invalid run_id: {run_id!r}")
+        raise errors.SpecInvalid(f"invalid run_id: {run_id!r}")
     return RepoLayout(experiment_dir).run_sidecar(run_id)
 
 
@@ -681,7 +682,7 @@ def prune_orphan_sidecars(
     import time as _time
 
     if min_age_seconds < 0:
-        raise ValueError("min_age_seconds must be non-negative")
+        raise errors.SpecInvalid("min_age_seconds must be non-negative")
     cutoff = _time.time() - float(min_age_seconds)
     deleted: list[str] = []
     for path in find_existing_runs(experiment_dir):
@@ -716,7 +717,7 @@ def prune_old_runs(experiment_dir: Path, keep: int | None = None) -> list[Path]:
     if keep is None:
         keep = MAX_RUNS
     if keep < 0:
-        raise ValueError("keep must be non-negative")
+        raise errors.SpecInvalid("keep must be non-negative")
     hits = find_existing_runs(experiment_dir)
     if len(hits) <= keep:
         return []

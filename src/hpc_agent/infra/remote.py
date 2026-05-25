@@ -44,6 +44,8 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+
+from hpc_agent import errors
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -120,15 +122,21 @@ def validate_remote_path(remote_path: str) -> str:
     enough that a tampered campaign manifest can't push a payload like
     ``/tmp; rm -rf /``.
 
-    Raises :class:`ValueError`.
+    Raises :class:`hpc_agent.errors.SpecInvalid`.
     """
     if not isinstance(remote_path, str) or not remote_path:
-        raise ValueError(f"remote_path must be a non-empty string, got {remote_path!r}")
+        raise errors.SpecInvalid(
+            f"remote_path must be a non-empty string, got {remote_path!r}"
+        )
     if remote_path.startswith("-"):
-        raise ValueError(f"remote_path must not start with '-': {remote_path!r}")
+        raise errors.SpecInvalid(
+            f"remote_path must not start with '-': {remote_path!r}"
+        )
     bad = sorted({c for c in _DISALLOWED_REMOTE_PATH_CHARS if c in remote_path})
     if bad:
-        raise ValueError(f"remote_path contains disallowed characters {bad!r}: {remote_path!r}")
+        raise errors.SpecInvalid(
+            f"remote_path contains disallowed characters {bad!r}: {remote_path!r}"
+        )
     return remote_path
 
 
@@ -144,19 +152,24 @@ def validate_ssh_target(ssh_target: str) -> str:
     ``ssh_target`` fields up front, then pass the same string verbatim
     into :func:`ssh_run`, :func:`rsync_push`, etc.
 
-    Raises :class:`ValueError` (callers may rewrap as
-    :class:`slash_commands.errors.SpecInvalid`).
+    Raises :class:`hpc_agent.errors.SpecInvalid`.
     """
     if not isinstance(ssh_target, str) or not ssh_target:
-        raise ValueError(f"ssh_target must be a non-empty string, got {ssh_target!r}")
+        raise errors.SpecInvalid(
+            f"ssh_target must be a non-empty string, got {ssh_target!r}"
+        )
     if ssh_target.startswith("-"):
         # OpenSSH interprets ``-oProxyCommand=...`` etc. as option flags
         # when they appear as the destination arg. Reject any
         # leading-dash target to close the argument-injection vector.
-        raise ValueError(f"ssh_target must not start with '-': {ssh_target!r}")
+        raise errors.SpecInvalid(
+            f"ssh_target must not start with '-': {ssh_target!r}"
+        )
     bad = [c for c in _DISALLOWED_TARGET_CHARS if c in ssh_target]
     if bad:
-        raise ValueError(f"ssh_target contains disallowed characters {bad!r}: {ssh_target!r}")
+        raise errors.SpecInvalid(
+            f"ssh_target contains disallowed characters {bad!r}: {ssh_target!r}"
+        )
     return ssh_target
 
 

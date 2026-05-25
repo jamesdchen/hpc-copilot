@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.state.runs import (
     SIDECAR_SCHEMA_VERSION,
     find_existing_runs,
@@ -218,7 +219,7 @@ def test_invalid_run_id_format_rejected_at_path_resolution(tmp_path: Path) -> No
     (``YYYYMMDD-HHMMSS-<sha>``). Catches accidental injection where a
     run_id sneaks into a filesystem path."""
     for bad in ("../escape", "id/with/slash", "id with space", "id;rm-rf"):
-        with pytest.raises(ValueError, match="invalid run_id"):
+        with pytest.raises(errors.SpecInvalid, match="invalid run_id"):
             run_sidecar_path(tmp_path, bad)
 
 

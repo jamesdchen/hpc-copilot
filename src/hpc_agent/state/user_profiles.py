@@ -37,6 +37,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
 from hpc_agent.infra.io import atomic_locked_update
 from hpc_agent.infra.time import parse_iso_utc_or_none
 
@@ -98,7 +99,7 @@ def user_profiles_path(experiment_dir: Path, cluster: str) -> Path:
     layout directly.
     """
     if not cluster:
-        raise ValueError("cluster must be non-empty")
+        raise errors.SpecInvalid("cluster must be non-empty")
     from hpc_agent._kernel.contract.layout import RepoLayout
 
     safe_cluster = cluster.replace("/", "_")

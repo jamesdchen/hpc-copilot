@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from hpc_agent import errors
 from hpc_agent.infra.backends import register
 from hpc_agent.infra.backends._remote_base import RemoteHPCBackend
 from hpc_agent.infra.backends.sge import SGEBackend
@@ -53,9 +54,9 @@ class RemoteSGEBackend(RemoteHPCBackend, SGEBackend):
         pass_env_keys: tuple[str, ...] = (),
     ):
         if ssh_run is None:
-            raise ValueError("RemoteSGEBackend requires an 'ssh_run' callable")
+            raise errors.SpecInvalid("RemoteSGEBackend requires an 'ssh_run' callable")
         if remote_repo is None:
-            raise ValueError("RemoteSGEBackend requires a 'remote_repo' path")
+            raise errors.SpecInvalid("RemoteSGEBackend requires a 'remote_repo' path")
         # Default the remote log dir to <remote_repo>/logs before the
         # local SGEBackend.__init__ sees None and falls back to the
         # local-machine SGE_LOG_DIR env var (which is wrong on a remote).

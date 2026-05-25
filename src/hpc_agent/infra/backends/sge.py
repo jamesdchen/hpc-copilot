@@ -12,6 +12,7 @@ and parser regexes).
 import os
 import re
 
+from hpc_agent import errors
 from hpc_agent.infra.backends import HPCBackend
 
 
@@ -40,7 +41,7 @@ class SGEBackend(HPCBackend):
         pass_env_keys: tuple[str, ...] = (),
     ):
         if script is None:
-            raise ValueError("SGEBackend requires a 'script' path")
+            raise errors.SpecInvalid("SGEBackend requires a 'script' path")
         self.script = script
         self.log_dir = log_dir or os.environ.get("SGE_LOG_DIR", "logs")
         self.pass_env_keys = pass_env_keys
@@ -208,7 +209,7 @@ class SGEBackend(HPCBackend):
             if k in self.pass_env_keys and "," in str(v)
         ]
         if bad:
-            raise ValueError(
+            raise errors.SpecInvalid(
                 "SGE qsub -v cannot transport env values containing "
                 f"','; offending keys: {sorted(bad)}. Pre-encode "
                 "(base64, space-delimited list, etc.) before submission."

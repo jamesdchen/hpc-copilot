@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from hpc_agent import errors
 from hpc_agent.infra.backends import register
 from hpc_agent.infra.backends._remote_base import RemoteHPCBackend
 from hpc_agent.infra.backends.slurm import SlurmBackend
@@ -64,9 +65,9 @@ class RemoteSlurmBackend(RemoteHPCBackend, SlurmBackend):
         cluster: str | None = None,
     ):
         if ssh_run is None:
-            raise ValueError("RemoteSlurmBackend requires an 'ssh_run' callable")
+            raise errors.SpecInvalid("RemoteSlurmBackend requires an 'ssh_run' callable")
         if remote_repo is None:
-            raise ValueError("RemoteSlurmBackend requires a 'remote_repo' path")
+            raise errors.SpecInvalid("RemoteSlurmBackend requires a 'remote_repo' path")
         # Default the remote log dir to <remote_repo>/logs before the
         # local SlurmBackend.__init__ sees None and falls back to the
         # local-machine SLURM_LOG_DIR env var.
