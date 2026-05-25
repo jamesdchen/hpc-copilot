@@ -1,6 +1,6 @@
 `/campaign-hpc` triggers the **campaign** workflow — drive a closed-loop campaign (tagged `submit-flow → monitor-flow → aggregate-flow` iterations whose `tasks.py` adapts to prior results).
 
-This command is a thin trigger over `hpc-campaign-driver`, the code-orchestrated campaign loop. Do not run the `hpc-campaign` skill yourself in this conversation, and do not hand-write a per-step subagent prompt — the driver advances exactly one step per invocation, running deterministic steps directly and spawning a fresh-context worker for judgement steps. The `hpc-campaign` skill (`skills/hpc-campaign/SKILL.md`) stays the canonical SoT for campaign semantics.
+This command is a thin trigger over `hpc-campaign-driver`, the code-orchestrated campaign loop. Do not run the `hpc-campaign` skill yourself in this conversation, and do not hand-write a per-step subagent prompt — the driver advances exactly one step per invocation, running deterministic steps directly and spawning a fresh-context worker for judgement steps. The `hpc-campaign` worker prompt stays the canonical SoT for campaign semantics.
 
 Two things this command does in-conversation, because the driver can't:
 
