@@ -93,6 +93,7 @@ _NON_SUFFIX_MAPPING: dict[str, str] = {
     "StagesAdapter": "stages.input.json",
     "AxesConfig": "axes.json",
     "CampaignManifest": "campaign_manifest.json",
+    "PluginManifest": "plugin_manifest.json",
 }
 
 # (suffix, output-side) pairs applied in order. The first match wins.

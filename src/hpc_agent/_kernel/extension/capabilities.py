@@ -80,6 +80,7 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
     fetched via ``hpc-agent describe <name>``.
     """
     from hpc_agent._kernel.registry.operations import operations_catalog
+    from hpc_agent._kernel.registry.plugins import get_plugin_manifests
     from hpc_agent.infra.clusters import CLUSTER_YAML_KEYS
 
     return {
@@ -100,5 +101,11 @@ def capabilities(*, subcommands: list[str]) -> dict[str, Any]:
         # New fields land here automatically when their validators are
         # added — single source of truth lives next to the validators.
         "cluster_yaml_keys": list(CLUSTER_YAML_KEYS),
+        # Item 5: every loaded plugin's PluginManifest, projected as a
+        # dict so callers can introspect overlay contributions without
+        # importing the plugin distributions themselves. Empty when no
+        # plugin is installed or when installed plugins haven't yet
+        # declared a manifest (a DeprecationWarning fires in that case).
+        "plugins": [m.model_dump(mode="json") for m in get_plugin_manifests().values()],
         "operations": operations_catalog(),
     }

@@ -47,6 +47,8 @@ jobs:
         run: python scripts/lint_subject_imports.py
       - name: Lint subject __init__.py is docstring-only
         run: python scripts/lint_subject_init.py
+      - name: Lint plugin manifests reconcile with runtime
+        run: python scripts/lint_plugin_manifests.py
       - name: Check JSON schemas regenerated from Pydantic
         run: python scripts/build_schemas.py --check
       - name: Check baked operations.json is up to date

@@ -30,6 +30,7 @@ from typing import Any
 
 __all__ = [
     "PLUGIN_GROUP",
+    "get_plugin_manifests",
     "load_plugins",
     "plugin_primitive_modules",
     "plugin_slash_command_roots",
@@ -72,6 +73,40 @@ def plugin_primitive_modules() -> tuple[str, ...]:
     for plugin in load_plugins():
         modules.extend(getattr(plugin, "primitive_modules", ()) or ())
     return tuple(modules)
+
+
+@cache
+def get_plugin_manifests() -> dict[str, Any]:
+    """Return the :class:`PluginManifest` for every loaded plugin, keyed by name.
+
+    A plugin exposes its manifest at module scope as ``MANIFEST``. The
+    field is informational — plugins without a manifest still load but
+    emit a :class:`DeprecationWarning` so the operator notices the
+    missing self-description, and the catalog projects them with a
+    synthesised stub. Item 5 added the manifest as the explicit
+    declaration surface; the implicit attribute lookup that pre-Item-5
+    drove plugin behaviour is unchanged underneath.
+    """
+    from hpc_agent._wire.plugin_manifest import PluginManifest
+
+    manifests: dict[str, Any] = {}
+    for plugin in load_plugins():
+        manifest = getattr(plugin, "MANIFEST", None)
+        if not isinstance(manifest, PluginManifest):
+            name = getattr(plugin, "__name__", repr(plugin))
+            warnings.warn(
+                f"hpc-agent plugin {name!r} does not declare a "
+                "``MANIFEST = PluginManifest(...)`` top-level — Item 5 "
+                "introduced the manifest as the explicit declaration "
+                "surface. The plugin still loads, but its overlay "
+                "contributions cannot be enumerated in the capabilities "
+                "envelope's ``plugins`` field.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            continue
+        manifests[manifest.name] = manifest
+    return manifests
 
 
 def register_plugin_cli(subparsers: Any) -> None:

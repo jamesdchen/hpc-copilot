@@ -86,9 +86,63 @@
       "default": null,
       "description": "Per-operation catalog. The CLI subcommands listed in `subcommands` are the invocable surface; this `operations` block carries machine-readable metadata about each one (verb tier, idempotency, side-effect class, schema files). Source-tree installs read from docs/primitives/ frontmatter; future wheel installs will read a baked operations.json shipped in the package.",
       "title": "Operations"
+    },
+    "plugins": {
+      "description": "Self-declared manifest of every installed hpc-agent plugin (Item 5). Projected from each plugin's top-level ``MANIFEST = PluginManifest(...)``; absent for plugins that haven't yet declared one (the loader emits a DeprecationWarning in that case). Empty when no plugin is installed.",
+      "items": {
+        "$ref": "#/$defs/PluginManifest"
+      },
+      "title": "Plugins",
+      "type": "array"
     }
   },
   "$defs": {
+    "PluginManifest": {
+      "additionalProperties": false,
+      "description": "Self-declared metadata for one ``hpc_agent.plugins`` entry.",
+      "properties": {
+        "name": {
+          "description": "Plugin distribution name (e.g. ``hpc-agent-pro``).",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "description": "Plugin distribution version (e.g. ``0.6.0``).",
+          "title": "Version",
+          "type": "string"
+        },
+        "primitives": {
+          "default": [],
+          "description": "Wire names of every primitive this plugin registers. Each name must appear in the operations catalog after registration; the ``scripts/lint_plugin_manifests.py`` gate verifies the match.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Primitives",
+          "type": "array"
+        },
+        "worker_prompt_overlays": {
+          "default": [],
+          "description": "Workflow names whose ``worker_prompts/<workflow>.md`` this plugin overlays. The host worker-prompt loader prefers the first plugin providing a workflow; declaring it here lets the catalog tell a caller which procedure body they'll actually receive.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Worker Prompt Overlays",
+          "type": "array"
+        },
+        "cli_register": {
+          "default": false,
+          "description": "Whether this plugin wires CLI subcommands via ``register_cli`` into the host argparse tree. Informational; the host always invokes ``register_cli`` if it exists, so the field is honest with respect to the loader, not an opt-out switch.",
+          "title": "Cli Register",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "hpc-agent plugin manifest",
+      "type": "object"
+    },
     "_ClusterYamlKey": {
       "additionalProperties": true,
       "description": "One declared field in clusters.yaml. Loose shape — extra info allowed.",

@@ -201,6 +201,23 @@ scoring) lives in the optional `hpc-agent-pro` plugin, which
 re-attaches through the `hpc_agent.plugins` entry-point seam wired up
 in `_kernel/registry/plugins.py`.
 
+### Plugin discovery (Item 5)
+
+Each loaded plugin self-declares its overlay contributions via a
+top-level `MANIFEST = PluginManifest(...)` (`PluginManifest` lives in
+`src/hpc_agent/_wire/plugin_manifest.py`). The manifest enumerates the
+plugin's name, version, the primitive names it registers, the
+worker-prompt files it overlays, and whether it wires CLI subcommands.
+`hpc-agent capabilities` projects every loaded manifest under the
+envelope's `plugins` field; `scripts/lint_plugin_manifests.py` (a
+pre-commit + CI gate) reconciles the declarations against runtime
+reality (every declared primitive must register, every declared
+overlay must exist on disk, the `cli_register` flag must match
+whether the plugin exposes `register_cli`). Plugins without a
+manifest still load — the field is informational metadata, not a
+hard requirement on first release — but the loader emits a
+`DeprecationWarning` and the catalog projects nothing for them.
+
 ## The @primitive registry
 
 Every wire-callable operation is decorated:

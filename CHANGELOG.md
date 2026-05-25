@@ -7,6 +7,40 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Explicit plugin overlay manifest
+
+Plugins now self-declare their overlay contributions via a top-level
+`MANIFEST = PluginManifest(...)`. Pre-Item-5, the overlay surface
+(whether a plugin overrides a host worker-prompt procedure, whether
+it registers CLI subcommands, what primitive names it claims) was an
+implicit consequence of attribute-existence checks against the entry
+point object — readers couldn't tell from a glance what the plugin
+actually changes about the host.
+
+`PluginManifest` (new, in `src/hpc_agent/_wire/plugin_manifest.py`)
+carries `name`, `version`, `primitives`, `worker_prompt_overlays`,
+and `cli_register`. The host's `hpc_agent.capabilities` envelope now
+includes a `plugins` field projecting every loaded plugin's
+manifest. A new pre-commit + CI gate
+(`scripts/lint_plugin_manifests.py`) reconciles each manifest's
+declarations against runtime reality (every declared primitive must
+register at import time, every declared overlay must exist on disk,
+the `cli_register` flag must match whether `register_cli` is
+exposed).
+
+`hpc-agent-pro` declares its manifest at
+`hpc-agent-pro/src/hpc_agent_pro/plugin.py:MANIFEST` (14 primitives,
+overlays the `submit` worker prompt, registers a CLI subgroup). The
+test helper `tests/_registry_helpers.py:pro_overlaid_workflows()`
+reads the manifest's `worker_prompt_overlays` so the snapshot test in
+`tests/worker_prompts/test_prefix_snapshot.py` no longer needs the
+parallel `_PRO_OVERRIDDEN_WORKFLOWS` allowlist.
+
+Plugins without a manifest still load — Item 5 ships the manifest as
+informational metadata, not a hard requirement on first release —
+but the loader emits a `DeprecationWarning` and the catalog projects
+nothing for them.
+
 ### Changed — `hpc_agent` root namespace trim (one-release deprecation)
 
 The root `__all__` was trimmed from 52 names to 15 — the integrator
