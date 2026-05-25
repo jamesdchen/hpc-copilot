@@ -15,9 +15,12 @@ rules.
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Surfaces (what the user / agent calls into)                        │
 │                                                                     │
-│  src/slash_commands/commands/   src/slash_commands/skills/          │
-│  user-typed entry points         agent-callable workflows           │
-│  (thin redirects to skills)      (one SKILL.md per workflow)        │
+│  src/slash_commands/commands/  src/slash_commands/skills/           │
+│  user-typed entry points        in-chat Skill-tool utilities        │
+│  (paired or workflow-trigger)   (2 paired with slashes)             │
+│                                                                     │
+│  src/hpc_agent/_kernel/extension/worker_prompts/                    │
+│  delegated-worker prompts (submit, status, aggregate, campaign)     │
 │                                  ↓                                  │
 │  cli/dispatch.py (`hpc-agent` console script — main())              │
 │    └ delegates to cli/parser.py + cli/_dispatch.py                  │
@@ -308,27 +311,36 @@ on success, `{"ok": false, "error_code": str, "category": str,
 
 ## Agent surfaces
 
-Two:
+Three, mirroring the three call-sites a workflow can fire from:
 
 1. **Skills** (`src/slash_commands/skills/<id>/SKILL.md`) —
-   agent-canonical workflows invoked by Claude Code's `Skill` tool.
-   Have richer metadata (model, tools, arguments).
-2. **Slash commands** (`src/slash_commands/commands/<stem>.md`) —
-   user-typed entry points. As of the audit refactor, these are thin
-   redirects to the matching skill: a 5-line "use the X skill" body.
-   Single SoT for workflow content lives in the skill.
+   in-chat utilities Claude Code's interactive session invokes via the
+   `Skill` tool. Small focused actions (`hpc-build-executor`,
+   `hpc-classify-axis`); paired 1:1 with a slash command. Have richer
+   metadata (model, tools, arguments).
+2. **Worker prompts** (`src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`) —
+   the four host workflows (`submit`, `status`, `aggregate`, `campaign`)
+   delegated workers consume. A `claude -p --bare` worker has no
+   `Skill` tool, so `_kernel/extension/spawn_prompt.py` inlines the
+   prompt body verbatim into `cacheable_prefix` (loaded via
+   `importlib.resources`). Snapshot tests pin the rendered bytes so
+   prompt-cache hit rates don't silently regress.
+3. **Slash commands** (`src/slash_commands/commands/<stem>.md`) —
+   user-typed entry points. Two routing modes coexist:
+   - **Paired** (`hpc-axes-init`, `classify-axis-hpc`) — 5-line "use
+     the X skill" redirect. Single SoT lives in the paired skill.
+   - **Workflow trigger** (`submit-hpc`, `monitor-hpc`,
+     `aggregate-hpc`, `campaign-hpc`) — routes through
+     `hpc-agent run <workflow>` to the spawn pipeline, which loads
+     the body from `worker_prompts/<workflow>.md`. No paired skill —
+     the workflow IS the worker prompt.
 
-The pair table in `scripts/lint_skill_command_sync.py:WORKFLOW_PAIRS`
-pins which skill matches which slash command; CI fails if either
-surface gains a workflow without the other.
-
-Delegated workers (`claude -p --bare` spawned by the campaign driver
-and similar) cannot discover skills — `_kernel/extension/spawn_prompt.py`
-inlines the procedure body verbatim from
-`_kernel/extension/worker_prompts/<workflow>.md` (loaded via
-`importlib.resources`). Snapshot tests pin the rendered
-`cacheable_prefix` bytes so prompt-cache hit rates don't silently
-regress.
+Two lint scripts pin the surfaces against each other:
+`scripts/lint_skill_command_sync.py:WORKFLOW_PAIRS` enumerates the
+skill↔slash redirects; `WORKFLOW_TRIGGER_SLASHES` (same file)
+enumerates the `hpc-agent run` triggers. CI fails if a new workflow
+shows up on one surface without the other. Skill-policy rationale
+lives in `docs/internals/skill-policy.md`.
 
 ## Cross-subject composition
 

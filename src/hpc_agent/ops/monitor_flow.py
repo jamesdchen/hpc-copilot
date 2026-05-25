@@ -611,6 +611,18 @@ def monitor_flow(
                 next_tick_seconds=None,
             )
             _ingest_runtime_at_terminal(experiment_dir, record=record)
+            # If combine_wave exhausted retries on any wave mid-flight,
+            # tasks completing afterward should not silence that
+            # failure. Surface ``failed_waves`` via ``escalation_reason``
+            # so callers branching on it (escalation surfaces, campaign
+            # auto-resubmit) see the partial-wave failure even on a
+            # COMPLETE return.
+            complete_escalation: str | None = None
+            if state.last_failed_waves:
+                complete_escalation = (
+                    "combine_failed_waves:waves="
+                    + ",".join(str(w) for w in state.last_failed_waves)
+                )
             return MonitorFlowResult(
                 run_id=run_id,
                 lifecycle_state=LifecycleState.COMPLETE,
@@ -619,7 +631,7 @@ def monitor_flow(
                 failed_waves=state.last_failed_waves,
                 ticks=state.ticks,
                 elapsed_seconds=elapsed,
-                escalation_reason=None,
+                escalation_reason=complete_escalation,
             )
         if terminal == LifecycleState.FAILED:
             mark_terminal(experiment_dir, run_id, status=LifecycleState.FAILED)

@@ -44,14 +44,29 @@ _SACCT_FORMAT = "JobID,Submit,Start,Priority,Partition,User,TimeLimit"
 
 
 def _coerce_iso(s: str) -> str | None:
-    """SLURM emits ``2026-09-22T10:00:00`` (no timezone). Treat as UTC."""
+    """Parse a SLURM sacct ``Submit``/``Start`` timestamp.
+
+    ``SLURM_TIME_FORMAT=%Y-%m-%dT%H:%M:%S%z`` (set by ``_build_sacct_command``)
+    makes sacct emit an explicit UTC offset, so we can parse strictly.
+    Older sacct callers (and tests that pipe naive text via ``--from-stdin``)
+    still produce naive ``YYYY-MM-DDThh:mm:ss`` — we accept those too,
+    but tag them ``+00:00`` ONLY when the caller has set
+    ``HPC_SACCT_NAIVE_IS_UTC=1``; otherwise we refuse them so a misset
+    cluster TZ doesn't silently shift queue-wait labels by hours.
+    """
     if not s or s in {"Unknown", "None", "N/A"}:
         return None
     try:
-        dt = datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
+        dt = datetime.fromisoformat(s)
     except ValueError:
         return None
-    return dt.replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
+    if dt.tzinfo is None:
+        import os as _os
+
+        if _os.environ.get("HPC_SACCT_NAIVE_IS_UTC") != "1":
+            return None
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 def parse_sacct_lines(text: str) -> list[dict]:
@@ -107,7 +122,12 @@ def _build_sacct_command(*, since_days: int) -> str:
     starttime = (datetime.now(timezone.utc) - timedelta(days=since_days)).strftime(
         "%Y-%m-%dT00:00:00+0000"
     )
+    # SLURM_TIME_FORMAT forces sacct's row-level Submit/Start to carry an
+    # explicit UTC offset (without it, sacct emits the cluster's local
+    # time and the parser would silently mislabel it as UTC, shifting
+    # every training row's queue-wait by the cluster's tz offset).
     return (
+        f"SLURM_TIME_FORMAT='%Y-%m-%dT%H:%M:%S%z' "
         f"sacct -P -X --noheader=no --starttime={starttime} "
         f"--state=COMPLETED,FAILED,TIMEOUT --format={_SACCT_FORMAT}"
     )

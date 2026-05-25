@@ -124,6 +124,14 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
     task_info: dict[int, dict] = {}
     errors: list[dict] = []
     job_id_set = {str(j) for j in job_ids}
+    # Resubmits append the new array's job_id to the run record's
+    # ``job_ids`` (oldest first → newest last). When the same task_id
+    # appears in both old (failed) and new (running) arrays sacct may
+    # return rows for both — prefer the row whose ``base_job`` is later
+    # in the input list so the agent sees the most recent attempt
+    # instead of the prior failure. Ties (same job_id) keep the
+    # main-record-first dedup below.
+    job_id_order: dict[str, int] = {str(j): i for i, j in enumerate(job_ids)}
     joined = ",".join(str(j) for j in job_ids)
 
     cmd = [
@@ -193,9 +201,23 @@ def query_sacct(job_ids: list[str], cluster: str | None = None) -> dict:
         except ValueError:
             errors.append({"code": "malformed_row", "detail": f"non-integer task id: {line!r}"})
             continue
-        # First occurrence wins - main record comes before .batch/.extern steps.
-        if tid in task_info:
-            continue
+        # Dedup rule:
+        #   * Within ONE array: first occurrence wins (main record comes
+        #     before .batch/.extern steps for the same job_id).
+        #   * Across MULTIPLE arrays for the same task_id (resubmit case):
+        #     the row whose base_job appears later in the input job_ids
+        #     list wins — that's the most recent attempt.
+        existing = task_info.get(tid)
+        if existing is not None:
+            existing_pos = job_id_order.get(existing["job_id"], -1)
+            new_pos = job_id_order.get(base_job, -1)
+            if new_pos < existing_pos:
+                # Older array's row arrived after the newer one's; keep newer.
+                continue
+            if new_pos == existing_pos:
+                # Same array — first occurrence (main record) already kept.
+                continue
+            # new_pos > existing_pos — newer array, overwrite.
         elapsed_s = _to_int(elapsed_raw)
         cpus = _to_int(req_cpus)
         gpus = parse_gpu_count_from_tres(alloc_tres)
@@ -357,6 +379,23 @@ def query_sge(job_ids: list[str], user: str | None = None) -> dict:
     task_info: dict[int, dict] = {}
     errors: list[dict] = []
     sge_user = user or os.environ.get("USER") or os.environ.get("USERNAME") or ""
+    if not sge_user:
+        # Refuse to call ``qstat -u ""`` — SGE interprets that
+        # inconsistently across versions (some treat it as "no filter",
+        # which returns the entire cluster's queue). Caller passed no
+        # user and the shell has no $USER/$USERNAME; we cannot identify
+        # which jobs belong to whom.
+        # Error-list entry shape is ``{"code", "detail"}`` per the
+        # module's documented contract (line 13).
+        return {
+            "tasks": {},
+            "errors": [
+                {
+                    "code": "qstat_unavailable",
+                    "detail": "no user identity ($USER/$USERNAME unset and no `user=` arg)",
+                }
+            ],
+        }
 
     # Phase 1: single qstat call for running/pending tasks across all jobs.
     qstat_ok = False

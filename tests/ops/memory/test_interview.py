@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.ops.memory.interview import record_interview
 
@@ -181,14 +182,14 @@ def test_task_count_mismatch_raises(tmp_path: Path) -> None:
     """Cross-check: intent.task_count must equal tasks.total()."""
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)  # 3 tasks
     intent = _minimal_intent(99)  # operator says 99
-    with pytest.raises(ValueError, match="task_count = 99 but tasks.total"):
+    with pytest.raises(errors.SpecInvalid, match="task_count = 99 but tasks.total"):
         record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     # On mismatch, interview.json must NOT be written (atomicity).
     assert not (tmp_path / "interview.json").exists()
 
 
 def test_missing_tasks_py_raises(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="missing tasks.py"):
+    with pytest.raises(errors.SpecInvalid, match="missing tasks.py"):
         record_interview(InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path)
 
 
@@ -196,7 +197,7 @@ def test_empty_tasks_py_raises(tmp_path: Path) -> None:
     """tasks.total() == 0 is rejected explicitly with a clear error rather
     than slipping through to a divide-by-zero downstream."""
     (tmp_path / "tasks.py").write_text("def total(): return 0\ndef resolve(i): raise IndexError\n")
-    with pytest.raises(ValueError, match="no tasks to dispatch"):
+    with pytest.raises(errors.SpecInvalid, match="no tasks to dispatch"):
         record_interview(InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path)
 
 
@@ -296,7 +297,7 @@ def test_generator_count_mismatch_does_not_write_tasks_py(tmp_path: Path) -> Non
             "params": {"param": "x", "low": 0, "high": 1, "n": 5},  # actually 5 tasks
         },
     )
-    with pytest.raises(ValueError, match="recipe and stated count disagree"):
+    with pytest.raises(errors.SpecInvalid, match="recipe and stated count disagree"):
         record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert not (tmp_path / "tasks.py").exists()
     assert not (tmp_path / "interview.json").exists()

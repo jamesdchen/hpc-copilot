@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra.constraints import ClusterConstraints
 from hpc_agent.infra.throughput import (
     WorkloadSpec,
@@ -107,7 +108,7 @@ class TestWalltimeExceeded:
         )
         # 400s task + 300s spin-up = 700s > 600s limit
         workload = WorkloadSpec(total_tasks=50, est_task_duration_s=400)
-        with pytest.raises(ValueError, match="exceeds max walltime"):
+        with pytest.raises(errors.SpecInvalid, match="exceeds max walltime"):
             compute_submission_plan(constraints, workload)
 
 

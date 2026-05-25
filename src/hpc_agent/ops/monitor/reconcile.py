@@ -102,7 +102,10 @@ def _reconcile_envelope(record: RunRecord) -> dict[str, Any]:
         ),
         SideEffect("ssh", "<cluster>"),
     ],
-    error_codes=[errors.SshUnreachable, errors.ClusterUnknown],
+    # ``ClusterUnknown`` was declared but is never raised in this
+    # primitive's body — kept here so callers' retry policy continues
+    # to recognise it if a future change introduces the raise.
+    error_codes=[errors.SshUnreachable, errors.ClusterUnknown, errors.JournalCorrupt],
     idempotent=True,
     idempotency_key="run_id",
     cli=CliShape(
@@ -227,7 +230,10 @@ def reconcile(
             "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (under flock)",
         ),
     ],
-    error_codes=[errors.JournalCorrupt],
+    # ``mark_terminal`` delegates to ``journal.mark_run`` which currently
+    # does not raise ``JournalCorrupt`` — leaving the prior declaration
+    # would be a phantom that callers wire retry policy against in vain.
+    error_codes=[],
     idempotent=True,
     idempotency_key="run_id",
     cli=None,  # Python-only primitive

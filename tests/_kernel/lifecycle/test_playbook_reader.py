@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent._kernel.lifecycle.playbook import (
     KnownBadCombination,
     Playbook,
@@ -98,7 +99,7 @@ def test_known_bad_combinations_missing_required_key_raises(tmp_path: Path) -> N
             severity: error
         """,
     )
-    with pytest.raises(ValueError, match="missing required key 'workload_tag'"):
+    with pytest.raises(errors.SpecInvalid, match="missing required key 'workload_tag'"):
         load_playbook(tmp_path)
 
 
@@ -113,7 +114,7 @@ def test_known_bad_combinations_invalid_severity_raises(tmp_path: Path) -> None:
             reason: oops
         """,
     )
-    with pytest.raises(ValueError, match="severity must be one of error/warning/info"):
+    with pytest.raises(errors.SpecInvalid, match="severity must be one of error/warning/info"):
         load_playbook(tmp_path)
 
 
@@ -171,7 +172,7 @@ def test_walltime_rules_quantile_must_be_in_closed_unit_interval(
             message: x
         """,
     )
-    with pytest.raises(ValueError, match="must be in"):
+    with pytest.raises(errors.SpecInvalid, match="must be in"):
         load_playbook(tmp_path)
 
 
@@ -196,11 +197,11 @@ def test_walltime_rules_quantile_endpoints_are_allowed(tmp_path: Path, ok_q: flo
 
 def test_malformed_yaml_raises_value_error(tmp_path: Path) -> None:
     _write(tmp_path, "{this is not: yaml: at all")
-    with pytest.raises(ValueError, match="parse error"):
+    with pytest.raises(errors.SpecInvalid, match="parse error"):
         load_playbook(tmp_path)
 
 
 def test_top_level_must_be_mapping(tmp_path: Path) -> None:
     _write(tmp_path, "- a list at the top level\n- second item")
-    with pytest.raises(ValueError, match="top-level must be a mapping"):
+    with pytest.raises(errors.SpecInvalid, match="top-level must be a mapping"):
         load_playbook(tmp_path)

@@ -47,6 +47,7 @@ __all__ = [
 import re
 import subprocess
 
+from hpc_agent import errors
 from hpc_agent.infra.parsing import parse_qstat_columns
 
 
@@ -145,14 +146,14 @@ def load_gpu_config_for_cluster(cluster_name: str) -> dict[str, dict] | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"clusters.yaml: {cluster_name!r}.gpu_queues must be a mapping, "
             f"got {type(raw).__name__}"
         )
     out: dict[str, dict] = {}
     for queue_prefix, entry in raw.items():
         if not isinstance(entry, dict) or "name" not in entry or "perf" not in entry:
-            raise ValueError(
+            raise errors.SpecInvalid(
                 f"clusters.yaml: {cluster_name!r}.gpu_queues.{queue_prefix} "
                 "must be a mapping with 'name' and 'perf' keys"
             )
@@ -179,7 +180,7 @@ def _excluded_prefixes_for_cluster(cluster_name: str | None) -> set[str]:
     if raw is None:
         return _DEFAULT_EXCLUDED_PREFIXES
     if not isinstance(raw, list) or not all(isinstance(p, str) for p in raw):
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"clusters.yaml: {cluster_name!r}.excluded_gpu_queue_prefixes must be a list of strings"
         )
     return set(raw)

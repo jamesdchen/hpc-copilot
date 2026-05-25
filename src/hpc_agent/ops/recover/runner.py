@@ -150,6 +150,18 @@ def resubmit_failed(
         "recent_resubmit_request_ids": recent_ids,
     }
     if new_job_ids is not None:
-        fields["job_ids"] = list(new_job_ids)
+        # Extend rather than replace: a resubmit only re-submits the
+        # *failed* tasks, so the original array's still-running /
+        # already-complete tasks are still under its job_id. Replacing
+        # would blind monitor to those. We keep submission order
+        # (oldest first → newest last) so consumers that prefer the
+        # most-recent attempt (e.g. ``query_sacct``'s newest-wins
+        # dedup) can rely on list order. ``dict.fromkeys`` preserves
+        # insertion order and dedups, in case a caller passes back the
+        # same id (e.g. resume after partial failure).
+        merged: dict[str, None] = dict.fromkeys(record.job_ids or [])
+        for jid in new_job_ids:
+            merged[str(jid)] = None
+        fields["job_ids"] = list(merged)
     updated = update_run_status(experiment_dir, run_id, **fields)
     return updated, False, rid

@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import yaml
 
+from hpc_agent import errors
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -65,7 +67,9 @@ _DEFAULT_PLAYBOOK = Playbook()
 
 def _coerce_severity(raw: Any) -> Literal["error", "warning", "info"]:
     if raw not in ("error", "warning", "info"):
-        raise ValueError(f"playbook severity must be one of error/warning/info; got {raw!r}")
+        raise errors.SpecInvalid(
+            f"playbook severity must be one of error/warning/info; got {raw!r}"
+        )
     return cast("Literal['error', 'warning', 'info']", raw)
 
 
@@ -73,11 +77,13 @@ def _parse_known_bad_combinations(raw: Any) -> tuple[KnownBadCombination, ...]:
     if not raw:
         return ()
     if not isinstance(raw, list):
-        raise ValueError(f"known_bad_combinations must be a list, got {type(raw).__name__}")
+        raise errors.SpecInvalid(
+            f"known_bad_combinations must be a list, got {type(raw).__name__}"
+        )
     out: list[KnownBadCombination] = []
     for i, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            raise ValueError(f"known_bad_combinations[{i}] must be a mapping")
+            raise errors.SpecInvalid(f"known_bad_combinations[{i}] must be a mapping")
         try:
             out.append(
                 KnownBadCombination(
@@ -88,7 +94,7 @@ def _parse_known_bad_combinations(raw: Any) -> tuple[KnownBadCombination, ...]:
                 )
             )
         except KeyError as exc:
-            raise ValueError(
+            raise errors.SpecInvalid(
                 f"known_bad_combinations[{i}] missing required key {exc.args[0]!r}"
             ) from None
     return tuple(out)
@@ -98,17 +104,23 @@ def _parse_walltime_rules(raw: Any) -> tuple[WalltimeRule, ...]:
     if not raw:
         return ()
     if not isinstance(raw, list):
-        raise ValueError(f"walltime_rules must be a list, got {type(raw).__name__}")
+        raise errors.SpecInvalid(
+            f"walltime_rules must be a list, got {type(raw).__name__}"
+        )
     out: list[WalltimeRule] = []
     for i, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            raise ValueError(f"walltime_rules[{i}] must be a mapping")
+            raise errors.SpecInvalid(f"walltime_rules[{i}] must be a mapping")
         try:
             q = float(entry["below_quantile"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"walltime_rules[{i}].below_quantile must be a float") from exc
+            raise errors.SpecInvalid(
+                f"walltime_rules[{i}].below_quantile must be a float"
+            ) from exc
         if not 0.0 <= q <= 1.0:
-            raise ValueError(f"walltime_rules[{i}].below_quantile must be in [0, 1]; got {q}")
+            raise errors.SpecInvalid(
+                f"walltime_rules[{i}].below_quantile must be in [0, 1]; got {q}"
+            )
         out.append(
             WalltimeRule(
                 below_quantile=q,
@@ -133,11 +145,13 @@ def load_playbook(experiment_dir: Path) -> Playbook:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
-        raise ValueError(f"playbook.yaml parse error: {exc}") from exc
+        raise errors.SpecInvalid(f"playbook.yaml parse error: {exc}") from exc
     if raw is None:
         return _DEFAULT_PLAYBOOK
     if not isinstance(raw, dict):
-        raise ValueError(f"playbook.yaml top-level must be a mapping, got {type(raw).__name__}")
+        raise errors.SpecInvalid(
+            f"playbook.yaml top-level must be a mapping, got {type(raw).__name__}"
+        )
     return Playbook(
         known_bad_combinations=_parse_known_bad_combinations(raw.get("known_bad_combinations")),
         walltime_rules=_parse_walltime_rules(raw.get("walltime_rules")),

@@ -21,6 +21,8 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -76,7 +78,7 @@ def validate_stages(stages: list[dict[str, Any]]) -> None:
             duplicates.append(n)
         seen.add(n)
     if duplicates:
-        raise ValueError(f"duplicate stage names: {sorted(set(duplicates))}")
+        raise errors.SpecInvalid(f"duplicate stage names: {sorted(set(duplicates))}")
     name_set = set(names)
     for stage in stages:
         deps = stage.get("depends_on")
@@ -85,7 +87,9 @@ def validate_stages(stages: list[dict[str, Any]]) -> None:
         dep_list = [deps] if isinstance(deps, str) else list(deps)
         unknown = [d for d in dep_list if d not in name_set]
         if unknown:
-            raise ValueError(f"stage {stage['name']!r} depends_on unknown stage(s): {unknown}")
+            raise errors.SpecInvalid(
+                f"stage {stage['name']!r} depends_on unknown stage(s): {unknown}"
+            )
 
 
 def load_stages_module(stages_py_path: Path) -> ModuleType:

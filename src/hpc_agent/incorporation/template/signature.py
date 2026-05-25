@@ -205,8 +205,17 @@ def flags_from_ast(funcdef: ast.FunctionDef | ast.AsyncFunctionDef) -> list[Flag
             out.append(_ast_flag(arg.arg, arg.annotation, False, None))
     for arg, dflt in zip(a.kwonlyargs, a.kw_defaults, strict=False):
         has_default = dflt is not None
+        # ``_literal(dflt) if dflt`` (truthy check) used to convert
+        # falsy literal defaults — 0, 0.0, "", False, [] — to ``None``,
+        # which then leaked into the synthesized Flag's default and the
+        # run_signature_sha. Test for presence explicitly.
         out.append(
-            _ast_flag(arg.arg, arg.annotation, has_default, _literal(dflt) if dflt else None)
+            _ast_flag(
+                arg.arg,
+                arg.annotation,
+                has_default,
+                _literal(dflt) if dflt is not None else None,
+            )
         )
     return out
 

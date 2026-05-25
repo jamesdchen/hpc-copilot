@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import keyword
+import os
 from pathlib import Path
 from typing import Any
 
@@ -590,10 +591,41 @@ def build_tasks_py(
             tasks_block=_render_tasks_block(axes),
         )
 
+    # Atomic + crash-durable write — same recipe as
+    # ``infra.io.atomic_write_json`` but inline because the payload is a
+    # Python source string, not JSON. The mkstemp-randomised tmp name
+    # prevents two concurrent ``build_tasks_py`` calls from racing on a
+    # shared ``.tmp`` sibling; fsync of the file + parent dir keeps the
+    # rename durable across power loss.
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(source, encoding="utf-8")
-    tmp.replace(target)
+    import contextlib as _contextlib
+    import tempfile as _tempfile
+
+    fd, tmp_name = _tempfile.mkstemp(
+        prefix=target.name + ".",
+        suffix=".tmp",
+        dir=str(target.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(source)
+            fh.flush()
+            with _contextlib.suppress(OSError):
+                os.fsync(fh.fileno())
+        os.replace(tmp_name, target)
+        try:
+            dir_fd = os.open(str(target.parent), os.O_RDONLY)
+            try:
+                with _contextlib.suppress(OSError):
+                    os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    except BaseException:
+        with _contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
     return {
         "path": str(target),

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra.backends.slurm import SlurmBackend
 
 
@@ -159,7 +160,7 @@ class TestSubmitArrayTracked:
 
 class TestConstructor:
     def test_missing_script_raises(self):
-        with pytest.raises(ValueError, match="script"):
+        with pytest.raises(errors.SpecInvalid, match="script"):
             SlurmBackend()
 
 

@@ -178,7 +178,13 @@ def _augment_job_env(
     cluster_cfg = load_clusters_config().get(cluster, {})
     try:
         nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
-    except (ValueError, TypeError):
+    except (errors.SpecInvalid, TypeError):
+        # Treat a malformed nfs_data_dir as "no NFS staging" rather
+        # than failing the whole submission — the rest of the cluster
+        # config (scheduler, cold_start_mem_buffer, ...) is still
+        # usable. Pre-migration this caught the underlying
+        # ``ValueError``; the typed migration replaced it with
+        # ``SpecInvalid``.
         nfs_dir = None
     if nfs_dir:
         out.setdefault("HPC_NFS_DATA_DIR", nfs_dir)
@@ -230,10 +236,15 @@ def _make_single_array_submission(
         SideEffect("scheduler-submit", "<cluster>"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json"),
     ],
+    # ``SchedulerThrottled`` was declared but never raised: real
+    # throttling currently surfaces as ``RemoteCommandFailed``. Removed
+    # to stop callers wiring retry policy against a code that never
+    # fires. ``RemoteCommandFailed`` IS raised by ssh_run helpers in
+    # this primitive's transitive path.
     error_codes=[
         errors.SpecInvalid,
         errors.SshUnreachable,
-        errors.SchedulerThrottled,
+        errors.RemoteCommandFailed,
         errors.ClusterUnknown,
     ],
     idempotent=True,
@@ -463,10 +474,13 @@ def _submit_one_spec(
         SideEffect("scheduler-submit", "<cluster> (one qsub per spec)"),
         SideEffect("writes-journal", "~/.claude/hpc/<repo_hash>/runs/<run_id>.json (per spec)"),
     ],
+    # See submit-flow above: ``SchedulerThrottled`` removed because
+    # nothing actually raises it; real throttling surfaces as
+    # ``RemoteCommandFailed``.
     error_codes=[
         errors.SpecInvalid,
         errors.SshUnreachable,
-        errors.SchedulerThrottled,
+        errors.RemoteCommandFailed,
         errors.ClusterUnknown,
     ],
     idempotent=True,

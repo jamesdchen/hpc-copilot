@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING
 
+from hpc_agent import errors
 from hpc_agent.state.run_record import (
     RunRecord,
     _atomic_write_json,
@@ -188,7 +189,7 @@ def find_runs_by_campaign(experiment_dir: Path, campaign_id: str) -> list[RunRec
 def prune_terminal_runs(experiment_dir: Path, keep: int = 20) -> int:
     """Evict oldest non-in-flight runs past *keep*. Returns count removed."""
     if keep < 0:
-        raise ValueError("keep must be non-negative")
+        raise errors.SpecInvalid("keep must be non-negative")
     files = _all_run_files(experiment_dir)
     terminal: list[tuple[float, Path, str]] = []
     for path in files:

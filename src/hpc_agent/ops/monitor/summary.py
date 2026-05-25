@@ -66,10 +66,14 @@ def _format_diff(diff: dict[str, Any]) -> str | None:
     nc = diff.get("newly_complete") or []
     nf = diff.get("newly_failed") or []
     nw = diff.get("newly_combined_waves") or []
+    # monitor_flow stores newly_complete / newly_failed as a length-1
+    # list whose single element is the delta count (see
+    # monitor_flow._tick: ``diff[f"newly_{key}"] = [cur - prv]``).
+    # Use the value, not the list length.
     if nc:
-        parts.append(f"+{len(nc)} complete")
+        parts.append(f"+{int(nc[0])} complete")
     if nf:
-        parts.append(f"+{len(nf)} failed")
+        parts.append(f"+{int(nf[0])} failed")
     if nw:
         parts.append(f"combined waves {sorted(nw)}")
     return ", ".join(parts) if parts else None

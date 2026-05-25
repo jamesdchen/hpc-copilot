@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import jsonschema
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.meta.campaign.cursor import (
     advance_cursor,
     cursor_path,
@@ -158,7 +159,7 @@ def test_read_rejects_newer_schema_version(tmp_path: Path) -> None:
             }
         )
     )
-    with pytest.raises(ValueError, match="newer than"):
+    with pytest.raises(errors.JournalCorrupt, match="newer than"):
         read_cursor(tmp_path, "camp_x")
 
 

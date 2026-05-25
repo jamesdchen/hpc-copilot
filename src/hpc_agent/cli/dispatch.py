@@ -155,9 +155,16 @@ def main(argv: list[str] | None = None) -> int:
         # without this clause a malformed --spec would fall through to the
         # generic handler and be mislabelled internal / exit 3.
         return _err_from_hpc(errors.SpecInvalid(str(exc)))
-    except ValueError as exc:
-        return _err_from_hpc(errors.SpecInvalid(str(exc)))
     except Exception as exc:  # noqa: BLE001 — last-resort envelope
+        # Spec-input validation sites across ``ops/``, ``meta/``,
+        # ``_kernel/contract``, ``state/``, ``infra/`` raise typed
+        # ``errors.SpecInvalid`` (caught by the ``HpcError`` clause
+        # above with exit 1). Any ``ValueError`` reaching here is now
+        # an unguarded internal bug (a stray ``int("garbage")`` from a
+        # buggy parser), so let it surface as exit 3 instead of being
+        # mis-classified as a user error. See ``docs/internals/`` for
+        # the migration history; the prior blanket ``except ValueError``
+        # was removed once every spec-input raise site was migrated.
         return _err_from_hpc(errors.HpcError(f"{type(exc).__name__}: {exc}"))
 
 

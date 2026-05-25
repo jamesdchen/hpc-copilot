@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra.backends.sge_remote import RemoteSGEBackend
 
 
@@ -39,18 +40,18 @@ class _SSHRecorder:
 
 class TestConstructor:
     def test_missing_script_raises(self):
-        with pytest.raises(ValueError, match="script"):
+        with pytest.raises(errors.SpecInvalid, match="script"):
             RemoteSGEBackend(
                 ssh_run=lambda cmd: _cp(),
                 remote_repo="/tmp",
             )
 
     def test_missing_ssh_run_raises(self):
-        with pytest.raises(ValueError, match="ssh_run"):
+        with pytest.raises(errors.SpecInvalid, match="ssh_run"):
             RemoteSGEBackend(script="job.sh", remote_repo="/tmp")
 
     def test_missing_remote_repo_raises(self):
-        with pytest.raises(ValueError, match="remote_repo"):
+        with pytest.raises(errors.SpecInvalid, match="remote_repo"):
             RemoteSGEBackend(script="job.sh", ssh_run=lambda cmd: _cp())
 
 

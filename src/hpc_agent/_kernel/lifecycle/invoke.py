@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from hpc_agent import errors
+
 
 @dataclass(frozen=True)
 class RenderedPrompt:
@@ -51,10 +53,19 @@ class RenderedPrompt:
 
 @dataclass(frozen=True)
 class InvocationResult:
-    """Outcome of running a worker: its exit code and captured stdout."""
+    """Outcome of running a worker: its exit code, stdout, and stderr.
+
+    ``output`` is the worker's stdout (the canonical channel for the
+    structured report). ``stderr`` is the captured diagnostic stream —
+    surfaced so callers that detect a malformed report can include the
+    worker's last words in their error message. Optional for
+    backward-compat with test fixtures that construct
+    ``InvocationResult(exit_code=..., output=...)`` directly.
+    """
 
     exit_code: int
     output: str
+    stderr: str = ""
 
 
 class WorkerInvoker(Protocol):
@@ -102,7 +113,11 @@ class ClaudeCliInvoker:
             errors="replace",
             check=False,
         )
-        return InvocationResult(exit_code=proc.returncode, output=proc.stdout)
+        return InvocationResult(
+            exit_code=proc.returncode,
+            output=proc.stdout,
+            stderr=getattr(proc, "stderr", None) or "",
+        )
 
 
 _INVOKERS: dict[str, Callable[..., WorkerInvoker]] = {
@@ -126,5 +141,7 @@ def get_invoker(name: str | None = None) -> WorkerInvoker:
     chosen = name or os.environ.get("HPC_AGENT_INVOKER") or DEFAULT_INVOKER
     factory = _INVOKERS.get(chosen)
     if factory is None:
-        raise ValueError(f"unknown worker invoker {chosen!r}; registered: {sorted(_INVOKERS)}")
+        raise errors.SpecInvalid(
+            f"unknown worker invoker {chosen!r}; registered: {sorted(_INVOKERS)}"
+        )
     return factory()

@@ -356,9 +356,15 @@ def _finalize_composes() -> None:
 
         with _ctx.suppress(AttributeError, TypeError):
             new_meta.func._primitive_meta = new_meta  # type: ignore[attr-defined]
-    _PENDING_COMPOSES.clear()
     if unresolved:
+        # Do NOT clear ``_PENDING_COMPOSES`` on failure. ``register_primitives``
+        # leaves ``_REGISTRATION_DONE`` False on raise, so a retry re-enters
+        # this function; but module imports are cached, so the decorator
+        # side-effects that fill ``_PENDING_COMPOSES`` do not re-fire. Keeping
+        # the dict populated means the retry still surfaces the same error
+        # rather than silently "succeeding" with a half-resolved registry.
         raise ValueError("composes resolution failed:\n  " + "\n  ".join(sorted(unresolved)))
+    _PENDING_COMPOSES.clear()
 
 
 def register_primitives() -> None:

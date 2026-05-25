@@ -31,13 +31,14 @@ overwrites interview.json with byte-equivalent content modulo the
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
+from hpc_agent.infra.io import atomic_locked_update, atomic_write_json
 from hpc_agent.infra.time import utcnow
 
 if TYPE_CHECKING:
@@ -129,7 +130,7 @@ def record_interview(
         generator = intent["task_generator"]
         expected = _expected_count(generator)
         if expected != declared:
-            raise ValueError(
+            raise errors.SpecInvalid(
                 f"task_generator would produce {expected} tasks but "
                 f"intent.task_count = {declared}; recipe and stated count "
                 f"disagree (refusing to write tasks.py)"
@@ -137,7 +138,7 @@ def record_interview(
         _materialize_tasks_py(generator, tasks_py)
         artifacts.append("tasks.py")
     elif not tasks_py.is_file():
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"campaign_dir is missing tasks.py: {tasks_py}. Either the "
             f"interview agent must produce tasks.py before invoking this "
             f"primitive, or intent.task_generator must specify a recipe."
@@ -148,10 +149,12 @@ def record_interview(
     tasks_mod = load_tasks_module(tasks_py)
     total_tasks = int(tasks_mod.total())
     if total_tasks < 1:
-        raise ValueError(f"tasks.total() = {total_tasks}; campaign has no tasks to dispatch")
+        raise errors.SpecInvalid(
+            f"tasks.total() = {total_tasks}; campaign has no tasks to dispatch"
+        )
 
     if declared != total_tasks:
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"intent.task_count = {declared} but tasks.total() = {total_tasks}; "
             f"interview agent's stated count disagrees with the produced tasks.py"
         )
@@ -172,9 +175,10 @@ def record_interview(
             "total_tasks": total_tasks,
         },
     }
-    interview_path.write_text(
-        json.dumps(interview_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    # Atomic write: a SIGINT or crash during a plain ``write_text``
+    # would leave half a JSON file that downstream readers
+    # (``load_context``, monitor flow) crash on.
+    atomic_write_json(interview_path, interview_doc)
     artifacts.append("interview.json")
 
     if _maybe_update_meta(intent=intent, campaign_dir=campaign_dir, total_tasks=total_tasks):
@@ -208,17 +212,19 @@ def _maybe_update_meta(*, intent: Mapping[str, Any], campaign_dir: Path, total_t
     if not meta_updates:
         return False
     meta_path = campaign_dir / "meta.json"
-    existing: dict[str, Any] = {}
-    if meta_path.exists():
-        try:
-            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            loaded = {}
-        if isinstance(loaded, dict):
-            existing = loaded
-    merged = {**meta_updates, **existing}
-    merged["total_tasks"] = total_tasks
-    meta_path.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _mutate(existing: dict[str, Any] | None) -> dict[str, Any]:
+        prior = existing or {}
+        # Existing meta.json keys win on conflict EXCEPT total_tasks,
+        # which is always authoritative (must match tasks.total()).
+        merged = {**meta_updates, **prior}
+        merged["total_tasks"] = total_tasks
+        return merged
+
+    # ``atomic_locked_update`` serializes concurrent interview runs
+    # against the same campaign dir — without it the read/merge/write
+    # window loses updates (a parallel agent + driver scenario).
+    atomic_locked_update(meta_path, _mutate)
     return True
 
 
@@ -253,7 +259,7 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
             # axes mapping silently produces the degenerate `n=1` "one
             # empty-kwargs task" outcome. Reject up-front so the
             # interview cross-check catches it.
-            raise ValueError("cartesian_product requires at least one axis")
+            raise errors.SpecInvalid("cartesian_product requires at least one axis")
         n = 1
         for axis_values in axes.values():
             n *= len(axis_values)
@@ -262,7 +268,7 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
         return len(params["items"]) * len(params["seeds"])
     if kind in ("numeric_logspace", "numeric_linspace"):
         return int(params["n"])
-    raise ValueError(f"unknown task_generator.kind: {kind!r}")
+    raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
 
 
 def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
@@ -326,5 +332,5 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
             f"def resolve(i: int) -> dict: return _TASKS[i]\n"
         )
     else:
-        raise ValueError(f"unknown task_generator.kind: {kind!r}")
+        raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
     path.write_text(_GENERATED_HEADER + "\n" + body, encoding="utf-8")

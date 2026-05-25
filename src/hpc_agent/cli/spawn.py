@@ -64,7 +64,13 @@ def cmd_run(args: argparse.Namespace) -> int:
             category="user",
             retry_safe=False,
         )
-    _ok({"report": report.model_dump(), "worker_exit_code": exit_code})
+    # The ``run`` verb spawns a fresh-context worker — side-effectful by
+    # design. Mark the envelope non-idempotent so caller retry logic
+    # treats it as such (``_ok`` defaults to idempotent=True).
+    _ok(
+        {"report": report.model_dump(), "worker_exit_code": exit_code},
+        idempotent=False,
+    )
     return EXIT_OK
 
 

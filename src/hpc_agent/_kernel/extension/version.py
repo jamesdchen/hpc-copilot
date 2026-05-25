@@ -107,9 +107,11 @@ def is_compatible(domain: str, found: int) -> bool:
     For readers that prefer to soft-skip an incompatible record (e.g.
     the journal rebuilder, which scans every file and shouldn't tank
     on one stale entry) rather than raise. Returns ``True`` iff
-    *found* is in :data:`_MANIFEST` ``[domain]``.
+    *found* is in :data:`_MANIFEST` ``[domain]``. An unknown *domain*
+    returns ``False`` rather than raising — the whole point of this
+    helper is to be safe to call from soft-skip readers.
     """
-    return found in _MANIFEST[domain]
+    return found in _MANIFEST.get(domain, ())
 
 
 __all__ = ["compatibility_check", "is_compatible", "supported_versions"]

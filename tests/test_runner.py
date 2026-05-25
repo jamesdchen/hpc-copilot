@@ -204,7 +204,11 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
         "3": {"attempts": 1, "category": "system_oom", "overrides": {"mem": "32G"}},
         "7": {"attempts": 1, "category": "system_oom", "overrides": {"mem": "32G"}},
     }
-    assert after_one.job_ids == ["99999999"]
+    # Resubmit EXTENDS rather than REPLACES the active job_ids so monitor
+    # keeps visibility of the original array's still-running /
+    # already-complete tasks — only the failed ones move to the new
+    # array. Order: oldest first → newest last.
+    assert after_one.job_ids == ["12345678", "99999999"]
 
     runner.resubmit_failed(
         experiment,
@@ -222,7 +226,8 @@ def test_resubmit_failed_increments_retries(journal_home, experiment):
         "overrides": {"mem": "64G"},
     }
     assert after_two.retries["7"]["attempts"] == 1
-    assert after_two.job_ids == ["99999999"]
+    # No new_job_ids on the second call — job_ids untouched.
+    assert after_two.job_ids == ["12345678", "99999999"]
 
 
 def test_record_status_sets_checked_at(journal_home, experiment):
@@ -365,11 +370,12 @@ def test_validate_ssh_target_accepts_alias_and_userhost():
 
 
 def test_validate_ssh_target_rejects_empty_and_shell_chars():
+    from hpc_agent import errors
     from hpc_agent.infra.remote import validate_ssh_target
 
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(errors.SpecInvalid, match="non-empty"):
         validate_ssh_target("")
-    with pytest.raises(ValueError, match="disallowed"):
+    with pytest.raises(errors.SpecInvalid, match="disallowed"):
         validate_ssh_target("alice@host; rm -rf /")
 
 

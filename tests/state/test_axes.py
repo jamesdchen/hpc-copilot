@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import jsonschema
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.state.axes import (
     AXES_FILENAME,
     AXES_SCHEMA_VERSION,
@@ -125,7 +126,7 @@ def test_write_with_axes_enumeration(tmp_path: Path) -> None:
 
 
 def test_homogeneous_must_be_subset_of_axes(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="homogeneous_axes references"):
+    with pytest.raises(errors.SpecInvalid, match="homogeneous_axes references"):
         write_axes(
             tmp_path,
             axes=[{"name": "model", "size": 4}],
@@ -141,7 +142,7 @@ def test_homogeneous_only_cross_validates_against_on_disk_axes(tmp_path: Path) -
         tmp_path,
         axes=[{"name": "model", "size": 4}],
     )
-    with pytest.raises(ValueError, match="homogeneous_axes references"):
+    with pytest.raises(errors.SpecInvalid, match="homogeneous_axes references"):
         write_axes(tmp_path, homogeneous_axes=["window"])
 
 
@@ -234,18 +235,18 @@ def test_wave_map_rejects_unknown_axis(tmp_path: Path) -> None:
         tmp_path,
         axes=[{"name": "model", "size": 2}],
     )
-    with pytest.raises(ValueError, match="not in axes"):
+    with pytest.raises(errors.SpecInvalid, match="not in axes"):
         compute_wave_map(tmp_path, picked_axis="nonexistent")
 
 
 def test_wave_map_rejects_missing_yaml(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(errors.SpecInvalid, match="not found"):
         compute_wave_map(tmp_path, picked_axis="anything")
 
 
 def test_wave_map_rejects_no_axes_enumeration(tmp_path: Path) -> None:
     write_axes(tmp_path, homogeneous_axes=["window"])
-    with pytest.raises(ValueError, match="no 'axes' enumeration"):
+    with pytest.raises(errors.JournalCorrupt, match="no 'axes' enumeration"):
         compute_wave_map(tmp_path, picked_axis="window")
 
 

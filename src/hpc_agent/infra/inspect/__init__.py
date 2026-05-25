@@ -122,13 +122,14 @@ def inspect_cluster(
     # B5-PR2: dispatch through the backend registry. Each backend's
     # ``inspect_cluster`` classmethod normalises kwargs for its scheduler
     # (e.g. SGE ignores ``sacct_window_hours``); a missing backend
-    # raises ValueError just like the prior ladder did.
+    # raises ``errors.SpecInvalid`` (scheduler name comes from cluster
+    # spec, so it's user-input misconfiguration, not corruption).
     from hpc_agent.infra.backends import get_backend_class
 
     try:
         backend_cls = get_backend_class(scheduler)
-    except ValueError as exc:
-        raise ValueError(
+    except errors.SpecInvalid as exc:
+        raise errors.SpecInvalid(
             f"unsupported scheduler {scheduler!r} for cluster {cluster_name!r}"
         ) from exc
     snap: ClusterSnapshot = backend_cls.inspect_cluster(

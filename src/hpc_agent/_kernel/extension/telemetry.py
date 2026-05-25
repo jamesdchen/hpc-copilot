@@ -53,6 +53,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
 from hpc_agent.infra.io import advisory_flock
 
 if TYPE_CHECKING:
@@ -119,7 +120,7 @@ def record(
         return
     if sink == "monitor-jsonl":
         if monitor_jsonl_path is None:
-            raise ValueError("sink='monitor-jsonl' requires monitor_jsonl_path")
+            raise errors.SpecInvalid("sink='monitor-jsonl' requires monitor_jsonl_path")
         try:
             with (
                 flock_append(monitor_jsonl_path),

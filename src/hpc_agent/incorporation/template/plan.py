@@ -34,6 +34,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from hpc_agent import errors
 from hpc_agent.incorporation.template.axis import (
     Associative,
     BoundedHalo,
@@ -109,9 +110,11 @@ def plan_tasks(
     """
     points = [dict(p) for p in sweep]
     if not points:
-        raise ValueError("plan_tasks requires at least one sweep point")
+        raise errors.SpecInvalid("plan_tasks requires at least one sweep point")
     if series_length < 0:
-        raise ValueError(f"series_length must be non-negative; got {series_length}")
+        raise errors.SpecInvalid(
+            f"series_length must be non-negative; got {series_length}"
+        )
 
     sequential = isinstance(data_axis, Sequential)
     if sequential:

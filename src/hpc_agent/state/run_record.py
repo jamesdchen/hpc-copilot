@@ -65,7 +65,11 @@ def _current_homedir() -> Path:
     3. ``~/.claude/hpc`` — the default.
     """
     env_val = os.environ.get("HPC_JOURNAL_DIR")
-    if env_val:
+    # ``if env_val`` previously fell through to the default branch when
+    # the env var was set to the empty string; v3 precedence says env
+    # wins (including the explicit empty-string case → still treat
+    # empty as unset, but distinguish None from "" elsewhere).
+    if env_val is not None and env_val != "":
         return Path(env_val)
     attr = globals().get("HPC_HOMEDIR")
     if isinstance(attr, Path):
@@ -79,7 +83,12 @@ def _current_homedir() -> Path:
 # call sites (``journal_dir``, ``find_in_flight_runs``,
 # ``find_runs_by_campaign``) go through ``_current_homedir()`` so
 # per-test env redirection actually applies.
-HPC_HOMEDIR = Path(os.environ.get("HPC_JOURNAL_DIR") or (Path.home() / ".claude" / "hpc"))
+_env_journal_dir = os.environ.get("HPC_JOURNAL_DIR")
+HPC_HOMEDIR = (
+    Path(_env_journal_dir)
+    if _env_journal_dir is not None and _env_journal_dir != ""
+    else Path.home() / ".claude" / "hpc"
+)
 
 # Re-exported for back-compat. Derived from the canonical
 # hpc_agent._kernel.lifecycle.lifecycle.JournalStatus StrEnum so the literal can

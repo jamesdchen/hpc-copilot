@@ -37,6 +37,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.queries.recall import RecallSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape
@@ -205,12 +206,12 @@ def recall_campaigns(
     include_generator_stats = bool(spec.include_generator_stats)
 
     if not roots:
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"no roots to walk — pass --root or set experiment_roots in {_USER_CONFIG}"
         )
     for root in roots:
         if not root.is_dir():
-            raise ValueError(f"recall root is not a directory: {root}")
+            raise errors.SpecInvalid(f"recall root is not a directory: {root}")
 
     summaries = list(_collect(roots, task_kind=task_kind, operator=operator, since=since))
     summaries.sort(key=lambda r: r.get("materialized_at") or "", reverse=True)

@@ -17,6 +17,7 @@ from unittest import mock
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra.clusters import get_nfs_data_dir
 from hpc_agent.state.journal import upsert_run
 
@@ -32,7 +33,7 @@ def _resolve_nfs_dir_for_cluster(cluster: str, full_clusters: dict[str, Any]):
     cluster_cfg = full_clusters.get(cluster, {})
     try:
         nfs_dir = get_nfs_data_dir(cluster_cfg) if cluster_cfg else None
-    except (ValueError, TypeError):
+    except (errors.SpecInvalid, TypeError):
         nfs_dir = None
     return cluster_cfg, nfs_dir
 
@@ -107,11 +108,11 @@ class TestLoadClustersConfigBubblesUp:
         with pytest.raises(FileNotFoundError):
             load_clusters_config()
 
-    def test_value_error_from_get_nfs_data_dir_does_not_propagate(self) -> None:
+    def test_spec_invalid_from_get_nfs_data_dir_does_not_propagate(self) -> None:
         """Cross-check the validator's behavior matches the resolver:
-        empty-string nfs_data_dir raises ValueError; the resolver
-        catches that single path and falls back to None."""
-        with pytest.raises(ValueError):
+        empty-string nfs_data_dir raises ``errors.SpecInvalid``; the
+        resolver catches that single path and falls back to None."""
+        with pytest.raises(errors.SpecInvalid):
             get_nfs_data_dir({"nfs_data_dir": ""})
 
 

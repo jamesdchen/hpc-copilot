@@ -32,6 +32,8 @@ from typing import Any
 
 import yaml
 
+from hpc_agent import errors
+
 __all__ = [
     "AXES_FILENAME",
     "AXES_SCHEMA_VERSION",
@@ -111,7 +113,9 @@ def write_axes(
         axis_names = {a["name"] for a in axes}
         unknown = [n for n in homogeneous_axes if n not in axis_names]
         if unknown:
-            raise ValueError(f"homogeneous_axes references axes not in axes list: {unknown}")
+            raise errors.SpecInvalid(
+                f"homogeneous_axes references axes not in axes list: {unknown}"
+            )
     elif axes is None and homogeneous_axes:
         # On-disk fallback: cross-validate against whatever axes the
         # existing file declared. If there is no file (or no axes
@@ -129,15 +133,48 @@ def write_axes(
                 axis_names = {a["name"] for a in existing_axes}
                 unknown = [n for n in homogeneous_axes if n not in axis_names]
                 if unknown:
-                    raise ValueError(
+                    raise errors.SpecInvalid(
                         f"homogeneous_axes references axes not in axes list: {unknown}"
                     )
     validate_axes(payload)
     target = axes_path(experiment_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(yaml.safe_dump(payload, sort_keys=True), encoding="utf-8")
-    tmp.replace(target)
+    # Atomic + durable write — fixed-name ``.tmp`` sibling is replaced
+    # with a mkstemp-allocated unique name (two concurrent writes to
+    # the same axes.yaml don't collide on the tmp), and an explicit
+    # ``fsync`` of both file and parent dir keeps the rename durable
+    # across a kernel panic / power loss. Mirrors
+    # ``infra.io.atomic_write_json``'s recipe but for YAML output.
+    import contextlib as _contextlib
+    import os as _os
+    import tempfile as _tempfile
+
+    serialized = yaml.safe_dump(payload, sort_keys=True)
+    fd, tmp_name = _tempfile.mkstemp(
+        prefix=target.name + ".",
+        suffix=".tmp",
+        dir=str(target.parent),
+    )
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(serialized)
+            fh.flush()
+            with _contextlib.suppress(OSError):
+                _os.fsync(fh.fileno())
+        _os.replace(tmp_name, target)
+        try:
+            dir_fd = _os.open(str(target.parent), _os.O_RDONLY)
+            try:
+                with _contextlib.suppress(OSError):
+                    _os.fsync(dir_fd)
+            finally:
+                _os.close(dir_fd)
+        except OSError:
+            pass
+    except BaseException:
+        with _contextlib.suppress(OSError):
+            _os.unlink(tmp_name)
+        raise
     return target
 
 
@@ -154,7 +191,9 @@ def read_axes(experiment_dir: Path | str) -> dict[str, Any] | None:
         return None
     data = yaml.safe_load(text) or {}
     if not isinstance(data, dict):
-        raise ValueError(f"{path}: top-level YAML must be a mapping, got {type(data).__name__}")
+        raise errors.JournalCorrupt(
+            f"{path}: top-level YAML must be a mapping, got {type(data).__name__}"
+        )
     validate_axes(data)
     return data
 
@@ -404,15 +443,15 @@ def compute_wave_map(
 
     config = read_axes(experiment_dir)
     if config is None:
-        raise ValueError("axes.yaml not found")
+        raise errors.SpecInvalid("axes.yaml not found")
     axes = config.get("axes")
     if not axes:
-        raise ValueError("axes.yaml has no 'axes' enumeration")
+        raise errors.JournalCorrupt("axes.yaml has no 'axes' enumeration")
 
     names = [a["name"] for a in axes]
     sizes = [int(a["size"]) for a in axes]
     if picked_axis not in names:
-        raise ValueError(f"picked_axis {picked_axis!r} not in axes {names!r}")
+        raise errors.SpecInvalid(f"picked_axis {picked_axis!r} not in axes {names!r}")
     picked_idx = names.index(picked_axis)
 
     # Strides for row-major task_id encoding.

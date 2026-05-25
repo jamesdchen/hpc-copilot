@@ -88,7 +88,11 @@ def test_in_flight_renders_counts_and_armed_hint(tmp_path: Path, journal_home: P
             "summary": {"complete": 3, "running": 2, "pending": 5, "failed": 0},
             "lifecycle_state": "in_flight",
             "diff_from_prev": {
-                "newly_complete": [0, 1, 2],
+                # ``monitor_flow`` encodes the delta as a length-1 list
+                # whose single element is the count (see
+                # ops/monitor_flow.py:540 — ``[cur - prv]``). Not a
+                # list of task IDs.
+                "newly_complete": [3],
                 "newly_failed": [],
                 "newly_combined_waves": [],
             },

@@ -269,11 +269,21 @@ def _validate_against_schema(payload: Any, schema_name: str) -> None:
             stacklevel=2,
         )
         return
-    try:
-        schema_text = (
-            _resource_files("hpc_agent.schemas") / f"{schema_name}.input.json"
-        ).read_text(encoding="utf-8")
-    except (FileNotFoundError, ModuleNotFoundError):
+    # Search core first, then known plugin schema roots. A pro-only
+    # primitive (e.g. ``predict_queue_wait``, ``run_pre_submit_gates``)
+    # has its schema under ``hpc_agent_pro.schemas/``; the bare
+    # ``hpc_agent.schemas`` lookup would silently no-op and the
+    # defence-in-depth layer would never fire for any pro primitive.
+    schema_text: str | None = None
+    for pkg in ("hpc_agent.schemas", "hpc_agent_pro.schemas"):
+        try:
+            schema_text = (_resource_files(pkg) / f"{schema_name}.input.json").read_text(
+                encoding="utf-8"
+            )
+            break
+        except (FileNotFoundError, ModuleNotFoundError):
+            continue
+    if schema_text is None:
         return
     schema = json.loads(schema_text)
     from hpc_agent._kernel.contract.schema import validate as _validate

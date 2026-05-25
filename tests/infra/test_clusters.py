@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from hpc_agent import errors
 from hpc_agent.infra.clusters import (
     get_auto_daisy_chain,
     get_max_walltime_sec,
@@ -35,7 +36,7 @@ class TestGetWalltimeArbitrage:
         ["yes", "true", 1, 0, 1.0, [], {}, None],
     )
     def test_rejects_non_bool(self, bad):
-        with pytest.raises(ValueError, match="walltime_arbitrage"):
+        with pytest.raises(errors.SpecInvalid, match="walltime_arbitrage"):
             get_walltime_arbitrage({"walltime_arbitrage": bad})
 
 
@@ -61,7 +62,7 @@ class TestGetAutoDaisyChain:
 
     @pytest.mark.parametrize("bad", ["yes", "true", 1, 0, 1.0, []])
     def test_rejects_non_bool(self, bad):
-        with pytest.raises(ValueError, match="auto_daisy_chain"):
+        with pytest.raises(errors.SpecInvalid, match="auto_daisy_chain"):
             get_auto_daisy_chain({"auto_daisy_chain": bad})
 
 
@@ -77,14 +78,14 @@ class TestGetMaxWalltimeSec:
         assert get_max_walltime_sec({"max_walltime_sec": 172800}) == 172800
 
     def test_rejects_zero(self):
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(errors.SpecInvalid, match="positive"):
             get_max_walltime_sec({"max_walltime_sec": 0})
 
     def test_rejects_negative(self):
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(errors.SpecInvalid, match="positive"):
             get_max_walltime_sec({"max_walltime_sec": -1})
 
     @pytest.mark.parametrize("bad", ["86400", 86400.0, True, False, [86400], None])
     def test_rejects_non_int(self, bad):
-        with pytest.raises(ValueError, match="max_walltime_sec"):
+        with pytest.raises(errors.SpecInvalid, match="max_walltime_sec"):
             get_max_walltime_sec({"max_walltime_sec": bad})

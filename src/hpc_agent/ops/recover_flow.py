@@ -131,7 +131,7 @@ def render_overrides_to_extra_flags(
         return []
     s = (scheduler or "").lower()
     if s not in {"slurm", "sge"}:
-        raise ValueError(
+        raise errors.SpecInvalid(
             f"render_overrides_to_extra_flags: unknown scheduler {scheduler!r}; "
             "expected 'slurm' or 'sge'"
         )
@@ -299,11 +299,20 @@ def resubmit_flow(
                 # polling the run record between a partial failure and a
                 # resume sees the resubmit array jobs that already
                 # landed — they would otherwise live only inside
-                # pending_resubmit, which monitor does not read.
+                # pending_resubmit, which monitor does not read. EXTEND
+                # rather than REPLACE for the same reason as
+                # ``resubmit_failed``: keep the original array's job_ids
+                # visible so monitor still sees its still-running /
+                # already-complete tasks. ``pending_resubmit.job_ids``
+                # stays scoped to *this* resubmit attempt (resume needs
+                # to know exactly which batches landed under this rid).
+                merged: dict[str, None] = dict.fromkeys(existing.job_ids or [])
+                for jid in ids:
+                    merged[str(jid)] = None
                 _update_run_status(
                     experiment_dir,
                     run_id,
-                    job_ids=list(ids),
+                    job_ids=list(merged),
                     pending_resubmit={
                         "request_id": derived_rid,
                         "failed_task_ids": list(plan_failed_ids),

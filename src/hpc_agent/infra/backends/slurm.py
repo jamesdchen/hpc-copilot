@@ -11,6 +11,7 @@ class for the remote subclass.
 import os
 import re
 
+from hpc_agent import errors
 from hpc_agent.infra.backends import HPCBackend
 
 
@@ -35,7 +36,7 @@ class SlurmBackend(HPCBackend):
         log_dir: str | None = None,
     ):
         if script is None:
-            raise ValueError("SlurmBackend requires a 'script' path")
+            raise errors.SpecInvalid("SlurmBackend requires a 'script' path")
         self.script = script
         self.account = account or os.environ.get("SLURM_ACCOUNT", "")
         self.cluster = cluster or os.environ.get("SLURM_CLUSTER", "")
@@ -184,7 +185,7 @@ class SlurmBackend(HPCBackend):
             # ``infra.backends.sge`` — v3 BUG-6V3-2).
             bad = [k for k, v in job_env.items() if "," in str(v)]
             if bad:
-                raise ValueError(
+                raise errors.SpecInvalid(
                     "SLURM --export cannot transport env values containing "
                     f"','; offending keys: {sorted(bad)}. Pre-encode "
                     "(base64, space-delimited list, etc.) before submission."
