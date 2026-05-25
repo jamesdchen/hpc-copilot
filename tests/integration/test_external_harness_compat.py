@@ -38,7 +38,7 @@ This module fills that gap. It exercises three slices of the contract:
 
 The mock-SSH approach: ``unittest.mock.patch("hpc_agent.infra.remote.ssh_run", ...)``
 intercepts every cluster-touching subprocess call (per the seam used
-throughout ``tests/runner/test_runner.py`` and
+throughout ``tests/test_runner.py`` and
 ``tests/state/test_submit_cmd_sha_dedup.py``). Subprocess invocations
 of ``uv run python -m hpc_agent`` drive the CLI's outer surface for
 the envelope-shape assertions; direct Python imports drive the
