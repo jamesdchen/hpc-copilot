@@ -141,8 +141,8 @@
   },
   "discriminator": {
     "mapping": {
-      "False": "#/$defs/ErrorEnvelope",
-      "True": "#/$defs/SuccessEnvelope"
+      "false": "#/$defs/ErrorEnvelope",
+      "true": "#/$defs/SuccessEnvelope"
     },
     "propertyName": "ok"
   },

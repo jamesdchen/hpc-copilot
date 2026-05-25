@@ -92,6 +92,8 @@ class _DataAxisConfig(BaseModel):
             raise ValueError(f"data_axis kind {self.kind!r} must not carry a 'halo' block")
         if self.kind != "associative" and self.monoid is not None:
             raise ValueError(f"data_axis kind {self.kind!r} must not carry a 'monoid'")
+        if self.kind == "associative" and self.monoid is None:
+            raise ValueError("data_axis kind 'associative' requires a 'monoid'")
         return self
 
 

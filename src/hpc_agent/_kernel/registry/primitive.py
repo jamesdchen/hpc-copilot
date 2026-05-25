@@ -345,7 +345,15 @@ def _finalize_composes() -> None:
                 )
                 continue
             extra.append(target)
-        if not extra:
+        # Only update the registry when EVERY pending name resolved.
+        # A partial update would silently drop the unresolved names from
+        # this primitive's composes tuple — the unresolved entries do get
+        # surfaced via ``unresolved`` / the final raise, but mutating the
+        # frozen meta with a half-resolved list first leaves the registry
+        # in an inconsistent state for any code that inspects it before
+        # the raise propagates. Leave the meta alone; the trailing
+        # ``raise ValueError`` is the single source of failure.
+        if len(extra) != len(pending):
             continue
         new_meta = dataclasses.replace(
             existing,
