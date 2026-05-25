@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**56 operations total**: 49 primitive atoms + 7 workflow atoms.
+**59 operations total**: 52 primitive atoms + 7 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (26)
+## `query` (27)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -27,10 +27,11 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`campaign-list`](primitives/campaign-list.md) | ✓ | _none_ | `hpc-agent campaign list [--experiment-dir <dir>]` | `hpc_agent.meta.campaign.atoms.list_campaigns.campaign_list` | — | — |
 | [`campaign-replay`](primitives/campaign-replay.md) | ✓ | _none_ | `hpc-agent campaign replay [--experiment-dir <dir>] --campaign-id <campaign_id> [--last-n <last_n>]` | `hpc_agent.meta.campaign.atoms.replay.campaign_replay` | — | `hpc_agent/schemas/campaign.output.json` |
 | [`campaign-status`](primitives/campaign-status.md) | ✓ | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` | `hpc_agent.meta.campaign.atoms.status.campaign_status` | — | — |
-| [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent._kernel.extension.capabilities.capabilities` | — | `hpc_agent/schemas/capabilities.output.json` |
+| [`capabilities`](primitives/capabilities.md) | ✓ | _none_ | `hpc-agent capabilities [--full]` | `hpc_agent._kernel.extension.capabilities.capabilities` | — | `hpc_agent/schemas/capabilities.output.json` |
 | [`clusters-describe`](primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `hpc_agent.ops.clusters.describe.describe_cluster` | — | `hpc_agent/schemas/clusters_describe.output.json` |
 | [`clusters-list`](primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `hpc_agent.ops.clusters.list.list_clusters` | — | `hpc_agent/schemas/clusters_list.output.json` |
 | [`decide-monitor-arm`](primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `hpc_agent.ops.monitor.arm.decide_monitor_arm` | `hpc_agent/schemas/decide_monitor_arm.input.json` | `hpc_agent/schemas/decide_monitor_arm.output.json` |
+| [`describe`](primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name>` | `hpc_agent.cli.setup.describe` | — | — |
 | [`discover-executors`](primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `hpc_agent.state.discover.discover_executors` | — | `hpc_agent/schemas/discover.output.json` |
 | [`discover-reducers`](primitives/discover-reducers.md) | ✓ | _none_ | `hpc-agent discover-reducers [--experiment-dir <dir>]` | `hpc_agent.state.discover.discover_reducers` | — | — |
 | [`failures`](primitives/failures.md) | ✓ | ssh | `hpc-agent failures [--experiment-dir <dir>] --run-id <run_id> [--lines <lines>]` | `hpc_agent.ops.recover.failures_atom.fetch_failures` | — | `hpc_agent/schemas/failures.output.json` |
@@ -82,7 +83,7 @@ Records a new submission (sidecar write + journal entry).
 |---|---|---|---|---|---|---|
 | [`submit-spec`](primitives/submit-spec.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent submit --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.ops.submit.runner.submit_and_record` | `hpc_agent/schemas/submit.input.json` | `hpc_agent/schemas/submit.output.json` |
 
-## `scaffold` (9)
+## `scaffold` (11)
 
 Creates new files (e.g. starter executor templates).
 
@@ -96,7 +97,9 @@ Creates new files (e.g. starter executor templates).
 | [`campaign-init`](primitives/campaign-init.md) | ✓ | writes-sidecar | `hpc-agent campaign init [--experiment-dir <dir>] --campaign-id <campaign_id> [--goal <goal>] [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>] [--strategy-name <strategy_name>] [--strategy-params-json <strategy_params_json>]` | `hpc_agent.meta.campaign.atoms.init.campaign_init` | — | `hpc_agent/schemas/campaign.output.json` |
 | [`classify-axis`](primitives/classify-axis.md) | ✓ | writes-sidecar | `hpc-agent classify-axis --spec <path> [--experiment-dir <dir>]` | `hpc_agent.incorporation.classify_axis.classify_axis` | `hpc_agent/schemas/classify_axis.input.json` | — |
 | [`export-package`](primitives/export-package.md) | ✓ | writes-sidecar | `hpc-agent export-package [--experiment-dir <dir>] [--force]` | `hpc_agent.incorporation.export_package.export_package` | `hpc_agent/schemas/export_package.input.json` | — |
+| [`install-commands`](primitives/install-commands.md) | ✓ | filesystem | `hpc-agent install-commands [--dry-run] [--claude-dir <claude_dir>]` | `hpc_agent.cli.setup.install_commands` | — | — |
 | [`interview`](primitives/interview.md) | ✓ | file_write | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` | `hpc_agent.ops.memory.interview.record_interview` | `hpc_agent/schemas/interview.input.json` | `hpc_agent/schemas/interview.output.json` |
+| [`setup`](primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>]` | `hpc_agent.cli.setup.setup` | — | — |
 
 ## `workflow` (7)
 

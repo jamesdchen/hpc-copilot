@@ -7,6 +7,25 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — Tier-3 CLI verbs folded into the primitive registry
+
+`capabilities`, `install-commands`, `setup`, and `describe` used to be
+hand-written Tier-3 adapters wired by `cli/setup.py:register`. Each
+now carries an `@primitive` decorator and is picked up by the
+registry-walking parser at `cli/parser.py:_register_from_registry`.
+The user-visible CLI surface is unchanged — same flags, same envelope
+shapes, same exit codes — but the four verbs now appear in the
+operations catalog (`hpc-agent capabilities`'s `operations` field, the
+baked `operations.json`, the auto-generated frontmatter under
+`docs/primitives/`) and in introspection tooling that walks
+`get_registry()`. New primitive doc pages: `describe.md`,
+`install-commands.md`, `setup.md` (the existing `capabilities.md` is
+refreshed). `run` remains the lone Tier-3 verb — its semantics are
+spawning a worker process, not invoking a primitive body.
+
+`cli/setup.py:register` is retained as a no-op back-compat shim — the
+registry walk picks up the four verbs from their decorators.
+
 ### Removed — `hpc_agent.runner` cross-subject re-export bridge (BREAKING)
 
 `src/hpc_agent/runner.py` and `scripts/lint_runner_shim.py` are gone.

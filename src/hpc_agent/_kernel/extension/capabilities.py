@@ -10,16 +10,40 @@ CLI verbs an orchestrator can drive, and ``operations`` enumerates the
 primitive or worker-prompt procedure by name, use ``hpc-agent describe
 <name>`` — it returns the body as a JSON envelope, eliminating the
 need for callers to reach into package-data filesystem paths.
+
+The ``--full`` flag bypasses the JSON-envelope contract and emits a
+plain-text llms-full dump; the dispatcher therefore goes through the
+``handler=`` escape hatch instead of the standard
+:func:`dispatch_primitive` envelope path.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from typing import Any
 
 import hpc_agent
 from hpc_agent._kernel.registry.primitive import primitive
+from hpc_agent.cli._dispatch import CliArg, CliShape
+from hpc_agent.cli._helpers import EXIT_OK, _ok
 from hpc_agent.state.run_record import HPC_HOMEDIR
+
+
+def _capabilities_handler(args: argparse.Namespace) -> int:
+    """CLI adapter — emits llms-full text on ``--full``, else the envelope."""
+    if getattr(args, "full", False):
+        from hpc_agent._kernel.registry.operations import render_llms_full
+
+        sys.stdout.write(render_llms_full())
+        sys.stdout.flush()
+        return EXIT_OK
+
+    from hpc_agent.cli.dispatch import _live_subcommands
+
+    _ok(capabilities(subcommands=_live_subcommands()), name="capabilities")
+    return EXIT_OK
 
 
 @primitive(
@@ -27,11 +51,21 @@ from hpc_agent.state.run_record import HPC_HOMEDIR
     verb="query",
     side_effects=[],
     idempotent=True,
-    # CLI is registered as a Tier 3 verb in :mod:`hpc_agent.cli.setup`
-    # (the ``--full`` flag bypasses the JSON-envelope contract, so the
-    # adapter is hand-written rather than dispatcher-driven). The atom
-    # is registered for the catalog only.
-    cli=None,
+    cli=CliShape(
+        help="Machine-readable feature flags: subcommands, schedulers, schema dirs.",
+        args=(
+            CliArg(
+                "--full",
+                action="store_true",
+                help=(
+                    "Emit a plain-text llms-full dump (catalog + every primitive doc + "
+                    "schemas + envelope + boundary contract + cli-spec). Exception to the "
+                    "stdout-is-JSON contract; intended for one-shot LLM context loading."
+                ),
+            ),
+        ),
+        handler=_capabilities_handler,
+    ),
     agent_facing=True,
 )
 def capabilities(*, subcommands: list[str]) -> dict[str, Any]:

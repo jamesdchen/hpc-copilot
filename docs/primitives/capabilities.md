@@ -6,7 +6,7 @@ idempotent: true
 idempotency_key: none
 error_codes: []
 backed_by:
-  cli: (none — Python-only primitive)
+  cli: hpc-agent capabilities [--full]
   python: hpc_agent._kernel.extension.capabilities.capabilities
 exit_codes:
 - 0: ok

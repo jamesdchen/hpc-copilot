@@ -286,13 +286,18 @@ fails CI. Editing a `@primitive(...)` decorator without re-running
 `hpc-agent` (entry point: `hpc_agent.cli.dispatch:main`, per
 `pyproject.toml`) exposes every primitive as a subcommand. The
 parser is built by walking the registry — each primitive's `cli=`
-field is a `CliShape` consumed by `hpc_agent.cli._dispatch`. Tier-3
-verbs that don't have a `@primitive` backing (`run`, `capabilities`,
-`install-commands`, `setup`, `describe`) declare their own
-`register(sub)` function in `cli/<module>.py` and are aggregated by
-`cli/parser.py`. The `cli/main.py` module re-exports `main` so
-external callers can `from hpc_agent.cli import main`; the canonical
-entry is `hpc_agent.cli.dispatch:main`.
+field is a `CliShape` consumed by `hpc_agent.cli._dispatch`. `run` is
+the only remaining Tier-3 verb without a `@primitive` backing; it
+declares its own `register(sub)` in `cli/spawn.py` and is wired by
+`cli/parser.py:_register_tier3_modules`. `capabilities`,
+`install-commands`, `setup`, and `describe` were converted from
+Tier-3 to `@primitive` entries in the post-reorg cleanup — they now
+flow through the same registry-driven parser walk as every other
+verb (each carries a `CliShape` with a `handler=` escape hatch when
+its body branches outside the standard envelope contract, e.g.
+`capabilities --full`'s llms-full text dump). The `cli/main.py`
+module re-exports `main` so external callers can `from hpc_agent.cli
+import main`; the canonical entry is `hpc_agent.cli.dispatch:main`.
 
 Subcommands can be invoked flat (`hpc-agent validate-campaign ...`)
 or under a verb group (`hpc-agent validate validate-campaign ...`);
