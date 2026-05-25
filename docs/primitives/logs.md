@@ -83,7 +83,7 @@ common triage path — pull every failure for a fresh look).
   is missing or unparseable, it falls back to `slurm` so the fetch still
   proceeds best-effort.
 - Per-task stderr paths follow each scheduler's convention; the helper
-  `runner.fetch_task_logs` handles the formatting.
+  `hpc_agent.infra.cluster_logs.fetch_task_logs` handles the formatting.
 - Returns an empty `logs` list with a `note` rather than an error when
   `--all-failed` finds nothing — keeps the call composable from agent
   loops that re-check until a failure shows up.
