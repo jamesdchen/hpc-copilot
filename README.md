@@ -5,7 +5,7 @@ HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces
 - **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/setup-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1. Environment preflight (SSH agent, cluster reachability) runs once per machine via `/setup-hpc` (or `hpc-agent setup --cluster <name>`), which writes a 24h cache marker `/submit-hpc`'s Step 6b gate reads — runtime workflows assume setup succeeded.
 - **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via a `Bash`-style tool by external orchestrators. This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md). For integrators: [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (`hpc_agent.runner`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
+Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (the per-subject runners under `hpc_agent/ops/`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
 
 ## Quick Start
 

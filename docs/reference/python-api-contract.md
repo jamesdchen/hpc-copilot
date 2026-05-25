@@ -1,6 +1,6 @@
 # Python-API Contract
 
-Cross-cutting reference for the Python helpers, on-cluster CLIs, and process-level entry points that slash commands and library callers invoke from inside the `hpc-agent` checkout. Per-operation contracts (input/output/error/idempotency) live in **[`docs/primitives/`](primitives/)** — this file documents only what's shared across operations: the per-run sidecar schema and the conventions the Python surface follows.
+Cross-cutting reference for the Python helpers, on-cluster CLIs, and process-level entry points that slash commands and library callers invoke from inside the `hpc-agent` checkout. Per-operation contracts (input/output/error/idempotency) live in **[`docs/primitives/`](../primitives/)** — this file documents only what's shared across operations: the per-run sidecar schema and the conventions the Python surface follows.
 
 > **Looking for the shell `hpc-agent` CLI?** That is the agent-facing surface — see [`docs/reference/cli-spec.md`](cli-spec.md) and the per-subcommand primitives under `docs/primitives/`. This document covers the Python/library and on-cluster paths that `slash_commands/*.py` and the CLI both reach into.
 
@@ -61,15 +61,15 @@ The Python surface that slash commands and library callers invoke:
 
 | Operation | Primitive | Python entry point |
 |---|---|---|
-| Record a submission | [submit-spec](primitives/submit-spec.md) | `hpc_agent.ops.submit.runner.submit_and_record` |
-| Poll one run's status | [poll-run-status](primitives/poll-run-status.md) | `hpc_agent.ops.monitor.status.record_status` |
-| Combine one wave | [combine-wave](primitives/combine-wave.md) | `hpc_agent.ops.aggregate.combine.combine_wave` |
-| Record a resubmission | [resubmit-failed](primitives/resubmit-failed.md) | `hpc_agent.ops.recover.runner.resubmit_failed` |
-| Reconcile journal vs cluster | [reconcile-journal](primitives/reconcile-journal.md) | `hpc_agent.ops.monitor.reconcile.reconcile` |
-| Mark run terminal | [mark-run-terminal](primitives/mark-run-terminal.md) | `hpc_agent.ops.monitor.reconcile.mark_terminal` |
-| Read campaign history | [campaign-status](primitives/campaign-status.md) (Python form) | `hpc_agent.models.mapreduce.reduce.history.prior` |
-| List in-flight runs | [list-in-flight](primitives/list-in-flight.md) | `hpc_agent.state.index.find_in_flight_runs` |
-| Discover executors | [discover-executors](primitives/discover-executors.md) | `hpc_agent.state.discover.discover_executors` |
+| Record a submission | [submit-spec](../primitives/submit-spec.md) | `hpc_agent.ops.submit.runner.submit_and_record` |
+| Poll one run's status | [poll-run-status](../primitives/poll-run-status.md) | `hpc_agent.ops.monitor.status.record_status` |
+| Combine one wave | [combine-wave](../primitives/combine-wave.md) | `hpc_agent.ops.aggregate.combine.combine_wave` |
+| Record a resubmission | [resubmit-failed](../primitives/resubmit-failed.md) | `hpc_agent.ops.recover.runner.resubmit_failed` |
+| Reconcile journal vs cluster | [reconcile-journal](../primitives/reconcile-journal.md) | `hpc_agent.ops.monitor.reconcile.reconcile` |
+| Mark run terminal | [mark-run-terminal](../primitives/mark-run-terminal.md) | `hpc_agent.ops.monitor.reconcile.mark_terminal` |
+| Read campaign history | [campaign-status](../primitives/campaign-status.md) (Python form) | `hpc_agent.models.mapreduce.reduce.history.prior` |
+| List in-flight runs | [list-in-flight](../primitives/list-in-flight.md) | `hpc_agent.state.index.find_in_flight_runs` |
+| Discover executors | [discover-executors](../primitives/discover-executors.md) | `hpc_agent.state.discover.discover_executors` |
 
 The framework also exposes two library-only helpers that are not
 primitives (no CLI command, not in `hpc-agent capabilities`) but
