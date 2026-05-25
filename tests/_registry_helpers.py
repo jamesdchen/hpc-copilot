@@ -65,3 +65,21 @@ def core_only_operations_catalog() -> list[dict]:
     register_primitives()
     core_names = set(core_only_registry().keys())
     return [entry for entry in _full_catalog() if entry["name"] in core_names]
+
+
+def pro_overlaid_workflows() -> frozenset[str]:
+    """Return the set of worker-prompt workflows hpc-agent-pro overlays.
+
+    Item 5 moved the overlay surface onto the plugin manifest; tests
+    that need to know "which workflow fixtures are stale when pro is
+    installed" read ``MANIFEST.worker_prompt_overlays`` instead of
+    maintaining a parallel allowlist. Returns an empty frozenset when
+    the plugin isn't installed.
+    """
+    if not is_pro_installed():
+        return frozenset()
+    try:
+        from hpc_agent_pro.plugin import MANIFEST  # noqa: PLC0415
+    except ImportError:
+        return frozenset()
+    return frozenset(MANIFEST.worker_prompt_overlays)

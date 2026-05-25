@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from hpc_agent._wire._shared import Scheduler
+from hpc_agent._wire.plugin_manifest import PluginManifest
 
 
 class _ClusterYamlKey(BaseModel):
@@ -75,5 +76,16 @@ class CapabilitiesResult(BaseModel):
             "Source-tree installs read from docs/primitives/ "
             "frontmatter; future wheel installs will read a baked "
             "operations.json shipped in the package."
+        ),
+    )
+    plugins: list[PluginManifest] = Field(
+        default_factory=list,
+        description=(
+            "Self-declared manifest of every installed hpc-agent plugin "
+            "(Item 5). Projected from each plugin's top-level "
+            "``MANIFEST = PluginManifest(...)``; absent for plugins that "
+            "haven't yet declared one (the loader emits a "
+            "DeprecationWarning in that case). Empty when no plugin is "
+            "installed."
         ),
     )

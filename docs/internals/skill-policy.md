@@ -82,7 +82,12 @@ Three structural empties confirm the rule:
   `hpc-agent <primitive>` reference cross-checks against the
   operations catalog (`test_primitive_references.py`). Plugins overlay
   a procedure by exposing a `worker_prompt_assets` attribute on their
-  entry point.
+  entry point and listing the overlaid workflow name in their
+  `MANIFEST.worker_prompt_overlays` tuple (Item 5). The host loader
+  prefers the first plugin providing a workflow; the manifest's
+  `worker_prompt_overlays` field lets the capabilities envelope tell
+  a caller which procedure body they will actually receive without
+  re-walking every plugin's asset tree.
 * **Preflight migrated to setup** — the former `hpc-preflight` skill
   was environment-authority work. Under the rule, environment
   authority belongs in setup (one-time, imperative), not in a runtime
