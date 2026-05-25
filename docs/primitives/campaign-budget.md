@@ -47,7 +47,7 @@ is invoked at the agent layer.
 ## Coupling
 
 - The budget shape (`max_jobs`, `max_tasks`, `max_walltime_sec`)
-  is mirrored in `_schema_models/campaign_manifest.py:_CampaignBudget`
+  is mirrored in `_wire/fixtures/campaign_manifest.py:_CampaignBudget`
   and `campaign-init`'s flag set. Adding a budget axis means
   updating all three places.
 - The "exhausted" semantic (any cap met → True) is a soft

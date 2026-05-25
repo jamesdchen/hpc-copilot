@@ -30,7 +30,7 @@ instead and the file becomes a fallback.
   values (last axis varies fastest, numpy/row-major). Required for
   `submit-flow`'s `wave_map` building. The full input schema lives
   at `hpc_agent/schemas/axes.json` (Pydantic-emitted from
-  `_schema_models/axes.py:AxesConfig`).
+  `_wire/fixtures/axes.py:AxesConfig`).
 - `homogeneous_axes` (list of str, optional) — names the deployer
   believes have low runtime-cost variance. The cold-start picker
   promotes the first one onto the task array. When `axes` is also
