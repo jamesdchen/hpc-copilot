@@ -2,10 +2,14 @@
 """Cross-check ``skills/`` against ``src/slash_commands/commands/``.
 
 Both trees describe the same workflows (submit, monitor, aggregate,
-campaign, build-executor, classify-axis) in different prose.
-Environment-authority work (the former ``hpc-preflight`` skill) moved
-to ``hpc-agent setup`` — see ``docs/internals/skill-policy.md``. This
-lint catches the most common drift modes:
+campaign, build-executor, classify-axis) in different prose: the skill
+is the agent-autonomous decision logic (callable by any agent — the
+user's chat via the Skill tool, or another harness like a MARs
+experiment agent via direct read); the slash is the human-elicitation
+wrapper that gathers intent and invokes the skill with a fully-resolved
+spec. See ``docs/internals/skill-policy.md``. Environment-authority
+work (the former ``hpc-preflight`` skill) moved to ``hpc-agent setup``.
+This lint catches the most common drift modes:
 
 1. A skill exists with no matching slash command (or vice versa).
 2. A skill or slash-command file is missing required frontmatter.
@@ -96,21 +100,25 @@ _EXECUTION_RE = re.compile(r"^execution:\s*(delegated|inline)\s*$", re.MULTILINE
 # Every workflow skill also declares its policy category — the witness
 # for docs/internals/skill-policy.md:
 #
-#   * ``experimenter-intent``  — runs inline in the user's interactive
-#     Claude Code chat; the Skill tool consumes it; tolerant prose is
-#     acceptable because the underlying primitive validates downstream.
+#   * ``agent-autonomous``     — runs inline; consumed via the Skill tool
+#     (by the user's interactive Claude Code chat) or by direct read (by
+#     another agent harness like MARs). The body MUST be deterministic
+#     given its inputs — no ``[Y/n]`` prompts — so any agent caller can
+#     drive it without a human in the loop. Human elicitation, when
+#     needed, lives in the paired slash command and feeds the skill a
+#     fully-resolved spec.
 #   * ``worker-prompt``        — gets inlined as text into the
 #     code-rendered ``claude -p --bare`` worker prompt via
 #     ``spawn_prompt._procedure_body``; the deterministic prefix means
 #     these are eligible for prose hardening (snapshot tests, token
 #     budgets, banned-construct lints) that real skills are not.
 #
-# The category must agree with ``execution``: ``experimenter-intent``
+# The category must agree with ``execution``: ``agent-autonomous``
 # ⇔ ``inline``; ``worker-prompt`` ⇔ ``delegated``. This pairing is the
 # machine-readable expression of the skill-policy rule.
-_CATEGORY_RE = re.compile(r"^category:\s*(experimenter-intent|worker-prompt)\s*$", re.MULTILINE)
+_CATEGORY_RE = re.compile(r"^category:\s*(agent-autonomous|worker-prompt)\s*$", re.MULTILINE)
 _CATEGORY_BY_EXECUTION = {
-    "inline": "experimenter-intent",
+    "inline": "agent-autonomous",
     "delegated": "worker-prompt",
 }
 
@@ -213,10 +221,11 @@ def main() -> int:
         if category_match is None:
             errors.append(
                 f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
-                "`category: experimenter-intent|worker-prompt` field. See "
+                "`category: agent-autonomous|worker-prompt` field. See "
                 "docs/internals/skill-policy.md — the category records "
-                "whether this skill is consumed by the user's chat (real "
-                "Skill tool) or inlined into a worker prompt."
+                "whether this skill is consumed via the Skill tool / direct "
+                "read by an agent (autonomous), or inlined into a worker "
+                "prompt for delegated execution."
             )
             continue
         expected_category = _CATEGORY_BY_EXECUTION[exec_match.group(1)]
@@ -226,7 +235,7 @@ def main() -> int:
                 f"`category: {category_match.group(1)}` — expected "
                 f"`category: {expected_category}`. See "
                 "docs/internals/skill-policy.md: inline execution ↔ "
-                "experimenter-intent; delegated execution ↔ worker-prompt."
+                "agent-autonomous; delegated execution ↔ worker-prompt."
             )
 
     # Skills present on disk but not declared in the pair table.

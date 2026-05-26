@@ -19,7 +19,7 @@ def test_describe_resolves_a_procedure() -> None:
 
 
 def test_describe_resolves_a_skill() -> None:
-    # Inline skills are the experimenter-intent surface; hpc-build-executor
+    # Inline skills are the agent-autonomous surface; hpc-build-executor
     # is one of two real skills the host still ships.
     rc, out, _ = run_cli("describe", "hpc-build-executor")
     assert rc == 0
