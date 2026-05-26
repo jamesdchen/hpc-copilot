@@ -1,134 +1,103 @@
 # Skill Policy — when something earns a SKILL.md
 
-hpc-agent ships markdown that LLMs read. There are **three places** it
-can live, and the choice is forced by the consumer. Get this wrong and
-you either (a) write hand-wavy prose where a deterministic primitive
-belongs, or (b) you ship a deterministic prompt with no test coverage
-because it's masquerading as an LLM-tolerant skill. Both have happened.
+hpc-agent ships markdown that LLMs read. There are **three places** it can live, and the choice is forced by the consumer.
 
-## The axis: who consumes it
+## The framing: two consumers of hpc-agent
 
-| Consumer | Mechanism | Drift tolerance |
+| Consumer | What they call | Decision-making |
 |---|---|---|
-| The user's interactive Claude Code chat | Real Skill tool, `~/.claude/skills/` discovery | High — the LLM interprets intent |
-| A code-rendered worker prompt for `claude -p --bare` | Text inlined into the cacheable prefix by `spawn_prompt._procedure_body` | Low — the prompt is deterministic, the model boundary is the only stochasticity |
-| A primitive caller (any harness via the JSON CLI) | None — primitives have no prompt | Zero — pure function call |
+| **Human** (Claude Code interactive chat) | `/<cmd>-hpc` slash command | The in-chat LLM elicits intent from the human, then invokes the skill with a resolved spec. |
+| **Other agent** (MARs experiment agent, harness, batch driver, ...) | `SKILL.md` directly (via the `Skill` tool, or by reading the body and executing the same procedure) | The calling agent makes the decision autonomously — no human in the loop. |
+
+The slash command is the human-elicitation surface. The skill is the agent-autonomous decision surface. **A skill does not interview the human.** When a human's intent is the source of truth (which YAML is the experiment identity, which entry point to onboard, whether a `BoundedHalo` halo expression is right), the slash command gathers that intent first and passes a fully-resolved spec to the skill. The skill then takes the deterministic path.
+
+This is a flip from the prior framing ("human authority ↔ skill"). The prior framing assumed the only consumer of a skill was the user's chat. That's wrong: hpc-agent is also called by other agents (a MARs experiment agent, a notebook harness, a cron driver). Those callers have no `[Y/n]` channel, and a skill that prompts them is a skill they can't use.
 
 ## The forcing rule
 
-> **Human authority required ↔ Skill. Mechanical-given-spec ↔ worker
-> prompt or pure primitive.**
+> **Skill = agent-autonomous decision logic. Slash = human-elicitation wrapper around the skill.**
 
-A surface needs experimenter interaction when **the human is the
-source of truth**: the only one who knows what they want (intent
-authority — what's your model, what's your axis math, what's your
-campaign goal) or the only one who can actuate the fix (environment
-authority — start ssh-agent, edit `clusters.yaml`). Everything else
-is mechanical and belongs in code.
+A skill's body MUST:
+
+- Take all inputs from the caller (caller-supplied or detected from repo state). No `[Y/n]`, no `Looks right?`, no "Apply this edit?" prompts.
+- Resolve every choice point deterministically. Ambiguity that cannot be resolved becomes a `spec_invalid` envelope (with a specific `error_code` like `ambiguous_entry_point` or `ambiguous_run`), not a prompt. The caller decides what to do.
+- Have an explicit fail-safe default for heuristic decisions (e.g. `DataAxis` falls back to `Sequential` when the tree is ambiguous). The default must be the conservative-but-correct outcome.
+
+A slash command's body MAY:
+
+- Conduct propose-then-confirm dialogs with the user.
+- Override the skill's autonomous defaults with user-confirmed choices (passed in via the spec).
+- Skip skill invocation entirely when a state check resolves the request (e.g. cache hit, environment already configured).
 
 ## The decision table
 
 ```
-                            │ experimenter (per-experiment intent)  │ deterministic
+                            │ human-elicitation                     │ agent-autonomous decision
 ────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-Skill (chat-LLM, inline     │ hpc-build-executor                    │ —
-   execution)               │ hpc-classify-axis                     │   ← empty by rule
+Skill (in-chat or other-    │ —                                     │ hpc-build-executor
+   agent consumer, Skill    │   ← empty by rule                     │ hpc-classify-axis
+   tool or direct read)     │                                       │ hpc-wrap-entry-point
                             │                                       │
 ────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-Worker prompt (inlined      │ —                                     │ hpc-submit
-   into spawn pipeline,     │   ← empty by rule                     │ hpc-status
-   delegated execution)     │                                       │ hpc-aggregate
+Slash command — workflow    │ /submit-hpc  (carries the escalation  │ —
+   trigger (human consumer, │              playbook for entry-point,│   ← workflow triggers are
+   interactive chat)        │              axis, axes-init dialogs) │     human-facing by design
+                            │ /monitor-hpc                          │
+                            │ /aggregate-hpc                        │
+                            │ /campaign-hpc (carries the            │
+                            │              validate-campaign        │
+                            │              findings interpretation) │
+────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
+Worker prompt (delegated    │ —                                     │ hpc-submit
+   workflow, inlined into   │   ← empty by rule                     │ hpc-status
+   spawn pipeline)          │                                       │ hpc-aggregate
                             │                                       │ hpc-campaign
 ────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-Setup (one-time, imperative │ —                                     │ env probes, SSH agent,
-   in /setup-hpc)           │   ← empty by rule                     │ clusters.yaml validation,
-                            │                                       │ experiment_roots config
+Setup (one-time, imperative │ `hpc-agent setup --cluster <name>`    │ —
+   CLI command)             │ — env probes, SSH agent, clusters.yaml│   ← empty by rule
+                            │   validation; preflight check details │
+                            │   carry actionable remediation prose  │
 ────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-CLI primitive (JSON-in,     │ build-executor, classify-axis,        │ submit-flow, monitor-flow,
-   JSON-out, no prompt)     │ interview                             │ aggregate-flow, combine-wave,
-                            │                                       │ reconcile, check-preflight, ...
+CLI primitive (JSON-in,     │ —                                     │ build-executor, classify-axis,
+   JSON-out, no prompt)     │   ← empty by rule                     │ interview, submit-flow,
+                            │                                       │ monitor-flow, aggregate-flow,
+                            │                                       │ combine-wave, ...
 ```
 
-Three structural empties confirm the rule:
+Structural empties confirm the rule:
 
-1. **Top-right empty** — mechanical work does not need an LLM-tolerant
-   skill. If you see one there, the prompt is doing what a deterministic
-   function should do.
-2. **Middle-left empty** — spawned workers cannot actuate human
-   authority. That's the escalation contract: workers handle only the
-   right column; left-column needs flow back as escalations the user's
-   in-chat Claude resolves.
-3. **Setup-left empty** — setup is one-time imperative work. Anything
-   that asks the user to re-affirm per submit belongs in a skill, not
-   setup. Anything you'd ask once-per-machine belongs in setup, not a
-   runtime skill.
+1. **Skill-left empty** — a skill that interviews the human is a skill another agent cannot call. If you see one, the interview belongs in the paired slash command.
+2. **Slash-right empty** — a slash with no human-elicitation content is a primitive call dressed up as a prompt. Either it elicits intent from the user, or it should be a thin trigger over `hpc-agent <verb>`.
+3. **Worker-prompt-left empty** — spawned workers cannot actuate human authority. That's the escalation contract: workers handle only the deterministic column; human-elicitation needs flow back as escalations the user's in-chat Claude resolves via a slash.
+4. **Setup-right empty** — setup is one-time imperative work. Anything that asks the user to re-affirm per submit belongs in a slash, not setup.
 
 ## How this plays out in the current codebase
 
-* `hpc-build-executor`, `hpc-classify-axis` — left column, inline
-  execution. The user's chat agent invokes them via the Skill tool.
-  Tolerant prose is fine; the underlying primitive (`build-executor`,
-  `classify-axis`) catches LLM mistakes.
-* `submit`, `status`, `aggregate`, `campaign` — right column,
-  delegated execution. The text is **inlined** into the `claude -p
-  --bare` worker prompt by `spawn_prompt._procedure_body`; the worker
-  never invokes the Skill tool. These live at
-  `src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`
-  (loaded via `importlib.resources`; the directory name reflects what
-  they actually are). Hardening that doesn't fit real skills lives
-  here: snapshot tests on the rendered `cacheable_prefix` bytes
-  (`tests/worker_prompts/test_prefix_snapshot.py`),
-  banned-hedging-phrase lints (`test_prose_lints.py`), and
-  `hpc-agent <primitive>` reference cross-checks against the
-  operations catalog (`test_primitive_references.py`). Plugins overlay
-  a procedure by exposing a `worker_prompt_assets` attribute on their
-  entry point and listing the overlaid workflow name in their
-  `MANIFEST.worker_prompt_overlays` tuple (Item 5). The host loader
-  prefers the first plugin providing a workflow; the manifest's
-  `worker_prompt_overlays` field lets the capabilities envelope tell
-  a caller which procedure body they will actually receive without
-  re-walking every plugin's asset tree.
-* **Preflight migrated to setup** — the former `hpc-preflight` skill
-  was environment-authority work. Under the rule, environment
-  authority belongs in setup (one-time, imperative), not in a runtime
-  skill that re-asks per submission. `hpc-agent setup --cluster
-  <name>` now does the probe and writes the 24h cache marker
-  `/submit-hpc`'s Step 6b gate reads. The skill and its slash command
-  are gone.
+- `hpc-build-executor`, `hpc-classify-axis`, `hpc-wrap-entry-point` — agent-autonomous decision logic. Each takes a partial spec, fills in the rest from repo inspection + heuristics, and invokes its underlying primitive. No `[Y/n]` anywhere in the bodies. None ships with a paired user-typed slash — the in-chat agent invokes them via the Skill tool when `/submit-hpc`'s escalation playbook reaches the matching escalation code; other agent harnesses read them directly.
+- `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc` — the four user-facing workflow triggers. Each routes through `hpc-agent run <workflow>` to the spawn pipeline. `/submit-hpc` carries the escalation playbook (entry-point onboarding, axis classification, axes-init dialogs); `/campaign-hpc` carries the validate-campaign findings interpretation guide (severity handling, common code values). The human-elicitation prose that used to live in paired slashes lives here.
+- `submit`, `status`, `aggregate`, `campaign` worker prompts — delegated execution. The text is **inlined** into the `claude -p --bare` worker prompt by `spawn_prompt._procedure_body`; the worker never invokes the Skill tool. These live at `src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md` (loaded via `importlib.resources`). Hardening that doesn't fit real skills lives here: snapshot tests on the rendered `cacheable_prefix` bytes, banned-hedging-phrase lints, and `hpc-agent <primitive>` reference cross-checks.
+- **Setup is a CLI step, not a slash.** Environment authority is one-time, imperative. `hpc-agent setup --cluster <name>` does the probe (install commands/skills + check-preflight) and writes the 24h cache marker `/submit-hpc`'s Step 6b gate reads. Each preflight check's `detail` field carries actionable remediation prose so the primitive's output is self-explanatory without a slash translating.
 
 ## When adding a new affordance
 
 Ask, in order:
 
 1. **Is this a one-time-per-machine concern?** If yes → setup. Stop.
-2. **Does it need information only the human has, per experiment?** If
-   yes → skill (with the underlying primitive doing the actual work
-   and catching LLM mistakes). The skill is conversational scaffolding.
-3. **Is it mechanical given a JSON spec?** If yes → primitive. If a
-   spawned worker should run it as part of a workflow, also add a
-   worker prompt that calls the primitive.
+2. **Is it mechanical given a JSON spec?** If yes → primitive. If a spawned worker should run it as part of a workflow, also add a worker prompt that calls the primitive.
+3. **Does it need a decision an agent (human or otherwise) makes per-experiment?** Then it's both a skill and a slash:
+   - The **skill** encodes the decision-making logic — autonomous when called by another agent, accepting caller-supplied overrides when present.
+   - The **slash** wraps the skill with human-elicitation prose. It runs in the user's chat, gathers intent via propose-then-confirm, and invokes the skill with the resolved spec.
 
-If the answer to (2) is "yes, but for any consumer, not just Claude
-Code chat," the deliverable is **both** a skill (Claude Code
-affordance) and an `--interactive` mode on the underlying CLI so
-harnesses without skill discovery still get an equivalent UX.
+If the answer to (3) is "yes, for *only* the human consumer" — that's rare; usually it's a sign the work belongs in the slash body entirely, not in a skill. If the answer is "yes, for *only* the agent consumer" — that's a skill with no paired slash, which is allowed but unusual (add it to `SLASH_ONLY_OK`-style explicit allow-listing in the lint).
 
 ## What this rule will not tell you
 
-* It does not say a skill must be small or large. `hpc-build-executor`
-  is short; a future `hpc-interview` could be long. The constraint is
-  consumer, not length.
-* It does not say a primitive cannot be backed by a skill. Most are.
-  The skill is a *Claude Code adapter* for the primitive — the
-  primitive remains the harness-agnostic source of truth.
+- It does not say a skill must be small or large. The constraint is consumer, not length. An agent-autonomous skill can have a long decision tree; what it can't have is `[Y/n]`.
+- It does not say a skill cannot consult prior state or invoke other primitives. It can do anything mechanical. The constraint is just no synchronous prompting.
+- It does not say a primitive cannot be backed by a skill. Most are. The skill is the *agent adapter* for the primitive — the primitive remains the harness-agnostic source of truth.
 
 ## See also
 
-* [`adding-a-primitive.md`](adding-a-primitive.md) — the wire-surface
-  recipe; complementary to this doc.
-* [`sync-checklist.md`](sync-checklist.md) — invariants between
-  slash-command surface and CLI.
-* `scripts/lint_skill_command_sync.py` — enforces that every workflow
-  pair (skill, slash command) has both halves on disk and the slash
-  routes to the right skill. The `category` frontmatter field is the
-  machine-readable witness for this policy.
+- [`adding-a-primitive.md`](adding-a-primitive.md) — the wire-surface recipe; complementary to this doc.
+- [`sync-checklist.md`](sync-checklist.md) — invariants between slash-command surface and CLI.
+- `scripts/lint_skill_command_sync.py` — enforces that every skill on disk declares matching `execution` + `category` frontmatter, every workflow-trigger slash shells `hpc-agent run`, and every paired (skill, slash) has both halves wired (post-condensation, `WORKFLOW_PAIRS` is empty by default — all skills are in `SKILL_ONLY_OK`). The `category` frontmatter field (`agent-autonomous` for skills consumed via the Skill tool / direct read; `worker-prompt` for skills inlined into delegated workers) is the machine-readable witness for this policy.

@@ -336,10 +336,17 @@ on success, `{"ok": false, "error_code": str, "category": str,
 Three, mirroring the three call-sites a workflow can fire from:
 
 1. **Skills** (`src/slash_commands/skills/<id>/SKILL.md`) —
-   in-chat utilities Claude Code's interactive session invokes via the
-   `Skill` tool. Small focused actions (`hpc-build-executor`,
-   `hpc-classify-axis`); paired 1:1 with a slash command. Have richer
-   metadata (model, tools, arguments).
+   agent-autonomous decision logic. Consumed via the `Skill` tool by
+   the user's interactive Claude Code chat, or by direct read from any
+   other agent harness (a MARs experiment agent, a notebook driver, a
+   cron-spawned worker). Small focused actions (`hpc-build-executor`,
+   `hpc-classify-axis`, `hpc-wrap-entry-point`). The body MUST be
+   deterministic given its inputs — no `[Y/n]` prompts — so any agent
+   caller can drive it without a human in the loop. None of the skills
+   ships with a paired user-typed slash; they are invoked by the
+   in-chat agent when `/submit-hpc`'s escalation playbook reaches the
+   matching escalation code, or by other agents directly. See
+   `docs/internals/skill-policy.md`.
 2. **Worker prompts** (`src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`) —
    the four host workflows (`submit`, `status`, `aggregate`, `campaign`)
    delegated workers consume. A `claude -p --bare` worker has no
@@ -348,21 +355,22 @@ Three, mirroring the three call-sites a workflow can fire from:
    `importlib.resources`). Snapshot tests pin the rendered bytes so
    prompt-cache hit rates don't silently regress.
 3. **Slash commands** (`src/slash_commands/commands/<stem>.md`) —
-   user-typed entry points. Two routing modes coexist:
-   - **Paired** (`hpc-axes-init`, `classify-axis-hpc`) — 5-line "use
-     the X skill" redirect. Single SoT lives in the paired skill.
-   - **Workflow trigger** (`submit-hpc`, `monitor-hpc`,
-     `aggregate-hpc`, `campaign-hpc`) — routes through
-     `hpc-agent run <workflow>` to the spawn pipeline, which loads
-     the body from `worker_prompts/<workflow>.md`. No paired skill —
-     the workflow IS the worker prompt.
+   the human-elicitation surface; user-typed entry points. Exactly
+   four user-facing slashes: `submit-hpc`, `monitor-hpc`,
+   `aggregate-hpc`, `campaign-hpc`. Each routes through
+   `hpc-agent run <workflow>` to the spawn pipeline, which loads the
+   body from `worker_prompts/<workflow>.md`. No paired skill — the
+   workflow IS the worker prompt. The in-chat playbook for handling
+   the worker's escalations (entry-point onboarding, axis
+   classification, axes-init, validate-campaign findings) lives in
+   the slash body of the workflow that escalates.
 
-Two lint scripts pin the surfaces against each other:
-`scripts/lint_skill_command_sync.py:WORKFLOW_PAIRS` enumerates the
-skill↔slash redirects; `WORKFLOW_TRIGGER_SLASHES` (same file)
-enumerates the `hpc-agent run` triggers. CI fails if a new workflow
-shows up on one surface without the other. Skill-policy rationale
-lives in `docs/internals/skill-policy.md`.
+`scripts/lint_skill_command_sync.py` pins the surfaces:
+`WORKFLOW_TRIGGER_SLASHES` enumerates the four `hpc-agent run`
+triggers; `SKILL_ONLY_OK` enumerates the agent-only skills. CI fails
+if a slash on disk has no entry in either set, or if a skill's
+`execution` and `category` frontmatter disagree. Skill-policy
+rationale lives in `docs/internals/skill-policy.md`.
 
 ## Cross-subject composition
 

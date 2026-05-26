@@ -92,18 +92,104 @@ def _setup_handler(args: argparse.Namespace) -> int:
     payload: dict[str, Any] = {"assets": assets}
 
     cluster = getattr(args, "cluster", None)
+    experiment_dir = (
+        Path(args.experiment_dir).expanduser() if args.experiment_dir else Path.cwd()
+    )
     if cluster:
         preflight = check_preflight(cluster=cluster)
         payload["preflight"] = preflight
         if preflight["all_ok"] and not args.dry_run:
-            experiment_dir = (
-                Path(args.experiment_dir).expanduser() if args.experiment_dir else Path.cwd()
-            )
             marker = write_preflight_marker(cluster=cluster, experiment_dir=experiment_dir)
             payload["preflight_marker"] = str(marker)
 
+    install_cron_flag = bool(getattr(args, "install_cron", False))
+    cron_info = _resolve_pro_cron_status(
+        cluster=cluster,
+        experiment_dir=experiment_dir,
+        install_cron_flag=install_cron_flag,
+        dry_run=args.dry_run,
+    )
+    if cron_info is not None:
+        payload["pro_cron"] = cron_info
+
     _emit({"ok": True, "idempotent": True, "data": payload})
     return EXIT_OK
+
+
+def _resolve_pro_cron_status(
+    *,
+    cluster: str | None,
+    experiment_dir: Path,
+    install_cron_flag: bool,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    """Surface or invoke the pro plugin's install-cron primitive.
+
+    Returns ``None`` when the pro plugin isn't loaded (nothing to say).
+    Otherwise returns a dict describing one of three states:
+
+    * ``status: "available"`` — pro is loaded; the cron install is a
+      one-command follow-up the user can run. No mutation. Always
+      surfaced when ``--install-cron`` was not passed.
+    * ``status: "installed"`` — pro is loaded and ``--install-cron``
+      was passed; the install-cron primitive ran and its result is
+      embedded.
+    * ``status: "skipped"`` — explicit reason the install couldn't run
+      (no cluster, no ssh_target derivable, dry-run, etc.).
+    """
+    from hpc_agent._kernel.registry.primitive import get_registry
+
+    registry = get_registry()
+    if "install-cron" not in registry:
+        return None
+
+    suggested_command = (
+        f"hpc-agent install-cron --experiment-dir '{experiment_dir}'"
+        + (f"  # derive --ssh-target from clusters.yaml for {cluster!r}" if cluster else "")
+    )
+
+    if not install_cron_flag:
+        return {
+            "status": "available",
+            "reason": (
+                "hpc-agent-pro is loaded; run `hpc-agent install-cron` to enable "
+                "LightGBM-residual queue-wait forecasting (the snapshot cron needs "
+                "~7-14 days of history before useful)"
+            ),
+            "command": suggested_command,
+        }
+
+    if dry_run:
+        return {"status": "skipped", "reason": "dry-run; install-cron not invoked"}
+    if not cluster:
+        return {
+            "status": "skipped",
+            "reason": "--install-cron requires --cluster (ssh_target is derived from clusters.yaml)",
+        }
+
+    from hpc_agent.infra.clusters import load_clusters_config
+
+    clusters = load_clusters_config()
+    if cluster not in clusters:
+        return {
+            "status": "skipped",
+            "reason": f"{cluster!r} not in clusters.yaml",
+        }
+    ssh_target = clusters[cluster].get("ssh_target")
+    if not ssh_target:
+        return {
+            "status": "skipped",
+            "reason": (
+                f"{cluster!r} clusters.yaml entry needs both `host` and `user` to "
+                "derive ssh_target; pass --ssh-target to `hpc-agent install-cron` directly"
+            ),
+        }
+
+    install_cron_fn = registry["install-cron"].func
+    cron_result = install_cron_fn(
+        ssh_target=ssh_target, experiment_dir=experiment_dir
+    )
+    return {"status": "installed", "ssh_target": ssh_target, **cron_result}
 
 
 @primitive(
@@ -154,6 +240,18 @@ def _setup_handler(args: argparse.Namespace) -> int:
                     "cache marker. Defaults to cwd. Only used when --cluster is set."
                 ),
             ),
+            CliArg(
+                "--install-cron",
+                action="store_true",
+                help=(
+                    "Also install the wait-predictor crontab entries (snapshot "
+                    "every 5 minutes, training daily at 03:00). Requires "
+                    "hpc-agent-pro to be installed and --cluster to be set; the "
+                    "ssh_target is derived from clusters.yaml. When hpc-agent-pro "
+                    "is loaded but this flag is not passed, the envelope still "
+                    "surfaces the suggested command."
+                ),
+            ),
         ),
         handler=_setup_handler,
     ),
@@ -165,6 +263,7 @@ def setup(
     claude_dir: str | Path | None = None,
     cluster: str | None = None,
     experiment_dir: str | Path | None = None,
+    install_cron: bool = False,
 ) -> dict[str, Any]:
     """One-shot setup: install bundled assets; optionally probe a cluster.
 
@@ -172,8 +271,14 @@ def setup(
     With *cluster* supplied, also probes the cluster's environment
     (SSH agent, ssh + file-transfer transport on PATH, ``clusters.yaml``
     parses, TCP :22 reachable) and — on a green probe — writes the 24h
-    cache marker that ``/submit-hpc``'s Step 6b gate reads, so the
-    first submit in this experiment doesn't repeat the probe.
+    cache marker that ``/submit-hpc``'s Step 6b gate reads.
+
+    With *install_cron=True* and the ``hpc-agent-pro`` plugin loaded,
+    also invokes the pro plugin's ``install-cron`` primitive with the
+    ssh_target derived from the cluster config. Without the flag, the
+    envelope still surfaces a ``pro_cron`` recommendation when the pro
+    plugin is detected — a no-mutation hint pointing at the follow-up
+    command.
 
     The marker is scoped to *experiment_dir* (default: cwd) because
     the Step 6b gate reads from ``JournalLayout(experiment_dir)`` — run
@@ -187,13 +292,22 @@ def setup(
     assets = install_agent_assets(claude_dir=target_claude_dir, dry_run=dry_run)
     payload: dict[str, Any] = {"assets": assets}
 
+    exp = Path(experiment_dir).expanduser() if experiment_dir else Path.cwd()
     if cluster:
         preflight = check_preflight(cluster=cluster)
         payload["preflight"] = preflight
         if preflight["all_ok"] and not dry_run:
-            exp = Path(experiment_dir).expanduser() if experiment_dir else Path.cwd()
             marker = write_preflight_marker(cluster=cluster, experiment_dir=exp)
             payload["preflight_marker"] = str(marker)
+
+    cron_info = _resolve_pro_cron_status(
+        cluster=cluster,
+        experiment_dir=exp,
+        install_cron_flag=install_cron,
+        dry_run=dry_run,
+    )
+    if cron_info is not None:
+        payload["pro_cron"] = cron_info
 
     return payload
 

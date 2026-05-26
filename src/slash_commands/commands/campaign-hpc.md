@@ -4,7 +4,7 @@ This command is a thin trigger over `hpc-campaign-driver`, the code-orchestrated
 
 Two things this command does in-conversation, because the driver can't:
 
-1. **Pick the path** (first-time setup only). Ask the user: "Do you have a fixed grid to step through — walk-forward windows, ablations, a manual sweep? → Path A. Or do you want an optimizer to choose params adaptively — Optuna, random-search, PBT? → Path B." Walk them through writing `tasks.py` accordingly. For Path B, the `_optuna_trial_number` (or equivalent unique marker) in `tasks.resolve()`'s kwargs is load-bearing — without it the framework silently dedupes repeat-param iterations and the campaign collapses. The skill's mandatory `validate-campaign` gate enforces this; surface the requirement to the user up front.
+1. **Pick the path** (first-time setup only). Ask the user: "Do you have a fixed grid to step through — walk-forward windows, ablations, a manual sweep? → Path A. Or do you want an optimizer to choose params adaptively — Optuna, random-search, PBT? → Path B." Walk them through writing `tasks.py` accordingly. For Path B, the `_optuna_trial_number` (or equivalent unique marker) in `tasks.resolve()`'s kwargs is load-bearing — without it the framework silently dedupes repeat-param iterations and the campaign collapses. The mandatory `validate-campaign` gate enforces this; surface the requirement to the user up front.
 
 2. **Tag the campaign**: ask "what should we call this campaign?" and validate the slug against `^[A-Za-z0-9._\-]+$`.
 
@@ -16,6 +16,46 @@ Once `tasks.py` and the slug are set, each `/campaign-hpc` invocation advances e
 2. Surface the printed `plan` and the step's result to the user: which step ran, the `run_id`, the lifecycle state or reduced metrics, and whether the campaign has more iterations queued.
 3. The user kicks the next iteration when ready. For unattended runs, point them at `/loop 30m hpc-campaign-driver --experiment-dir . --allow-agent-steps` or a cron wrapper — each tick is one step, and on-disk state is the only thing carried between ticks.
 
+## Interpreting `validate-campaign` findings
+
+Each campaign iteration runs `hpc-agent validate-campaign` as a pre-submit static gate (catches three bug classes — fabricated kwargs, NaN-trap row references in the dataset, walltime/GPU mismatches against history). The worker invokes it autonomously; when findings come back to your chat, interpret by severity:
+
+| Severity | What to do |
+|---|---|
+| `error` | Submission must NOT proceed. Apply `suggested_fix` if present, edit the relevant input (`tasks.py.resolve()`, dataset row, walltime), and re-invoke the campaign step. |
+| `warning` | Informational. Surface to the operator: "Walltime is below the historical p95 (3600s vs 5400s) — proceed anyway?" Proceed only if they accept the trade-off. |
+| `info` | Purely advisory (cold-start, no samples yet, etc.). No action needed; mention if relevant. |
+
+Common `code` values and recommended responses:
+
+| `code` | Recommended response |
+|---|---|
+| `literal_value_not_allowed` | Fix the offending value in `tasks.py.resolve(i)` per `evidence.allowed`. |
+| `missing_parameter` | Either remove the kwarg from `tasks.py` or add it to the executor function signature. |
+| `row_index_oob` | Drop the index from `tasks.py` or extend the dataset. |
+| `required_column_null` | Drop the row from `tasks.py` or backfill the column. |
+| `walltime_below_quantile` | Raise `requested_walltime_sec` to `evidence.quantile_sec` (the historical p95). |
+| `known_bad_combination` | Switch GPU type or remove the workload tag — the `(gpu, workload_tag)` pair is recorded as known-bad in `.hpc/playbook.yaml`. |
+
+If `data.overall == "fail"`, do NOT advance the campaign. Fix and re-run.
+
+There is no `--force` flag by design. If a rule is wrong for the project, edit `.hpc/playbook.yaml` (one version-controlled commit) rather than override at runtime. Schema (every section optional):
+
+```yaml
+known_bad_combinations:
+  - gpu: v100
+    workload_tag: attn-fp32
+    severity: error
+    reason: "V100 fp32 attention is numerically unstable"
+
+walltime_rules:
+  - below_quantile: 0.95
+    severity: warning
+    message: "Requested walltime is below historical p95"
+```
+
+The user can also run `hpc-agent validate-campaign --spec spec.json --experiment-dir .` directly while iterating on `tasks.py` — a dry-run with no side effects. Same envelope, same `data.findings` shape.
+
 ## When the user asks "show me what landed"
 
 Run `hpc-agent campaign list` first; if more than one campaign exists, ask which. Then `hpc-agent campaign status --campaign-id <slug>` and surface the per-iteration history. Group multiple in-flight runs by `campaign_id` — easier to scan than a flat list.
@@ -24,3 +64,4 @@ Run `hpc-agent campaign list` first; if more than one campaign exists, ask which
 
 - **Pause and resume is trivial.** There is no driver state to recover — sidecars on disk are the only durable artifact. Re-run `/campaign-hpc` (or `hpc-agent campaign status`) and the driver resumes from where it left off.
 - **Concurrency** is opt-in: for K iterations in flight (Optuna's `constant_liar=True` is built for this), the campaign's `tasks.py` and submit cadence control it. Default to sequential when in doubt — walk-forward iteration N+1 depends on N's result.
+- **Idempotent validation.** `validate-campaign` is safe to call as many times as you want; no side effects.

@@ -7,6 +7,112 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — Slash surface condensed to four workflow triggers
+
+The user-facing slash surface is now exactly `/submit-hpc`,
+`/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`. Five slashes
+removed: the three paired interview slashes (`/hpc-axes-init`,
+`/classify-axis-hpc`, `/wrap-entry-point-hpc`) plus `/setup-hpc` and
+`/validate-campaign`. Their behaviors are preserved:
+
+- **Entry-point onboarding / axis classification / axes-init dialogs**
+  — moved into `/submit-hpc`'s escalation playbook. The worker
+  escalates with `mature_repo_needs_interview`, `axis_unclassified`,
+  `no_axes_yaml`, `ambiguous_entry_point`, or `ambiguous_run`; the
+  in-chat agent walks the user through the matching dialog and then
+  invokes the relevant skill (`hpc-wrap-entry-point`,
+  `hpc-classify-axis`, `hpc-build-executor`) via the Skill tool with
+  a fully-resolved spec. The skills themselves are unchanged and
+  remain callable directly by other agent harnesses (MARs, notebook
+  drivers, cron workers).
+- **`validate-campaign` findings interpretation** — moved into
+  `/campaign-hpc`'s body (severity handling, common-code response
+  table, playbook.yaml schema). The `hpc-agent validate-campaign`
+  primitive is unchanged; both `submit` and `campaign` workers
+  continue to auto-invoke it as a pre-submit static gate.
+- **`/setup-hpc`** — replaced by `hpc-agent setup --cluster <name>`
+  (already a primitive). Each preflight check's `detail` field gained
+  actionable remediation prose so the primitive's output is
+  self-explanatory without a slash translating
+  (`src/hpc_agent/ops/preflight/check.py`). The optional snapshot-cron
+  install (for the LightGBM-residual queue-wait predictor) became a
+  proper primitive shipped in the pro wheel — see Added below.
+
+### Added — `install-cron` primitive in `hpc-agent-pro`
+
+`hpc-agent install-cron --ssh-target <target> --experiment-dir <dir>`
+installs the wait-predictor crontab entries (snapshot every 5 minutes,
+training daily at 03:00) idempotently. Fingerprinted by target module
+path so re-running detects existing entries and skips. The three
+cron-invoked modules — `snapshot_squeue`, `train_wait_predictor`,
+`extract_sacct_history` — moved from the top-level `scripts/`
+directories into `hpc_agent_pro._cron/`, so a plain
+`pip install hpc-agent-pro` ships everything the cron lines need. The
+cron commands use `python -m hpc_agent_pro._cron.<module>` so they
+work in any pip-installed environment without an editable source
+checkout.
+
+`hpc-agent setup` now detects the pro plugin via the registry and
+integrates the cron install into the setup flow:
+
+* When pro is loaded and `--install-cron` is **not** passed: the
+  envelope surfaces `data.pro_cron: {status: "available", command:
+  "..."}` — a no-mutation recommendation pointing at the follow-up
+  command.
+* When pro is loaded and `--install-cron` **is** passed (with
+  `--cluster <name>`): setup derives `ssh_target` from the cluster's
+  `clusters.yaml` entry (`user@host`) and invokes the install-cron
+  primitive directly, embedding its result in
+  `data.pro_cron: {status: "installed", ...}`.
+* When pro is not loaded: no `pro_cron` field; the recommendation is
+  silent.
+
+Pip install itself is unchanged — auto-modifying the user's crontab
+during `pip install` would be a footgun (needs user-specific args,
+side-effects in CI/Docker). The two-step (`pip install hpc-agent-pro`
+→ `hpc-agent setup --cluster <name> --install-cron`) is the explicit
+form.
+
+`scripts/lint_skill_command_sync.py` updated: `WORKFLOW_PAIRS` is now
+empty by design; `SKILL_ONLY_OK` enumerates the three agent-only
+skills. Frontmatter validation runs on every skill on disk, not just
+paired ones.
+
+### Changed — Skills are agent-autonomous; human elicitation moves to slash commands
+
+hpc-agent has two consumers: humans (via slash commands in the user's
+interactive chat) and other agents (e.g. a MARs experiment agent that
+calls into hpc-agent without a human in the loop). The prior skill
+policy framed skills as "experimenter-intent" surfaces that interview
+the user via `[Y/n]` turns — which made every skill un-callable by any
+non-chat consumer.
+
+Flipped the model:
+
+- **Skills** (`hpc-build-executor`, `hpc-classify-axis`,
+  `hpc-wrap-entry-point`) are now the agent's decision logic.
+  Deterministic given inputs. No `[Y/n]` prompts, no "Looks right?"
+  turns. Ambiguity that can't be resolved becomes a `spec_invalid`
+  envelope (e.g. `ambiguous_entry_point`, `ambiguous_run`) rather than
+  a prompt — the caller decides what to do next.
+- **Slash commands** (`/classify-axis-hpc`, `/wrap-entry-point-hpc`,
+  `/hpc-axes-init`) absorbed the propose-then-confirm dialogs that used
+  to live in the skill bodies. Each slash now elicits intent from the
+  user and then invokes the paired skill with a fully-resolved spec,
+  causing the skill's own elicitation paths to short-circuit.
+- `docs/internals/skill-policy.md` rewritten around the two-consumer
+  framing. The decision table's "experimenter-intent" column became
+  "human-elicitation" (now exclusively the slash's domain); the
+  "deterministic" column became "agent-autonomous decision" (now
+  exclusively the skill's domain).
+- `scripts/lint_skill_command_sync.py` renamed the category enum
+  `experimenter-intent` → `agent-autonomous`; the skill's frontmatter
+  `category:` field now witnesses this.
+
+No wire-surface changes — the underlying primitives (`build-executor`,
+`classify-axis`, `interview`) accept the same specs as before. The flip
+is in the agent-facing markdown (skills + slashes + policy doc) only.
+
 ### Added — Explicit plugin overlay manifest
 
 Plugins now self-declare their overlay contributions via a top-level

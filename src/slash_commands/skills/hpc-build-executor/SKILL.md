@@ -1,18 +1,27 @@
 ---
 name: hpc-build-executor
-description: "Scaffold a new executor file from the starter template into the experiment repo, then customize it."
+description: "Scaffold a new executor file from the starter template into the experiment repo, then customize it. Autonomous: the caller supplies `--name` and `--output-dir`; the skill scaffolds, customizes, smoke-tests, classifies axes by heuristic, and invokes `axes-init`. No `[Y/n]` prompts."
 allowed-tools: Bash Read Write
 execution: inline
-category: experimenter-intent
+category: agent-autonomous
 ---
 
-Agent-facing composition over the **[build-executor](../../docs/primitives/build-executor.md) primitive** (see that file for full input/output/error contract). Materializes the bundled starter template at a chosen path; the caller customizes it afterward.
+Agent-facing composition over the **[build-executor](../../docs/primitives/build-executor.md) primitive** (see that file for full input/output/error contract). Materializes the bundled starter template at a caller-supplied path; the skill then customizes it.
 
 This skill also covers axis-init — the companion step that writes `.hpc/axes.yaml` so the framework can pick a parallelism axis automatically at submit time. The two are paired in practice: a new executor needs an `axes.yaml` describing which of its parallel dimensions belongs on the task array.
 
+## Inputs
+
+| Field | Source |
+|---|---|
+| `name` | Caller (filename stem, no `.py`) |
+| `output_dir` | Caller (absolute path inside the experiment repo) |
+| `force` | Caller (default `false`; set `true` to overwrite) |
+| `homogeneous_axes` | Caller, or filled by Step 2 of the axes-init companion (heuristic) |
+
 ## Steps (build-executor)
 
-1. **Choose `--name`** (filename stem, no `.py`) and `--output-dir` (absolute path inside the experiment repo, NOT inside the framework repo).
+1. **Validate inputs**. `name` is the filename stem (no `.py`). `output_dir` is an absolute path inside the experiment repo, NOT inside the framework repo. The skill refuses with `spec_invalid` if `output_dir` resolves inside the framework repo's `templates/` tree.
 
 2. **Invoke** [build-executor](../../docs/primitives/build-executor.md). Add `--force` only if intentionally overwriting an existing file.
 
@@ -40,7 +49,7 @@ The framework needs to know which parallel dimension to promote to the SLURM/SGE
 
 1. **Inspect the experiment for parallel axes.** Read `tasks.py` and any companion files (`CLAUDE.md`, README, executor scripts) to identify each parallel dimension the experimenter has expressed. Common shapes: a `resolve(task_id)` function returning kwargs derived from `task_id` via cartesian product over named lists; a grid-search dict the executor reads; an explicit per-axis loop in driver code.
 
-2. **Classify each axis as homogeneous or not** using the experiment's semantics. Heuristics that often hold:
+2. **Resolve `homogeneous_axes`.** If the caller supplied `homogeneous_axes` in the spec (the slash path, after `/hpc-axes-init` ran its propose-then-confirm dialog with the user), use it as-is — skip the heuristic. Otherwise classify each axis autonomously using the experiment's semantics. Heuristics that often hold:
    - Replicates / seeds / folds / cross-validation windows / time-series backtest windows → typically **homogeneous** (same compute on slightly different data).
    - Model class / architecture / algorithm → typically **heterogeneous** (orders-of-magnitude different cost).
    - Data type / dataset → depends on dataset sizes; usually mildly heterogeneous.
@@ -48,7 +57,7 @@ The framework needs to know which parallel dimension to promote to the SLURM/SGE
 
 3. **Invoke** [axes-init](../../docs/primitives/axes-init.md) with `--homogeneous-axes <comma-separated-names>`. Refuses to overwrite an existing `axes.yaml`; pass `--force` only when intentional.
 
-4. **Parse the envelope** — confirm `wrote: true` and the resolved `axes_path`. On `wrote: false`, surface the existing file's contents and let the caller decide (prompt user, abort, or pass `--force` after confirmation).
+4. **Parse the envelope** — confirm `wrote: true` and the resolved `axes_path`. On `wrote: false`, surface the existing file's contents to the caller (the slash, which re-prompts the user for `--force`; an autonomous caller decides programmatically). The skill itself does not prompt — the wrote-false envelope is the signal back to whoever invoked it.
 
 ## Notes
 

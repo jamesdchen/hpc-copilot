@@ -2,7 +2,7 @@
 
 HPC orchestrator for array-batch experiments on SGE/SLURM clusters. Two surfaces over one core:
 
-- **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`, `/setup-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. Executor scaffolding is folded into `/submit-hpc` Step 1. Environment preflight (SSH agent, cluster reachability) runs once per machine via `/setup-hpc` (or `hpc-agent setup --cluster <name>`), which writes a 24h cache marker `/submit-hpc`'s Step 6b gate reads — runtime workflows assume setup succeeded.
+- **Slash commands for humans** in Claude Code (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`) — interactive markdown templates in `slash_commands/commands/*.md` that walk you through choosing a cluster and authoring `.hpc/tasks.py`. The four workflow triggers cover every end-user moment; entry-point onboarding, axis classification, and axes-init are folded into `/submit-hpc`'s escalation playbook (the worker escalates when it can't proceed; the playbook walks the user through the dialog and the agent invokes the relevant skill with a resolved spec). Environment preflight (SSH agent, cluster reachability) is a one-time-per-machine CLI step: `hpc-agent setup --cluster <name>` probes the cluster and writes a 24h cache marker `/submit-hpc`'s Step 6b gate reads — runtime workflows assume setup succeeded.
 - **CLI for agents and automation** (`hpc-agent <subcommand>`) — JSON-in, JSON-out, exit codes. Designed to be invoked via a `Bash`-style tool by external orchestrators. This is a POSIX-native agent surface: any tool that can shell out and parse JSON can drive a cluster — see [`docs/reference/agent-surface.md`](docs/reference/agent-surface.md). For integrators: [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
 Both surfaces invoke `hpc-agent <subcommand>`. The slash commands are pure markdown that orchestrate the binary; the binary's atomic-ops layer (the per-subject runners under `hpc_agent/ops/`) ensures cross-surface state — in-flight runs, journal records under `~/.claude/hpc/<repo_hash>/` — is shared automatically.
@@ -23,14 +23,15 @@ to probe SSH agent reachability, ssh/transport on PATH,
 `clusters.yaml` parseability, and TCP :22; on a green probe it writes
 a 24h cache marker that `/submit-hpc`'s Step 6b gate consults, so the
 first submit doesn't re-run the check. Pass `--dry-run` to preview.
-Every command (`/setup-hpc`, `/submit-hpc`, `/monitor-hpc`,
-`/aggregate-hpc`, `/campaign-hpc`, `/hpc-axes-init`) and skill ships
-inside the package.
+Each preflight check's `detail` field carries actionable remediation
+prose, so a red probe tells you exactly what to fix. Every command
+(`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`)
+and skill ships inside the package.
 
 Once installed:
 
-- `/setup-hpc` (once per machine + cluster) — install assets and probe each cluster you'll submit to. Runtime workflows assume setup succeeded; re-run if SSH credentials or a cluster's reachability change.
-- `/submit-hpc` — answer prompts about cluster, executor, grid params. Scaffolds the executor inline if none exists.
+- `hpc-agent setup --cluster <name>` (once per machine + cluster) — install assets and probe each cluster you'll submit to. Runtime workflows assume setup succeeded; re-run if SSH credentials or a cluster's reachability change.
+- `/submit-hpc` — answer prompts about cluster, executor, grid params. The worker escalates with structured intent prompts (entry-point onboarding, axis classification) when it can't proceed; the in-chat agent walks the user through the escalation playbook and invokes the relevant skill with the resolved spec.
 - `/monitor-hpc` to monitor, `/aggregate-hpc` to collect results.
 
 ### For agents and automation
@@ -97,10 +98,10 @@ Each executor accepts experiment-specific arguments (`--horizon`, `--start`, `--
 ### Run
 
 ```
-/setup-hpc → one-time per machine: install assets + probe each cluster's environment
-/submit    → discovers executors, walks you through .hpc/tasks.py, syncs code, submits
-/monitor-hpc    → tracks completion per grid point, diagnoses failures, auto-resubmits
-/aggregate → validates completeness, runs aggregation, downloads summaries
+hpc-agent setup --cluster <name> → one-time per machine: install assets + probe cluster
+/submit-hpc                      → discovers executors, walks you through .hpc/tasks.py, syncs code, submits
+/monitor-hpc                     → tracks completion per grid point, diagnoses failures, auto-resubmits
+/aggregate-hpc                   → validates completeness, runs aggregation, downloads summaries
 ```
 
 **Example conversation:**
@@ -164,12 +165,12 @@ Configure constraints in `clusters.yaml` (cluster-level); per-experiment overrid
 
 | Command | What it does |
 |---------|-------------|
-| `/setup-hpc` | One-time per machine: install commands + skills into `~/.claude/`, then probe each cluster's environment (SSH agent, ssh/rsync on PATH, `clusters.yaml` parses, TCP :22) and write the 24h cache marker that `/submit-hpc`'s Step 6b gate consults. Re-run when SSH credentials or a cluster's reachability change. |
-| `/submit-hpc` | Discover executors (scaffolds inline if none found), build grid conversationally, write `.hpc/tasks.py` with FLAGS dict + `.hpc/cli.py` dispatcher, sync code, submit array jobs |
+| `/submit-hpc` | Discover executors (scaffolds inline if none found), build grid conversationally, write `.hpc/tasks.py` with FLAGS dict + `.hpc/cli.py` dispatcher, sync code, submit array jobs. Carries an escalation playbook covering entry-point onboarding, axis classification, and axes-init dialogs. |
 | `/monitor-hpc` | Poll status, diagnose failures, auto-resubmit, self-schedule next check |
 | `/aggregate-hpc` | Validate completeness, run aggregation on cluster, download summaries |
-| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. See [`docs/workflows/campaign.md`](docs/workflows/campaign.md). |
-| `/hpc-axes-init` | Write `<experiment>/.hpc/axes.yaml` with the parallel-axis enumeration + homogeneity hint that drives the cold-start (and warm-path) array-axis picker. |
+| `/campaign-hpc` | Closed-loop iteration: tag submits, read prior history, repeat `/submit-hpc campaign_id=<slug>` until the strategy stops. Carries the validate-campaign findings interpretation guide. See [`docs/workflows/campaign.md`](docs/workflows/campaign.md). |
+
+Setup is a CLI step, not a slash: run `hpc-agent setup --cluster <name>` once per machine + cluster (see Quick Start above). Each preflight check's `detail` field carries actionable remediation prose.
 
 ### Primitives
 
