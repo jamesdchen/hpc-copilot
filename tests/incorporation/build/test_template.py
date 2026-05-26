@@ -171,11 +171,7 @@ def test_injected_assets_parse(tmp_path: Path) -> None:
 
 def test_notebook_skeleton_is_a_discoverable_register_run(tmp_path: Path) -> None:
     skeleton = (
-        hpc_agent._PACKAGE_ROOT
-        / "incorporation"
-        / "build"
-        / "scaffolds"
-        / "experiment.ipynb.tmpl"
+        hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds" / "experiment.ipynb.tmpl"
     )
     nb = tmp_path / "experiment.ipynb"
     nb.write_text(skeleton.read_text(encoding="utf-8"), encoding="utf-8")
