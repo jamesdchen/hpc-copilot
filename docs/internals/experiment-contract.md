@@ -70,8 +70,10 @@ target function was authored in a notebook or a script.
 When the entry point is a **compiled binary**, a **shell script**, or
 has a **decorator conflict** (e.g. `@hydra.main` rewrites the function
 signature so `@register_run` can't be stacked on top), direct
-decoration isn't possible. For those cases `/wrap-entry-point-hpc`
-materializes a `@register_run` **wrapper** at
+decoration isn't possible. For those cases the `hpc-wrap-entry-point`
+skill (invoked by `/submit-hpc`'s escalation playbook when the worker
+escalates with `mature_repo_needs_interview`, or directly by another
+agent harness) materializes a `@register_run` **wrapper** at
 `.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the
 underlying command with kwargs substituted in.
 

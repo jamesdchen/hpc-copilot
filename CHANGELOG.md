@@ -7,6 +7,43 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — Slash surface condensed to four workflow triggers
+
+The user-facing slash surface is now exactly `/submit-hpc`,
+`/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`. Five slashes
+removed: the three paired interview slashes (`/hpc-axes-init`,
+`/classify-axis-hpc`, `/wrap-entry-point-hpc`) plus `/setup-hpc` and
+`/validate-campaign`. Their behaviors are preserved:
+
+- **Entry-point onboarding / axis classification / axes-init dialogs**
+  — moved into `/submit-hpc`'s escalation playbook. The worker
+  escalates with `mature_repo_needs_interview`, `axis_unclassified`,
+  `no_axes_yaml`, `ambiguous_entry_point`, or `ambiguous_run`; the
+  in-chat agent walks the user through the matching dialog and then
+  invokes the relevant skill (`hpc-wrap-entry-point`,
+  `hpc-classify-axis`, `hpc-build-executor`) via the Skill tool with
+  a fully-resolved spec. The skills themselves are unchanged and
+  remain callable directly by other agent harnesses (MARs, notebook
+  drivers, cron workers).
+- **`validate-campaign` findings interpretation** — moved into
+  `/campaign-hpc`'s body (severity handling, common-code response
+  table, playbook.yaml schema). The `hpc-agent validate-campaign`
+  primitive is unchanged; both `submit` and `campaign` workers
+  continue to auto-invoke it as a pre-submit static gate.
+- **`/setup-hpc`** — replaced by `hpc-agent setup --cluster <name>`
+  (already a primitive). Each preflight check's `detail` field gained
+  actionable remediation prose so the primitive's output is
+  self-explanatory without a slash translating
+  (`src/hpc_agent/ops/preflight/check.py`). The optional snapshot-cron
+  install (for the LightGBM-residual queue-wait predictor) moved into
+  a standalone `hpc-agent-pro/scripts/install_cron.sh` script the pro
+  plugin's README documents.
+
+`scripts/lint_skill_command_sync.py` updated: `WORKFLOW_PAIRS` is now
+empty by design; `SKILL_ONLY_OK` enumerates the three agent-only
+skills. Frontmatter validation runs on every skill on disk, not just
+paired ones.
+
 ### Changed — Skills are agent-autonomous; human elicitation moves to slash commands
 
 hpc-agent has two consumers: humans (via slash commands in the user's

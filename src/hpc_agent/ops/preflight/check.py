@@ -72,7 +72,16 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
     # SSH agent
     sock = os.environ.get("SSH_AUTH_SOCK")
     if not sock:
-        checks.append(_check("ssh_auth_sock", False, "SSH_AUTH_SOCK is not set"))
+        checks.append(
+            _check(
+                "ssh_auth_sock",
+                False,
+                "SSH_AUTH_SOCK is not set — start the agent and load a key: "
+                "`eval $(ssh-agent -s); ssh-add ~/.ssh/<your-key>`, then re-run from "
+                "the same shell. In tmux/screen/mosh, export SSH_AUTH_SOCK and "
+                "SSH_AGENT_PID into that session.",
+            )
+        )
     else:
         try:
             agent = subprocess.run(
@@ -83,19 +92,35 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
                 timeout=5,
             )
             has_keys = agent.returncode == 0 and bool(agent.stdout.strip())
+            if has_keys:
+                detail = f"agent at {sock}"
+            else:
+                detail = (
+                    "ssh-agent has no keys loaded — run "
+                    "`ssh-add ~/.ssh/<your-key>` to add one"
+                )
+            checks.append(_check("ssh_auth_sock", has_keys, detail))
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             checks.append(
                 _check(
                     "ssh_auth_sock",
-                    has_keys,
-                    "ssh-agent has no keys" if not has_keys else f"agent at {sock}",
+                    False,
+                    f"ssh-add failed: {exc} — install openssh-client "
+                    "(`apt install openssh-client` / `brew install openssh`)",
                 )
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            checks.append(_check("ssh_auth_sock", False, f"ssh-add failed: {exc}"))
 
     # ssh is mandatory for every remote operation.
     ssh_path = shutil.which("ssh")
-    checks.append(_check("ssh_on_path", ssh_path is not None, ssh_path or "not found"))
+    ssh_detail = (
+        ssh_path
+        if ssh_path
+        else (
+            "not found — install openssh-client "
+            "(`apt install openssh-client` / `brew install openssh`)"
+        )
+    )
+    checks.append(_check("ssh_on_path", ssh_path is not None, ssh_detail))
 
     # File transfer: rsync is preferred, but infra.remote falls back to a
     # ``tar c | ssh tar x`` push + ``scp -r`` pull pipeline when rsync is
@@ -118,7 +143,8 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
             if found is None
         ]
         transfer_detail = (
-            f"no file-transfer transport — need rsync, or scp+tar (missing: {', '.join(missing)})"
+            f"no file-transfer transport — install rsync (preferred), "
+            f"or ensure scp+tar are both on PATH (missing: {', '.join(missing)})"
         )
     checks.append(_check("file_transfer_on_path", transfer_ok, transfer_detail))
 
@@ -133,7 +159,14 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
     # If a cluster name was passed, attempt a TCP probe on port 22.
     if cluster:
         if cluster not in clusters:
-            checks.append(_check("cluster_known", False, f"{cluster!r} not in clusters.yaml"))
+            checks.append(
+                _check(
+                    "cluster_known",
+                    False,
+                    f"{cluster!r} not in clusters.yaml — run `hpc-agent clusters list` "
+                    "and pick from the available names",
+                )
+            )
         else:
             host = clusters[cluster].get("host")
             if not host:
@@ -148,7 +181,14 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
                     with socket.create_connection((host, 22), timeout=3):
                         checks.append(_check("cluster_tcp_22", True, f"{host}:22 open"))
                 except OSError as exc:
-                    checks.append(_check("cluster_tcp_22", False, f"{host}:22 — {exc}"))
+                    checks.append(
+                        _check(
+                            "cluster_tcp_22",
+                            False,
+                            f"{host}:22 — {exc} — cluster may be offline or behind a VPN; "
+                            "verify connectivity from your network",
+                        )
+                    )
 
     all_ok = all(c["ok"] for c in checks)
     return {"all_ok": all_ok, "checks": checks}

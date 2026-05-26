@@ -50,11 +50,15 @@ SKILLS_DIR = REPO_ROOT / "src" / "slash_commands" / "skills"
 COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
 
 # Each tuple: (skill_id, slash_command_stem). Both files must exist.
-WORKFLOW_PAIRS: list[tuple[str, str]] = [
-    ("hpc-build-executor", "hpc-axes-init"),
-    ("hpc-classify-axis", "classify-axis-hpc"),
-    ("hpc-wrap-entry-point", "wrap-entry-point-hpc"),
-]
+#
+# Empty by design after the slash-condensation pass: the user-facing
+# slash surface is now exactly the four workflow triggers
+# (WORKFLOW_TRIGGER_SLASHES). The three skills (hpc-build-executor,
+# hpc-classify-axis, hpc-wrap-entry-point) are agent-only — callable
+# via the Skill tool by the in-chat agent (when /submit-hpc escalates)
+# or by another agent harness like MARs directly. Skills without a
+# paired slash are allow-listed in SKILL_ONLY_OK below.
+WORKFLOW_PAIRS: list[tuple[str, str]] = []
 
 # Slash commands that route through `hpc-agent run <workflow>` to the
 # spawn pipeline rather than to a paired Skill. Their workflow lives in
@@ -68,9 +72,22 @@ WORKFLOW_TRIGGER_SLASHES: set[str] = {
     "campaign-hpc",
 }
 
-# Slash-command files allowed to have no skill counterpart (e.g.
-# scaffolding commands that don't expose a long-form skill surface).
-SLASH_ONLY_OK: set[str] = {"validate-campaign"}
+# Skills that ship without a paired slash command. Under the
+# agent-autonomous policy (docs/internals/skill-policy.md) every skill
+# falls into this bucket — the in-chat agent invokes them via the Skill
+# tool when a workflow escalates, and other agent harnesses read them
+# directly. No slash is needed because the human-elicitation prose
+# lives in the workflow-trigger slash that escalates.
+SKILL_ONLY_OK: set[str] = {
+    "hpc-build-executor",
+    "hpc-classify-axis",
+    "hpc-wrap-entry-point",
+}
+
+# Slash-command files allowed to have no skill counterpart. Empty after
+# the condensation pass — every remaining slash is either a workflow
+# trigger (above) or has been removed.
+SLASH_ONLY_OK: set[str] = set()
 
 
 # A workflow command must explicitly route to its skill rather than run
@@ -123,6 +140,45 @@ _CATEGORY_BY_EXECUTION = {
 }
 
 
+def _check_skill_frontmatter(
+    skill_id: str, skill_path: Path, errors: list[str]
+) -> str | None:
+    """Validate a skill's `execution` and `category` frontmatter. Return
+    the resolved `execution` value (`"inline"` / `"delegated"`) on
+    success, or `None` if anything was wrong (errors appended)."""
+    skill_body = skill_path.read_text(encoding="utf-8")
+    exec_match = _EXECUTION_RE.search(skill_body)
+    if exec_match is None:
+        errors.append(
+            f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
+            "`execution: delegated|inline` field. Every workflow skill "
+            "must statically declare how it runs."
+        )
+        return None
+    category_match = _CATEGORY_RE.search(skill_body)
+    if category_match is None:
+        errors.append(
+            f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
+            "`category: agent-autonomous|worker-prompt` field. See "
+            "docs/internals/skill-policy.md — the category records "
+            "whether this skill is consumed via the Skill tool / direct "
+            "read by an agent (autonomous), or inlined into a worker "
+            "prompt for delegated execution."
+        )
+        return None
+    expected_category = _CATEGORY_BY_EXECUTION[exec_match.group(1)]
+    if category_match.group(1) != expected_category:
+        errors.append(
+            f"{skill_id!r} declares `execution: {exec_match.group(1)}` but "
+            f"`category: {category_match.group(1)}` — expected "
+            f"`category: {expected_category}`. See "
+            "docs/internals/skill-policy.md: inline execution ↔ "
+            "agent-autonomous; delegated execution ↔ worker-prompt."
+        )
+        return None
+    return exec_match.group(1)
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -132,12 +188,18 @@ def main() -> int:
     declared_skills = {pair[0] for pair in WORKFLOW_PAIRS}
     declared_slashes = {pair[1] for pair in WORKFLOW_PAIRS}
 
-    # Each declared pair must have both files. The slash body must also
-    # route to its skill — either an inline "Invoke the `<skill>` skill"
-    # directive or the subagent-delegation form — otherwise the slash
-    # collapsed away its own workflow-mechanics content and the agent has
-    # nothing to work from. The regex tolerates `name`/**name**/plain
-    # wrapping.
+    # Every skill on disk gets its frontmatter validated (execution +
+    # category agreement), independent of whether it's paired with a
+    # slash. The pairing checks come after.
+    for skill_id in sorted(skill_ids_present):
+        skill_path = SKILLS_DIR / skill_id / "SKILL.md"
+        _check_skill_frontmatter(skill_id, skill_path, errors)
+
+    # Each declared pair must have both files, and the slash body must
+    # route to the skill — either via an "Invoke the `<skill>` skill"
+    # directive, the subagent-delegation form, or by shelling
+    # `hpc-agent run`/`hpc-campaign-driver`. Empty by default; entries
+    # exist only when a skill ships with a paired user-typed slash.
     for skill_id, slash_stem in WORKFLOW_PAIRS:
         skill_path = SKILLS_DIR / skill_id / "SKILL.md"
         slash_path = COMMANDS_DIR / f"{slash_stem}.md"
@@ -164,7 +226,6 @@ def main() -> int:
                 "lacks the workflow mechanics by design."
             )
             continue
-        # Stronger check: the directive should name *this pair's* skill_id.
         if skill_id not in body:
             errors.append(
                 f"{slash_path.relative_to(REPO_ROOT)} contains an invocation "
@@ -172,39 +233,27 @@ def main() -> int:
                 "Either fix the slash body to invoke the right skill, or "
                 "update WORKFLOW_PAIRS in this lint script."
             )
-
-        # The skill's declared `execution` mode must agree with how its
-        # command routes: `delegated` ⇒ the command delegates via an
-        # `hpc_spawn` Task request, an `hpc-agent run` Bash call, or an
-        # `hpc-campaign-driver` Bash call; `inline` ⇒ it does none of these.
         if not skill_path.is_file():
             continue
-        skill_body = skill_path.read_text(encoding="utf-8")
-        exec_match = _EXECUTION_RE.search(skill_body)
-        if exec_match is None:
-            errors.append(
-                f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
-                "`execution: delegated|inline` field. Every workflow skill "
-                "must statically declare how it runs."
-            )
+        execution = _check_skill_frontmatter(skill_id, skill_path, errors)
+        if execution is None:
             continue
+        # Match `hpc-agent run` followed by whitespace / end / backtick /
+        # quote. Plain `\b` matches between `run` and `-` because `-` is
+        # non-word, falsely accepting `hpc-agent run-time` etc.
         routes_via_spawn = (
             "hpc_spawn" in body
-            # Match ``hpc-agent run`` followed by whitespace / end /
-            # backtick / quote. Plain ``\b`` matches between ``run``
-            # and ``-`` because ``-`` is non-word, so it falsely
-            # accepted ``hpc-agent run-time`` and similar typos.
             or re.search(r"hpc-agent run(?![\w-])", body) is not None
             or "hpc-campaign-driver" in body
         )
-        if exec_match.group(1) == "delegated" and not routes_via_spawn:
+        if execution == "delegated" and not routes_via_spawn:
             errors.append(
                 f"{skill_id!r} declares `execution: delegated` but its command "
                 f"{slash_path.relative_to(REPO_ROOT)} does not delegate via an "
                 "`hpc_spawn` Task request or an `hpc-agent run` Bash call. A "
                 "delegated skill must run in a fresh-context worker."
             )
-        if exec_match.group(1) == "inline" and routes_via_spawn:
+        if execution == "inline" and routes_via_spawn:
             errors.append(
                 f"{skill_id!r} declares `execution: inline` but its command "
                 f"{slash_path.relative_to(REPO_ROOT)} routes through an "
@@ -213,39 +262,18 @@ def main() -> int:
                 "routing, or mark the skill `delegated`."
             )
 
-        # Policy: every skill declares its category (see
-        # docs/internals/skill-policy.md). The category must agree with
-        # the `execution` mode — that pairing is what makes the policy
-        # machine-checkable.
-        category_match = _CATEGORY_RE.search(skill_body)
-        if category_match is None:
-            errors.append(
-                f"{skill_path.relative_to(REPO_ROOT)} is missing a frontmatter "
-                "`category: agent-autonomous|worker-prompt` field. See "
-                "docs/internals/skill-policy.md — the category records "
-                "whether this skill is consumed via the Skill tool / direct "
-                "read by an agent (autonomous), or inlined into a worker "
-                "prompt for delegated execution."
-            )
-            continue
-        expected_category = _CATEGORY_BY_EXECUTION[exec_match.group(1)]
-        if category_match.group(1) != expected_category:
-            errors.append(
-                f"{skill_id!r} declares `execution: {exec_match.group(1)}` but "
-                f"`category: {category_match.group(1)}` — expected "
-                f"`category: {expected_category}`. See "
-                "docs/internals/skill-policy.md: inline execution ↔ "
-                "agent-autonomous; delegated execution ↔ worker-prompt."
-            )
-
-    # Skills present on disk but not declared in the pair table.
-    undeclared_skills = skill_ids_present - declared_skills
+    # Skills present on disk but not declared in WORKFLOW_PAIRS or
+    # SKILL_ONLY_OK. After the slash-condensation pass, all skills are
+    # in SKILL_ONLY_OK by default — they are agent-only surfaces invoked
+    # via the Skill tool, not paired 1:1 with user-typed slashes.
+    undeclared_skills = skill_ids_present - declared_skills - SKILL_ONLY_OK
     if undeclared_skills:
         errors.append(
-            "skill(s) on disk with no entry in WORKFLOW_PAIRS: "
-            f"{sorted(undeclared_skills)}. Add them to "
-            "scripts/lint_skill_command_sync.py:WORKFLOW_PAIRS so the "
-            "two surfaces stay in sync."
+            "skill(s) on disk with no entry in WORKFLOW_PAIRS or "
+            f"SKILL_ONLY_OK: {sorted(undeclared_skills)}. Add them to "
+            "scripts/lint_skill_command_sync.py:SKILL_ONLY_OK (the "
+            "default, for agent-only skills) or to WORKFLOW_PAIRS "
+            "(only if a paired user-typed slash also ships)."
         )
 
     # Workflow-trigger slash commands route to the spawn pipeline via
