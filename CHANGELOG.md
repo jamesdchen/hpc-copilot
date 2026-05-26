@@ -35,9 +35,22 @@ removed: the three paired interview slashes (`/hpc-axes-init`,
   actionable remediation prose so the primitive's output is
   self-explanatory without a slash translating
   (`src/hpc_agent/ops/preflight/check.py`). The optional snapshot-cron
-  install (for the LightGBM-residual queue-wait predictor) moved into
-  a standalone `hpc-agent-pro/scripts/install_cron.sh` script the pro
-  plugin's README documents.
+  install (for the LightGBM-residual queue-wait predictor) became a
+  proper primitive shipped in the pro wheel — see Added below.
+
+### Added — `install-cron` primitive in `hpc-agent-pro`
+
+`hpc-agent install-cron --ssh-target <target> --experiment-dir <dir>`
+installs the wait-predictor crontab entries (snapshot every 5 minutes,
+training daily at 03:00) idempotently. Fingerprinted by target module
+path so re-running detects existing entries and skips. The three
+cron-invoked modules — `snapshot_squeue`, `train_wait_predictor`,
+`extract_sacct_history` — moved from the top-level `scripts/`
+directories into `hpc_agent_pro._cron/`, so a plain
+`pip install hpc-agent-pro` ships everything the cron lines need. The
+cron commands use `python -m hpc_agent_pro._cron.<module>` so they
+work in any pip-installed environment without an editable source
+checkout.
 
 `scripts/lint_skill_command_sync.py` updated: `WORKFLOW_PAIRS` is now
 empty by design; `SKILL_ONLY_OK` enumerates the three agent-only
