@@ -1,29 +1,25 @@
 ---
 name: hpc-status
-description: "Poll an in-flight HPC run's status and decide what to do about it — wait, resubmit failed tasks, mark terminal. Autonomous: chooses polling cadence, resubmit thresholds, and lifecycle dispatch deterministically. Callers may pre-resolve run_id and wait_terminal; otherwise the skill auto-resolves the run from on-disk state. The /monitor-hpc slash invokes this skill; an external autonomous agent (MARs experiment-runner) invokes it directly to poll long-running jobs."
+description: "Poll an in-flight HPC run's status and decide what to do about it — wait, resubmit failed tasks, mark terminal. Walks resolution steps, accumulates ambiguities into a single envelope. Branches on wait_terminal: snapshot calls the status primitive directly (no worker spawn); blocking poll hands off to the bare worker for context-isolated polling."
 allowed-tools: Bash Read Skill
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[monitor-flow](../../docs/primitives/monitor-flow.md) workflow**. This skill resolves the choices a status poll requires — which run, what cadence, whether to escalate a failing task to resubmit — and hands off to `hpc-agent run status` for execution.
+Agent-facing decision layer over the **[monitor-flow](../../docs/primitives/monitor-flow.md) workflow**. Resolves which run to poll, what cadence, and how to handle failures.
 
 ## Inputs
 
-Caller may pre-resolve any of these; the skill auto-resolves what's missing:
-
-| Field | Default behaviour if absent |
+| Field | Source |
 |---|---|
-| `experiment_dir` | Required (caller must supply) |
-| `run_id` | Resolve from `load-context.data.in_flight`. Single in-flight → use it. Multiple → `spec_invalid: ambiguous_run` with candidates. Zero → `spec_invalid: no_in_flight_run`. |
-| `wait_terminal` | Default `false` (one-shot snapshot). Set `true` to block until the run reaches a terminal lifecycle state. |
-| `resubmit_failed_threshold` | Default `0.10` (resubmit if failed-task fraction ≤ 10%; above this, escalate). |
-| `cadence_sec` | Default 60s. Only relevant when `wait_terminal=true`. |
+| `experiment_dir` | Required |
+| `run_id` | Caller, or auto-resolve from `load-context.data.in_flight` |
+| `wait_terminal` | Caller (default `false` for snapshot; `true` for blocking poll) |
+| `resubmit_failed_threshold` | Caller (default `0.10`) |
 
-## Mode
+## The resolution contract
 
-- **`mode: "interview"`** — caller passes user-resolved values; the skill respects them.
-- **`mode: "autonomous"`** (default) — auto-resolve and never return `needs_human`. If multiple in-flight runs exist and the caller didn't pick, default to the most recently submitted; record the choice.
+Same as `hpc-submit`: walk every step, accumulate ambiguities (no early-return), return them all in one envelope OR proceed to execution if none.
 
 ## Steps
 
@@ -33,54 +29,77 @@ Caller may pre-resolve any of these; the skill auto-resolves what's missing:
 hpc-agent load-context --experiment-dir <experiment_dir>
 ```
 
-Use `data.in_flight` to resolve `run_id` if not supplied.
-
 ### 2. Resolve run_id
 
-If exactly one in-flight run, use it. If zero, return `spec_invalid: no_in_flight_run`. If multiple:
+- Caller supplied → use.
+- Else exactly one in-flight run → use.
+- Else multiple in-flight, no pick → add to ambiguities:
+  ```json
+  {"field": "run_id", "candidates": [<run_id list>], "depends_on": [], "safe_default": "<most recent by submitted_at_iso>"}
+  ```
+- Else zero in-flight → return `spec_invalid: no_in_flight_run` (this isn't an ambiguity — there's literally nothing to monitor).
 
-- Interview mode: return `spec_invalid: ambiguous_run` with `candidates: [run_id, ...]`; slash asks user.
-- Autonomous mode: pick the most recently submitted (highest `submitted_at_iso`); record in `decisions`.
+### 3. Return ambiguities if any
 
-### 3. Hand off to the status worker
+If accumulated, return `needs_resolution` envelope per the standard shape. Caller resolves and re-invokes.
+
+### 4. Branch on wait_terminal
+
+The worker spawn is only justified when the workflow has more than one LLM-driven step — i.e., when there's a poll loop or lifecycle dispatch that would otherwise accumulate intermediate state in the caller's context.
+
+**If `wait_terminal == false` (snapshot)**:
 
 ```bash
-hpc-agent run status --fields-json '{"run_id": "<id>", "wait_terminal": <bool>}'
+hpc-agent status --run-id <id>
 ```
 
-Spawns a fresh-context worker that reads `worker_prompts/status.md` and executes the polling loop (sacct/qstat queries, journal updates, lifecycle transitions). Returns the lifecycle state and per-task counts.
+Single primitive call. Returns one envelope. No worker spawn. The caller's context grows by ~1 KB (the envelope).
 
-### 4. Handle the result
+**If `wait_terminal == true` (blocking poll)**:
 
-Branch on the worker's `data.report.result.lifecycle_state`:
+```bash
+hpc-agent run status --fields-json '{"run_id": "<id>", "wait_terminal": true}'
+```
 
-| `lifecycle_state` | Skill behaviour |
+Spawns a fresh-context bare worker that reads `worker_prompts/status.md`. The worker contains the poll loop (sacct queries every 60s, lifecycle transitions, sidecar updates) in its private context. Returns the final terminal envelope. The caller's context grows by ~1 KB regardless of how long the poll ran.
+
+This split saves the worker-spawn overhead on the common single-call case while preserving context isolation on the multi-step case. The principle: **a workflow skill hands off to a bare worker when (and only when) the workflow has more than one LLM-driven step.**
+
+### 5. Handle the result
+
+Branch on the envelope's `data.lifecycle_state` (or `data.report.result.lifecycle_state` on the worker path):
+
+| State | Skill behaviour |
 |---|---|
-| `running`, `pending` | Return the envelope as-is. Caller polls again later (or set `wait_terminal=true` for a blocking call). |
-| `complete` | Return the envelope; next step is aggregation. Record `next_step_hint: "aggregate"` in decisions. |
-| `terminal_with_failures` (some failed tasks) | Apply the resubmit policy below. |
-| `terminal_no_progress` | Return `spec_invalid: terminal_no_progress`; the run is stuck and the caller decides whether to resubmit-from-scratch or investigate. Autonomous mode does NOT auto-resubmit a no-progress run. |
+| `running`, `pending` | Return envelope as-is. (Snapshot mode; the caller polls again later.) |
+| `complete` | Return envelope. Add `next_step_hint: "aggregate"` in decisions. |
+| `terminal_with_failures` | Apply resubmit policy below. |
+| `terminal_no_progress` | Return `spec_invalid: terminal_no_progress`. The run is stuck — caller decides whether to resubmit-from-scratch or investigate. |
 
-### 5. Resubmit policy (terminal_with_failures)
+### 6. Resubmit policy (terminal_with_failures)
 
-Compute `failed_fraction = data.report.result.failed_task_ids.length / data.report.result.total_tasks`.
+`failed_fraction = failed_task_ids.length / total_tasks`
 
-- If `failed_fraction == 0`: lifecycle is actually `complete`; return aggregation hint.
-- If `failed_fraction ≤ resubmit_failed_threshold` (default 10%): auto-invoke `hpc-agent resubmit --run-id <id> --task-ids <failed-list>`. Record the resubmission in decisions. Return the new resubmit run_id.
-- If `failed_fraction > resubmit_failed_threshold`:
-  - Interview mode: return `spec_invalid: high_failure_rate` with the count + sample errors; slash asks user.
-  - Autonomous mode: do NOT auto-resubmit. Return `spec_invalid: high_failure_rate` with the count + sample errors. The autonomous caller (MARs experiment-runner) inspects the failure pattern and decides whether to resubmit, investigate, or abandon. Auto-resubmitting at >10% failure usually wastes more cluster time on the same bug.
+- `failed_fraction == 0` → lifecycle is actually `complete`.
+- `failed_fraction ≤ resubmit_failed_threshold` (default 10%) → auto-invoke `hpc-agent resubmit --run-id <id> --task-ids <failed-list>`. Record in decisions; return the new resubmit run_id.
+- `failed_fraction > resubmit_failed_threshold` → add to ambiguities (decision needs caller resolution):
+  ```json
+  {
+    "field": "high_failure_rate_action",
+    "candidates": ["resubmit", "investigate", "abandon"],
+    "depends_on": [],
+    "safe_default": "investigate",
+    "context": {"failed_count": N, "total": M, "sample_errors": [...]}
+  }
+  ```
+  At >10% failure, auto-resubmitting usually wastes more cluster time on the same bug. The safe_default is `investigate` — don't auto-resubmit.
 
-### 6. Return the envelope
+### 7. Return envelope
 
-Surface to the caller:
-- `data.report.result.lifecycle_state`
-- `data.report.result.complete_count`, `data.report.result.failed_task_ids`
-- `data.report.decisions` (cadence, resubmit choice, run_id selection)
-- `data.report.anomalies` (anything off-contract — preemption, NODE_FAIL, etc.)
+Surface to caller verbatim.
 
 ## Notes
 
-- **No background polling.** Each invocation is one round-trip — one snapshot if `wait_terminal=false`, one blocking call if `true`. For ongoing monitoring beyond a single chat session, the caller schedules a `hpc-campaign-driver` cron or `/loop`.
-- **Resubmit is conservative in autonomous mode.** A 10% failure rate is usually a transient cluster issue (preempt, scratch full, oneoff NODE_FAIL); >10% usually means a real bug. Autonomous callers shouldn't burn cluster time chasing real bugs.
-- **MARs experiment-runner pattern**: invoke with `{experiment_dir, run_id, wait_terminal: true, mode: "autonomous"}`. Block until the run is terminal, get back the lifecycle + failed-task summary, decide next steps in MARs.
+- **Snapshot vs blocking is the worker-spawn boundary.** Single-step → primitive. Multi-step (the poll loop) → worker. This matches the general rule.
+- **MARs polling pattern**: invoke with `wait_terminal: true` ONCE; let the worker block; receive the terminal envelope. Avoids accumulating ~N poll-envelopes in experiment-runner's context.
+- **No `[Y/n]`. No mode flag.** Caller-supplied authoritative; ambiguities returned in one envelope.

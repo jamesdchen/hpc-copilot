@@ -138,6 +138,39 @@ _CATEGORY_BY_EXECUTION = {
     "delegated": "worker-prompt",
 }
 
+# Match an "## Inputs" section's table rows. Each row looks like:
+#   | `field_name` | source description |
+# Capture group 1 = field name; group 2 = source description.
+_INPUTS_ROW_RE = re.compile(r"^\|\s*`([a-z_][a-z0-9_]*)`\s*\|\s*([^|]+?)\s*\|", re.MULTILINE)
+
+
+def _required_inputs(skill_body: str) -> set[str]:
+    """Return the set of field names the skill marks as Required.
+
+    A field is Required when its Source column starts with "Required" (case
+    insensitive). Optional fields (auto-resolved, caller-supplied with
+    default) are not in this set — the lint doesn't require those to
+    appear in the slash body because the slash can correctly omit them.
+    """
+    in_inputs = False
+    required: set[str] = set()
+    for line in skill_body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## Inputs"):
+            in_inputs = True
+            continue
+        if in_inputs and stripped.startswith("## "):
+            break
+        if not in_inputs:
+            continue
+        m = _INPUTS_ROW_RE.match(line)
+        if m is None:
+            continue
+        field, source = m.group(1), m.group(2)
+        if source.lower().startswith("required"):
+            required.add(field)
+    return required
+
 
 def _check_skill_frontmatter(
     skill_id: str, skill_path: Path, errors: list[str]
@@ -259,6 +292,27 @@ def main() -> int:
                 "`hpc_spawn` Task request or an `hpc-agent run` Bash call. An "
                 "inline skill runs in the main conversation — drop the spawn "
                 "routing, or mark the skill `delegated`."
+            )
+
+        # Input-shape drift check: every field the skill marks as Required
+        # must appear in the slash body (in the invocation pseudo-code,
+        # a dialog template, or an args block — anywhere). Optional fields
+        # aren't checked — the slash can legitimately omit those and let
+        # the skill auto-resolve.
+        skill_body = skill_path.read_text(encoding="utf-8")
+        required = _required_inputs(skill_body)
+        missing = sorted(f for f in required if f not in body)
+        if missing:
+            errors.append(
+                f"{slash_path.relative_to(REPO_ROOT)} does not mention "
+                f"required input field(s) of {skill_id!r}: {missing}. "
+                "Every field the skill marks as Required in its Inputs "
+                "table must appear somewhere in the slash body — either "
+                "the invocation pseudo-code, a dialog template, or the "
+                "`$ARGUMENTS` parser. Slash and skill input shape drift "
+                "is a silent failure mode: the slash invokes without the "
+                "field; the skill refuses or auto-resolves to an "
+                "unintended default."
             )
 
     # Skills present on disk but not declared in WORKFLOW_PAIRS or

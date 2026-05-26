@@ -7,6 +7,80 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — Workflow skills return all ambiguities in one envelope
+
+Refined the workflow-skill contract: skills no longer early-return on the
+first unresolved field. They walk every resolution step, accumulate
+ambiguities into a single `needs_resolution` envelope, and return the
+full list in one round-trip. Each ambiguity entry carries:
+
+```json
+{
+  "field": "<name>",
+  "candidates": [...],
+  "depends_on": [<dependency fields>],
+  "safe_default": <value>
+}
+```
+
+Callers resolve every entry at once and re-invoke. Bounded by dependency
+DAG depth (~3 rounds max for HPC submission), not by ambiguity count.
+
+This subsumes three earlier awkwardness points:
+
+- **The `mode: "interview" | "autonomous"` flag is gone.** Caller-supplied
+  fields are always authoritative; the slash interprets ambiguities as
+  user dialogs; the autonomous caller (MARs experiment-runner) applies
+  `safe_default` to every ambiguity and re-invokes. No mode-dependent
+  branches in the skill body.
+- **The skill no longer enumerates worker-surfaceable escalation codes.**
+  Worker envelopes carry `safe_default` per ambiguity; the skill applies
+  it generically. Adding a new escalation type doesn't require a skill
+  update.
+- **Multi-turn escalation state lives in the augmented spec.** Each
+  re-invocation passes the resolved-so-far fields explicitly; there's no
+  implicit conversation state to track.
+
+The slash bodies' "On `spec_invalid`" sections become "On
+`needs_resolution`" — topo-sort the ambiguities list, walk dialogs in
+order, re-invoke once with everything filled.
+
+### Changed — `hpc-status` skips the worker for one-shot snapshots
+
+Refined: the worker-spawn boundary is "more than one LLM-driven step,"
+not "every workflow." For `wait_terminal=false` (single primitive call),
+the skill calls `hpc-agent status --run-id <id>` directly — no worker
+spawn, no context-isolation overhead. For `wait_terminal=true` (blocking
+poll), the skill hands off to `hpc-agent run status` so the poll loop's
+intermediate state stays in the worker's private context (not the
+caller's). Saves substantial overhead for MARs experiment-runners that
+poll often.
+
+### Changed — Lint catches slash↔skill input-shape drift
+
+Added a check to `scripts/lint_skill_command_sync.py`: every field the
+skill marks as Required in its Inputs table must appear in the slash
+body. Catches the silent failure mode where a new required field gets
+added to the skill but the slash invocation doesn't get updated.
+
+### Changed — `skill-policy.md` clarifies what each layer decides
+
+Added the experiment-aware vs experiment-agnostic split for decisions:
+
+- **Skills make experiment-aware decisions** — which executor for *this*
+  repo, which DataAxis for *this* run's loop, what walltime for *this*
+  cmd_sha's runtime priors. The questions depend on the experiment.
+- **Workers make experiment-agnostic decisions** — is there an in-flight
+  run? is the spec cached? did the canary succeed? Plumbing-level
+  branching that doesn't depend on the experiment's content.
+
+Both layers branch; both layers make judgement calls. The split is *what
+they decide on*, not *whether they decide*.
+
+Also documented the worker-spawn principle: workflow skills hand off to
+a bare worker only when the workflow has more than one LLM-driven step.
+Single-step workflows call the primitive directly.
+
 ### Added — Workflow-skill layer between slashes and the execution worker
 
 Resurrected the four workflow skills (`hpc-submit`, `hpc-status`,

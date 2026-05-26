@@ -36,6 +36,13 @@ Two consumers (human, external agent) enter at different layers; both converge o
 
 > **Each layer has one job. A slash interviews. A skill decides. A worker prompt executes.**
 
+The decisions made at each layer are also distinct:
+
+- **Skills make experiment-aware decisions.** Which executor for *this* repo, which DataAxis for *this* run's loop, what walltime for *this* cmd_sha based on its runtime priors. The questions depend on the experiment's content.
+- **Workers make experiment-agnostic decisions.** Is there already an in-flight run? Has this spec been cached in the journal? Did the canary succeed? Has the array been fully accepted by the scheduler? Workflow plumbing — the questions are the same regardless of what the experiment computes.
+
+Both layers make decisions; both layers can branch. The split is *about what they decide on*, not whether they decide at all.
+
 A **slash command's** body MUST:
 
 - Conduct propose-then-confirm dialogs with the user for any decision the matching workflow skill needs.
@@ -45,18 +52,19 @@ A **slash command's** body MUST:
 A **workflow skill's** body MUST:
 
 - Take all inputs from the caller (slash or autonomous agent). No `[Y/n]`, no `Looks right?`.
-- Resolve every choice point deterministically. Caller-supplied values short-circuit auto-resolution. Ambiguity that genuinely can't auto-resolve becomes a `spec_invalid` envelope (`error_code: ambiguous_*`) — the caller decides what to do.
-- Compose sub-skills when a sub-decision is non-trivial (e.g., axis classification → `hpc-classify-axis`).
-- Hand off to the execution layer with `hpc-agent run <workflow>`. This is the single execution boundary; no decisions live in the worker prompt.
-- Support **two modes**: `interview` (caller passes user-resolved values; respect them) and `autonomous` (default; auto-resolve everything; never return `needs_human`). External callers like a MARs experiment-runner use autonomous mode — they must resolve everything internally and have no human to escalate to.
+- Walk every resolution step; **accumulate ambiguities into a single envelope, never early-return on the first miss.** When some fields can't auto-resolve, return `{ok: false, error_code: "needs_resolution", data: {resolved, ambiguities}}` with the full list. Each ambiguity carries `field`, `candidates`, `depends_on`, `safe_default`. The caller resolves every entry (slash walks user dialogs; autonomous caller applies safe_defaults) and re-invokes in one shot. Bounded by dependency DAG depth (~3 rounds max), not by ambiguity count.
+- Compose sub-skills when a sub-decision is non-trivial (e.g., axis classification → `hpc-classify-axis`). Sub-skill ambiguities propagate upward into the workflow skill's `ambiguities` list.
+- Hand off to the execution layer (`hpc-agent run <workflow>`) **only when the workflow has more than one LLM-driven step.** Single-step workflows (a one-shot status snapshot, a single-primitive query) should call the primitive directly — the bare-worker spawn buys no context isolation when there's nothing to isolate. Multi-step (submit, aggregate, campaign, blocking poll) hands off; intermediate tool calls accumulate in the worker's private context, not the caller's.
 
 A **sub-skill's** body MUST satisfy the same rules as a workflow skill, just at finer grain. Sub-skills don't have paired slashes — users don't type `/classify-axis-hpc`; they reach sub-skills through a workflow skill's composition.
 
 A **worker prompt's** body MUST:
 
-- Be deterministic. No `[Y/n]`, no decision points.
-- Read the resolved spec, execute the action sequence.
+- Be deterministic on the resolved spec — no LLM-judgment calls about the experiment's content (those happened in the skill).
+- Plumbing-level branching is allowed and expected (cache checks, lifecycle dispatch, retry-on-transient-error) — these are experiment-agnostic decisions.
+- No `[Y/n]`. Workers can't prompt the user (the bare worker has no Skill tool, no chat partner).
 - Be eligible for prose hardening: snapshot tests on `cacheable_prefix` bytes, banned-hedging-phrase lints, primitive-reference cross-checks.
+- Surface mid-flight ambiguities (e.g., co-tenant exclusion judgment) in the same `needs_resolution` envelope shape, with `safe_default` populated, so the calling skill propagates them up consistently.
 
 ## The decision table
 

@@ -1,124 +1,141 @@
 ---
 name: hpc-submit
-description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off to the submit-flow worker. Autonomous — every decision auto-resolves; ambiguous cases fall back to the conservative default and proceed. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions. Callers that pre-resolved a field pass it in; the skill skips that resolution step. The /submit-hpc slash invokes this skill after collecting human intent; an external autonomous agent (MARs experiment-runner, notebook driver) invokes it directly with whatever it knows."
+description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off to the submit-flow worker. Walks every resolution step, accumulates ambiguities into a single envelope, never early-returns on the first miss. Callers (slash for human dialogs, autonomous agent applying safe_defaults) resolve the entire list in one re-invocation. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions."
 allowed-tools: Bash Read Write Skill
 execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[submit-flow](../../docs/primitives/submit-flow.md) workflow**. This skill is the *decisions* surface: it walks the choice points an HPC submission requires (which cluster? which executor? which axis classification? what walltime?) and resolves each one — autonomously by default, or accepting caller-supplied values when present. Once everything's resolved, it shells out to `hpc-agent run submit`, which spawns a fresh-context worker that runs `worker_prompts/submit.md` — the *execution* layer that does the actual rsync / qsub / canary / record sequence.
+Agent-facing decision layer over the **[submit-flow](../../docs/primitives/submit-flow.md) workflow**. This skill is the *experiment-aware* decision surface: it walks the choice points an HPC submission requires (which cluster? which executor? which axis classification?) and resolves each one — from caller-supplied input, autonomous heuristics, or composed sub-skill. Once everything's resolved, it shells out to `hpc-agent run submit`, which spawns a fresh-context worker that runs `worker_prompts/submit.md` — the experiment-agnostic execution layer (rsync, qsub, canary, journal, scheduler verify).
 
-The slash command `/submit-hpc` is the human-interview wrapper around this skill: it conducts the propose-then-confirm dialog with the user, then invokes this skill with the resolved fields. An external autonomous caller invokes this skill directly, supplies whatever it pre-resolved, and relies on the autonomous defaults for the rest.
+The slash `/submit-hpc` is the human-interview wrapper around this skill; an external autonomous agent (MARs experiment-runner, notebook driver) invokes this skill directly with whatever it pre-resolved.
 
 ## Inputs
 
-Caller-supplied (skill refuses with `spec_invalid` if absent):
-
-| Field | Why the caller has to supply it |
+| Field | Source |
 |---|---|
-| `experiment_dir` | Absolute path to the experiment repo. Cannot be inferred. |
+| `experiment_dir` | Required (absolute path) |
+| `cluster` | Caller, or auto-resolve from `clusters.yaml` (single configured → use it; multiple → ambiguous) |
+| `entry_point` (kind + path + run_name) | Caller, or invoke `hpc-wrap-entry-point` sub-skill if no `@register_run` on disk |
+| `data_axis` | Caller, or invoke `hpc-classify-axis` sub-skill if no classification for current run_signature_sha |
+| `homogeneous_axes` | Caller, or invoke `hpc-build-executor` (axes-init companion) if no `.hpc/axes.yaml` |
+| `frozen_configs` | Caller, or detect from `configs/*.yaml` |
+| `task_generator` | Caller (REQUIRED if no existing `tasks.py`; cannot be auto-invented) |
+| `walltime_sec` | Caller, or auto-resolve from runtime priors (p95 × safety_mult) |
+| `gpu_type` | Caller, or first GPU in `clusters.<cluster>.gpu_types` |
+| `no_canary` | Caller (default `false`) |
+| `campaign_id` | Caller (pass-through) |
 
-Caller may pre-resolve to skip the corresponding sub-skill or auto-decision:
+## The resolution contract
 
-| Field | Skill's default behaviour if absent |
-|---|---|
-| `cluster` | Auto-resolve from `clusters.yaml` (single configured cluster → use it; multiple → `spec_invalid` with `ambiguous_cluster` + candidates) |
-| `entry_point` (kind + path + run_name) | If no `@register_run` on disk and no `interview.json`, invoke `hpc-wrap-entry-point` skill |
-| `data_axis` | If no `DataAxis` in `axes.yaml` for the current run_signature_sha, invoke `hpc-classify-axis` skill |
-| `homogeneous_axes` | If no `.hpc/axes.yaml`, invoke `hpc-build-executor` skill (axes-init companion) |
-| `frozen_configs` | Detected by convention (`configs/*.yaml`); caller's list overrides |
-| `task_generator` | If absent and no `tasks.py` exists, refuse with `spec_invalid: task_generator_required` (cannot be invented) |
-| `walltime_sec` | Auto-resolve from runtime priors (p95 × safety_mult); cold-start fallback to cluster default |
-| `gpu_type` | Auto-resolve from cluster `gpu_types` list; pass-through to worker which scores candidates |
-| `no_canary` | Default `false` (canary is the safety net) |
-| `campaign_id` | Pass-through if supplied; otherwise omitted |
+The skill walks every resolution step in dependency order. Each step does ONE of:
 
-## Mode
+- **Resolve from input** — caller supplied the field; accept it as authoritative.
+- **Auto-resolve** — apply a deterministic rule or compose a sub-skill that resolves it.
+- **Add to ambiguities** — record the unresolved field with candidates + dependency info + safe_default, and continue walking subsequent steps.
 
-Two interaction modes, signalled by the caller:
+When all steps are done, the skill behaves as follows:
 
-- **`mode: "interview"`** — the caller (typically `/submit-hpc`) has already conducted a human-facing dialog and is passing in user-resolved values. The skill treats every supplied field as authoritative and only auto-resolves what's missing.
-- **`mode: "autonomous"`** (default) — the caller is an external agent (MARs experiment-runner, notebook driver, etc.). The skill auto-resolves every missing field and **never returns `needs_human` envelopes**. If a decision truly can't auto-resolve, the skill picks the most conservative interpretation and proceeds, recording the choice in `decisions` for the caller to inspect.
+- **No ambiguities accumulated** → all fields resolved → proceed to Step 8 (handoff to worker).
+- **Ambiguities accumulated** → return `needs_resolution` envelope with the full list (Step 7).
 
-The default is `autonomous` so that an agent caller that just hands over a minimal `{experiment_dir}` gets a working submission.
+This means **one round-trip per workflow invocation** — the caller resolves every ambiguity in the returned list at once and re-invokes. No N-way escalation loop.
 
 ## Steps
 
 ### 1. Load context
 
-Run [`load-context`](../../docs/primitives/load-context.md) and treat its `data` as the only source of truth for run / campaign / cluster state:
-
 ```bash
 hpc-agent load-context --experiment-dir <experiment_dir>
 ```
 
-Key fields: `data.latest_run`, `data.in_flight`, `data.campaigns`, `data.next_step_hint`. If `next_step_hint == "monitor"`, the experiment has an in-flight run — return `spec_invalid: already_in_flight` with the run_id; the caller switches to `hpc-status`.
+If `data.next_step_hint == "monitor"`, return `spec_invalid: already_in_flight` with the run_id (different from `needs_resolution` — this isn't an ambiguity, it's a state conflict).
 
 ### 2. Resolve cluster
 
-If caller supplied `cluster`, use it. Otherwise read `clusters.yaml`:
-
-- Exactly one configured cluster → use it
-- Multiple, no caller pick → `spec_invalid` with `error_code: ambiguous_cluster` and `candidates: [list]`. (Interview mode: slash re-asks user. Autonomous mode: caller picks the first lexicographically and records a warning — the user can pin via spec next time.)
+- Caller supplied → use.
+- Else single configured cluster in `clusters.yaml` → use.
+- Else (multiple, no pick) → add to ambiguities:
+  ```json
+  {"field": "cluster", "candidates": [...], "depends_on": [], "safe_default": "<first lexicographically>"}
+  ```
 
 ### 3. Resolve entry point
 
-Check for `@register_run` on disk and for `interview.json`:
+Check for `@register_run` on disk and for `interview.json`. If either, the entry_point is resolved — continue.
 
-```bash
-grep -rln '@register_run' notebooks/ src/ *.py 2>/dev/null | head
-test -f interview.json && cat interview.json | jq '._materialized.entry_point // empty'
+Otherwise, invoke the `hpc-wrap-entry-point` sub-skill with `{goal, task_generator, experiment_dir}`. The sub-skill itself follows the same contract — if it can't resolve (e.g., multiple entry-point candidates), it returns its own ambiguities. Propagate them into this skill's list:
+
+```json
+{"field": "entry_point", "candidates": ["train.py", "main.py"], "depends_on": [], "safe_default": "<first match>"}
 ```
-
-If either is present, the entry point is resolved — proceed.
-
-If neither, the experiment needs onboarding. Invoke the `hpc-wrap-entry-point` skill (Skill tool) with `{goal, task_generator, experiment_dir}`. The sub-skill materializes `tasks.py` + `interview.json` (and, on the wrapper path, `.hpc/wrappers/<run_name>.py`) and returns the resolved entry_point block.
-
-Autonomous-mode contract: if `hpc-wrap-entry-point` returns `spec_invalid: ambiguous_entry_point`, pick the highest-likelihood candidate from the envelope's `candidates` list (probe order encodes likelihood) and record the choice in `decisions`; don't escalate.
 
 ### 4. Resolve data axis
 
-Read `.hpc/axes.yaml`:
+Check `.hpc/axes.yaml` for `executors.<run_name>` matching the current sha. If present, resolved — continue.
 
-```bash
-test -f .hpc/axes.yaml && python -c "
-import yaml
-d = yaml.safe_load(open('.hpc/axes.yaml'))
-print((d.get('executors') or {}).get('<run_name>', {}))"
+Otherwise, invoke `hpc-classify-axis` sub-skill. If it returns ambiguities, propagate. Sub-skill's own safe_default (`Sequential` for ambiguous trees) populates the entry's `safe_default`.
+
+```json
+{"field": "data_axis", "candidates": null, "depends_on": ["entry_point"], "safe_default": {"kind": "sequential"}}
 ```
 
-If `executors.<run_name>` exists and its `run_signature_sha` matches the current sha, the classification is valid — proceed.
-
-If not, invoke the `hpc-classify-axis` skill with `{run_name, experiment_dir}`. The sub-skill walks its decision tree (`axis.py`) and commits the classification. Caller-supplied `data_axis` short-circuits the tree walk.
+Note the `depends_on: ["entry_point"]` — the data_axis dialog needs to know which `@register_run` function is being classified, which depends on the entry_point being resolved first.
 
 ### 5. Resolve homogeneous axes (cold-start only)
 
-If `.hpc/axes.yaml` doesn't have `homogeneous_axes`, invoke `hpc-build-executor` skill's axes-init companion with `{experiment_dir}`. Walks `tasks.py`, classifies each named dimension by heuristic, writes the file.
-
-Caller-supplied `homogeneous_axes` short-circuits the heuristic.
+Check `.hpc/axes.yaml` for `homogeneous_axes`. If present, resolved. Otherwise, invoke `hpc-build-executor` sub-skill (axes-init companion). Propagate ambiguities.
 
 ### 6. Resolve walltime, gpu_type, partition
 
-Auto-resolve from `read-runtime-prior` (the pro plugin's runtime-prior reader if available; falls back to cluster default otherwise):
+Auto-resolve from runtime priors:
 
 ```bash
 hpc-agent read-runtime-prior --experiment-dir <dir> --profile <run_name> --cluster <cluster> --cmd-sha <sha> 2>/dev/null
 ```
 
-`walltime_sec` = `prior.p95_sec * safety_mult` (default safety_mult=1.30). `gpu_type` = caller's pick or first GPU in `clusters.<cluster>.gpu_types`. `partition` = `recommend-partition` primitive output.
+`walltime_sec` = `prior.p95_sec * 1.30` (default safety_mult); cold-start fallback to `clusters.<cluster>.default_walltime_sec`. `gpu_type` from caller or `clusters.<cluster>.gpu_types[0]`. `partition` from `recommend-partition` primitive.
 
-### 7. Build the fields JSON
+These never go into the ambiguities list — they always auto-resolve to a conservative default.
 
-Assemble every resolved value into the submit fields dict:
+### 7. Return ambiguities if any
+
+If the ambiguities list is non-empty:
+
+```json
+{
+  "ok": false,
+  "error_code": "needs_resolution",
+  "data": {
+    "resolved": {
+      "experiment_dir": "/path/to/exp",
+      "cluster": "hoffman2",
+      "task_generator": {"kind": "items_x_seeds", "params": {...}},
+      "walltime_sec": 7200,
+      "gpu_type": "a100"
+    },
+    "ambiguities": [
+      {"field": "entry_point", "candidates": [...], "depends_on": [], "safe_default": "..."},
+      {"field": "data_axis", "candidates": null, "depends_on": ["entry_point"], "safe_default": "..."}
+    ]
+  }
+}
+```
+
+The caller resolves every entry (slash walks user dialogs; autonomous caller applies safe_defaults) and re-invokes this skill with the augmented spec. The skill walks the same resolution steps; the caller-supplied fields now make Steps 2-5 short-circuit; the ambiguities list comes back empty; the skill proceeds to Step 8.
+
+### 8. Build the fields JSON
+
+Assemble every resolved value:
 
 ```json
 {
   "experiment_dir": "<abs path>",
   "cluster": "<resolved>",
   "profile": "<run_name>",
-  "data_axis": { ... },
-  "homogeneous_axes": [ ... ],
-  "task_generator": { ... },
+  "data_axis": {...},
+  "homogeneous_axes": [...],
+  "task_generator": {...},
   "walltime_sec": 7200,
   "gpu_type": "a100",
   "no_canary": false,
@@ -126,38 +143,22 @@ Assemble every resolved value into the submit fields dict:
 }
 ```
 
-### 8. Hand off to the submit-flow worker
+### 9. Hand off to the submit-flow worker
 
 ```bash
 hpc-agent run submit --fields-json '<fields>'
 ```
 
-This is the **execution boundary**. `hpc-agent run submit` spawns a fresh-context `claude -p --bare` worker that reads `worker_prompts/submit.md` and runs the deterministic submit sequence (rsync, qsub, canary, journal write, scheduler verify). No further decisions live in the worker — every choice was resolved in Steps 2-7.
+Spawns a fresh-context bare worker that runs `worker_prompts/submit.md` (experiment-agnostic execution: rsync, qsub, canary, journal, scheduler verify). Returns its envelope.
 
-The worker returns a JSON envelope on stdout with `data.report.result` (run_id, job_ids, grid dimensions, verified scheduler state), `data.report.decisions` (each choice the worker reached + why), and `data.report.anomalies`.
+### 10. Propagate worker ambiguities (if any)
 
-### 9. Handle worker escalations
-
-The worker may surface escalations its `worker_prompts/submit.md` couldn't auto-resolve mid-flight (e.g., a co-tenant exclusion judgment, a `walltime_split` confirmation). Per mode:
-
-- **Interview mode**: return the escalation envelope to the caller unchanged. The slash walks the user through the matching dialog and re-invokes this skill with the augmented fields.
-- **Autonomous mode**: try to auto-resolve once:
-  - `co_tenant_exclusion` → exclude any node where a co-tenant has been running >12h AND holds >50% CPU/mem; record the choice
-  - `submit_now_vs_wait` → submit now (don't wait for a predicted-better window)
-  - `walltime_split_confirm` → decline (don't checkpoint; let the run terminate naturally)
-  - Any other escalation → return `spec_invalid` with the original `error_code` and a `reason: "autonomous mode cannot resolve <code>"` field. The caller (experiment-runner) is responsible.
-
-### 10. Return the envelope
-
-Surface to the caller verbatim:
-- `data.report.result` (run_id, job_ids, grid dimensions, scheduler state)
-- `data.report.decisions` (every resolved choice + source: `caller-supplied` / `cached` / `recall` / `agent` / `autonomous-fallback`)
-- `data.report.anomalies` (anything off-contract)
+The worker may surface its own mid-flight needs_resolution — e.g., `co_tenant_exclusion`, `submit_now_vs_wait`, `walltime_split_confirm`. The worker's envelope carries them in the same shape (`{error_code: "needs_resolution", data: {resolved, ambiguities}}`), each ambiguity with its own `safe_default`. Surface verbatim to this skill's caller; the same one-round-trip resolution contract applies.
 
 ## Notes
 
-- **Two consumers, one execution path.** The slash and autonomous callers both end at Step 8 with a fully-resolved fields dict. They differ only in how the choices got resolved (user dialog vs. autonomous heuristic + sub-skill composition).
-- **The execution layer is untouched.** `worker_prompts/submit.md` runs deterministically regardless of which surface invoked this skill — it just reads the resolved fields and executes.
-- **Idempotent on `cmd_sha`.** Re-invoking with the same resolved fields produces the same `cmd_sha`; the submit-flow primitive dedupes against the journal and emits no cluster-side side effects.
-- **No `[Y/n]` in this skill body.** Every choice point either resolves from caller-supplied input, autonomously, or via a sub-skill (which is also `[Y/n]`-free). The interview prose lives in the `/submit-hpc` slash wrapper.
-- **MARs experiment-runner pattern**: invoke this skill with `{experiment_dir, mode: "autonomous"}` plus whatever it pre-resolved. The skill resolves the rest, submits, and returns the envelope. No escalation back to a human.
+- **One round-trip per call** (when ambiguities have no dependencies among each other). At most 2-3 round-trips if dependencies cascade (e.g., entry_point must be resolved before data_axis dialog can be asked). The depth is bounded by the dependency DAG, not by the number of ambiguities.
+- **The worker is the experiment-agnostic execution layer.** Decisions about *this experiment* (executor, axis, walltime) live in this skill. Decisions about *workflow plumbing* (is there an in-flight run? is the spec cached?) live in the worker. The seam is clean.
+- **Idempotent on `cmd_sha`.** Re-invoking with the same resolved fields produces the same `cmd_sha`; the submit-flow primitive dedupes against the journal.
+- **Caller-supplied fields are always authoritative.** This skill's auto-resolution never overrides a value the caller passed in. The slash uses this to pass user-confirmed values; MARs's experiment-runner uses this to pass pre-resolved values.
+- **No `[Y/n]` in this skill body.** Every choice point either resolves from caller-supplied input, autonomously, or via a sub-skill (which is also `[Y/n]`-free). The dialog prose lives in the `/submit-hpc` slash wrapper.

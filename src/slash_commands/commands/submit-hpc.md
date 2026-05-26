@@ -1,35 +1,64 @@
 `/submit-hpc` is the **human-interview wrapper** around the `hpc-submit` skill — the agent-autonomous decision layer that resolves every HPC submission input and hands off to the submit-flow worker.
 
-When the user types `/submit-hpc`, this slash walks the propose-then-confirm dialog for each decision point, then invokes the `hpc-submit` skill (via the Skill tool) in `mode: "interview"` with the user-resolved fields. The skill skips its own autonomous resolution for any field the user already pinned, fills in the rest from on-disk state, and shells out to the submit-flow worker.
+The slash conducts the user-facing dialogs **after** the skill identifies what needs resolving. The flow is:
 
-The decision content (which tree branch resolves the data axis, which entry-point pathway, etc.) lives in the **skill** — the canonical source of truth. This slash's job is purely human-elicitation: walking the user through each decision the skill would otherwise auto-resolve.
+1. Parse `$ARGUMENTS` into an initial spec (whatever the user pre-stated).
+2. Invoke the `hpc-submit` skill via the Skill tool with that initial spec.
+3. If the skill returns `needs_resolution` with an `ambiguities` list, walk a dialog with the user for each ambiguity (in topo-sorted dependency order), assemble the user's answers into an augmented spec, re-invoke the skill.
+4. Repeat up to ~3 times (bounded by the dependency DAG depth — typically once).
+5. On a successful envelope, surface the worker's result to the user.
 
-## Interview
+## Invocation
 
-For each of the following decisions, conduct the dialog *only if the user didn't already state the value* in `$ARGUMENTS`. Skip decisions the user pre-stated.
-
-### Cluster
-
-If `clusters.yaml` has exactly one configured cluster, default to it. Otherwise:
+Invoke the `hpc-submit` skill via the Skill tool with the initial spec:
 
 ```
-Configured clusters: hoffman2, discovery, frontera.
+Skill("hpc-submit", {
+  experiment_dir: ".",
+  cluster: <if user stated --cluster>,
+  no_canary: <if user stated --no-canary>,
+  campaign_id: <if --campaign-id>,
+  task_generator: <if inferable from $ARGUMENTS, else omit>
+})
+```
+
+The skill resolves the rest. The slash never needs to enumerate every field — only what the user supplied.
+
+## On `needs_resolution` — walking the ambiguities
+
+The skill returns:
+
+```json
+{
+  "ok": false,
+  "error_code": "needs_resolution",
+  "data": {
+    "resolved": { ... fields the skill auto-resolved ... },
+    "ambiguities": [
+      {"field": "<name>", "candidates": [...], "depends_on": [...], "safe_default": ..., "context": {...}}
+    ]
+  }
+}
+```
+
+Topo-sort `ambiguities` by `depends_on`. Walk in order; for each, conduct the matching dialog below. Collect user answers into the augmented spec. Re-invoke.
+
+If `depends_on` has unresolved entries in the current list (cascading dependencies), walk only the resolvable subset this round; the skill will surface a new round of ambiguities (now smaller) after the deps are resolved. Bounded by DAG depth (~3 rounds max for HPC submission).
+
+### Dialog: `cluster`
+
+```
+Configured clusters: <candidates from envelope>.
 Which cluster?
 ```
 
-### Entry-point onboarding (when no `@register_run` on disk)
+If the user has no preference, accept the `safe_default` from the envelope.
 
-Probe the repo:
+### Dialog: `entry_point`
 
-```bash
-ls main.py train.py run.py experiment.py 2>/dev/null
-ls src/main.py src/train.py src/run.py 2>/dev/null
-find . -maxdepth 4 -name __main__.py -not -path '*/.*' 2>/dev/null | head -5
-test -f pyproject.toml && grep -A1 '\[project.scripts\]' pyproject.toml 2>/dev/null
-ls run.sh launch.sh ./simulator 2>/dev/null
-```
+The skill's sub-skill (`hpc-wrap-entry-point`) couldn't auto-resolve. The ambiguity's `candidates` lists what was found.
 
-If nothing matches (greenfield):
+**Greenfield (no candidates)**:
 
 ```
 I don't see an entry-point file. I can scaffold one. Two shapes:
@@ -38,129 +67,94 @@ I don't see an entry-point file. I can scaffold one. Two shapes:
 Which shape?  [1 / 2]
 ```
 
-If multiple candidates exist:
+**Multiple candidates**:
 
 ```
-I see plausible entry points: train.py, eval.py, python -m mypkg.cli.
+I see plausible entry points: <list from candidates>.
 Which one should the cluster run?
 ```
 
-Direct decoration is the default; only fall back to a wrapper when blocked (non-Python entry point, `@hydra.main`, consuming click/typer decorator, vendor code):
+Then: direct decoration is the default; only fall back to a wrapper when blocked (non-Python entry point, `@hydra.main`, vendor code):
 
 ```
-Your train.py parses --config and --seed via argparse. The cleanest onboarding
-is @register_run direct decoration — a two-line edit (import + decorator).
-Apply this edit?  [Y / n / show me first / use a wrapper instead]
+Your <path> parses --<flag> via argparse. The cleanest onboarding is @register_run
+direct decoration — a two-line edit. Apply this edit?
+  [Y / n / show me first / use a wrapper instead]
 ```
 
-### Data axis classification (when no `DataAxis` in `axes.yaml`)
+### Dialog: `data_axis`
 
-Read the run's source. Walk the decision tree (from `hpc_agent/experiment_kit/axis.py`):
+Walk the decision tree (from `axis.py`):
 
 1. Each row independent of prior rows? → **Independent** (DOALL).
 2. Carried state combinable in any order (sum / moments)? → **Associative** with monoid.
 3. Bounded look-back (rolling window)? → **BoundedHalo** with `halo.expr`. Bias the halo **large**.
-4. Otherwise / unsure → **Sequential** (fail-safe; serial is slow, not wrong).
+4. Otherwise / unsure → **Sequential** (fail-safe).
 
-Propose with one-sentence reasoning:
+Propose with reasoning:
 
 ```
-Your run `forecast` iterates an 8760-row hourly series. The loop refits the
-model on a trailing `train_window`-day window each step — a bounded look-back.
-I'll classify it as: DataAxis = BoundedHalo, halo = train_window * 48
+Your run `<name>` iterates a <N>-row series. The loop <pattern>.
+I'll classify it as: DataAxis = <kind>, <params>.
 Looks right?  [Y / n / unsure]
 ```
 
-On **unsure**, fall back to Sequential.
+On **unsure**, accept `safe_default` (typically Sequential).
 
-### Homogeneous axes (when no `.hpc/axes.yaml`)
+### Dialog: `homogeneous_axes`
 
-Read `tasks.py`. Classify each named dimension by heuristic (seeds/folds/windows are homogeneous; model class, dataset, layer count are heterogeneous). Propose:
+The skill's sub-skill found parallel axes but couldn't classify their homogeneity. Propose per heuristic (seeds/folds/windows homogeneous; model class, dataset, layer count heterogeneous):
 
 ```
 Found parallel axes:
- • `window` (20 values) — homogeneous
- • `model` (4 values) — heterogeneous
-I'll write .hpc/axes.yaml with homogeneous_axes: [window].
+ • `<axis>` (N values) — <homogeneous|heterogeneous> (reasoning)
+I'll write .hpc/axes.yaml with homogeneous_axes: [<list>].
 Looks right? [Y/n]
 ```
 
-### Frozen YAML configs
+### Dialog: `frozen_configs`
 
-For each `configs/*.yaml`:
+For each `configs/*.yaml` in `ambiguity.candidates`:
 
 ```
-Treat configs/exp_42.yaml as a frozen experiment config?  [Y / n / different file]
+Treat configs/<name>.yaml as a frozen experiment config?  [Y / n / different file]
 ```
 
-### Task generator
+### Dialog: `task_generator`
 
-If neither caller-supplied nor inferable from existing `tasks.py`, ask:
+The skill refused — this can't be auto-invented. Ask the user:
 
 ```
 What's the scale-up shape?
   items_x_seeds      — one frozen config × N seeds
-  cartesian_product  — cross several axes (seed × shard × ...)
+  cartesian_product  — cross several axes
   enumerated         — hand-supplied list of N task dicts
-  numeric_linspace   — sweep one numeric hyperparameter (linear)
-  numeric_logspace   — sweep one numeric hyperparameter (log)
+  numeric_linspace   — sweep one numeric hyperparameter
 ```
 
 Walk the user through the params for their choice.
 
-## Handoff
+## On final envelope
 
-Assemble every user-resolved value into the fields dict, then invoke the `hpc-submit` skill via the Skill tool:
-
-```
-Skill("hpc-submit", {
-  experiment_dir: ".",
-  cluster: "<resolved>",
-  entry_point: <resolved>,        // omit to let skill auto-resolve
-  data_axis: <resolved>,           // omit to let skill auto-resolve
-  homogeneous_axes: <resolved>,    // omit to let skill auto-resolve
-  task_generator: <resolved>,      // omit to use existing tasks.py
-  no_canary: false,
-  campaign_id: <if set>,
-  mode: "interview"
-})
-```
-
-The skill resolves anything not in the dict, hands off to the submit-flow worker, and returns the envelope. Surface the worker's `data.report.result` (run_id, job_ids, scheduler state), `data.report.decisions`, and `data.report.anomalies`.
-
-## On `spec_invalid` from the skill
-
-The skill returns `spec_invalid` when a decision genuinely needs human intervention (typically: an ambiguity that the user can resolve but the skill won't guess at, like multiple `@register_run` functions). Walk the user through the matching dialog above for the field named in the envelope's `error_code`, then re-invoke with the augmented spec.
-
-Common error codes:
-- `ambiguous_cluster` — user picks from the listed candidates
-- `ambiguous_entry_point` — user picks from the listed paths
-- `ambiguous_run` — user picks which `@register_run` function
-- `task_generator_required` — user supplies the shape + params
-- `incomplete_aggregation` (from a prior submit's aggregation) — user decides whether to retry or proceed with partial
-- `high_failure_rate` (from a prior submit's status) — user investigates before resubmitting
+Surface to the user:
+- `data.report.result` (run_id, job_ids, scheduler state)
+- `data.report.decisions` (every resolved choice + source)
+- `data.report.anomalies`
 
 ## Args
 
 `$ARGUMENTS` formats:
-
-- **Free-form intent**: `"run ridge with horizon=[1, 5, 25]"` — slash parses to `(executor_hint, axis_hint)` and passes as the skill's `task_generator` params.
-- **Flags**:
-  - `--cluster <name>` — pin the target cluster (skip the cluster prompt).
-  - `--no-canary` — skip the 1-task canary submission.
-  - `--campaign-id <slug>` — tag this submission as one iteration of a closed-loop campaign. Required when invoked from `/campaign-hpc`.
-- **Empty**: full interactive interview.
+- Free-form intent: `"run ridge with horizon=[1, 5, 25]"` — parse to `task_generator` params.
+- Flags: `--cluster <name>`, `--no-canary`, `--campaign-id <slug>`.
+- Empty: invoke skill with `{experiment_dir: "."}`; skill returns ambiguities; walk dialogs.
 
 ## Common failure modes
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Eqw` state (SGE) | Job error | `qmod -cj <JOBID>` or resubmit |
-| `PENDING` (SLURM) > 30 min | Resource unavailable | Check `sinfo`, try different partition |
+| `PENDING` (SLURM) > 30 min | Resource unavailable | Try different partition |
 | Memory exceeded | Exceeded mem limit | Resubmit with higher memory |
 | Walltime exceeded | Exceeded time limit | Resubmit with longer walltime |
 | `ModuleNotFoundError` | Env not set up | Check modules and `conda_env` |
 | rsync/scp failure | SSH key issue | `ssh $SSH_TARGET hostname` first; verify `ssh-add -l` |
-| `--features` not recognized | Executor doesn't support that arg | Check `--help`, update executor |
-
-When the user mentions CLI arguments the executor doesn't accept (e.g. "sweep features=[har, pca]" but `--features` isn't in `--help`), surface it: "ml_ridge.py doesn't accept `--features`. Should I add it, or did you mean a different executor?"

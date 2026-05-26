@@ -1,6 +1,6 @@
-`/campaign-hpc` is the **human-interview wrapper** around the `hpc-campaign` skill — the agent-autonomous decision layer that drives one tick of a closed-loop campaign (the per-iteration `submit-flow → monitor-flow → aggregate-flow` loop whose `tasks.py` adapts to prior results).
+`/campaign-hpc` is the **human-interview wrapper** around the `hpc-campaign` skill — the agent-autonomous decision layer that drives one tick of a closed-loop campaign (the per-iteration `submit → monitor → aggregate` loop whose `tasks.py` adapts to prior results).
 
-The slash's job is the first-time-setup interview (path picking, slug tagging) and per-tick user-facing dialogs (validate-campaign findings interpretation, `decide` step responses). Per-tick mechanics live in the skill, which composes `hpc-submit`, `hpc-status`, and `hpc-aggregate` for each phase.
+The slash handles the first-time-setup interview (path picking, slug tagging) and per-tick user-facing dialogs.
 
 ## First-time setup interview (only the first time per campaign)
 
@@ -16,12 +16,9 @@ Or do you want an optimizer to choose params adaptively — Optuna, random-searc
 PBT? → Path B.
 ```
 
-**Path A**: walk the user through writing `tasks.py` with the manual grid. `resolve(task_id)` enumerates the grid; `total()` returns its size.
+**Path A**: walk the user through writing `tasks.py` with the manual grid.
 
-**Path B**: walk the user through writing `tasks.py` with the strategy library. Inside `total()` / `resolve()`, the user calls:
-- `study.tell(prev_trial, prev_metric)` for each prior iteration (loaded via `prior(experiment_dir, campaign_id)`)
-- `study.ask()` to get the next batch
-- **Add `_optuna_trial_number` (or equivalent unique field) into the kwargs dict** so each iteration's `cmd_sha` differs even when the strategy picks repeat params. Without this, the framework dedupes the second iteration silently and the campaign collapses. The `hpc-campaign` skill enforces this via `validate-campaign`'s `missing_stochastic_marker` error.
+**Path B**: walk through writing `tasks.py` with the strategy library. Critical: **add `_optuna_trial_number` (or equivalent unique marker) into kwargs** so each iteration's `cmd_sha` differs even when the strategy picks repeat params. Without this, the framework dedupes the second iteration silently and the campaign collapses. The `hpc-campaign` skill enforces this via `validate-campaign`'s `missing_stochastic_marker` error.
 
 ### Slug
 
@@ -31,66 +28,80 @@ What should we call this campaign?
 
 Validate against `^[A-Za-z0-9._\-]+$`.
 
-## Per-tick handoff
+## Per-tick invocation
 
-Each `/campaign-hpc` invocation drives one tick. Invoke the `hpc-campaign` skill via the Skill tool:
+Invoke the `hpc-campaign` skill via the Skill tool with the per-tick spec:
 
 ```
 Skill("hpc-campaign", {
   experiment_dir: ".",
   campaign_id: "<slug>",
   path: "<A | B>",
-  allow_warnings: true,
-  mode: "interview"
+  allow_warnings: <true|false>  // default true
 })
 ```
 
-The skill reads the campaign cursor, asks the campaign driver what to do next, composes the matching workflow skill (submit / status / aggregate), and returns the per-tick envelope.
+## On `needs_resolution` — walking ambiguities
 
-Surface to the user:
-- `data.report.result.step` (which step ran this tick)
-- `data.report.result.run_id` and `lifecycle_state` (if applicable)
-- `data.report.decisions` — validate-campaign findings handled, decide defaults applied
-- `data.report.anomalies`
+The campaign skill propagates ambiguities from its composed skills (`hpc-submit`, `hpc-status`, `hpc-aggregate`) plus its own. Use the same dialog templates as `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc` for those fields.
 
-## On `validate-campaign` findings (skill returns `validate_campaign_failed`)
+Campaign-specific ambiguities:
 
-The skill blocks the tick if validation has errors. Surface to the user by severity:
+### Dialog: `allow_warnings`
 
-| Severity | Dialog |
-|---|---|
-| `error` | "Validation found errors:<br>- `<code>`: `<message>`<br>Apply `<suggested_fix>` or edit `tasks.py` / dataset / playbook.yaml; rerun /campaign-hpc." |
-| `warning` (when `allow_warnings=false`) | "Validation warning: walltime 3600s is below historical p95 (5400s). Proceed anyway?" If yes, re-invoke with `allow_warnings: true`. |
-| `info` | Surface for visibility; doesn't block. |
-
-Common `code` values:
-
-| `code` | What to fix |
-|---|---|
-| `literal_value_not_allowed` | Fix the value in `tasks.py.resolve(i)` per `evidence.allowed`. |
-| `missing_parameter` | Remove the kwarg or add it to the executor signature. |
-| `row_index_oob` | Drop the index or extend the dataset. |
-| `required_column_null` | Drop the row or backfill the column. |
-| `walltime_below_quantile` | Raise `requested_walltime_sec` to `evidence.quantile_sec`. |
-| `known_bad_combination` | Switch GPU type or remove the workload tag. |
-| `missing_stochastic_marker` (Path B) | Add `_optuna_trial_number` to kwargs. |
-
-There is no `--force` flag by design. If a rule is wrong for the project, edit `.hpc/playbook.yaml` (one version-controlled commit).
-
-## On `decide` step (skill returns the decide envelope)
-
-The driver surfaces `decide` steps for judgement calls — budget gates, convergence gates, early-stop suggestions. The skill returns the question + context; the slash asks the user:
+Validate-campaign produced warnings (e.g., walltime below historical p95). Ask:
 
 ```
-The campaign has used 48 of 60 cluster-hours budgeted. Three iterations
-remaining at the current burn rate would exceed the budget. Options:
-  [1] continue — proceed with the remaining iterations
-  [2] stop — declare the campaign complete with current results
-  [3] increase budget — set a new ceiling and continue
+Validation warning: <message>. Proceed anyway? [Y/n]
+```
+
+If Y → re-invoke with `allow_warnings: true`.
+
+### Dialog: `decide_response`
+
+The driver surfaced a judgement call (budget gate, convergence gate). Present the question + context from `ambiguity.context`, with options from `ambiguity.candidates`:
+
+```
+<question from context>
+  1. continue — <description>
+  2. stop — <description>
+  3. increase_budget — <description>
 Which?
 ```
 
-Re-invoke `hpc-campaign` with the user's answer in the `decide_response` field.
+Re-invoke with the user's answer in the `decide_response` field.
+
+## On `spec_invalid` from the skill
+
+- `unknown_campaign` — show the list of known campaigns; user picks.
+- `validate_campaign_failed` — surface findings by severity:
+
+  | Severity | Action |
+  |---|---|
+  | `error` | "Validation errors: <code>: <message>. Apply <suggested_fix> or edit tasks.py / dataset / playbook.yaml; rerun /campaign-hpc." |
+  | `info` | Surface for visibility; doesn't block. |
+
+  Common `code` values:
+
+  | `code` | What to fix |
+  |---|---|
+  | `literal_value_not_allowed` | Fix the value in `tasks.py.resolve(i)` per `evidence.allowed`. |
+  | `missing_parameter` | Remove the kwarg or add it to the executor signature. |
+  | `row_index_oob` | Drop the index or extend the dataset. |
+  | `required_column_null` | Drop the row or backfill the column. |
+  | `walltime_below_quantile` | Raise `requested_walltime_sec` to `evidence.quantile_sec`. |
+  | `known_bad_combination` | Switch GPU type or remove the workload tag. |
+  | `missing_stochastic_marker` (Path B) | Add `_optuna_trial_number` to kwargs. |
+
+  There is no `--force` flag by design. If a rule is wrong for the project, edit `.hpc/playbook.yaml` (version-controlled).
+
+## On final envelope
+
+Surface:
+- `data.report.result.step` (which step ran this tick)
+- `data.report.result.run_id` and `lifecycle_state` (if applicable)
+- `data.report.decisions`
+- `data.report.anomalies`
 
 ## When the user asks "show me what landed"
 
@@ -103,13 +114,10 @@ Group multiple in-flight runs by `campaign_id` for display.
 
 ## For unattended runs
 
-Two options:
-
-- Schedule a recurring campaign-tick run in cron. The campaign driver CLI is the headless surface — each tick advances one step.
-- `/loop 30m /campaign-hpc` inside a chat session — repeats this slash on a 30-minute interval.
+- Schedule a recurring campaign-tick run in cron.
+- `/loop 30m /campaign-hpc` inside a chat session.
 
 ## Notes
 
-- **Pause and resume is trivial.** State lives in sidecars + the campaign cursor on disk. Re-running the slash resumes from the cursor.
-- **Path B `_optuna_trial_number` is load-bearing.** Without a unique marker per iteration, `cmd_sha` is the same across ticks → the submit-flow primitive dedupes → the campaign silently collapses. The skill enforces this via `validate-campaign`.
-- **Concurrency is opt-in.** Default to sequential — walk-forward iteration N+1 depends on N's result. For K iterations in flight (Optuna's `constant_liar=True` is built for this), pass `--concurrency K` to the driver.
+- **Pause and resume is trivial.** State lives in sidecars + the campaign cursor on disk.
+- **Concurrency is opt-in.** Default to sequential.
