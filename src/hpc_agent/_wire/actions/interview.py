@@ -240,6 +240,58 @@ class _PythonModuleEntry(BaseModel):
     )
 
 
+class _HaloHint(BaseModel):
+    """Halo expression for a ``bounded_halo`` ``data_axis_hint``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expr: str = Field(
+        min_length=1,
+        description=(
+            "Arithmetic-only expression over the wrapper's parameters; the same "
+            "restricted-AST form classify-axis already accepts. Example: "
+            "``train_window * 48``."
+        ),
+    )
+
+
+class _DataAxisHint(BaseModel):
+    """Pre-declared series-axis classification.
+
+    For shell-out wrappers ``classify-axis`` cannot introspect the body
+    (it's a ``subprocess.check_call``). When the experimenter knows the
+    classification — usually they do, because they wrote ``main.py`` —
+    they can declare it here and the interview persists it so
+    classify-axis records it directly without an introspection step.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["independent", "associative", "bounded_halo", "sequential"]
+    halo: _HaloHint | None = Field(
+        default=None,
+        description="Required when ``kind='bounded_halo'``; otherwise must be omitted.",
+    )
+    monoid: Literal["sum", "moments"] | None = Field(
+        default=None,
+        description="Optional for ``kind='associative'``; defaults to 'moments'. Ignored for other kinds.",
+    )
+
+    @model_validator(mode="after")
+    def _check_kind_specific_fields(self) -> _DataAxisHint:
+        if self.kind == "bounded_halo" and self.halo is None:
+            raise ValueError("data_axis_hint kind='bounded_halo' requires 'halo'")
+        if self.kind != "bounded_halo" and self.halo is not None:
+            raise ValueError(
+                f"data_axis_hint.halo only valid when kind='bounded_halo'; got kind={self.kind!r}"
+            )
+        if self.kind != "associative" and self.monoid is not None:
+            raise ValueError(
+                f"data_axis_hint.monoid only valid when kind='associative'; got kind={self.kind!r}"
+            )
+        return self
+
+
 class _ShellCommandEntry(BaseModel):
     """Mature-repo entry point: a shell command (``main.py``, compiled binary, ...).
 
@@ -255,6 +307,19 @@ class _ShellCommandEntry(BaseModel):
     ``<basename>_sha`` into every materialized task's kwargs so the
     framework's ``cmd_sha`` correctly distinguishes ``exp_42.yaml``
     from ``exp_43.yaml`` (and catches accidental in-place edits).
+
+    *Constraint*: ``frozen_configs`` requires ``task_generator`` (so the
+    framework has somewhere to thread the shas). A hand-written tasks.py
+    plus ``frozen_configs`` is rejected at interview time — the framework
+    can't safely edit the user's hand-rolled file, and silently dropping
+    the shas would defeat the identity guarantee. Use ``task_generator``
+    or include the shas in your own tasks.py kwargs.
+
+    *Timing*: ``frozen_configs`` are hashed at interview time. If the
+    YAML is edited between interview and submit, the stored sha is the
+    interview-time content; the cluster runs whatever rsync ships. The
+    window is small (interview is typically immediately before submit)
+    but real — re-run the interview to refresh.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -292,7 +357,18 @@ class _ShellCommandEntry(BaseModel):
             "Paths (relative to campaign_dir) to config files whose content "
             "should be part of the experiment's identity. For each entry the "
             "interview hashes the bytes and threads ``<basename>_sha`` into "
-            "every task's kwargs."
+            "every task's kwargs. Requires ``task_generator`` (see class docstring)."
+        ),
+    )
+    data_axis_hint: _DataAxisHint | None = Field(
+        default=None,
+        description=(
+            "Pre-declared series-axis classification. classify-axis cannot "
+            "introspect a shell-out body, so when the experimenter knows the "
+            "classification they declare it here. The interview persists it to "
+            "``interview.json._materialized.entry_point.data_axis`` so "
+            "classify-axis records it directly. Omit when you want the "
+            "interactive classification interview."
         ),
     )
 

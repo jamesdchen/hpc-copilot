@@ -535,6 +535,15 @@ def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Pa
     """The register_run kind is a pure pointer — no wrapper file written.
     Existing tasks.py-or-hand-rolled flow applies."""
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    # Seed a discoverable @register_run function so the validator passes.
+    nb = tmp_path / "notebooks"
+    nb.mkdir()
+    (nb / "forecast.py").write_text(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "@register_run\n"
+        "def forecast(seed: int = 0) -> dict:\n"
+        "    return {'loss': 0.0}\n"
+    )
     intent = _minimal_intent(
         3,
         entry_point={"kind": "register_run", "run_name": "forecast"},
@@ -543,6 +552,232 @@ def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Pa
     assert "tasks.py" not in result["artifacts"]  # not regenerated
     assert "interview.json" in result["artifacts"]
     assert not (tmp_path / ".hpc" / "wrappers").exists()
+    # The materialized entry_point block records the pointer for downstream readers.
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["entry_point"] == {
+        "kind": "register_run",
+        "run_name": "forecast",
+    }
+
+
+def test_entry_point_register_run_rejects_missing_run(tmp_path: Path) -> None:
+    """A register_run pointer to a non-existent function is rejected at intake."""
+    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    intent = _minimal_intent(
+        3,
+        entry_point={"kind": "register_run", "run_name": "ghost"},
+    )
+    with pytest.raises(errors.SpecInvalid, match="no @register_run function"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+
+def test_entry_point_python_module_rejects_missing_module(tmp_path: Path) -> None:
+    """A python_module pointer that doesn't import is rejected at intake."""
+    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    intent = _minimal_intent(
+        3,
+        entry_point={
+            "kind": "python_module",
+            "module": "no_such_pkg_xyz_definitely_not_real",
+            "function": "main",
+        },
+    )
+    with pytest.raises(errors.SpecInvalid, match="does not import"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+
+def test_entry_point_python_module_rejects_missing_function(tmp_path: Path) -> None:
+    """A python_module whose module imports but lacks the function is rejected."""
+    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    intent = _minimal_intent(
+        3,
+        entry_point={
+            "kind": "python_module",
+            "module": "json",  # real module
+            "function": "definitely_not_a_real_function",
+        },
+    )
+    with pytest.raises(errors.SpecInvalid, match="has no attribute"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+
+def test_entry_point_python_module_accepts_valid(tmp_path: Path) -> None:
+    """A python_module pointer to a real importable function is accepted; no wrapper materialized."""
+    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    intent = _minimal_intent(
+        3,
+        entry_point={"kind": "python_module", "module": "json", "function": "dumps"},
+    )
+    result = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert not (tmp_path / ".hpc" / "wrappers").exists()
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["entry_point"] == {
+        "kind": "python_module",
+        "module": "json",
+        "function": "dumps",
+    }
+
+
+def test_entry_point_shell_command_frozen_configs_without_generator_rejected(tmp_path: Path) -> None:
+    """shell_command + frozen_configs requires task_generator; the framework
+    can't safely edit a hand-written tasks.py to thread the shas."""
+    _seed_yaml(tmp_path, "configs/exp_42.yaml", "lr: 1e-3\n")
+    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    intent = _minimal_intent(
+        3,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "r",
+            "argv": ["python3", "main.py", "--config", "{config}"],
+            "signature": {"config": "str"},
+            "frozen_configs": ["configs/exp_42.yaml"],
+        },
+        # No task_generator — hand-written tasks.py.
+    )
+    with pytest.raises(errors.SpecInvalid, match="frozen_configs requires task_generator"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    # No residue from the rejected spec.
+    assert not (tmp_path / ".hpc" / "wrappers").exists()
+
+
+def test_entry_point_shell_command_data_axis_hint_persisted(tmp_path: Path) -> None:
+    """When data_axis_hint is supplied, it lands in _materialized.entry_point.data_axis
+    so classify-axis can record it directly without introspection."""
+    intent = _minimal_intent(
+        2,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "r",
+            "argv": ["python3", "main.py", "--seed", "{seed}"],
+            "signature": {"seed": "int"},
+            "data_axis_hint": {"kind": "independent"},
+        },
+        task_generator={
+            "kind": "enumerated", "params": {"items": [{"seed": 0}, {"seed": 1}]},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["entry_point"]["data_axis"] == {"kind": "independent"}
+
+
+def test_entry_point_shell_command_data_axis_hint_bounded_halo(tmp_path: Path) -> None:
+    """bounded_halo data_axis_hint round-trips with its halo expression."""
+    intent = _minimal_intent(
+        2,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "r",
+            "argv": ["python3", "main.py", "--window", "{window}"],
+            "signature": {"window": "int"},
+            "data_axis_hint": {
+                "kind": "bounded_halo",
+                "halo": {"expr": "window * 48"},
+            },
+        },
+        task_generator={
+            "kind": "enumerated", "params": {"items": [{"window": 1}, {"window": 2}]},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    assert doc["_materialized"]["entry_point"]["data_axis"] == {
+        "kind": "bounded_halo",
+        "halo": {"expr": "window * 48"},
+    }
+
+
+def test_entry_point_shell_command_executor_cmd_in_materialized(tmp_path: Path) -> None:
+    """_materialized.entry_point.executor_cmd is the shell command callers
+    (slash commands, submit-flow orchestrators) feed into submit-flow's
+    ``executor`` so the wrapper actually runs on the cluster."""
+    intent = _minimal_intent(
+        2,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "forecast",
+            "argv": ["python3", "main.py", "--seed", "{seed}"],
+            "signature": {"seed": "int"},
+        },
+        task_generator={
+            "kind": "enumerated", "params": {"items": [{"seed": 0}, {"seed": 1}]},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    ep_mat = doc["_materialized"]["entry_point"]
+    assert ep_mat["wrapper_path"] == ".hpc/wrappers/forecast.py"
+    # The executor_cmd builds an args namespace from HPC_KW_* env vars and
+    # invokes compute(). Pin the contract by checking key tokens.
+    assert "python3 -c" in ep_mat["executor_cmd"]
+    assert ".hpc/wrappers/forecast.py" in ep_mat["executor_cmd"]
+    assert "HPC_KW_" in ep_mat["executor_cmd"]
+    assert "compute" in ep_mat["executor_cmd"]
+
+
+def test_entry_point_shell_command_executor_cmd_actually_invokes_wrapper(tmp_path: Path) -> None:
+    """End-to-end: the executor_cmd persisted to interview.json, when run with
+    HPC_KW_* env vars (the dispatcher's contract), actually invokes the
+    wrapper which then subprocess-invokes the argv. Closes the
+    orphan-wrapper gap — proves the materialized executor_cmd is a
+    real shell command the dispatcher can use."""
+    import os
+    import subprocess
+
+    intent = _minimal_intent(
+        1,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "demo",
+            "argv": ["echo", "{message}"],
+            "signature": {"message": "str"},
+        },
+        task_generator={
+            "kind": "enumerated",
+            "params": {"items": [{"message": "WRAPPER_CHAIN_OK"}]},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    doc = json.loads((tmp_path / "interview.json").read_text())
+    executor_cmd = doc["_materialized"]["entry_point"]["executor_cmd"]
+
+    # Simulate the dispatcher: REPO_DIR points at the campaign, HPC_KW_*
+    # carries the kwargs the wrapper signature expects.
+    env = {**os.environ, "REPO_DIR": str(tmp_path), "HPC_KW_MESSAGE": "WRAPPER_CHAIN_OK"}
+    proc = subprocess.run(
+        executor_cmd, shell=True, env=env, capture_output=True, text=True, timeout=15
+    )
+    assert proc.returncode == 0, f"executor_cmd failed: stderr={proc.stderr!r}"
+    # The wrapper subprocess-called `echo WRAPPER_CHAIN_OK`; stdout proves
+    # the whole chain works (dispatcher env → wrapper kwargs → echo argv).
+    assert "WRAPPER_CHAIN_OK" in proc.stdout
+
+
+def test_entry_point_shell_command_wrapper_is_idempotent(tmp_path: Path) -> None:
+    """Re-running with the same entry_point produces byte-equivalent wrapper
+    (no mtime churn, no timestamp embedding in the wrapper body)."""
+    intent = _minimal_intent(
+        2,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "r",
+            "argv": ["python3", "main.py", "--seed", "{seed}"],
+            "signature": {"seed": "int"},
+        },
+        task_generator={
+            "kind": "enumerated", "params": {"items": [{"seed": 0}, {"seed": 1}]},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    wrapper = tmp_path / ".hpc" / "wrappers" / "r.py"
+    first_bytes = wrapper.read_bytes()
+    first_mtime = wrapper.stat().st_mtime
+    # Re-run; the skip-write-when-identical branch should not bump mtime.
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert wrapper.read_bytes() == first_bytes
+    assert wrapper.stat().st_mtime == first_mtime, (
+        "wrapper mtime should not change on a no-op re-run"
+    )
 
 
 def test_generator_then_validate_mode_picks_up_hand_edits(tmp_path: Path) -> None:

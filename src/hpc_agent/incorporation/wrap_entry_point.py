@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 
-__all__ = ["materialize_shell_wrapper", "WrapperResult"]
+__all__ = ["materialize_shell_wrapper", "WrapperResult", "wrapper_executor_cmd"]
 
 
 _WRAPPERS_SUBDIR = Path(".hpc") / "wrappers"
@@ -111,9 +111,55 @@ def materialize_shell_wrapper(
 
     body = _render_wrapper_body(run_name=run_name, argv=argv, signature=signature)
     wrapper_path = wrappers_dir / f"{run_name}.py"
-    wrapper_path.write_text(_HEADER + "\n" + body, encoding="utf-8")
+    content = _HEADER + "\n" + body
+    # Idempotency: skip the write when bytes are identical so an mtime-
+    # sensitive consumer (or just a curious operator running `ls -la`)
+    # doesn't see churn on a no-op re-run. The body has no timestamps,
+    # so any byte difference here means the spec actually changed.
+    if not wrapper_path.is_file() or wrapper_path.read_text(encoding="utf-8") != content:
+        wrapper_path.write_text(content, encoding="utf-8")
 
     return WrapperResult(wrapper_path=wrapper_path, frozen_shas=frozen_shas)
+
+
+def wrapper_executor_cmd(
+    *,
+    campaign_dir: Path,
+    run_name: str,
+) -> str:
+    """Return the shell command to invoke ``<run_name>``'s wrapper on a task.
+
+    The materialized wrapper is a Python module with ``@register_run``
+    that injects a ``compute(args)`` callable into its namespace. The
+    cluster-side dispatcher exports each kwarg from ``tasks.resolve(i)``
+    as both ``HPC_KW_<NAME>`` and bare ``<NAME>`` env vars, then runs
+    this shell command per task. The one-liner builds an ``args``
+    namespace from those env vars and dispatches.
+
+    Returned form is a shell command suitable for stamping into the
+    submit-flow spec / sidecar's ``executor`` field; ``submit-flow``
+    consumes it as-is.
+
+    Note: assumes the wrapper has already been materialized at
+    ``<campaign_dir>/.hpc/wrappers/<run_name>.py``. The helper just
+    composes the command — it neither writes nor verifies the wrapper.
+    """
+    rel = _WRAPPERS_SUBDIR / f"{run_name}.py"
+    # Single-quote-safe Python one-liner: import the materialized module by
+    # path (no package install required on the cluster), build args from
+    # HPC_KW_* env vars, then call compute(args). The dispatcher's bare-
+    # form env exports (NAME alongside HPC_KW_NAME) aren't used here — the
+    # HPC_KW_* namespace is the stable contract.
+    py = (
+        "import argparse,importlib.util,os,sys;"
+        f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {str(rel)!r});"
+        "_s=importlib.util.spec_from_file_location('_hpc_wrapper',_p);"
+        "_m=importlib.util.module_from_spec(_s);_s.loader.exec_module(_m);"
+        "_n=argparse.Namespace(**{k[len('HPC_KW_'):].lower():v "
+        "for k,v in os.environ.items() if k.startswith('HPC_KW_')});"
+        "_m.compute(_n)"
+    )
+    return f'python3 -c "{py}"'
 
 
 def _hash_frozen_configs(

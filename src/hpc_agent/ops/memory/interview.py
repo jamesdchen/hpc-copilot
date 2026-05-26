@@ -125,26 +125,75 @@ def record_interview(
     declared = int(intent["task_count"])
     artifacts: list[str] = []
 
-    # Materialize the entry-point wrapper first (if shell_command). Its
-    # frozen-config shas get threaded into tasks-kwargs when the generator
-    # then runs. Failing here before any tasks.py write avoids the
-    # half-baked state of a tasks.py that references shas for a config
-    # path that doesn't exist.
+    # Validate the entry_point (if present) and materialize the wrapper
+    # (if shell_command). All entry-point validation happens BEFORE any
+    # tasks.py write so a bad spec leaves no residue.
     frozen_shas: dict[str, str] = {}
-    if "entry_point" in intent and intent["entry_point"]["kind"] == "shell_command":
-        from hpc_agent.incorporation.wrap_entry_point import materialize_shell_wrapper
-
+    entry_point_materialized: dict[str, Any] | None = None
+    if "entry_point" in intent:
         ep = intent["entry_point"]
-        result = materialize_shell_wrapper(
-            campaign_dir=campaign_dir,
-            run_name=ep["run_name"],
-            argv=ep["argv"],
-            signature=ep.get("signature", {}),
-            frozen_configs=ep.get("frozen_configs", []),
-        )
-        frozen_shas = dict(result.frozen_shas)
-        # Path relative to campaign_dir for portability in the envelope.
-        artifacts.append(str(result.wrapper_path.relative_to(campaign_dir)))
+        kind = ep["kind"]
+        if kind == "shell_command":
+            # Reject ``frozen_configs`` without ``task_generator``. The framework
+            # threads ``<stem>_sha`` into kwargs only on materialized tasks.py;
+            # for a hand-written tasks.py we can't safely edit the user's file,
+            # and silently dropping the shas would defeat the identity guarantee
+            # the field promises. The user can either switch to task_generator or
+            # include the shas in their own tasks.py kwargs.
+            if ep.get("frozen_configs") and "task_generator" not in intent:
+                raise errors.SpecInvalid(
+                    "shell_command.frozen_configs requires task_generator; "
+                    "a hand-written tasks.py must include the shas itself. "
+                    "Either add task_generator to the intent or drop "
+                    "frozen_configs and thread the shas through your own "
+                    "tasks.py kwargs."
+                )
+            from hpc_agent.incorporation.wrap_entry_point import (
+                materialize_shell_wrapper,
+                wrapper_executor_cmd,
+            )
+
+            result = materialize_shell_wrapper(
+                campaign_dir=campaign_dir,
+                run_name=ep["run_name"],
+                argv=ep["argv"],
+                signature=ep.get("signature", {}),
+                frozen_configs=ep.get("frozen_configs", []),
+            )
+            frozen_shas = dict(result.frozen_shas)
+            wrapper_rel = str(result.wrapper_path.relative_to(campaign_dir))
+            artifacts.append(wrapper_rel)
+            entry_point_materialized = {
+                "kind": "shell_command",
+                "run_name": ep["run_name"],
+                "wrapper_path": wrapper_rel,
+                "executor_cmd": wrapper_executor_cmd(
+                    campaign_dir=campaign_dir, run_name=ep["run_name"]
+                ),
+                "frozen_shas": dict(frozen_shas),
+            }
+            if "data_axis_hint" in ep:
+                entry_point_materialized["data_axis"] = ep["data_axis_hint"]
+        elif kind == "python_module":
+            # Validate the module/function imports; surface the same spec_invalid
+            # the rest of the interview uses so a typo is loud at intake.
+            _validate_python_module_entry(ep)
+            entry_point_materialized = {
+                "kind": "python_module",
+                "module": ep["module"],
+                "function": ep.get("function", "main"),
+            }
+        elif kind == "register_run":
+            # Validate the named run is actually discoverable. ``discover_runs``
+            # defaults to ``notebooks/`` (the canonical notebook location); a
+            # mature repo with a different layout passes the path via
+            # ``notebooks_dir``. The fallback to campaign_dir handles the
+            # tiny-repo case where everything sits at the root.
+            _validate_register_run_entry(ep, campaign_dir)
+            entry_point_materialized = {
+                "kind": "register_run",
+                "run_name": ep["run_name"],
+            }
 
     if "task_generator" in intent:
         # Generator mode — pre-validate count, then materialize tasks.py.
@@ -188,13 +237,16 @@ def record_interview(
     cmd_sha = compute_cmd_sha(tasks_mod)
 
     interview_path = campaign_dir / "interview.json"
+    materialized: dict[str, Any] = {
+        "at": utcnow().isoformat(),
+        "cmd_sha": cmd_sha,
+        "total_tasks": total_tasks,
+    }
+    if entry_point_materialized is not None:
+        materialized["entry_point"] = entry_point_materialized
     interview_doc = {
         **dict(intent),
-        "_materialized": {
-            "at": utcnow().isoformat(),
-            "cmd_sha": cmd_sha,
-            "total_tasks": total_tasks,
-        },
+        "_materialized": materialized,
     }
     # Atomic write: a SIGINT or crash during a plain ``write_text``
     # would leave half a JSON file that downstream readers
@@ -265,6 +317,62 @@ hand-edit.
 """
 from __future__ import annotations
 '''
+
+
+def _validate_python_module_entry(ep: Mapping[str, Any]) -> None:
+    """Confirm ``module`` imports and ``function`` exists on it.
+
+    Catches the typo / packaging mistake at intake. Without this the
+    failure would land much later — during cluster-side dispatch — as
+    an opaque ``ImportError`` in a per-task log.
+    """
+    import importlib
+
+    module = ep["module"]
+    function = ep.get("function", "main")
+    try:
+        mod = importlib.import_module(module)
+    except ImportError as exc:
+        raise errors.SpecInvalid(
+            f"python_module.entry_point: module {module!r} does not import "
+            f"({exc.__class__.__name__}: {exc})"
+        ) from exc
+    if not hasattr(mod, function):
+        raise errors.SpecInvalid(
+            f"python_module.entry_point: module {module!r} has no attribute "
+            f"{function!r}"
+        )
+    if not callable(getattr(mod, function)):
+        raise errors.SpecInvalid(
+            f"python_module.entry_point: {module}.{function} is not callable"
+        )
+
+
+def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> None:
+    """Confirm a ``@register_run`` function named ``run_name`` is discoverable.
+
+    Walks the canonical ``notebooks/`` dir first (the framework's default),
+    falling back to ``campaign_dir`` for tiny-repo layouts where everything
+    sits at the root. The scan uses ``discover_runs`` — same primitive the
+    rest of the framework keys off — so this validation matches the
+    runtime discovery behavior exactly.
+    """
+    from hpc_agent.experiment_kit.discover import discover_runs
+
+    run_name = ep["run_name"]
+    search_roots = [campaign_dir / "notebooks", campaign_dir]
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for run in discover_runs(root):
+            if run.name == run_name:
+                return
+    raise errors.SpecInvalid(
+        f"register_run.entry_point: no @register_run function named "
+        f"{run_name!r} found under {campaign_dir}/notebooks or "
+        f"{campaign_dir}. Either the run isn't decorated yet or its file "
+        f"isn't on disk."
+    )
 
 
 def _expected_count(generator: Mapping[str, Any]) -> int:
