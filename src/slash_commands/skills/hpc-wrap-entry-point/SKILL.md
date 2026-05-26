@@ -1,21 +1,21 @@
 ---
-name: hpc-wrap-main-py
-description: "Set up a mature repo (main.py + optional YAML configs) for hpc-agent submission. Detects the entry point, conducts a short proposes-then-confirms interview about its signature / frozen configs / data-axis classification, then invokes the `interview` primitive to materialize a wrapper at `.hpc/wrappers/<run_name>.py` plus a starter `tasks.py`. Run this once before `/submit-hpc` on a repo that doesn't have a `@register_run` notebook."
+name: hpc-wrap-entry-point
+description: "Set up a mature repo (any shell-invokable entry point — main.py, train.py, python -m pkg.cli, a compiled binary, ... — plus optional YAML configs) for hpc-agent submission. Detects the entry point, conducts a short proposes-then-confirms interview about its signature / frozen configs / data-axis classification, then invokes the `interview` primitive to materialize a wrapper at `.hpc/wrappers/<run_name>.py` plus a starter `tasks.py`. Run this once before `/submit-hpc` on a repo that doesn't have a `@register_run` notebook."
 allowed-tools: Bash Read Write Glob
 execution: inline
 category: experimenter-intent
 ---
 
-Agent-facing composition over the **[interview](../../docs/primitives/interview.md) primitive** for mature repos. The greenfield path is `@register_run` in a notebook; this skill is the analog for repos that already have `main.py` + YAML configs and don't want to rewrite. It conducts the conversational intake the headless `/submit-hpc` worker can't (the worker reads `interview.json`; this skill writes it) and then hands off to `/submit-hpc`.
+Agent-facing composition over the **[interview](../../docs/primitives/interview.md) primitive** for mature repos. The greenfield path is `@register_run` in a notebook; this skill is the analog for repos whose entry point is *anything else* — a `main.py`, a `train.py`, `python -m pkg.cli`, a compiled binary, a shell script — and the experimenter doesn't want to rewrite the repo. The skill finds the entry point, derives its signature, and registers a `@register_run` wrapper around it so the framework gets the introspection it needs. It conducts the conversational intake the headless `/submit-hpc` worker can't (the worker reads `interview.json`; this skill writes it) and then hands off to `/submit-hpc`.
 
 The interview persists:
-- A `@register_run` **wrapper** at `<experiment>/.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the user's `main.py` with kwargs substituted. The wrapper's typed signature is what downstream framework primitives (`classify-axis`, `validate-executor-signatures`) introspect. `main.py` stays untouched.
+- A `@register_run` **wrapper** at `<experiment>/.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the user's entry point with kwargs substituted. The wrapper's typed signature is what downstream framework primitives (`classify-axis`, `validate-executor-signatures`) introspect. The underlying entry point stays untouched.
 - A `tasks.py` (from the supplied `task_generator`) whose kwargs include `<stem>_sha` for every frozen YAML, so `cmd_sha` correctly distinguishes `exp_42.yaml` from `exp_43.yaml` and catches accidental in-place edits.
 - An `interview.json` with a `_materialized.entry_point` block carrying the wrapper path, `executor_cmd`, frozen-config shas, and (optionally) a pre-declared `data_axis` — read by the submit workflow's Step 0b.
 
 ## When to run
 
-- The user's repo has `main.py` (or another shell-invokable entry point), not `@register_run` in a notebook.
+- The user's repo has any non-notebook entry point — `main.py`, `train.py`, `run_experiment.py`, `python -m pkg.cli`, `./simulator`, etc. — and no `@register_run` decoration anywhere.
 - The user wants to scale a *frozen* experiment configured by one YAML (or a small number of them) across seeds / shards / replicates — not sweep over the YAMLs themselves.
 - A fresh `/submit-hpc` would escalate with `mature_repo_needs_interview` because the worker can't conduct the conversational intake itself.
 
@@ -23,38 +23,63 @@ The interview persists:
 
 ### 1. Detect the entry point
 
-Walk the repo to propose a candidate entry point. Probe in order:
+Walk the repo to propose a candidate entry point. Probe shapes in order of likelihood:
 
 ```bash
-# Common entry-point locations
-ls main.py src/main.py 2>/dev/null
-# Python package with __main__.py
-find . -maxdepth 3 -name __main__.py -not -path '*/.*' 2>/dev/null | head -5
+# Conventional Python entry-point filenames at the root or under src/
+ls main.py train.py run.py experiment.py 2>/dev/null
+ls src/main.py src/train.py src/run.py 2>/dev/null
+
+# Python package with __main__.py (runnable via `python -m pkg`)
+find . -maxdepth 4 -name __main__.py -not -path '*/.*' 2>/dev/null | head -5
+
+# pyproject.toml console_scripts entry points (e.g. `mytool = mypkg.cli:main`)
+test -f pyproject.toml && grep -A1 '\[project.scripts\]' pyproject.toml 2>/dev/null
+
+# Shell scripts / compiled binaries — only consider these when no Python entry exists
+ls run.sh launch.sh ./simulator 2>/dev/null
 ```
 
-Read the candidate file and look at its CLI surface — `argparse.ArgumentParser`, `@click.command`, `@app.command` (typer), or a `if __name__ == "__main__":` block calling something with `sys.argv`. If detection is ambiguous, ask the experimenter: *"Is `main.py` your entry point, or somewhere else?"* Record the path.
+For each candidate Python file, read it and inspect the CLI surface — `argparse.ArgumentParser`, `@click.command` / `@click.group`, `@app.command` (typer), `fire.Fire(...)`, or a bare `if __name__ == "__main__":` block calling something with `sys.argv`. For a package with `__main__.py`, propose the invocation as `python3 -m <pkg>`. For a `console_scripts` entry, propose the registered command name directly.
+
+If multiple candidates are plausible, surface them to the experimenter and let them pick:
+
+```
+I see three plausible entry points in this repo:
+  1. `train.py`       — argparse with --config, --seed, --epochs
+  2. `eval.py`        — argparse with --model, --dataset
+  3. `python -m mypkg.cli`  — Click app with `train` / `eval` subcommands
+
+Which one should the cluster run?  [1 / 2 / 3 / other]
+```
+
+Record the picked entry point — the path (or `-m` invocation), and which CLI library it uses. The next step turns that into a typed wrapper signature.
 
 ### 2. Propose the argv template + signature
 
-From the detected file's CLI surface, propose:
+From the detected entry point's CLI surface, propose:
 
-- An `argv` template list, e.g. `["python3", "main.py", "--config", "{config}", "--seed", "{seed}"]`
+- An `argv` template list — the shell command with `{placeholder}` for each kwarg the wrapper will pass through. The first element is the invocation form for the entry-point shape:
+  - File-based Python script → `["python3", "train.py", ...]`
+  - Package module → `["python3", "-m", "mypkg.cli", ...]`
+  - Installed console script → `["mytool", ...]`
+  - Shell script / binary → `["./run.sh", ...]` or `["./simulator", ...]`
 - A `signature` dict mapping each `{placeholder}` to a Python type (`str` / `int` / `float` / `bool`) — derive from argparse `type=int`, click `IntType`, typer annotations, etc.
 
-Show the proposal to the experimenter with one sentence of reasoning:
+Show the proposal to the experimenter with one sentence of reasoning. Concrete shape depends on what was detected; for a Python script with argparse:
 
 ```
-Your `main.py` takes `--config PATH` and `--seed INT`. I'll wrap it as:
+Your `train.py` takes `--config PATH` and `--seed INT`. I'll wrap it as:
 
-  argv:      python3 main.py --config {config} --seed {seed}
+  argv:      python3 train.py --config {config} --seed {seed}
   signature: config: str, seed: int
 
-The wrapper will subprocess-call this with kwargs from tasks.py; main.py stays as-is.
+The wrapper will subprocess-call this with kwargs from tasks.py; train.py stays as-is.
 
 Looks right?  [Y / n / edit]
 ```
 
-On **edit**, take the correction (a flag rename, a missing flag, a different invoker like `uv run`). On **n**, ask the experimenter to share `python3 main.py --help` so the agent can re-propose.
+On **edit**, take the correction (a flag rename, a missing flag, a different invoker like `uv run`, a different entry point file). On **n**, ask the experimenter to share `<entry-point> --help` so the agent can re-propose.
 
 ### 3. Identify frozen YAML configs (the experiment-identity inputs)
 
@@ -97,7 +122,7 @@ Propose the shape, get confirmation, collect the params.
 Because the wrapper body is `subprocess.check_call`, `classify-axis` cannot introspect it later. If the experimenter knows the classification, declare it now:
 
 ```
-Your `main.py` runs an independent training job per seed — each task is a pure
+Your `train.py` runs an independent training job per seed — each task is a pure
 function of its kwargs (no carried state between tasks).
 
 I'll classify as: DataAxis = Independent
@@ -148,7 +173,7 @@ Summarize the materialization for the experimenter:
 
 ```
 Wrote:
-  .hpc/wrappers/forecast.py        (the wrapper main.py runs through)
+  .hpc/wrappers/forecast.py        (the wrapper the entry point runs through)
   tasks.py                         (100 tasks: configs/exp_42.yaml × seeds 0..99)
   interview.json                   (entry_point + materialized executor_cmd)
 
@@ -162,8 +187,8 @@ The submit workflow's Step 0b picks up `_materialized.entry_point` and threads `
 
 ## Notes
 
-- **Idempotent.** Re-running with the same intent overwrites `interview.json` and the wrapper byte-equivalently (modulo `_materialized.at`). Editing the user's `main.py` flags requires re-running this skill to re-elicit `signature`.
-- **Signature drift safety.** The wrapper's typed signature is what `validate-executor-signatures` checks at submit time. If `main.py`'s actual flags drift from the declared signature, the canary catches the argparse error (one task, not a hundred).
-- **The wrapper IS the contract.** The framework reads the wrapper's signature, not `main.py`'s. If the wrapper says `seed: int` but `main.py` accepts `--seed-num`, framework pre-submit lints can't catch it; the canary will. Keep the wrapper in sync.
+- **Idempotent.** Re-running with the same intent overwrites `interview.json` and the wrapper byte-equivalently (modulo `_materialized.at`). Editing the underlying entry point's flags requires re-running this skill to re-elicit `signature`.
+- **Signature drift safety.** The wrapper's typed signature is what `validate-executor-signatures` checks at submit time. If the entry point's actual flags drift from the declared signature, the canary catches the argparse / CLI error (one task, not a hundred).
+- **The wrapper IS the contract.** The framework reads the wrapper's signature, not the entry point's. If the wrapper says `seed: int` but the entry point accepts `--seed-num`, framework pre-submit lints can't catch it; the canary will. Keep the wrapper in sync.
 - **One frozen experiment per YAML.** Each `configs/exp_NN.yaml` is its own experiment with its own `cmd_sha`. To run a different frozen experiment, re-run this skill against the new YAML — the new `<stem>_sha` makes the framework correctly treat it as fresh, not a dedup of the prior one.
 - **No `@register_run` notebook required.** This skill is the alternative entry point. A repo with *both* a notebook `@register_run` AND a generated wrapper is fine — the submit worker picks based on what `interview.json` declares.
