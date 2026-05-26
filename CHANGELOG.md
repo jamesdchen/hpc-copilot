@@ -7,6 +7,41 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — Skills are agent-autonomous; human elicitation moves to slash commands
+
+hpc-agent has two consumers: humans (via slash commands in the user's
+interactive chat) and other agents (e.g. a MARs experiment agent that
+calls into hpc-agent without a human in the loop). The prior skill
+policy framed skills as "experimenter-intent" surfaces that interview
+the user via `[Y/n]` turns — which made every skill un-callable by any
+non-chat consumer.
+
+Flipped the model:
+
+- **Skills** (`hpc-build-executor`, `hpc-classify-axis`,
+  `hpc-wrap-entry-point`) are now the agent's decision logic.
+  Deterministic given inputs. No `[Y/n]` prompts, no "Looks right?"
+  turns. Ambiguity that can't be resolved becomes a `spec_invalid`
+  envelope (e.g. `ambiguous_entry_point`, `ambiguous_run`) rather than
+  a prompt — the caller decides what to do next.
+- **Slash commands** (`/classify-axis-hpc`, `/wrap-entry-point-hpc`,
+  `/hpc-axes-init`) absorbed the propose-then-confirm dialogs that used
+  to live in the skill bodies. Each slash now elicits intent from the
+  user and then invokes the paired skill with a fully-resolved spec,
+  causing the skill's own elicitation paths to short-circuit.
+- `docs/internals/skill-policy.md` rewritten around the two-consumer
+  framing. The decision table's "experimenter-intent" column became
+  "human-elicitation" (now exclusively the slash's domain); the
+  "deterministic" column became "agent-autonomous decision" (now
+  exclusively the skill's domain).
+- `scripts/lint_skill_command_sync.py` renamed the category enum
+  `experimenter-intent` → `agent-autonomous`; the skill's frontmatter
+  `category:` field now witnesses this.
+
+No wire-surface changes — the underlying primitives (`build-executor`,
+`classify-axis`, `interview`) accept the same specs as before. The flip
+is in the agent-facing markdown (skills + slashes + policy doc) only.
+
 ### Added — Explicit plugin overlay manifest
 
 Plugins now self-declare their overlay contributions via a top-level
