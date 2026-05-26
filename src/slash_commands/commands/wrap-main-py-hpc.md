@@ -1,19 +1,32 @@
-Invoke the `hpc-wrap-main-py` skill via the Skill tool (`skills/hpc-wrap-main-py/SKILL.md`) for the workflow: detect the user's `main.py` entry point, conduct the proposes-then-confirms interview about its argv / signature / frozen YAML configs / data-axis classification, then invoke the `interview` primitive to materialize a `@register_run` wrapper at `.hpc/wrappers/<run_name>.py` plus a starter `tasks.py` + `interview.json`. The skill is the canonical SoT.
+Invoke the `hpc-wrap-main-py` skill via the Skill tool (`skills/hpc-wrap-main-py/SKILL.md`) for the workflow: detect the user's `main.py` entry point, conduct the proposes-then-confirms interview about its argv / signature / frozen YAML configs / data-axis classification, then invoke the `interview` primitive to materialize a `@register_run` wrapper + starter `tasks.py` + `interview.json`. The skill is the canonical SoT.
 
-This slash command is the human-facing entry point for **mature-repo onboarding** — taking a repo that already has `main.py` + YAML configs and giving the framework enough structure to scale it across the cluster, without rewriting `main.py` as a notebook.
+This slash command is the human-facing entry point for **mature-repo onboarding** — taking a repo that already has `main.py` + YAML configs and giving the framework enough structure to scale it across the cluster, without rewriting `main.py` as a notebook. `/submit-hpc` escalates with `mature_repo_needs_interview` on a cache miss; reasons to invoke standalone:
 
-Run this once before `/submit-hpc` on a repo that:
+- Pre-onboard a mature repo before its first `/submit-hpc` so the submission is one shot, not two.
+- Refresh after editing `main.py`'s CLI flags or adding a new frozen config — the wrapper's declared signature needs to track `main.py`'s actual interface.
+- Switch the frozen experiment (`configs/exp_42.yaml` → `configs/exp_43.yaml`) without leaving stale wrapper / interview state behind.
 
-- Has `main.py` (or another shell-invokable entry point), not a `@register_run` notebook.
-- Wants to scale a *frozen* experiment (configured by one YAML) across seeds / shards / replicates — not sweep over the YAMLs themselves.
-- Hit a `mature_repo_needs_interview` escalation from `/submit-hpc`.
+## Human-facing dialog
 
-The skill conducts an interactive intake the headless `/submit-hpc` worker can't do — it reads `interview.json` but doesn't write it. This skill writes it.
+The intake is conversational: the agent reads `main.py`, proposes an entry-point shape, and asks for confirmation:
 
-After `/wrap-main-py-hpc` completes, `/submit-hpc` finds the materialized `_materialized.entry_point` in `interview.json`, skips its `@register_run` discovery step, and uses the wrapper's `executor_cmd` directly. The frozen YAML's content hash rides through every task's kwargs so `cmd_sha` correctly distinguishes `exp_42.yaml` from `exp_43.yaml` — re-running the same YAML dedups, an accidental in-place edit doesn't.
+```
+Your `main.py` takes `--config PATH` and `--seed INT`, and I see
+`configs/exp_42.yaml` looks like a frozen pipeline. I'll wrap it as:
+
+  argv:         python3 main.py --config {config} --seed {seed}
+  signature:    config: str, seed: int
+  frozen:       configs/exp_42.yaml  (sha threaded into every task's kwargs)
+  scale axis:   seed × 100 (items_x_seeds)
+  data_axis:    Independent (each seed is a pure function of its kwargs)
+
+Looks right?  [Y / n / edit]
+```
+
+On **edit**, the skill takes the correction (a flag rename, a different YAML, a different scale-up axis). On **Y**, it invokes `hpc-agent interview`, which writes `.hpc/wrappers/<run_name>.py` + `tasks.py` + `interview.json`.
 
 ## Notes
 
-- **One YAML = one frozen experiment.** The skill's identity model assumes you don't edit a YAML between runs of the same experiment. For a new experiment, write `exp_43.yaml` (don't edit `exp_42.yaml`) and re-run this command.
-- **Wrapper is the framework's contract.** `main.py` stays opaque to the framework; the wrapper's typed signature is what `validate-executor-signatures` and `classify-axis` see. The canary backstops any drift between the wrapper and `main.py`'s actual flags.
-- **Re-run to refresh.** If you change `main.py`'s CLI flags or add a new frozen config, re-run this command to re-elicit the signature / re-hash the YAMLs. The interview overwrites `interview.json` and the wrapper byte-equivalently when nothing changed.
+- **One YAML = one frozen experiment.** To run a different frozen pipeline, write `configs/exp_43.yaml` (don't edit `exp_42.yaml` in place) and re-run this command — the new content hash makes the framework correctly treat it as fresh.
+- **`/submit-hpc` is the next step.** After this command completes, run `/submit-hpc`; the worker reads `interview.json` and uses the materialized wrapper as the executor.
+- **Backstop is the canary.** The wrapper is the framework's contract; if its declared signature drifts from `main.py`'s actual flags, the canary catches it (one failed task, not a hundred).
