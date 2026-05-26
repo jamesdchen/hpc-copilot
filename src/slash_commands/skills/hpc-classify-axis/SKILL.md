@@ -54,7 +54,9 @@ Read `<experiment>/.hpc/axes.yaml`. If `executors.<name>` exists **and** its `ru
 
 ### 3. Pre-fill from memory (recall)
 
-Before classifying cold, query prior classifications:
+**Skip this step if the caller already supplied `data_axis`** (the slash path; the classification is already resolved). Jump to Step 5.
+
+Otherwise, before classifying cold, query prior classifications:
 
 ```bash
 hpc-agent recall --root <experiments-root> --task-kind <kind>

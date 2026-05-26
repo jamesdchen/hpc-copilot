@@ -66,7 +66,7 @@ The primitive injects the chosen seed file (`train.py` at repo root or `notebook
 
 ### 1. Detect the entry point
 
-Walk the repo to identify candidates, in this order (the order encodes likelihood — a tie-break for autonomous selection):
+Walk the repo to identify candidates (the probe order below is by likelihood, used only for stable diagnostic output — not as a tie-break, since ties refuse):
 
 ```bash
 ls main.py train.py run.py experiment.py 2>/dev/null
@@ -78,9 +78,11 @@ ls run.sh launch.sh ./simulator 2>/dev/null
 
 For each candidate Python file, inspect the CLI surface — `argparse.ArgumentParser`, `@click.command` / `@click.group`, `@app.command` (typer), `fire.Fire(...)`, `@hydra.main`, or a bare `if __name__ == "__main__":` block calling something with `sys.argv`. For a package with `__main__.py`, the invocation is `python3 -m <pkg>`. For a `console_scripts` entry, the registered command name.
 
-**Autonomous resolution**: pick the first candidate that matched a probe (probes are ordered by likelihood). If the caller supplied `entry_point.path`, that overrides detection.
+**Autonomous resolution**:
 
-**Multiple-candidates contract**: if multiple Python entry points exist *and* the caller did not supply `entry_point.path`, **return `spec_invalid` with `error_code: ambiguous_entry_point`** listing the candidates. The skill picks across `main.py` / `train.py` / `run.py` only when one of them is the unique match.
+- If the caller supplied `entry_point.path`, use it (overrides detection).
+- Else if exactly one candidate matched across all probes, use it.
+- Else (multiple Python entry points, no caller pick) **return `spec_invalid` with `error_code: ambiguous_entry_point`** listing the candidates. The skill does not silently pick across `main.py` / `train.py` / `run.py` when more than one exists — the wrong choice is non-recoverable without the user noticing.
 
 Record the picked entry point — the path (or `-m` invocation), and which CLI library it uses.
 

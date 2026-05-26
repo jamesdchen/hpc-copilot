@@ -49,7 +49,7 @@ The framework needs to know which parallel dimension to promote to the SLURM/SGE
 
 1. **Inspect the experiment for parallel axes.** Read `tasks.py` and any companion files (`CLAUDE.md`, README, executor scripts) to identify each parallel dimension the experimenter has expressed. Common shapes: a `resolve(task_id)` function returning kwargs derived from `task_id` via cartesian product over named lists; a grid-search dict the executor reads; an explicit per-axis loop in driver code.
 
-2. **Classify each axis as homogeneous or not** autonomously using the experiment's semantics. Heuristics that often hold (no human confirmation required at this layer — the slash-command wrapper conducts the propose-then-confirm dialog if a human consumer is present):
+2. **Resolve `homogeneous_axes`.** If the caller supplied `homogeneous_axes` in the spec (the slash path, after `/hpc-axes-init` ran its propose-then-confirm dialog with the user), use it as-is — skip the heuristic. Otherwise classify each axis autonomously using the experiment's semantics. Heuristics that often hold:
    - Replicates / seeds / folds / cross-validation windows / time-series backtest windows → typically **homogeneous** (same compute on slightly different data).
    - Model class / architecture / algorithm → typically **heterogeneous** (orders-of-magnitude different cost).
    - Data type / dataset → depends on dataset sizes; usually mildly heterogeneous.
@@ -57,7 +57,7 @@ The framework needs to know which parallel dimension to promote to the SLURM/SGE
 
 3. **Invoke** [axes-init](../../docs/primitives/axes-init.md) with `--homogeneous-axes <comma-separated-names>`. Refuses to overwrite an existing `axes.yaml`; pass `--force` only when intentional.
 
-4. **Parse the envelope** — confirm `wrote: true` and the resolved `axes_path`. On `wrote: false`, surface the existing file's contents and let the caller decide (prompt user, abort, or pass `--force` after confirmation).
+4. **Parse the envelope** — confirm `wrote: true` and the resolved `axes_path`. On `wrote: false`, surface the existing file's contents to the caller (the slash, which re-prompts the user for `--force`; an autonomous caller decides programmatically). The skill itself does not prompt — the wrote-false envelope is the signal back to whoever invoked it.
 
 ## Notes
 
