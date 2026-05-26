@@ -55,6 +55,14 @@ _ROOT_ASSETS: tuple[tuple[str, str], ...] = (
     ("conftest.py.tmpl", "conftest.py"),
 )
 
+# The user-facing experiment seed file — one per repo, chosen by --shape.
+# Refuse-without-force; never auto-merged. Both shapes carry the same
+# `@register_run`-decorated function (see docs/internals/experiment-contract.md).
+_SHAPE_ASSETS: dict[str, tuple[str, str]] = {
+    "script": ("train.py.tmpl", "train.py"),
+    "notebook": ("experiment.ipynb.tmpl", "notebooks/experiment.ipynb"),
+}
+
 # The single line a root Makefile needs; appended non-destructively.
 _MAKEFILE_INCLUDE = "include .hpc/template.mk"
 
@@ -67,7 +75,8 @@ _MAKEFILE_INCLUDE = "include .hpc/template.mk"
             "writes-file",
             "<repo_dir>/{.hpc/template.mk,.hpc/scaffold.py} (self-healing); "
             "<repo_dir>/{Makefile,.gitignore,pyproject.toml,.pre-commit-config.yaml,"
-            "conftest.py,.github/workflows/ci.yml} (refuse-without-force at repo root)",
+            "conftest.py,.github/workflows/ci.yml,train.py | "
+            "notebooks/experiment.ipynb} (refuse-without-force at repo root)",
         ),
     ],
     error_codes=[errors.SpecInvalid],
@@ -90,6 +99,19 @@ _MAKEFILE_INCLUDE = "include .hpc/template.mk"
                     "framework-owned .hpc/ assets are re-injected regardless."
                 ),
             ),
+            CliArg(
+                "--shape",
+                type=str,
+                default="script",
+                choices=("script", "notebook"),
+                help=(
+                    "Which experiment-seed shape to inject: `script` writes "
+                    "`train.py` (the default — peer to the notebook scaffold, "
+                    "for already-finalized executors), `notebook` writes "
+                    "`notebooks/experiment.ipynb`. See "
+                    "docs/internals/experiment-contract.md."
+                ),
+            ),
         ),
     ),
     # Registered with the verb=scaffold convention that the contract
@@ -98,7 +120,9 @@ _MAKEFILE_INCLUDE = "include .hpc/template.mk"
     # users through scaffold flows and needs visibility.
     agent_facing=True,
 )
-def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
+def build_template(
+    *, repo_dir: Path, force: bool = False, shape: str = "script"
+) -> dict[str, Any]:
     """Inject the experiment-template scaffold into ``repo_dir``.
 
     Parameters
@@ -108,6 +132,12 @@ def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
     force:
         Overwrite repo-root files that already exist. The framework-owned
         ``.hpc/`` assets are re-injected regardless of this flag.
+    shape:
+        Which experiment-seed shape to inject — ``"script"`` (the default;
+        writes ``train.py``) or ``"notebook"`` (writes
+        ``notebooks/experiment.ipynb``). Both carry the same
+        ``@register_run`` contract; see
+        ``docs/internals/experiment-contract.md``.
 
     Returns
     -------
@@ -122,10 +152,15 @@ def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
     Raises
     ------
     errors.SpecInvalid
-        If ``repo_dir`` does not exist or is not a directory.
+        If ``repo_dir`` does not exist or is not a directory, or if
+        ``shape`` is not one of the supported shapes.
     """
     if not repo_dir.is_dir():
         raise errors.SpecInvalid(f"repo-dir {repo_dir} does not exist or is not a directory")
+    if shape not in _SHAPE_ASSETS:
+        raise errors.SpecInvalid(
+            f"shape {shape!r} not in {sorted(_SHAPE_ASSETS)!r}"
+        )
 
     scaffold_dir = hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds"
 
@@ -184,6 +219,17 @@ def build_template(*, repo_dir: Path, force: bool = False) -> dict[str, Any]:
         fragment.write_text(_asset("pyproject.toml.tmpl"), encoding="utf-8")
         framework.append(".hpc/pyproject-fragment.toml")
         needs_manual_merge.append("pyproject.toml")
+
+    # 4b. Experiment seed (train.py or notebooks/experiment.ipynb).
+    #     Refuse-without-force — the user iterates on it in place.
+    shape_asset, shape_rel = _SHAPE_ASSETS[shape]
+    shape_dest = repo_dir / shape_rel
+    if shape_dest.exists() and not force:
+        skipped.append(shape_rel)
+    else:
+        shape_dest.parent.mkdir(parents=True, exist_ok=True)
+        shape_dest.write_text(_asset(shape_asset), encoding="utf-8")
+        written.append(shape_rel)
 
     # 5. .gitignore — non-destructive merge. The generated set (src/,
     #    .hpc/tasks.py, .hpc/cli.py, .hpc/.build-cache.json) must not be

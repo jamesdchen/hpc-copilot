@@ -452,7 +452,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent build-template [--repo-dir <repo_dir>] [--force]",
+    "cli": "hpc-agent build-template [--repo-dir <repo_dir>] [--force] [--shape <shape>]",
     "idempotent": true,
     "input_schema": null,
     "name": "build-template",

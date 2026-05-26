@@ -49,6 +49,7 @@ COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
 WORKFLOW_PAIRS: list[tuple[str, str]] = [
     ("hpc-build-executor", "hpc-axes-init"),
     ("hpc-classify-axis", "classify-axis-hpc"),
+    ("hpc-wrap-entry-point", "wrap-entry-point-hpc"),
 ]
 
 # Slash commands that route through `hpc-agent run <workflow>` to the
