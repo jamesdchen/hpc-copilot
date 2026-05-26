@@ -70,11 +70,11 @@ HAS_MAIN=$([ -f main.py ] || [ -f src/main.py ] && echo yes || echo no)
 HAS_REGISTER_RUN=$(grep -rl '@register_run' notebooks/ src/ 2>/dev/null | head -1 && echo yes || echo no)
 ```
 
-If `HAS_MAIN=yes` and `HAS_REGISTER_RUN=no` (or empty): the experiment has a shell entry point but no `@register_run` declaration the worker can pick up. Record `mature_repo_needs_interview` in `decisions` with `reason: "main.py present, no @register_run; run /wrap-main-py to materialize an entry_point wrapper, then re-invoke"` and stop. The caller (the conversational parent agent) runs the `/wrap-main-py` skill to elicit the entry-point declaration from the user, which writes `interview.json` with a `shell_command` entry_point. The re-invoked submit worker then enters this step's first branch.
+If `HAS_MAIN=yes` and `HAS_REGISTER_RUN=no` (or empty): the experiment has a shell entry point but no `@register_run` declaration the worker can pick up. Record `mature_repo_needs_interview` in `decisions` with `reason: "main.py present, no @register_run; run /wrap-main-py-hpc to materialize an entry_point wrapper, then re-invoke"` and stop. The caller (the conversational parent agent) runs the `/wrap-main-py-hpc` skill to elicit the entry-point declaration from the user, which writes `interview.json` with a `shell_command` entry_point. The re-invoked submit worker then enters this step's first branch.
 
 Otherwise (no mature-repo signals): the rest of the procedure runs unchanged (the notebook-discovery default).
 
-This step is what makes the mature-repo path end-to-end usable: the `interview` primitive (invoked by `/wrap-main-py` from the conversational layer) sets up the wrapper and persists the executor command; this step reads them and threads them into the rest of the submit pipeline so nothing is orphaned. The split — interview conversationally, dispatch headlessly — respects the worker's one-shot constraint.
+This step is what makes the mature-repo path end-to-end usable: the `interview` primitive (invoked by `/wrap-main-py-hpc` from the conversational layer) sets up the wrapper and persists the executor command; this step reads them and threads them into the rest of the submit pipeline so nothing is orphaned. The split — interview conversationally, dispatch headlessly — respects the worker's one-shot constraint.
 
 ## Step 1: Discover runs
 

@@ -1,5 +1,5 @@
 ---
-name: wrap-main-py
+name: hpc-wrap-main-py
 description: "Set up a mature repo (main.py + optional YAML configs) for hpc-agent submission. Detects the entry point, conducts a short proposes-then-confirms interview about its signature / frozen configs / data-axis classification, then invokes the `interview` primitive to materialize a wrapper at `.hpc/wrappers/<run_name>.py` plus a starter `tasks.py`. Run this once before `/submit-hpc` on a repo that doesn't have a `@register_run` notebook."
 allowed-tools: Bash Read Write Glob
 execution: inline
