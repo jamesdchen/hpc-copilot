@@ -41,6 +41,45 @@ hpc-agent export-package --experiment-dir .
 
 `export-package` globs `notebooks/{pipeline,executors,scripts}/*.ipynb`, exports each to `src/<module>.py` (strict-AST for `@register_run` executors, `# export`-marker for pipeline libraries), and content-hash-caches against `.hpc/.build-cache.json` — a no-op when nothing changed. The built `src/` rides the `submit-flow` rsync into the deploy bundle; **the cluster node never builds** (it stays stdlib-only). On a `spec_invalid` envelope (an output-path collision, a bad module name), surface it and stop — the notebooks need a rename.
 
+## Step 0b: Honor a `shell_command` wrapper (fallback path only)
+
+**The default mature-repo path is `@register_run` on the user's function** — same as the greenfield notebook case. Step 1's existing `discover_runs` scan finds the decorated function regardless of whether it lives in `notebooks/`, `train.py`, or `main.py`. No special branch is needed for that case.
+
+This step exists for the **wrapper fallback**: when direct decoration wasn't possible (non-Python entry point, decorator conflict, vendor code), `/wrap-entry-point-hpc` materializes a `@register_run` wrapper at `.hpc/wrappers/<run_name>.py` and writes `interview.json` declaring a `shell_command` entry_point that points at it. Read the block:
+
+```bash
+test -f interview.json && python -c "
+import json, sys
+doc = json.load(open('interview.json'))
+ep = doc.get('_materialized', {}).get('entry_point')
+if ep: print(json.dumps(ep))
+" | tee /tmp/_entry_point.json
+```
+
+If the block is non-empty, branch on `kind`:
+
+| `kind` | Procedure behavior |
+|---|---|
+| `shell_command` | **The fallback path.** A wrapper has been materialized at `<wrapper_path>` (`.hpc/wrappers/<run_name>.py`) — it satisfies the `@register_run` contract for an entry point the framework can't decorate directly. **Skip Step 1's discover scan**; treat `<run_name>` as the picked run. **Use `<executor_cmd>` as the `EXECUTOR` in Step 6d's `job_env`** instead of synthesizing one from `discover_executors`. If `data_axis` is on the block, **skip the Step 3b classification interview** — the user pre-declared the axis; just feed `data_axis` into the `axes.yaml` write that classify-axis would have done. `tasks.py` is already on disk (the interview materialized it from `task_generator`) — Step 6a's reuse branch picks it up. |
+| `register_run` | A pointer to a `@register_run`-decorated function the user has on disk — the canonical Python path. No wrapper to honor; fall through to Step 1's discovery, optionally scoped to `<run_name>` rather than enumerating. |
+| `python_module` | A pointer to an importable Python module. No wrapper to honor; fall through to Step 1's discovery, scoped to `<module>:<function>`. The `EXECUTOR` at Step 6d is `python3 -m <module>` (or a one-liner that imports `<function>`) if Step 1 doesn't otherwise resolve it. |
+
+Both `register_run` and `python_module` are **pointers, not wrappers** — they declare which function the worker should target but don't materialize anything. They get resolved through the normal Step 1 discovery flow; only `shell_command` short-circuits it.
+
+If `interview.json` doesn't exist, or `_materialized.entry_point` is absent, **probe whether this is a mature-repo case** that needs an interview the headless worker can't conduct:
+
+```bash
+# Mature-repo signals: an entry point exists, but no @register_run anywhere.
+HAS_MAIN=$([ -f main.py ] || [ -f src/main.py ] && echo yes || echo no)
+HAS_REGISTER_RUN=$(grep -rl '@register_run' notebooks/ src/ 2>/dev/null | head -1 && echo yes || echo no)
+```
+
+If `HAS_MAIN=yes` and `HAS_REGISTER_RUN=no` (or empty): the experiment has a shell entry point but no `@register_run` declaration the worker can pick up. Record `mature_repo_needs_interview` in `decisions` with `reason: "main.py present, no @register_run; ask the user to add @register_run to their entry-point function (two-line edit: import + decorator), or run /wrap-entry-point-hpc for guided setup, then re-invoke"` and stop. Direct decoration is the cheap path — a two-line edit on the function `main.py` ultimately calls; `/wrap-entry-point-hpc` is the guided path that walks the user through that edit and falls back to wrapper materialization only when direct decoration isn't possible.
+
+Otherwise (no mature-repo signals): the rest of the procedure runs unchanged (the notebook-discovery default).
+
+This step is what makes the wrapper-fallback path end-to-end usable: when the `interview` primitive (invoked by `/wrap-entry-point-hpc`) chose to materialize a wrapper rather than direct-decorate, this step reads the wrapper pointer + executor command and threads them into the rest of the submit pipeline. Direct decoration needs no special handling here — Step 1's discovery already finds it.
+
 ## Step 1: Discover runs
 
 **Notebook-first.** The researcher authors only a notebook carrying a `@register_run def run(...)` — no axis declaration, no `tasks.py`, no CLI glue. Discovery is `discover_runs` over `notebooks/`, which AST-walks `.py` and `.ipynb` files (skipping `.hpc/`):

@@ -125,6 +125,76 @@ def record_interview(
     declared = int(intent["task_count"])
     artifacts: list[str] = []
 
+    # Validate the entry_point (if present) and materialize the wrapper
+    # (if shell_command). All entry-point validation happens BEFORE any
+    # tasks.py write so a bad spec leaves no residue.
+    frozen_shas: dict[str, str] = {}
+    entry_point_materialized: dict[str, Any] | None = None
+    if "entry_point" in intent:
+        ep = intent["entry_point"]
+        kind = ep["kind"]
+        if kind == "shell_command":
+            # Reject ``frozen_configs`` without ``task_generator``. The framework
+            # threads ``<stem>_sha`` into kwargs only on materialized tasks.py;
+            # for a hand-written tasks.py we can't safely edit the user's file,
+            # and silently dropping the shas would defeat the identity guarantee
+            # the field promises. The user can either switch to task_generator or
+            # include the shas in their own tasks.py kwargs.
+            if ep.get("frozen_configs") and "task_generator" not in intent:
+                raise errors.SpecInvalid(
+                    "shell_command.frozen_configs requires task_generator; "
+                    "a hand-written tasks.py must include the shas itself. "
+                    "Either add task_generator to the intent or drop "
+                    "frozen_configs and thread the shas through your own "
+                    "tasks.py kwargs."
+                )
+            from hpc_agent.incorporation.wrap_entry_point import (
+                materialize_shell_wrapper,
+                wrapper_executor_cmd,
+            )
+
+            result = materialize_shell_wrapper(
+                campaign_dir=campaign_dir,
+                run_name=ep["run_name"],
+                argv=ep["argv"],
+                signature=ep.get("signature", {}),
+                frozen_configs=ep.get("frozen_configs", []),
+            )
+            frozen_shas = dict(result.frozen_shas)
+            wrapper_rel = str(result.wrapper_path.relative_to(campaign_dir))
+            artifacts.append(wrapper_rel)
+            entry_point_materialized = {
+                "kind": "shell_command",
+                "run_name": ep["run_name"],
+                "wrapper_path": wrapper_rel,
+                "executor_cmd": wrapper_executor_cmd(
+                    campaign_dir=campaign_dir, run_name=ep["run_name"]
+                ),
+                "frozen_shas": dict(frozen_shas),
+            }
+            if "data_axis_hint" in ep:
+                entry_point_materialized["data_axis"] = ep["data_axis_hint"]
+        elif kind == "python_module":
+            # Validate the module/function imports; surface the same spec_invalid
+            # the rest of the interview uses so a typo is loud at intake.
+            _validate_python_module_entry(ep)
+            entry_point_materialized = {
+                "kind": "python_module",
+                "module": ep["module"],
+                "function": ep.get("function", "main"),
+            }
+        elif kind == "register_run":
+            # Validate the named run is actually discoverable. ``discover_runs``
+            # defaults to ``notebooks/`` (the canonical notebook location); a
+            # mature repo with a different layout passes the path via
+            # ``notebooks_dir``. The fallback to campaign_dir handles the
+            # tiny-repo case where everything sits at the root.
+            _validate_register_run_entry(ep, campaign_dir)
+            entry_point_materialized = {
+                "kind": "register_run",
+                "run_name": ep["run_name"],
+            }
+
     if "task_generator" in intent:
         # Generator mode — pre-validate count, then materialize tasks.py.
         generator = intent["task_generator"]
@@ -135,7 +205,7 @@ def record_interview(
                 f"intent.task_count = {declared}; recipe and stated count "
                 f"disagree (refusing to write tasks.py)"
             )
-        _materialize_tasks_py(generator, tasks_py)
+        _materialize_tasks_py(generator, tasks_py, inject_kwargs=frozen_shas)
         artifacts.append("tasks.py")
     elif not tasks_py.is_file():
         raise errors.SpecInvalid(
@@ -167,13 +237,16 @@ def record_interview(
     cmd_sha = compute_cmd_sha(tasks_mod)
 
     interview_path = campaign_dir / "interview.json"
+    materialized: dict[str, Any] = {
+        "at": utcnow().isoformat(),
+        "cmd_sha": cmd_sha,
+        "total_tasks": total_tasks,
+    }
+    if entry_point_materialized is not None:
+        materialized["entry_point"] = entry_point_materialized
     interview_doc = {
         **dict(intent),
-        "_materialized": {
-            "at": utcnow().isoformat(),
-            "cmd_sha": cmd_sha,
-            "total_tasks": total_tasks,
-        },
+        "_materialized": materialized,
     }
     # Atomic write: a SIGINT or crash during a plain ``write_text``
     # would leave half a JSON file that downstream readers
@@ -246,6 +319,62 @@ from __future__ import annotations
 '''
 
 
+def _validate_python_module_entry(ep: Mapping[str, Any]) -> None:
+    """Confirm ``module`` imports and ``function`` exists on it.
+
+    Catches the typo / packaging mistake at intake. Without this the
+    failure would land much later — during cluster-side dispatch — as
+    an opaque ``ImportError`` in a per-task log.
+    """
+    import importlib
+
+    module = ep["module"]
+    function = ep.get("function", "main")
+    try:
+        mod = importlib.import_module(module)
+    except ImportError as exc:
+        raise errors.SpecInvalid(
+            f"python_module.entry_point: module {module!r} does not import "
+            f"({exc.__class__.__name__}: {exc})"
+        ) from exc
+    if not hasattr(mod, function):
+        raise errors.SpecInvalid(
+            f"python_module.entry_point: module {module!r} has no attribute "
+            f"{function!r}"
+        )
+    if not callable(getattr(mod, function)):
+        raise errors.SpecInvalid(
+            f"python_module.entry_point: {module}.{function} is not callable"
+        )
+
+
+def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> None:
+    """Confirm a ``@register_run`` function named ``run_name`` is discoverable.
+
+    Walks the canonical ``notebooks/`` dir first (the framework's default),
+    falling back to ``campaign_dir`` for tiny-repo layouts where everything
+    sits at the root. The scan uses ``discover_runs`` — same primitive the
+    rest of the framework keys off — so this validation matches the
+    runtime discovery behavior exactly.
+    """
+    from hpc_agent.experiment_kit.discover import discover_runs
+
+    run_name = ep["run_name"]
+    search_roots = [campaign_dir / "notebooks", campaign_dir]
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for run in discover_runs(root):
+            if run.name == run_name:
+                return
+    raise errors.SpecInvalid(
+        f"register_run.entry_point: no @register_run function named "
+        f"{run_name!r} found under {campaign_dir}/notebooks or "
+        f"{campaign_dir}. Either the run isn't decorated yet or its file "
+        f"isn't on disk."
+    )
+
+
 def _expected_count(generator: Mapping[str, Any]) -> int:
     """Compute total tasks the recipe will produce. Pre-flight cross-check."""
     kind = generator["kind"]
@@ -271,38 +400,65 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
     raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
 
 
-def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
-    """Write tasks.py from the recipe. Caller has already cross-checked count."""
+def _materialize_tasks_py(
+    generator: Mapping[str, Any],
+    path,
+    *,
+    inject_kwargs: Mapping[str, str] | None = None,
+) -> None:
+    """Write tasks.py from the recipe. Caller has already cross-checked count.
+
+    ``inject_kwargs`` is merged into every materialized task's kwargs as
+    constant string fields. Used by the interview to thread frozen-config
+    shas (``<basename>_sha``) so ``cmd_sha`` covers them. Renders as a
+    static dict in the generated file so resolve() returns the merged
+    dict without per-call work.
+    """
     kind = generator["kind"]
     params = generator["params"]
+    inject = dict(inject_kwargs or {})
+    inject_prefix = f"_INJECT = {inject!r}\n" if inject else ""
+    # When inject is non-empty, every resolve() return gets merged with
+    # _INJECT. Inject takes second place (``{**task, **_INJECT}``) so an
+    # explicit task kwarg with the same name wins — defensive against an
+    # axis named ``foo_sha`` colliding with an inject key.
+    merge_resolve = (
+        "def resolve(i: int) -> dict: return {**_TASKS[i], **_INJECT}\n"
+        if inject
+        else "def resolve(i: int) -> dict: return _TASKS[i]\n"
+    )
     if kind == "enumerated":
         body = (
+            f"{inject_prefix}"
             f"_TASKS = {list(params['items'])!r}\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "cartesian_product":
         keys = list(params["axes"].keys())
         body = (
             f"import itertools\n\n"
+            f"{inject_prefix}"
             f"_KEYS = {keys!r}\n"
             f"_AXES = {[list(params['axes'][k]) for k in keys]!r}\n"
             f"_TASKS = [dict(zip(_KEYS, row)) for row in itertools.product(*_AXES)]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "items_x_seeds":
         body = (
+            f"{inject_prefix}"
             f"_ITEMS = {list(params['items'])!r}\n"
             f"_SEEDS = {list(params['seeds'])!r}\n"
             f"_TASKS = [{{**item, 'seed': seed}} for item in _ITEMS for seed in _SEEDS]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "numeric_logspace":
         base = params.get("base", 10)
         body = (
             f"import math\n\n"
+            f"{inject_prefix}"
             f"_LOW = {params['low']!r}\n"
             f"_HIGH = {params['high']!r}\n"
             f"_N = {int(params['n'])}\n"
@@ -318,10 +474,11 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
             f"    for i in range(_N)\n"
             f"]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "numeric_linspace":
         body = (
+            f"{inject_prefix}"
             f"_LOW, _HIGH, _N = {params['low']!r}, {params['high']!r}, {int(params['n'])}\n"
             # _N == 1 → single-point sweep; avoid division by (_N - 1).
             f"_TASKS = [{{{params['param']!r}: _LOW}}] if _N == 1 else [\n"
@@ -329,7 +486,7 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
             f"    for i in range(_N)\n"
             f"]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     else:
         raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")

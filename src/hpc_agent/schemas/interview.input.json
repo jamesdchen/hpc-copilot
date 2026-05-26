@@ -143,6 +143,37 @@
       "default": null,
       "description": "Optional opt-in: when present, the materializer regenerates tasks.py from a typed recipe instead of consuming the agent-written one. The five shapes cover common ground without locking out exotic campaigns. Materializer cross-checks the produced task count against intent.task_count before any disk writes.",
       "title": "Task Generator"
+    },
+    "entry_point": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "python_module": "#/$defs/_PythonModuleEntry",
+              "register_run": "#/$defs/_RegisterRunEntry",
+              "shell_command": "#/$defs/_ShellCommandEntry"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/_RegisterRunEntry"
+            },
+            {
+              "$ref": "#/$defs/_PythonModuleEntry"
+            },
+            {
+              "$ref": "#/$defs/_ShellCommandEntry"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional declaration of the experiment's entry point. Three shapes, with a strong default: ``register_run`` (the canonical Python path — a pointer to an ``@register_run``-decorated function the framework discovers directly; no materialization) and ``python_module`` (a second canonical Python path — an importable module + function) are preferred whenever a Python entry-point function is available. ``shell_command`` (argv + signature; the interview materializes a ``@register_run`` wrapper at ``.hpc/wrappers/<run_name>.py`` that subprocess-invokes the argv) is the **fallback**, used only when direct ``@register_run`` decoration isn't possible (non-Python entry point, decorator conflict, vendor code). Lets a mature repo with ``main.py`` + frozen YAML configs participate in the same intake as a greenfield notebook — direct decoration is a two-line code edit; the wrapper is a subprocess shim that gives the framework something to introspect when the entry point itself can't be decorated.",
+      "title": "Entry Point"
     }
   },
   "$defs": {
@@ -259,6 +290,56 @@
       "title": "_ClusterTargetSpec",
       "type": "object"
     },
+    "_DataAxisHint": {
+      "additionalProperties": false,
+      "description": "Pre-declared series-axis classification.\n\nFor shell-out wrappers ``classify-axis`` cannot introspect the body\n(it's a ``subprocess.check_call``). When the experimenter knows the\nclassification — usually they do, because they wrote ``main.py`` —\nthey can declare it here and the interview persists it so\nclassify-axis records it directly without an introspection step.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "independent",
+            "associative",
+            "bounded_halo",
+            "sequential"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "halo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_HaloHint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required when ``kind='bounded_halo'``; otherwise must be omitted."
+        },
+        "monoid": {
+          "anyOf": [
+            {
+              "enum": [
+                "sum",
+                "moments"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional for ``kind='associative'``; defaults to 'moments'. Ignored for other kinds.",
+          "title": "Monoid"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "_DataAxisHint",
+      "type": "object"
+    },
     "_Enumerated": {
       "additionalProperties": false,
       "properties": {
@@ -296,6 +377,23 @@
         "items"
       ],
       "title": "_EnumeratedParams",
+      "type": "object"
+    },
+    "_HaloHint": {
+      "additionalProperties": false,
+      "description": "Halo expression for a ``bounded_halo`` ``data_axis_hint``.",
+      "properties": {
+        "expr": {
+          "description": "Arithmetic-only expression over the wrapper's parameters; the same restricted-AST form classify-axis already accepts. Example: ``train_window * 48``.",
+          "minLength": 1,
+          "title": "Expr",
+          "type": "string"
+        }
+      },
+      "required": [
+        "expr"
+      ],
+      "title": "_HaloHint",
       "type": "object"
     },
     "_ItemsXSeeds": {
@@ -508,6 +606,127 @@
         "kind"
       ],
       "title": "_Provenance",
+      "type": "object"
+    },
+    "_PythonModuleEntry": {
+      "additionalProperties": false,
+      "description": "Canonical Python entry point: an importable module + function.\n\nA second canonical Python shape, alongside ``register_run``: the\nframework can already introspect importable Python, so this kind is\na wire hint so the interview can validate the module/function exists\nbefore submit. No wrapper is materialized. Prefer ``register_run``\nwhen the user can decorate the function directly; use this kind for\nimportable Python the framework should target by dotted path\ninstead of by ``@register_run`` discovery.",
+      "properties": {
+        "kind": {
+          "const": "python_module",
+          "title": "Kind",
+          "type": "string"
+        },
+        "module": {
+          "description": "Dotted module path, e.g. ``my_pkg.train``.",
+          "minLength": 1,
+          "title": "Module",
+          "type": "string"
+        },
+        "function": {
+          "default": "main",
+          "description": "The function inside ``module`` to treat as the entry point.",
+          "minLength": 1,
+          "title": "Function",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "module"
+      ],
+      "title": "_PythonModuleEntry",
+      "type": "object"
+    },
+    "_RegisterRunEntry": {
+      "additionalProperties": false,
+      "description": "Canonical Python entry point: an ``@register_run``-decorated function.\n\nThe default and recommended shape for Python repos. The user puts\n``@register_run`` directly on the function the framework should treat\nas the entry point — whether it lives in a notebook\n(``notebooks/<name>.ipynb``) or a ``.py`` file (``train.py``,\n``main.py``). Pure pointer — no materialization. The framework's\nexisting ``discover_runs`` walks the experiment to find the function\nby ``run_name``. For a mature repo with an existing entry-point\nfunction, this is a two-line code edit (an import and a decorator)\nand is strongly preferred over ``shell_command`` whenever direct\ndecoration is possible.",
+      "properties": {
+        "kind": {
+          "const": "register_run",
+          "title": "Kind",
+          "type": "string"
+        },
+        "run_name": {
+          "description": "The ``@register_run`` function name to discover (in notebooks/ or .py files under the experiment).",
+          "minLength": 1,
+          "title": "Run Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "run_name"
+      ],
+      "title": "_RegisterRunEntry",
+      "type": "object"
+    },
+    "_ShellCommandEntry": {
+      "additionalProperties": false,
+      "description": "Fallback entry point: a shell command (compiled binary, decorator-conflicting CLI, ...).\n\n**The fallback path, used only when direct ``@register_run``\ndecoration isn't possible** — non-Python entry points (shell\nscripts, compiled binaries), CLI libraries whose decorators conflict\nwith ``@register_run`` (e.g. ``@hydra.main`` rewrites the signature),\nor vendor code the user can't edit. For a Python repo with an\nimportable entry-point function, prefer ``register_run`` instead:\na two-line code edit beats a subprocess shim, and the framework\nintrospects the real function rather than the wrapper.\n\nThe interview materializes a thin ``@register_run`` wrapper at\n``.hpc/wrappers/<run_name>.py`` whose body subprocess-invokes the\nargv with kwargs substituted in. The wrapper's *signature* (built\nfrom ``signature``) is what downstream introspection reads;\nthe underlying entry point stays opaque to the framework.\n\n``frozen_configs`` lets the experimenter declare config files\nwhose content is part of the experiment's identity. The\nmaterializer hashes each path's bytes; the interview threads\n``<basename>_sha`` into every materialized task's kwargs so the\nframework's ``cmd_sha`` correctly distinguishes ``exp_42.yaml``\nfrom ``exp_43.yaml`` (and catches accidental in-place edits).\n\n*Constraint*: ``frozen_configs`` requires ``task_generator`` (so the\nframework has somewhere to thread the shas). A hand-written tasks.py\nplus ``frozen_configs`` is rejected at interview time — the framework\ncan't safely edit the user's hand-rolled file, and silently dropping\nthe shas would defeat the identity guarantee. Use ``task_generator``\nor include the shas in your own tasks.py kwargs.\n\n*Timing*: ``frozen_configs`` are hashed at interview time. If the\nYAML is edited between interview and submit, the stored sha is the\ninterview-time content; the cluster runs whatever rsync ships. The\nwindow is small (interview is typically immediately before submit)\nbut real — re-run the interview to refresh.",
+      "properties": {
+        "kind": {
+          "const": "shell_command",
+          "title": "Kind",
+          "type": "string"
+        },
+        "run_name": {
+          "description": "Name for the generated wrapper file (``.hpc/wrappers/<run_name>.py``) and the ``@register_run``-decorated function inside it. Must be a valid Python identifier.",
+          "minLength": 1,
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+          "title": "Run Name",
+          "type": "string"
+        },
+        "argv": {
+          "description": "Argv template. ``{param}`` placeholders are substituted from the wrapper's kwargs at call time. Example: [\"python3\", \"main.py\", \"--config\", \"{config}\", \"--seed\", \"{seed}\"].",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "signature": {
+          "additionalProperties": {
+            "enum": [
+              "str",
+              "int",
+              "float",
+              "bool"
+            ],
+            "type": "string"
+          },
+          "description": "Wrapper signature: ``{param_name: type_str}``. Each name must be a valid Python identifier; types are 'str' / 'int' / 'float' / 'bool'. The wrapper also takes ``**kwargs`` so framework-injected identity fields (e.g. ``config_sha``) flow through without polluting main.py.",
+          "title": "Signature",
+          "type": "object"
+        },
+        "frozen_configs": {
+          "description": "Paths (relative to campaign_dir) to config files whose content should be part of the experiment's identity. For each entry the interview hashes the bytes and threads ``<basename>_sha`` into every task's kwargs. Requires ``task_generator`` (see class docstring).",
+          "items": {
+            "type": "string"
+          },
+          "title": "Frozen Configs",
+          "type": "array"
+        },
+        "data_axis_hint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/_DataAxisHint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pre-declared series-axis classification. classify-axis cannot introspect a shell-out body, so when the experimenter knows the classification they declare it here. The interview persists it to ``interview.json._materialized.entry_point.data_axis`` so classify-axis records it directly. Omit when you want the interactive classification interview."
+        }
+      },
+      "required": [
+        "kind",
+        "run_name",
+        "argv"
+      ],
+      "title": "_ShellCommandEntry",
       "type": "object"
     },
     "_TranscriptTurn": {
