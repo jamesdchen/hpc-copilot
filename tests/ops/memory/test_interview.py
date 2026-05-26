@@ -319,6 +319,232 @@ def test_generator_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
     assert first == second
 
 
+# ─── entry_point: shell_command wrapper materialization ──────────────────
+
+
+def _seed_yaml(campaign_dir: Path, rel: str, body: str) -> Path:
+    p = campaign_dir / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    return p
+
+
+def test_entry_point_shell_command_writes_wrapper_with_register_run(tmp_path: Path) -> None:
+    """A shell_command entry_point materializes ``.hpc/wrappers/<name>.py``
+    decorated with @register_run, with the declared signature plus
+    ``**kwargs`` for framework-injected fields."""
+    intent = _minimal_intent(
+        3,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "forecast",
+            "argv": ["python3", "main.py", "--seed", "{seed}"],
+            "signature": {"seed": "int"},
+            "frozen_configs": [],
+        },
+        task_generator={
+            "kind": "enumerated",
+            "params": {"items": [{"seed": 0}, {"seed": 1}, {"seed": 2}]},
+        },
+    )
+    result = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+    wrapper = tmp_path / ".hpc" / "wrappers" / "forecast.py"
+    assert wrapper.is_file()
+    assert ".hpc/wrappers/forecast.py" in result["artifacts"]
+    body = wrapper.read_text()
+    # The wrapper carries @register_run + the declared signature + **kwargs.
+    assert "@register_run" in body
+    assert "def forecast(seed: int, **kwargs)" in body
+    # subprocess.check_call with the argv, every placeholder str()-wrapped.
+    assert "subprocess.check_call(['python3', 'main.py', '--seed', str(seed)])" in body
+
+
+def test_entry_point_frozen_configs_threaded_into_kwargs(tmp_path: Path) -> None:
+    """frozen_configs are hashed; ``<basename>_sha`` lands in every task's
+    kwargs so cmd_sha distinguishes content versions."""
+    _seed_yaml(tmp_path, "configs/exp_42.yaml", "lr: 1e-3\n")
+    intent = _minimal_intent(
+        2,
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "forecast",
+            "argv": ["python3", "main.py", "--config", "{config}", "--seed", "{seed}"],
+            "signature": {"config": "str", "seed": "int"},
+            "frozen_configs": ["configs/exp_42.yaml"],
+        },
+        task_generator={
+            "kind": "enumerated",
+            "params": {"items": [
+                {"config": "configs/exp_42.yaml", "seed": 0},
+                {"config": "configs/exp_42.yaml", "seed": 1},
+            ]},
+        },
+    )
+    result = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    first = result["preview"]["first"]
+    last = result["preview"]["last"]
+    # exp_42_sha is present and equal across tasks (one frozen config → constant).
+    assert "exp_42_sha" in first
+    assert first["exp_42_sha"] == last["exp_42_sha"]
+    # The user's own kwargs survive.
+    assert first["config"] == "configs/exp_42.yaml" and first["seed"] == 0
+
+
+def test_entry_point_yaml_edit_changes_cmd_sha(tmp_path: Path) -> None:
+    """The headline contract: editing the frozen YAML changes cmd_sha so
+    submit-flow no longer dedups against the prior submit."""
+    counter = {"n": 0}
+
+    def _run(yaml_body: str) -> str:
+        # Fresh campaign dir per invocation so this is hermetic; index is
+        # the disambiguator (two identical YAML bodies share content but
+        # need distinct campaign dirs to test the comparison).
+        counter["n"] += 1
+        sub = tmp_path / f"campaign_{counter['n']}"
+        sub.mkdir()
+        _seed_yaml(sub, "configs/exp.yaml", yaml_body)
+        intent = _minimal_intent(
+            2,
+            entry_point={
+                "kind": "shell_command", "run_name": "r",
+                "argv": ["python3", "main.py", "--config", "{config}"],
+                "signature": {"config": "str"},
+                "frozen_configs": ["configs/exp.yaml"],
+            },
+            task_generator={
+                "kind": "enumerated",
+                "params": {"items": [{"config": "x"}, {"config": "y"}]},
+            },
+        )
+        return record_interview(InterviewSpec.model_validate(intent), campaign_dir=sub)["cmd_sha"]
+
+    a = _run("lr: 1e-3\n")
+    b = _run("lr: 1e-3\n")  # identical content
+    c = _run("lr: 1e-2\n")  # one-character edit
+    assert a == b, "identical YAML content must produce identical cmd_sha"
+    assert a != c, "edited YAML must produce a different cmd_sha (defeats false dedup)"
+
+
+def test_entry_point_argv_typo_fails_at_spec_validation(tmp_path: Path) -> None:
+    """A placeholder in argv that doesn't match any signature param
+    fails at Pydantic validation — before any disk write."""
+    from pydantic import ValidationError
+
+    intent = _minimal_intent(
+        1,
+        entry_point={
+            "kind": "shell_command", "run_name": "r",
+            "argv": ["python3", "main.py", "--config", "{cnfig}"],  # typo
+            "signature": {"config": "str"},
+            "frozen_configs": [],
+        },
+    )
+    with pytest.raises(ValidationError, match="references parameters not in signature"):
+        InterviewSpec.model_validate(intent)
+
+
+def test_entry_point_missing_frozen_config_rejected(tmp_path: Path) -> None:
+    """A frozen_configs entry whose path doesn't exist surfaces as
+    spec_invalid before the wrapper or tasks.py gets written."""
+    intent = _minimal_intent(
+        1,
+        entry_point={
+            "kind": "shell_command", "run_name": "r",
+            "argv": ["python3", "main.py"],
+            "signature": {},
+            "frozen_configs": ["configs/does_not_exist.yaml"],
+        },
+        task_generator={
+            "kind": "enumerated", "params": {"items": [{"a": 1}]},
+        },
+    )
+    with pytest.raises(errors.SpecInvalid, match="is not a file"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    # Atomicity: no wrapper, no tasks.py left behind on the failed path.
+    assert not (tmp_path / ".hpc" / "wrappers").exists()
+    assert not (tmp_path / "tasks.py").exists()
+
+
+def test_entry_point_path_traversal_rejected(tmp_path: Path) -> None:
+    """A frozen_configs path that escapes campaign_dir is rejected —
+    the framework's mental model is configs live inside the rsynced
+    experiment dir."""
+    intent = _minimal_intent(
+        1,
+        entry_point={
+            "kind": "shell_command", "run_name": "r",
+            "argv": ["python3", "main.py"],
+            "signature": {},
+            "frozen_configs": ["../../etc/passwd"],
+        },
+        task_generator={"kind": "enumerated", "params": {"items": [{"a": 1}]}},
+    )
+    with pytest.raises(errors.SpecInvalid, match="resolves outside campaign_dir"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+
+def test_entry_point_wrapper_is_importable_python(tmp_path: Path) -> None:
+    """End-to-end: the generated wrapper must actually import (the framework
+    later loads it via discover_runs / validate-executor-signatures)."""
+    import importlib.util
+
+    intent = _minimal_intent(
+        1,
+        entry_point={
+            "kind": "shell_command", "run_name": "demo_run",
+            "argv": ["echo", "{message}"],
+            "signature": {"message": "str"},
+            "frozen_configs": [],
+        },
+        task_generator={
+            "kind": "enumerated", "params": {"items": [{"message": "hi"}]},
+        },
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    wrapper = tmp_path / ".hpc" / "wrappers" / "demo_run.py"
+    spec = importlib.util.spec_from_file_location("hpc_wrapper_under_test", wrapper)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    # @register_run injects compute() into the module namespace.
+    assert hasattr(mod, "demo_run")
+    assert hasattr(mod, "compute")
+
+
+def test_entry_point_argv_with_mixed_literal_and_placeholder(tmp_path: Path) -> None:
+    """A token like ``--seed={seed}`` is one argv element; render as an
+    f-string so substitution preserves the literal prefix."""
+    intent = _minimal_intent(
+        1,
+        entry_point={
+            "kind": "shell_command", "run_name": "r",
+            "argv": ["python3", "main.py", "--seed={seed}"],
+            "signature": {"seed": "int"},
+            "frozen_configs": [],
+        },
+        task_generator={"kind": "enumerated", "params": {"items": [{"seed": 7}]}},
+    )
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    body = (tmp_path / ".hpc" / "wrappers" / "r.py").read_text()
+    # Mixed token renders as f-string. Plain placeholder renders as str(name).
+    assert "f'--seed={seed}'" in body
+
+
+def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Path) -> None:
+    """The register_run kind is a pure pointer — no wrapper file written.
+    Existing tasks.py-or-hand-rolled flow applies."""
+    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    intent = _minimal_intent(
+        3,
+        entry_point={"kind": "register_run", "run_name": "forecast"},
+    )
+    result = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    assert "tasks.py" not in result["artifacts"]  # not regenerated
+    assert "interview.json" in result["artifacts"]
+    assert not (tmp_path / ".hpc" / "wrappers").exists()
+
+
 def test_generator_then_validate_mode_picks_up_hand_edits(tmp_path: Path) -> None:
     """After dropping task_generator from intent, the next interview
     accepts whatever tasks.py now contains — operator escape hatch."""

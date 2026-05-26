@@ -179,6 +179,153 @@ _TaskGenerator = Annotated[
 ]
 
 
+# ── Discriminated union for entry_point ──────────────────────────────────────
+#
+# Universalizes how the interview learns "what's the user's experiment entry
+# point?" — the three shapes a mature repo, a Python module, or a notebook
+# might present, all normalized through one wire field. Downstream primitives
+# (classify-axis, validate-executor-signatures, submit) read the materialized
+# wrapper / module path; the kind only affects the interview's intake.
+
+
+# A pre-compiled regex for parameter-name validation; reused across kinds.
+_PARAM_NAME = r"^[a-zA-Z_][a-zA-Z0-9_]*$"
+
+# Type annotations the shell_command wrapper can declare. Kept narrow on
+# purpose — these are what the wrapper's signature renders as, and what
+# validate-executor-signatures can introspect against tasks.py kwargs.
+# Stringly-typed wire form keeps the JSON schema simple; the materializer
+# maps these to Python annotations.
+_SignatureType = Literal["str", "int", "float", "bool"]
+
+
+class _RegisterRunEntry(BaseModel):
+    """Notebook entry point: an existing ``@register_run``-decorated function.
+
+    Pure pointer — no materialization. The framework's existing
+    ``discover_runs`` walks ``notebooks/`` to find the function by
+    ``run_name``. Provided as a kind so the interview's entry-point
+    field is total over the shapes the framework supports, not just
+    the ones that need materialization.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["register_run"]
+    run_name: str = Field(
+        min_length=1,
+        description="The ``@register_run`` function name to discover in notebooks/.",
+    )
+
+
+class _PythonModuleEntry(BaseModel):
+    """Mature-repo entry point: an importable Python function (no notebook).
+
+    The framework can already introspect importable Python; this kind is
+    a wire hint so the interview can validate the module/function exists
+    before submit. No wrapper is materialized.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["python_module"]
+    module: str = Field(
+        min_length=1,
+        description="Dotted module path, e.g. ``my_pkg.train``.",
+    )
+    function: str = Field(
+        default="main",
+        min_length=1,
+        description="The function inside ``module`` to treat as the entry point.",
+    )
+
+
+class _ShellCommandEntry(BaseModel):
+    """Mature-repo entry point: a shell command (``main.py``, compiled binary, ...).
+
+    The interview materializes a thin ``@register_run`` wrapper at
+    ``.hpc/wrappers/<run_name>.py`` whose body subprocess-invokes the
+    argv with kwargs substituted in. The wrapper's *signature* (built
+    from ``signature``) is what downstream introspection reads;
+    ``main.py`` stays opaque to the framework.
+
+    ``frozen_configs`` lets the experimenter declare config files
+    whose content is part of the experiment's identity. The
+    materializer hashes each path's bytes; the interview threads
+    ``<basename>_sha`` into every materialized task's kwargs so the
+    framework's ``cmd_sha`` correctly distinguishes ``exp_42.yaml``
+    from ``exp_43.yaml`` (and catches accidental in-place edits).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["shell_command"]
+    run_name: str = Field(
+        min_length=1,
+        pattern=_PARAM_NAME,
+        description=(
+            "Name for the generated wrapper file (``.hpc/wrappers/<run_name>.py``) "
+            "and the ``@register_run``-decorated function inside it. Must be a "
+            "valid Python identifier."
+        ),
+    )
+    argv: list[str] = Field(
+        min_length=1,
+        description=(
+            "Argv template. ``{param}`` placeholders are substituted from the "
+            "wrapper's kwargs at call time. Example: "
+            '["python3", "main.py", "--config", "{config}", "--seed", "{seed}"].'
+        ),
+    )
+    signature: dict[str, _SignatureType] = Field(
+        default_factory=dict,
+        description=(
+            "Wrapper signature: ``{param_name: type_str}``. Each name must be a "
+            "valid Python identifier; types are 'str' / 'int' / 'float' / 'bool'. "
+            "The wrapper also takes ``**kwargs`` so framework-injected identity "
+            "fields (e.g. ``config_sha``) flow through without polluting main.py."
+        ),
+    )
+    frozen_configs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Paths (relative to campaign_dir) to config files whose content "
+            "should be part of the experiment's identity. For each entry the "
+            "interview hashes the bytes and threads ``<basename>_sha`` into "
+            "every task's kwargs."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate(self) -> _ShellCommandEntry:
+        import re
+
+        param_re = re.compile(_PARAM_NAME)
+        bad = [name for name in self.signature if not param_re.match(name)]
+        if bad:
+            raise ValueError(
+                f"shell_command.signature: invalid parameter names {bad}; "
+                "each name must be a valid Python identifier"
+            )
+        # Every ``{placeholder}`` in argv must correspond to a declared signature
+        # name. Catches the typo class at spec-validation time.
+        placeholder_re = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+        referenced = {m for token in self.argv for m in placeholder_re.findall(token)}
+        undeclared = referenced - set(self.signature)
+        if undeclared:
+            raise ValueError(
+                f"shell_command.argv references parameters not in signature: "
+                f"{sorted(undeclared)}; declared: {sorted(self.signature)}"
+            )
+        return self
+
+
+_EntryPoint = Annotated[
+    _RegisterRunEntry | _PythonModuleEntry | _ShellCommandEntry,
+    Field(discriminator="kind"),
+]
+
+
 class InterviewSpec(BaseModel):
     """Structured campaign intent produced by an interview between the hpc agent and either an external orchestrator or a human.
 
@@ -256,6 +403,21 @@ class InterviewSpec(BaseModel):
             "common ground without locking out exotic campaigns. "
             "Materializer cross-checks the produced task count "
             "against intent.task_count before any disk writes."
+        ),
+    )
+    entry_point: _EntryPoint | None = Field(
+        default=None,
+        description=(
+            "Optional declaration of the experiment's entry point. Three shapes: "
+            "``register_run`` (pointer to an existing @register_run notebook "
+            "function — no materialization), ``python_module`` (importable Python "
+            "module + function), ``shell_command`` (argv + signature; the "
+            "interview materializes a ``@register_run`` wrapper at "
+            "``.hpc/wrappers/<run_name>.py`` that subprocess-invokes the argv). "
+            "Lets a mature repo with main.py + frozen YAML configs participate in "
+            "the same intake as a greenfield notebook — the wrapper gives the "
+            "framework something to introspect (signature, classify-axis, "
+            "validate-executor-signatures) while main.py stays untouched."
         ),
     )
 

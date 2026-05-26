@@ -143,6 +143,37 @@
       "default": null,
       "description": "Optional opt-in: when present, the materializer regenerates tasks.py from a typed recipe instead of consuming the agent-written one. The five shapes cover common ground without locking out exotic campaigns. Materializer cross-checks the produced task count against intent.task_count before any disk writes.",
       "title": "Task Generator"
+    },
+    "entry_point": {
+      "anyOf": [
+        {
+          "discriminator": {
+            "mapping": {
+              "python_module": "#/$defs/_PythonModuleEntry",
+              "register_run": "#/$defs/_RegisterRunEntry",
+              "shell_command": "#/$defs/_ShellCommandEntry"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/_RegisterRunEntry"
+            },
+            {
+              "$ref": "#/$defs/_PythonModuleEntry"
+            },
+            {
+              "$ref": "#/$defs/_ShellCommandEntry"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional declaration of the experiment's entry point. Three shapes: ``register_run`` (pointer to an existing @register_run notebook function — no materialization), ``python_module`` (importable Python module + function), ``shell_command`` (argv + signature; the interview materializes a ``@register_run`` wrapper at ``.hpc/wrappers/<run_name>.py`` that subprocess-invokes the argv). Lets a mature repo with main.py + frozen YAML configs participate in the same intake as a greenfield notebook — the wrapper gives the framework something to introspect (signature, classify-axis, validate-executor-signatures) while main.py stays untouched.",
+      "title": "Entry Point"
     }
   },
   "$defs": {
@@ -508,6 +539,115 @@
         "kind"
       ],
       "title": "_Provenance",
+      "type": "object"
+    },
+    "_PythonModuleEntry": {
+      "additionalProperties": false,
+      "description": "Mature-repo entry point: an importable Python function (no notebook).\n\nThe framework can already introspect importable Python; this kind is\na wire hint so the interview can validate the module/function exists\nbefore submit. No wrapper is materialized.",
+      "properties": {
+        "kind": {
+          "const": "python_module",
+          "title": "Kind",
+          "type": "string"
+        },
+        "module": {
+          "description": "Dotted module path, e.g. ``my_pkg.train``.",
+          "minLength": 1,
+          "title": "Module",
+          "type": "string"
+        },
+        "function": {
+          "default": "main",
+          "description": "The function inside ``module`` to treat as the entry point.",
+          "minLength": 1,
+          "title": "Function",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "module"
+      ],
+      "title": "_PythonModuleEntry",
+      "type": "object"
+    },
+    "_RegisterRunEntry": {
+      "additionalProperties": false,
+      "description": "Notebook entry point: an existing ``@register_run``-decorated function.\n\nPure pointer — no materialization. The framework's existing\n``discover_runs`` walks ``notebooks/`` to find the function by\n``run_name``. Provided as a kind so the interview's entry-point\nfield is total over the shapes the framework supports, not just\nthe ones that need materialization.",
+      "properties": {
+        "kind": {
+          "const": "register_run",
+          "title": "Kind",
+          "type": "string"
+        },
+        "run_name": {
+          "description": "The ``@register_run`` function name to discover in notebooks/.",
+          "minLength": 1,
+          "title": "Run Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "run_name"
+      ],
+      "title": "_RegisterRunEntry",
+      "type": "object"
+    },
+    "_ShellCommandEntry": {
+      "additionalProperties": false,
+      "description": "Mature-repo entry point: a shell command (``main.py``, compiled binary, ...).\n\nThe interview materializes a thin ``@register_run`` wrapper at\n``.hpc/wrappers/<run_name>.py`` whose body subprocess-invokes the\nargv with kwargs substituted in. The wrapper's *signature* (built\nfrom ``signature``) is what downstream introspection reads;\n``main.py`` stays opaque to the framework.\n\n``frozen_configs`` lets the experimenter declare config files\nwhose content is part of the experiment's identity. The\nmaterializer hashes each path's bytes; the interview threads\n``<basename>_sha`` into every materialized task's kwargs so the\nframework's ``cmd_sha`` correctly distinguishes ``exp_42.yaml``\nfrom ``exp_43.yaml`` (and catches accidental in-place edits).",
+      "properties": {
+        "kind": {
+          "const": "shell_command",
+          "title": "Kind",
+          "type": "string"
+        },
+        "run_name": {
+          "description": "Name for the generated wrapper file (``.hpc/wrappers/<run_name>.py``) and the ``@register_run``-decorated function inside it. Must be a valid Python identifier.",
+          "minLength": 1,
+          "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+          "title": "Run Name",
+          "type": "string"
+        },
+        "argv": {
+          "description": "Argv template. ``{param}`` placeholders are substituted from the wrapper's kwargs at call time. Example: [\"python3\", \"main.py\", \"--config\", \"{config}\", \"--seed\", \"{seed}\"].",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Argv",
+          "type": "array"
+        },
+        "signature": {
+          "additionalProperties": {
+            "enum": [
+              "str",
+              "int",
+              "float",
+              "bool"
+            ],
+            "type": "string"
+          },
+          "description": "Wrapper signature: ``{param_name: type_str}``. Each name must be a valid Python identifier; types are 'str' / 'int' / 'float' / 'bool'. The wrapper also takes ``**kwargs`` so framework-injected identity fields (e.g. ``config_sha``) flow through without polluting main.py.",
+          "title": "Signature",
+          "type": "object"
+        },
+        "frozen_configs": {
+          "description": "Paths (relative to campaign_dir) to config files whose content should be part of the experiment's identity. For each entry the interview hashes the bytes and threads ``<basename>_sha`` into every task's kwargs.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Frozen Configs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "run_name",
+        "argv"
+      ],
+      "title": "_ShellCommandEntry",
       "type": "object"
     },
     "_TranscriptTurn": {

@@ -125,6 +125,27 @@ def record_interview(
     declared = int(intent["task_count"])
     artifacts: list[str] = []
 
+    # Materialize the entry-point wrapper first (if shell_command). Its
+    # frozen-config shas get threaded into tasks-kwargs when the generator
+    # then runs. Failing here before any tasks.py write avoids the
+    # half-baked state of a tasks.py that references shas for a config
+    # path that doesn't exist.
+    frozen_shas: dict[str, str] = {}
+    if "entry_point" in intent and intent["entry_point"]["kind"] == "shell_command":
+        from hpc_agent.incorporation.wrap_entry_point import materialize_shell_wrapper
+
+        ep = intent["entry_point"]
+        result = materialize_shell_wrapper(
+            campaign_dir=campaign_dir,
+            run_name=ep["run_name"],
+            argv=ep["argv"],
+            signature=ep.get("signature", {}),
+            frozen_configs=ep.get("frozen_configs", []),
+        )
+        frozen_shas = dict(result.frozen_shas)
+        # Path relative to campaign_dir for portability in the envelope.
+        artifacts.append(str(result.wrapper_path.relative_to(campaign_dir)))
+
     if "task_generator" in intent:
         # Generator mode — pre-validate count, then materialize tasks.py.
         generator = intent["task_generator"]
@@ -135,7 +156,7 @@ def record_interview(
                 f"intent.task_count = {declared}; recipe and stated count "
                 f"disagree (refusing to write tasks.py)"
             )
-        _materialize_tasks_py(generator, tasks_py)
+        _materialize_tasks_py(generator, tasks_py, inject_kwargs=frozen_shas)
         artifacts.append("tasks.py")
     elif not tasks_py.is_file():
         raise errors.SpecInvalid(
@@ -271,38 +292,65 @@ def _expected_count(generator: Mapping[str, Any]) -> int:
     raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
 
 
-def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
-    """Write tasks.py from the recipe. Caller has already cross-checked count."""
+def _materialize_tasks_py(
+    generator: Mapping[str, Any],
+    path,
+    *,
+    inject_kwargs: Mapping[str, str] | None = None,
+) -> None:
+    """Write tasks.py from the recipe. Caller has already cross-checked count.
+
+    ``inject_kwargs`` is merged into every materialized task's kwargs as
+    constant string fields. Used by the interview to thread frozen-config
+    shas (``<basename>_sha``) so ``cmd_sha`` covers them. Renders as a
+    static dict in the generated file so resolve() returns the merged
+    dict without per-call work.
+    """
     kind = generator["kind"]
     params = generator["params"]
+    inject = dict(inject_kwargs or {})
+    inject_prefix = f"_INJECT = {inject!r}\n" if inject else ""
+    # When inject is non-empty, every resolve() return gets merged with
+    # _INJECT. Inject takes second place (``{**task, **_INJECT}``) so an
+    # explicit task kwarg with the same name wins — defensive against an
+    # axis named ``foo_sha`` colliding with an inject key.
+    merge_resolve = (
+        "def resolve(i: int) -> dict: return {**_TASKS[i], **_INJECT}\n"
+        if inject
+        else "def resolve(i: int) -> dict: return _TASKS[i]\n"
+    )
     if kind == "enumerated":
         body = (
+            f"{inject_prefix}"
             f"_TASKS = {list(params['items'])!r}\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "cartesian_product":
         keys = list(params["axes"].keys())
         body = (
             f"import itertools\n\n"
+            f"{inject_prefix}"
             f"_KEYS = {keys!r}\n"
             f"_AXES = {[list(params['axes'][k]) for k in keys]!r}\n"
             f"_TASKS = [dict(zip(_KEYS, row)) for row in itertools.product(*_AXES)]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "items_x_seeds":
         body = (
+            f"{inject_prefix}"
             f"_ITEMS = {list(params['items'])!r}\n"
             f"_SEEDS = {list(params['seeds'])!r}\n"
             f"_TASKS = [{{**item, 'seed': seed}} for item in _ITEMS for seed in _SEEDS]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "numeric_logspace":
         base = params.get("base", 10)
         body = (
             f"import math\n\n"
+            f"{inject_prefix}"
             f"_LOW = {params['low']!r}\n"
             f"_HIGH = {params['high']!r}\n"
             f"_N = {int(params['n'])}\n"
@@ -318,10 +366,11 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
             f"    for i in range(_N)\n"
             f"]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     elif kind == "numeric_linspace":
         body = (
+            f"{inject_prefix}"
             f"_LOW, _HIGH, _N = {params['low']!r}, {params['high']!r}, {int(params['n'])}\n"
             # _N == 1 → single-point sweep; avoid division by (_N - 1).
             f"_TASKS = [{{{params['param']!r}: _LOW}}] if _N == 1 else [\n"
@@ -329,7 +378,7 @@ def _materialize_tasks_py(generator: Mapping[str, Any], path) -> None:
             f"    for i in range(_N)\n"
             f"]\n\n"
             f"def total() -> int: return len(_TASKS)\n"
-            f"def resolve(i: int) -> dict: return _TASKS[i]\n"
+            f"{merge_resolve}"
         )
     else:
         raise errors.SpecInvalid(f"unknown task_generator.kind: {kind!r}")
