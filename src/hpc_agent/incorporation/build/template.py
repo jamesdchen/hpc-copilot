@@ -10,9 +10,11 @@ scaffold.
 Deliberately **not a wire primitive.** It is a human-facing CLI command
 (``hpc-agent build-template``), not part of the integrator-agnostic
 primitive catalog that headless orchestrators compose against. The
-experiment-template flow is built around researcher-authored notebooks;
-a headless agent does not write notebooks, so this scaffold step is
-exclusive to the human entry point.
+scaffold is bilingual via ``--shape``: ``script`` (the default — a
+``train.py`` with ``@register_run`` + argparse, agent-writable) and
+``notebook`` (``notebooks/experiment.ipynb``, the literate / iteration
+shape). Both shapes carry the same ``@register_run`` contract; see
+``docs/internals/experiment-contract.md``.
 
 Two tiers, with different overwrite discipline:
 
@@ -120,9 +122,7 @@ _MAKEFILE_INCLUDE = "include .hpc/template.mk"
     # users through scaffold flows and needs visibility.
     agent_facing=True,
 )
-def build_template(
-    *, repo_dir: Path, force: bool = False, shape: str = "script"
-) -> dict[str, Any]:
+def build_template(*, repo_dir: Path, force: bool = False, shape: str = "script") -> dict[str, Any]:
     """Inject the experiment-template scaffold into ``repo_dir``.
 
     Parameters
@@ -158,9 +158,7 @@ def build_template(
     if not repo_dir.is_dir():
         raise errors.SpecInvalid(f"repo-dir {repo_dir} does not exist or is not a directory")
     if shape not in _SHAPE_ASSETS:
-        raise errors.SpecInvalid(
-            f"shape {shape!r} not in {sorted(_SHAPE_ASSETS)!r}"
-        )
+        raise errors.SpecInvalid(f"shape {shape!r} not in {sorted(_SHAPE_ASSETS)!r}")
 
     scaffold_dir = hpc_agent._PACKAGE_ROOT / "incorporation" / "build" / "scaffolds"
 
