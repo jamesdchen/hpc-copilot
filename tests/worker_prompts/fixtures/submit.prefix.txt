@@ -54,6 +54,31 @@ hpc-agent export-package --experiment-dir .
 
 `export-package` globs `notebooks/{pipeline,executors,scripts}/*.ipynb`, exports each to `src/<module>.py` (strict-AST for `@register_run` executors, `# export`-marker for pipeline libraries), and content-hash-caches against `.hpc/.build-cache.json` — a no-op when nothing changed. The built `src/` rides the `submit-flow` rsync into the deploy bundle; **the cluster node never builds** (it stays stdlib-only). On a `spec_invalid` envelope (an output-path collision, a bad module name), surface it and stop — the notebooks need a rename.
 
+## Step 0b: Honor `interview.json` entry_point (if present)
+
+Before Step 1's `@register_run` discovery, check whether the campaign was set up via the `interview` primitive. If `<experiment_dir>/interview.json` exists, read its `_materialized.entry_point` block — it tells the worker the entry point was *declared* rather than *discovered*, which short-circuits several later steps:
+
+```bash
+test -f interview.json && python -c "
+import json, sys
+doc = json.load(open('interview.json'))
+ep = doc.get('_materialized', {}).get('entry_point')
+if ep: print(json.dumps(ep))
+" | tee /tmp/_entry_point.json
+```
+
+If the block is non-empty, branch on `kind`:
+
+| `kind` | Procedure behavior |
+|---|---|
+| `shell_command` | A wrapper has been materialized at `<wrapper_path>` (`.hpc/wrappers/<run_name>.py`) — it satisfies the `@register_run` contract. **Skip Step 1's discover scan**; treat `<run_name>` as the picked run. **Use `<executor_cmd>` as the `EXECUTOR` in Step 6d's `job_env`** instead of synthesizing one from `discover_executors`. If `data_axis` is on the block, **skip the Step 3b classification interview** — the user pre-declared the axis; just feed `data_axis` into the `axes.yaml` write that classify-axis would have done. `tasks.py` is already on disk (the interview materialized it from `task_generator`) — Step 6a's reuse branch picks it up. |
+| `python_module` | The entry point is an importable Python module. Skip Step 1's discovery scan; treat `<module>:<function>` as the picked run. The `EXECUTOR` at Step 6d is `python3 -m <module>` (or a one-liner that imports `<function>`). |
+| `register_run` | A `@register_run` function name is declared, but no wrapper was materialized — fall through to Step 1's discovery, scoped to `<run_name>` rather than enumerating. |
+
+If `interview.json` doesn't exist, or `_materialized.entry_point` is absent, the rest of the procedure runs unchanged (the notebook-discovery default).
+
+This step is what makes the mature-repo path end-to-end usable: the `interview` primitive set up the wrapper and persisted the executor command; this step reads them and threads them into the rest of the submit pipeline so nothing is orphaned.
+
 ## Step 1: Discover runs
 
 **Notebook-first.** The researcher authors only a notebook carrying a `@register_run def run(...)` — no axis declaration, no `tasks.py`, no CLI glue. Discovery is `discover_runs` over `notebooks/`, which AST-walks `.py` and `.ipynb` files (skipping `.hpc/`):
