@@ -182,10 +182,17 @@ _TaskGenerator = Annotated[
 # ── Discriminated union for entry_point ──────────────────────────────────────
 #
 # Universalizes how the interview learns "what's the user's experiment entry
-# point?" — the three shapes a mature repo, a Python module, or a notebook
-# might present, all normalized through one wire field. Downstream primitives
-# (classify-axis, validate-executor-signatures, submit) read the materialized
-# wrapper / module path; the kind only affects the interview's intake.
+# point?" — three shapes, normalized through one wire field. The canonical
+# Python paths are ``register_run`` (the user's function carries an
+# ``@register_run`` decorator the framework can discover directly) and
+# ``python_module`` (an importable function the framework can introspect).
+# ``shell_command`` is the *fallback* — used only when direct decoration
+# isn't possible (non-Python entry point, a CLI library's decorator
+# conflicts with ``@register_run``, vendor code) — and materializes a thin
+# ``@register_run`` wrapper around an argv. Downstream primitives
+# (classify-axis, validate-executor-signatures, submit) read the
+# materialized wrapper / module path; the kind only affects the
+# interview's intake.
 
 
 # A pre-compiled regex for parameter-name validation; reused across kinds.
@@ -200,13 +207,18 @@ _SignatureType = Literal["str", "int", "float", "bool"]
 
 
 class _RegisterRunEntry(BaseModel):
-    """Notebook entry point: an existing ``@register_run``-decorated function.
+    """Canonical Python entry point: an ``@register_run``-decorated function.
 
-    Pure pointer — no materialization. The framework's existing
-    ``discover_runs`` walks ``notebooks/`` to find the function by
-    ``run_name``. Provided as a kind so the interview's entry-point
-    field is total over the shapes the framework supports, not just
-    the ones that need materialization.
+    The default and recommended shape for Python repos. The user puts
+    ``@register_run`` directly on the function the framework should treat
+    as the entry point — whether it lives in a notebook
+    (``notebooks/<name>.ipynb``) or a ``.py`` file (``train.py``,
+    ``main.py``). Pure pointer — no materialization. The framework's
+    existing ``discover_runs`` walks the experiment to find the function
+    by ``run_name``. For a mature repo with an existing entry-point
+    function, this is a two-line code edit (an import and a decorator)
+    and is strongly preferred over ``shell_command`` whenever direct
+    decoration is possible.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -214,16 +226,20 @@ class _RegisterRunEntry(BaseModel):
     kind: Literal["register_run"]
     run_name: str = Field(
         min_length=1,
-        description="The ``@register_run`` function name to discover in notebooks/.",
+        description="The ``@register_run`` function name to discover (in notebooks/ or .py files under the experiment).",
     )
 
 
 class _PythonModuleEntry(BaseModel):
-    """Mature-repo entry point: an importable Python function (no notebook).
+    """Canonical Python entry point: an importable module + function.
 
-    The framework can already introspect importable Python; this kind is
+    A second canonical Python shape, alongside ``register_run``: the
+    framework can already introspect importable Python, so this kind is
     a wire hint so the interview can validate the module/function exists
-    before submit. No wrapper is materialized.
+    before submit. No wrapper is materialized. Prefer ``register_run``
+    when the user can decorate the function directly; use this kind for
+    importable Python the framework should target by dotted path
+    instead of by ``@register_run`` discovery.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -293,13 +309,22 @@ class _DataAxisHint(BaseModel):
 
 
 class _ShellCommandEntry(BaseModel):
-    """Mature-repo entry point: a shell command (``main.py``, compiled binary, ...).
+    """Fallback entry point: a shell command (compiled binary, decorator-conflicting CLI, ...).
+
+    **The fallback path, used only when direct ``@register_run``
+    decoration isn't possible** — non-Python entry points (shell
+    scripts, compiled binaries), CLI libraries whose decorators conflict
+    with ``@register_run`` (e.g. ``@hydra.main`` rewrites the signature),
+    or vendor code the user can't edit. For a Python repo with an
+    importable entry-point function, prefer ``register_run`` instead:
+    a two-line code edit beats a subprocess shim, and the framework
+    introspects the real function rather than the wrapper.
 
     The interview materializes a thin ``@register_run`` wrapper at
     ``.hpc/wrappers/<run_name>.py`` whose body subprocess-invokes the
     argv with kwargs substituted in. The wrapper's *signature* (built
     from ``signature``) is what downstream introspection reads;
-    ``main.py`` stays opaque to the framework.
+    the underlying entry point stays opaque to the framework.
 
     ``frozen_configs`` lets the experimenter declare config files
     whose content is part of the experiment's identity. The
@@ -484,16 +509,21 @@ class InterviewSpec(BaseModel):
     entry_point: _EntryPoint | None = Field(
         default=None,
         description=(
-            "Optional declaration of the experiment's entry point. Three shapes: "
-            "``register_run`` (pointer to an existing @register_run notebook "
-            "function — no materialization), ``python_module`` (importable Python "
-            "module + function), ``shell_command`` (argv + signature; the "
-            "interview materializes a ``@register_run`` wrapper at "
-            "``.hpc/wrappers/<run_name>.py`` that subprocess-invokes the argv). "
-            "Lets a mature repo with main.py + frozen YAML configs participate in "
-            "the same intake as a greenfield notebook — the wrapper gives the "
-            "framework something to introspect (signature, classify-axis, "
-            "validate-executor-signatures) while main.py stays untouched."
+            "Optional declaration of the experiment's entry point. Three shapes, "
+            "with a strong default: ``register_run`` (the canonical Python path — "
+            "a pointer to an ``@register_run``-decorated function the framework "
+            "discovers directly; no materialization) and ``python_module`` (a "
+            "second canonical Python path — an importable module + function) are "
+            "preferred whenever a Python entry-point function is available. "
+            "``shell_command`` (argv + signature; the interview materializes a "
+            "``@register_run`` wrapper at ``.hpc/wrappers/<run_name>.py`` that "
+            "subprocess-invokes the argv) is the **fallback**, used only when "
+            "direct ``@register_run`` decoration isn't possible (non-Python entry "
+            "point, decorator conflict, vendor code). Lets a mature repo with "
+            "``main.py`` + frozen YAML configs participate in the same intake as "
+            "a greenfield notebook — direct decoration is a two-line code edit; "
+            "the wrapper is a subprocess shim that gives the framework something "
+            "to introspect when the entry point itself can't be decorated."
         ),
     )
 

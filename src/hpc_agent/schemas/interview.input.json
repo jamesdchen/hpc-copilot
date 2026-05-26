@@ -172,7 +172,7 @@
         }
       ],
       "default": null,
-      "description": "Optional declaration of the experiment's entry point. Three shapes: ``register_run`` (pointer to an existing @register_run notebook function — no materialization), ``python_module`` (importable Python module + function), ``shell_command`` (argv + signature; the interview materializes a ``@register_run`` wrapper at ``.hpc/wrappers/<run_name>.py`` that subprocess-invokes the argv). Lets a mature repo with main.py + frozen YAML configs participate in the same intake as a greenfield notebook — the wrapper gives the framework something to introspect (signature, classify-axis, validate-executor-signatures) while main.py stays untouched.",
+      "description": "Optional declaration of the experiment's entry point. Three shapes, with a strong default: ``register_run`` (the canonical Python path — a pointer to an ``@register_run``-decorated function the framework discovers directly; no materialization) and ``python_module`` (a second canonical Python path — an importable module + function) are preferred whenever a Python entry-point function is available. ``shell_command`` (argv + signature; the interview materializes a ``@register_run`` wrapper at ``.hpc/wrappers/<run_name>.py`` that subprocess-invokes the argv) is the **fallback**, used only when direct ``@register_run`` decoration isn't possible (non-Python entry point, decorator conflict, vendor code). Lets a mature repo with ``main.py`` + frozen YAML configs participate in the same intake as a greenfield notebook — direct decoration is a two-line code edit; the wrapper is a subprocess shim that gives the framework something to introspect when the entry point itself can't be decorated.",
       "title": "Entry Point"
     }
   },
@@ -610,7 +610,7 @@
     },
     "_PythonModuleEntry": {
       "additionalProperties": false,
-      "description": "Mature-repo entry point: an importable Python function (no notebook).\n\nThe framework can already introspect importable Python; this kind is\na wire hint so the interview can validate the module/function exists\nbefore submit. No wrapper is materialized.",
+      "description": "Canonical Python entry point: an importable module + function.\n\nA second canonical Python shape, alongside ``register_run``: the\nframework can already introspect importable Python, so this kind is\na wire hint so the interview can validate the module/function exists\nbefore submit. No wrapper is materialized. Prefer ``register_run``\nwhen the user can decorate the function directly; use this kind for\nimportable Python the framework should target by dotted path\ninstead of by ``@register_run`` discovery.",
       "properties": {
         "kind": {
           "const": "python_module",
@@ -640,7 +640,7 @@
     },
     "_RegisterRunEntry": {
       "additionalProperties": false,
-      "description": "Notebook entry point: an existing ``@register_run``-decorated function.\n\nPure pointer — no materialization. The framework's existing\n``discover_runs`` walks ``notebooks/`` to find the function by\n``run_name``. Provided as a kind so the interview's entry-point\nfield is total over the shapes the framework supports, not just\nthe ones that need materialization.",
+      "description": "Canonical Python entry point: an ``@register_run``-decorated function.\n\nThe default and recommended shape for Python repos. The user puts\n``@register_run`` directly on the function the framework should treat\nas the entry point — whether it lives in a notebook\n(``notebooks/<name>.ipynb``) or a ``.py`` file (``train.py``,\n``main.py``). Pure pointer — no materialization. The framework's\nexisting ``discover_runs`` walks the experiment to find the function\nby ``run_name``. For a mature repo with an existing entry-point\nfunction, this is a two-line code edit (an import and a decorator)\nand is strongly preferred over ``shell_command`` whenever direct\ndecoration is possible.",
       "properties": {
         "kind": {
           "const": "register_run",
@@ -648,7 +648,7 @@
           "type": "string"
         },
         "run_name": {
-          "description": "The ``@register_run`` function name to discover in notebooks/.",
+          "description": "The ``@register_run`` function name to discover (in notebooks/ or .py files under the experiment).",
           "minLength": 1,
           "title": "Run Name",
           "type": "string"
@@ -663,7 +663,7 @@
     },
     "_ShellCommandEntry": {
       "additionalProperties": false,
-      "description": "Mature-repo entry point: a shell command (``main.py``, compiled binary, ...).\n\nThe interview materializes a thin ``@register_run`` wrapper at\n``.hpc/wrappers/<run_name>.py`` whose body subprocess-invokes the\nargv with kwargs substituted in. The wrapper's *signature* (built\nfrom ``signature``) is what downstream introspection reads;\n``main.py`` stays opaque to the framework.\n\n``frozen_configs`` lets the experimenter declare config files\nwhose content is part of the experiment's identity. The\nmaterializer hashes each path's bytes; the interview threads\n``<basename>_sha`` into every materialized task's kwargs so the\nframework's ``cmd_sha`` correctly distinguishes ``exp_42.yaml``\nfrom ``exp_43.yaml`` (and catches accidental in-place edits).\n\n*Constraint*: ``frozen_configs`` requires ``task_generator`` (so the\nframework has somewhere to thread the shas). A hand-written tasks.py\nplus ``frozen_configs`` is rejected at interview time — the framework\ncan't safely edit the user's hand-rolled file, and silently dropping\nthe shas would defeat the identity guarantee. Use ``task_generator``\nor include the shas in your own tasks.py kwargs.\n\n*Timing*: ``frozen_configs`` are hashed at interview time. If the\nYAML is edited between interview and submit, the stored sha is the\ninterview-time content; the cluster runs whatever rsync ships. The\nwindow is small (interview is typically immediately before submit)\nbut real — re-run the interview to refresh.",
+      "description": "Fallback entry point: a shell command (compiled binary, decorator-conflicting CLI, ...).\n\n**The fallback path, used only when direct ``@register_run``\ndecoration isn't possible** — non-Python entry points (shell\nscripts, compiled binaries), CLI libraries whose decorators conflict\nwith ``@register_run`` (e.g. ``@hydra.main`` rewrites the signature),\nor vendor code the user can't edit. For a Python repo with an\nimportable entry-point function, prefer ``register_run`` instead:\na two-line code edit beats a subprocess shim, and the framework\nintrospects the real function rather than the wrapper.\n\nThe interview materializes a thin ``@register_run`` wrapper at\n``.hpc/wrappers/<run_name>.py`` whose body subprocess-invokes the\nargv with kwargs substituted in. The wrapper's *signature* (built\nfrom ``signature``) is what downstream introspection reads;\nthe underlying entry point stays opaque to the framework.\n\n``frozen_configs`` lets the experimenter declare config files\nwhose content is part of the experiment's identity. The\nmaterializer hashes each path's bytes; the interview threads\n``<basename>_sha`` into every materialized task's kwargs so the\nframework's ``cmd_sha`` correctly distinguishes ``exp_42.yaml``\nfrom ``exp_43.yaml`` (and catches accidental in-place edits).\n\n*Constraint*: ``frozen_configs`` requires ``task_generator`` (so the\nframework has somewhere to thread the shas). A hand-written tasks.py\nplus ``frozen_configs`` is rejected at interview time — the framework\ncan't safely edit the user's hand-rolled file, and silently dropping\nthe shas would defeat the identity guarantee. Use ``task_generator``\nor include the shas in your own tasks.py kwargs.\n\n*Timing*: ``frozen_configs`` are hashed at interview time. If the\nYAML is edited between interview and submit, the stored sha is the\ninterview-time content; the cluster runs whatever rsync ships. The\nwindow is small (interview is typically immediately before submit)\nbut real — re-run the interview to refresh.",
       "properties": {
         "kind": {
           "const": "shell_command",
