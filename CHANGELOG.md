@@ -7,6 +7,49 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Workflow-skill layer between slashes and the execution worker
+
+Resurrected the four workflow skills (`hpc-submit`, `hpc-status`,
+`hpc-aggregate`, `hpc-campaign`) as the **decision layer** between
+the human-elicitation slashes and the deterministic execution worker.
+Previously the slashes shelled out directly to `hpc-agent run
+<workflow>`; now they invoke the matching workflow skill via the
+Skill tool, and the skill resolves decisions before handing off.
+
+The architecture is now three layers, four surfaces:
+
+| Layer | Surface | What it does |
+|---|---|---|
+| Interview | Slashes (`/submit-hpc`, etc.) | Propose-then-confirm dialogs with the user |
+| Decision | Workflow skills (`hpc-submit`, etc.) + sub-skills (`hpc-classify-axis`, etc.) | Resolve every choice point; auto-resolve by default; compose sub-skills |
+| Execution | Worker prompts (`worker_prompts/<workflow>.md`) | Deterministic action sequence; no decisions, no prompts |
+
+Two consumers, one execution path:
+
+- **Human**: types `/submit-hpc`; slash conducts the interview, invokes `hpc-submit` skill in `mode: "interview"` with user-resolved fields; skill auto-resolves the rest, shells out to `hpc-agent run submit`.
+- **External agent** (MARs experiment-runner, notebook driver, cron worker): invokes `Skill("hpc-submit", { ..., mode: "autonomous" })` directly with whatever it pre-resolved; skill auto-resolves everything else and never returns `needs_human` (autonomous callers can't escalate to a human; the skill picks the most conservative interpretation and proceeds, recording the choice in `decisions`).
+
+Why resurrect: the four workflow skills had existed previously (commit
+`04a6290` "slash/skill surgery: separate human surface from agent
+surface") but were deleted in `7a39b5e` because the only known
+consumer at the time was hpc-agent's own `claude -p --bare` worker,
+which has no Skill tool. The deletion missed external Claude agents
+(MARs's experiment-runner, future MCP hosts) which DO have Skill
+tools and want to delegate the entire HPC pipeline as one skill
+invocation rather than orchestrating primitives + sub-skills
+themselves. Re-adding the workflow-skill layer gives external agents
+the natural entry point.
+
+Files:
+- New: `src/slash_commands/skills/hpc-{submit,status,aggregate,campaign}/SKILL.md`
+- Rewritten: `src/slash_commands/commands/{submit,monitor,aggregate,campaign}-hpc.md` — slim to interview-only prose; invoke the matching workflow skill via the Skill tool.
+- Updated: `scripts/lint_skill_command_sync.py` — `WORKFLOW_PAIRS` repopulated with the four pairs; `WORKFLOW_TRIGGER_SLASHES` emptied (no more thin trigger slashes); `_INVOKE_DIRECTIVE_RE` simplified (paired-skill invocation only).
+- Updated: `docs/internals/skill-policy.md` — three-layer / four-surface framing.
+- Updated: `docs/architecture.md` — "Agent surfaces" rewritten.
+
+The execution layer (`worker_prompts/<workflow>.md`) is unchanged —
+each worker prompt's `cacheable_prefix` snapshot test stays green.
+
 ### Changed — Slash surface condensed to four workflow triggers
 
 The user-facing slash surface is now exactly `/submit-hpc`,
