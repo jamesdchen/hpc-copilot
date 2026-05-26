@@ -9,7 +9,7 @@ idempotency_key: cluster
 error_codes: []
 backed_by:
   cli: hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>]
-    [--experiment-dir <experiment_dir>]
+    [--experiment-dir <experiment_dir>] [--install-cron]
   python: hpc_agent.cli.setup.setup
 exit_codes:
 - 0: ok

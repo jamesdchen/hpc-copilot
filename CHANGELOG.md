@@ -52,6 +52,27 @@ cron commands use `python -m hpc_agent_pro._cron.<module>` so they
 work in any pip-installed environment without an editable source
 checkout.
 
+`hpc-agent setup` now detects the pro plugin via the registry and
+integrates the cron install into the setup flow:
+
+* When pro is loaded and `--install-cron` is **not** passed: the
+  envelope surfaces `data.pro_cron: {status: "available", command:
+  "..."}` — a no-mutation recommendation pointing at the follow-up
+  command.
+* When pro is loaded and `--install-cron` **is** passed (with
+  `--cluster <name>`): setup derives `ssh_target` from the cluster's
+  `clusters.yaml` entry (`user@host`) and invokes the install-cron
+  primitive directly, embedding its result in
+  `data.pro_cron: {status: "installed", ...}`.
+* When pro is not loaded: no `pro_cron` field; the recommendation is
+  silent.
+
+Pip install itself is unchanged — auto-modifying the user's crontab
+during `pip install` would be a footgun (needs user-specific args,
+side-effects in CI/Docker). The two-step (`pip install hpc-agent-pro`
+→ `hpc-agent setup --cluster <name> --install-cron`) is the explicit
+form.
+
 `scripts/lint_skill_command_sync.py` updated: `WORKFLOW_PAIRS` is now
 empty by design; `SKILL_ONLY_OK` enumerates the three agent-only
 skills. Frontmatter validation runs on every skill on disk, not just

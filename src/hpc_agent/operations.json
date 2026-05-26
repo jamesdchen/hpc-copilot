@@ -530,7 +530,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>]",
+    "cli": "hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]",
     "idempotent": true,
     "input_schema": null,
     "name": "setup",

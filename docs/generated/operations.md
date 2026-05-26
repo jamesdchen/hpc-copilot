@@ -99,7 +99,7 @@ Creates new files (e.g. starter executor templates).
 | [`export-package`](../primitives/export-package.md) | ✓ | writes-sidecar | `hpc-agent export-package [--experiment-dir <dir>] [--force]` | `hpc_agent.incorporation.export_package.export_package` | `hpc_agent/schemas/export_package.input.json` | — |
 | [`install-commands`](../primitives/install-commands.md) | ✓ | filesystem | `hpc-agent install-commands [--dry-run] [--claude-dir <claude_dir>]` | `hpc_agent.cli.setup.install_commands` | — | — |
 | [`interview`](../primitives/interview.md) | ✓ | file_write | `hpc-agent interview --spec <path> --campaign-dir <campaign_dir>` | `hpc_agent.ops.memory.interview.record_interview` | `hpc_agent/schemas/interview.input.json` | `hpc_agent/schemas/interview.output.json` |
-| [`setup`](../primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>]` | `hpc_agent.cli.setup.setup` | — | — |
+| [`setup`](../primitives/setup.md) | ✓ | filesystem; ssh | `hpc-agent setup [--dry-run] [--claude-dir <claude_dir>] [--cluster <cluster>] [--experiment-dir <experiment_dir>] [--install-cron]` | `hpc_agent.cli.setup.setup` | — | — |
 
 ## `workflow` (7)
 
