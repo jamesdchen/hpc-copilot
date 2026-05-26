@@ -95,7 +95,7 @@ This step is what makes the wrapper-fallback path end-to-end usable: when the `i
 
 ## Step 1: Discover runs
 
-**Notebook-first.** The researcher authors only a notebook carrying a `@register_run def run(...)` — no axis declaration, no `tasks.py`, no CLI glue. Discovery is `discover_runs` over `notebooks/`, which AST-walks `.py` and `.ipynb` files (skipping `.hpc/`):
+**Function-first.** The researcher's contract is a `@register_run def run(...)` — a typed-kwarg Python function with no axis declaration, no `tasks.py`, no CLI glue. The function may live in a notebook (`.ipynb`), a script (`.py`), or a package module — `discover_runs` AST-walks all three (skipping `.hpc/`). The example invocation below scans `notebooks/`; for repos whose entry point lives at the repo root or under `src/`, the discovery walks those too:
 
 ```bash
 python .hpc/scaffold.py discover
@@ -104,7 +104,7 @@ python .hpc/scaffold.py discover
 Each line is `<path>::<name>  gpu=<bool>  sha=<run_signature_sha>  flags=[...]`.
 
 - **Bare `/submit-hpc`** (the default) — list every `@register_run` and let the user pick one.
-- **`/submit-hpc <notebook>`** — scope discovery to that one file.
+- **`/submit-hpc <file>`** — scope discovery to that one file (a notebook or a script).
 
 Record the picked run's `name`, `gpu`, `flags`, and `run_signature_sha` — the signature hash is the cache key for Step 3's classification lookup.
 

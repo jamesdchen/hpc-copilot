@@ -1,6 +1,6 @@
 ---
 name: hpc-wrap-entry-point
-description: "Onboard a mature repo (`main.py`, `train.py`, `python -m pkg.cli`, a compiled binary, ... — plus optional YAML configs) for hpc-agent submission. Detects the entry point, then leads the experimenter through `@register_run` direct decoration as the default path; falls back to materializing a wrapper at `.hpc/wrappers/<run_name>.py` only when direct decoration isn't possible (non-Python entry point, Hydra/argparse decorator conflict, vendor code). After either pathway, conducts the rest of the interview (task generator, frozen configs, data-axis hint) and invokes the `interview` primitive to persist `tasks.py` + `interview.json`. Run this once before `/submit-hpc` when the repo doesn't already have a `@register_run` notebook."
+description: "Onboard a repo for hpc-agent submission. Handles two on-ramps: (a) greenfield repos with no entry point yet — scaffolds either a `.py` script or a notebook via `build-template --shape {script,notebook}` (defaulting to script); (b) mature repos with an existing entry point (`main.py`, `train.py`, `python -m pkg.cli`, a compiled binary, ...) — leads the experimenter through `@register_run` direct decoration as the default path, falling back to materializing a wrapper at `.hpc/wrappers/<run_name>.py` only when direct decoration isn't possible (non-Python entry point, Hydra/argparse decorator conflict, vendor code). After either on-ramp lands a `@register_run` function on disk, conducts the rest of the interview (task generator, frozen configs, data-axis hint) and invokes the `interview` primitive to persist `tasks.py` + `interview.json`. Run this once before `/submit-hpc`."
 allowed-tools: Bash Read Edit Write Glob
 execution: inline
 category: experimenter-intent
@@ -16,10 +16,71 @@ The interview persists, in either pathway:
 ## When to run
 
 - The user's repo has any non-notebook entry point — `main.py`, `train.py`, `run_experiment.py`, `python -m pkg.cli`, `./simulator`, etc. — and no `@register_run` decoration anywhere.
+- **The repo is greenfield** — no entry point yet — and the user wants the skill to scaffold one (notebook or script) before walking through `@register_run`.
 - The user wants to scale a *frozen* experiment configured by one YAML (or a small number of them) across seeds / shards / replicates — not sweep over the YAMLs themselves.
 - A fresh `/submit-hpc` would escalate with `mature_repo_needs_interview` because the worker can't conduct the conversational intake itself.
 
 ## Steps
+
+### 0. Detect or scaffold an entry point (greenfield branch)
+
+Probe whether the repo already has an entry-point file the skill can
+onboard. Run all of these — none should fail — and collect the results:
+
+```bash
+# Conventional Python entry-point filenames at the root or under src/
+ls main.py train.py run.py experiment.py 2>/dev/null
+ls src/main.py src/train.py src/run.py 2>/dev/null
+
+# Package with __main__.py (runnable via `python -m pkg`)
+find . -maxdepth 4 -name __main__.py -not -path '*/.*' 2>/dev/null | head -5
+
+# pyproject.toml console_scripts entry points
+test -f pyproject.toml && grep -A1 '\[project.scripts\]' pyproject.toml 2>/dev/null
+
+# Shell scripts / compiled binaries
+ls run.sh launch.sh ./simulator 2>/dev/null
+
+# Existing @register_run anywhere (notebook or script)
+grep -rln '@register_run' notebooks/ src/ *.py 2>/dev/null | head
+```
+
+**If anything matches** — at least one file is a plausible entry point
+or a `@register_run` is already on disk — skip to Step 1 (the
+mature-repo path).
+
+**If nothing matches** — this is a greenfield repo. Offer the
+experimenter a choice. Default to the script shape (mature-repo
+audience is the dominant case at scale-up time; the notebook is the
+literate / iteration-phase tool):
+
+```
+I don't see an entry-point file (no main.py / train.py / __main__.py /
+console_scripts / .ipynb-with-@register_run). I can scaffold one for
+you. Two shapes — both produce a @register_run-decorated function the
+framework can introspect; pick whichever matches where you are:
+
+  [1] script   (default) — train.py with @register_run + argparse.
+                Pick this when the work is already settled and you just
+                want to scale it out.
+  [2] notebook — notebooks/experiment.ipynb with @register_run.
+                Pick this when you're still iterating literately —
+                scratch cells, plots, smoke tests.
+
+Which shape?  [1 / 2]
+```
+
+On confirmation, scaffold via `build-template` so there's one source of
+truth for both shapes:
+
+```bash
+hpc-agent build-template --repo-dir . --shape script    # or --shape notebook
+```
+
+The primitive injects the chosen seed file (`train.py` at repo root or
+`notebooks/experiment.ipynb`) alongside the framework-owned `.hpc/`
+assets. Then proceed through Step 1 onwards against the freshly
+scaffolded file — the same flow as if the user had brought their own.
 
 ### 1. Detect the entry point
 
@@ -297,6 +358,7 @@ The submit workflow's Step 0b picks up `_materialized.entry_point` and threads `
 
 ## Notes
 
+- **Two on-ramps, one contract.** Greenfield repos scaffold an entry point via `build-template --shape {script,notebook}` (Step 0); mature repos onboard the existing one (Steps 1+). Both paths end in the same place: a `@register_run`-decorated function on disk plus a materialized `tasks.py` + `interview.json`. The canonical description of the contract is `docs/internals/experiment-contract.md`.
 - **Direct decoration is the default; the wrapper is a rescue boat.** A two-line code edit beats a subprocess shim whenever it's possible. The wrapper is for non-Python entry points, decorator conflicts, and read-only vendor code.
 - **Idempotent.** Re-running with the same intent overwrites `interview.json` (and, on the wrapper path, the wrapper file) byte-equivalently (modulo `_materialized.at`). Editing the underlying entry point's flags requires re-running this skill — for direct decoration to update the decorated function's kwargs; for the wrapper to re-elicit `signature`.
 - **Signature drift safety (wrapper path).** The wrapper's typed signature is what `validate-executor-signatures` checks at submit time. If the entry point's actual flags drift from the declared signature, the canary catches the argparse / CLI error (one task, not a hundred).

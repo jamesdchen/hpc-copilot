@@ -1,0 +1,26 @@
+"""Experiment entry point — peer to ``experiment.ipynb`` for script-shaped repos.
+
+The contract is the ``@register_run`` function: a typed-kwarg Python
+callable that the framework calls one task at a time.  See
+``docs/internals/experiment-contract.md`` for the canonical description.
+"""
+
+from __future__ import annotations
+
+from hpc_agent.experiment_kit import register_run
+
+
+@register_run
+def run(seed: int = 0, alpha: float = 1.0) -> dict:
+    """Return this experiment's metrics as a dict (results-by-return)."""
+    return {"score": alpha, "seed": seed, "n_samples": 1}
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--alpha", type=float, default=1.0)
+    args = ap.parse_args()
+    print(run(**vars(args)))

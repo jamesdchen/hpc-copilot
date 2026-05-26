@@ -32,12 +32,73 @@ def test_full_scaffold_on_empty_repo(tmp_path: Path) -> None:
     assert (tmp_path / ".hpc" / "scaffold.py").is_file()
     for rel in _ROOT_FILES:
         assert (tmp_path / rel).is_file(), rel
+    # The default shape is `script` — train.py rides in alongside the rest.
+    assert (tmp_path / "train.py").is_file()
 
     assert ".hpc/template.mk" in data["framework_files"]
     assert ".hpc/scaffold.py" in data["framework_files"]
     assert "Makefile" in data["written"]
+    assert "train.py" in data["written"]
     assert data["skipped"] == []
     assert data["needs_manual_merge"] == []
+
+
+@pytest.mark.parametrize(
+    "shape,rel",
+    [
+        ("script", "train.py"),
+        ("notebook", "notebooks/experiment.ipynb"),
+    ],
+)
+def test_shape_scaffold_is_a_discoverable_register_run(
+    tmp_path: Path, shape: str, rel: str
+) -> None:
+    """Both shapes produce a discoverable ``@register_run`` function.
+
+    The point of the bilingual on-ramp: the framework's contract is the
+    decorated function, not the file format. ``discover_runs`` AST-walks
+    ``.py`` and ``.ipynb`` indifferently, so both scaffolds satisfy it.
+    """
+    data = build_template(repo_dir=tmp_path, shape=shape)
+    assert rel in data["written"], rel
+    seed = tmp_path / rel
+    assert seed.is_file(), seed
+
+    runs = discover_runs(seed)
+    assert [r.name for r in runs] == ["run"], (shape, runs)
+
+
+def test_shape_script_is_default(tmp_path: Path) -> None:
+    """No --shape flag means train.py — the script shape is the default."""
+    data = build_template(repo_dir=tmp_path)
+    assert "train.py" in data["written"]
+    assert not (tmp_path / "notebooks" / "experiment.ipynb").exists()
+
+
+def test_invalid_shape_raises_spec_invalid(tmp_path: Path) -> None:
+    with pytest.raises(errors.SpecInvalid, match="shape"):
+        build_template(repo_dir=tmp_path, shape="banana")
+
+
+def test_existing_shape_seed_is_refused_without_force(tmp_path: Path) -> None:
+    build_template(repo_dir=tmp_path, shape="script")
+    # User has been editing their entry point.
+    (tmp_path / "train.py").write_text(
+        "from hpc_agent.experiment_kit import register_run\n"
+        "@register_run\n"
+        "def run(seed: int = 7) -> None:\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+
+    data = build_template(repo_dir=tmp_path, shape="script")
+    assert "train.py" in data["skipped"]
+    # User edits preserved.
+    assert "seed: int = 7" in (tmp_path / "train.py").read_text()
+
+    data = build_template(repo_dir=tmp_path, shape="script", force=True)
+    assert "train.py" in data["written"]
+    assert "seed: int = 7" not in (tmp_path / "train.py").read_text()
 
 
 def test_hpc_assets_self_heal_root_files_refused(tmp_path: Path) -> None:

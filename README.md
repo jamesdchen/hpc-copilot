@@ -128,6 +128,8 @@ No config files required. Claude discovers your executors by reading their sourc
 
 ## How It Works
 
+The framework's contract with your experiment is a `@register_run`-decorated Python function with typed kwargs — that function can live in a notebook, a `.py` script, or a package module; `discover_runs` AST-walks all three indifferently. See [`docs/internals/experiment-contract.md`](docs/internals/experiment-contract.md) for the canonical description.
+
 The boundary between hpc-agent and your experiment repo is documented in [`docs/reference/boundary-contract.md`](docs/reference/boundary-contract.md) and enforced by `tests/test_boundary_contract.py`.
 
 1. Claude reads your executor scripts and their `--help` output.
