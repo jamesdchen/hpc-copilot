@@ -2,8 +2,8 @@
 name: build-template
 verb: scaffold
 side_effects:
-- writes-file: <repo_dir>/{.hpc/template.mk,.hpc/scaffold.py} (self-healing); <repo_dir>/{Makefile,.gitignore,pyproject.toml,.pre-commit-config.yaml,conftest.py,.github/workflows/ci.yml}
-    (refuse-without-force at repo root)
+- writes-file: <repo_dir>/{.hpc/template.mk,.hpc/scaffold.py} (self-healing); <repo_dir>/{Makefile,.gitignore,pyproject.toml,.pre-commit-config.yaml,conftest.py,.github/workflows/ci.yml,train.py
+    | notebooks/experiment.ipynb} (refuse-without-force at repo root)
 idempotent: true
 idempotency_key: repo_dir
 error_codes:
@@ -11,7 +11,7 @@ error_codes:
   category: user
   retry_safe: false
 backed_by:
-  cli: hpc-agent build-template [--repo-dir <repo_dir>] [--force]
+  cli: hpc-agent build-template [--repo-dir <repo_dir>] [--force] [--shape <shape>]
   python: hpc_agent.incorporation.build.template.build_template
 ---
 # build-template
