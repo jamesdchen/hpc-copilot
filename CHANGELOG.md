@@ -7,6 +7,47 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Changed — Axis matcher narrows to Independent + BoundedHalo pattern library
+
+Tightened the autonomous classification scope of
+`hpc_agent.experiment_kit.axis_matcher` (and the `classify-axis-easy`
+primitive that wraps it). The matcher's autonomous outputs are now
+`independent`, `bounded_halo` (via a fixed pattern library), and
+`sequential` (the safe default for unrecognized carried state), plus
+the error/fallback states `unclassifiable` / `no_loop_detected` /
+`function_not_found`. `associative` is no longer detected autonomously
+— users who want to parallelize an inner reduction express it as a
+sweep dimension in their `task_generator`, and the framework's
+existing `combine-wave` machinery handles the map-reduce. The skill's
+LLM fallback (Step 4b) still recognizes Associative for the long tail.
+
+The previous rolling-window detector was over-conservative: it flagged
+input-slicing patterns like `data[i-W:i]` as `needs_halo_expr`
+(BoundedHalo) even when the loop body had no carried state. Such
+loops refit a model from scratch each iteration; nothing is carried
+output-to-input. They are now correctly classified as `independent`.
+The defining characteristic of BoundedHalo is now framed precisely:
+iteration N reads iteration N-1's *output* (carried state from prior
+iterations' computations), not iteration N reading a window of the
+*input* array.
+
+The BoundedHalo pattern library covers five shapes — first-order
+stencil (`u[i] = f(u[i-1])`; halo = 1), finite-order stencil
+(`u[i] = a*u[i-1] + b*u[i-2]`; halo = K), bounded-window deque
+(`deque(maxlen=W)`; halo = W), pandas rolling
+(`.rolling(window=W).<agg>()`; halo = W, recognized both inside loops
+and as a vectorized op with no explicit loop), and EMA / exponential
+smoothing (`state = β*state + (1-β)*x`; halo ≈ `ceil(5/(1-β))` for
+literal β, conservative `100` for parameter β). Patterns outside the
+library fall back to `sequential` — the framework runs the inner loop
+serially, which is safe (just slower).
+
+Wire-shape: the matcher's `MatcherResult` and the `classify-axis-easy`
+envelope's `data` now expose `halo_expr` (string in the axis-config
+expression syntax) in place of `monoid`. The `kind` enum drops
+`associative` and `needs_halo_expr`, and adds `bounded_halo` and
+`sequential` as autonomous outputs.
+
 ### Added — Hybrid axis classifier (AST pattern-match + LLM fallback)
 
 `hpc-classify-axis` now runs a stdlib-only AST pattern-matcher first

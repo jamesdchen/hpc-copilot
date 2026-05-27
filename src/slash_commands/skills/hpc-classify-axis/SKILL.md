@@ -76,23 +76,26 @@ Each campaign summary carries `data_axes: {run_name: {kind, halo_expr?, monoid?}
 hpc-agent classify-axis-easy --source-path <path-from-Step-1> --run-name <name>
 ```
 
-The envelope's `data` carries `{kind, evidence, monoid?, tried}`. Branch on `data.kind`:
+The envelope's `data` carries `{kind, evidence, halo_expr?, tried}`. The matcher's autonomous scope is narrow: `independent`, `bounded_halo` (committed with a structurally-extracted `halo_expr`), or `sequential` (carried state but no recognized halo pattern — safe default). Anything outside that scope (`unclassifiable` / `no_loop_detected` / `function_not_found`) falls through to Step 4b.
+
+Branch on `data.kind`:
 
 | `kind` | action |
 |---|---|
 | `independent` | Committed. Build `data_axis: {kind: "independent"}`. Jump to Step 5. |
-| `associative` | Committed. Build `data_axis: {kind: "associative", monoid: data.monoid}`. Jump to Step 5. |
-| `sequential` | Committed (reserved — the matcher does not currently emit it). Build `data_axis: {kind: "sequential"}`. Jump to Step 5. |
-| `needs_halo_expr` | The matcher detected a rolling-window subscript. Walk the run's source to derive the halo expression from parameter context (see "halo expression syntax" below). Build `data_axis: {kind: "bounded_halo", halo: {expr: "<expr>"}}`. Jump to Step 5. |
+| `bounded_halo` | Committed — the matcher recognized one of the pattern-library shapes (first-order / finite-order stencil, bounded-window deque, pandas rolling, EMA) and extracted `data.halo_expr`. Build `data_axis: {kind: "bounded_halo", halo: {expr: data.halo_expr}}`. Jump to Step 5. **No LLM call is needed** — the halo expression is already structurally derived. |
+| `sequential` | Committed — the matcher saw carried outer-scope state but no halo pattern matched. Sequential is the safe default; the framework will run the inner loop serially. Build `data_axis: {kind: "sequential"}`. Jump to Step 5. |
 | `no_loop_detected` / `unclassifiable` / `function_not_found` | Fall through to Step 4b. |
 
 Set `classified_by: "agent"`. Carry `data.evidence` forward verbatim as the one-line reasoning for Step 6's transcript turn.
 
-**Halo expression syntax** (`hpc_agent.experiment_kit.axis_config`): only bare `run()` parameter names, numeric literals, `+ - * //`, and `min()` / `max()`. It is **never `eval()`'d** — a restricted AST interpreter walks it. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
+**Halo expression syntax** (`hpc_agent.experiment_kit.axis_config`): only bare `run()` parameter names, numeric literals, `+ - * //`, and `min()` / `max()`. It is **never `eval()`'d** — a restricted AST interpreter walks it. The matcher emits halo expressions that already conform to this syntax. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
+
+**Note: the matcher does NOT autonomously classify `Associative`.** The framework provides task-array map-reduce via `combine-wave`; users who want to parallelize an inner reduction express it as a sweep dimension in their `task_generator`. Step 4b's LLM tree still recognizes Associative — the matcher just doesn't.
 
 #### 4b. Walk the LLM decision tree (long-tail fallback)
 
-Only invoked on `unclassifiable` / `no_loop_detected` / `function_not_found` from Step 4a. Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
+Only invoked on `unclassifiable` / `no_loop_detected` / `function_not_found` from Step 4a. The long tail covers novel patterns the matcher doesn't recognize — including **Associative** classifications (since the matcher does not detect Associative autonomously). Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
 
 1. **Does each row's result depend on rows computed before it?**
    No → **`Independent`**. The loop body is a pure function of its row (a DOALL loop) — split anywhere.
