@@ -21,6 +21,10 @@ def _ensure_multiplex_enabled(monkeypatch):
     # Start each test with a clean slate for the var under test, so tests
     # that want the default don't pick up another test's override.
     monkeypatch.delenv("HPC_SSH_PERSIST_INTERVAL", raising=False)
+    # Force a non-Windows platform so the Windows auto-disable short-circuit
+    # (added for ssh.exe Unix-socket incompatibility) doesn't swallow the
+    # branch under test when this suite runs on Windows.
+    monkeypatch.setattr(remote.sys, "platform", "linux")
 
 
 def _persist_values(opts: list[str]) -> list[str]:

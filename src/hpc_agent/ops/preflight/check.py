@@ -31,6 +31,7 @@ from typing import Any
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
+from hpc_agent.infra.ssh_agent import agent_available, agent_detail
 
 
 def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
@@ -69,9 +70,12 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
     """
     checks: list[dict[str, Any]] = []
 
-    # SSH agent
+    # SSH agent — name kept as ``ssh_auth_sock`` for backwards-compat with
+    # downstream consumers (tests, JSON output schema). On Windows the
+    # named-pipe agent doesn't set the env var; ``agent_available`` probes
+    # the pipe directly there.
     sock = os.environ.get("SSH_AUTH_SOCK")
-    if not sock:
+    if not agent_available():
         checks.append(
             _check(
                 "ssh_auth_sock",
@@ -79,10 +83,12 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
                 "SSH_AUTH_SOCK is not set — start the agent and load a key: "
                 "`eval $(ssh-agent -s); ssh-add ~/.ssh/<your-key>`, then re-run from "
                 "the same shell. In tmux/screen/mosh, export SSH_AUTH_SOCK and "
-                "SSH_AGENT_PID into that session.",
+                "SSH_AGENT_PID into that session. "
+                "On Windows: `Start-Service ssh-agent; ssh-add ~/.ssh/<your-key>`.",
             )
         )
-    else:
+    elif sock:
+        # Unix path: env-var is the signal — verify a key is actually loaded.
         try:
             agent = subprocess.run(
                 ["ssh-add", "-l"],
@@ -95,10 +101,7 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
             if has_keys:
                 detail = f"agent at {sock}"
             else:
-                detail = (
-                    "ssh-agent has no keys loaded — run "
-                    "`ssh-add ~/.ssh/<your-key>` to add one"
-                )
+                detail = "ssh-agent has no keys loaded — run `ssh-add ~/.ssh/<your-key>` to add one"
             checks.append(_check("ssh_auth_sock", has_keys, detail))
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             checks.append(
@@ -109,6 +112,12 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
                     "(`apt install openssh-client` / `brew install openssh`)",
                 )
             )
+    else:
+        # Windows named-pipe path: ``agent_available`` already verified
+        # the pipe is reachable (rc 0 or 1). Emit OK with the detail
+        # string; the rc=1 ("no keys loaded") state still passes here
+        # because the pipe is reachable, and the detail surfaces it.
+        checks.append(_check("ssh_auth_sock", True, agent_detail()))
 
     # ssh is mandatory for every remote operation.
     ssh_path = shutil.which("ssh")

@@ -28,12 +28,12 @@ from __future__ import annotations
 import argparse
 import functools
 import json
-import os
 from importlib.resources import files as _resource_files
 from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
+from hpc_agent.infra.ssh_agent import agent_available
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
@@ -153,18 +153,21 @@ def _err_from_hpc(exc: errors.HpcError) -> int:
 
 
 def _require_ssh_agent() -> int | None:
-    # Cluster-touching subcommands hang silently when SSH_AUTH_SOCK is
-    # missing — the most common default-empty-spawn-env failure mode
+    # Cluster-touching subcommands hang silently when no agent is
+    # reachable — the most common default-empty-spawn-env failure mode
     # for external orchestrators. Fail fast with a typed error instead
-    # of stalling on auth.
-    if os.environ.get("SSH_AUTH_SOCK"):
+    # of stalling on auth. On Windows, ``agent_available()`` also probes
+    # the OpenSSH named-pipe agent (which never sets SSH_AUTH_SOCK).
+    if agent_available():
         return None
     return _err_from_hpc(
         errors.SshUnreachable(
-            "SSH_AUTH_SOCK is not set; cannot reach the cluster.",
+            "No SSH agent reachable; cannot reach the cluster.",
             remediation=(
-                "Forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
+                "Unix/macOS: forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
                 "environment, then run `hpc-agent preflight` to verify. "
+                "Windows: ensure the ssh-agent service is running (`Start-Service ssh-agent`) "
+                "and a key is loaded (`ssh-add ~/.ssh/<your-key>`). "
                 "See docs/integrations/CONTRACT.md for the spawn env block."
             ),
         )

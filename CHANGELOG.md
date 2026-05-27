@@ -7,6 +7,18 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.6.1 — 2026-05-27
+
+### Fixed — Windows compatibility
+
+Three concrete issues that broke `hpc-agent` for Windows users running native PowerShell + Windows OpenSSH:
+
+- **SSH connection multiplexing now auto-disables on Windows.** `infra/remote.py:_ssh_multiplex_opts` previously emitted `-o ControlMaster=auto -o ControlPath=$XDG_RUNTIME_DIR/hpc-cm-%C` on every ssh invocation. ControlMaster uses Unix-domain sockets; native Windows OpenSSH fails on the multiplex socket with `getsockname failed: Not a socket / Read from remote host: Unknown error` — aborting every `submit`/`status`/`aggregate` call. The escape hatch `HPC_NO_SSH_MULTIPLEX=1` already existed but had to be discovered manually; now `sys.platform == "win32"` triggers it automatically. Same function also replaces the `or "/tmp"` fallback for `XDG_RUNTIME_DIR` with `tempfile.gettempdir()` so the non-Windows code is correct on systems without `/tmp`.
+
+- **SSH-agent detection is now cross-platform.** `cli/_helpers.py:_require_ssh_agent` and `ops/preflight/check.py` previously hard-required `SSH_AUTH_SOCK` — a Unix convention. Windows OpenSSH uses a named pipe (`\\.\pipe\openssh-ssh-agent`) instead and never sets the env var, so every cluster-touching command was blocked on Windows even when the agent was reachable with a loaded key. A new `infra/ssh_agent` module provides `agent_available()` / `agent_detail()`: on Unix it preserves the existing `SSH_AUTH_SOCK` semantics verbatim; on Windows it probes the named-pipe agent via `ssh-add -l` (rc ∈ {0, 1} = reachable). The preflight check's `ssh_auth_sock` field name is unchanged for downstream consumer compatibility.
+
+- **`hpc-agent setup` now gives a clear error when `~/.claude/skills` exists as a file.** Previously `_install_tree` in `agent_assets.py` called `mkdir(parents=True, exist_ok=True)` without first checking whether the eventual parent (`<claude_dir>/commands` or `<claude_dir>/skills`) existed as a non-directory. On Windows where a 0-byte `~/.claude/skills` file could shadow the intended directory, this surfaced as an opaque `FileExistsError [WinError 183]`. Now raises a `FileExistsError` with the conflicting path, what should be there, and a "move or remove the conflicting file, then re-run" remediation.
+
 ### Added — Three internals docs + decision-content drift lint
 
 Three new docs under `docs/internals/`:

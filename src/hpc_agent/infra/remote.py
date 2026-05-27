@@ -43,6 +43,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -124,13 +125,9 @@ def validate_remote_path(remote_path: str) -> str:
     Raises :class:`hpc_agent.errors.SpecInvalid`.
     """
     if not isinstance(remote_path, str) or not remote_path:
-        raise errors.SpecInvalid(
-            f"remote_path must be a non-empty string, got {remote_path!r}"
-        )
+        raise errors.SpecInvalid(f"remote_path must be a non-empty string, got {remote_path!r}")
     if remote_path.startswith("-"):
-        raise errors.SpecInvalid(
-            f"remote_path must not start with '-': {remote_path!r}"
-        )
+        raise errors.SpecInvalid(f"remote_path must not start with '-': {remote_path!r}")
     bad = sorted({c for c in _DISALLOWED_REMOTE_PATH_CHARS if c in remote_path})
     if bad:
         raise errors.SpecInvalid(
@@ -154,16 +151,12 @@ def validate_ssh_target(ssh_target: str) -> str:
     Raises :class:`hpc_agent.errors.SpecInvalid`.
     """
     if not isinstance(ssh_target, str) or not ssh_target:
-        raise errors.SpecInvalid(
-            f"ssh_target must be a non-empty string, got {ssh_target!r}"
-        )
+        raise errors.SpecInvalid(f"ssh_target must be a non-empty string, got {ssh_target!r}")
     if ssh_target.startswith("-"):
         # OpenSSH interprets ``-oProxyCommand=...`` etc. as option flags
         # when they appear as the destination arg. Reject any
         # leading-dash target to close the argument-injection vector.
-        raise errors.SpecInvalid(
-            f"ssh_target must not start with '-': {ssh_target!r}"
-        )
+        raise errors.SpecInvalid(f"ssh_target must not start with '-': {ssh_target!r}")
     bad = [c for c in _DISALLOWED_TARGET_CHARS if c in ssh_target]
     if bad:
         raise errors.SpecInvalid(
@@ -203,6 +196,10 @@ def _ssh_multiplex_opts() -> list[str]:
     ``HPC_NO_SSH_MULTIPLEX=1``
         Opt out of multiplexing entirely (some clusters disallow
         multiplexed sessions, e.g. due to PAM-based session limits).
+        Multiplexing is also auto-disabled on Windows because the
+        ``ControlPath`` Unix socket isn't supported by native Windows
+        OpenSSH (``ssh.exe`` aborts with ``getsockname failed: Not a
+        socket``).
     ``HPC_SSH_PERSIST_INTERVAL``
         Override the ControlPersist window. The value is passed verbatim
         to OpenSSH, so any shape ``ssh_config(5)`` accepts works:
@@ -224,7 +221,9 @@ def _ssh_multiplex_opts() -> list[str]:
     """
     if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
         return []
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    if sys.platform == "win32":
+        return []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     opts = [
         "-o",
         "ControlMaster=auto",
@@ -820,7 +819,13 @@ def deploy_runtime(
         ext = template_ext_for(sched).lstrip(".")
         for kind in ("cpu_array", "gpu_array"):
             _scp(
-                pkg_dir / "models" / "mapreduce" / "templates" / "runtime" / sched / f"{kind}.{ext}",
+                pkg_dir
+                / "models"
+                / "mapreduce"
+                / "templates"
+                / "runtime"
+                / sched
+                / f"{kind}.{ext}",
                 f".hpc/templates/{kind}.{ext}",
             )
 

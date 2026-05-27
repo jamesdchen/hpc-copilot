@@ -10,8 +10,13 @@ pipeline instead.
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
+import pytest
+
+from hpc_agent.infra import ssh_agent
 from hpc_agent.ops.preflight import check as preflight
 
 
@@ -66,3 +71,51 @@ def test_ssh_check_named_ssh_on_path_and_no_legacy_rsync_check() -> None:
     checks = _checks_by_name({"ssh", "rsync"})
     assert checks["ssh_on_path"]["ok"] is True
     assert "rsync_on_path" not in checks
+
+
+def test_ssh_auth_sock_windows_named_pipe_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows path: env var unset but named-pipe agent reachable → ok=True.
+
+    Check name stays ``ssh_auth_sock`` for backwards compat; the detail
+    surfaces the named-pipe state.
+    """
+    monkeypatch.setattr(ssh_agent.sys, "platform", "win32")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+
+    def _run(*args: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(returncode=0, stdout="2048 SHA256:xyz key (RSA)\n", stderr="")
+
+    monkeypatch.setattr(ssh_agent.subprocess, "run", _run)
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert "ssh_auth_sock" in checks
+    assert checks["ssh_auth_sock"]["ok"] is True
+    assert "named-pipe" in checks["ssh_auth_sock"]["detail"]
+
+
+def test_ssh_auth_sock_windows_no_agent_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows path: env var unset and named-pipe unreachable → ok=False."""
+    monkeypatch.setattr(ssh_agent.sys, "platform", "win32")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+
+    def _run(*args: Any, **kwargs: Any) -> Any:
+        return SimpleNamespace(returncode=2, stdout="", stderr="")
+
+    monkeypatch.setattr(ssh_agent.subprocess, "run", _run)
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["ssh_auth_sock"]["ok"] is False
+
+
+def test_ssh_auth_sock_unix_unset_fails_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unix path: env var unset → ok=False with the original message kept."""
+    monkeypatch.setattr(ssh_agent.sys, "platform", "linux")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    with mock.patch.object(preflight.shutil, "which", _which_for({"ssh", "rsync"})):
+        result = preflight.check_preflight()
+    checks = {c["name"]: c for c in result["checks"]}
+    assert checks["ssh_auth_sock"]["ok"] is False
+    assert "SSH_AUTH_SOCK is not set" in checks["ssh_auth_sock"]["detail"]
+    assert "eval $(ssh-agent -s)" in checks["ssh_auth_sock"]["detail"]

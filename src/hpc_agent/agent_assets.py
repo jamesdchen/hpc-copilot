@@ -43,6 +43,12 @@ def _install_tree(root: Any, target: Path, *, dry_run: bool) -> tuple[list[str],
     commands_src = root / "commands"
     if commands_src.is_dir():
         commands_dst = target / "commands"
+        if not dry_run and commands_dst.exists() and not commands_dst.is_dir():
+            raise FileExistsError(
+                f"{commands_dst} exists but is not a directory — "
+                "hpc-agent setup needs to install slash commands here. "
+                "Move or remove the conflicting file, then re-run."
+            )
         for entry in commands_src.iterdir():
             if not entry.name.endswith(".md"):
                 continue
@@ -54,12 +60,19 @@ def _install_tree(root: Any, target: Path, *, dry_run: bool) -> tuple[list[str],
 
     skills_src = root / "skills"
     if skills_src.is_dir():
+        skills_dst = target / "skills"
+        if not dry_run and skills_dst.exists() and not skills_dst.is_dir():
+            raise FileExistsError(
+                f"{skills_dst} exists but is not a directory — "
+                "hpc-agent setup needs to install skills here. "
+                "Move or remove the conflicting file, then re-run."
+            )
         for skill in skills_src.iterdir():
             if not skill.is_dir():
                 continue
             skills.append(skill.name)
             if not dry_run:
-                skill_dst = target / "skills" / skill.name
+                skill_dst = skills_dst / skill.name
                 skill_dst.mkdir(parents=True, exist_ok=True)
                 for entry in skill.iterdir():
                     if entry.is_dir():
