@@ -64,12 +64,19 @@ def campaign_replay(
     history = prior(experiment_dir, campaign_id)
     sliced_sidecars = sidecars[-n:]
     sliced_history = history[-n:]
+    # Run-lifecycle status lives on the journal RunRecord, not the sidecar
+    # (see state/run_record.py). Reading sidecar.get('status') always
+    # returned "", so the replay envelope's status field was useless prose.
+    from hpc_agent.state.journal import load_run
+
     for sidecar, metrics in zip(sliced_sidecars, sliced_history, strict=False):
+        run_id = sidecar.get("run_id", "")
+        record = load_run(experiment_dir, run_id) if run_id else None
         iterations.append(
             {
-                "run_id": sidecar.get("run_id", ""),
+                "run_id": run_id,
                 "submitted_at": sidecar.get("submitted_at", ""),
-                "status": sidecar.get("status", ""),
+                "status": record.status if record is not None else "",
                 "metrics": metrics,
             }
         )

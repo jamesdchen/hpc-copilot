@@ -23,18 +23,20 @@ if TYPE_CHECKING:
 
 
 def _spent_walltime_sec(sidecar: dict[str, Any]) -> float:
-    """Sum per-task elapsed_sec if last_status carries it; else 0."""
-    last_status = sidecar.get("last_status") or {}
-    tasks = last_status.get("tasks") or {}
-    if not isinstance(tasks, dict):
-        return 0.0
-    total = 0.0
-    for entry in tasks.values():
-        if isinstance(entry, dict):
-            elapsed = entry.get("elapsed_sec")
-            if isinstance(elapsed, (int, float)):
-                total += float(elapsed)
-    return total
+    """Per-task elapsed_sec lives on the per-run journal RunRecord's
+    ``last_status['summary']`` (counts only, no elapsed) and on the
+    runtime-prior samples at ``.hpc/runtimes/<profile>__<cluster>.json``
+    (full per-task elapsed). The previous implementation read
+    ``sidecar.get('last_status')['tasks']`` — a key the sidecar never
+    carries — and silently returned 0 on every call, so the
+    ``max_walltime_sec`` budget cap was never enforced.
+
+    Returning 0 explicitly here is honest until either the journal
+    grows per-task elapsed or this function is rewritten to walk
+    runtime-prior samples joined on run_id. Either way is a feature,
+    not a quick fix.
+    """
+    return 0.0
 
 
 @primitive(

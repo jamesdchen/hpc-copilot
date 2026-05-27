@@ -296,7 +296,7 @@ def aggregate_flow(
     experiment_dir: Path,
     *,
     spec: AggregateFlowSpec,
-    mode: str = "auto",
+    mode: str | None = None,
     aggregate_cmd: str | None = None,
     aggregate_output_path: str | None = None,
 ) -> AggregateFlowResult:
@@ -305,7 +305,7 @@ def aggregate_flow(
     The wire-validated ``spec`` carries the user-facing knobs
     (``run_id``, ``output_dir``, ``ensure_all_combined``,
     ``combiner_max_retries``, ``pull_summaries``, ``summary_glob``,
-    ``results_subdir``); ``mode`` / ``aggregate_cmd`` /
+    ``results_subdir``, ``mode``); ``aggregate_cmd`` /
     ``aggregate_output_path`` are framework-mode flags that don't
     belong on the wire (the framework decides which mode to enter
     based on ``aggregate_defaults`` recorded on the run sidecar).
@@ -330,6 +330,10 @@ def aggregate_flow(
     pull_summaries = spec.pull_summaries
     summary_glob = spec.summary_glob
     results_subdir = spec.results_subdir
+    # Explicit kwarg overrides spec (back-compat seam); otherwise read from
+    # spec where mode now lives as a wire-validated Literal.
+    if mode is None:
+        mode = spec.mode
 
     record = load_run(experiment_dir, run_id)
     if record is None:

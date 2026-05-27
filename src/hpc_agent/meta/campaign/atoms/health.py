@@ -218,7 +218,12 @@ def campaign_health(
         except (FileNotFoundError, OSError, ValueError):
             samples = []
 
-    # Walk per-run sidecars to count runs.
+    # Walk per-run sidecars to count runs. Run-lifecycle status lives on
+    # the journal RunRecord (see state/run_record.py), not the sidecar —
+    # reading sidecar.get('status') always returned None, so the n_complete
+    # / n_failed counters never incremented.
+    from hpc_agent.state.journal import load_run
+
     for sidecar_path in find_existing_runs(experiment_dir):
         run_id = sidecar_path.stem
         try:
@@ -233,7 +238,8 @@ def campaign_health(
                 continue
         n_runs += 1
         matched_run_ids.add(run_id)
-        status = (sc.get("status") or sc.get("lifecycle_state") or "").lower()
+        record = load_run(experiment_dir, run_id)
+        status = (record.status if record is not None else "").lower()
         if status == "complete":
             n_complete += 1
         elif status in ("failed", "abandoned", "timeout"):

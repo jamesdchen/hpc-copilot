@@ -71,6 +71,17 @@
       "minimum": 0,
       "title": "Min Rows",
       "type": "integer"
+    },
+    "mode": {
+      "default": "auto",
+      "description": "Routing mode. 'auto' (default) picks cluster-reduce when the sidecar's aggregate_defaults.aggregate_cmd is set, otherwise combiner-only. 'cluster-reduce' forces the cluster-side reducer (raises if no aggregate_cmd is available). 'combiner-only' bypasses the reducer, pulls _combiner/ partials and reduces locally.",
+      "enum": [
+        "auto",
+        "cluster-reduce",
+        "combiner-only"
+      ],
+      "title": "Mode",
+      "type": "string"
     }
   }
 }

@@ -24,6 +24,8 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 
@@ -486,6 +488,96 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
                 # evicted while rarely-seen ones stay.
                 _warned_version_mismatch.move_to_end(key)
     return data
+
+
+# ---------------------------------------------------------------------------
+# SidecarRecord — typed read accessor (Pydantic).
+#
+# The historical :func:`read_run_sidecar` returns ``dict[str, Any]`` so
+# every reader does ``sidecar.get("<key>")``. That's the failure mode
+# behind the ``ssh_target`` / ``status`` / ``last_status`` /
+# ``job_name`` bugs the audit found: the reader asks for a key the
+# writer never persists, gets ``None`` back, and silently degrades.
+#
+# :func:`read_run_sidecar_typed` returns the same data shaped through a
+# Pydantic model whose field list mirrors the writer's authoritative
+# schema. Attribute access (``sidecar.cluster``) becomes the canonical
+# read pattern; a misspelled / unwritten field raises ``AttributeError``
+# at import time rather than silently returning ``None`` at runtime.
+#
+# The existing dict-returning API stays for back-compat; new code
+# should prefer the typed accessor. The
+# ``test_lint_sidecar_field_reads`` lint enforces the same invariant
+# for the legacy code path.
+# ---------------------------------------------------------------------------
+
+
+class SidecarRecord(BaseModel):
+    """Typed shape of a per-run sidecar (``.hpc/runs/<run_id>.json``).
+
+    Field set mirrors :func:`write_run_sidecar`'s authoritative output
+    (v1 required header + ``_V2_CONFIG_FIELDS`` + the optional
+    ``wave_map``/``extra``/``job_ids`` blocks + the runtime-added
+    ``tasks`` block written by the cluster-side dispatcher).
+
+    ``model_config = ConfigDict(extra="allow")`` so forward-compat
+    sidecars (written by a newer framework version with extra fields)
+    round-trip without raising — the lint's job is preventing
+    *backward* drift (callers reading fields the writer never wrote).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # v1 required header
+    sidecar_schema_version: int
+    run_id: str
+    cmd_sha: str
+    hpc_agent_version: str
+    submitted_at: str
+    executor: str
+    result_dir_template: str = ""
+    task_count: int = 0
+    tasks_py_sha: str
+
+    # writer-optional blocks
+    wave_map: dict[str, list[int]] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
+    job_ids: list[str] = Field(default_factory=list)
+
+    # v2 config-snapshot fields (all optional)
+    cluster: str | None = None
+    profile: str | None = None
+    campaign_id: str | None = None
+    project: str | None = None
+    remote_path: str | None = None
+    resources: dict[str, Any] | None = None
+    env: dict[str, Any] | None = None
+    env_group: str | None = None
+    constraints: dict[str, Any] | None = None
+    gpu_fallback: list[str] | None = None
+    max_retries: int | None = None
+    runtime: str | None = None
+    auto_retry: dict[str, Any] | None = None
+    aggregate_defaults: dict[str, Any] | None = None
+    results: dict[str, Any] | None = None
+
+    # populated by models/mapreduce/dispatch.py at task runtime — the
+    # per-task block carrying ``exit_code``, ``preempt``, etc.
+    tasks: dict[str, Any] = Field(default_factory=dict)
+
+
+def read_run_sidecar_typed(experiment_dir: Path, run_id: str) -> SidecarRecord:
+    """Typed counterpart of :func:`read_run_sidecar`.
+
+    Returns a :class:`SidecarRecord` with attribute access for every
+    field the writer persists. Forward-compat extra keys are preserved
+    (``model_config = extra="allow"``) and accessible via
+    ``model_dump()``; reading them via attribute access raises
+    ``AttributeError`` — the desired loud-fail for typo'd field names.
+
+    Same backfill / version-warning semantics as ``read_run_sidecar``.
+    """
+    return SidecarRecord.model_validate(read_run_sidecar(experiment_dir, run_id))
 
 
 def find_existing_runs(experiment_dir: Path) -> list[Path]:
