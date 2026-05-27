@@ -97,6 +97,7 @@ Set `classified_by: "agent"`. Carry `data.evidence` forward verbatim as the one-
 
 Only invoked on `unclassifiable` / `no_loop_detected` / `function_not_found` from Step 4a. The long tail covers novel patterns the matcher doesn't recognize — including **Associative** classifications (since the matcher does not detect Associative autonomously). Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
 
+<!-- decision-content:axis-tree start -->
 1. **Does each row's result depend on rows computed before it?**
    No → **`Independent`**. The loop body is a pure function of its row (a DOALL loop) — split anywhere.
 2. **Yes → is the carried state a fixed-size summary combinable in any order** — a sum, a count, a mean/variance via moments?
@@ -104,6 +105,7 @@ Only invoked on `unclassifiable` / `no_loop_detected` / `function_not_found` fro
 3. **Is the dependence a bounded look-back** — e.g. a rolling training window of N rows?
    Yes → **`BoundedHalo`**. Derive the halo as an arithmetic expression over `run()`'s parameters (bare names), e.g. `train_window * 48`. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
 4. **Otherwise, or ambiguous → `Sequential`.** This is the fail-safe default and the autonomous-mode tiebreaker. From `axis.py`: *"When in doubt, classify as Sequential: the fail-safe outcome is slow, not wrong."*
+<!-- decision-content:axis-tree end -->
 
 Set `classified_by: "agent"`. Record one short sentence of reasoning (which branch of the tree resolved, which parameters were named) for the transcript in Step 6.
 

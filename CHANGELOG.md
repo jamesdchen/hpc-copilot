@@ -7,6 +7,22 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Three internals docs + decision-content drift lint
+
+Three new docs under `docs/internals/`:
+
+- **`parallelization-axes.md`** — the five-axis model (sweep dimensions, scheduling axis, wave structure, stage DAG, DataAxis). Lays out what each axis is for, how it operates, and how they compose at submit time. Explicitly clarifies that DataAxis is NOT the privileged axis — sweep dimensions are.
+- **`state-model.md`** — canonical reference for what state files exist, what each contains, which primitives touch them. Per-user state under `~/.claude/hpc/<repo>/`; per-experiment state under `<exp>/.hpc/`. Plus a reverse index mapping each primitive to the files it reads/writes.
+- **`submit-sequence.md`** — end-to-end walkthrough from `/submit-hpc` typed in chat to results landing in `aggregated.json`. Traces the slash → skill → bare worker → primitives → cluster pipeline.
+
+Plus a new lint: `scripts/lint_decision_content.py` catches drift between markdown surfaces that paraphrase the same operational content. Marked blocks (`<!-- decision-content:<tag> start -->` ... `<!-- decision-content:<tag> end -->`) must be byte-identical across files; the lint enforces this with normalised whitespace. Currently covers the axis decision tree (shared by `hpc-classify-axis` SKILL.md Step 4b and `/submit-hpc`'s data-axis dialog).
+
+Sibling docs updated:
+
+- `docs/internals/skill-policy.md` — added a section explicitly noting that DataAxis is not the privileged parallelization axis (pointing readers at `parallelization-axes.md`). The framework's primary parallelism comes from user-declared sweep dimensions in `task_generator`; DataAxis is a niche secondary optimization.
+- `docs/architecture.md` — added cross-cutting references to the three new internals docs and the `lint_decision_content.py` lint.
+- `docs/internals/README.md` — index updated with the three new entries.
+
 ### Changed — Axis matcher narrows to Independent + BoundedHalo pattern library
 
 Tightened the autonomous classification scope of

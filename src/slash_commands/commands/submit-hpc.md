@@ -86,10 +86,15 @@ direct decoration — a two-line edit. Apply this edit?
 
 Walk the decision tree (from `axis.py`):
 
-1. Each row independent of prior rows? → **Independent** (DOALL).
-2. Carried state combinable in any order (sum / moments)? → **Associative** with monoid.
-3. Bounded look-back (rolling window)? → **BoundedHalo** with `halo.expr`. Bias the halo **large**.
-4. Otherwise / unsure → **Sequential** (fail-safe).
+<!-- decision-content:axis-tree start -->
+1. **Does each row's result depend on rows computed before it?**
+   No → **`Independent`**. The loop body is a pure function of its row (a DOALL loop) — split anywhere.
+2. **Yes → is the carried state a fixed-size summary combinable in any order** — a sum, a count, a mean/variance via moments?
+   Yes → **`Associative`**. Pick the monoid: `sum` (additive) or `moments` (mean/variance via sufficient statistics). Default `moments`.
+3. **Is the dependence a bounded look-back** — e.g. a rolling training window of N rows?
+   Yes → **`BoundedHalo`**. Derive the halo as an arithmetic expression over `run()`'s parameters (bare names), e.g. `train_window * 48`. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
+4. **Otherwise, or ambiguous → `Sequential`.** This is the fail-safe default and the autonomous-mode tiebreaker. From `axis.py`: *"When in doubt, classify as Sequential: the fail-safe outcome is slow, not wrong."*
+<!-- decision-content:axis-tree end -->
 
 Propose with reasoning:
 

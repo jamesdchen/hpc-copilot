@@ -119,6 +119,33 @@ Structural empties confirm the layer rule:
 - **Worker prompts** (`submit`, `status`, `aggregate`, `campaign` under `src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`) — execution layer. Inlined into the `claude -p --bare` worker prompt by `spawn_prompt._procedure_body`; the worker has no Skill tool. Hardening lives here: snapshot tests on the rendered `cacheable_prefix` bytes, banned-hedging-phrase lints, and `hpc-agent <primitive>` reference cross-checks.
 - **Setup is a CLI step, not a slash.** Environment authority is one-time, imperative. `hpc-agent setup --cluster <name>` does the probe + cache marker; preflight check details carry actionable remediation prose so the primitive output is self-explanatory.
 
+## A note on DataAxis (and what's NOT the privileged axis)
+
+The framework has accumulated documentation prominence around the
+DataAxis classification (`hpc-classify-axis` sub-skill, the four-way
+taxonomy in `axis.py`, the matcher's pattern library). This can
+mislead readers into thinking DataAxis is *the* central
+parallelization concept in the framework. It's not.
+
+The framework's privileged axis of parallelization is the user's
+**sweep dimensions** (declared in `task_generator` via
+`<experiment>/.hpc/tasks.py`). That's what produces the bulk of
+parallelism: a user's `cartesian_product(seed=range(100),
+model=["a","b"])` produces 200 tasks; the framework's task-array
+machinery fans them out to the cluster. No DataAxis classification is
+involved.
+
+DataAxis matters only when a SINGLE task's `run()` function has an
+inner loop you want to *further* chunk into sub-tasks. That's a niche
+optimization. Most users never hit it because their sweep dimensions
+provide enough parallelism.
+
+The five parallelization axes — sweep dimensions, scheduling axis,
+wave structure, stage DAG, DataAxis — are documented separately in
+[`parallelization-axes.md`](parallelization-axes.md). Future
+contributors should read that doc before treating DataAxis as a
+central concern.
+
 ## When adding a new affordance
 
 Ask, in order:

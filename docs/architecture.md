@@ -381,6 +381,21 @@ CI fails if a slash on disk has no entry in either, if a paired
 slash doesn't invoke its skill via the Skill tool, or if a skill's
 `execution`/`category` frontmatter disagree.
 
+`scripts/lint_decision_content.py` is a sibling lint that catches
+drift between markdown surfaces that share operationally-identical
+prose (the axis decision tree appears in both the `hpc-classify-axis`
+skill body and the `/submit-hpc` slash's data-axis dialog). Marked
+blocks must be byte-identical across files; the lint enforces this.
+
+## Cross-cutting concerns
+
+Several aspects of the framework don't fit cleanly into a single
+subject and are worth knowing as standalone references:
+
+- [`internals/parallelization-axes.md`](internals/parallelization-axes.md) — the five-axis model (sweep dimensions, scheduling axis, wave structure, stage DAG, DataAxis) and how they compose at submit time.
+- [`internals/state-model.md`](internals/state-model.md) — what state files exist (per-user under `~/.claude/hpc/<repo>/`, per-experiment under `<exp>/.hpc/`), what each contains, which primitives touch them.
+- [`internals/submit-sequence.md`](internals/submit-sequence.md) — end-to-end walkthrough from `/submit-hpc` typed in chat to results landing in `aggregated.json`.
+
 ## Cross-subject composition
 
 Each top-level directory under `src/hpc_agent/ops/` and
