@@ -250,9 +250,7 @@ def _read_source(path: Path) -> str | None:
         return None
 
 
-def _find_function(
-    tree: ast.Module, name: str
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+def _find_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Return the module-level function named *name*, or ``None``."""
     for node in tree.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
@@ -488,19 +486,13 @@ def _append_only_receivers(loop: ast.For | ast.While) -> set[str]:
             continue
         is_append_recv = False
         parent = parents.get(id(node))
-        if (
-            isinstance(parent, ast.Attribute)
-            and parent.attr == "append"
-            and parent.value is node
-        ):
+        if isinstance(parent, ast.Attribute) and parent.attr == "append" and parent.value is node:
             grandparent = parents.get(id(parent))
             if isinstance(grandparent, ast.Call) and grandparent.func is parent:
                 is_append_recv = True
         name_usages.setdefault(node.id, []).append(is_append_recv)
 
-    return {
-        name for name, usages in name_usages.items() if usages and all(usages)
-    }
+    return {name for name, usages in name_usages.items() if usages and all(usages)}
 
 
 def _parent_map(root: ast.AST) -> dict[int, ast.AST]:
@@ -673,9 +665,7 @@ def _match_pandas_rolling(scope: ast.AST) -> tuple[str, str] | None:
         if not isinstance(rolling_call, ast.Call):
             continue
         rolling_callee = rolling_call.func
-        if not (
-            isinstance(rolling_callee, ast.Attribute) and rolling_callee.attr == "rolling"
-        ):
+        if not (isinstance(rolling_callee, ast.Attribute) and rolling_callee.attr == "rolling"):
             continue
         # Extract window argument (kwarg `window=` or first positional).
         window_expr: ast.expr | None = None

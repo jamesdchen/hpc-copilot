@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 
 import hpc_agent
-
 from tests._registry_helpers import core_only_operations_catalog, core_only_registry
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent

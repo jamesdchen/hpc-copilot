@@ -203,11 +203,7 @@ class SGEBackend(HPCBackend):
         # on the scheduler side — e.g. ``MODULES="python/3.11,gcc/11"``
         # corrupts the cluster-side env. Reject up front. SLURM has the
         # symmetric guard in ``infra.backends.slurm``.
-        bad = [
-            k
-            for k, v in job_env.items()
-            if k in self.pass_env_keys and "," in str(v)
-        ]
+        bad = [k for k, v in job_env.items() if k in self.pass_env_keys and "," in str(v)]
         if bad:
             raise errors.SpecInvalid(
                 "SGE qsub -v cannot transport env values containing "

@@ -23,7 +23,6 @@ from __future__ import annotations
 import pytest
 
 from hpc_agent.cli.dispatch import build_parser
-
 from tests._registry_helpers import core_only_operations_catalog
 
 # Primitives whose CLI verb differs from their catalog name. Each entry

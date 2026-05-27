@@ -30,9 +30,7 @@ def campaign_dir(experiment_dir: Path | str, campaign_id: str) -> Path:
     if not campaign_id:
         raise errors.SpecInvalid("campaign_id must be a non-empty string")
     if "/" in campaign_id or "\\" in campaign_id or campaign_id in (".", ".."):
-        raise errors.SpecInvalid(
-            f"campaign_id must be filesystem-safe; got {campaign_id!r}"
-        )
+        raise errors.SpecInvalid(f"campaign_id must be filesystem-safe; got {campaign_id!r}")
     target = Path(experiment_dir) / ".hpc" / "campaigns" / campaign_id
     target.mkdir(parents=True, exist_ok=True)
     return target

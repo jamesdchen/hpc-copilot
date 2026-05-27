@@ -77,9 +77,7 @@ def _parse_known_bad_combinations(raw: Any) -> tuple[KnownBadCombination, ...]:
     if not raw:
         return ()
     if not isinstance(raw, list):
-        raise errors.SpecInvalid(
-            f"known_bad_combinations must be a list, got {type(raw).__name__}"
-        )
+        raise errors.SpecInvalid(f"known_bad_combinations must be a list, got {type(raw).__name__}")
     out: list[KnownBadCombination] = []
     for i, entry in enumerate(raw):
         if not isinstance(entry, dict):
@@ -104,9 +102,7 @@ def _parse_walltime_rules(raw: Any) -> tuple[WalltimeRule, ...]:
     if not raw:
         return ()
     if not isinstance(raw, list):
-        raise errors.SpecInvalid(
-            f"walltime_rules must be a list, got {type(raw).__name__}"
-        )
+        raise errors.SpecInvalid(f"walltime_rules must be a list, got {type(raw).__name__}")
     out: list[WalltimeRule] = []
     for i, entry in enumerate(raw):
         if not isinstance(entry, dict):
@@ -114,9 +110,7 @@ def _parse_walltime_rules(raw: Any) -> tuple[WalltimeRule, ...]:
         try:
             q = float(entry["below_quantile"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise errors.SpecInvalid(
-                f"walltime_rules[{i}].below_quantile must be a float"
-            ) from exc
+            raise errors.SpecInvalid(f"walltime_rules[{i}].below_quantile must be a float") from exc
         if not 0.0 <= q <= 1.0:
             raise errors.SpecInvalid(
                 f"walltime_rules[{i}].below_quantile must be in [0, 1]; got {q}"

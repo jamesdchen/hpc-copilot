@@ -50,9 +50,7 @@ class ClusterConstraints:
         """Parse est_spin_up duration string (e.g. '5m', '30s', '1h') to seconds."""
         m = re.fullmatch(r"(\d+)\s*([smh]?)", self.est_spin_up.strip().lower())
         if not m:
-            raise errors.SpecInvalid(
-                f"Cannot parse spin-up duration: {self.est_spin_up!r}"
-            )
+            raise errors.SpecInvalid(f"Cannot parse spin-up duration: {self.est_spin_up!r}")
         val = int(m.group(1))
         unit = m.group(2) or "s"
         return val * {"s": 1, "m": 60, "h": 3600}[unit]

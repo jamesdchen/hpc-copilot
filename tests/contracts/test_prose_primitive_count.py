@@ -24,7 +24,6 @@ from pathlib import Path
 import pytest
 
 from hpc_agent._kernel.registry.primitive import PrimitiveMeta
-
 from tests._registry_helpers import core_only_registry
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -92,9 +92,7 @@ def _setup_handler(args: argparse.Namespace) -> int:
     payload: dict[str, Any] = {"assets": assets}
 
     cluster = getattr(args, "cluster", None)
-    experiment_dir = (
-        Path(args.experiment_dir).expanduser() if args.experiment_dir else Path.cwd()
-    )
+    experiment_dir = Path(args.experiment_dir).expanduser() if args.experiment_dir else Path.cwd()
     if cluster:
         preflight = check_preflight(cluster=cluster)
         payload["preflight"] = preflight
@@ -143,9 +141,8 @@ def _resolve_pro_cron_status(
     if "install-cron" not in registry:
         return None
 
-    suggested_command = (
-        f"hpc-agent install-cron --experiment-dir '{experiment_dir}'"
-        + (f"  # derive --ssh-target from clusters.yaml for {cluster!r}" if cluster else "")
+    suggested_command = f"hpc-agent install-cron --experiment-dir '{experiment_dir}'" + (
+        f"  # derive --ssh-target from clusters.yaml for {cluster!r}" if cluster else ""
     )
 
     if not install_cron_flag:
@@ -192,9 +189,7 @@ def _resolve_pro_cron_status(
         }
 
     install_cron_fn = registry["install-cron"].func
-    cron_result = install_cron_fn(
-        ssh_target=ssh_target, experiment_dir=experiment_dir
-    )
+    cron_result = install_cron_fn(ssh_target=ssh_target, experiment_dir=experiment_dir)
     return {"status": "installed", "ssh_target": ssh_target, **cron_result}
 
 

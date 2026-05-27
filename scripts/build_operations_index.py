@@ -71,9 +71,7 @@ def render_row(op: dict) -> str:
     # entries from primitive frontmatter survive — the previous inline
     # ", ".join(side_effects) silently dropped them.
     sfx = summarize_side_effects(op.get("side_effects") or [])
-    return (
-        f"| [`{name}`](../primitives/{name}.md) | {idem} | {sfx} | `{cli}` | `{py}` | {inp} | {out} |"
-    )
+    return f"| [`{name}`](../primitives/{name}.md) | {idem} | {sfx} | `{cli}` | `{py}` | {inp} | {out} |"
 
 
 def render_section(verb: str, ops: list[dict]) -> str:

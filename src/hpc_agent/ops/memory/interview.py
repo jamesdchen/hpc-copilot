@@ -339,13 +339,10 @@ def _validate_python_module_entry(ep: Mapping[str, Any]) -> None:
         ) from exc
     if not hasattr(mod, function):
         raise errors.SpecInvalid(
-            f"python_module.entry_point: module {module!r} has no attribute "
-            f"{function!r}"
+            f"python_module.entry_point: module {module!r} has no attribute {function!r}"
         )
     if not callable(getattr(mod, function)):
-        raise errors.SpecInvalid(
-            f"python_module.entry_point: {module}.{function} is not callable"
-        )
+        raise errors.SpecInvalid(f"python_module.entry_point: {module}.{function} is not callable")
 
 
 def _validate_register_run_entry(ep: Mapping[str, Any], campaign_dir: Path) -> None:

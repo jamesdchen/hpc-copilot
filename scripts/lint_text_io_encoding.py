@@ -102,11 +102,7 @@ def _call_name(call: ast.Call) -> str | None:
         # encoding when no ``encoding=`` is passed — same hazard as
         # bare ``open()`` and the reason JSON sidecars cp1252-rot on
         # non-UTF-8 hosts.
-        if (
-            func.attr == "fdopen"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "os"
-        ):
+        if func.attr == "fdopen" and isinstance(func.value, ast.Name) and func.value.id == "os":
             return "os.fdopen"
         return None
     return None

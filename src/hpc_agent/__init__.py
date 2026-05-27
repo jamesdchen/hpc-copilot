@@ -136,7 +136,7 @@ def __getattr__(name: str) -> Any:
     if target is None:
         raise AttributeError(f"module 'hpc_agent' has no attribute {name!r}")
     warnings.warn(
-        f"{name!r} moved out of the hpc_agent root namespace; " f"import from {target} instead.",
+        f"{name!r} moved out of the hpc_agent root namespace; import from {target} instead.",
         DeprecationWarning,
         stacklevel=2,
     )
