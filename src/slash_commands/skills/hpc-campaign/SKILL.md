@@ -6,7 +6,7 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[campaign](../../docs/primitives/campaign-advance.md) workflow**. Drives one tick — submits a new iteration, monitors it, aggregates, decides whether to advance or stop. Composes the per-phase workflow skills.
+Agent-facing decision layer over the **[campaign](../../../../docs/primitives/campaign-advance.md) workflow**. Drives one tick — submits a new iteration, monitors it, aggregates, decides whether to advance or stop. Composes the per-phase workflow skills.
 
 ## Inputs
 

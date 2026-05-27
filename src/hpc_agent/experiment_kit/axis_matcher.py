@@ -423,7 +423,6 @@ def _carried_state_names(loop: ast.For | ast.While) -> set[str]:
     # another append-receiver) — i.e. its contents are actually carried
     # into the next iteration's computation. This is the deque case.
     append_only = _append_only_receivers(loop)
-    parents = _parent_map(loop)
     for node in ast.walk(loop):
         if not (
             isinstance(node, ast.Call)

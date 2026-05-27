@@ -103,7 +103,14 @@ def load_stages_module(stages_py_path: Path) -> ModuleType:
     path = Path(stages_py_path)
     if not path.is_file():
         raise FileNotFoundError(f"stages.py not found: {path}")
-    spec = importlib.util.spec_from_file_location("hpc_user_stages", path)
+    # Per-path unique module name so two different stages.py files loaded
+    # in the same Python process don't collide in the import cache.
+    # Mirrors :func:`hpc_agent.load_tasks_module`.
+    import hashlib as _hashlib
+
+    _digest = _hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:8]
+    mod_name = f"hpc_user_stages_{_digest}"
+    spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"could not load stages.py from {path}")
     module = importlib.util.module_from_spec(spec)

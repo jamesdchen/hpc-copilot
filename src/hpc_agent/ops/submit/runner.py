@@ -129,13 +129,18 @@ def submit_and_record(
                 # we should dedup against — the journal lifecycle has no
                 # "cancelled" status, so any historical guard for that
                 # value was dead code.
+                # ssh_target and job_name are NOT v2 sidecar fields (see
+                # _V2_CONFIG_FIELDS in state/runs.py) — they live on the
+                # journal RunRecord. The earlier sidecar.get(...) reads
+                # for these always returned None and fell through to the
+                # caller-supplied args, so the dict-reads were dead.
                 reconstructed = RunRecord(
                     run_id=existing_run_id,
                     profile=str(sidecar_data.get("profile") or profile),
                     cluster=str(sidecar_data.get("cluster") or cluster),
-                    ssh_target=str(sidecar_data.get("ssh_target") or ssh_target),
+                    ssh_target=ssh_target,
                     remote_path=str(sidecar_data.get("remote_path") or remote_path),
-                    job_name=str(sidecar_data.get("job_name") or job_name),
+                    job_name=job_name,
                     job_ids=list(sidecar_data.get("job_ids") or []),
                     total_tasks=int(sidecar_data.get("task_count") or total_tasks),
                     submitted_at=str(sidecar_data.get("submitted_at") or utcnow_iso()),

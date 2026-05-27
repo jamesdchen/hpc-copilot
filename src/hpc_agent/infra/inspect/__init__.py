@@ -118,7 +118,19 @@ def inspect_cluster(
         if cached is not None:
             return _snapshot_from_dict(cached)
     if runner is None:
-        runner = _CommandRunner(ssh_target=cfg.get("ssh_target"))
+        # ssh_target is a computed property on ClusterConfig (user@host),
+        # never a literal key in clusters.yaml. Reading it via .get() on
+        # the raw dict always returns None, which would silently route
+        # qstat/sacct through the local shell instead of SSH. Route the
+        # raw dict through the validated model so the computed accessor
+        # fires.
+        from hpc_agent.infra.clusters import ClusterConfig
+
+        try:
+            ssh_target = ClusterConfig.model_validate(cfg).ssh_target
+        except Exception:  # noqa: BLE001 — corrupted entry → local runner fallback
+            ssh_target = None
+        runner = _CommandRunner(ssh_target=ssh_target)
     # B5-PR2: dispatch through the backend registry. Each backend's
     # ``inspect_cluster`` classmethod normalises kwargs for its scheduler
     # (e.g. SGE ignores ``sacct_window_hours``); a missing backend

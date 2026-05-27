@@ -151,6 +151,34 @@ exclude_lines = [
 show_missing = true
 skip_empty = true
 
+# Mutation testing config. Mutmut mutates one operator at a time
+# (constant flips, boolean inversions, off-by-one, etc.) and re-runs
+# the test suite; survivors are tests that don't actually exercise the
+# mutated branch. Surfaces the same class of test-masks-bug that hid
+# the ssh_target dataflow bug (the unit test patched the sidecar key
+# manually rather than driving the real reader).
+#
+# Run locally with:
+#   uv run mutmut run --paths-to-mutate src/hpc_agent/ops/monitor/
+#   uv run mutmut results
+#   uv run mutmut show <id>      # see the surviving mutant
+#
+# Not wired into CI — a full sweep over src/ takes hours on a single
+# core. Prefer scoping to a directory or file under audit. See
+# docs/internals/mutation-testing.md for the recommended workflow.
+[tool.mutmut]
+paths_to_mutate = "src/hpc_agent/"
+tests_dir = "tests/"
+runner = "uv run pytest -x --tb=no -q --no-header"
+# Exclude wire definitions (Pydantic Field() defaults are noise to
+# mutate — every default flip is technically a "live mutant" but
+# semantically meaningless to surface) and pure type/contract modules.
+exclude = [
+    "src/hpc_agent/_wire/",
+    "src/hpc_agent/_kernel/contract/",
+    "src/hpc_agent/schemas/",
+]
+
 [dependency-groups]
 dev = [
     "pytest-xdist>=3.8.0",

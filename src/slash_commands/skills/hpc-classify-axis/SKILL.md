@@ -6,7 +6,7 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[classify-axis](../../docs/primitives/classify-axis.md) primitive**. The skill is autonomous: it reads `run()`, walks the decision tree, commits a `DataAxis`, and records it. No `[Y/n]` prompts. Callers that need a human in the loop (the in-chat agent driving `/classify-axis-hpc`) conduct the interview *before* invoking the skill and pass the human-confirmed `data_axis` in as input — in that mode the skill skips its own classification and just records.
+Agent-facing composition over the **[classify-axis](../../../../docs/primitives/classify-axis.md) primitive**. The skill is autonomous: it reads `run()`, walks the decision tree, commits a `DataAxis`, and records it. No `[Y/n]` prompts. Callers that need a human in the loop (the in-chat agent driving `/classify-axis-hpc`) conduct the interview *before* invoking the skill and pass the human-confirmed `data_axis` in as input — in that mode the skill skips its own classification and just records.
 
 `@register_run` already captures the entry point, the CLI flags (from the signature), and `gpu`. It does **not** capture the *parallel decomposition* of the totally-ordered series the experiment iterates. This skill closes that gap.
 
@@ -111,7 +111,7 @@ Set `classified_by: "agent"`. Record one short sentence of reasoning (which bran
 
 ### 5. Record the classification
 
-Build a spec and invoke [classify-axis](../../docs/primitives/classify-axis.md):
+Build a spec and invoke [classify-axis](../../../../docs/primitives/classify-axis.md):
 
 ```json
 {
@@ -139,7 +139,7 @@ On a `spec_invalid` envelope the most common cause is a `bounded_halo` whose `ha
 
 ### 6. Persist the *why* (transcript)
 
-Persist the reasoning via the existing [interview](../../docs/primitives/interview.md) primitive — add a single turn (`role: agent`) summarising which tree branch resolved and which parameters were referenced. `classify-axis` records the *answer*; `interview` records the *one-line rationale*. When `classified_by: "interview"`, the slash command writes its own operator/agent turns to the transcript directly — this skill does not duplicate them.
+Persist the reasoning via the existing [interview](../../../../docs/primitives/interview.md) primitive — add a single turn (`role: agent`) summarising which tree branch resolved and which parameters were referenced. `classify-axis` records the *answer*; `interview` records the *one-line rationale*. When `classified_by: "interview"`, the slash command writes its own operator/agent turns to the transcript directly — this skill does not duplicate them.
 
 ### 7. The elision gate is the backstop
 

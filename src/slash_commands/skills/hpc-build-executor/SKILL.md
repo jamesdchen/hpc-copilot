@@ -6,7 +6,7 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[build-executor](../../docs/primitives/build-executor.md) primitive** (see that file for full input/output/error contract). Materializes the bundled starter template at a caller-supplied path; the skill then customizes it.
+Agent-facing composition over the **[build-executor](../../../../docs/primitives/build-executor.md) primitive** (see that file for full input/output/error contract). Materializes the bundled starter template at a caller-supplied path; the skill then customizes it.
 
 This skill also covers axis-init — the companion step that writes `.hpc/axes.yaml` so the framework can pick a parallelism axis automatically at submit time. The two are paired in practice: a new executor needs an `axes.yaml` describing which of its parallel dimensions belongs on the task array.
 
@@ -23,7 +23,7 @@ This skill also covers axis-init — the companion step that writes `.hpc/axes.y
 
 1. **Validate inputs**. `name` is the filename stem (no `.py`). `output_dir` is an absolute path inside the experiment repo, NOT inside the framework repo. The skill refuses with `spec_invalid` if `output_dir` resolves inside the framework repo's `templates/` tree.
 
-2. **Invoke** [build-executor](../../docs/primitives/build-executor.md). Add `--force` only if intentionally overwriting an existing file.
+2. **Invoke** [build-executor](../../../../docs/primitives/build-executor.md). Add `--force` only if intentionally overwriting an existing file.
 
 3. **Parse the envelope** per the primitive's `outputs:` contract (`path`, `type`, `source`).
 
@@ -55,14 +55,14 @@ The framework needs to know which parallel dimension to promote to the SLURM/SGE
    - Data type / dataset → depends on dataset sizes; usually mildly heterogeneous.
    - Hyperparameter sweeps → depends; learning rates rarely change cost; layer counts usually do.
 
-3. **Invoke** [axes-init](../../docs/primitives/axes-init.md) with `--homogeneous-axes <comma-separated-names>`. Refuses to overwrite an existing `axes.yaml`; pass `--force` only when intentional.
+3. **Invoke** [axes-init](../../../../docs/primitives/axes-init.md) with `--homogeneous-axes <comma-separated-names>`. Refuses to overwrite an existing `axes.yaml`; pass `--force` only when intentional.
 
 4. **Parse the envelope** — confirm `wrote: true` and the resolved `axes_path`. On `wrote: false`, surface the existing file's contents to the caller (the slash, which re-prompts the user for `--force`; an autonomous caller decides programmatically). The skill itself does not prompt — the wrote-false envelope is the signal back to whoever invoked it.
 
 ## Notes
 
 - This skill writes to the experiment repo only — never to the framework repo's `templates/` dir. Confirm `--output-dir` is the experiment repo before invoking.
-- After scaffolding and customizing, the executor is auto-discovered by [discover-executors](../../docs/primitives/discover-executors.md) (which `hpc-submit` invokes) if it lands in `executors/`, `scripts/`, or `src/` and either exports `compute(args)` (new contract) or has an `if __name__ == "__main__":` guard plus a CLI import (old contract; transitional).
+- After scaffolding and customizing, the executor is auto-discovered by [discover-executors](../../../../docs/primitives/discover-executors.md) (which `hpc-submit` invokes) if it lands in `executors/`, `scripts/`, or `src/` and either exports `compute(args)` (new contract) or has an `if __name__ == "__main__":` guard plus a CLI import (old contract; transitional).
 - Per-task fan-out (Cartesian product, chunking, date windows, …) AND the new-contract executor's CLI flag list both live in `.hpc/tasks.py`, scaffolded by `/submit-hpc` Step 6 — not via this skill.
 - **One-shot per repo** for axes-init under normal use. If the experiment's parallelism shape changes (axis added, semantics flipped), re-run with `--force`.
 - **Cardinality is not yet recorded** in the v1 axes schema — only `homogeneous_axes` (a list of names). Cardinalities will land when submit-flow integration uses them to build the wave_map.

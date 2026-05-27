@@ -159,7 +159,8 @@
           "enum": [
             "interview",
             "recall",
-            "manual"
+            "manual",
+            "agent"
           ],
           "title": "Classified By",
           "type": "string"

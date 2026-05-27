@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -83,6 +83,17 @@ class AggregateFlowSpec(BaseModel):
             "many data rows beyond the header is reported as a failing "
             "task id in `nonempty_failing_task_ids`. 0 (default) skips "
             "the gate — header-only CSVs are accepted."
+        ),
+    )
+    mode: Literal["auto", "cluster-reduce", "combiner-only"] = Field(
+        default="auto",
+        description=(
+            "Routing mode. 'auto' (default) picks cluster-reduce when "
+            "the sidecar's aggregate_defaults.aggregate_cmd is set, "
+            "otherwise combiner-only. 'cluster-reduce' forces the "
+            "cluster-side reducer (raises if no aggregate_cmd is "
+            "available). 'combiner-only' bypasses the reducer, pulls "
+            "_combiner/ partials and reduces locally."
         ),
     )
 
