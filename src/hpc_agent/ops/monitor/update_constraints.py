@@ -86,6 +86,7 @@ def update_run_constraints(
         raise errors.SpecInvalid("Pass at least one of `set_features` or `add_features`")
 
     from hpc_agent.infra.remote import ssh_run
+    from hpc_agent.state.journal import load_run
     from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
 
     sidecar = read_run_sidecar(experiment_dir, spec.run_id)
@@ -95,13 +96,17 @@ def update_run_constraints(
             f"sidecar for run_id={spec.run_id!r} has no job_ids; nothing to update"
         )
 
-    # Resolve the SSH target. v2 sidecars carry it on `ssh_target`;
-    # v1 sidecars don't, in which case we error rather than guess.
-    ssh_target = sidecar.get("ssh_target")
+    # Resolve the SSH target from the journal RunRecord. ssh_target is
+    # NOT a v2 sidecar field (see _V2_CONFIG_FIELDS in state/runs.py) —
+    # the journal record at ~/.claude/hpc/<repo_hash>/runs/<run_id>.json
+    # is the canonical store.
+    record = load_run(experiment_dir, spec.run_id)
+    ssh_target = record.ssh_target if record is not None else None
     if not ssh_target:
         raise errors.SpecInvalid(
-            f"sidecar for run_id={spec.run_id!r} is missing ssh_target; "
-            "scontrol update requires explicit cluster routing"
+            f"no journal record for run_id={spec.run_id!r}, or the record "
+            "is missing ssh_target; scontrol update requires explicit "
+            "cluster routing"
         )
 
     # Compute the new Features expression.

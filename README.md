@@ -252,20 +252,32 @@ Cluster connection details are in `hpc_agent/config/clusters.yaml` (or whatever 
 ## Python API
 
 ```python
-from hpc_agent import (
-    # Framework subdirectory layout
-    framework_subdir, runs_subdir, tasks_path, load_tasks_module,
-    # Per-run sidecars
-    compute_cmd_sha, write_run_sidecar, read_run_sidecar,
-    find_run_by_cmd_sha, find_existing_runs,
-    # Cluster config
-    load_clusters_config, get_template_path, _PACKAGE_ROOT,
-    # Submission
-    ClusterConstraints, parse_constraints,
-    WorkloadSpec, compute_submission_plan, build_wave_map,
-    deploy_runtime, run_combiner_checked,
+# Framework subdirectory layout
+from hpc_agent import RUNS_SUBDIR, RepoLayout, TASKS_FILENAME, load_tasks_module
+
+# Per-run sidecars (canonical home)
+from hpc_agent.state.runs import (
+    compute_cmd_sha,
+    find_existing_runs,
+    find_run_by_cmd_sha,
+    read_run_sidecar,
+    write_run_sidecar,
 )
+
+# Cluster config + templates
+from hpc_agent import _PACKAGE_ROOT, get_template_path, load_clusters_config
+
+# Submission planning
+from hpc_agent.infra.constraints import ClusterConstraints, parse_constraints
+from hpc_agent.infra.throughput import (
+    WorkloadSpec,
+    build_wave_map,
+    compute_submission_plan,
+)
+
+# Remote execution + backends
 from hpc_agent.infra.backends import get_backend
+from hpc_agent.infra.remote import deploy_runtime
 ```
 
 ## Development

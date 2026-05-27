@@ -20,6 +20,9 @@ from hpc_agent._wire.actions.update_run_constraints import (
     UpdateRunConstraintsSpec,
 )
 from hpc_agent.ops.monitor.update_constraints import update_run_constraints
+from hpc_agent.state import run_record as _run_record
+from hpc_agent.state.journal import upsert_run
+from hpc_agent.state.run_record import RunRecord
 from hpc_agent.state.runs import write_run_sidecar
 
 if TYPE_CHECKING:
@@ -27,6 +30,14 @@ if TYPE_CHECKING:
 
 
 _RUN_ID = "20260101-000000-aaaaaaa"
+
+
+@pytest.fixture(autouse=True)
+def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect HPC_HOMEDIR so journal writes don't pollute ~/.claude."""
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(_run_record, "HPC_HOMEDIR", home)
+    return home
 
 
 def _seed_sidecar(tmp_path: Path, *, job_ids: list[str], features: list[str] | None = None) -> None:
@@ -42,16 +53,25 @@ def _seed_sidecar(tmp_path: Path, *, job_ids: list[str], features: list[str] | N
         tasks_py_sha="b" * 64,
         job_ids=job_ids,
         constraints={"features": features} if features else None,
-        # Normally written by submit_flow; the primitive expects it.
-        extra={"ssh_target": "alice@cluster"},
     )
-    # write_run_sidecar doesn't expose ssh_target as a top-level v2
-    # field today; patch it in directly so the test models the sidecar
-    # the primitive reads.
-    target = tmp_path / ".hpc" / "runs" / f"{_RUN_ID}.json"
-    data = json.loads(target.read_text())
-    data["ssh_target"] = "alice@cluster"
-    target.write_text(json.dumps(data, indent=2, sort_keys=True))
+    # ssh_target is NOT a v2 sidecar field — see _V2_CONFIG_FIELDS in
+    # state/runs.py. The primitive resolves ssh_target from the journal
+    # RunRecord, which submit_flow writes alongside the sidecar.
+    upsert_run(
+        tmp_path,
+        RunRecord(
+            run_id=_RUN_ID,
+            profile="p",
+            cluster="c",
+            ssh_target="alice@cluster",
+            remote_path="/remote",
+            job_name="j",
+            job_ids=list(job_ids),
+            total_tasks=4,
+            submitted_at="2026-01-01T00:00:00+00:00",
+            experiment_dir=str(tmp_path.resolve()),
+        ),
+    )
 
 
 def _ok_cp(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:

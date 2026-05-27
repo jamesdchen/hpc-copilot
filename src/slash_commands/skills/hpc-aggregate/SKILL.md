@@ -6,7 +6,7 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow**.
+Agent-facing decision layer over the **[aggregate-flow](../../../../docs/primitives/aggregate-flow.md) workflow**.
 
 ## Inputs
 

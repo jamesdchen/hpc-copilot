@@ -167,7 +167,7 @@ def _resolve_pro_cron_status(
             "reason": "--install-cron requires --cluster (ssh_target is derived from clusters.yaml)",
         }
 
-    from hpc_agent.infra.clusters import load_clusters_config
+    from hpc_agent.infra.clusters import ClusterConfig, load_clusters_config
 
     clusters = load_clusters_config()
     if cluster not in clusters:
@@ -175,7 +175,13 @@ def _resolve_pro_cron_status(
             "status": "skipped",
             "reason": f"{cluster!r} not in clusters.yaml",
         }
-    ssh_target = clusters[cluster].get("ssh_target")
+    # ssh_target is a computed property on ClusterConfig (user@host); it
+    # is never a literal key in clusters.yaml. Read the raw dict via the
+    # validated model so the computed accessor fires.
+    try:
+        ssh_target = ClusterConfig.model_validate(clusters[cluster]).ssh_target
+    except Exception:  # noqa: BLE001 — corrupted entry falls back to "skipped"
+        ssh_target = None
     if not ssh_target:
         return {
             "status": "skipped",

@@ -114,7 +114,7 @@ class _ExecutorEntry(BaseModel):
         ),
     )
     data_axis: _DataAxisConfig
-    classified_by: Literal["interview", "recall", "manual"] = Field(
+    classified_by: Literal["interview", "recall", "manual", "agent"] = Field(
         description="How the classification was reached.",
     )
     classified_at: str = Field(

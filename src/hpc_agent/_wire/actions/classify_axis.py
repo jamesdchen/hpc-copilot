@@ -48,12 +48,14 @@ class ClassifyAxisInput(BaseModel):
             "numbers."
         ),
     )
-    classified_by: Literal["interview", "recall", "manual"] = Field(
+    classified_by: Literal["interview", "recall", "manual", "agent"] = Field(
         default="interview",
         description=(
             "How the classification was reached: 'interview' (the agent "
-            "ran the classification interview), 'recall' (a prior similar "
-            "experiment's classification was reused), or 'manual' (the "
-            "operator stated it directly)."
+            "ran the classification interview with a human in the loop), "
+            "'recall' (a prior similar experiment's classification was "
+            "reused), 'agent' (the agent classified autonomously via the "
+            "hpc-classify-axis skill without a human interview), or "
+            "'manual' (the operator stated it directly)."
         ),
     )

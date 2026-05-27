@@ -6,7 +6,7 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing composition over the **[interview](../../docs/primitives/interview.md) primitive**. Autonomous mode: given a partial `InterviewSpec`, fill in the rest from repo inspection, apply edits, materialize artifacts. The slash command consumer (`/wrap-entry-point-hpc`) elicits the same fields from the human first and passes a fully-resolved spec — in that mode the skill just records.
+Agent-facing composition over the **[interview](../../../../docs/primitives/interview.md) primitive**. Autonomous mode: given a partial `InterviewSpec`, fill in the rest from repo inspection, apply edits, materialize artifacts. The slash command consumer (`/wrap-entry-point-hpc`) elicits the same fields from the human first and passes a fully-resolved spec — in that mode the skill just records.
 
 The skill persists, in either pathway:
 - A `tasks.py` (from the supplied `task_generator`) whose kwargs include `<stem>_sha` for every frozen YAML, so `cmd_sha` correctly distinguishes `exp_42.yaml` from `exp_43.yaml` and catches accidental in-place edits.

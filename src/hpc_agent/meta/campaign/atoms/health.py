@@ -203,6 +203,7 @@ def campaign_health(
     n_runs = 0
     n_complete = 0
     n_failed = 0
+    matched_run_ids: set[str] = set()
 
     if profile and cluster:
         try:
@@ -231,20 +232,25 @@ def campaign_health(
             if isinstance(submitted, str) and submitted < since_iso:
                 continue
         n_runs += 1
+        matched_run_ids.add(run_id)
         status = (sc.get("status") or sc.get("lifecycle_state") or "").lower()
         if status == "complete":
             n_complete += 1
         elif status in ("failed", "abandoned", "timeout"):
             n_failed += 1
 
+    # Runtime samples (see runtime_prior.append_sample) carry
+    # ``submitted_at_iso``, not ``submitted_at``; they don't carry
+    # ``campaign_id`` at all. Filter by ISO and join campaign membership
+    # via run_id against the sidecar walk above.
     if since_iso is not None:
         samples = [
             s
             for s in samples
-            if isinstance(s.get("submitted_at"), str) and s["submitted_at"] >= since_iso
+            if isinstance(s.get("submitted_at_iso"), str) and s["submitted_at_iso"] >= since_iso
         ]
     if campaign_id is not None:
-        samples = [s for s in samples if s.get("campaign_id") == campaign_id]
+        samples = [s for s in samples if s.get("run_id") in matched_run_ids]
 
     payload: dict[str, Any] = {
         "campaign_id": campaign_id,
