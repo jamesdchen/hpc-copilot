@@ -159,24 +159,52 @@ skip_empty = true
 # manually rather than driving the real reader).
 #
 # Run locally with:
-#   uv run mutmut run --paths-to-mutate src/hpc_agent/ops/monitor/
-#   uv run mutmut results
-#   uv run mutmut show <id>      # see the surviving mutant
+#   uv run mutmut run            # full sweep — hours
+#   uv run mutmut results        # surviving mutants
+#   uv run mutmut show <id>      # see what flipped
 #
-# Not wired into CI — a full sweep over src/ takes hours on a single
-# core. Prefer scoping to a directory or file under audit. See
-# docs/internals/mutation-testing.md for the recommended workflow.
+# Targeted sweep (recommended): override `paths_to_mutate` via env or
+# pass mutant names to ``mutmut run``. Not wired into CI — a full
+# sweep over src/ is hours. See docs/internals/mutation-testing.md.
 [tool.mutmut]
-paths_to_mutate = "src/hpc_agent/"
-tests_dir = "tests/"
-runner = "uv run pytest -x --tb=no -q --no-header"
-# Exclude wire definitions (Pydantic Field() defaults are noise to
-# mutate — every default flip is technically a "live mutant" but
-# semantically meaningless to surface) and pure type/contract modules.
-exclude = [
-    "src/hpc_agent/_wire/",
-    "src/hpc_agent/_kernel/contract/",
-    "src/hpc_agent/schemas/",
+# Default scoping. Override per-run by editing this list — mutmut 3.x
+# doesn't expose ``--paths-to-mutate`` on the CLI. A full sweep of
+# ``src/hpc_agent/`` is on the order of an hour on a single core;
+# scope tight to the subject under audit.
+paths_to_mutate = ["src/hpc_agent/ops/monitor/"]
+# mutmut copies only paths_to_mutate by default, so the rest of the
+# package needs to be copied via ``also_copy`` for ``hpc_agent`` to
+# remain importable in the test process. When widening paths_to_mutate
+# to the full ``src/hpc_agent/``, drop the src/hpc_agent/ entry here.
+also_copy = [
+    "src/hpc_agent/",
+    "src/slash_commands/",
+    "scripts/",
+    "docs/",
+    "hpc-agent-pro/",
+]
+tests_dir = ["tests/"]
+# Field name is do_not_mutate in mutmut 3.x (was exclude in 2.x).
+# Wire definitions + JSON schemas are noise: Pydantic Field()
+# default flips and JSON whitespace mutations are technically alive
+# but semantically inert.
+do_not_mutate = [
+    "src/hpc_agent/_wire/*",
+    "src/hpc_agent/_kernel/contract/*",
+    "src/hpc_agent/schemas/*",
+]
+# mutmut adds its own -x / -q / --tb=native / -m "not slow".
+# Override the project's ``addopts`` (which includes ``-n auto`` from
+# pytest-xdist) so xdist workers don't fork subprocesses that lose
+# mutmut's process context — the trampoline does ``from mutmut.__main__
+# import …`` which only resolves in mutmut's own pytest invocation.
+# Deselect concurrency tests for the same reason: they spawn
+# multiprocessing children that don't inherit mutmut.
+pytest_add_cli_args = [
+    "-o",
+    "addopts=-ra --strict-markers",
+    "--deselect=tests/state/test_runtime_prior_integration.py::test_concurrent_writers_lose_no_samples",
+    "--deselect=tests/infra/test_atomic_locked_update.py",
 ]
 
 [dependency-groups]
