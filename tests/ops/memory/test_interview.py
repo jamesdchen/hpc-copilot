@@ -612,13 +612,13 @@ def test_entry_point_python_module_rejects_missing_function(tmp_path: Path) -> N
 
 
 def test_entry_point_python_module_accepts_valid(tmp_path: Path) -> None:
-    """A python_module pointer to a real importable function is accepted; no wrapper materialized."""
+    """python_module pointer to an importable function: accepted; no wrapper."""
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         entry_point={"kind": "python_module", "module": "json", "function": "dumps"},
     )
-    result = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert not (tmp_path / ".hpc" / "wrappers").exists()
     doc = json.loads((tmp_path / "interview.json").read_text())
     assert doc["_materialized"]["entry_point"] == {

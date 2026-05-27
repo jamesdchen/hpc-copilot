@@ -161,7 +161,9 @@ def _resolve_pro_cron_status(
     if not cluster:
         return {
             "status": "skipped",
-            "reason": "--install-cron requires --cluster (ssh_target is derived from clusters.yaml)",
+            "reason": (
+                "--install-cron requires --cluster (ssh_target is derived from clusters.yaml)"
+            ),
         }
 
     from hpc_agent.infra.clusters import ClusterConfig, load_clusters_config
