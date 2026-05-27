@@ -281,7 +281,13 @@ def run(data, N, beta):
 
 
 def test_ema_unbounded_accumulator(tmp_path: Path) -> None:
-    """``state = state + data[t]`` (β=1) is unbounded → Sequential."""
+    """``state = state + data[t]`` (β=1) is unbounded → Sequential.
+
+    Also pins the EMA-branch destructure: ``_match_ema_smoothing`` returns
+    ``(kind, halo_expr, evidence)`` with ``halo_expr=None`` for the unbounded
+    case, and the caller must propagate that None straight into
+    ``MatcherResult.halo_expr`` without losing the kind/evidence alignment.
+    """
     src = _write(
         tmp_path,
         """
@@ -297,6 +303,10 @@ def run(data, N):
     result = classify_axis_easy(src, "run")
     assert result.kind == "sequential", result
     assert result.halo_expr is None
+    # Evidence must come from the EMA branch (mentions "unbounded accumulation"),
+    # not the generic "no pattern matched" sequential fallback — proves the
+    # destructure landed all three fields, not just kind.
+    assert "unbounded accumulation" in result.evidence, result.evidence
 
 
 # ─── Sequential: carried state, no recognized pattern ───────────────────

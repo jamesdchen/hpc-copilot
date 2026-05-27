@@ -460,6 +460,7 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
     # old sidecars in the wild.
     sidecar_version = data.get("hpc_agent_version")
     if isinstance(sidecar_version, str) and sidecar_version:
+        _pkg_version: str | None
         try:
             from hpc_agent import __version__ as _pkg_version
         except Exception:  # noqa: BLE001 — never let a circular fail the read

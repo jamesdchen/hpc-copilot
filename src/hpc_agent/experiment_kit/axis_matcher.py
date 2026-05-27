@@ -220,11 +220,14 @@ def classify_axis_easy(source_path: Path, run_name: str) -> MatcherResult:
     tried.append(_PATTERN_EMA_SMOOTHING)
     ema_hit = _match_ema_smoothing(loop, carried)
     if ema_hit is not None:
-        kind, halo_expr, evidence = ema_hit
+        # ema_halo_expr is Optional: the unbounded β=1 branch returns None
+        # alongside kind="sequential" (no bounded halo). MatcherResult.halo_expr
+        # accepts None, so it propagates straight through.
+        ema_kind, ema_halo_expr, ema_evidence = ema_hit
         return MatcherResult(
-            kind=kind,
-            evidence=evidence,
-            halo_expr=halo_expr,
+            kind=ema_kind,
+            evidence=ema_evidence,
+            halo_expr=ema_halo_expr,
             tried=tuple(tried),
         )
 
