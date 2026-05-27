@@ -1,39 +1,64 @@
-`/submit-hpc` triggers the **submit** workflow — submit a parameter-grid experiment to an HPC cluster.
+`/submit-hpc` is the **human-interview wrapper** around the `hpc-submit` skill — the agent-autonomous decision layer that resolves every HPC submission input and hands off to the submit-flow worker.
 
-This command is a thin trigger over `hpc-agent run`, the code-orchestrated entrypoint. Do not run the `hpc-submit` skill, and do not perform the workflow steps yourself in this conversation — the workflow runs in a fresh-context worker.
+The slash conducts the user-facing dialogs **after** the skill identifies what needs resolving. The flow is:
 
-The submit workflow accepts two experiment shapes:
+1. Parse `$ARGUMENTS` into an initial spec (whatever the user pre-stated).
+2. Invoke the `hpc-submit` skill via the Skill tool with that initial spec.
+3. If the skill returns `needs_resolution` with an `ambiguities` list, walk a dialog with the user for each ambiguity (in topo-sorted dependency order), assemble the user's answers into an augmented spec, re-invoke the skill.
+4. Repeat up to ~3 times (bounded by the dependency DAG depth — typically once).
+5. On a successful envelope, surface the worker's result to the user.
 
-- **`@register_run`-decorated Python function** (the canonical input) — whether it lives in a notebook (`notebooks/<name>.ipynb`) or a `.py` file (`train.py`, `main.py`), the framework discovers it, introspects its signature, and classifies its parallel axis. No setup needed before invoking `/submit-hpc`. For a mature repo with an existing entry-point function, the right onboarding is to put `@register_run` directly on that function — a two-line code edit (an import and a decorator). The escalation playbook below walks the user through this when the worker can't proceed without it.
-- **Mature repo with a non-Python or decorator-conflicting entry point** (`python -m pkg.cli` you can't edit, a compiled binary, a `@hydra.main`-wrapped function whose signature `@register_run` can't see through) — the fallback path is to materialize a `@register_run` wrapper at `.hpc/wrappers/<run_name>.py` that subprocess-invokes the real entry point. The playbook covers this too.
+## Invocation
 
-## Driving the workflow
+Invoke the `hpc-submit` skill via the Skill tool with the initial spec:
 
-1. Structure the user's request into a JSON object `<fields>` — the run or entry point to submit, plus any explicit choices they stated (`cluster`, `--no-canary`, `campaign_id`). No up-front interview is needed; pass whatever the user gave.
-2. Run, via the `Bash` tool: `hpc-agent run submit --fields-json '<fields>'`. It validates the fields, generates the canonical worker prompt by code, and spawns a fresh-context worker that executes the `hpc-submit` skill. It prints a JSON envelope.
-3. Surface to the user: `data.report.result` (run id, job ids, grid dimensions, verified scheduler state), `data.report.decisions` (each decision point the worker reached and why), and `data.report.anomalies`.
-4. If a decision is an **escalation** — the worker needs an input only a human can give — consult the playbook below for the matching escalation code, gather the resolved fields, add them to `<fields>`, and re-run `hpc-agent run submit`. A fresh, unscaffolded experiment may take two round-trips.
-
-## Escalation playbook
-
-The worker can't actuate human authority. When it surfaces an escalation, the in-chat agent runs the matching dialog below, then invokes the relevant skill via the Skill tool with a fully-resolved spec, then re-invokes `/submit-hpc`. Skills are agent-autonomous (no `[Y/n]` in their bodies) — the dialogs that used to live in the now-deleted paired slashes are consolidated here.
-
-### `mature_repo_needs_interview` — onboard the entry point
-
-"No `@register_run` decoration anywhere AND no `interview.json`." Walk the user through `hpc-wrap-entry-point` (see `skills/hpc-wrap-entry-point/SKILL.md`).
-
-**Step A. Detect or scaffold.** Probe whether the repo has an entry-point file:
-
-```bash
-ls main.py train.py run.py experiment.py 2>/dev/null
-ls src/main.py src/train.py src/run.py 2>/dev/null
-find . -maxdepth 4 -name __main__.py -not -path '*/.*' 2>/dev/null | head -5
-test -f pyproject.toml && grep -A1 '\[project.scripts\]' pyproject.toml 2>/dev/null
-ls run.sh launch.sh ./simulator 2>/dev/null
-grep -rln '@register_run' notebooks/ src/ *.py 2>/dev/null | head
+```
+Skill("hpc-submit", {
+  experiment_dir: ".",
+  cluster: <if user stated --cluster>,
+  no_canary: <if user stated --no-canary>,
+  campaign_id: <if --campaign-id>,
+  task_generator: <if inferable from $ARGUMENTS, else omit>
+})
 ```
 
-If nothing matches, greenfield — ask the user:
+The skill resolves the rest. The slash never needs to enumerate every field — only what the user supplied.
+
+## On `needs_resolution` — walking the ambiguities
+
+The skill returns:
+
+```json
+{
+  "ok": false,
+  "error_code": "needs_resolution",
+  "data": {
+    "resolved": { ... fields the skill auto-resolved ... },
+    "ambiguities": [
+      {"field": "<name>", "candidates": [...], "depends_on": [...], "safe_default": ..., "context": {...}}
+    ]
+  }
+}
+```
+
+Topo-sort `ambiguities` by `depends_on`. Walk in order; for each, conduct the matching dialog below. Collect user answers into the augmented spec. Re-invoke.
+
+If `depends_on` has unresolved entries in the current list (cascading dependencies), walk only the resolvable subset this round; the skill will surface a new round of ambiguities (now smaller) after the deps are resolved. Bounded by DAG depth (~3 rounds max for HPC submission).
+
+### Dialog: `cluster`
+
+```
+Configured clusters: <candidates from envelope>.
+Which cluster?
+```
+
+If the user has no preference, accept the `safe_default` from the envelope.
+
+### Dialog: `entry_point`
+
+The skill's sub-skill (`hpc-wrap-entry-point`) couldn't auto-resolve. The ambiguity's `candidates` lists what was found.
+
+**Greenfield (no candidates)**:
 
 ```
 I don't see an entry-point file. I can scaffold one. Two shapes:
@@ -42,126 +67,99 @@ I don't see an entry-point file. I can scaffold one. Two shapes:
 Which shape?  [1 / 2]
 ```
 
-**Step B. Disambiguate entry point** if multiple candidates exist:
+**Multiple candidates**:
 
 ```
-I see three plausible entry points in this repo:
-  1. `train.py`       — argparse with --config, --seed, --epochs
-  2. `eval.py`        — argparse with --model, --dataset
-  3. `python -m mypkg.cli`  — Click app with `train` / `eval` subcommands
-
-Which one should the cluster run?  [1 / 2 / 3 / other]
+I see plausible entry points: <list from candidates>.
+Which one should the cluster run?
 ```
 
-**Step C. Pathway: direct decoration vs. wrapper.** Direct decoration is the default — a two-line code edit (import + `@register_run`). Fall back to wrapper only when blocked (non-Python entry point, `@hydra.main`, consuming click/typer decorator, vendor code).
+Then: direct decoration is the default; only fall back to a wrapper when blocked (non-Python entry point, `@hydra.main`, vendor code):
 
 ```
-Your `train.py` parses --config and --seed from sys.argv via argparse. The
-cleanest onboarding is `@register_run` direct decoration — a two-line edit:
-
-  from hpc_agent import register_run
-
-  @register_run
-  def run(config: str, seed: int) -> None:
-      # ... the body that used to live below argparse.parse_args() ...
-
-  if __name__ == "__main__":
-      # existing argparse block stays as-is, calls run(**vars(args))
-
-Apply this edit?  [Y / n / show me first / use a wrapper instead]
+Your <path> parses --<flag> via argparse. The cleanest onboarding is @register_run
+direct decoration — a two-line edit. Apply this edit?
+  [Y / n / show me first / use a wrapper instead]
 ```
 
-On wrapper, propose argv template + signature; let the user edit.
+### Dialog: `data_axis`
 
-**Step D. Frozen YAML configs.** For each `configs/*.yaml`, ask: "Treat as frozen experiment config? [Y / n / different file]". Collected into `frozen_configs`.
+Walk the decision tree (from `axis.py`):
 
-**Step E. Pick `task_generator`** (mandatory — skill refuses without it):
+<!-- decision-content:axis-tree start -->
+1. **Does each row's result depend on rows computed before it?**
+   No → **`Independent`**. The loop body is a pure function of its row (a DOALL loop) — split anywhere.
+2. **Yes → is the carried state a fixed-size summary combinable in any order** — a sum, a count, a mean/variance via moments?
+   Yes → **`Associative`**. Pick the monoid: `sum` (additive) or `moments` (mean/variance via sufficient statistics). Default `moments`.
+3. **Is the dependence a bounded look-back** — e.g. a rolling training window of N rows?
+   Yes → **`BoundedHalo`**. Derive the halo as an arithmetic expression over `run()`'s parameters (bare names), e.g. `train_window * 48`. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
+4. **Otherwise, or ambiguous → `Sequential`.** This is the fail-safe default and the autonomous-mode tiebreaker. From `axis.py`: *"When in doubt, classify as Sequential: the fail-safe outcome is slow, not wrong."*
+<!-- decision-content:axis-tree end -->
 
-| Shape | When | Example |
-|---|---|---|
-| `items_x_seeds` | One frozen config × N seeds | `items=[{config: "exp_42.yaml"}], seeds=[0..99]` |
-| `cartesian_product` | Cross a few axes | `axes={seed: [0..9], shard: [0..3]}` |
-| `enumerated` | Hand-supplied N task dicts | `items=[{...}, ...]` |
-| `numeric_linspace` / `numeric_logspace` | Sweep one numeric hyperparameter | `param="lr", low, high, n` |
-
-**Step F. Invoke the skill.** Assemble the full `InterviewSpec`, invoke `hpc-wrap-entry-point` via the Skill tool with the resolved spec. The skill materializes `tasks.py` + `interview.json` (+ the wrapper on the fallback path), then return to Step 4 of the main flow.
-
-### `axis_unclassified` — classify a `@register_run`'s data axis
-
-"The run has no `DataAxis` in `axes.yaml`, and the signature changed since the last classification." Walk the user through `hpc-classify-axis` (see `skills/hpc-classify-axis/SKILL.md`).
-
-**Step A. Discover and cache check.**
-
-```bash
-python .hpc/scaffold.py discover
-```
-
-Read `.hpc/axes.yaml`. If `executors.<run_name>.run_signature_sha` matches the current sha, report the cached classification and skip the rest — no interview, no skill invocation.
-
-**Step B. Walk the decision tree** against `run()`'s source. The single question (from `hpc_agent/experiment_kit/axis.py`): *is there carried state across the series, and is its transition associative?*
-
-1. Each row independent of prior rows? → **`Independent`** (DOALL).
-2. Carried state combinable in any order (sum / moments)? → **`Associative`** with monoid `sum` or `moments` (default `moments`).
-3. Bounded look-back (rolling window of N rows)? → **`BoundedHalo`** with `halo.expr` over parameter names, e.g. `train_window * 48`. Bias the halo **large** — over-wide is wasteful, too-small is silent corruption.
-4. Otherwise / unsure → **`Sequential`** (fail-safe; serial is slow, not wrong).
-
-Halo expression syntax: bare parameter names, numeric literals, `+ - * //`, `min()` / `max()`. Never `eval()`'d.
-
-**Step C. Propose, then confirm:**
+Propose with reasoning:
 
 ```
-Your run `forecast` iterates an 8760-row hourly series. The loop refits
-the model on a trailing `train_window`-day window each step — a bounded
-look-back. I'll classify it as:
-
-  DataAxis = BoundedHalo,  halo = train_window * 48
-
+Your run `<name>` iterates a <N>-row series. The loop <pattern>.
+I'll classify it as: DataAxis = <kind>, <params>.
 Looks right?  [Y / n / unsure]
 ```
 
-On **n**, take the correction. On **unsure**, fall back to `Sequential`.
+On **unsure**, accept `safe_default` (typically Sequential).
 
-**Step D. Invoke the skill** with the resolved `data_axis` and `classified_by: "interview"`. The skill records into `.hpc/axes.yaml`'s `executors` block.
+### Dialog: `homogeneous_axes`
 
-### `no_axes_yaml` — initialize scheduling axes (homogeneity)
-
-"`tasks.py` exists but `.hpc/axes.yaml` doesn't, so the framework can't pick a parallelism axis automatically." Walk the user through `hpc-build-executor`'s axes-init companion (see `skills/hpc-build-executor/SKILL.md`).
-
-**Step A. Read `tasks.py` and enumerate parallel axes.** Identify each named dimension; count cardinality.
-
-**Step B. Classify each axis as homogeneous or not** by heuristic:
-
-- Replicates / seeds / folds / CV windows / backtest windows → typically **homogeneous** (same compute, different data).
-- Model class / architecture / algorithm → typically **heterogeneous**.
-- Data type / dataset → depends on dataset sizes; often mildly heterogeneous.
-- Hyperparameter sweeps → depends; LR rarely changes cost, layer count usually does.
-
-**Step C. Propose, then confirm:**
+The skill's sub-skill found parallel axes but couldn't classify their homogeneity. Propose per heuristic (seeds/folds/windows homogeneous; model class, dataset, layer count heterogeneous):
 
 ```
-Found these parallel axes in your experiment:
- • `window` (20 values) — homogeneous (same model trained on a 6-month rolling window)
- • `model` (4 values) — heterogeneous (linear / ridge / xgboost / neural_net have very different runtimes)
- • `data_type` (3 values) — heterogeneous (equities are 10x larger than fx)
-
-I'll write `.hpc/axes.yaml` with `homogeneous_axes: [window]`.
-
+Found parallel axes:
+ • `<axis>` (N values) — <homogeneous|heterogeneous> (reasoning)
+I'll write .hpc/axes.yaml with homogeneous_axes: [<list>].
 Looks right? [Y/n]
 ```
 
-On **n**, abort. On **Y**, invoke `hpc-build-executor` via the Skill tool with the resolved `homogeneous_axes` list. If `axes.yaml` already exists, the primitive returns `wrote: false`; re-prompt for `--force`.
+### Dialog: `frozen_configs`
 
-### `ambiguous_run`, `ambiguous_entry_point` — the skill refused to pick
+For each `configs/*.yaml` in `ambiguity.candidates`:
 
-The agent-autonomous skills refuse rather than silently choose across `main.py` / `train.py` / `run.py` or across multiple `@register_run` functions. Ask the user to pick from the candidates the envelope lists, then re-invoke the skill with the resolved `run_name` / `entry_point.path`.
+```
+Treat configs/<name>.yaml as a frozen experiment config?  [Y / n / different file]
+```
 
-### Other escalations
+### Dialog: `task_generator`
 
-- **Cluster pick** — ask the user which cluster (the envelope lists the configured names from `clusters.yaml`).
-- **`--no-canary` confirmation** — ask the user; the canary is the default safety net.
-- **`campaign_id` collision** — ask whether to overwrite, resume, or rename.
+The skill refused — this can't be auto-invented. Ask the user:
 
-## Notes
+```
+What's the scale-up shape?
+  items_x_seeds      — one frozen config × N seeds
+  cartesian_product  — cross several axes
+  enumerated         — hand-supplied list of N task dicts
+  numeric_linspace   — sweep one numeric hyperparameter
+```
 
-- After resolving any escalation, return to Step 4 of the main flow — re-invoke `hpc-agent run submit` with the augmented `<fields>`. A fresh, unscaffolded experiment typically takes two round-trips (intake → resolve → re-submit).
-- The skills (`hpc-wrap-entry-point`, `hpc-classify-axis`, `hpc-build-executor`) are agent-autonomous. The dialogs above gather what only the human knows; the skills do the deterministic work after.
+Walk the user through the params for their choice.
+
+## On final envelope
+
+Surface to the user:
+- `data.report.result` (run_id, job_ids, scheduler state)
+- `data.report.decisions` (every resolved choice + source)
+- `data.report.anomalies`
+
+## Args
+
+`$ARGUMENTS` formats:
+- Free-form intent: `"run ridge with horizon=[1, 5, 25]"` — parse to `task_generator` params.
+- Flags: `--cluster <name>`, `--no-canary`, `--campaign-id <slug>`.
+- Empty: invoke skill with `{experiment_dir: "."}`; skill returns ambiguities; walk dialogs.
+
+## Common failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Eqw` state (SGE) | Job error | `qmod -cj <JOBID>` or resubmit |
+| `PENDING` (SLURM) > 30 min | Resource unavailable | Try different partition |
+| Memory exceeded | Exceeded mem limit | Resubmit with higher memory |
+| Walltime exceeded | Exceeded time limit | Resubmit with longer walltime |
+| `ModuleNotFoundError` | Env not set up | Check modules and `conda_env` |
+| rsync/scp failure | SSH key issue | `ssh $SSH_TARGET hostname` first; verify `ssh-add -l` |

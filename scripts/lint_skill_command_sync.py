@@ -51,60 +51,59 @@ COMMANDS_DIR = REPO_ROOT / "src" / "slash_commands" / "commands"
 
 # Each tuple: (skill_id, slash_command_stem). Both files must exist.
 #
-# Empty by design after the slash-condensation pass: the user-facing
-# slash surface is now exactly the four workflow triggers
-# (WORKFLOW_TRIGGER_SLASHES). The three skills (hpc-build-executor,
-# hpc-classify-axis, hpc-wrap-entry-point) are agent-only — callable
-# via the Skill tool by the in-chat agent (when /submit-hpc escalates)
-# or by another agent harness like MARs directly. Skills without a
-# paired slash are allow-listed in SKILL_ONLY_OK below.
-WORKFLOW_PAIRS: list[tuple[str, str]] = []
+# Under the three-layer architecture (docs/internals/skill-policy.md):
+#   - Interview layer: the slash (human-elicitation)
+#   - Decision layer: the workflow skill (agent-autonomous; composes
+#     sub-skills, hands off to the execution layer)
+#   - Execution layer: worker_prompts/<workflow>.md (deterministic;
+#     runs in a fresh-context `claude -p --bare` worker)
+#
+# Each workflow has both a slash (for human consumers) and a workflow
+# skill (for agent consumers). The slash invokes the skill via the
+# Skill tool; the skill resolves decisions, then shells out to the
+# execution layer. Both surfaces converge on the same execution.
+WORKFLOW_PAIRS: list[tuple[str, str]] = [
+    ("hpc-submit", "submit-hpc"),
+    ("hpc-status", "monitor-hpc"),
+    ("hpc-aggregate", "aggregate-hpc"),
+    ("hpc-campaign", "campaign-hpc"),
+]
 
-# Slash commands that route through `hpc-agent run <workflow>` to the
-# spawn pipeline rather than to a paired Skill. Their workflow lives in
-# ``src/hpc_agent/worker_prompts/<workflow>.md`` (see
-# ``docs/internals/skill-policy.md``), not in any ``SKILL.md``. The
-# routing lint below skips the skill-pair check for these.
-WORKFLOW_TRIGGER_SLASHES: set[str] = {
-    "submit-hpc",
-    "monitor-hpc",
-    "aggregate-hpc",
-    "campaign-hpc",
-}
+# Workflow-trigger slashes that route directly to the spawn pipeline
+# without a paired Skill. Empty under the three-layer architecture —
+# every slash pairs with a workflow skill; the skill (not the slash)
+# is what shells out to ``hpc-agent run <workflow>``.
+WORKFLOW_TRIGGER_SLASHES: set[str] = set()
 
-# Skills that ship without a paired slash command. Under the
-# agent-autonomous policy (docs/internals/skill-policy.md) every skill
-# falls into this bucket — the in-chat agent invokes them via the Skill
-# tool when a workflow escalates, and other agent harnesses read them
-# directly. No slash is needed because the human-elicitation prose
-# lives in the workflow-trigger slash that escalates.
+# Skills that ship without a paired slash command. These are the
+# sub-skills composed by workflow skills (and by the in-chat agent
+# directly when a workflow's interview phase needs a specific
+# decision). No slash is needed because users don't type
+# `/classify-axis-hpc` directly — they go through `/submit-hpc` which
+# composes the sub-skills internally.
 SKILL_ONLY_OK: set[str] = {
     "hpc-build-executor",
     "hpc-classify-axis",
     "hpc-wrap-entry-point",
 }
 
-# Slash-command files allowed to have no skill counterpart. Empty after
-# the condensation pass — every remaining slash is either a workflow
-# trigger (above) or has been removed.
+# Slash-command files allowed to have no skill counterpart. Empty
+# under the three-layer architecture — every slash pairs with a skill.
 SLASH_ONLY_OK: set[str] = set()
 
 
-# A workflow command must explicitly route to its skill rather than run
-# the workflow from the slash body alone. Accepted routing forms: the
-# inline "Invoke the `<skill>` skill" directive; the subagent-execute
-# form ("... subagent ... to execute it (`skills/<id>/SKILL.md`)"); the
-# thin-trigger form — shelling `hpc-agent run <workflow>`, the
-# code-orchestrated entrypoint; or, for the campaign loop, shelling
-# `hpc-campaign-driver`, the code-orchestrated tick-by-tick driver.
+# A workflow command must explicitly route to its skill rather than
+# run the workflow from the slash body alone. Under the three-layer
+# architecture (slash → skill → execution), the slash's routing is the
+# Skill-tool invocation: "Invoke the `<skill>` skill". The slash MUST
+# NOT shell out to `hpc-agent run` or `hpc-campaign-driver` itself —
+# that's the skill's job, not the slash's.
 _INVOKE_DIRECTIVE_RE = re.compile(
     # ``[\`*]{0,2}`` (not ``[\`*]?``) so the directive accepts
-    # ``**hpc-submit**`` and ``\`hpc-submit\``` wrapping — the comment
-    # above promises bold wrapping is tolerated.
+    # ``**hpc-submit**`` and ``\`hpc-submit\``` wrapping — bold
+    # wrapping is tolerated.
     r"[Ii]nvoke the [`*]{0,2}[a-z][a-z0-9-]+[`*]{0,2} skill"
     r"|subagent[^\n]*?to execute it \(`skills/[a-z0-9-]+/SKILL\.md`\)"
-    r"|hpc-agent run\b"
-    r"|hpc-campaign-driver"
 )
 
 # Every workflow skill statically declares, in its frontmatter, whether
@@ -138,6 +137,39 @@ _CATEGORY_BY_EXECUTION = {
     "inline": "agent-autonomous",
     "delegated": "worker-prompt",
 }
+
+# Match an "## Inputs" section's table rows. Each row looks like:
+#   | `field_name` | source description |
+# Capture group 1 = field name; group 2 = source description.
+_INPUTS_ROW_RE = re.compile(r"^\|\s*`([a-z_][a-z0-9_]*)`\s*\|\s*([^|]+?)\s*\|", re.MULTILINE)
+
+
+def _required_inputs(skill_body: str) -> set[str]:
+    """Return the set of field names the skill marks as Required.
+
+    A field is Required when its Source column starts with "Required" (case
+    insensitive). Optional fields (auto-resolved, caller-supplied with
+    default) are not in this set — the lint doesn't require those to
+    appear in the slash body because the slash can correctly omit them.
+    """
+    in_inputs = False
+    required: set[str] = set()
+    for line in skill_body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## Inputs"):
+            in_inputs = True
+            continue
+        if in_inputs and stripped.startswith("## "):
+            break
+        if not in_inputs:
+            continue
+        m = _INPUTS_ROW_RE.match(line)
+        if m is None:
+            continue
+        field, source = m.group(1), m.group(2)
+        if source.lower().startswith("required"):
+            required.add(field)
+    return required
 
 
 def _check_skill_frontmatter(
@@ -262,6 +294,27 @@ def main() -> int:
                 "routing, or mark the skill `delegated`."
             )
 
+        # Input-shape drift check: every field the skill marks as Required
+        # must appear in the slash body (in the invocation pseudo-code,
+        # a dialog template, or an args block — anywhere). Optional fields
+        # aren't checked — the slash can legitimately omit those and let
+        # the skill auto-resolve.
+        skill_body = skill_path.read_text(encoding="utf-8")
+        required = _required_inputs(skill_body)
+        missing = sorted(f for f in required if f not in body)
+        if missing:
+            errors.append(
+                f"{slash_path.relative_to(REPO_ROOT)} does not mention "
+                f"required input field(s) of {skill_id!r}: {missing}. "
+                "Every field the skill marks as Required in its Inputs "
+                "table must appear somewhere in the slash body — either "
+                "the invocation pseudo-code, a dialog template, or the "
+                "`$ARGUMENTS` parser. Slash and skill input shape drift "
+                "is a silent failure mode: the slash invokes without the "
+                "field; the skill refuses or auto-resolves to an "
+                "unintended default."
+            )
+
     # Skills present on disk but not declared in WORKFLOW_PAIRS or
     # SKILL_ONLY_OK. After the slash-condensation pass, all skills are
     # in SKILL_ONLY_OK by default — they are agent-only surfaces invoked
@@ -276,38 +329,13 @@ def main() -> int:
             "(only if a paired user-typed slash also ships)."
         )
 
-    # Workflow-trigger slash commands route to the spawn pipeline via
-    # ``hpc-agent run <workflow>`` instead of pairing with a Skill —
-    # their workflow lives in ``src/hpc_agent/worker_prompts/<name>.md``
-    # (see ``docs/internals/skill-policy.md``). Verify each exists, and
-    # carries the trigger directive.
-    for slash_stem in sorted(WORKFLOW_TRIGGER_SLASHES):
-        slash_path = COMMANDS_DIR / f"{slash_stem}.md"
-        if not slash_path.is_file():
-            errors.append(
-                f"declared workflow-trigger slash {slash_stem!r} but "
-                f"{slash_path.relative_to(REPO_ROOT)} is missing"
-            )
-            continue
-        body = slash_path.read_text(encoding="utf-8")
-        if re.search(r"hpc-agent run\b", body) is None and "hpc-campaign-driver" not in body:
-            errors.append(
-                f"{slash_path.relative_to(REPO_ROOT)} is a workflow-trigger "
-                "slash (WORKFLOW_TRIGGER_SLASHES) but does not shell "
-                "`hpc-agent run <workflow>` or `hpc-campaign-driver`. A "
-                "trigger slash must route to the code-orchestrated spawn "
-                "pipeline; see docs/internals/skill-policy.md."
-            )
-
-    # Slash commands without a declared skill, not allow-listed, and not
-    # a workflow trigger.
+    # Slash commands without a declared skill and not allow-listed.
     accounted = declared_slashes | SLASH_ONLY_OK | WORKFLOW_TRIGGER_SLASHES
     undeclared_slashes = slash_ids_present - accounted
     if undeclared_slashes:
         errors.append(
-            "slash command(s) on disk with no entry in WORKFLOW_PAIRS, "
-            "SLASH_ONLY_OK, or WORKFLOW_TRIGGER_SLASHES: "
-            f"{sorted(undeclared_slashes)}"
+            "slash command(s) on disk with no entry in WORKFLOW_PAIRS "
+            f"or SLASH_ONLY_OK: {sorted(undeclared_slashes)}"
         )
 
     if errors:
@@ -316,8 +344,8 @@ def main() -> int:
         return 1
     print(
         f"skills <-> slash_commands in sync "
-        f"({len(WORKFLOW_PAIRS)} skill pairs + "
-        f"{len(WORKFLOW_TRIGGER_SLASHES)} workflow triggers)"
+        f"({len(WORKFLOW_PAIRS)} workflow pairs + "
+        f"{len(SKILL_ONLY_OK)} agent-only skills)"
     )
     return 0
 

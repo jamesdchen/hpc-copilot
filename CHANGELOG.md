@@ -7,6 +7,196 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Three internals docs + decision-content drift lint
+
+Three new docs under `docs/internals/`:
+
+- **`parallelization-axes.md`** — the five-axis model (sweep dimensions, scheduling axis, wave structure, stage DAG, DataAxis). Lays out what each axis is for, how it operates, and how they compose at submit time. Explicitly clarifies that DataAxis is NOT the privileged axis — sweep dimensions are.
+- **`state-model.md`** — canonical reference for what state files exist, what each contains, which primitives touch them. Per-user state under `~/.claude/hpc/<repo>/`; per-experiment state under `<exp>/.hpc/`. Plus a reverse index mapping each primitive to the files it reads/writes.
+- **`submit-sequence.md`** — end-to-end walkthrough from `/submit-hpc` typed in chat to results landing in `aggregated.json`. Traces the slash → skill → bare worker → primitives → cluster pipeline.
+
+Plus a new lint: `scripts/lint_decision_content.py` catches drift between markdown surfaces that paraphrase the same operational content. Marked blocks (`<!-- decision-content:<tag> start -->` ... `<!-- decision-content:<tag> end -->`) must be byte-identical across files; the lint enforces this with normalised whitespace. Currently covers the axis decision tree (shared by `hpc-classify-axis` SKILL.md Step 4b and `/submit-hpc`'s data-axis dialog).
+
+Sibling docs updated:
+
+- `docs/internals/skill-policy.md` — added a section explicitly noting that DataAxis is not the privileged parallelization axis (pointing readers at `parallelization-axes.md`). The framework's primary parallelism comes from user-declared sweep dimensions in `task_generator`; DataAxis is a niche secondary optimization.
+- `docs/architecture.md` — added cross-cutting references to the three new internals docs and the `lint_decision_content.py` lint.
+- `docs/internals/README.md` — index updated with the three new entries.
+
+### Changed — Axis matcher narrows to Independent + BoundedHalo pattern library
+
+Tightened the autonomous classification scope of
+`hpc_agent.experiment_kit.axis_matcher` (and the `classify-axis-easy`
+primitive that wraps it). The matcher's autonomous outputs are now
+`independent`, `bounded_halo` (via a fixed pattern library), and
+`sequential` (the safe default for unrecognized carried state), plus
+the error/fallback states `unclassifiable` / `no_loop_detected` /
+`function_not_found`. `associative` is no longer detected autonomously
+— users who want to parallelize an inner reduction express it as a
+sweep dimension in their `task_generator`, and the framework's
+existing `combine-wave` machinery handles the map-reduce. The skill's
+LLM fallback (Step 4b) still recognizes Associative for the long tail.
+
+The previous rolling-window detector was over-conservative: it flagged
+input-slicing patterns like `data[i-W:i]` as `needs_halo_expr`
+(BoundedHalo) even when the loop body had no carried state. Such
+loops refit a model from scratch each iteration; nothing is carried
+output-to-input. They are now correctly classified as `independent`.
+The defining characteristic of BoundedHalo is now framed precisely:
+iteration N reads iteration N-1's *output* (carried state from prior
+iterations' computations), not iteration N reading a window of the
+*input* array.
+
+The BoundedHalo pattern library covers five shapes — first-order
+stencil (`u[i] = f(u[i-1])`; halo = 1), finite-order stencil
+(`u[i] = a*u[i-1] + b*u[i-2]`; halo = K), bounded-window deque
+(`deque(maxlen=W)`; halo = W), pandas rolling
+(`.rolling(window=W).<agg>()`; halo = W, recognized both inside loops
+and as a vectorized op with no explicit loop), and EMA / exponential
+smoothing (`state = β*state + (1-β)*x`; halo ≈ `ceil(5/(1-β))` for
+literal β, conservative `100` for parameter β). Patterns outside the
+library fall back to `sequential` — the framework runs the inner loop
+serially, which is safe (just slower).
+
+Wire-shape: the matcher's `MatcherResult` and the `classify-axis-easy`
+envelope's `data` now expose `halo_expr` (string in the axis-config
+expression syntax) in place of `monoid`. The `kind` enum drops
+`associative` and `needs_halo_expr`, and adds `bounded_halo` and
+`sequential` as autonomous outputs.
+
+### Added — Hybrid axis classifier (AST pattern-match + LLM fallback)
+
+`hpc-classify-axis` now runs a stdlib-only AST pattern-matcher first
+(new `classify-axis-easy` primitive, backed by
+`hpc_agent.experiment_kit.axis_matcher`) and only falls through to the
+LLM decision tree on `unclassifiable` / `no_loop_detected`. The matcher
+recognises the canonical shapes — `functools.reduce` /
+`itertools.accumulate`, append-only loops, `acc += x` accumulators, and
+`data[i - W : i]` / `data.iloc[i - W : i]` / `data[max(0, i - W) : i]`
+rolling windows — and returns a confident `{kind, evidence, monoid?,
+tried}` envelope or `unclassifiable`. Conservative by design: an
+uncertain match returns `unclassifiable`, never a wrong-but-confident
+classification. Handles ~80% of common cases without LLM reasoning,
+saving context budget on every cold-start submit. The skill's existing
+decision tree is preserved verbatim as the long-tail fallback.
+
+### Changed — Workflow skills return all ambiguities in one envelope
+
+Refined the workflow-skill contract: skills no longer early-return on the
+first unresolved field. They walk every resolution step, accumulate
+ambiguities into a single `needs_resolution` envelope, and return the
+full list in one round-trip. Each ambiguity entry carries:
+
+```json
+{
+  "field": "<name>",
+  "candidates": [...],
+  "depends_on": [<dependency fields>],
+  "safe_default": <value>
+}
+```
+
+Callers resolve every entry at once and re-invoke. Bounded by dependency
+DAG depth (~3 rounds max for HPC submission), not by ambiguity count.
+
+This subsumes three earlier awkwardness points:
+
+- **The `mode: "interview" | "autonomous"` flag is gone.** Caller-supplied
+  fields are always authoritative; the slash interprets ambiguities as
+  user dialogs; the autonomous caller (MARs experiment-runner) applies
+  `safe_default` to every ambiguity and re-invokes. No mode-dependent
+  branches in the skill body.
+- **The skill no longer enumerates worker-surfaceable escalation codes.**
+  Worker envelopes carry `safe_default` per ambiguity; the skill applies
+  it generically. Adding a new escalation type doesn't require a skill
+  update.
+- **Multi-turn escalation state lives in the augmented spec.** Each
+  re-invocation passes the resolved-so-far fields explicitly; there's no
+  implicit conversation state to track.
+
+The slash bodies' "On `spec_invalid`" sections become "On
+`needs_resolution`" — topo-sort the ambiguities list, walk dialogs in
+order, re-invoke once with everything filled.
+
+### Changed — `hpc-status` skips the worker for one-shot snapshots
+
+Refined: the worker-spawn boundary is "more than one LLM-driven step,"
+not "every workflow." For `wait_terminal=false` (single primitive call),
+the skill calls `hpc-agent status --run-id <id>` directly — no worker
+spawn, no context-isolation overhead. For `wait_terminal=true` (blocking
+poll), the skill hands off to `hpc-agent run status` so the poll loop's
+intermediate state stays in the worker's private context (not the
+caller's). Saves substantial overhead for MARs experiment-runners that
+poll often.
+
+### Changed — Lint catches slash↔skill input-shape drift
+
+Added a check to `scripts/lint_skill_command_sync.py`: every field the
+skill marks as Required in its Inputs table must appear in the slash
+body. Catches the silent failure mode where a new required field gets
+added to the skill but the slash invocation doesn't get updated.
+
+### Changed — `skill-policy.md` clarifies what each layer decides
+
+Added the experiment-aware vs experiment-agnostic split for decisions:
+
+- **Skills make experiment-aware decisions** — which executor for *this*
+  repo, which DataAxis for *this* run's loop, what walltime for *this*
+  cmd_sha's runtime priors. The questions depend on the experiment.
+- **Workers make experiment-agnostic decisions** — is there an in-flight
+  run? is the spec cached? did the canary succeed? Plumbing-level
+  branching that doesn't depend on the experiment's content.
+
+Both layers branch; both layers make judgement calls. The split is *what
+they decide on*, not *whether they decide*.
+
+Also documented the worker-spawn principle: workflow skills hand off to
+a bare worker only when the workflow has more than one LLM-driven step.
+Single-step workflows call the primitive directly.
+
+### Added — Workflow-skill layer between slashes and the execution worker
+
+Resurrected the four workflow skills (`hpc-submit`, `hpc-status`,
+`hpc-aggregate`, `hpc-campaign`) as the **decision layer** between
+the human-elicitation slashes and the deterministic execution worker.
+Previously the slashes shelled out directly to `hpc-agent run
+<workflow>`; now they invoke the matching workflow skill via the
+Skill tool, and the skill resolves decisions before handing off.
+
+The architecture is now three layers, four surfaces:
+
+| Layer | Surface | What it does |
+|---|---|---|
+| Interview | Slashes (`/submit-hpc`, etc.) | Propose-then-confirm dialogs with the user |
+| Decision | Workflow skills (`hpc-submit`, etc.) + sub-skills (`hpc-classify-axis`, etc.) | Resolve every choice point; auto-resolve by default; compose sub-skills |
+| Execution | Worker prompts (`worker_prompts/<workflow>.md`) | Deterministic action sequence; no decisions, no prompts |
+
+Two consumers, one execution path:
+
+- **Human**: types `/submit-hpc`; slash conducts the interview, invokes `hpc-submit` skill in `mode: "interview"` with user-resolved fields; skill auto-resolves the rest, shells out to `hpc-agent run submit`.
+- **External agent** (MARs experiment-runner, notebook driver, cron worker): invokes `Skill("hpc-submit", { ..., mode: "autonomous" })` directly with whatever it pre-resolved; skill auto-resolves everything else and never returns `needs_human` (autonomous callers can't escalate to a human; the skill picks the most conservative interpretation and proceeds, recording the choice in `decisions`).
+
+Why resurrect: the four workflow skills had existed previously (commit
+`04a6290` "slash/skill surgery: separate human surface from agent
+surface") but were deleted in `7a39b5e` because the only known
+consumer at the time was hpc-agent's own `claude -p --bare` worker,
+which has no Skill tool. The deletion missed external Claude agents
+(MARs's experiment-runner, future MCP hosts) which DO have Skill
+tools and want to delegate the entire HPC pipeline as one skill
+invocation rather than orchestrating primitives + sub-skills
+themselves. Re-adding the workflow-skill layer gives external agents
+the natural entry point.
+
+Files:
+- New: `src/slash_commands/skills/hpc-{submit,status,aggregate,campaign}/SKILL.md`
+- Rewritten: `src/slash_commands/commands/{submit,monitor,aggregate,campaign}-hpc.md` — slim to interview-only prose; invoke the matching workflow skill via the Skill tool.
+- Updated: `scripts/lint_skill_command_sync.py` — `WORKFLOW_PAIRS` repopulated with the four pairs; `WORKFLOW_TRIGGER_SLASHES` emptied (no more thin trigger slashes); `_INVOKE_DIRECTIVE_RE` simplified (paired-skill invocation only).
+- Updated: `docs/internals/skill-policy.md` — three-layer / four-surface framing.
+- Updated: `docs/architecture.md` — "Agent surfaces" rewritten.
+
+The execution layer (`worker_prompts/<workflow>.md`) is unchanged —
+each worker prompt's `cacheable_prefix` snapshot test stays green.
+
 ### Changed — Slash surface condensed to four workflow triggers
 
 The user-facing slash surface is now exactly `/submit-hpc`,

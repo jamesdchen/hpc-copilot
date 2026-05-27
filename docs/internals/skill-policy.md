@@ -1,82 +1,150 @@
-# Skill Policy — when something earns a SKILL.md
+# Skill Policy — three layers, four surfaces
 
-hpc-agent ships markdown that LLMs read. There are **three places** it can live, and the choice is forced by the consumer.
+hpc-agent ships markdown that LLMs read. The architecture is **three
+layers** (interview → decision → execution) across **four surfaces**
+(slashes, workflow skills, sub-skills, worker prompts). Each surface
+has exactly one job; each consumer reaches into the layer it needs.
 
-## The framing: two consumers of hpc-agent
+## The framing: three concerns, three layers
 
-| Consumer | What they call | Decision-making |
+| Layer | What it does | Surfaces |
 |---|---|---|
-| **Human** (Claude Code interactive chat) | `/<cmd>-hpc` slash command | The in-chat LLM elicits intent from the human, then invokes the skill with a resolved spec. |
-| **Other agent** (MARs experiment agent, harness, batch driver, ...) | `SKILL.md` directly (via the `Skill` tool, or by reading the body and executing the same procedure) | The calling agent makes the decision autonomously — no human in the loop. |
+| **Interview** | Conducts propose-then-confirm dialogs with the human. Collects intent for any decision the decision layer can't auto-resolve. | Slash commands (`/submit-hpc`, etc.) |
+| **Decision** | Resolves every choice point. Auto-resolves by default (autonomous mode); accepts caller-supplied values to skip resolution (interview mode); composes finer-grained sub-skills when a specific decision is non-trivial. | Workflow skills (`hpc-submit`, etc.) + sub-skills (`hpc-classify-axis`, etc.) |
+| **Execution** | Runs the deterministic action sequence — rsync, qsub, journal write, canary, monitor loop, combiner. No decisions, no prompts. Reads the resolved spec, executes. | Worker prompts (`worker_prompts/<workflow>.md`) |
 
-The slash command is the human-elicitation surface. The skill is the agent-autonomous decision surface. **A skill does not interview the human.** When a human's intent is the source of truth (which YAML is the experiment identity, which entry point to onboard, whether a `BoundedHalo` halo expression is right), the slash command gathers that intent first and passes a fully-resolved spec to the skill. The skill then takes the deterministic path.
+The flow is layered top to bottom:
 
-This is a flip from the prior framing ("human authority ↔ skill"). The prior framing assumed the only consumer of a skill was the user's chat. That's wrong: hpc-agent is also called by other agents (a MARs experiment agent, a notebook harness, a cron driver). Those callers have no `[Y/n]` channel, and a skill that prompts them is a skill they can't use.
+```
+Human types /submit-hpc                MARs experiment-runner
+   ↓                                      ↓
+INTERVIEW: slash collects decisions   (skip — agent has the spec)
+   ↓                                      ↓
+DECISION: workflow skill resolves remaining decisions
+          (composes sub-skills for axis classification,
+           entry-point onboarding, axes-init)
+   ↓
+EXECUTION: bare worker runs worker_prompts/<workflow>.md
+          (deterministic sequence: rsync, qsub, canary, ...)
+   ↓
+envelope back up the stack
+```
+
+Two consumers (human, external agent) enter at different layers; both converge on the same execution layer with a fully-resolved spec.
 
 ## The forcing rule
 
-> **Skill = agent-autonomous decision logic. Slash = human-elicitation wrapper around the skill.**
+> **Each layer has one job. A slash interviews. A skill decides. A worker prompt executes.**
 
-A skill's body MUST:
+The decisions made at each layer are also distinct:
 
-- Take all inputs from the caller (caller-supplied or detected from repo state). No `[Y/n]`, no `Looks right?`, no "Apply this edit?" prompts.
-- Resolve every choice point deterministically. Ambiguity that cannot be resolved becomes a `spec_invalid` envelope (with a specific `error_code` like `ambiguous_entry_point` or `ambiguous_run`), not a prompt. The caller decides what to do.
-- Have an explicit fail-safe default for heuristic decisions (e.g. `DataAxis` falls back to `Sequential` when the tree is ambiguous). The default must be the conservative-but-correct outcome.
+- **Skills make experiment-aware decisions.** Which executor for *this* repo, which DataAxis for *this* run's loop, what walltime for *this* cmd_sha based on its runtime priors. The questions depend on the experiment's content.
+- **Workers make experiment-agnostic decisions.** Is there already an in-flight run? Has this spec been cached in the journal? Did the canary succeed? Has the array been fully accepted by the scheduler? Workflow plumbing — the questions are the same regardless of what the experiment computes.
 
-A slash command's body MAY:
+Both layers make decisions; both layers can branch. The split is *about what they decide on*, not whether they decide at all.
 
-- Conduct propose-then-confirm dialogs with the user.
-- Override the skill's autonomous defaults with user-confirmed choices (passed in via the spec).
-- Skip skill invocation entirely when a state check resolves the request (e.g. cache hit, environment already configured).
+A **slash command's** body MUST:
+
+- Conduct propose-then-confirm dialogs with the user for any decision the matching workflow skill needs.
+- Invoke the matching workflow skill via the Skill tool with the user-resolved fields. No `hpc-agent run` shell-out from the slash body — that's the skill's job.
+- Carry NO workflow mechanics (no rsync prose, no qsub, no journal). The skill is the canonical SoT for what the workflow does.
+
+A **workflow skill's** body MUST:
+
+- Take all inputs from the caller (slash or autonomous agent). No `[Y/n]`, no `Looks right?`.
+- Walk every resolution step; **accumulate ambiguities into a single envelope, never early-return on the first miss.** When some fields can't auto-resolve, return `{ok: false, error_code: "needs_resolution", data: {resolved, ambiguities}}` with the full list. Each ambiguity carries `field`, `candidates`, `depends_on`, `safe_default`. The caller resolves every entry (slash walks user dialogs; autonomous caller applies safe_defaults) and re-invokes in one shot. Bounded by dependency DAG depth (~3 rounds max), not by ambiguity count.
+- Compose sub-skills when a sub-decision is non-trivial (e.g., axis classification → `hpc-classify-axis`). Sub-skill ambiguities propagate upward into the workflow skill's `ambiguities` list.
+- Hand off to the execution layer (`hpc-agent run <workflow>`) **only when the workflow has more than one LLM-driven step.** Single-step workflows (a one-shot status snapshot, a single-primitive query) should call the primitive directly — the bare-worker spawn buys no context isolation when there's nothing to isolate. Multi-step (submit, aggregate, campaign, blocking poll) hands off; intermediate tool calls accumulate in the worker's private context, not the caller's.
+
+A **sub-skill's** body MUST satisfy the same rules as a workflow skill, just at finer grain. Sub-skills don't have paired slashes — users don't type `/classify-axis-hpc`; they reach sub-skills through a workflow skill's composition.
+
+A **worker prompt's** body MUST:
+
+- Be deterministic on the resolved spec — no LLM-judgment calls about the experiment's content (those happened in the skill).
+- Plumbing-level branching is allowed and expected (cache checks, lifecycle dispatch, retry-on-transient-error) — these are experiment-agnostic decisions.
+- No `[Y/n]`. Workers can't prompt the user (the bare worker has no Skill tool, no chat partner).
+- Be eligible for prose hardening: snapshot tests on `cacheable_prefix` bytes, banned-hedging-phrase lints, primitive-reference cross-checks.
+- Surface mid-flight ambiguities (e.g., co-tenant exclusion judgment) in the same `needs_resolution` envelope shape, with `safe_default` populated, so the calling skill propagates them up consistently.
 
 ## The decision table
 
 ```
-                            │ human-elicitation                     │ agent-autonomous decision
-────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-Skill (in-chat or other-    │ —                                     │ hpc-build-executor
-   agent consumer, Skill    │   ← empty by rule                     │ hpc-classify-axis
-   tool or direct read)     │                                       │ hpc-wrap-entry-point
-                            │                                       │
-────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-Slash command — workflow    │ /submit-hpc  (carries the escalation  │ —
-   trigger (human consumer, │              playbook for entry-point,│   ← workflow triggers are
-   interactive chat)        │              axis, axes-init dialogs) │     human-facing by design
-                            │ /monitor-hpc                          │
-                            │ /aggregate-hpc                        │
-                            │ /campaign-hpc (carries the            │
-                            │              validate-campaign        │
-                            │              findings interpretation) │
-────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-Worker prompt (delegated    │ —                                     │ hpc-submit
-   workflow, inlined into   │   ← empty by rule                     │ hpc-status
-   spawn pipeline)          │                                       │ hpc-aggregate
-                            │                                       │ hpc-campaign
-────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-Setup (one-time, imperative │ `hpc-agent setup --cluster <name>`    │ —
-   CLI command)             │ — env probes, SSH agent, clusters.yaml│   ← empty by rule
-                            │   validation; preflight check details │
-                            │   carry actionable remediation prose  │
-────────────────────────────┼───────────────────────────────────────┼──────────────────────────────
-CLI primitive (JSON-in,     │ —                                     │ build-executor, classify-axis,
-   JSON-out, no prompt)     │   ← empty by rule                     │ interview, submit-flow,
-                            │                                       │ monitor-flow, aggregate-flow,
-                            │                                       │ combine-wave, ...
+                            │ INTERVIEW            │ DECISION              │ EXECUTION
+                            │ (human-elicitation)  │ (agent-autonomous)    │ (deterministic action)
+────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
+Slash command (interview    │ /submit-hpc          │ —                     │ —
+   layer; human consumer)   │ /monitor-hpc         │   ← slashes don't     │   ← slashes don't
+                            │ /aggregate-hpc       │     decide; they      │     execute; they
+                            │ /campaign-hpc        │     invoke skills     │     invoke skills
+────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
+Workflow skill (decision    │ —                    │ hpc-submit            │ —
+   layer; paired w/ slash)  │   ← skills don't     │ hpc-status            │   ← skills don't
+                            │     prompt; they     │ hpc-aggregate         │     execute; they
+                            │     auto-resolve     │ hpc-campaign          │     run `hpc-agent run`
+────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
+Sub-skill (decision layer;  │ —                    │ hpc-classify-axis     │ —
+   no paired slash;         │   ← composed by      │ hpc-wrap-entry-point  │   ← composed by
+   composed by workflow     │     a workflow       │ hpc-build-executor    │     a workflow
+   skills)                  │     skill, not       │                       │     skill, not
+                            │     called directly  │                       │     called directly
+                            │     by users         │                       │
+────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
+Worker prompt (execution    │ —                    │ —                     │ submit, status,
+   layer; inlined into bare │   ← workers can't    │   ← workers don't     │ aggregate, campaign
+   spawn worker)            │     prompt           │     decide; they      │
+                            │                      │     execute resolved  │
+                            │                      │     specs             │
+────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
+Setup (one-time, imperative │ hpc-agent setup      │ —                     │ —
+   CLI command)             │   --cluster <name>   │                       │
+────────────────────────────┼──────────────────────┼───────────────────────┼─────────────────────────
+CLI primitive (JSON-in,     │ —                    │ —                     │ build-executor,
+   JSON-out, no prompt)     │                      │                       │ classify-axis,
+                            │                      │                       │ submit-flow, ...
 ```
 
-Structural empties confirm the rule:
+Structural empties confirm the layer rule:
 
-1. **Skill-left empty** — a skill that interviews the human is a skill another agent cannot call. If you see one, the interview belongs in the paired slash command.
-2. **Slash-right empty** — a slash with no human-elicitation content is a primitive call dressed up as a prompt. Either it elicits intent from the user, or it should be a thin trigger over `hpc-agent <verb>`.
-3. **Worker-prompt-left empty** — spawned workers cannot actuate human authority. That's the escalation contract: workers handle only the deterministic column; human-elicitation needs flow back as escalations the user's in-chat Claude resolves via a slash.
-4. **Setup-right empty** — setup is one-time imperative work. Anything that asks the user to re-affirm per submit belongs in a slash, not setup.
+1. **Slash decision/execution columns empty** — slashes are pure interview prose. They invoke skills; they don't decide or execute.
+2. **Skill interview/execution columns empty** — skills are pure decision logic. They don't prompt the user; they don't run rsync.
+3. **Worker prompt interview/decision columns empty** — workers are pure execution. They don't prompt (the bare worker has no Skill tool); they don't decide (every decision was resolved in the skill).
+4. **Sub-skill interview/execution columns empty** — same rules as workflow skills, just composed rather than called directly.
+5. **Setup decision/execution columns empty** — setup is one-time imperative environment authority. Anything per-submit belongs in a slash + skill pair, not setup.
 
 ## How this plays out in the current codebase
 
-- `hpc-build-executor`, `hpc-classify-axis`, `hpc-wrap-entry-point` — agent-autonomous decision logic. Each takes a partial spec, fills in the rest from repo inspection + heuristics, and invokes its underlying primitive. No `[Y/n]` anywhere in the bodies. None ships with a paired user-typed slash — the in-chat agent invokes them via the Skill tool when `/submit-hpc`'s escalation playbook reaches the matching escalation code; other agent harnesses read them directly.
-- `/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc` — the four user-facing workflow triggers. Each routes through `hpc-agent run <workflow>` to the spawn pipeline. `/submit-hpc` carries the escalation playbook (entry-point onboarding, axis classification, axes-init dialogs); `/campaign-hpc` carries the validate-campaign findings interpretation guide (severity handling, common code values). The human-elicitation prose that used to live in paired slashes lives here.
-- `submit`, `status`, `aggregate`, `campaign` worker prompts — delegated execution. The text is **inlined** into the `claude -p --bare` worker prompt by `spawn_prompt._procedure_body`; the worker never invokes the Skill tool. These live at `src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md` (loaded via `importlib.resources`). Hardening that doesn't fit real skills lives here: snapshot tests on the rendered `cacheable_prefix` bytes, banned-hedging-phrase lints, and `hpc-agent <primitive>` reference cross-checks.
-- **Setup is a CLI step, not a slash.** Environment authority is one-time, imperative. `hpc-agent setup --cluster <name>` does the probe (install commands/skills + check-preflight) and writes the 24h cache marker `/submit-hpc`'s Step 6b gate reads. Each preflight check's `detail` field carries actionable remediation prose so the primitive's output is self-explanatory without a slash translating.
+- **Workflow slashes** (`/submit-hpc`, `/monitor-hpc`, `/aggregate-hpc`, `/campaign-hpc`) — interview layer. Each conducts the propose-then-confirm dialog with the user for its workflow's decisions, then invokes the matching workflow skill via the Skill tool with the resolved fields. The slash body is pure interview prose; no workflow mechanics.
+- **Workflow skills** (`hpc-submit`, `hpc-status`, `hpc-aggregate`, `hpc-campaign`) — decision layer. Each resolves missing fields autonomously (interview-mode callers pre-resolve via the slash; autonomous-mode callers like MARs's experiment-runner let the skill auto-resolve everything). Composes sub-skills for sub-decisions. Hands off to the execution layer via `hpc-agent run <workflow>`. No `[Y/n]` anywhere.
+- **Sub-skills** (`hpc-classify-axis`, `hpc-wrap-entry-point`, `hpc-build-executor`) — decision layer, composed by workflow skills (and directly by the in-chat agent when the interview phase needs a specific decision). No paired slash — users don't type `/classify-axis-hpc`; they reach sub-skills through the workflow skill's composition. Same `[Y/n]`-free rule.
+- **Worker prompts** (`submit`, `status`, `aggregate`, `campaign` under `src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`) — execution layer. Inlined into the `claude -p --bare` worker prompt by `spawn_prompt._procedure_body`; the worker has no Skill tool. Hardening lives here: snapshot tests on the rendered `cacheable_prefix` bytes, banned-hedging-phrase lints, and `hpc-agent <primitive>` reference cross-checks.
+- **Setup is a CLI step, not a slash.** Environment authority is one-time, imperative. `hpc-agent setup --cluster <name>` does the probe + cache marker; preflight check details carry actionable remediation prose so the primitive output is self-explanatory.
+
+## A note on DataAxis (and what's NOT the privileged axis)
+
+The framework has accumulated documentation prominence around the
+DataAxis classification (`hpc-classify-axis` sub-skill, the four-way
+taxonomy in `axis.py`, the matcher's pattern library). This can
+mislead readers into thinking DataAxis is *the* central
+parallelization concept in the framework. It's not.
+
+The framework's privileged axis of parallelization is the user's
+**sweep dimensions** (declared in `task_generator` via
+`<experiment>/.hpc/tasks.py`). That's what produces the bulk of
+parallelism: a user's `cartesian_product(seed=range(100),
+model=["a","b"])` produces 200 tasks; the framework's task-array
+machinery fans them out to the cluster. No DataAxis classification is
+involved.
+
+DataAxis matters only when a SINGLE task's `run()` function has an
+inner loop you want to *further* chunk into sub-tasks. That's a niche
+optimization. Most users never hit it because their sweep dimensions
+provide enough parallelism.
+
+The five parallelization axes — sweep dimensions, scheduling axis,
+wave structure, stage DAG, DataAxis — are documented separately in
+[`parallelization-axes.md`](parallelization-axes.md). Future
+contributors should read that doc before treating DataAxis as a
+central concern.
 
 ## When adding a new affordance
 
@@ -84,11 +152,10 @@ Ask, in order:
 
 1. **Is this a one-time-per-machine concern?** If yes → setup. Stop.
 2. **Is it mechanical given a JSON spec?** If yes → primitive. If a spawned worker should run it as part of a workflow, also add a worker prompt that calls the primitive.
-3. **Does it need a decision an agent (human or otherwise) makes per-experiment?** Then it's both a skill and a slash:
-   - The **skill** encodes the decision-making logic — autonomous when called by another agent, accepting caller-supplied overrides when present.
-   - The **slash** wraps the skill with human-elicitation prose. It runs in the user's chat, gathers intent via propose-then-confirm, and invokes the skill with the resolved spec.
+3. **Is the new affordance a top-level user-typed workflow?** (Submit something. Monitor it. Aggregate. Drive a campaign.) Then it gets a (slash, workflow skill) pair under `WORKFLOW_PAIRS` and a `worker_prompts/<workflow>.md` for the execution.
+4. **Is it a sub-decision composed into a workflow skill** (axis classification, entry-point onboarding, ...)? Then it's a sub-skill — no paired slash. List it in `SKILL_ONLY_OK`.
 
-If the answer to (3) is "yes, for *only* the human consumer" — that's rare; usually it's a sign the work belongs in the slash body entirely, not in a skill. If the answer is "yes, for *only* the agent consumer" — that's a skill with no paired slash, which is allowed but unusual (add it to `SLASH_ONLY_OK`-style explicit allow-listing in the lint).
+If the answer to (3) is "yes, for *only* the human consumer" — that's rare; usually it's a sign the work belongs in the slash body entirely, not in a skill.
 
 ## What this rule will not tell you
 
@@ -100,4 +167,4 @@ If the answer to (3) is "yes, for *only* the human consumer" — that's rare; us
 
 - [`adding-a-primitive.md`](adding-a-primitive.md) — the wire-surface recipe; complementary to this doc.
 - [`sync-checklist.md`](sync-checklist.md) — invariants between slash-command surface and CLI.
-- `scripts/lint_skill_command_sync.py` — enforces that every skill on disk declares matching `execution` + `category` frontmatter, every workflow-trigger slash shells `hpc-agent run`, and every paired (skill, slash) has both halves wired (post-condensation, `WORKFLOW_PAIRS` is empty by default — all skills are in `SKILL_ONLY_OK`). The `category` frontmatter field (`agent-autonomous` for skills consumed via the Skill tool / direct read; `worker-prompt` for skills inlined into delegated workers) is the machine-readable witness for this policy.
+- `scripts/lint_skill_command_sync.py` — enforces that every paired (slash, workflow skill) has both halves on disk and the slash routes to the matching skill via the Skill tool, that every sub-skill is in `SKILL_ONLY_OK`, and that every skill's `execution` + `category` frontmatter agree. The `category` field (`agent-autonomous` for skills consumed via the Skill tool / direct read; `worker-prompt` for skills inlined into delegated workers) is the machine-readable witness for this policy.

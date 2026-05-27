@@ -1,8 +1,58 @@
-`/aggregate-hpc` triggers the **aggregate** workflow — finalize a run's aggregated metrics.
+`/aggregate-hpc` is the **human-interview wrapper** around the `hpc-aggregate` skill — the agent-autonomous decision layer that combines a terminal HPC run's per-task results into a final metrics envelope.
 
-This command is a thin trigger over `hpc-agent run`, the code-orchestrated entrypoint. Do not run the `hpc-aggregate` skill, and do not perform the workflow steps yourself in this conversation — the workflow runs in a fresh-context worker.
+## Invocation
 
-1. Structure the user's request into a JSON object `<fields>` — the `profile` (and optional `stage`) to aggregate, or `{}` to let the worker auto-discover which profiles/stages have results ready.
-2. Run, via the `Bash` tool: `hpc-agent run aggregate --fields-json '<fields>'`. It spawns a fresh-context worker that executes the `hpc-aggregate` skill and prints a JSON envelope.
-3. Surface to the user: `data.report.result` (`ok`, an aggregated-metrics summary, missing waves/tasks, escalation reason), `data.report.decisions`, and `data.report.anomalies`.
-4. If a decision is an **escalation** — a partial-aggregation choice, an integrity violation to confirm — ask the user, add it to `<fields>`, and run `hpc-agent run aggregate` again.
+Invoke the `hpc-aggregate` skill via the Skill tool with the initial spec:
+
+```
+Skill("hpc-aggregate", {
+  experiment_dir: ".",
+  profile: <if user stated>,
+  run_id: <if user stated>,
+  allow_partial: <if user requested>
+})
+```
+
+The skill auto-discovers profile/run/stage from on-disk state; only fields the user pinned go in the initial spec.
+
+## On `needs_resolution` — walking ambiguities
+
+### Dialog: `profile`
+
+Multiple profiles with terminal runs. Show candidates from the envelope:
+
+```
+Multiple profiles have terminal runs:
+  1. ml_ridge — 3 runs, latest <run_id> (complete, 100/100)
+  2. dl_patchts — 1 run, <run_id> (terminal_with_failures, 22/24)
+Which profile?
+```
+
+### Dialog: `allow_partial`
+
+```
+Run <id> has <N>/<M> waves complete (<count> still running or failed). Aggregate on partial data?
+  [Y]  proceed; mark envelope partial: true
+  [n]  refuse; wait for the remaining waves (default)
+```
+
+Default **n** — partial aggregation usually masks real cluster issues.
+
+## On final envelope
+
+Surface to the user:
+- `data.report.result.aggregated_metrics`
+- `data.report.result.partial` flag if applicable
+- `data.report.result.ingested_runtime_samples`
+- `data.report.decisions`
+- `data.report.anomalies`
+
+## On `spec_invalid` (not `needs_resolution`)
+
+- `nothing_to_aggregate`: "Nothing to aggregate — no terminal runs."
+- `integrity_violation`: surface the code + evidence. Do NOT auto-proceed — these need investigation.
+
+## Notes
+
+- **Refuse partial by default.** Aggregating on incomplete waves silently produces wrong final metrics.
+- **Idempotent.** Re-aggregating produces byte-identical output.

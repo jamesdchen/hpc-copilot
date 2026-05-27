@@ -333,44 +333,68 @@ on success, `{"ok": false, "error_code": str, "category": str,
 
 ## Agent surfaces
 
-Three, mirroring the three call-sites a workflow can fire from:
+Four, organised into three layers (interview → decision → execution).
+See `docs/internals/skill-policy.md` for the full forcing rule.
 
-1. **Skills** (`src/slash_commands/skills/<id>/SKILL.md`) —
-   agent-autonomous decision logic. Consumed via the `Skill` tool by
-   the user's interactive Claude Code chat, or by direct read from any
-   other agent harness (a MARs experiment agent, a notebook driver, a
-   cron-spawned worker). Small focused actions (`hpc-build-executor`,
-   `hpc-classify-axis`, `hpc-wrap-entry-point`). The body MUST be
-   deterministic given its inputs — no `[Y/n]` prompts — so any agent
-   caller can drive it without a human in the loop. None of the skills
-   ships with a paired user-typed slash; they are invoked by the
-   in-chat agent when `/submit-hpc`'s escalation playbook reaches the
-   matching escalation code, or by other agents directly. See
-   `docs/internals/skill-policy.md`.
-2. **Worker prompts** (`src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`) —
-   the four host workflows (`submit`, `status`, `aggregate`, `campaign`)
-   delegated workers consume. A `claude -p --bare` worker has no
-   `Skill` tool, so `_kernel/extension/spawn_prompt.py` inlines the
-   prompt body verbatim into `cacheable_prefix` (loaded via
-   `importlib.resources`). Snapshot tests pin the rendered bytes so
-   prompt-cache hit rates don't silently regress.
-3. **Slash commands** (`src/slash_commands/commands/<stem>.md`) —
-   the human-elicitation surface; user-typed entry points. Exactly
-   four user-facing slashes: `submit-hpc`, `monitor-hpc`,
-   `aggregate-hpc`, `campaign-hpc`. Each routes through
-   `hpc-agent run <workflow>` to the spawn pipeline, which loads the
-   body from `worker_prompts/<workflow>.md`. No paired skill — the
-   workflow IS the worker prompt. The in-chat playbook for handling
-   the worker's escalations (entry-point onboarding, axis
-   classification, axes-init, validate-campaign findings) lives in
-   the slash body of the workflow that escalates.
+1. **Slash commands** (`src/slash_commands/commands/<stem>.md`) — the
+   interview layer; user-typed entry points. Exactly four user-facing
+   slashes (`submit-hpc`, `monitor-hpc`, `aggregate-hpc`,
+   `campaign-hpc`). Each conducts a propose-then-confirm dialog for
+   any decision the matching workflow skill can't auto-resolve, then
+   invokes the workflow skill via the Skill tool with the resolved
+   spec. Slashes carry NO workflow mechanics — they are pure
+   human-elicitation prose.
+
+2. **Workflow skills** (`src/slash_commands/skills/hpc-<workflow>/SKILL.md`)
+   — the decision layer. Four agent-autonomous skills (`hpc-submit`,
+   `hpc-status`, `hpc-aggregate`, `hpc-campaign`). Each composes
+   sub-skills (see below) to resolve every choice point, then shells
+   out to `hpc-agent run <workflow>` for execution. Invoked by the
+   matching slash after the interview, or directly by an external
+   autonomous agent (a MARs experiment-runner, notebook driver,
+   cron-spawned worker) with whatever spec it pre-resolved.
+
+   **Sub-skills** (`src/slash_commands/skills/hpc-<topic>/SKILL.md`) —
+   the same decision layer, finer grained. Three sub-skills
+   (`hpc-classify-axis`, `hpc-wrap-entry-point`, `hpc-build-executor`)
+   that workflow skills compose to resolve specific decisions. No
+   paired slash — users don't type `/classify-axis-hpc`; the in-chat
+   agent reaches them through `/submit-hpc`'s composition. Listed in
+   `SKILL_ONLY_OK` in the lint.
+
+3. **Worker prompts** (`src/hpc_agent/_kernel/extension/worker_prompts/<workflow>.md`)
+   — the execution layer. The four host workflows (`submit`, `status`,
+   `aggregate`, `campaign`) delegated workers consume. A `claude -p
+   --bare` worker has no `Skill` tool, so
+   `_kernel/extension/spawn_prompt.py` inlines the prompt body
+   verbatim into `cacheable_prefix` (loaded via
+   `importlib.resources`). Worker prompts make NO decisions — every
+   choice was resolved in the decision layer; the worker just executes
+   the deterministic sequence (rsync, qsub, canary, journal). Snapshot
+   tests pin the rendered bytes so prompt-cache hit rates don't
+   silently regress.
 
 `scripts/lint_skill_command_sync.py` pins the surfaces:
-`WORKFLOW_TRIGGER_SLASHES` enumerates the four `hpc-agent run`
-triggers; `SKILL_ONLY_OK` enumerates the agent-only skills. CI fails
-if a slash on disk has no entry in either set, or if a skill's
-`execution` and `category` frontmatter disagree. Skill-policy
-rationale lives in `docs/internals/skill-policy.md`.
+`WORKFLOW_PAIRS` enumerates the four workflow (slash, skill) pairs;
+`SKILL_ONLY_OK` enumerates the three sub-skills with no paired slash.
+CI fails if a slash on disk has no entry in either, if a paired
+slash doesn't invoke its skill via the Skill tool, or if a skill's
+`execution`/`category` frontmatter disagree.
+
+`scripts/lint_decision_content.py` is a sibling lint that catches
+drift between markdown surfaces that share operationally-identical
+prose (the axis decision tree appears in both the `hpc-classify-axis`
+skill body and the `/submit-hpc` slash's data-axis dialog). Marked
+blocks must be byte-identical across files; the lint enforces this.
+
+## Cross-cutting concerns
+
+Several aspects of the framework don't fit cleanly into a single
+subject and are worth knowing as standalone references:
+
+- [`internals/parallelization-axes.md`](internals/parallelization-axes.md) — the five-axis model (sweep dimensions, scheduling axis, wave structure, stage DAG, DataAxis) and how they compose at submit time.
+- [`internals/state-model.md`](internals/state-model.md) — what state files exist (per-user under `~/.claude/hpc/<repo>/`, per-experiment under `<exp>/.hpc/`), what each contains, which primitives touch them.
+- [`internals/submit-sequence.md`](internals/submit-sequence.md) — end-to-end walkthrough from `/submit-hpc` typed in chat to results landing in `aggregated.json`.
 
 ## Cross-subject composition
 
