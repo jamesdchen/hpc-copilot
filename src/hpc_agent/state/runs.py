@@ -15,7 +15,6 @@ task content also changes the run's identity.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -26,6 +25,7 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+from hpc_agent.state.run_sha import compute_cmd_sha, compute_tasks_py_sha
 
 __all__ = [
     "MAX_RUNS",
@@ -90,39 +90,11 @@ def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
     return RepoLayout(experiment_dir).run_sidecar(run_id)
 
 
-def compute_cmd_sha(tasks_module: Any) -> str:
-    """Materialize the task list and return a deterministic SHA-256.
-
-    Imports the user's ``tasks.py`` module (already loaded by the caller),
-    calls ``total()``, then ``resolve(i)`` for every ``i`` in
-    ``range(total())``. Each kwargs dict is normalized to sorted-keys JSON
-    and the lines are joined with ``\\n`` before hashing. The resulting
-    digest is stable across equivalent task lists and changes whenever any
-    kwarg dict changes.
-
-    Returns a 64-char hex string.
-
-    Raises
-    ------
-    AttributeError
-        If *tasks_module* lacks ``total`` or ``resolve``.
-    TypeError
-        If ``resolve(i)`` does not return a dict.
-    """
-    n = int(tasks_module.total())
-    parts: list[str] = []
-    for i in range(n):
-        kwargs = tasks_module.resolve(i)
-        if not isinstance(kwargs, dict):
-            raise TypeError(f"tasks.resolve({i}) must return a dict, got {type(kwargs).__name__}")
-        parts.append(json.dumps(kwargs, sort_keys=True, separators=(",", ":")))
-    joined = "\n".join(parts).encode()
-    return hashlib.sha256(joined).hexdigest()
-
-
-def compute_tasks_py_sha(tasks_py_path: Path) -> str:
-    """Return SHA-256 of ``tasks.py``'s bytes — diagnostic only."""
-    return hashlib.sha256(Path(tasks_py_path).read_bytes()).hexdigest()
+# ``compute_cmd_sha`` and ``compute_tasks_py_sha`` live in
+# :mod:`hpc_agent.state.run_sha` so this module can stay focused on the
+# sidecar lifecycle. The names re-export above via the top-level
+# ``from hpc_agent.state.run_sha import ...``; ``__all__`` already lists
+# both names so star-imports keep working unchanged.
 
 
 # v2 first-class config-snapshot fields. All optional; absent keys are
