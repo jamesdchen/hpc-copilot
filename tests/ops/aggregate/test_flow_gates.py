@@ -246,3 +246,60 @@ def test_columns_gate_skipped_without_pulled_summaries(journal_home, experiment)
 
     assert result.columns_checked is False
     assert result.column_violations == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: spec.mode is a wire-validated Literal
+#
+# The audit found worker_prompts/aggregate.md prescribing
+# ``"mode": "auto"`` inside the spec JSON, but ``AggregateFlowSpec``
+# had ``extra="forbid"`` and no ``mode`` field — every spec-driven
+# invocation following the prose would have hard-failed at the schema
+# boundary. ``mode`` was a function-level kwarg the CLI never wired,
+# so the override paths were dead code regardless. Tests below pin
+# the wire-validated field semantics.
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateFlowSpecMode:
+    @pytest.mark.parametrize("value", ["auto", "cluster-reduce", "combiner-only"])
+    def test_spec_accepts_each_valid_mode(self, value: str) -> None:
+        spec = AggregateFlowSpec(run_id="r1", mode=value)  # type: ignore[arg-type]
+        assert spec.mode == value
+
+    def test_spec_default_is_auto(self) -> None:
+        """The 90%-case route per the worker prompt — pin the default."""
+        spec = AggregateFlowSpec(run_id="r1")
+        assert spec.mode == "auto"
+
+    def test_spec_rejects_unknown_mode(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError, match="mode"):
+            AggregateFlowSpec(run_id="r1", mode="bogus")  # type: ignore[arg-type]
+
+    def test_spec_mode_is_consumed_by_aggregate_flow(
+        self, journal_home, experiment
+    ) -> None:
+        """End-to-end: spec.mode threads into aggregate_flow without
+        raising ``SpecInvalid``. The function previously rejected
+        ``mode`` only via a runtime check on a kwarg the CLI never
+        wired; this asserts the wire-validated field works."""
+        _seed_run(experiment)
+        _seed_sidecar(experiment)
+        spec = AggregateFlowSpec(
+            run_id="r1",
+            ensure_all_combined=False,
+            mode="combiner-only",  # type: ignore[arg-type]
+        )
+
+        with (
+            mock.patch.object(af_module, "rsync_pull", side_effect=_ok_rsync),
+            mock.patch.object(af_module, "reduce_partials", return_value={}),
+            mock.patch.object(af_module, "collect_wave_errors", return_value=set()),
+        ):
+            result = aggregate_flow(experiment, spec=spec)
+
+        # The flow completes (no spec_invalid) and the combiner-only
+        # route produces a result.
+        assert result.run_id == "r1"

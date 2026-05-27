@@ -112,6 +112,90 @@ class TestWalltimeExceeded:
             compute_submission_plan(constraints, workload)
 
 
+class TestInputValidationBoundaries:
+    """Surfaced by mutmut on compute_submission_plan — the input
+    validation guards (``total_tasks``, ``max_array_size``,
+    ``max_concurrent_jobs`` all >= 1) had no exact-boundary tests, so
+    every off-by-one mutation on those checks survived. These tests
+    pin the boundary semantics."""
+
+    def test_max_concurrent_jobs_zero_rejected(self):
+        constraints = ClusterConstraints(max_array_size=100, max_concurrent_jobs=0)
+        with pytest.raises(errors.SpecInvalid, match="max_concurrent_jobs must be >= 1"):
+            compute_submission_plan(constraints, WorkloadSpec(total_tasks=10))
+
+    def test_max_concurrent_jobs_one_accepted(self):
+        """The smallest accepted value — pins ``<= 0`` vs ``< 0``."""
+        constraints = ClusterConstraints(max_array_size=100, max_concurrent_jobs=1)
+        plan = compute_submission_plan(constraints, WorkloadSpec(total_tasks=10))
+        assert plan.max_concurrent == 1
+
+    def test_max_array_size_zero_rejected(self):
+        constraints = ClusterConstraints(max_array_size=0)
+        with pytest.raises(errors.SpecInvalid, match="max_array_size must be >= 1"):
+            compute_submission_plan(constraints, WorkloadSpec(total_tasks=10))
+
+    def test_max_array_size_one_accepted(self):
+        """The smallest accepted value — pins ``<= 0`` vs ``<= 1``."""
+        constraints = ClusterConstraints(max_array_size=1, max_concurrent_jobs=10)
+        plan = compute_submission_plan(constraints, WorkloadSpec(total_tasks=3))
+        assert plan.total_batches == 3
+        assert all(b.array_size == 1 for b in plan.batches)
+
+
+class TestWalltimeBoundaries:
+    """Surfaced by mutmut on compute_submission_plan's walltime check.
+    The guard is ``if walltime_limit > 0 and effective_time >
+    walltime_limit`` — three boundaries: walltime_limit=0 (skip
+    check), walltime_limit=1 (still active), effective_time exactly
+    at walltime_limit (no raise)."""
+
+    def test_walltime_limit_zero_skips_check(self):
+        """When ``walltime_limit`` parses to 0 (unset / unparseable),
+        the check is intentionally skipped. Tasks taking arbitrary
+        time are still planned without raising."""
+        # parse_walltime_to_sec returns 0 for invalid strings; the
+        # comment in compute_submission_plan documents this skip path.
+        constraints = ClusterConstraints(
+            max_array_size=100,
+            max_walltime="garbage_that_parses_to_zero",
+            est_spin_up="0s",
+        )
+        assert constraints.walltime_seconds() == 0
+        plan = compute_submission_plan(
+            constraints,
+            WorkloadSpec(total_tasks=1, est_task_duration_s=1_000_000),
+        )
+        # No raise — the check is skipped, plan is built.
+        assert plan.total_batches == 1
+
+    def test_walltime_exact_match_does_not_raise(self):
+        """``effective_time == walltime_limit`` is the documented
+        boundary: pass (strict ``>`` in the raise condition). Pins the
+        boundary so a future flip to ``>=`` is caught."""
+        constraints = ClusterConstraints(
+            max_array_size=100,
+            max_walltime="0:10:00",  # 600s
+            est_spin_up="5m",  # 300s
+        )
+        # 300s task + 300s spin-up = exactly 600s
+        workload = WorkloadSpec(total_tasks=10, est_task_duration_s=300)
+        plan = compute_submission_plan(constraints, workload)
+        # Should not raise; plan is built.
+        assert plan.total_batches == 1
+
+    def test_walltime_one_second_over_raises(self):
+        """One second past the limit raises — the ``>`` boundary."""
+        constraints = ClusterConstraints(
+            max_array_size=100,
+            max_walltime="0:10:00",  # 600s
+            est_spin_up="5m",  # 300s
+        )
+        workload = WorkloadSpec(total_tasks=10, est_task_duration_s=301)
+        with pytest.raises(errors.SpecInvalid, match="exceeds max walltime"):
+            compute_submission_plan(constraints, workload)
+
+
 class TestEvenDistribution:
     """350 tasks in 4 batches → no batch smaller than 86."""
 
@@ -152,6 +236,26 @@ class TestTimeEstimation:
         plan = compute_submission_plan(constraints, workload)
         # 1 wave * (600 + 300) = 900
         assert plan.est_total_wall_s == 900
+
+    def test_per_batch_est_wall_s_populated_when_duration_known(self):
+        """Regression: each ``JobBatch.est_wall_s`` carries the per-batch
+        wall-time estimate when ``est_task_duration_s`` is provided.
+        Surfaced by mutmut — the existing tests only asserted on the
+        all-None branch (TestUnknownDuration.test_batch_wall_is_none),
+        so a mutation that set ``est_wall_s=None`` for the
+        duration-known path slipped through and the
+        ``plan_throughput`` envelope's per-batch ETA could silently
+        flip to null."""
+        constraints = ClusterConstraints(
+            max_array_size=100,
+            max_concurrent_jobs=1,
+            est_spin_up="5m",  # 300s
+        )
+        workload = WorkloadSpec(total_tasks=50, est_task_duration_s=600)
+        plan = compute_submission_plan(constraints, workload)
+        # Spin-up + duration = 300 + 600 = 900s, threaded into every batch.
+        for b in plan.batches:
+            assert b.est_wall_s == 900
 
 
 class TestStrategyString:
