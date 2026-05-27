@@ -32,6 +32,40 @@ def test_classify_axis_records_executor_entry(tmp_path) -> None:
     assert entry["classified_at"] == out["classified_at"]
 
 
+@pytest.mark.parametrize("value", ["interview", "recall", "manual", "agent"])
+def test_classify_axis_input_accepts_all_classified_by_literal_values(value: str) -> None:
+    """Regression: the hpc-classify-axis SKILL.md prescribes
+    ``classified_by: "agent"`` at the autonomous-classification step
+    (Steps 4a/4b). The Literal in ClassifyAxisInput previously only
+    accepted {"interview", "recall", "manual"}, hard-failing the
+    autonomous path at the schema boundary. Pin every accepted value
+    so a future Literal narrowing fails here, not silently in the
+    skill at run time."""
+    spec = _spec(classified_by=value)
+    assert spec.classified_by == value
+
+
+def test_classify_axis_input_rejects_unknown_classified_by() -> None:
+    """Negative pin: the Literal must reject novel values rather than
+    silently accept them. A value drift here is exactly what bug #9
+    described — re-add this guard when extending the enum."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="classified_by"):
+        _spec(classified_by="autonomous")
+
+
+def test_classify_axis_persists_agent_value_to_axes_yaml(tmp_path) -> None:
+    """End-to-end: the skill's prescription ``classified_by: "agent"``
+    round-trips through classify_axis → axes.yaml entry. Pinning the
+    actual write path, not just the schema."""
+    out = classify_axis(tmp_path, spec=_spec(classified_by="agent"))
+    assert out["wrote"] is True
+    entry = read_executor(tmp_path, "run")
+    assert entry is not None
+    assert entry["classified_by"] == "agent"
+
+
 def test_classify_axis_associative_defaults_monoid(tmp_path) -> None:
     classify_axis(tmp_path, spec=_spec(data_axis={"kind": "associative"}))
     entry = read_executor(tmp_path, "run")

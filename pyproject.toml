@@ -171,7 +171,7 @@ skip_empty = true
 # doesn't expose ``--paths-to-mutate`` on the CLI. A full sweep of
 # ``src/hpc_agent/`` is on the order of an hour on a single core;
 # scope tight to the subject under audit.
-paths_to_mutate = ["src/hpc_agent/ops/monitor/"]
+paths_to_mutate = ["src/hpc_agent/infra/throughput.py"]
 # mutmut copies only paths_to_mutate by default, so the rest of the
 # package needs to be copied via ``also_copy`` for ``hpc_agent`` to
 # remain importable in the test process. When widening paths_to_mutate

@@ -276,3 +276,98 @@ def test_campaign_init_rejects_non_object_strategy_params(tmp_path: Path) -> Non
             strategy_name="custom",
             strategy_params_json="[1, 2, 3]",
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression: campaign-health / campaign-replay read lifecycle status
+# from the journal RunRecord, not the sidecar.
+#
+# The audit found ``sc.get("status")`` / ``sc.get("lifecycle_state")``
+# reads in health.py and replay.py — both fields live on the journal
+# RunRecord (state/run_record.py), not on the v2 sidecar. The reads
+# always returned None / "", so n_complete / n_failed counters never
+# incremented and the replay envelope's status was always blank.
+# ---------------------------------------------------------------------------
+
+
+def _seed_run_with_status(
+    experiment_dir: Path,
+    *,
+    run_id: str,
+    campaign_id: str,
+    status: str,
+) -> None:
+    """Seed BOTH a sidecar and a journal RunRecord with explicit status.
+
+    The journal RunRecord is what the post-fix campaign-health and
+    campaign-replay readers consult — see meta/campaign/atoms/health.py
+    and atoms/replay.py.
+    """
+    from hpc_agent.state.journal import upsert_run
+    from hpc_agent.state.run_record import RunRecord
+
+    _seed_run(experiment_dir, run_id=run_id, campaign_id=campaign_id)
+    upsert_run(
+        experiment_dir,
+        RunRecord(
+            run_id=run_id,
+            profile="ml",
+            cluster="hoffman2",
+            ssh_target="user@host",
+            remote_path="/scratch/exp",
+            job_name="ml",
+            job_ids=["12345"],
+            total_tasks=1,
+            submitted_at="2026-01-01T00:00:00+00:00",
+            experiment_dir=str(experiment_dir.resolve()),
+            campaign_id=campaign_id,
+            status=status,
+        ),
+    )
+
+
+@pytest.fixture
+def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    from hpc_agent.state import run_record
+
+    home = tmp_path / "home_hpc"
+    monkeypatch.setattr(run_record, "HPC_HOMEDIR", home)
+    return home
+
+
+def test_campaign_health_counts_complete_from_journal(
+    tmp_path: Path, _journal_home: Path
+) -> None:
+    """Before the fix, ``sc.get("status")`` always returned None; the
+    n_complete / n_failed counters never incremented and every
+    campaign's health envelope reported 0 / 0 regardless of actual
+    state. This test pins that the journal lookup now drives the
+    counts."""
+    from hpc_agent._wire.queries.campaign_health import CampaignHealthSpec
+    from hpc_agent.meta.campaign.atoms.health import campaign_health
+
+    _seed_run_with_status(tmp_path, run_id="r1", campaign_id="A", status="complete")
+    _seed_run_with_status(tmp_path, run_id="r2", campaign_id="A", status="complete")
+    _seed_run_with_status(tmp_path, run_id="r3", campaign_id="A", status="failed")
+    _seed_run_with_status(tmp_path, run_id="r4", campaign_id="A", status="in_flight")
+
+    out = campaign_health(
+        experiment_dir=tmp_path, spec=CampaignHealthSpec(campaign_id="A")
+    )
+    assert out["n_runs"] == 4
+    assert out["n_complete"] == 2
+    assert out["n_failed"] == 1
+
+
+def test_campaign_replay_status_from_journal(
+    tmp_path: Path, _journal_home: Path
+) -> None:
+    """Before the fix, ``sidecar.get("status", "")`` returned "" for
+    every iteration. The replay envelope now surfaces the journal
+    RunRecord's status — pinning the join."""
+    _seed_run_with_status(tmp_path, run_id="run_0000", campaign_id="A", status="complete")
+    _seed_run_with_status(tmp_path, run_id="run_0001", campaign_id="A", status="failed")
+
+    out = campaign_replay(experiment_dir=tmp_path, campaign_id="A", last_n=2)
+    statuses = [it["status"] for it in out["iterations"]]
+    assert statuses == ["complete", "failed"]
