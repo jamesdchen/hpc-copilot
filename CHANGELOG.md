@@ -798,7 +798,7 @@ The experiment repo no longer commits generated code.
   first then runs lint / type-check / the serial-elision gate on the
   built output; `conftest.py` rebuilds `src/` on a fresh clone.
 
-## 0.3.0 — 2026-05-22
+## 0.3.0 — 2026-05-20
 
 ### Removed — scheduling-strategy layer extracted to `hpc-agent-pro`
 
