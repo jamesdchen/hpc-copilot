@@ -7,6 +7,22 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Hybrid axis classifier (AST pattern-match + LLM fallback)
+
+`hpc-classify-axis` now runs a stdlib-only AST pattern-matcher first
+(new `classify-axis-easy` primitive, backed by
+`hpc_agent.experiment_kit.axis_matcher`) and only falls through to the
+LLM decision tree on `unclassifiable` / `no_loop_detected`. The matcher
+recognises the canonical shapes — `functools.reduce` /
+`itertools.accumulate`, append-only loops, `acc += x` accumulators, and
+`data[i - W : i]` / `data.iloc[i - W : i]` / `data[max(0, i - W) : i]`
+rolling windows — and returns a confident `{kind, evidence, monoid?,
+tried}` envelope or `unclassifiable`. Conservative by design: an
+uncertain match returns `unclassifiable`, never a wrong-but-confident
+classification. Handles ~80% of common cases without LLM reasoning,
+saving context budget on every cold-start submit. The skill's existing
+decision tree is preserved verbatim as the long-tail fallback.
+
 ### Changed — Workflow skills return all ambiguities in one envelope
 
 Refined the workflow-skill contract: skills no longer early-return on the

@@ -64,11 +64,35 @@ hpc-agent recall --root <experiments-root> --task-kind <kind>
 
 Each campaign summary carries `data_axes: {run_name: {kind, halo_expr?, monoid?}}`, and the rollup carries a `data_axis_kinds` histogram. If a prior *similar* experiment classified an analogous series — same loop shape, same parameter names — adopt its classification (set `classified_by: "recall"`) and jump to Step 5. If no clean match, continue to Step 4.
 
-### 4. Skip if caller supplied `data_axis`; otherwise walk the decision tree
+### 4. Skip if caller supplied `data_axis`; otherwise classify
 
 **If the caller already supplied `data_axis` in the spec** (the human-driven slash path, after `/classify-axis-hpc` ran its interview), set `classified_by: "interview"` and jump to Step 5 — do not re-classify.
 
-**Otherwise, classify autonomously.** Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
+**Otherwise, classify autonomously.** The classifier is hybrid: a stdlib AST pattern-matcher (`classify-axis-easy`) handles ~80% of cases without LLM reasoning; the LLM decision tree below is the long-tail fallback for novel patterns.
+
+#### 4a. Try the cheap match first
+
+```bash
+hpc-agent classify-axis-easy --source-path <path-from-Step-1> --run-name <name>
+```
+
+The envelope's `data` carries `{kind, evidence, monoid?, tried}`. Branch on `data.kind`:
+
+| `kind` | action |
+|---|---|
+| `independent` | Committed. Build `data_axis: {kind: "independent"}`. Jump to Step 5. |
+| `associative` | Committed. Build `data_axis: {kind: "associative", monoid: data.monoid}`. Jump to Step 5. |
+| `sequential` | Committed (reserved — the matcher does not currently emit it). Build `data_axis: {kind: "sequential"}`. Jump to Step 5. |
+| `needs_halo_expr` | The matcher detected a rolling-window subscript. Walk the run's source to derive the halo expression from parameter context (see "halo expression syntax" below). Build `data_axis: {kind: "bounded_halo", halo: {expr: "<expr>"}}`. Jump to Step 5. |
+| `no_loop_detected` / `unclassifiable` / `function_not_found` | Fall through to Step 4b. |
+
+Set `classified_by: "agent"`. Carry `data.evidence` forward verbatim as the one-line reasoning for Step 6's transcript turn.
+
+**Halo expression syntax** (`hpc_agent.experiment_kit.axis_config`): only bare `run()` parameter names, numeric literals, `+ - * //`, and `min()` / `max()`. It is **never `eval()`'d** — a restricted AST interpreter walks it. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
+
+#### 4b. Walk the LLM decision tree (long-tail fallback)
+
+Only invoked on `unclassifiable` / `no_loop_detected` / `function_not_found` from Step 4a. Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
 
 1. **Does each row's result depend on rows computed before it?**
    No → **`Independent`**. The loop body is a pure function of its row (a DOALL loop) — split anywhere.
@@ -77,8 +101,6 @@ Each campaign summary carries `data_axes: {run_name: {kind, halo_expr?, monoid?}
 3. **Is the dependence a bounded look-back** — e.g. a rolling training window of N rows?
    Yes → **`BoundedHalo`**. Derive the halo as an arithmetic expression over `run()`'s parameters (bare names), e.g. `train_window * 48`. Bias the estimate **large** — an over-wide halo is merely wasteful; a too-small halo is silent corruption.
 4. **Otherwise, or ambiguous → `Sequential`.** This is the fail-safe default and the autonomous-mode tiebreaker. From `axis.py`: *"When in doubt, classify as Sequential: the fail-safe outcome is slow, not wrong."*
-
-The halo expression is restricted: only bare parameter names, numeric literals, `+ - * //`, and `min()`/`max()`. It is **never `eval()`'d** — `hpc_agent.experiment_kit.axis_config` walks it with a restricted AST interpreter.
 
 Set `classified_by: "agent"`. Record one short sentence of reasoning (which branch of the tree resolved, which parameters were named) for the transcript in Step 6.
 

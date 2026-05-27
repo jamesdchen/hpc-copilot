@@ -186,6 +186,17 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "classify-axis-easy",
+    "output_schema": null,
+    "python": "hpc_agent.incorporation.classify_axis_easy.classify_axis_easy",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent clusters describe <name> [--strict]",
     "idempotent": true,
     "input_schema": null,
