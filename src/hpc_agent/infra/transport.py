@@ -425,7 +425,17 @@ def deploy_runtime(
         f" {remote_path_q}/.hpc/templates/common"
         f" && rm -f {remote_path_q}/hpc_agent/__init__.py"
         f" {remote_path_q}/hpc_agent/models/__init__.py"
-        f" {remote_path_q}/hpc_agent/models/mapreduce/__init__.py",
+        f" {remote_path_q}/hpc_agent/models/mapreduce/__init__.py"
+        # Purge stale compiled artifacts in the deployed tree. A Py2.7
+        # ``__init__.pyc`` left *beside* the (now-absent) ``__init__.py`` is
+        # imported directly by Py3 as the package init -> ``bad magic
+        # number``, shadowing the conda install and killing every
+        # cluster-side verb. rsync ``--delete`` excludes ``hpc_agent/`` (see
+        # DEFAULT_RSYNC_EXCLUDES) so nothing else ever cleans this dir; the
+        # ``.py`` removal above doesn't touch ``.pyc`` / ``__pycache__``.
+        f" && find {remote_path_q}/hpc_agent -name '*.pyc' -delete"
+        f" && find {remote_path_q}/hpc_agent -depth -type d -name __pycache__"
+        f" -exec rm -rf {{}} +",
         ssh_target=ssh_target,
     )
 
