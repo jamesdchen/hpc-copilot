@@ -41,7 +41,6 @@ What it intentionally does NOT do (in MVP)
 
 from __future__ import annotations
 
-import contextlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -56,6 +55,10 @@ from hpc_agent.cli._dispatch import CliShape, SchemaRef
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.ops.monitor.terminal import (
+    _ingest_runtime_at_terminal,
+    _is_terminal,
+)
 from hpc_agent.ops.monitor.tick_log import (
     _append_tick,
     _status_fingerprint,
@@ -144,85 +147,9 @@ class _LoopState:
 # legacy ``monitor_flow.<helper>`` attribute path keeps working.
 
 
-def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
-    """Pull `_combiner/wave_*.runtime.json` from the cluster and ingest.
-
-    The runtime-prior pipeline normally runs from `aggregate_flow`. This
-    hook lets `monitor_flow` feed the warm-axis-picker even when the
-    user never invokes `/aggregate-hpc` (e.g. they read metrics on the
-    cluster directly, or only care about pass/fail). Best-effort:
-    failures are swallowed — monitor's job is lifecycle, not priors.
-
-    Pull is filtered to just the runtime sidecars (~1 file per wave,
-    typically <100KB total) — cheap relative to a full `_combiner/`
-    pull. Idempotent: re-running on the same run is safe because
-    `append_sample` dedups on `(run_id, task_id)`.
-
-    The pull lands under a :class:`tempfile.TemporaryDirectory` so a
-    long-running monitor that ticks N runs to terminal does not leak N
-    ``hpc_runtime_pull_*`` dirs under ``$TMPDIR``.
-    """
-    import tempfile
-
-    from hpc_agent.infra.remote import rsync_pull
-    from hpc_agent.state.runs import read_run_sidecar
-    from hpc_agent.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
-
-    try:
-        with tempfile.TemporaryDirectory(prefix="hpc_runtime_pull_") as local_dir_str:
-            local_dir = Path(local_dir_str)
-            result = rsync_pull(
-                ssh_target=record.ssh_target,
-                remote_path=record.remote_path,
-                remote_subdir="_combiner",
-                local_dir=str(local_dir),
-                include=["wave_*.runtime.json"],
-            )
-            if result.returncode != 0:
-                return 0
-            cmd_sha = None
-            with contextlib.suppress(FileNotFoundError, OSError, json.JSONDecodeError):
-                cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
-            return ingest_runtime_samples_from_combiner_dir(
-                local_dir,
-                experiment_dir=experiment_dir,
-                profile=record.profile,
-                cluster=record.cluster,
-                cmd_sha=cmd_sha,
-            )
-    except (OSError, TimeoutError):
-        return 0
-
-
-def _is_terminal(
-    last_status: dict[str, Any],
-    total_tasks: int,
-    *,
-    partial_ok: bool = False,
-) -> tuple[str | None, str | None]:
-    """Inspect counts and return (lifecycle_state, escalation_reason).
-
-    Returns ``(None, None)`` when still in flight.
-
-    With ``partial_ok=True``, the wave is classified ``complete`` as
-    soon as no work is left and at least one task succeeded. Only a
-    zero-success wave is classified ``failed`` under partial-ok.
-    """
-    complete = int(last_status.get("complete", 0))
-    running = int(last_status.get("running", 0))
-    pending = int(last_status.get("pending", 0))
-    failed = int(last_status.get("failed", 0))
-
-    if complete >= total_tasks:
-        return (LifecycleState.COMPLETE, None)
-    if running == 0 and pending == 0 and failed > 0:
-        if partial_ok and complete > 0:
-            # Partial success: at least one task done, no work left.
-            return (LifecycleState.COMPLETE, "partial_ok_with_failures")
-        # No work left and at least one failure. MVP doesn't auto-resubmit;
-        # surface the failure for the caller to handle.
-        return (LifecycleState.FAILED, "failed_tasks_no_auto_recover_in_mvp")
-    return (None, None)
+# ``_ingest_runtime_at_terminal`` and ``_is_terminal`` live in
+# :mod:`hpc_agent.ops.monitor.terminal`. They re-export above so any
+# code that reached in via ``monitor_flow._is_terminal`` keeps working.
 
 
 @primitive(
