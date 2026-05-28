@@ -222,8 +222,8 @@ def test_generator_enumerated(tmp_path: Path) -> None:
     )
     data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert data["total_tasks"] == 3
-    assert "tasks.py" in data["artifacts"]
-    assert (tmp_path / "tasks.py").is_file()
+    assert ".hpc/tasks.py" in data["artifacts"]
+    assert (tmp_path / ".hpc" / "tasks.py").is_file()
     assert data["preview"]["first"] == {"model": "opus-4.7", "dataset": "mmlu-pro"}
 
 
@@ -313,9 +313,9 @@ def test_generator_regenerate_is_byte_equivalent(tmp_path: Path) -> None:
         },
     )
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
-    first = (tmp_path / "tasks.py").read_bytes()
+    first = (tmp_path / ".hpc" / "tasks.py").read_bytes()
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
-    second = (tmp_path / "tasks.py").read_bytes()
+    second = (tmp_path / ".hpc" / "tasks.py").read_bytes()
     assert first == second
 
 
@@ -819,8 +819,8 @@ def test_generator_then_validate_mode_picks_up_hand_edits(tmp_path: Path) -> Non
         },
     )
     record_interview(InterviewSpec.model_validate(gen_intent), campaign_dir=tmp_path)
-    # Operator hand-edits tasks.py to add a fourth task
-    (tmp_path / "tasks.py").write_text(
+    # Operator hand-edits the canonical .hpc/tasks.py to add a fourth task
+    (tmp_path / ".hpc" / "tasks.py").write_text(
         "_TASKS = [{'a': 1}, {'a': 2}, {'a': 3}, {'a': 4}]\n"
         "def total(): return len(_TASKS)\n"
         "def resolve(i): return _TASKS[i]\n"

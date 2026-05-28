@@ -34,7 +34,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from hpc_agent import errors
+from hpc_agent import RepoLayout, errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.interview import InterviewSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
@@ -121,7 +121,6 @@ def record_interview(
     campaign_dir.mkdir(parents=True, exist_ok=True)
 
     intent: dict[str, Any] = spec.model_dump(exclude_none=True, mode="json")
-    tasks_py = campaign_dir / "tasks.py"
     declared = int(intent["task_count"])
     artifacts: list[str] = []
 
@@ -205,14 +204,27 @@ def record_interview(
                 f"intent.task_count = {declared}; recipe and stated count "
                 f"disagree (refusing to write tasks.py)"
             )
+        # tasks.py is a framework artifact — materialize it into the
+        # canonical <campaign_dir>/.hpc/tasks.py that deploy_runtime, the
+        # cluster dispatcher, build-tasks-py and RepoLayout all read.
+        # interview.json + frozen_configs stay at the campaign_dir root.
+        tasks_py = RepoLayout(campaign_dir).tasks
         _materialize_tasks_py(generator, tasks_py, inject_kwargs=frozen_shas)
-        artifacts.append("tasks.py")
-    elif not tasks_py.is_file():
-        raise errors.SpecInvalid(
-            f"campaign_dir is missing tasks.py: {tasks_py}. Either the "
-            f"interview agent must produce tasks.py before invoking this "
-            f"primitive, or intent.task_generator must specify a recipe."
-        )
+        artifacts.append(".hpc/tasks.py")
+    else:
+        # Validate mode — the interview agent wrote tasks.py already. Prefer
+        # the canonical .hpc/tasks.py; accept a legacy campaign-root tasks.py
+        # (the pre-0.7.1 location) so hand-authored files keep validating.
+        hpc_tasks = campaign_dir / ".hpc" / "tasks.py"
+        root_tasks = campaign_dir / "tasks.py"
+        tasks_py = hpc_tasks if hpc_tasks.is_file() else root_tasks
+        if not tasks_py.is_file():
+            raise errors.SpecInvalid(
+                f"campaign_dir is missing tasks.py (looked in {hpc_tasks} and "
+                f"{root_tasks}). Either the interview agent must produce "
+                f"tasks.py before invoking this primitive, or "
+                f"intent.task_generator must specify a recipe."
+            )
 
     from hpc_agent import compute_cmd_sha, load_tasks_module
 

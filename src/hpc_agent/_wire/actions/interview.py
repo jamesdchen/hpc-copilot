@@ -552,7 +552,7 @@ class InterviewResult(BaseModel):
     model_config = ConfigDict(extra="forbid", title="interview output")
 
     campaign_dir: str = Field(
-        description="Absolute path to the campaign workdir (where tasks.py and the persisted interview.json live).",
+        description="Absolute path to the campaign workdir. interview.json is written here at the root; generator-mode tasks.py is materialized into campaign_dir/.hpc/tasks.py (the canonical framework location deploy + the dispatcher read).",
     )
     artifacts: list[str] = Field(
         min_length=1,
