@@ -13,6 +13,11 @@ The skill persists, in either pathway:
 - An `interview.json` recording the entry-point shape (a `register_run` pointer for the direct-decoration path; a `shell_command` block with the materialized wrapper for the fallback path).
 - **Only in the fallback path**: a `@register_run` **wrapper** at `<experiment>/.hpc/wrappers/<run_name>.py` whose body `subprocess.check_call`s the user's entry point with kwargs substituted. The wrapper's typed signature is what downstream framework primitives (`classify-axis`, `validate-executor-signatures`) introspect. The underlying entry point stays untouched.
 
+## Execution style
+
+- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
+- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+
 ## Inputs
 
 Caller-supplied (the skill refuses with `spec_invalid` if these are absent):

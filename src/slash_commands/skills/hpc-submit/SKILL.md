@@ -10,6 +10,11 @@ Agent-facing decision layer over the **[submit-flow](../../../../docs/primitives
 
 The slash `/submit-hpc` is the human-interview wrapper around this skill; an external autonomous agent (MARs experiment-runner, notebook driver) invokes this skill directly with whatever it pre-resolved.
 
+## Execution style
+
+- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
+- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+
 ## Inputs
 
 | Field | Source |

@@ -1,5 +1,10 @@
 `/aggregate-hpc` is the **human-interview wrapper** around the `hpc-aggregate` skill — the agent-autonomous decision layer that combines a terminal HPC run's per-task results into a final metrics envelope.
 
+## Execution style
+
+- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
+- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+
 ## Invocation
 
 Invoke the `hpc-aggregate` skill via the Skill tool with the initial spec:

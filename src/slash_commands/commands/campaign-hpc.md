@@ -2,6 +2,11 @@
 
 The slash handles the first-time-setup interview (path picking, slug tagging) and per-tick user-facing dialogs.
 
+## Execution style
+
+- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
+- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+
 ## First-time setup interview (only the first time per campaign)
 
 ### Path

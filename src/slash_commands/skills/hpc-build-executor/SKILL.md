@@ -10,6 +10,11 @@ Agent-facing composition over the **[build-executor](../../../../docs/primitives
 
 This skill also covers axis-init — the companion step that writes `.hpc/axes.yaml` so the framework can pick a parallelism axis automatically at submit time. The two are paired in practice: a new executor needs an `axes.yaml` describing which of its parallel dimensions belongs on the task array.
 
+## Execution style
+
+- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
+- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+
 ## Inputs
 
 | Field | Source |

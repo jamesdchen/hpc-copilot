@@ -10,6 +10,11 @@ Agent-facing composition over the **[classify-axis](../../../../docs/primitives/
 
 `@register_run` already captures the entry point, the CLI flags (from the signature), and `gpu`. It does **not** capture the *parallel decomposition* of the totally-ordered series the experiment iterates. This skill closes that gap.
 
+## Execution style
+
+- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
+- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+
 ## Inputs
 
 Callers pass either a partial or fully-resolved spec:

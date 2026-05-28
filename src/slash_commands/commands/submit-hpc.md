@@ -8,6 +8,11 @@ The slash conducts the user-facing dialogs **after** the skill identifies what n
 4. Repeat up to ~3 times (bounded by the dependency DAG depth — typically once).
 5. On a successful envelope, surface the worker's result to the user.
 
+## Execution style
+
+- **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
+- **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+
 ## Invocation
 
 Invoke the `hpc-submit` skill via the Skill tool with the initial spec:
