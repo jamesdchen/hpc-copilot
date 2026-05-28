@@ -134,6 +134,13 @@ def test_get_invoker_auto_selects_oauth_when_only_creds_file(
     assert get_invoker().name == "claude-cli-oauth"
 
 
+def test_get_invoker_inline_is_not_a_spawning_transport() -> None:
+    # "inline" is a valid HPC_AGENT_INVOKER value but `hpc-agent run` intercepts
+    # it; a spawn path that reaches get_invoker must reject it with a clear hint.
+    with pytest.raises(errors.SpecInvalid, match="in-context execution"):
+        get_invoker("inline")
+
+
 def test_get_invoker_env_override_beats_auto_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

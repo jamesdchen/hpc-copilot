@@ -369,6 +369,16 @@ def _auto_select_invoker() -> str:
 def get_invoker(name: str | None = None) -> WorkerInvoker:
     """Resolve a :class:`WorkerInvoker` (see module docstring for precedence)."""
     chosen = name or os.environ.get("HPC_AGENT_INVOKER") or _auto_select_invoker()
+    if chosen == "inline":
+        # "inline" is a valid HPC_AGENT_INVOKER value but not a spawning
+        # transport: it means the caller runs the procedure in its own context.
+        # `hpc-agent run` intercepts it before reaching here (see cli/spawn.py);
+        # any code path that needs to actually spawn a worker cannot honor it.
+        raise errors.SpecInvalid(
+            "HPC_AGENT_INVOKER='inline' selects in-context execution, which only "
+            "`hpc-agent run` supports; this path requires a spawning transport "
+            f"({sorted(_INVOKERS)})."
+        )
     factory = _INVOKERS.get(chosen)
     if factory is None:
         raise errors.SpecInvalid(

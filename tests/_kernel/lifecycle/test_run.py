@@ -96,7 +96,7 @@ def test_cmd_run_success_envelope(
     from hpc_agent._wire.spawn_contract import WorkerReport
     from hpc_agent.cli.spawn import cmd_run
 
-    monkeypatch.delenv("HPC_AGENT_INLINE", raising=False)
+    monkeypatch.delenv("HPC_AGENT_INVOKER", raising=False)
     report = WorkerReport(result={"run_id": "r1"}, anomalies="")
     # cmd_run does `from hpc_agent._kernel.lifecycle.run import run_workflow`
     # at call time, so patch the symbol there (its canonical home).
@@ -130,7 +130,7 @@ def test_cmd_run_inline_flag_renders_without_spawning(
 
     from hpc_agent.cli.spawn import cmd_run
 
-    monkeypatch.delenv("HPC_AGENT_INLINE", raising=False)
+    monkeypatch.delenv("HPC_AGENT_INVOKER", raising=False)
     _no_spawn(monkeypatch)
     rc = cmd_run(
         argparse.Namespace(
@@ -157,7 +157,7 @@ def test_cmd_run_inline_via_env(
 
     from hpc_agent.cli.spawn import cmd_run
 
-    monkeypatch.setenv("HPC_AGENT_INLINE", "1")
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "inline")
     _no_spawn(monkeypatch)
     # No `inline` attr on the namespace — the env knob alone flips the mode.
     rc = cmd_run(argparse.Namespace(workflow="status", experiment_dir=Path("."), fields_json="{}"))
@@ -172,7 +172,7 @@ def test_cmd_run_inline_rejects_bad_fields_json(monkeypatch: pytest.MonkeyPatch)
 
     from hpc_agent.cli.spawn import cmd_run
 
-    monkeypatch.setenv("HPC_AGENT_INLINE", "1")
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "inline")
     rc = cmd_run(
         argparse.Namespace(workflow="submit", experiment_dir=Path("."), fields_json="not-json")
     )

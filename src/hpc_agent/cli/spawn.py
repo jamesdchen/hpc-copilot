@@ -3,8 +3,9 @@
 Houses the ``run`` subcommand: the code-orchestrated entrypoint that
 validates fields, renders the canonical worker prompt, invokes a
 fresh-context ``claude -p`` worker, and emits its parsed report. Its
-``--inline`` mode (also ``HPC_AGENT_INLINE``) skips the spawn and returns
-the rendered procedure for the calling agent to run in its own context.
+``--inline`` mode (also ``HPC_AGENT_INVOKER=inline``) skips the spawn and
+returns the rendered procedure for the calling agent to run in its own
+context.
 
 This is a Tier 3 verb: a CLI-only orchestrator with no ``@primitive``
 backing — it lives outside the registry-driven dispatcher
@@ -26,17 +27,20 @@ from hpc_agent.cli._helpers import (
     _ok,
 )
 
-# Env knob that flips the workflow from spawning a fresh `claude -p` worker to
-# running its procedure inline in the current agent's context. A CLI `--inline`
-# flag overrides it. The trade-off — context rot in exchange for no per-command
-# spawn (no extra API cost / latency) — is the caller's to make.
-_INLINE_ENV = "HPC_AGENT_INLINE"
+# "inline" is a pseudo-invoker selected through the same HPC_AGENT_INVOKER knob
+# as the real spawning transports in invoke.py (claude-cli / claude-cli-oauth),
+# but it is handled here rather than by get_invoker(): it is the *absence* of a
+# worker transport — the calling agent runs the procedure and produces the
+# report — not another WorkerInvoker. The --inline flag forces it regardless of
+# the env. The trade-off (context rot for no per-command spawn) is the caller's.
+_INVOKER_ENV = "HPC_AGENT_INVOKER"
+_INLINE_INVOKER = "inline"
 
 
 def _inline_requested(args: argparse.Namespace) -> bool:
     if getattr(args, "inline", False):
         return True
-    return os.environ.get(_INLINE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.environ.get(_INVOKER_ENV, "").strip().lower() == _INLINE_INVOKER
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -47,7 +51,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     report. The spawn is emitted by code here — no PreToolUse hook
     mediates this path. See hpc_agent._kernel.lifecycle.run.
 
-    In *inline* mode (``--inline`` / ``HPC_AGENT_INLINE``) it does NOT spawn:
+    In *inline* mode (``--inline`` / ``HPC_AGENT_INVOKER=inline``) it does NOT spawn:
     it renders the same canonical worker prompt and returns it in the envelope
     under ``data.prompt`` with ``data.mode == "inline"``, so the calling agent
     runs the procedure itself in its own context instead of forking a fresh
@@ -175,7 +179,7 @@ def register(sub: argparse._SubParsersAction) -> None:
             "Do not spawn a fresh `claude -p` worker; render the workflow "
             "procedure and return it under `data.prompt` (mode=inline) so the "
             "calling agent runs it in its own context. Trades context isolation "
-            "for no per-command spawn. Also enabled by HPC_AGENT_INLINE=1."
+            "for no per-command spawn. Also selected by HPC_AGENT_INVOKER=inline."
         ),
     )
     p_run.set_defaults(func=cmd_run)
