@@ -277,7 +277,8 @@ def cluster_reduce(
 
     from pathlib import Path as _Path
 
-    from hpc_agent.infra.remote import rsync_pull, ssh_run
+    from hpc_agent.infra.remote import ssh_run
+    from hpc_agent.infra.transport import rsync_pull
     from hpc_agent.state.journal import load_run
 
     record = load_run(experiment_dir, run_id)

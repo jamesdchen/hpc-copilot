@@ -231,10 +231,8 @@ def _run_qstat(ssh_host: str | None = None) -> str | None:
     """
     if ssh_host:
         # Lazy import to avoid a hard dependency for the local-qstat path.
-        from hpc_agent.infra.remote import (  # noqa: PLC0415
-            ssh_run,
-            validate_ssh_target,
-        )
+        from hpc_agent.infra.remote import ssh_run  # noqa: PLC0415
+        from hpc_agent.infra.ssh_validation import validate_ssh_target  # noqa: PLC0415
 
         try:
             validate_ssh_target(ssh_host)

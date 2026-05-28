@@ -133,7 +133,9 @@ def test_submit_and_record_dedups_replay(journal_home, experiment):
 
 def test_combine_wave_records_success(journal_home, experiment):
     _seed_run(experiment)
-    with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(True, "ok", "")) as m:
+    with patch(
+        "hpc_agent.infra.transport.run_combiner_checked", return_value=(True, "ok", "")
+    ) as m:
         ok, _, _ = combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -150,7 +152,7 @@ def test_combine_wave_records_success(journal_home, experiment):
 
 def test_combine_wave_records_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(False, "", "boom")):
+    with patch("hpc_agent.infra.transport.run_combiner_checked", return_value=(False, "", "boom")):
         ok, _, _ = combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -166,7 +168,7 @@ def test_combine_wave_records_failure(journal_home, experiment):
 
 def test_combine_wave_failed_then_success_clears_failure(journal_home, experiment):
     _seed_run(experiment)
-    with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(False, "", "boom")):
+    with patch("hpc_agent.infra.transport.run_combiner_checked", return_value=(False, "", "boom")):
         combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -174,7 +176,7 @@ def test_combine_wave_failed_then_success_clears_failure(journal_home, experimen
             ssh_target="user@h",
             remote_path="/x",
         )
-    with patch("hpc_agent.infra.remote.run_combiner_checked", return_value=(True, "ok", "")):
+    with patch("hpc_agent.infra.transport.run_combiner_checked", return_value=(True, "ok", "")):
         combine_wave(
             experiment,
             "ml_ridge_abcd1234",
@@ -364,7 +366,7 @@ def test_mark_terminal_pass_through(journal_home, experiment):
 
 
 def test_validate_ssh_target_accepts_alias_and_userhost():
-    from hpc_agent.infra.remote import validate_ssh_target
+    from hpc_agent.infra.ssh_validation import validate_ssh_target
 
     # Both forms are accepted: an OpenSSH config alias and explicit user@host.
     assert validate_ssh_target("usc-discovery") == "usc-discovery"
@@ -373,7 +375,7 @@ def test_validate_ssh_target_accepts_alias_and_userhost():
 
 def test_validate_ssh_target_rejects_empty_and_shell_chars():
     from hpc_agent import errors
-    from hpc_agent.infra.remote import validate_ssh_target
+    from hpc_agent.infra.ssh_validation import validate_ssh_target
 
     with pytest.raises(errors.SpecInvalid, match="non-empty"):
         validate_ssh_target("")

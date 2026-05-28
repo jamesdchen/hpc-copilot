@@ -33,7 +33,9 @@ from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.submit_flow import SubmitFlowSpec
 from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.backends.remote_factory import build_remote_backend
-from hpc_agent.infra.remote import deploy_runtime, rsync_push, ssh_run, validate_ssh_target
+from hpc_agent.infra.remote import ssh_run
+from hpc_agent.infra.ssh_validation import validate_ssh_target
+from hpc_agent.infra.transport import deploy_runtime, rsync_push
 from hpc_agent.ops.submit.runner import submit_and_record
 from hpc_agent.state.journal import load_run
 

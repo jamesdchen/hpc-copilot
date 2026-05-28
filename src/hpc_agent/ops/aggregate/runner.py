@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from hpc_agent.errors import RemoteCommandFailed
 from hpc_agent.infra import remote
-from hpc_agent.infra.remote import parse_remote_json
+from hpc_agent.infra.ssh_validation import parse_remote_json
 from hpc_agent.infra.time import utcnow_iso
 
 if TYPE_CHECKING:

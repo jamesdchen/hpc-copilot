@@ -2,7 +2,8 @@
 
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.gpu import pick_gpu
-from hpc_agent.infra.remote import deploy_runtime, rsync_pull, rsync_push, ssh_run
+from hpc_agent.infra.remote import ssh_run
+from hpc_agent.infra.transport import deploy_runtime, rsync_pull, rsync_push
 
 __all__ = [
     "load_clusters_config",

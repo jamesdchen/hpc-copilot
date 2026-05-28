@@ -17,7 +17,7 @@ import tempfile
 
 import pytest
 
-from hpc_agent.infra import remote
+from hpc_agent.infra import ssh_options
 
 
 @pytest.fixture(autouse=True)
@@ -40,17 +40,17 @@ def test_ssh_multiplex_disabled_on_windows(monkeypatch):
     # On win32 the function must short-circuit to an empty opts list so
     # ssh.exe never sees ControlMaster/ControlPath and never trips the
     # ``getsockname failed: Not a socket`` failure path.
-    monkeypatch.setattr(remote.sys, "platform", "win32")
-    assert remote._ssh_multiplex_opts() == []
+    monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+    assert ssh_options._ssh_multiplex_opts() == []
 
 
 def test_ssh_multiplex_uses_tempfile_fallback(monkeypatch):
     # When XDG_RUNTIME_DIR is unset on a non-Windows platform, the
     # ControlPath must come from tempfile.gettempdir(), not a hardcoded
     # /tmp literal — covers locked-down /tmp and non-Linux Unixes.
-    monkeypatch.setattr(remote.sys, "platform", "linux")
+    monkeypatch.setattr(ssh_options.sys, "platform", "linux")
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-    opts = remote._ssh_multiplex_opts()
+    opts = ssh_options._ssh_multiplex_opts()
     paths = _control_path_values(opts)
     assert len(paths) == 1
     expected_prefix = f"{tempfile.gettempdir()}/hpc-cm-"
