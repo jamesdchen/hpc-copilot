@@ -62,29 +62,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hpc_agent.experiment_kit.axis_matcher._ast_utils import (
-    _append_only_receivers,  # noqa: F401 — re-export for backwards compat
     _carried_state_names,
     _find_function,
     _loop_var_name,
-    _parent_map,  # noqa: F401 — re-export for backwards compat
     _read_source,
     _top_level_loops,
 )
-from hpc_agent.experiment_kit.axis_matcher.matchers.ema import (
-    _classify_ema_rhs,  # noqa: F401 — re-export for backwards compat
-    _extract_state_coef,  # noqa: F401 — re-export for backwards compat
-    _match_ema_smoothing,
-)
+from hpc_agent.experiment_kit.axis_matcher.matchers.ema import _match_ema_smoothing
 from hpc_agent.experiment_kit.axis_matcher.matchers.pandas_rolling import (
     _match_pandas_rolling,
 )
-from hpc_agent.experiment_kit.axis_matcher.matchers.stencil import (
-    _extract_lookback_offset,  # noqa: F401 — re-export for backwards compat
-    _match_stencil,
-)
+from hpc_agent.experiment_kit.axis_matcher.matchers.stencil import _match_stencil
 from hpc_agent.experiment_kit.axis_matcher.matchers.window import (
     _match_bounded_window_deque,
-    _render_halo_token,  # noqa: F401 — re-export for backwards compat
 )
 
 __all__ = ["MatcherResult", "classify_axis_easy"]
