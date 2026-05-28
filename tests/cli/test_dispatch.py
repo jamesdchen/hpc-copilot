@@ -262,24 +262,36 @@ def test_result_post_projects_return_value(capsys: pytest.CaptureFixture[str]) -
 # ─── requires_ssh ──────────────────────────────────────────────────────────
 
 
-def test_requires_ssh_gates_without_auth_sock(
+def test_requires_ssh_is_not_a_hard_gate(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """``requires_ssh`` is declarative metadata, not a pre-flight gate.
+
+    The dispatcher used to short-circuit a ``requires_ssh`` primitive with
+    ``ssh_unreachable`` when no agent was reachable. That blocked valid
+    IdentityFile-based auth, so the hard gate was removed — ``ssh_run`` uses
+    ``BatchMode=yes`` (fails fast at the real connection) and a genuine auth
+    failure is enriched with agent state in ``_err_from_hpc``. This test
+    proves the primitive is now actually dispatched (here it raises its own
+    error to prove it was reached) instead of being gated before it runs.
+    """
+
     @primitive(
         name="syn-ssh",
         verb="query",
-        cli=CliShape(help="Needs SSH agent.", requires_ssh=True),
+        cli=CliShape(help="Declares SSH.", requires_ssh=True),
     )
     def syn_ssh() -> dict[str, Any]:
-        raise AssertionError("must not be called without SSH gate")
+        raise errors.SpecInvalid("primitive was reached — no hard SSH gate")
 
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
-    ns = argparse.Namespace()
-    rc = dispatch_primitive("syn-ssh", ns)
-    assert rc == 2  # EXIT_CLUSTER_ERROR (ssh_unreachable → network → cluster)
+    rc = dispatch_primitive("syn-ssh", argparse.Namespace())
     env = _capsys_envelope(capsys.readouterr())
     assert env["ok"] is False
-    assert env["error_code"] == "ssh_unreachable"
+    # Reached the primitive (its own spec_invalid), NOT short-circuited
+    # with a pre-flight ssh_unreachable.
+    assert env["error_code"] == "spec_invalid"
+    assert rc == 1  # spec_invalid → user → exit 1
 
 
 # ─── handler (Tier 2 escape hatch) ─────────────────────────────────────────

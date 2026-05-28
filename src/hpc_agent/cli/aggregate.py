@@ -27,7 +27,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent.cli._helpers import EXIT_OK, _err_from_hpc, _ok, _require_ssh_agent
+from hpc_agent.cli._helpers import EXIT_OK, _err_from_hpc, _ok
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.aggregate.runner import (
     build_provenance,
@@ -76,8 +76,6 @@ def cmd_aggregate(args: argparse.Namespace) -> int:
     #                                   sidecar file when --expect-output set
     # Defaults for require/expect can be set per-run in the sidecar's
     # ``aggregate_defaults`` block, populated by /submit. CLI flags win.
-    if (rc := _require_ssh_agent()) is not None:
-        return rc
     record = load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(f"no journal record for run_id {args.run_id!r}")

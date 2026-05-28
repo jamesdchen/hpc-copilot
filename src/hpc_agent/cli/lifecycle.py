@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hpc_agent import errors
-from hpc_agent.cli._helpers import EXIT_OK, _ok, _require_ssh_agent
+from hpc_agent.cli._helpers import EXIT_OK, _ok
 from hpc_agent.ops.monitor.list_in_flight import _last_status_age_seconds
 from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.state.journal import load_run
@@ -42,8 +42,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     see scheduler pressure on a partially-bumped run without first
     calling ``/failures``.
     """
-    if (rc := _require_ssh_agent()) is not None:
-        return rc
     record = load_run(args.experiment_dir, args.run_id)
     if record is None:
         raise errors.JournalCorrupt(
