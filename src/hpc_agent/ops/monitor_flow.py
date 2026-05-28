@@ -59,16 +59,8 @@ from hpc_agent.ops.monitor.terminal import (
     _ingest_runtime_at_terminal,
     _is_terminal,
 )
-from hpc_agent.ops.monitor.tick_log import (
-    _append_tick,
-    _status_fingerprint,
-    _tick_log_path,  # noqa: F401 — re-export for backwards compat
-)
-from hpc_agent.ops.monitor.waves import (
-    _newly_complete_waves,
-    _read_partial_ok,
-    _write_failed_task_ids,  # noqa: F401 — re-export for backwards compat
-)
+from hpc_agent.ops.monitor.tick_log import _append_tick, _status_fingerprint
+from hpc_agent.ops.monitor.waves import _newly_complete_waves, _read_partial_ok
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.runs import read_run_sidecar
 
