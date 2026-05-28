@@ -41,8 +41,6 @@ What it intentionally does NOT do (in MVP)
 
 from __future__ import annotations
 
-import contextlib
-import hashlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -54,12 +52,24 @@ from hpc_agent._kernel.lifecycle.lifecycle import LifecycleState
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.ops.monitor.terminal import (
+    _ingest_runtime_at_terminal,
+    _is_terminal,
+)
+from hpc_agent.ops.monitor.tick_log import (
+    _append_tick,
+    _status_fingerprint,
+    _tick_log_path,  # noqa: F401 — re-export for backwards compat
+)
+from hpc_agent.ops.monitor.waves import (
+    _newly_complete_waves,
+    _read_partial_ok,
+    _write_failed_task_ids,  # noqa: F401 — re-export for backwards compat
+)
 from hpc_agent.state.journal import load_run
-from hpc_agent.state.run_record import runs_dir
 from hpc_agent.state.runs import read_run_sidecar
 
 __all__ = ["monitor_flow", "MonitorFlowResult"]
@@ -110,23 +120,10 @@ _MAX_ADAPTIVE_POLL_SECONDS: float = 300.0
 _UNCHANGED_POLLS_BEFORE_BACKOFF: int = 2
 
 
-def _status_fingerprint(status: dict[str, Any]) -> str:
-    """Return a stable hash of the polled status dict.
-
-    Any change in task counts, scheduler-state flips, new waves, etc.
-    flips the fingerprint and resets the adaptive backoff. We serialize
-    with ``sort_keys=True`` and ``default=str`` so heterogeneous (and
-    nested-dict) values like the ``waves`` block hash deterministically
-    without us having to enumerate which keys matter. blake2b is fast
-    and collision-resistant enough for an equality oracle.
-    """
-    try:
-        payload = json.dumps(status, sort_keys=True, default=str).encode("utf-8")
-    except (TypeError, ValueError):
-        # Pathological payload — fall back to a per-call unique value so
-        # we never spuriously declare "unchanged" on an opaque diff.
-        payload = repr(status).encode("utf-8", errors="replace")
-    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+# ``_status_fingerprint`` lives in
+# :mod:`hpc_agent.ops.monitor.tick_log` alongside ``_append_tick`` and
+# ``_tick_log_path``. It re-exports above so any code that reached in
+# via ``monitor_flow._status_fingerprint`` keeps working.
 
 
 @dataclass
@@ -140,247 +137,19 @@ class _LoopState:
     combiner_attempts: dict[int, int] = field(default_factory=dict)
 
 
-def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
-    """Return the path the slash-command surface writes its tick log to.
-
-    Sharing the file across surfaces lets ``/monitor-hpc summary`` work
-    regardless of whether monitoring was driven by repeated slash-command
-    invocations or by one long monitor-flow call.
-    """
-    return runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
+# ``_tick_log_path`` and ``_append_tick`` live in
+# :mod:`hpc_agent.ops.monitor.tick_log`.
 
 
-# _flock_append was removed in favour of routing the tick-log append
-# through hpc_agent._kernel.extension.telemetry's monitor-jsonl sink, which owns
-# the flock-guarded writer pattern (see _append_tick below).
+# ``_newly_complete_waves``, ``_read_partial_ok`` and
+# ``_write_failed_task_ids`` live in
+# :mod:`hpc_agent.ops.monitor.waves`. They re-export above so the
+# legacy ``monitor_flow.<helper>`` attribute path keeps working.
 
 
-def _append_tick(
-    experiment_dir: Path,
-    run_id: str,
-    *,
-    summary: dict[str, Any],
-    diff_from_prev: dict[str, list[int]],
-    actions: list[dict[str, Any]],
-    lifecycle_state: str,
-    next_tick_seconds: float | None,
-) -> None:
-    """Append one JSONL record to ``<run_id>.monitor.jsonl`` (best-effort).
-
-    Holds an exclusive flock for the duration of the append so a
-    concurrent slash-command writer can\'t interleave bytes mid-line.
-    """
-    record = {
-        "tick_id": utcnow_iso(),
-        "run_id": run_id,
-        "summary": summary,
-        "diff_from_prev": diff_from_prev,
-        "preflight": "ok",
-        "actions": actions,
-        "lifecycle_state": lifecycle_state,
-        "next_tick_seconds": next_tick_seconds,
-        "console_emitted": False,
-    }
-    path = _tick_log_path(experiment_dir, run_id)
-    # B7: Route the JSONL append through hpc_agent._kernel.extension.telemetry,
-    # which owns the flock-guarded writer pattern. Telemetry's
-    # monitor-jsonl sink ignores HPC_TELEMETRY_SINK because this caller
-    # is the canonical producer.
-    try:
-        from hpc_agent._kernel.extension.telemetry import record as _telemetry_record
-
-        _telemetry_record(
-            "tick",
-            record,
-            sink="monitor-jsonl",
-            monitor_jsonl_path=path,
-        )
-    except Exception:  # noqa: BLE001 — never crash the loop on telemetry
-        # Tick log writes must never crash the loop. The journal record
-        # is the primary state; this is observability.
-        pass
-
-
-def _newly_complete_waves(
-    *,
-    last_status: dict[str, Any],
-    wave_map: dict[str, list[int]] | None,
-    already_combined: set[int],
-) -> list[int]:
-    """Identify waves whose every task reports complete and aren't yet combined.
-
-    The cluster-side reporter optionally emits a ``waves`` block in
-    ``last_status`` when the sidecar carried a ``wave_map``. We trust
-    that: when ``waves[N].complete == waves[N].total``, wave ``N`` is
-    done. Falls back to "no wave_map → no combining" silently.
-    """
-    waves_block = last_status.get("waves")
-    if not isinstance(waves_block, dict):
-        return []
-    # Restrict to waves the local wave_map declared so a cluster-side
-    # reporter that picks up unexpected wave numbers (e.g. from a stale
-    # status report, or after a fresh resubmission added new groups) can't
-    # trigger combine_wave on waves the framework doesn't track.
-    declared_waves: set[int] | None = None
-    if wave_map is not None:
-        declared_waves = set()
-        for k in wave_map:
-            try:
-                declared_waves.add(int(k))
-            except (TypeError, ValueError):
-                continue
-    out: list[int] = []
-    for k, counts in waves_block.items():
-        try:
-            wave_num = int(k)
-        except (TypeError, ValueError):
-            continue
-        if wave_num in already_combined:
-            continue
-        if declared_waves is not None and wave_num not in declared_waves:
-            continue
-        if not isinstance(counts, dict):
-            continue
-        # Coerce to int explicitly so a missing/None counter doesn't
-        # falsy-skip a legitimate (e.g. total=5, complete=5) match, and
-        # require total > 0 explicitly so empty waves don't loop until
-        # walltime budget.
-        try:
-            total = int(counts.get("total") or 0)
-            complete = int(counts.get("complete") or 0)
-        except (TypeError, ValueError):
-            continue
-        if total > 0 and complete == total:
-            out.append(wave_num)
-    return sorted(out)
-
-
-def _read_partial_ok(experiment_dir: Path, run_id: str) -> bool:
-    """Read the partial_ok sibling marker written by submit-flow.
-
-    Returns True iff ``<exp>/.hpc/runs/<run_id>.partial_ok`` exists.
-    The marker is a sibling of the run sidecar (intentionally not a
-    sidecar field) so the sidecar's frozen schema does not need to bump
-    for this opt-in flag. See ``submit_flow.partial_ok``.
-    """
-    from hpc_agent.state.runs import run_sidecar_path
-
-    marker = run_sidecar_path(experiment_dir, run_id).with_suffix(".partial_ok")
-    return marker.is_file()
-
-
-def _write_failed_task_ids(
-    experiment_dir: Path,
-    run_id: str,
-    *,
-    failed_task_ids: list[int],
-    classifier_codes: list[str] | None = None,
-    wave: int | None = None,
-) -> None:
-    """Persist the failure ledger consulted by aggregate-flow.
-
-    Writes ``<exp>/.hpc/runs/<run_id>.failed.json`` with the shape
-    documented in the D2b primitive doc — kept on disk (not in the
-    sidecar) so aggregate-flow can read it without a sidecar parse.
-
-    Routed through :func:`atomic_write_json` so a concurrent reader
-    (aggregate-flow scanning the ledger) never observes a partial JSON
-    write — without this, a Python-level ``write_text`` produces a
-    truncate-then-write sequence that can land mid-payload.
-    """
-    from hpc_agent.infra.io import atomic_write_json
-    from hpc_agent.state.runs import run_sidecar_path
-
-    target = run_sidecar_path(experiment_dir, run_id).with_suffix(".failed.json")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "run_id": run_id,
-        "failed_task_ids": sorted(set(int(t) for t in failed_task_ids)),
-        "wave": wave,
-        "classifier_codes": list(classifier_codes or []),
-    }
-    atomic_write_json(target, payload)
-
-
-def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
-    """Pull `_combiner/wave_*.runtime.json` from the cluster and ingest.
-
-    The runtime-prior pipeline normally runs from `aggregate_flow`. This
-    hook lets `monitor_flow` feed the warm-axis-picker even when the
-    user never invokes `/aggregate-hpc` (e.g. they read metrics on the
-    cluster directly, or only care about pass/fail). Best-effort:
-    failures are swallowed — monitor's job is lifecycle, not priors.
-
-    Pull is filtered to just the runtime sidecars (~1 file per wave,
-    typically <100KB total) — cheap relative to a full `_combiner/`
-    pull. Idempotent: re-running on the same run is safe because
-    `append_sample` dedups on `(run_id, task_id)`.
-
-    The pull lands under a :class:`tempfile.TemporaryDirectory` so a
-    long-running monitor that ticks N runs to terminal does not leak N
-    ``hpc_runtime_pull_*`` dirs under ``$TMPDIR``.
-    """
-    import tempfile
-
-    from hpc_agent.infra.remote import rsync_pull
-    from hpc_agent.state.runs import read_run_sidecar
-    from hpc_agent.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
-
-    try:
-        with tempfile.TemporaryDirectory(prefix="hpc_runtime_pull_") as local_dir_str:
-            local_dir = Path(local_dir_str)
-            result = rsync_pull(
-                ssh_target=record.ssh_target,
-                remote_path=record.remote_path,
-                remote_subdir="_combiner",
-                local_dir=str(local_dir),
-                include=["wave_*.runtime.json"],
-            )
-            if result.returncode != 0:
-                return 0
-            cmd_sha = None
-            with contextlib.suppress(FileNotFoundError, OSError, json.JSONDecodeError):
-                cmd_sha = read_run_sidecar(experiment_dir, record.run_id).get("cmd_sha")
-            return ingest_runtime_samples_from_combiner_dir(
-                local_dir,
-                experiment_dir=experiment_dir,
-                profile=record.profile,
-                cluster=record.cluster,
-                cmd_sha=cmd_sha,
-            )
-    except (OSError, TimeoutError):
-        return 0
-
-
-def _is_terminal(
-    last_status: dict[str, Any],
-    total_tasks: int,
-    *,
-    partial_ok: bool = False,
-) -> tuple[str | None, str | None]:
-    """Inspect counts and return (lifecycle_state, escalation_reason).
-
-    Returns ``(None, None)`` when still in flight.
-
-    With ``partial_ok=True``, the wave is classified ``complete`` as
-    soon as no work is left and at least one task succeeded. Only a
-    zero-success wave is classified ``failed`` under partial-ok.
-    """
-    complete = int(last_status.get("complete", 0))
-    running = int(last_status.get("running", 0))
-    pending = int(last_status.get("pending", 0))
-    failed = int(last_status.get("failed", 0))
-
-    if complete >= total_tasks:
-        return (LifecycleState.COMPLETE, None)
-    if running == 0 and pending == 0 and failed > 0:
-        if partial_ok and complete > 0:
-            # Partial success: at least one task done, no work left.
-            return (LifecycleState.COMPLETE, "partial_ok_with_failures")
-        # No work left and at least one failure. MVP doesn't auto-resubmit;
-        # surface the failure for the caller to handle.
-        return (LifecycleState.FAILED, "failed_tasks_no_auto_recover_in_mvp")
-    return (None, None)
+# ``_ingest_runtime_at_terminal`` and ``_is_terminal`` live in
+# :mod:`hpc_agent.ops.monitor.terminal`. They re-export above so any
+# code that reached in via ``monitor_flow._is_terminal`` keeps working.
 
 
 @primitive(

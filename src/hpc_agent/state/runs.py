@@ -15,7 +15,6 @@ task content also changes the run's identity.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -26,10 +25,13 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
+from hpc_agent.state.run_sha import compute_cmd_sha, compute_tasks_py_sha
+from hpc_agent.state.wave_map import derive_wave_map as _maybe_derive_wave_map
 
 __all__ = [
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
+    "_maybe_derive_wave_map",
     "compute_cmd_sha",
     "compute_tasks_py_sha",
     "find_existing_runs",
@@ -90,39 +92,11 @@ def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
     return RepoLayout(experiment_dir).run_sidecar(run_id)
 
 
-def compute_cmd_sha(tasks_module: Any) -> str:
-    """Materialize the task list and return a deterministic SHA-256.
-
-    Imports the user's ``tasks.py`` module (already loaded by the caller),
-    calls ``total()``, then ``resolve(i)`` for every ``i`` in
-    ``range(total())``. Each kwargs dict is normalized to sorted-keys JSON
-    and the lines are joined with ``\\n`` before hashing. The resulting
-    digest is stable across equivalent task lists and changes whenever any
-    kwarg dict changes.
-
-    Returns a 64-char hex string.
-
-    Raises
-    ------
-    AttributeError
-        If *tasks_module* lacks ``total`` or ``resolve``.
-    TypeError
-        If ``resolve(i)`` does not return a dict.
-    """
-    n = int(tasks_module.total())
-    parts: list[str] = []
-    for i in range(n):
-        kwargs = tasks_module.resolve(i)
-        if not isinstance(kwargs, dict):
-            raise TypeError(f"tasks.resolve({i}) must return a dict, got {type(kwargs).__name__}")
-        parts.append(json.dumps(kwargs, sort_keys=True, separators=(",", ":")))
-    joined = "\n".join(parts).encode()
-    return hashlib.sha256(joined).hexdigest()
-
-
-def compute_tasks_py_sha(tasks_py_path: Path) -> str:
-    """Return SHA-256 of ``tasks.py``'s bytes — diagnostic only."""
-    return hashlib.sha256(Path(tasks_py_path).read_bytes()).hexdigest()
+# ``compute_cmd_sha`` and ``compute_tasks_py_sha`` live in
+# :mod:`hpc_agent.state.run_sha` so this module can stay focused on the
+# sidecar lifecycle. The names re-export above via the top-level
+# ``from hpc_agent.state.run_sha import ...``; ``__all__`` already lists
+# both names so star-imports keep working unchanged.
 
 
 # v2 first-class config-snapshot fields. All optional; absent keys are
@@ -209,71 +183,11 @@ _WARNED_VERSION_MISMATCH_CAP: int = 1024
 _warned_version_mismatch: OrderedDict[tuple[str, str], None] = OrderedDict()
 
 
-def _maybe_derive_wave_map(experiment_dir: Path, *, task_count: int) -> dict[str, list[int]] | None:
-    """Best-effort axes-driven wave_map derivation. Returns None on any miss.
-
-    Silent on the happy path; emits a :class:`UserWarning` only when
-    ``axes.yaml`` is present with a full enumeration but the cartesian
-    product of axis sizes disagrees with *task_count* — that's a sign
-    of a misconfigured deploy and the user wants to hear about it.
-    """
-    import jsonschema
-    import yaml
-
-    try:
-        from hpc_agent.state.axes import (
-            compute_wave_map,
-            pick_array_axis,
-            read_axes,
-        )
-    except ImportError:
-        return None
-
-    try:
-        config = read_axes(experiment_dir)
-    except (jsonschema.ValidationError, yaml.YAMLError, ValueError, OSError):
-        return None
-    if config is None or not config.get("axes"):
-        return None
-
-    sizes = [int(a["size"]) for a in config["axes"]]
-    product = 1
-    for s in sizes:
-        product *= s
-    if product != task_count:
-        warnings.warn(
-            f"axes.yaml product ({product}) != task_count ({task_count}); "
-            "skipping auto-derived wave_map. Re-run /hpc-axes-init or pass "
-            "wave_map explicitly.",
-            UserWarning,
-            stacklevel=3,
-        )
-        return None
-
-    picked_name, picker_reason = pick_array_axis(experiment_dir)
-    if picked_name is None:
-        # Picker couldn't choose (no homogeneous_axes hint, no qualifying
-        # axis after CV scoring, etc). axes.yaml HAD a multi-axis
-        # enumeration; degrading to single-wave aggregation silently
-        # surprises the user when they later see per-wave combiner
-        # output collapse. Warn loudly so the operator knows what
-        # changed; the degraded path still works (downstream treats
-        # a missing wave_map as "single implicit wave-0").
-        warnings.warn(
-            f"axes.yaml declared multi-axis enumeration but pick_array_axis "
-            f"returned None ({picker_reason!r}); sidecar will lack wave_map "
-            "and downstream auto-combine-waves will degrade to single-wave "
-            "aggregation. Add homogeneous_axes to axes.yaml or pass "
-            "wave_map explicitly to /submit to enforce a specific shape.",
-            UserWarning,
-            stacklevel=3,
-        )
-        return None
-    try:
-        derived = compute_wave_map(experiment_dir, picked_axis=picked_name)
-    except (ValueError, jsonschema.ValidationError):
-        return None
-    return {str(k): list(v) for k, v in derived.items()}
+# ``_maybe_derive_wave_map`` lives in :mod:`hpc_agent.state.wave_map`
+# (under the public name ``derive_wave_map``) so this module can stay
+# focused on the sidecar lifecycle. The name is imported above under its
+# original underscore alias and re-listed in ``__all__`` below so callers
+# that pulled it off ``hpc_agent.state.runs`` keep working.
 
 
 def write_run_sidecar(
