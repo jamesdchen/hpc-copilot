@@ -291,18 +291,19 @@ Branch:
 
 ## Step 8b: Verify the array is queued/running
 
-`qsub`/`sbatch` returning a job ID is necessary but not sufficient. Confirm each returned job ID is alive on the cluster BEFORE reporting success:
+`qsub`/`sbatch` returning a job ID is necessary but not sufficient — an SGE array can land in `Eqw` (error) and a SLURM job can be held, both of which a plain alive-check still reports as "present." Confirm the submitted jobs landed cleanly with a verb (never raw `ssh qstat`):
 
 ```bash
-# SLURM
-ssh $SSH_TARGET 'squeue -j '"$JOB_IDS"' -h -o "%i %T %r"; sacct -j '"$JOB_IDS"' -n -P -o JobID,State,Reason 2>&1 | head'
-# SGE
-ssh $SSH_TARGET 'qstat -j '"$JOB_IDS"' 2>&1 | head -40; qstat -u '"$USER"' | awk "NR>2"'
+hpc-agent verify-submitted --experiment-dir . --run-id "$RUN_ID"
 ```
 
-Classify each job ID as **healthy** (proceed) or **failed** (abort) per the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md). A wave-2+ job pending on a dependency is healthy.
+It reads the run's job_ids from the journal, queries per-job scheduler state over SSH, and returns `{ok, states, healthy, error, held, missing, details}`. A wave-2+ job pending on a dependency reports as healthy.
 
-On a failed state: record the scheduler reason verbatim and the bad job ID in `decisions`, stop. Do not run Step 9 or Step 10.
+Branch:
+- `ok=True` → every submitted job is queued/running, none in error/held → proceed.
+- `ok=False` → record the `error`/`held` job IDs, `states`, and `details` verbatim in `decisions`, then stop. Do NOT run Step 9 or Step 10.
+
+`missing` (submitted IDs absent from the queue right after submit) is suspicious — surface it too. See the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md); the failure-mode table below maps a bad state (e.g. `Eqw`) to its fix.
 
 ## Step 9-10: Cache + report
 

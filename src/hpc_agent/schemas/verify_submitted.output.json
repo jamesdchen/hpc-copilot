@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/verify_submitted.output.json",
+  "title": "verify-submitted output",
+  "description": "Per-job scheduler state for a just-submitted array (#157).\n\nAnswers Step 8b's question — \"is every submitted job queued/running and\nNOT in an error/held state?\" — through a verb instead of raw\n``ssh … qstat``. The caller branches on ``ok``; ``states`` carries the raw\nper-job token for any case the alive/error/held classification doesn't\ncover.",
+  "type": "object",
+  "required": [
+    "ok",
+    "details"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "ok": {
+      "description": "True iff no submitted job is in a scheduler error or held state.",
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "states": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "job_id -> raw scheduler state token (e.g. SGE 'Eqw'/'r', SLURM 'RUNNING'/'PENDING').",
+      "title": "States",
+      "type": "object"
+    },
+    "healthy": {
+      "description": "Job ids in a healthy alive state (queued / running).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Healthy",
+      "type": "array"
+    },
+    "error": {
+      "description": "Job ids in a scheduler error state (e.g. SGE Eqw).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Error",
+      "type": "array"
+    },
+    "held": {
+      "description": "Job ids held by the scheduler.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Held",
+      "type": "array"
+    },
+    "missing": {
+      "description": "Submitted job ids not present in the scheduler queue (already terminal/gone, or never landed).",
+      "items": {
+        "type": "string"
+      },
+      "title": "Missing",
+      "type": "array"
+    },
+    "details": {
+      "description": "One-line human-readable summary the caller can surface.",
+      "title": "Details",
+      "type": "string"
+    }
+  }
+}

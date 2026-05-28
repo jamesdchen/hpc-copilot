@@ -106,6 +106,63 @@ class SlurmBackend(HPCBackend):
         return alive
 
     @staticmethod
+    def build_scheduler_state_cmd(job_ids: list[str]) -> str:
+        """Shell command whose stdout pairs each live job id with its state.
+
+        ``squeue -o '%i %T'`` adds the state column the alive-check omits;
+        ``|| true`` keeps rc 0 when squeue knows none of the ids (all gone).
+        A job stuck pending/held still appears here with its state.
+        """
+        import shlex
+
+        if not job_ids:
+            return "true"
+        csv = ",".join(job_ids)
+        return f"squeue -j {shlex.quote(csv)} -h -o '%i %T' 2>/dev/null || true"
+
+    @staticmethod
+    def parse_scheduler_states(stdout: str, job_ids: list[str]) -> dict[str, str]:
+        """Map each requested job id present in ``squeue`` output to its raw
+        state token (``%T``), e.g. ``RUNNING``, ``PENDING``, ``FAILED``.
+        """
+        states: dict[str, str] = {}
+        wanted = set(job_ids)
+        for line in stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            base = parts[0].split(".")[0].split("_")[0]
+            if base in wanted:
+                states[base] = parts[1].strip()
+        return states
+
+    @staticmethod
+    def classify_scheduler_state(state: str) -> str:
+        """Bucket a raw SLURM state token into ``alive`` / ``error`` / ``held``.
+
+        Active healthy states (``RUNNING``, ``PENDING``, ``COMPLETING`` …) are
+        alive; the failed/cancelled family is an error; an explicitly held job
+        (``*_HOLD``) is held. Unknown tokens are treated as alive (conservative
+        — the verb still surfaces the raw state for the agent to judge).
+        """
+        s = state.strip().upper()
+        if s in {
+            "FAILED",
+            "NODE_FAIL",
+            "BOOT_FAIL",
+            "DEADLINE",
+            "OUT_OF_MEMORY",
+            "CANCELLED",
+            "TIMEOUT",
+            "PREEMPTED",
+            "REVOKED",
+        }:
+            return "error"
+        if "HOLD" in s or s == "SPECIAL_EXIT":
+            return "held"
+        return "alive"
+
+    @staticmethod
     def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side path to a single task's stderr log.
 

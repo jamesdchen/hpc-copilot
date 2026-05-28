@@ -93,6 +93,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [campaign-replay](campaign-replay.md) | yes | _none_ | `hpc-agent campaign replay [--experiment-dir <dir>] --campaign-id <campaign_id> [--last-n <last_n>]` |
 | [campaign-status](campaign-status.md) | yes | _none_ | `hpc-agent campaign status [--experiment-dir <dir>] --campaign-id <campaign_id>` |
 | [capabilities](capabilities.md) | yes | _none_ | `hpc-agent capabilities [--full]` |
+| [classify-axis-easy](classify-axis-easy.md) | yes | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` |
 | [clusters-describe](clusters-describe.md) | yes | _none_ | `hpc-agent clusters describe <name> [--strict]` |
 | [clusters-list](clusters-list.md) | yes | _none_ | `hpc-agent clusters list` |
 | [decide-monitor-arm](decide-monitor-arm.md) | yes | _none_ | `hpc-agent decide-monitor-arm --spec <path>` |
@@ -112,6 +113,7 @@ The verb partitions primitives into bands the reader can scan independently:
 | [suggest-setup-action](suggest-setup-action.md) | yes | _none_ | `hpc-agent suggest-setup-action [--experiment-dir <dir>]` |
 | [summarize-submit-plan](summarize-submit-plan.md) | yes | _none_ | `hpc-agent summarize-submit-plan --spec <path>` |
 | [verify-aggregation-complete](verify-aggregation-complete.md) | yes | _none_ | `hpc-agent verify-aggregation-complete [--experiment-dir <dir>] --run-id <run_id> --combiner-dir <combiner_dir_local> [--results-dir <results_dir_local>]` |
+| [verify-submitted](verify-submitted.md) | yes | ssh: `<cluster>` | `hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>` |
 
 ### `validate` primitives
 
