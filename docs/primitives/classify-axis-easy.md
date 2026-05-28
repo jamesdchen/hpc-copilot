@@ -14,9 +14,9 @@ backed_by:
 Stdlib-only AST pattern-match for a `@register_run` function's
 `DataAxis`. Read-only fast path used by the `hpc-classify-axis` skill:
 on a confident hit the skill records the classification without
-invoking the LLM decision tree; on `unclassifiable` /
-`no_loop_detected` / `function_not_found` it falls through to the LLM
-tree.
+invoking the LLM decision tree — including `no_loop_detected`, which is
+recorded as the terminal `cartesian` (no-series) verdict; only
+`unclassifiable` / `function_not_found` fall through to the LLM tree.
 
 ## Purpose
 
