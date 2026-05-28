@@ -3,10 +3,11 @@
 A read-only wrapper around
 :func:`hpc_agent.experiment_kit.axis_matcher.classify_axis_easy`. The
 ``hpc-classify-axis`` skill calls this primitive *first*; on a confident
-hit (``independent`` / ``bounded_halo`` / ``sequential``) it skips the
-LLM decision tree and proceeds straight to recording; on
-``unclassifiable`` / ``no_loop_detected`` / ``function_not_found`` it
-falls through to the LLM tree.
+hit (``independent`` / ``bounded_halo`` / ``sequential``, or
+``no_loop_detected`` — recorded as the terminal ``cartesian`` "no ordered
+series" verdict) it skips the LLM decision tree and records directly;
+only ``unclassifiable`` / ``function_not_found`` fall through to the LLM
+tree.
 
 The matcher's autonomous classification scope is narrow on purpose:
 ``Independent``, ``BoundedHalo`` (via a pattern library), and

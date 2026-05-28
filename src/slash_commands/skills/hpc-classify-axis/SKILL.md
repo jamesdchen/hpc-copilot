@@ -85,7 +85,8 @@ Branch on `data.kind`:
 | `independent` | Committed. Build `data_axis: {kind: "independent"}`. Jump to Step 5. |
 | `bounded_halo` | Committed — the matcher recognized one of the pattern-library shapes (first-order / finite-order stencil, bounded-window deque, pandas rolling, EMA) and extracted `data.halo_expr`. Build `data_axis: {kind: "bounded_halo", halo: {expr: data.halo_expr}}`. Jump to Step 5. **No LLM call is needed** — the halo expression is already structurally derived. |
 | `sequential` | Committed — the matcher saw carried outer-scope state but no halo pattern matched. Sequential is the safe default; the framework will run the inner loop serially. Build `data_axis: {kind: "sequential"}`. Jump to Step 5. |
-| `no_loop_detected` / `unclassifiable` / `function_not_found` | Fall through to Step 4b. |
+| `no_loop_detected` | Committed — the matcher confidently found **no ordered-series loop** to split. Build `data_axis: {kind: "cartesian"}` (a plain cartesian sweep — distinct from `independent`, which has a parallelizable series). Jump to Step 5. **No LLM call needed**, and **not** a fall-through: a confident no-loop signal is a terminal verdict, recorded so the worker never re-infers it. |
+| `unclassifiable` / `function_not_found` | Fall through to Step 4b — genuinely uncertain (a parse the matcher couldn't resolve); the LLM tree decides, or the run escalates. |
 
 Set `classified_by: "agent"`. Carry `data.evidence` forward verbatim as the one-line reasoning for Step 6's transcript turn.
 
@@ -95,7 +96,7 @@ Set `classified_by: "agent"`. Carry `data.evidence` forward verbatim as the one-
 
 #### 4b. Walk the LLM decision tree (long-tail fallback)
 
-Only invoked on `unclassifiable` / `no_loop_detected` / `function_not_found` from Step 4a. The long tail covers novel patterns the matcher doesn't recognize — including **Associative** classifications (since the matcher does not detect Associative autonomously). Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
+Only invoked on `unclassifiable` / `function_not_found` from Step 4a (a confident `no_loop_detected` is already the terminal `cartesian` verdict — see 4a). The long tail covers novel patterns the matcher doesn't recognize — including **Associative** classifications (since the matcher does not detect Associative autonomously). Read the run's source. The single question that classifies every axis (from `hpc_agent/experiment_kit/axis.py`): **is there carried state across the series, and is its transition associative?**
 
 <!-- decision-content:axis-tree start -->
 1. **Does each row's result depend on rows computed before it?**
@@ -134,6 +135,7 @@ hpc-agent classify-axis --experiment-dir <dir> --spec <spec.json>
 | `associative` | `monoid: "sum" \| "moments"` |
 | `bounded_halo` | `halo: { expr: "<arithmetic over params>" }` |
 | `sequential` | — |
+| `cartesian` | — (no ordered series; plain cartesian sweep) |
 
 On a `spec_invalid` envelope the most common cause is a `bounded_halo` whose `halo.expr` is not safe arithmetic over the run's parameters — fall back to `Sequential` and re-invoke. (A human-driven caller surfaces the message and re-elicits; an autonomous caller takes the fail-safe.)
 

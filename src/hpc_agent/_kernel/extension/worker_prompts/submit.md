@@ -113,28 +113,25 @@ The caller has already parsed the user's natural-language request into a list of
 
 For multi-executor submissions sharing `(ssh_target, remote_path)`, build a **batch spec** — `{"specs": [<per-spec>...], "rsync_excludes": [...], "skip_preflight": ...}`; `submit-flow` auto-routes it to the batched path (one rsync + one deploy + N qsubs). Heterogeneous batches raise `spec_invalid`. Why batch rather than N parallel submits: see [submit-flow.md](../../docs/primitives/submit-flow.md).
 
-## Step 3: Plan the parallelization axis
+## Step 3: Consume the recorded parallelization verdict (never infer it)
 
-The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 scaffolds it once per experiment; from then on it is committed and reused on every submit. There are two shapes, and Step 3 decides which:
+The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_id)`). Step 6 scaffolds it once per experiment; from then on it is committed and reused on every submit. There are two shapes:
 
-- **Cartesian grid** — each task is one independent cell of a parameter grid. `tasks_example.py` Pattern 1; scaffolded deterministically by [build-tasks-py](../../docs/primitives/build-tasks-py.md) at Step 6b. The 80% case.
-- **Planner-driven** — the executor iterates a *totally-ordered series* (a walk-forward backtest, an online-learning scan) and you want to fan that series out. Splitting a *stateful* series computation is only correct if each chunk replays the right warm-up; hpc-agent owns that via `hpc_agent.experiment_kit.plan_tasks`. Emitted by [build-tasks-py](../../docs/primitives/build-tasks-py.md) when the spec carries a `data_axis` (Step 3b's classification).
+- **Cartesian grid** — each task is one independent cell of a parameter grid. `tasks_example.py` Pattern 1; scaffolded deterministically by [build-tasks-py](../../docs/primitives/build-tasks-py.md) at Step 6b with **no** `data_axis`. The 80% case.
+- **Planner-driven** — the executor iterates a *totally-ordered series* (a walk-forward backtest, an online-learning scan) fanned out across chunks. Splitting a *stateful* series is only correct if each chunk replays the right warm-up; hpc-agent owns that via `hpc_agent.experiment_kit.plan_tasks`, emitted by [build-tasks-py](../../docs/primitives/build-tasks-py.md) when the spec carries a `data_axis`.
 
-### 3a: Detect a series axis
+**Which shape is not the worker's call.** The classification is resolved *upstream* by the caller — the `hpc-classify-axis` skill (a deterministic AST matcher for the common shapes; the human/LLM decision tree for the long tail) — and recorded in `<experiment>/.hpc/axes.yaml`'s `executors.<run_name>` block, keyed by run name and stamped with the `run_signature_sha` it was classified against. Read it and branch:
 
-Read `compute()` / the `@register_run` function and its call graph — the same code-analysis pass that classifies hardware from `info.imports` at Step 4. A series axis is present when the executor loops over an ordered series (a time index, a date range, rows of a sorted frame) and you intend to parallelize *that loop*. If there is no series loop, it is a cartesian grid — skip to Step 4.
+- **`executors.<run_name>` present AND its `run_signature_sha` matches the picked run's current `run_signature_sha`** (Step 1) → the verdict is valid:
+  - `data_axis.kind == "cartesian"` → no ordered series to split; build a **plain cartesian** `tasks.py` (Step 6b, **omit** `data_axis` from the spec).
+  - `independent` / `associative` / `bounded_halo` / `sequential` → planner-driven; thread the `data_axis` block into Step 6b's `build-tasks-py` spec verbatim.
+- **No entry, or the `run_signature_sha` drifted** → unresolved. **Do NOT read the executor's code to infer an axis, and do NOT default to a cartesian grid** — a wrong "no series" guess silently mishandles a stateful series and returns plausible-but-wrong numbers. Record `axis_unclassified` in `decisions` (run name + current `run_signature_sha`) and **stop**; the caller runs `hpc-classify-axis`, writes the verdict to `axes.yaml`, and re-invokes this workflow.
 
-### 3b: Classify the `DataAxis` — cache check, then interview
-
-The experiment declares nothing about parallelism — the classification is stored in `<experiment>/.hpc/axes.yaml`'s `executors.<run_name>` block, keyed by run name and stamped with the `run_signature_sha` it was classified against.
-
-**Cache lookup.** Read `axes.yaml`. If `executors.<run_name>` exists **and** its `run_signature_sha` equals the picked run's current `run_signature_sha` (from Step 1) → the stored `DataAxis` is still valid: **reuse it, skip the interview.** A mismatch (signature drifted) or no entry → conduct the classification interview.
-
-**Interview.** The `hpc-classify-axis` skill walks the proposes-then-confirms decision tree with the user — that interaction needs a human, which a headless worker cannot give. Record the boundary in `decisions` / `anomalies` and stop; the caller resolves the classification, writes it to `axes.yaml`, and re-invokes this workflow.
+The distinction that makes this safe: a *recorded* `cartesian` verdict means the caller's matcher **confidently** found no ordered series; an *absent* verdict means "not yet resolved → escalate." The worker never conflates the two.
 
 > **`DataAxis` ≠ scheduling axes.** `axes.yaml` holds two unrelated things: the `executors.<run>.data_axis` block (this step — *how to split the series correctly*) and `homogeneous_axes` / `axes` (Step 4b / `hpc-axes-init` — *which sweep dimension goes on the task array*). They are orthogonal; classifying the `DataAxis` never touches the scheduling axes.
 
-### 3c: Serial-elision gate (mandatory for a non-`Sequential` axis)
+### 3c: Serial-elision gate (mandatory for a splittable axis — `independent` / `associative` / `bounded_halo`)
 
 Before scaffolding a planner-driven `tasks.py`, prove the classification on a fixture: `hpc_agent.experiment_kit.check_elision` (or `assert_elision_equivalent`) runs the experiment once whole and once split N ways and asserts the results agree. If it fails, the axis is misclassified — widen the halo or fall back to `Sequential()`. This gate is what makes the inference safe: a misclassified axis produces a job that runs fine and returns plausible-but-wrong numbers, and nothing else catches it. Do not skip it, and recommend the experiment repo wire `assert_elision_equivalent` into its CI as a required check.
 

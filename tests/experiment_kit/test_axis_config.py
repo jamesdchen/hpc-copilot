@@ -144,3 +144,29 @@ def test_data_axis_config_model_rejects_bounded_halo_without_halo() -> None:
 def test_data_axis_config_model_rejects_halo_on_non_bounded() -> None:
     with pytest.raises(ValueError, match="halo"):
         _DataAxisConfig.model_validate({"kind": "independent", "halo": {"expr": "w"}})
+
+
+# ─── cartesian (no-series) verdict ───────────────────────────────────────
+
+
+def test_cartesian_verdict_has_no_live_axis() -> None:
+    """'cartesian' is the recorded "no ordered series to split" verdict —
+    distinct from 'independent'. There is no live DataAxis; the caller
+    emits a plain cartesian tasks.py. data_axis_from_config returns None."""
+    assert data_axis_from_config({"kind": "cartesian"}) is None
+
+
+def test_v2_executors_block_accepts_cartesian_verdict() -> None:
+    validate_axes(
+        {
+            "axes_schema_version": 2,
+            "executors": {
+                "run": {
+                    "run_signature_sha": "abc123",
+                    "data_axis": {"kind": "cartesian"},
+                    "classified_by": "agent",
+                    "classified_at": "2026-05-28T00:00:00+00:00",
+                }
+            },
+        }
+    )

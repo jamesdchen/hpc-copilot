@@ -65,14 +65,18 @@ class _DataAxisConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["independent", "associative", "bounded_halo", "sequential"] = Field(
+    kind: Literal["independent", "associative", "bounded_halo", "sequential", "cartesian"] = Field(
         description=(
             "How the series axis is safe to split. 'independent': the loop "
             "body is a pure function of its row. 'associative': it "
             "accumulates an associative summary — also set `monoid`. "
             "'bounded_halo': it depends on a bounded look-back window — "
             "also set `halo`. 'sequential': unbounded / order-dependent "
-            "state, not splittable; the fail-safe default."
+            "state, not splittable; the fail-safe default. 'cartesian': "
+            "there is no ordered series to split — a plain cartesian sweep "
+            "(distinct from 'independent', which has a parallelizable series). "
+            "Recorded only on a confident no-loop signal; anything ambiguous "
+            "stays 'sequential'."
         ),
     )
     halo: _HaloConfig | None = Field(

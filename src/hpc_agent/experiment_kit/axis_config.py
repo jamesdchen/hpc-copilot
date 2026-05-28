@@ -186,14 +186,22 @@ def _make_halo_fn(expr: str) -> Callable[[dict[str, Any]], int]:
     return halo_fn
 
 
-def data_axis_from_config(cfg: dict[str, Any]) -> DataAxis:
+def data_axis_from_config(cfg: dict[str, Any]) -> DataAxis | None:
     """Turn a serialized ``data_axis`` block into a live :data:`DataAxis`.
 
     *cfg* is the ``executors.<run>.data_axis`` mapping —
     ``{kind, halo?, monoid?}``. For ``bounded_halo`` the ``halo.expr``
     is compiled into a safe :func:`eval_halo_expr`-backed ``halo_fn``.
+
+    Returns ``None`` for the ``cartesian`` verdict — the recorded "no
+    ordered series to split; run a plain cartesian sweep" outcome,
+    distinct from ``independent`` (which *has* a series that merely
+    happens to be embarrassingly parallel). There is no live
+    ``DataAxis`` for it; the caller emits a plain cartesian ``tasks.py``.
     """
     kind = cfg.get("kind")
+    if kind == "cartesian":
+        return None
     if kind == "independent":
         return Independent()
     if kind == "sequential":
