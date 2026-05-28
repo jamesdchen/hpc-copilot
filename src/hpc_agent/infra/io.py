@@ -32,12 +32,34 @@ __all__ = ["atomic_locked_update", "advisory_flock", "atomic_write_json"]
 import contextlib
 import json
 import os
+import sys
 import tempfile
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
+
+
+def _replace_with_retry(src: str, dst: Path) -> None:
+    """``os.replace(src, dst)`` with a short bounded retry on Windows.
+
+    POSIX renames atomically over an open destination; Windows has no
+    equivalent, so if *dst* is momentarily held open by another
+    thread/process the replace raises ``PermissionError`` ([WinError 5],
+    a sharing violation). A brief backoff lets the colliding handle close.
+    Outside win32 the first failure propagates unchanged — byte-identical
+    to a bare ``os.replace``.
+    """
+    for attempt in range(5):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
@@ -98,7 +120,7 @@ def atomic_write_json(path: Path, payload: Any, *, fsync: bool = True) -> None:
             if fsync:
                 with contextlib.suppress(OSError):
                     os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
         if fsync:
             try:
                 dir_fd = os.open(str(path.parent), os.O_RDONLY)
@@ -188,7 +210,7 @@ def atomic_locked_update(
             tmp.flush()
             os.fsync(tmp.fileno())
             tmp.close()
-            os.replace(tmp.name, path)
+            _replace_with_retry(tmp.name, path)
             try:
                 dir_fd = os.open(str(path.parent), os.O_RDONLY)
                 try:
