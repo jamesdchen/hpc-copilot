@@ -42,7 +42,6 @@ What it intentionally does NOT do (in MVP)
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -54,12 +53,15 @@ from hpc_agent._kernel.lifecycle.lifecycle import LifecycleState
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.monitor_flow import MonitorFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.infra.time import utcnow_iso
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.ops.monitor.reconcile import mark_terminal
 from hpc_agent.ops.monitor.status import record_status
+from hpc_agent.ops.monitor.tick_log import (
+    _append_tick,
+    _status_fingerprint,
+    _tick_log_path,  # noqa: F401 — re-export for backwards compat
+)
 from hpc_agent.state.journal import load_run
-from hpc_agent.state.run_record import runs_dir
 from hpc_agent.state.runs import read_run_sidecar
 
 __all__ = ["monitor_flow", "MonitorFlowResult"]
@@ -110,23 +112,10 @@ _MAX_ADAPTIVE_POLL_SECONDS: float = 300.0
 _UNCHANGED_POLLS_BEFORE_BACKOFF: int = 2
 
 
-def _status_fingerprint(status: dict[str, Any]) -> str:
-    """Return a stable hash of the polled status dict.
-
-    Any change in task counts, scheduler-state flips, new waves, etc.
-    flips the fingerprint and resets the adaptive backoff. We serialize
-    with ``sort_keys=True`` and ``default=str`` so heterogeneous (and
-    nested-dict) values like the ``waves`` block hash deterministically
-    without us having to enumerate which keys matter. blake2b is fast
-    and collision-resistant enough for an equality oracle.
-    """
-    try:
-        payload = json.dumps(status, sort_keys=True, default=str).encode("utf-8")
-    except (TypeError, ValueError):
-        # Pathological payload — fall back to a per-call unique value so
-        # we never spuriously declare "unchanged" on an opaque diff.
-        payload = repr(status).encode("utf-8", errors="replace")
-    return hashlib.blake2b(payload, digest_size=16).hexdigest()
+# ``_status_fingerprint`` lives in
+# :mod:`hpc_agent.ops.monitor.tick_log` alongside ``_append_tick`` and
+# ``_tick_log_path``. It re-exports above so any code that reached in
+# via ``monitor_flow._status_fingerprint`` keeps working.
 
 
 @dataclass
@@ -140,65 +129,8 @@ class _LoopState:
     combiner_attempts: dict[int, int] = field(default_factory=dict)
 
 
-def _tick_log_path(experiment_dir: Path, run_id: str) -> Path:
-    """Return the path the slash-command surface writes its tick log to.
-
-    Sharing the file across surfaces lets ``/monitor-hpc summary`` work
-    regardless of whether monitoring was driven by repeated slash-command
-    invocations or by one long monitor-flow call.
-    """
-    return runs_dir(experiment_dir) / f"{run_id}.monitor.jsonl"
-
-
-# _flock_append was removed in favour of routing the tick-log append
-# through hpc_agent._kernel.extension.telemetry's monitor-jsonl sink, which owns
-# the flock-guarded writer pattern (see _append_tick below).
-
-
-def _append_tick(
-    experiment_dir: Path,
-    run_id: str,
-    *,
-    summary: dict[str, Any],
-    diff_from_prev: dict[str, list[int]],
-    actions: list[dict[str, Any]],
-    lifecycle_state: str,
-    next_tick_seconds: float | None,
-) -> None:
-    """Append one JSONL record to ``<run_id>.monitor.jsonl`` (best-effort).
-
-    Holds an exclusive flock for the duration of the append so a
-    concurrent slash-command writer can\'t interleave bytes mid-line.
-    """
-    record = {
-        "tick_id": utcnow_iso(),
-        "run_id": run_id,
-        "summary": summary,
-        "diff_from_prev": diff_from_prev,
-        "preflight": "ok",
-        "actions": actions,
-        "lifecycle_state": lifecycle_state,
-        "next_tick_seconds": next_tick_seconds,
-        "console_emitted": False,
-    }
-    path = _tick_log_path(experiment_dir, run_id)
-    # B7: Route the JSONL append through hpc_agent._kernel.extension.telemetry,
-    # which owns the flock-guarded writer pattern. Telemetry's
-    # monitor-jsonl sink ignores HPC_TELEMETRY_SINK because this caller
-    # is the canonical producer.
-    try:
-        from hpc_agent._kernel.extension.telemetry import record as _telemetry_record
-
-        _telemetry_record(
-            "tick",
-            record,
-            sink="monitor-jsonl",
-            monitor_jsonl_path=path,
-        )
-    except Exception:  # noqa: BLE001 — never crash the loop on telemetry
-        # Tick log writes must never crash the loop. The journal record
-        # is the primary state; this is observability.
-        pass
+# ``_tick_log_path`` and ``_append_tick`` live in
+# :mod:`hpc_agent.ops.monitor.tick_log`.
 
 
 def _newly_complete_waves(
