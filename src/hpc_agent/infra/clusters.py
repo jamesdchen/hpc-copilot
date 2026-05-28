@@ -11,6 +11,7 @@ than silently disabling the feature.
 from __future__ import annotations
 
 import os
+import shlex
 from pathlib import Path
 from typing import Any, Literal
 
@@ -237,6 +238,53 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
         # downstream `.get(...)` calls on the result don't AttributeError.
         result: dict[str, Any] = yaml.safe_load(f) or {}
     return result
+
+
+def remote_activation_prefix(cluster_cfg: dict[str, Any], *, conda_env: str | None = None) -> str:
+    """Build a shell prefix that activates the cluster env for a direct
+    (control-plane) ssh command.
+
+    The job-submission path activates the env inside ``hpc_preamble.sh``
+    via ``$MODULES`` / ``$CONDA_SOURCE`` / ``$CONDA_ENV``. But control-plane
+    commands run directly on the login node by ``ssh_run`` (the status
+    reporter, the combiner) never source that preamble — so without this
+    they fall to the login node's bare ``python`` (often ``/usr/bin/python``),
+    which lacks the framework package (the ``No module named ...`` failure
+    class).
+
+    Returns a prefix ending in `` && `` (so it slots after ``cd <path> &&``),
+    or ``""`` when nothing is configured — preserving the pre-existing
+    bare-python behaviour. *conda_env* (the per-run resolved env from the
+    run sidecar) overrides; otherwise the first ``conda_envs`` entry is used.
+    The ``<your_env>`` placeholder is treated as unset.
+    """
+    parts: list[str] = []
+    for mod in cluster_cfg.get("modules") or []:
+        parts.append(f"module load {shlex.quote(str(mod))}")
+    conda_source = cluster_cfg.get("conda_source")
+    if conda_source:
+        parts.append(f"source {shlex.quote(str(conda_source))}")
+        env = conda_env or next(iter(cluster_cfg.get("conda_envs") or []), None)
+        if env and env != "<your_env>":
+            parts.append(f"conda activate {shlex.quote(str(env))}")
+    if not parts:
+        return ""
+    return " && ".join(parts) + " && "
+
+
+def remote_activation_for_sidecar(sidecar: dict[str, Any]) -> str:
+    """Activation prefix for a run, derived from its sidecar's ``cluster``
+    + resolved ``env``. Best-effort: ``""`` when the cluster can't be
+    resolved (so the caller falls back to bare ``python``, unchanged)."""
+    cluster_key = sidecar.get("cluster")
+    if not cluster_key:
+        return ""
+    try:
+        cfg = load_clusters_config().get(cluster_key, {})
+    except Exception:  # noqa: BLE001 — a bad/missing config must not break status/aggregate
+        return ""
+    conda_env = (sidecar.get("env") or {}).get("conda_env")
+    return remote_activation_prefix(cfg, conda_env=conda_env)
 
 
 def validate_clusters_config(clusters: dict[str, Any]) -> None:

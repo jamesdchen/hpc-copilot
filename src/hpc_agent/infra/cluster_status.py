@@ -34,6 +34,7 @@ def ssh_status_report(
     log_dir: str = "logs",
     file_glob: str = "*",
     min_rows: int = 0,
+    remote_activation: str = "",
 ) -> dict:
     """Run the on-cluster status reporter (``--run-id``) and return parsed JSON.
 
@@ -51,6 +52,7 @@ def ssh_status_report(
     job_ids_csv = ",".join(job_ids)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
+        f"{remote_activation}"
         f"python -m hpc_agent.models.mapreduce.reduce.status "
         f"--run-id {shlex.quote(run_id)} "
         f"--job-ids {shlex.quote(job_ids_csv)} "
