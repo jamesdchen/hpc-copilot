@@ -97,7 +97,7 @@ def test_happy_path_runs_reducer_and_returns_parsed_json(
 
     with (
         mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
-        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.transport.rsync_pull", side_effect=fake_rsync_pull),
     ):
         out = cluster_reduce(
             tmp_path,
@@ -131,7 +131,7 @@ def test_aggregate_cmd_falls_back_to_sidecar(tmp_path: Path, journal_home: Path)
 
     with (
         mock.patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh),
-        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.transport.rsync_pull", side_effect=fake_rsync_pull),
     ):
         out = cluster_reduce(tmp_path, run_id="r1")
     assert out["ok"] is True
@@ -169,7 +169,7 @@ def test_rsync_pull_failure_raises(tmp_path: Path, journal_home: Path) -> None:
     with (
         mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
         mock.patch(
-            "hpc_agent.infra.remote.rsync_pull",
+            "hpc_agent.infra.transport.rsync_pull",
             return_value=_completed(
                 returncode=23, stderr="rsync: connection unexpectedly closed\n"
             ),
@@ -192,7 +192,7 @@ def test_invalid_json_output_raises(tmp_path: Path, journal_home: Path) -> None:
 
     with (
         mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
-        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.transport.rsync_pull", side_effect=fake_rsync_pull),
         pytest.raises(errors.RemoteCommandFailed, match="not valid JSON"),
     ):
         cluster_reduce(tmp_path, run_id="r1", aggregate_cmd="python -m my.reducer")
@@ -216,7 +216,7 @@ def test_extra_env_threaded_into_remote_cmd(tmp_path: Path, journal_home: Path) 
 
     with (
         mock.patch("hpc_agent.infra.remote.ssh_run", side_effect=fake_ssh),
-        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.transport.rsync_pull", side_effect=fake_rsync_pull),
     ):
         cluster_reduce(
             tmp_path,
@@ -241,7 +241,7 @@ def test_custom_output_path_template_substitutes_run_id(tmp_path: Path, journal_
 
     with (
         mock.patch("hpc_agent.infra.remote.ssh_run", return_value=_completed(returncode=0)),
-        mock.patch("hpc_agent.infra.remote.rsync_pull", side_effect=fake_rsync_pull),
+        mock.patch("hpc_agent.infra.transport.rsync_pull", side_effect=fake_rsync_pull),
     ):
         out = cluster_reduce(
             tmp_path,

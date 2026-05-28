@@ -474,7 +474,7 @@ def _submit_resubmit_batches(
     if backend_factory is None:
         from hpc_agent import errors
         from hpc_agent.infra.backends.remote_factory import build_remote_backend
-        from hpc_agent.infra.remote import validate_ssh_target
+        from hpc_agent.infra.ssh_validation import validate_ssh_target
 
         # Validate ssh_target up front — build_remote_backend doesn't
         # double-validate (see BUG-4-10), so callers own the check. We

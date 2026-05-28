@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from hpc_agent.infra import remote
+from hpc_agent.infra import ssh_options
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +24,7 @@ def _ensure_multiplex_enabled(monkeypatch):
     # Force a non-Windows platform so the Windows auto-disable short-circuit
     # (added for ssh.exe Unix-socket incompatibility) doesn't swallow the
     # branch under test when this suite runs on Windows.
-    monkeypatch.setattr(remote.sys, "platform", "linux")
+    monkeypatch.setattr(ssh_options.sys, "platform", "linux")
 
 
 def _persist_values(opts: list[str]) -> list[str]:
@@ -38,40 +38,40 @@ def _persist_values(opts: list[str]) -> list[str]:
 
 class TestPersistIntervalDefault:
     def test_default_is_10m(self):
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["10m"]
 
     def test_empty_env_var_falls_back_to_default(self, monkeypatch):
         # Empty string should be treated as "not set" rather than as a
         # literal empty ControlPersist value, which OpenSSH would reject.
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["10m"]
 
 
 class TestPersistIntervalOverride:
     def test_long_window_passes_through(self, monkeypatch):
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "30m")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["30m"]
 
     def test_hours_suffix_passes_through(self, monkeypatch):
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "2h")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["2h"]
 
     def test_zero_means_persist_until_master_exits(self, monkeypatch):
         # ``0`` is a valid ssh_config value meaning "do not auto-exit"; we
         # pass it through verbatim.
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "0")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["0"]
 
 
 class TestPersistIntervalNo:
     def test_no_drops_control_persist_option(self, monkeypatch):
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "no")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         # No ControlPersist option should be emitted at all.
         assert _persist_values(opts) == []
         # ControlMaster/ControlPath are still in place — multiplexing
@@ -81,7 +81,7 @@ class TestPersistIntervalNo:
 
     def test_no_is_case_insensitive(self, monkeypatch):
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "NO")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == []
 
 
@@ -90,7 +90,7 @@ class TestPersistIntervalRejection:
         # Shell metachar: must not flow into argv. Documented behaviour
         # is to log to stderr and fall back to the safe default.
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "30m;rm -rf /")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["10m"]
         captured = capsys.readouterr()
         assert "HPC_SSH_PERSIST_INTERVAL" in captured.err
@@ -100,13 +100,13 @@ class TestPersistIntervalRejection:
 
     def test_whitespace_falls_back_to_default(self, monkeypatch, capsys):
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "30 m")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["10m"]
         assert "HPC_SSH_PERSIST_INTERVAL" in capsys.readouterr().err
 
     def test_backtick_falls_back_to_default(self, monkeypatch, capsys):
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "`whoami`")
-        opts = remote._ssh_multiplex_opts()
+        opts = ssh_options._ssh_multiplex_opts()
         assert _persist_values(opts) == ["10m"]
         assert "HPC_SSH_PERSIST_INTERVAL" in capsys.readouterr().err
 
@@ -117,4 +117,4 @@ class TestMultiplexFullyDisabledStillWins:
         # empty opts list, ignoring any persist interval value.
         monkeypatch.setenv("HPC_NO_SSH_MULTIPLEX", "1")
         monkeypatch.setenv("HPC_SSH_PERSIST_INTERVAL", "2h")
-        assert remote._ssh_multiplex_opts() == []
+        assert ssh_options._ssh_multiplex_opts() == []

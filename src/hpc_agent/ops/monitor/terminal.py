@@ -42,7 +42,7 @@ def _ingest_runtime_at_terminal(experiment_dir: Path, *, record: Any) -> int:
     long-running monitor that ticks N runs to terminal does not leak N
     ``hpc_runtime_pull_*`` dirs under ``$TMPDIR``.
     """
-    from hpc_agent.infra.remote import rsync_pull
+    from hpc_agent.infra.transport import rsync_pull
     from hpc_agent.state.runs import read_run_sidecar
     from hpc_agent.state.runtime_prior import ingest_runtime_samples_from_combiner_dir
 

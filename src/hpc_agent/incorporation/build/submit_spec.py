@@ -28,7 +28,7 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent._wire.actions.build_submit_spec import BuildSubmitSpecInput
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.infra.remote import validate_ssh_target
+from hpc_agent.infra.ssh_validation import validate_ssh_target
 
 # Canonical cluster-side template paths. The local-side rsync ships the
 # generic templates under ``.hpc/templates/`` (deploy_runtime puts them

@@ -55,7 +55,8 @@ from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
 from hpc_agent.cli._dispatch import CliShape, SchemaRef
-from hpc_agent.infra.remote import rsync_pull, validate_ssh_target
+from hpc_agent.infra.ssh_validation import validate_ssh_target
+from hpc_agent.infra.transport import rsync_pull
 from hpc_agent.models.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
 from hpc_agent.ops.aggregate.combine import combine_wave
 from hpc_agent.state.journal import load_run

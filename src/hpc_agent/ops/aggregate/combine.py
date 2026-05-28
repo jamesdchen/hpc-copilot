@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
-from hpc_agent.infra import remote
+from hpc_agent.infra import transport
 from hpc_agent.state.journal import update_run_record
 
 if TYPE_CHECKING:
@@ -102,7 +102,7 @@ def combine_wave(
     mark the wave combined. Returns ``(ok, stdout, stderr)`` from
     :func:`run_combiner_checked`.
     """
-    ok, stdout, stderr = remote.run_combiner_checked(
+    ok, stdout, stderr = transport.run_combiner_checked(
         ssh_target=ssh_target,
         remote_path=remote_path,
         wave=wave,

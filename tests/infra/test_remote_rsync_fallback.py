@@ -1,4 +1,4 @@
-"""Tests for the rsync-absent fallback in hpc_agent.infra.remote.
+"""Tests for the rsync-absent fallback in hpc_agent.infra.transport.
 
 The transport layer detects rsync via ``shutil.which("rsync")``; when
 absent (typically Windows without WSL/MSYS), :func:`rsync_push` routes
@@ -13,7 +13,7 @@ import subprocess
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-from hpc_agent.infra import remote
+from hpc_agent.infra import transport
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,22 +24,22 @@ def _ok(stdout: str = "") -> subprocess.CompletedProcess[str]:
 
 
 def test_have_rsync_reports_truthy_when_present() -> None:
-    with patch("hpc_agent.infra.remote.shutil.which", return_value="/usr/bin/rsync"):
-        assert remote._have_rsync() is True
+    with patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"):
+        assert transport._have_rsync() is True
 
 
 def test_have_rsync_reports_false_when_absent() -> None:
-    with patch("hpc_agent.infra.remote.shutil.which", return_value=None):
-        assert remote._have_rsync() is False
+    with patch("hpc_agent.infra.transport.shutil.which", return_value=None):
+        assert transport._have_rsync() is False
 
 
 def test_rsync_push_uses_rsync_when_available(tmp_path: Path) -> None:
     (tmp_path / "f.txt").write_text("hi")
     with (
-        patch("hpc_agent.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
-        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
     ):
-        remote.rsync_push(ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[])
+        transport.rsync_push(ssh_target="u@h", remote_path="/r", local_path=tmp_path, exclude=[])
     cmd = run_mock.call_args[0][0]
     assert cmd[0] == "rsync"
     assert "-az" in cmd
@@ -50,9 +50,9 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
     (tmp_path / "f.txt").write_text("hi")
     fake_run = _ok()
     with (
-        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
-        patch("hpc_agent.infra.remote.subprocess.run", return_value=fake_run) as run_mock,
-        patch("hpc_agent.infra.remote.subprocess.Popen") as popen_mock,
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=fake_run) as run_mock,
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
@@ -64,7 +64,7 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
         # delete=False here keeps this test focused on tar-exclude
         # routing; the delete=True pre-clean path has its own coverage
         # (test_rsync_push_fallback_delete_true_runs_remote_preclean).
-        result = remote.rsync_push(
+        result = transport.rsync_push(
             ssh_target="u@h",
             remote_path="/r",
             local_path=tmp_path,
@@ -88,9 +88,9 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
     string handed to ssh (the last element of the ssh argv)."""
     (tmp_path / "f.txt").write_text("hi")
     with (
-        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
-        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
-        patch("hpc_agent.infra.remote.subprocess.Popen") as popen_mock,
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
@@ -98,7 +98,7 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
         tar_proc.stderr.read.return_value = b""
         tar_proc.returncode = 0
         tar_proc.wait.return_value = 0
-        remote.rsync_push(
+        transport.rsync_push(
             ssh_target="u@h",
             remote_path="/r",
             local_path=tmp_path,
@@ -134,7 +134,7 @@ def test_rsync_push_fallback_delete_false_skips_preclean(tmp_path: Path) -> None
 def test_remote_clean_cmd_anchors_excludes() -> None:
     """A bare name prunes at any depth (-name); an internal-slash pattern
     is anchored to the sync root (-path) — mirroring rsync's exclude rule."""
-    cmd = remote._remote_clean_cmd("/r", [".git/", "*.pyc", ".hpc/_hpc_dispatch.py"])
+    cmd = transport._remote_clean_cmd("/r", [".git/", "*.pyc", ".hpc/_hpc_dispatch.py"])
     # shlex.quote leaves metachar-free tokens bare and quotes only what
     # needs it (the glob), so the remote shell cannot expand ``*.pyc``.
     assert "-name .git" in cmd
@@ -147,7 +147,7 @@ def test_remote_clean_cmd_protects_framework_files() -> None:
     """The framework files in DEFAULT_RSYNC_EXCLUDES land in prune clauses,
     so the pre-clean preserves them; a non-excluded stale file is not
     pruned and therefore gets deleted by the trailing rm -rf."""
-    cmd = remote._remote_clean_cmd("/r", remote.DEFAULT_RSYNC_EXCLUDES)
+    cmd = transport._remote_clean_cmd("/r", transport.DEFAULT_RSYNC_EXCLUDES)
     assert "-path /r/.hpc/_hpc_dispatch.py" in cmd
     assert "-path /r/.hpc/_hpc_combiner.py" in cmd
     assert "-name hpc_agent" in cmd  # deployed runtime stubs
@@ -157,16 +157,16 @@ def test_remote_clean_cmd_protects_framework_files() -> None:
 def test_remote_clean_cmd_empty_exclude_deletes_whole_subtree() -> None:
     """With no excludes the pre-clean removes everything under remote_path
     (but never remote_path itself — guarded by -mindepth 1)."""
-    cmd = remote._remote_clean_cmd("/r", [])
+    cmd = transport._remote_clean_cmd("/r", [])
     assert cmd == "find /r -mindepth 1 -print0 | xargs -0 -r rm -rf --"
 
 
 def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
     with (
-        patch("hpc_agent.infra.remote.shutil.which", return_value="/usr/bin/rsync"),
-        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.shutil.which", return_value="/usr/bin/rsync"),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
     ):
-        remote.rsync_pull(
+        transport.rsync_pull(
             ssh_target="u@h",
             remote_path="/r",
             remote_subdir="_combiner",
@@ -178,10 +178,10 @@ def test_rsync_pull_uses_rsync_when_available(tmp_path: Path) -> None:
 
 def test_rsync_pull_falls_back_to_scp_when_rsync_missing(tmp_path: Path) -> None:
     with (
-        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
-        patch("hpc_agent.infra.remote.subprocess.run", return_value=_ok()) as run_mock,
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()) as run_mock,
     ):
-        remote.rsync_pull(
+        transport.rsync_pull(
             ssh_target="u@h",
             remote_path="/r",
             remote_subdir="_combiner",
@@ -200,9 +200,9 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
         args=[], returncode=2, stdout="", stderr="ssh: connect refused"
     )
     with (
-        patch("hpc_agent.infra.remote.shutil.which", return_value=None),
-        patch("hpc_agent.infra.remote.subprocess.run", return_value=fail),
-        patch("hpc_agent.infra.remote.subprocess.Popen") as popen_mock,
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=fail),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
     ):
         tar_proc = popen_mock.return_value
         tar_proc.stdout = MagicMock()
@@ -211,7 +211,7 @@ def test_tar_push_propagates_ssh_failure(tmp_path: Path) -> None:
         tar_proc.returncode = 0
         tar_proc.wait.return_value = 0
 
-        result = remote.rsync_push(
+        result = transport.rsync_push(
             ssh_target="u@h",
             remote_path="/r",
             local_path=tmp_path,

@@ -27,36 +27,15 @@ from __future__ import annotations
 __all__ = [
     "SSH_TIMEOUT_SEC",
     "RSYNC_TIMEOUT_SEC",
-    "validate_ssh_target",
     "ssh_run",
-    "rsync_push",
-    "rsync_pull",
-    "deploy_runtime",
-    "run_combiner",
-    "run_combiner_checked",
-    "parse_remote_json",
 ]
 
 import os
-import shutil  # noqa: F401 — kept so tests that patch remote.shutil.which still steer transport._have_rsync
 import subprocess
-import sys  # noqa: F401 — kept so tests that monkeypatch remote.sys.platform still steer ssh_options
 import time
 from typing import TYPE_CHECKING, Any, Final
 
-from hpc_agent.infra.ssh_options import (
-    _DEFAULT_SSH_PERSIST_INTERVAL,  # noqa: F401 — re-export for backwards compat
-    _DISALLOWED_PERSIST_CHARS,  # noqa: F401 — re-export for backwards compat
-    _resolve_ssh_persist_interval,  # noqa: F401 — re-export for backwards compat
-    _ssh_multiplex_opts,
-)
-from hpc_agent.infra.ssh_validation import (
-    _DISALLOWED_REMOTE_PATH_CHARS,  # noqa: F401 — re-export for backwards compat
-    _DISALLOWED_TARGET_CHARS,  # noqa: F401 — re-export for backwards compat
-    parse_remote_json,
-    validate_remote_path,  # noqa: F401 — re-export for backwards compat
-    validate_ssh_target,
-)
+from hpc_agent.infra.ssh_options import _ssh_multiplex_opts
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -92,18 +71,11 @@ SSH_TIMEOUT_SEC = _env_int("HPC_SSH_TIMEOUT_SEC", 60)
 RSYNC_TIMEOUT_SEC = _env_int("HPC_RSYNC_TIMEOUT_SEC", 1800)
 
 # ``validate_remote_path``, ``validate_ssh_target``, and
-# ``parse_remote_json`` live in :mod:`hpc_agent.infra.ssh_validation` —
-# they are pure, no-I/O helpers. The disallowed-char constants
-# (``_DISALLOWED_TARGET_CHARS`` / ``_DISALLOWED_REMOTE_PATH_CHARS``)
-# live there too; the names re-export via the top-level import block so
-# existing call sites (``from hpc_agent.infra.remote import
-# validate_ssh_target``) keep working unchanged.
-
-# SSH option-building helpers (``_ssh_multiplex_opts``,
-# ``_resolve_ssh_persist_interval``) plus the two constants they consult
-# live in :mod:`hpc_agent.infra.ssh_options`. They re-import at the top
-# of this module so existing test access via ``remote._ssh_multiplex_opts``
-# keeps working.
+# ``parse_remote_json`` live in :mod:`hpc_agent.infra.ssh_validation`.
+# ``_ssh_multiplex_opts`` / ``_resolve_ssh_persist_interval`` and the
+# two constants they consult live in :mod:`hpc_agent.infra.ssh_options`.
+# Callers import from those modules directly; this module only re-imports
+# ``_ssh_multiplex_opts`` because :func:`ssh_run` consumes it inline.
 
 
 # Sentinel marker meaning "caller did not specify a timeout".  We need a
@@ -113,9 +85,10 @@ RSYNC_TIMEOUT_SEC = _env_int("HPC_RSYNC_TIMEOUT_SEC", 1800)
 # identity that no caller can accidentally collide with.
 _DEFAULT: Final[Any] = object()
 
-# ``DEFAULT_RSYNC_EXCLUDES`` lives in :mod:`hpc_agent.infra.transport`
-# alongside ``rsync_push`` (its sole consumer) and re-exports back via
-# the deferred import below.
+# ``DEFAULT_RSYNC_EXCLUDES`` and the file-transport helpers
+# (``rsync_push`` / ``rsync_pull`` / ``deploy_runtime`` / ``run_combiner``
+# / ``run_combiner_checked``) live in :mod:`hpc_agent.infra.transport`.
+# Callers import them from there directly.
 
 
 def _truncate(text: str, limit: int = 120) -> str:
@@ -272,22 +245,3 @@ def ssh_run(
             ) from exc
 
     return _with_ssh_backoff(_run, label=f"ssh {ssh_target}")
-
-
-# Transport helpers (rsync push/pull, scp/tar fallbacks, deploy_runtime,
-# run_combiner / run_combiner_checked, DEFAULT_RSYNC_EXCLUDES) live in
-# :mod:`hpc_agent.infra.transport`. They re-import below — placed AFTER
-# ssh_run / _with_ssh_backoff so transport.py can import remote without
-# a circular dependency.
-from hpc_agent.infra.transport import (  # noqa: E402 — placed below ssh_run on purpose
-    DEFAULT_RSYNC_EXCLUDES,  # noqa: F401 — re-export for backwards compat
-    _have_rsync,  # noqa: F401 — re-export for backwards compat (mock target)
-    _remote_clean_cmd,  # noqa: F401 — re-export for backwards compat (tested directly)
-    _scp_pull,  # noqa: F401 — re-export for backwards compat
-    _tar_ssh_push,  # noqa: F401 — re-export for backwards compat
-    deploy_runtime,  # noqa: F401 — re-export for backwards compat
-    rsync_pull,  # noqa: F401 — re-export for backwards compat
-    rsync_push,  # noqa: F401 — re-export for backwards compat
-    run_combiner,  # noqa: F401 — re-export for backwards compat
-    run_combiner_checked,  # noqa: F401 — re-export for backwards compat
-)
