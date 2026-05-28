@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from collections.abc import Iterable
 
 __all__ = [
     "_resolve_ssh_persist_interval",
@@ -23,7 +24,10 @@ __all__ = [
     "_scp_binary",
     "_ssh_add_binary",
     "_ssh_binary",
+    "_ssh_config_override_opts",
     "_ssh_multiplex_opts",
+    "ssh_argv",
+    "ssh_env",
 ]
 
 
@@ -127,6 +131,25 @@ _DEFAULT_SSH_PERSIST_INTERVAL = "10m"
 _DISALLOWED_PERSIST_CHARS = " \t\n\r;|&`$<>\"'\\*?!()=/"
 
 
+def _ssh_config_override_opts() -> list[str]:
+    """SSH ``-o`` options that neutralise a user's ssh-config multiplexing on
+    Windows; ``[]`` on POSIX.
+
+    Native Windows OpenSSH can't use a ``ControlPath`` Unix socket
+    (``getsockname failed: Not a socket``). For one-shot transfers (scp, the
+    tar-fallback push) we don't want to *be* a multiplex master — but we must
+    still stop the user's ``~/.ssh/config`` (often a ``Host *`` ``ControlMaster``
+    stanza) from forcing multiplexing, since a command-line ``-o`` beats the
+    config file. On POSIX nothing is needed. ``HPC_NO_SSH_MULTIPLEX=1`` disables
+    it everywhere. This is the transfer-sized subset of :func:`_ssh_multiplex_opts`.
+    """
+    if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
+        return []
+    if sys.platform == "win32":
+        return ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
+    return []
+
+
 def _ssh_multiplex_opts() -> list[str]:
     """Return SSH options that enable connection multiplexing.
 
@@ -172,11 +195,11 @@ def _ssh_multiplex_opts() -> list[str]:
         return []
     if sys.platform == "win32":
         # Native Windows OpenSSH can't use a ControlPath Unix socket
-        # (getsockname failed: Not a socket). Returning [] would only omit
-        # OUR flags; a user's ~/.ssh/config ControlMaster would still bite.
-        # Emit an explicit override so the config directive can't take
-        # effect — a command-line -o beats the config file.
-        return ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
+        # (getsockname failed: Not a socket), so instead of POSIX
+        # multiplexing emit the explicit ControlMaster=no/ControlPath=none
+        # override (see _ssh_config_override_opts) — returning [] would only
+        # omit OUR flags and let a user's ~/.ssh/config ControlMaster bite.
+        return _ssh_config_override_opts()
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     opts = [
         "-o",
@@ -216,3 +239,48 @@ def _resolve_ssh_persist_interval() -> str | None:
     if raw.lower() == "no":
         return None
     return raw
+
+
+def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
+    """Leading argv (resolved binary + platform-correct options) for an
+    ssh-family command of *kind* — the single seam for ssh invocation.
+
+    Owns both binary resolution (native Windows OpenSSH / ``HPC_*_BINARY``
+    override / bare PATH name) and option assembly, so no call site can get
+    either wrong — the regression class behind #145 / #154 / #156. Callers
+    append only the per-invocation positionals (ssh target + remote command,
+    scp src + dst, ``ssh-add -l``) via *extra_opts* and/or by extending the
+    returned list.
+
+    * ``"ssh"`` — command channel (``ssh_run``, the tar-fallback push):
+      ``[<ssh>, -o BatchMode=yes, *_ssh_multiplex_opts()]``. ``BatchMode``
+      fails fast on a missing key instead of hanging on a prompt;
+      :func:`_ssh_multiplex_opts` reuses one connection on POSIX and applies
+      the ControlMaster override on Windows.
+    * ``"scp"`` — one-shot transfer: ``[<scp>, -o BatchMode=yes,
+      *_ssh_config_override_opts()]``. A transfer needn't be a multiplex
+      master, but on Windows it still must neutralise the user's ssh-config
+      ControlMaster, so it gets the override only (nothing on POSIX).
+    * ``"ssh-add"`` — local agent probe, no remote host: ``[<ssh-add>]``
+      (no BatchMode, no multiplexing).
+
+    rsync is env-based, not argv-based — see :func:`ssh_env`.
+    """
+    if kind == "ssh":
+        return [_ssh_binary(), "-o", "BatchMode=yes", *_ssh_multiplex_opts(), *extra_opts]
+    if kind == "scp":
+        return [_scp_binary(), "-o", "BatchMode=yes", *_ssh_config_override_opts(), *extra_opts]
+    if kind == "ssh-add":
+        return [_ssh_add_binary(), *extra_opts]
+    raise ValueError(f"unknown ssh-family kind {kind!r}; expected 'ssh', 'scp', or 'ssh-add'")
+
+
+def ssh_env() -> dict[str, str]:
+    """Env overrides for a subprocess that spawns its *own* ssh (rsync).
+
+    rsync runs the bare ``rsync`` binary but invokes its own ssh for the
+    transport; :func:`_rsync_rsh_env` pins that to the resolved binary and, on
+    Windows, the multiplex override — the env-var twin of what :func:`ssh_argv`
+    splices into an argv. Merge into ``os.environ`` for the rsync subprocess.
+    """
+    return _rsync_rsh_env()

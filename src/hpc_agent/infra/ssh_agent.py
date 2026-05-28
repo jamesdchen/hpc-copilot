@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 
-from hpc_agent.infra.ssh_options import _ssh_add_binary
+from hpc_agent.infra.ssh_options import ssh_argv
 
 __all__ = ["agent_available", "agent_detail"]
 
@@ -33,7 +33,7 @@ def agent_available() -> bool:
     # reachable but no keys. Return code 2 means agent unreachable.
     try:
         rc = subprocess.run(
-            [_ssh_add_binary(), "-l"],
+            ssh_argv("ssh-add", extra_opts=["-l"]),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -52,7 +52,7 @@ def agent_detail() -> str:
     if sys.platform == "win32":
         try:
             r = subprocess.run(
-                [_ssh_add_binary(), "-l"],
+                ssh_argv("ssh-add", extra_opts=["-l"]),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

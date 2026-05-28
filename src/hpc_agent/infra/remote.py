@@ -35,7 +35,7 @@ import subprocess
 import time
 from typing import TYPE_CHECKING, Any, Final
 
-from hpc_agent.infra.ssh_options import _ssh_binary, _ssh_multiplex_opts
+from hpc_agent.infra.ssh_options import ssh_argv
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -72,10 +72,10 @@ RSYNC_TIMEOUT_SEC = _env_int("HPC_RSYNC_TIMEOUT_SEC", 1800)
 
 # ``validate_remote_path``, ``validate_ssh_target``, and
 # ``parse_remote_json`` live in :mod:`hpc_agent.infra.ssh_validation`.
-# ``_ssh_multiplex_opts`` / ``_resolve_ssh_persist_interval`` and the
-# two constants they consult live in :mod:`hpc_agent.infra.ssh_options`.
-# Callers import from those modules directly; this module only re-imports
-# ``_ssh_multiplex_opts`` because :func:`ssh_run` consumes it inline.
+# Binary resolution + SSH option assembly live in
+# :mod:`hpc_agent.infra.ssh_options`; :func:`ssh_run` builds its argv through
+# that module's :func:`ssh_argv` seam — the one place that owns native-binary
+# resolution + BatchMode + POSIX multiplexing / the Windows ControlMaster override.
 
 
 # Sentinel marker meaning "caller did not specify a timeout".  We need a
@@ -228,7 +228,7 @@ def ssh_run(
     # unknown host or missing key surfaces as an immediate auth failure
     # rather than blocking until the timeout. _tar_ssh_push and
     # _scp_pull already use this flag.
-    argv = [_ssh_binary(), "-o", "BatchMode=yes", *_ssh_multiplex_opts(), ssh_target, cmd]
+    argv = [*ssh_argv("ssh"), ssh_target, cmd]
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:

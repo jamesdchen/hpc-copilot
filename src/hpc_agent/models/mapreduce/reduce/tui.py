@@ -358,7 +358,12 @@ def _open_log(ssh_target: str | None, log_path: str, live: Any) -> None:
         # execute). Quote the path explicitly with shlex.quote.
         import shlex as _shlex
 
-        argv: list[str] = ["ssh", ssh_target, f"less {_shlex.quote(log_path)}"]
+        from hpc_agent.infra.ssh_options import ssh_argv
+
+        # Route through the ssh_argv seam so this viewer uses the native
+        # Windows OpenSSH binary + the ControlMaster override like every
+        # other ssh call (#158), not a Git-Bash-shadowed bare "ssh".
+        argv: list[str] = [*ssh_argv("ssh"), ssh_target, f"less {_shlex.quote(log_path)}"]
     else:
         argv = ["less", log_path]
     # Stop the Live refresh before handing the TTY over to less.
