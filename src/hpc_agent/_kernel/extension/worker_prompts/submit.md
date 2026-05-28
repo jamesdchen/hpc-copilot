@@ -185,7 +185,7 @@ from pathlib import Path
 from hpc_agent import RepoLayout, load_tasks_module
 from hpc_agent.state.run_sha import compute_cmd_sha
 
-experiment_dir = Path.cwd()
+experiment_dir = Path("<experiment_dir>")  # the value from the invocation context (you cd'd here at the start); do not depend on the process cwd
 layout = RepoLayout(experiment_dir)
 _ = layout.hpc  # mkdir's .hpc/ + writes .gitignore on first read
 tp = layout.tasks

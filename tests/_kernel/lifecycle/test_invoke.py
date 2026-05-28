@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,13 +11,24 @@ import hpc_agent._kernel.lifecycle.invoke as invoke_mod
 from hpc_agent import errors
 from hpc_agent._kernel.lifecycle.invoke import (
     ClaudeCliInvoker,
+    ClaudeCliOAuthInvoker,
     InvocationResult,
     RenderedPrompt,
     get_invoker,
 )
 
 
-def test_get_invoker_default() -> None:
+def _clear_worker_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every ambient credential signal so auto-selection is deterministic."""
+    for var in (*invoke_mod._WORKER_CREDENTIAL_ENV_VARS, "HPC_AGENT_INVOKER"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_available", lambda: False)
+
+
+def test_get_invoker_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No credentials anywhere → the proven --bare path, whose pre-spawn guard
+    # then surfaces the missing-credential remediation.
+    _clear_worker_credentials(monkeypatch)
     assert get_invoker().name == "claude-cli"
 
 
@@ -100,3 +112,176 @@ def test_missing_credential_remediation_message_when_no_credential(
     msg = ClaudeCliInvoker().missing_credential_remediation()
     assert msg is not None
     assert "ANTHROPIC_API_KEY" in msg
+
+
+# ─── auto-selection ────────────────────────────────────────────────────────
+
+
+def test_get_invoker_auto_selects_claude_cli_with_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    assert get_invoker().name == "claude-cli"
+
+
+def test_get_invoker_auto_selects_oauth_when_only_creds_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No API key / cloud creds, but an OAuth credentials file is present.
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_available", lambda: True)
+    assert get_invoker().name == "claude-cli-oauth"
+
+
+def test_get_invoker_env_override_beats_auto_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An OAuth creds file would auto-select claude-cli-oauth, but an explicit
+    # HPC_AGENT_INVOKER wins.
+    _clear_worker_credentials(monkeypatch)
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_available", lambda: True)
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "claude-cli")
+    assert get_invoker().name == "claude-cli"
+    # An explicit name beats both.
+    assert get_invoker("claude-cli-oauth").name == "claude-cli-oauth"
+
+
+# ─── OAuth invoker ─────────────────────────────────────────────────────────
+
+
+def test_oauth_credentials_path_uses_config_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(invoke_mod.sys, "platform", "linux")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert invoke_mod._oauth_credentials_path() == tmp_path / ".credentials.json"
+
+
+def test_oauth_credentials_path_none_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    # macOS keeps the OAuth token in the Keychain — no linkable file.
+    monkeypatch.setattr(invoke_mod.sys, "platform", "darwin")
+    assert invoke_mod._oauth_credentials_path() is None
+
+
+def test_oauth_invoker_builds_the_right_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    creds = tmp_path / ".credentials.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_path", lambda: creds)
+
+    linked: dict[str, Path] = {}
+    monkeypatch.setattr(
+        invoke_mod,
+        "_link_credentials",
+        lambda live, link: linked.update(live=live, link=link),
+    )
+
+    seen: dict[str, object] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "worker output"
+        stderr = ""
+
+    def _fake_run(argv: list[str], **kwargs: object) -> _Proc:
+        seen["argv"] = argv
+        seen["cwd"] = kwargs.get("cwd")
+        seen["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _fake_run)
+
+    prompt = RenderedPrompt(cacheable_prefix="PREFIX", variable_suffix="SUFFIX")
+    exp_dir = tmp_path / "exp"
+    result = ClaudeCliOAuthInvoker().invoke(prompt, cwd=exp_dir)
+
+    assert isinstance(result, InvocationResult)
+    assert result.exit_code == 0
+    assert result.output == "worker output"
+    # No --bare (it strips the OAuth-credential path); same model + sandbox-off +
+    # appended-prefix shape as the --bare path otherwise.
+    assert seen["argv"] == [
+        "claude",
+        "-p",
+        "--model",
+        "haiku",
+        "--settings",
+        '{"sandbox": {"enabled": false}}',
+        "--append-system-prompt",
+        "PREFIX",
+        "SUFFIX",
+    ]
+    # The child is pointed at an ephemeral CLAUDE_CONFIG_DIR holding only the
+    # linked creds, and runs in a clean cwd — NOT the experiment dir — so a user
+    # repo's project .claude/ never loads into the worker.
+    env = seen["env"]
+    assert isinstance(env, dict)
+    config_dir = env["CLAUDE_CONFIG_DIR"]
+    assert config_dir
+    assert linked["live"] == creds
+    assert linked["link"] == Path(config_dir) / ".credentials.json"
+    assert seen["cwd"] != str(exp_dir)
+    assert seen["cwd"] != config_dir
+
+
+def test_oauth_invoker_returns_failure_without_spawning_when_creds_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing = tmp_path / "nope" / ".credentials.json"
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_path", lambda: missing)
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("must not spawn a worker without credentials")
+
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _boom)
+
+    result = ClaudeCliOAuthInvoker().invoke(RenderedPrompt("P", "S"), cwd=tmp_path)
+    assert result.exit_code == 1
+    assert str(missing) in result.stderr
+
+
+def test_oauth_missing_credential_remediation_none_when_file_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    creds = tmp_path / ".credentials.json"
+    creds.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_path", lambda: creds)
+    assert ClaudeCliOAuthInvoker().missing_credential_remediation() is None
+
+
+def test_oauth_missing_credential_remediation_message_when_file_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    missing = tmp_path / "nope" / ".credentials.json"
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_path", lambda: missing)
+    msg = ClaudeCliOAuthInvoker().missing_credential_remediation()
+    assert msg is not None
+    assert str(missing) in msg
+
+
+def test_oauth_unsupported_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    # _oauth_credentials_path returns None on macOS → a clear unsupported message.
+    monkeypatch.setattr(invoke_mod, "_oauth_credentials_path", lambda: None)
+    msg = ClaudeCliOAuthInvoker().missing_credential_remediation()
+    assert msg is not None
+    assert "macOS" in msg
+
+
+def test_link_credentials_prefers_symlink(tmp_path: Path) -> None:
+    live = tmp_path / "live.json"
+    live.write_text("tok", encoding="utf-8")
+    link = tmp_path / "cfg" / ".credentials.json"
+    link.parent.mkdir()
+
+    invoke_mod._link_credentials(live, link)
+
+    assert link.exists()
+    assert link.read_text(encoding="utf-8") == "tok"
+    if sys.platform != "win32":
+        # Symlink (not copy) so a mid-session OAuth token refresh that rewrites
+        # the live file is seen through the link.
+        assert link.is_symlink()
+        live.write_text("refreshed", encoding="utf-8")
+        assert link.read_text(encoding="utf-8") == "refreshed"
