@@ -169,16 +169,33 @@ def submit_and_record(
     # Post-qsub finalize: stamp the per-experiment sidecar with the job_ids
     # we just got back. This is what distinguishes a real run from the
     # half-baked sidecar Step 6d of /submit-hpc writes before rsync — see
-    # :func:`hpc_agent.state.runs.is_orphan_sidecar`. Best-effort: if the
-    # sidecar isn't on disk yet (callers that skipped Step 6d), we don't
-    # synthesize one — the journal record alone is enough to deflect the
-    # orphan check.
+    # :func:`hpc_agent.state.runs.is_orphan_sidecar`.
+    #
+    # The per-exp sidecar at ``.hpc/runs/<run_id>.json`` is what the
+    # cluster-side dispatcher hard-requires (it reads ``executor`` +
+    # ``result_dir_template`` from it). The journal record alone deflects
+    # the *local* orphan check, but the cluster will fail every task if
+    # the sidecar never shipped. A missing sidecar here therefore is NOT
+    # a benign no-op — warn loudly so the caller skipping Step 6d /
+    # wrap-entry-point sees it instead of discovering it only when every
+    # cluster task dies with "run sidecar not found".
     try:
         from hpc_agent.state.runs import update_run_sidecar_job_ids
 
         update_run_sidecar_job_ids(experiment_dir, run_id, list(job_ids))
     except FileNotFoundError:
-        pass
+        import warnings
+
+        warnings.warn(
+            f"per-run sidecar .hpc/runs/{run_id}.json was not found when "
+            "finalizing job_ids — the cluster dispatcher requires it "
+            "(executor + result_dir_template) and every task will fail "
+            "with 'run sidecar not found' if it does not ship. Ensure "
+            "write_run_sidecar (Step 6d / wrap-entry-point) ran before "
+            "submission.",
+            UserWarning,
+            stacklevel=2,
+        )
     return record, False
 
 

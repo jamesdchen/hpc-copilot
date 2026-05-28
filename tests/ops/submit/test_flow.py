@@ -137,6 +137,10 @@ def _spec(run_id: str, **overrides: Any):
         script="run.sh",
         job_env={},
         canary=False,
+        # submit-flow now guarantees the per-run sidecar at rsync time; a
+        # result_dir_template lets it synthesize one when Step 6d was
+        # skipped (these tests submit without pre-writing a sidecar).
+        result_dir_template="results/{run_id}/task_{task_id}",
     )
     base.update(overrides)
     return SubmitFlowSpec(**base)  # type: ignore[arg-type]
@@ -361,3 +365,141 @@ class TestKeepGeneratedShippable:
 
         assert _keep_generated_shippable(None) is None
         assert _keep_generated_shippable([]) == []
+
+
+# ---------------------------------------------------------------------------
+# Per-run sidecar guarantee (#148 / #150): submit-flow OWNS the
+# cluster-required artifact rather than trusting a prior step to write it.
+# ---------------------------------------------------------------------------
+
+
+def _mock_prelude_and_submit(sf_module):
+    """Patch the cluster-touching steps so the sidecar logic runs alone."""
+    from hpc_agent.ops.submit_flow import SubmitFlowResult
+
+    def _fake_submit(*, experiment_dir, spec):
+        return SubmitFlowResult(
+            run_id=spec.run_id,
+            job_ids=[f"job_{spec.run_id}"],
+            total_tasks=spec.total_tasks,
+            deduped=False,
+            canary_done=False,
+        )
+
+    return (
+        mock.patch.object(sf_module, "_preflight_probe"),
+        mock.patch.object(sf_module, "_push_and_deploy"),
+        mock.patch.object(sf_module, "_submit_one_spec", side_effect=_fake_submit),
+    )
+
+
+class TestSidecarGuarantee:
+    def test_synthesizes_sidecar_when_missing(self, tmp_path: Any, _journal_home: Any) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
+
+        spec = _spec(
+            "rX",
+            job_env={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_CMD_SHA": "abcd1234"},
+        )
+        assert not run_sidecar_path(tmp_path, "rX").is_file()
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        # submit-flow wrote the sidecar from the spec before rsync.
+        sc = read_run_sidecar(tmp_path, "rX")
+        assert sc["result_dir_template"] == "results/{run_id}/task_{task_id}"
+        assert sc["executor"] == "python3 .hpc/_hpc_dispatch.py"
+        assert sc["task_count"] == 4
+
+    def test_records_resources_on_synthesized_sidecar(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        from hpc_agent._wire.workflows.submit_flow import SubmitResources
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar
+
+        spec = _spec("rRes", resources=SubmitResources(walltime_sec=7200, mem_mb=8192))
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        assert read_run_sidecar(tmp_path, "rRes")["resources"] == {
+            "walltime_sec": 7200,
+            "mem_mb": 8192,
+        }
+
+    def test_raises_when_missing_and_no_result_dir_template(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+
+        spec = _spec("rNo", result_dir_template=None)
+        with pytest.raises(errors.SpecInvalid, match="result_dir_template"):
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+
+    def test_does_not_overwrite_existing_sidecar(self, tmp_path: Any, _journal_home: Any) -> None:
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+        # A real Step-6d sidecar with a distinctive executor / template.
+        write_run_sidecar(
+            tmp_path,
+            run_id="rE",
+            cmd_sha="x" * 64,
+            hpc_agent_version="0.7.2",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor="CUSTOM_DISPATCH",
+            result_dir_template="custom/{task_id}",
+            task_count=4,
+            tasks_py_sha="y" * 64,
+        )
+        spec = _spec("rE")  # carries the generic default template
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3:
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        sc = read_run_sidecar(tmp_path, "rE")
+        # The pre-written sidecar wins — submit-flow never clobbers it.
+        assert sc["executor"] == "CUSTOM_DISPATCH"
+        assert sc["result_dir_template"] == "custom/{task_id}"
+
+
+class TestResourceFlagPlumbing:
+    def test_resource_flags_reach_build_command(self, tmp_path: Any) -> None:
+        import re
+        import subprocess
+
+        from hpc_agent._wire.workflows.submit_flow import SubmitResources
+        from hpc_agent.ops.submit_flow import _make_single_array_submission
+
+        captured: dict[str, Any] = {}
+
+        class _FakeBackend:
+            JOB_ID_REGEX = re.compile(r"job (\d+)")
+
+            def _setup_log_dir(self) -> None:
+                pass
+
+            def resource_flags(self, resources: Any) -> list[str]:
+                return ["-l", f"h_rt={resources.walltime_sec}"] if resources else []
+
+            def _build_command(self, rng, name, env, *, extra_flags=None):  # type: ignore[no-untyped-def]
+                captured["extra_flags"] = extra_flags
+                return ["qsub", "..."]
+
+            def _execute_command(self, cmd, env, cwd):  # type: ignore[no-untyped-def]
+                return subprocess.CompletedProcess(cmd, 0, stdout="job 42", stderr="")
+
+        ids = _make_single_array_submission(
+            _FakeBackend(),  # type: ignore[arg-type]
+            job_name="j",
+            total_tasks=4,
+            job_env={},
+            cwd=tmp_path,
+            resources=SubmitResources(walltime_sec=3600),
+        )
+        assert ids == ["42"]
+        # The backend's resource_flags output flowed into _build_command.
+        assert captured["extra_flags"] == ["-l", "h_rt=3600"]

@@ -47,6 +47,29 @@ class SlurmBackend(HPCBackend):
             return []
         return ["--dependency", f"afterany:{':'.join(job_ids)}"]
 
+    def resource_flags(self, resources: object) -> list[str]:
+        """Emit SLURM ``--time`` / ``--mem`` / ``--cpus-per-task`` for set asks.
+
+        Opt-in per field — an empty ``resources`` emits nothing, so the
+        template's ``#SBATCH`` directives (e.g. the hardcoded 6h walltime)
+        still apply. ``--time`` is given in whole minutes (rounded up so a
+        sub-minute ask never truncates to 0).
+        """
+        flags: list[str] = []
+        if resources is None:
+            return flags
+        walltime_sec = getattr(resources, "walltime_sec", None)
+        mem_mb = getattr(resources, "mem_mb", None)
+        cpus = getattr(resources, "cpus", None)
+        if walltime_sec:
+            minutes = -(-int(walltime_sec) // 60)  # ceil division
+            flags += ["--time", str(minutes)]
+        if mem_mb:
+            flags += ["--mem", f"{int(mem_mb)}M"]
+        if cpus:
+            flags += ["--cpus-per-task", str(int(cpus))]
+        return flags
+
     # ------------------------------------------------------------------
     # B5-PR2 capability hooks — pure, scheduler-shape-only helpers.
     # Callers (runner.py, status.py) pair these with their own SSH /

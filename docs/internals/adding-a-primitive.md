@@ -18,6 +18,56 @@ Two questions, both load-bearing:
    (workflow / scaffold / validate — pinned by
    `tests/test_agent_facing_partition.py`); the others are mixed.
 
+## A primitive owns its invariants
+
+> **A primitive must not rely on a sibling procedure step for a
+> correctness invariant.** If an invariant is required for the
+> primitive's output to be valid — or for downstream / cluster execution
+> to succeed — the primitive must establish or verify it itself, or fail
+> loudly. It must never silently assume "the procedure already did it."
+
+The decide/act boundary declares primitives first-class and directly
+callable, so they must be **safe for any caller**: the faithful spawned
+worker, an exploratory in-session agent that calls one primitive
+directly, the headless campaign driver, or a raw `--spec` invocation.
+The prose procedure (worker prompts, skill bodies) sequences primitives
+for convenience — it is *not* a correctness dependency. The moment
+execution leaves the procedure (the single-step-direct rule,
+`HPC_AGENT_INVOKER=inline`, a direct CLI call), any invariant that lived
+only in the prose silently evaporates.
+
+Concretely, when you write a primitive:
+
+- **Validate boundary inputs.** Don't trust that an upstream step
+  normalized or range-checked them. (Wire models do the shape work;
+  semantic checks are yours.)
+- **Establish required artifacts, don't assume them.** If the primitive —
+  or the cluster job it launches — needs a file/record to exist,
+  create-or-verify it inside the primitive. Example: `submit-flow`
+  *guarantees* the cluster-required per-run sidecar
+  (`.hpc/runs/<run_id>.json`) exists before rsync — it synthesizes it
+  from the spec when a prior step (Step 6d) did not, rather than shipping
+  an empty `runs/` that dooms every cluster task
+  (`ops/submit_flow.py::_ensure_run_sidecar`).
+- **Carry resolved values through the contract, don't drop them.** If a
+  value is resolved/validated upstream and the cluster needs it, the spec
+  must carry it and the primitive must emit it. Example: scheduler
+  `resources` (walltime/mem/cpus) are first-class on the submit spec and
+  the backends emit the flags — they used to be resolved in skill prose
+  and then silently dropped.
+- **Fail loudly on a missing required artifact**, never silently no-op.
+  A swallowed `FileNotFoundError` that the cluster will hard-fail on is a
+  bug, not a tolerance (`runner.py` warns instead of swallowing).
+- **Never destroy the thing you're operating on.** A prune/cleanup step
+  must exclude the run it is currently submitting.
+
+When you add or touch a primitive, add a **contract test** for any
+load-bearing guarantee so it survives refactors without relying on
+procedure fidelity — e.g. "after submit-flow the per-run sidecar for
+`run_id` exists and is non-empty", "submit-flow never deletes the
+`run_id` it is submitting". See `tests/ops/submit/test_flow.py`
+(`TestSidecarGuarantee`).
+
 ## The recipe
 
 ### 1. Pydantic spec models

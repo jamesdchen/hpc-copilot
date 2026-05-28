@@ -105,6 +105,25 @@ def test_optional_passthroughs() -> None:
     assert spec["slurm_cluster"] == "hoffman2"
 
 
+def test_resources_and_result_dir_template_threaded() -> None:
+    spec = build_submit_spec(
+        spec=BuildSubmitSpecInput(
+            **_required(),
+            result_dir_template="results/{run_id}/task_{task_id}",
+            walltime_sec=7200,
+            mem_mb=8192,
+            cpus=4,
+        )
+    )
+    assert spec["result_dir_template"] == "results/{run_id}/task_{task_id}"
+    assert spec["resources"] == {"walltime_sec": 7200, "mem_mb": 8192, "cpus": 4}
+
+
+def test_partial_resources_only_emit_set_fields() -> None:
+    spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required(), walltime_sec=3600))
+    assert spec["resources"] == {"walltime_sec": 3600}
+
+
 def test_omitted_optional_fields_not_in_output() -> None:
     spec = build_submit_spec(spec=BuildSubmitSpecInput(**_required()))
     omitted = (
@@ -114,6 +133,8 @@ def test_omitted_optional_fields_not_in_output() -> None:
         "slurm_cluster",
         "campaign_id",
         "runtime",
+        "resources",
+        "result_dir_template",
     )
     for k in omitted:
         assert k not in spec, f"{k!r} should be omitted when not supplied"

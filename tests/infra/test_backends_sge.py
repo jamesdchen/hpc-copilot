@@ -91,6 +91,33 @@ class TestBuildCommand:
         assert cmd[-1] == script
 
 
+class TestResourceFlags:
+    """SGE resource asks → qsub flags (#146). Opt-in per field."""
+
+    def _res(self, **kw):
+        from hpc_agent._wire.workflows.submit_flow import SubmitResources
+
+        return SubmitResources(**kw)
+
+    def test_none_and_empty_emit_no_flags(self, tmp_path):
+        backend = SGEBackend(script=str(tmp_path / "j.sh"))
+        assert backend.resource_flags(None) == []
+        assert backend.resource_flags(self._res()) == []
+
+    def test_walltime_formats_as_hms(self, tmp_path):
+        backend = SGEBackend(script=str(tmp_path / "j.sh"))
+        # 2h on the dot.
+        assert backend.resource_flags(self._res(walltime_sec=7200)) == ["-l", "h_rt=02:00:00"]
+        # >99h still renders (no two-digit-hour truncation).
+        assert backend.resource_flags(self._res(walltime_sec=90061)) == ["-l", "h_rt=25:01:01"]
+
+    def test_mem_and_cpus(self, tmp_path):
+        backend = SGEBackend(script=str(tmp_path / "j.sh"))
+        flags = backend.resource_flags(self._res(mem_mb=8192, cpus=4))
+        assert "-l" in flags and "h_data=8192M" in flags
+        assert flags[flags.index("-pe") : flags.index("-pe") + 3] == ["-pe", "shared", "4"]
+
+
 # ---------------------------------------------------------------------------
 # _build_dependency_flag
 # ---------------------------------------------------------------------------

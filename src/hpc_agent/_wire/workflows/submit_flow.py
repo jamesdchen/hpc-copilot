@@ -22,6 +22,48 @@ from hpc_agent._wire._shared import (
 )
 
 
+class SubmitResources(BaseModel):
+    """Scheduler resource asks emitted as qsub/sbatch flags.
+
+    First-class in the submit spec (#146): the planning/validation layer
+    already resolves and validates walltime against history + cluster
+    ceilings, but before this the submission layer had nowhere to put the
+    result, so the resolved walltime was silently dropped and the job ran
+    on the cluster default. Every field is optional and opt-in — an
+    omitted/empty ``resources`` block emits NO new scheduler flags, so the
+    template directives (and the cluster default) apply exactly as before.
+
+    The backend translates each set field into its scheduler's flag:
+
+    * ``walltime_sec`` → SGE ``-l h_rt=HH:MM:SS`` / SLURM ``--time=<min>``
+    * ``mem_mb``       → SGE ``-l h_data=<mem>M`` / SLURM ``--mem=<mem>M``
+    * ``cpus``         → SGE ``-pe shared <n>`` / SLURM ``--cpus-per-task=<n>``
+
+    These override the corresponding directive baked into the job
+    template (a command-line flag beats a ``#$``/``#SBATCH`` line), which
+    is the only way to vary a per-submission resource since SGE ``#$``
+    directives cannot read env vars.
+    """
+
+    model_config = ConfigDict(extra="forbid", title="submit resources")
+
+    walltime_sec: int | None = Field(
+        default=None,
+        gt=0,
+        description="Wall-clock limit in seconds. SGE -l h_rt / SLURM --time.",
+    )
+    mem_mb: int | None = Field(
+        default=None,
+        gt=0,
+        description="Memory ask in MB. SGE -l h_data (per-slot) / SLURM --mem.",
+    )
+    cpus: int | None = Field(
+        default=None,
+        ge=1,
+        description="CPU cores. SGE -pe shared <n> / SLURM --cpus-per-task.",
+    )
+
+
 class SubmitFlowSpec(BaseModel):
     """Spec passed to ``hpc-agent submit-flow --spec <file>``.
 
@@ -107,6 +149,26 @@ class SubmitFlowSpec(BaseModel):
     )
     campaign_id: CampaignId | None = Field(default=None)
     runtime: Runtime | None = Field(default=None)
+    resources: SubmitResources | None = Field(
+        default=None,
+        description=(
+            "Scheduler resource asks (walltime/mem/cpus) emitted as "
+            "qsub/sbatch flags. Null/empty = no resource flags; the job "
+            "template directives and cluster defaults apply unchanged."
+        ),
+    )
+    result_dir_template: str | None = Field(
+        default=None,
+        description=(
+            "Per-task result-dir template (e.g. 'results/{run_id}/task_{task_id}'). "
+            "The cluster dispatcher hard-requires this (it reads it from the "
+            "per-run sidecar). Supplying it lets submit-flow GUARANTEE the "
+            "sidecar exists at rsync time — it synthesizes the sidecar from "
+            "the spec when a prior step (write_run_sidecar / Step 6d) did not "
+            "already write one, instead of shipping an empty .hpc/runs/ that "
+            "dooms every cluster task. Null = rely on a pre-written sidecar."
+        ),
+    )
     rsync_excludes: list[str] | None = Field(
         default=None,
         description="Override DEFAULT_RSYNC_EXCLUDES. Null uses defaults.",

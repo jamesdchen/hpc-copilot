@@ -103,6 +103,71 @@ def test_submit_and_record_writes_journal(journal_home, experiment):
     assert loaded.total_tasks == 100
 
 
+def _write_jobless_sidecar(experiment: Path, run_id: str) -> None:
+    """Write the half-baked per-exp sidecar /submit-hpc Step 6d produces."""
+    from hpc_agent.state.runs import write_run_sidecar
+
+    write_run_sidecar(
+        experiment,
+        run_id=run_id,
+        cmd_sha="a" * 64,
+        hpc_agent_version="0.7.2",
+        submitted_at="2026-04-26T17:00:00+00:00",
+        executor="python3 .hpc/_hpc_dispatch.py",
+        result_dir_template="results/{run_id}/task_{task_id}",
+        task_count=100,
+        tasks_py_sha="b" * 64,
+    )
+
+
+def test_submit_and_record_warns_when_sidecar_missing(journal_home, experiment, recwarn):
+    """No per-exp sidecar at finalize time is NOT a benign no-op: the
+    cluster dispatcher requires it, so submit_and_record warns loudly
+    instead of silently swallowing the FileNotFoundError (issue #148)."""
+    submit_and_record(
+        experiment,
+        spec=_WireSubmitSpec(
+            profile="ml_ridge",
+            cluster="hoffman2",
+            ssh_target="user@hoffman2.idre.ucla.edu",
+            remote_path="/u/scratch/exp",
+            job_name="ml_ridge",
+            run_id="ml_ridge_nosc1234",
+            job_ids=["12345678"],
+            total_tasks=100,
+        ),
+    )
+    messages = [str(w.message) for w in recwarn.list if issubclass(w.category, UserWarning)]
+    assert any("run sidecar" in m and "ml_ridge_nosc1234" in m for m in messages)
+
+
+def test_submit_and_record_finalizes_existing_sidecar_without_warning(
+    journal_home, experiment, recwarn
+):
+    """When Step 6d wrote the sidecar, finalize stamps job_ids into it and
+    emits no missing-sidecar warning — the happy path."""
+    from hpc_agent.state.runs import read_run_sidecar
+
+    run_id = "ml_ridge_have1234"
+    _write_jobless_sidecar(experiment, run_id)
+    submit_and_record(
+        experiment,
+        spec=_WireSubmitSpec(
+            profile="ml_ridge",
+            cluster="hoffman2",
+            ssh_target="user@hoffman2.idre.ucla.edu",
+            remote_path="/u/scratch/exp",
+            job_name="ml_ridge",
+            run_id=run_id,
+            job_ids=["12345678"],
+            total_tasks=100,
+        ),
+    )
+    assert read_run_sidecar(experiment, run_id)["job_ids"] == ["12345678"]
+    missing_warnings = [w for w in recwarn.list if "run sidecar" in str(w.message)]
+    assert missing_warnings == []
+
+
 def test_submit_and_record_dedups_replay(journal_home, experiment):
     """Second call with the same run_id returns the existing record + deduped=True."""
     base = dict(

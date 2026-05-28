@@ -44,6 +44,16 @@ class BuildSubmitSpecInput(BaseModel):
     conda_env: str | None = None
     runtime: Runtime | None = None
     campaign_id: CampaignId | None = None
+    # Per-task result-dir template recorded on the sidecar; threading it
+    # through here lets submit-flow guarantee the cluster-required sidecar
+    # exists at rsync time (#148).
+    result_dir_template: str | None = None
+    # Scheduler resource asks emitted as qsub/sbatch flags (#146). All
+    # opt-in; omitted fields leave the template directives / cluster
+    # defaults in force.
+    walltime_sec: int | None = Field(default=None, gt=0)
+    mem_mb: int | None = Field(default=None, gt=0)
+    cpus: int | None = Field(default=None, ge=1)
     canary: bool | None = None
     partial_ok: bool | None = None
     skip_preflight: bool | None = None

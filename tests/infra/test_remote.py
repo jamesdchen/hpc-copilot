@@ -72,9 +72,13 @@ class TestRsyncPush:
         assert "-az" in argv
         # --delete is on by default
         assert "--delete" in argv
-        # excludes from DEFAULT_RSYNC_EXCLUDES, preserving order
+        # excludes from DEFAULT_RSYNC_EXCLUDES, preserving order, with the
+        # mandatory credential-protecting excludes (clusters.yaml) appended.
         exclude_patterns = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--exclude"]
-        assert exclude_patterns == transport.DEFAULT_RSYNC_EXCLUDES
+        assert (
+            exclude_patterns
+            == transport.DEFAULT_RSYNC_EXCLUDES + transport.MANDATORY_RSYNC_EXCLUDES
+        )
         # Source has trailing slash
         src = argv[-2]
         assert src.endswith("/")
@@ -106,7 +110,9 @@ class TestRsyncPush:
             )
         argv = mock_run.call_args[0][0]
         patterns = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--exclude"]
-        assert patterns == ["a/", "b/", "c/"]
+        # Caller excludes preserved in order; mandatory credential excludes
+        # (clusters.yaml) are always unioned in and cannot be dropped.
+        assert patterns == ["a/", "b/", "c/", "clusters.yaml"]
 
 
 # ---------------------------------------------------------------------------

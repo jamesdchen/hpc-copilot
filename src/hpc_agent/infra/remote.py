@@ -35,7 +35,7 @@ import subprocess
 import time
 from typing import TYPE_CHECKING, Any, Final
 
-from hpc_agent.infra.ssh_options import _ssh_multiplex_opts
+from hpc_agent.infra.ssh_options import _ssh_binary, _ssh_multiplex_opts
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -228,7 +228,7 @@ def ssh_run(
     # unknown host or missing key surfaces as an immediate auth failure
     # rather than blocking until the timeout. _tar_ssh_push and
     # _scp_pull already use this flag.
-    argv = ["ssh", "-o", "BatchMode=yes", *_ssh_multiplex_opts(), ssh_target, cmd]
+    argv = [_ssh_binary(), "-o", "BatchMode=yes", *_ssh_multiplex_opts(), ssh_target, cmd]
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:

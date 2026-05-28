@@ -59,6 +59,18 @@ def _write_sidecar(experiment: Path, run_id: str, **overrides) -> None:
     write_run_sidecar(experiment, **base)
 
 
+def _onboard(experiment: Path) -> None:
+    """Mark *experiment* as onboarded by creating ``.hpc/tasks.py``.
+
+    ``load-context`` keys ``needs_onboarding`` on this file's presence
+    (the dispatch contract a submit requires), mirroring the signal
+    ``hpc-agent setup`` uses.
+    """
+    hpc = experiment / ".hpc"
+    hpc.mkdir(parents=True, exist_ok=True)
+    (hpc / "tasks.py").write_text("# dispatch contract\n", encoding="utf-8")
+
+
 def _make_record(run_id: str, **overrides) -> RunRecord:
     base = {
         "run_id": run_id,
@@ -76,12 +88,33 @@ def _make_record(run_id: str, **overrides) -> RunRecord:
     return RunRecord(**base)
 
 
-def test_empty_experiment_hints_submit(journal_home, experiment):
+def test_empty_experiment_hints_onboard(journal_home, experiment):
+    # A fresh repo with no .hpc/tasks.py is not onboarded — route to
+    # wrap-entry-point, not submit (there is nothing to submit yet).
     ctx = load_context(experiment_dir=experiment)
     assert ctx["latest_run"] is None
     assert ctx["in_flight"] == []
     assert ctx["campaigns"] == []
     assert ctx["warnings"] == []
+    assert ctx["needs_onboarding"] is True
+    assert ctx["next_step_hint"] == "onboard"
+
+
+def test_onboard_delegate_routes_to_wrap_entry_point(journal_home, experiment):
+    delegate = load_context(experiment_dir=experiment)["delegate"]
+    assert delegate["kind"] == "agent"
+    assert delegate["step"] == "onboard"
+    # Onboarding is not one of the spawn-contract workflows, so no
+    # spawn_request — the prompt names wrap-entry-point as the remedy.
+    assert delegate["spawn_request"] is None
+    assert "wrap-entry-point" in delegate["prompt"]
+
+
+def test_onboarded_no_runs_hints_submit(journal_home, experiment):
+    # tasks.py present, no run history -> ready to submit.
+    _onboard(experiment)
+    ctx = load_context(experiment_dir=experiment)
+    assert ctx["needs_onboarding"] is False
     assert ctx["next_step_hint"] == "submit"
 
 
@@ -157,6 +190,7 @@ def test_campaign_without_cursor_omits_cursor_fields(journal_home, experiment):
 
 
 def test_delegate_submit_is_agent_kind(journal_home, experiment):
+    _onboard(experiment)
     delegate = load_context(experiment_dir=experiment)["delegate"]
     assert delegate["kind"] == "agent"
     assert delegate["step"] == "submit"
@@ -168,6 +202,7 @@ def test_delegate_agent_step_carries_a_spawn_request(journal_home, experiment):
     # An agent step is delegated through a pinned hpc_spawn request, not
     # a hand-written prompt — the orchestrator passes spawn_request to
     # Task and the spawn_guard hook renders it.
+    _onboard(experiment)
     delegate = load_context(experiment_dir=experiment)["delegate"]
     spawn = delegate["spawn_request"]
     assert spawn["workflow"] == "submit"
@@ -213,6 +248,7 @@ def test_decide_hint_when_campaign_idle(journal_home, experiment):
 
 def test_submit_hint_when_idle_and_no_campaign(journal_home, experiment):
     # An idle non-campaign run stays a cold submit, not decide.
+    _onboard(experiment)
     _write_sidecar(experiment, "20260521-120000-aaa", campaign_id=None)
     ctx = load_context(experiment_dir=experiment)
     assert ctx["next_step_hint"] == "submit"

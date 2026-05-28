@@ -85,6 +85,7 @@ class LoadContextResult(BaseModel):
     latest_run: _LatestRun | None
     in_flight: list[_InFlightRow]
     campaigns: list[_CampaignRow]
-    next_step_hint: Literal["submit", "monitor", "aggregate", "decide"]
+    needs_onboarding: bool
+    next_step_hint: Literal["submit", "monitor", "aggregate", "decide", "onboard"]
     delegate: _Delegate
     warnings: list[str]

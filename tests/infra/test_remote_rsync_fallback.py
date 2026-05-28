@@ -110,6 +110,49 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
     return str(ssh_cmd[-1])
 
 
+def test_defaults_exclude_venvs_and_credentials() -> None:
+    """The default exclude set drops virtualenvs (perf) and never ships
+    the credential file clusters.yaml (security) — see issue #149."""
+    assert ".venv/" in transport.DEFAULT_RSYNC_EXCLUDES
+    assert "venv/" in transport.DEFAULT_RSYNC_EXCLUDES
+    assert "node_modules/" in transport.DEFAULT_RSYNC_EXCLUDES
+    assert "clusters.yaml" in transport.MANDATORY_RSYNC_EXCLUDES
+
+
+def test_mandatory_excludes_cannot_be_dropped_by_caller() -> None:
+    """A caller-supplied exclude list cannot re-expose clusters.yaml."""
+    eff = transport._effective_excludes(["only_this/"])
+    assert eff == ["only_this/", "clusters.yaml"]
+    # None selects the defaults, still with the credential exclude appended.
+    assert "clusters.yaml" in transport._effective_excludes(None)
+
+
+def test_tar_fallback_always_excludes_credentials(tmp_path: Path) -> None:
+    """Even on the rsync-absent tar path, clusters.yaml is never tarred,
+    regardless of the caller's exclude list — issue #149."""
+    (tmp_path / "f.txt").write_text("hi")
+    with (
+        patch("hpc_agent.infra.transport.shutil.which", return_value=None),
+        patch("hpc_agent.infra.transport.subprocess.run", return_value=_ok()),
+        patch("hpc_agent.infra.transport.subprocess.Popen") as popen_mock,
+    ):
+        tar_proc = popen_mock.return_value
+        tar_proc.stdout = MagicMock()
+        tar_proc.stderr = MagicMock()
+        tar_proc.stderr.read.return_value = b""
+        tar_proc.returncode = 0
+        tar_proc.wait.return_value = 0
+        transport.rsync_push(
+            ssh_target="u@h",
+            remote_path="/r",
+            local_path=tmp_path,
+            exclude=["custom/"],
+            delete=False,
+        )
+    tar_cmd = popen_mock.call_args[0][0]
+    assert "--exclude=clusters.yaml" in tar_cmd
+
+
 def test_rsync_push_fallback_delete_true_runs_remote_preclean(tmp_path: Path) -> None:
     """delete=True on the tar fallback emulates rsync --delete: a remote
     pre-clean (find ... | xargs rm -rf) runs before the tar extract so

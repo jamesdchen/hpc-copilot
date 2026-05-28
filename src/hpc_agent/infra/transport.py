@@ -13,6 +13,7 @@ import rsync_push``).
 from __future__ import annotations
 
 import contextlib
+import os
 import shlex
 import shutil
 import subprocess
@@ -27,10 +28,12 @@ from hpc_agent.infra.remote import (
     _with_ssh_backoff,
     ssh_run,
 )
+from hpc_agent.infra.ssh_options import _rsync_rsh_env, _scp_binary, _ssh_binary
 from hpc_agent.infra.ssh_validation import validate_remote_path
 
 __all__ = [
     "DEFAULT_RSYNC_EXCLUDES",
+    "MANDATORY_RSYNC_EXCLUDES",
     "deploy_runtime",
     "rsync_pull",
     "rsync_push",
@@ -51,6 +54,12 @@ DEFAULT_RSYNC_EXCLUDES: list[str] = [
     "*.pyc",
     ".mypy_cache/",
     ".claude/",
+    # Virtualenvs / package caches: gigabytes that get re-diffed and
+    # re-sent on every submit, and that the cluster job never reads (it
+    # builds its own env from MODULES / CONDA_ENV / `uv sync`).
+    ".venv/",
+    "venv/",
+    "node_modules/",
     "hpc_agent/",  # protect deployed runtime stubs from --delete
     # Protect framework files scp'd into the cluster-side .hpc/ from the
     # local rsync's --delete pass.  The local .hpc/ contains only
@@ -60,6 +69,35 @@ DEFAULT_RSYNC_EXCLUDES: list[str] = [
     ".hpc/_hpc_combiner.py",
     ".hpc/templates/",
 ]
+
+# Patterns that must NEVER ship to the cluster, regardless of what
+# ``exclude`` a caller passes. ``clusters.yaml`` holds real cluster
+# credentials (user/host/scratch paths) and is gitignored locally for
+# exactly that reason; when it lives inside the experiment dir (the
+# documented demo layout puts it at the repo root with
+# ``HPC_CLUSTERS_CONFIG`` pointing there) a default push would rsync it
+# onto a shared cluster filesystem. These are unioned into every
+# transfer's exclude set so an explicit ``rsync_excludes`` cannot drop
+# the protection. Bare names (no ``/``) so rsync/tar match the file at
+# any depth in the tree.
+MANDATORY_RSYNC_EXCLUDES: list[str] = [
+    "clusters.yaml",
+]
+
+
+def _effective_excludes(exclude: list[str] | None) -> list[str]:
+    """Resolve the exclude list, always enforcing :data:`MANDATORY_RSYNC_EXCLUDES`.
+
+    ``None`` selects :data:`DEFAULT_RSYNC_EXCLUDES`. The mandatory
+    credential-protecting patterns are appended (de-duplicated) so a
+    caller-supplied list can never re-expose ``clusters.yaml``.
+    """
+    base = DEFAULT_RSYNC_EXCLUDES if exclude is None else list(exclude)
+    out = list(base)
+    for pat in MANDATORY_RSYNC_EXCLUDES:
+        if pat not in out:
+            out.append(pat)
+    return out
 
 
 def _have_rsync() -> bool:
@@ -153,7 +191,7 @@ def _tar_ssh_push(
         remote_steps.append(_remote_clean_cmd(remote_path, exclude))
     remote_steps.append(f"tar x -C {quoted_remote}")
     ssh_remote_cmd = " && ".join(remote_steps)
-    ssh_cmd = ["ssh", "-o", "BatchMode=yes", ssh_target, ssh_remote_cmd]
+    ssh_cmd = [_ssh_binary(), "-o", "BatchMode=yes", ssh_target, ssh_remote_cmd]
 
     # tar's stderr goes to a temp file rather than a PIPE: it is only
     # read after ``ssh`` exits, and a PIPE that fills its ~64 KB kernel
@@ -225,7 +263,7 @@ def _scp_pull(
     dst_path.mkdir(parents=True, exist_ok=True)
     dst = str(dst_path)
 
-    scp_cmd = ["scp", "-r", "-o", "BatchMode=yes", src, dst]
+    scp_cmd = [_scp_binary(), "-r", "-o", "BatchMode=yes", src, dst]
     try:
         return subprocess.run(
             scp_cmd,
@@ -267,7 +305,9 @@ def rsync_push(
         Local directory to push. Trailing slash is handled automatically.
     exclude:
         Rsync exclude patterns.  Defaults to :data:`DEFAULT_RSYNC_EXCLUDES`
-        if *None*.
+        if *None*.  :data:`MANDATORY_RSYNC_EXCLUDES` (the credential file
+        ``clusters.yaml``) is always unioned in — a caller cannot drop it
+        by passing an explicit list.
     delete:
         If True (default), pass ``--delete`` so removed local files are
         also removed on the remote. On the tar/ssh fallback this is
@@ -283,8 +323,7 @@ def rsync_push(
     TimeoutError
         If the underlying ``subprocess.run`` exceeds the timeout.
     """
-    if exclude is None:
-        exclude = DEFAULT_RSYNC_EXCLUDES
+    exclude = _effective_excludes(exclude)
     effective_timeout: float | None = RSYNC_TIMEOUT_SEC if timeout is _DEFAULT else timeout
 
     # Validate the remote path up front so push and pull share one
@@ -314,6 +353,8 @@ def rsync_push(
     if delete:
         flags.append("--delete")
 
+    rsync_env = {**os.environ, **_rsync_rsh_env()}
+
     def _run() -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
@@ -322,6 +363,7 @@ def rsync_push(
                 text=True,
                 encoding="utf-8",
                 timeout=effective_timeout,
+                env=rsync_env,
             )
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(
@@ -396,7 +438,7 @@ def deploy_runtime(
                     # ``-o BatchMode=yes`` fails fast on missing
                     # credentials instead of blocking on a password
                     # prompt — matches ``_scp_pull`` and ``ssh_run``.
-                    ["scp", "-o", "BatchMode=yes", str(src), dst],
+                    [_scp_binary(), "-o", "BatchMode=yes", str(src), dst],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -636,6 +678,8 @@ def rsync_pull(
             filter_flags += [f"--include={pattern}"]
         filter_flags += ["--exclude=*"]
 
+    rsync_env = {**os.environ, **_rsync_rsh_env()}
+
     def _run() -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
@@ -644,6 +688,7 @@ def rsync_pull(
                 text=True,
                 encoding="utf-8",
                 timeout=effective_timeout,
+                env=rsync_env,
             )
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(
