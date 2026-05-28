@@ -24,7 +24,17 @@ def _force_rsync_present():
     and explicitly patch ``shutil.which`` themselves; this fixture only
     affects the rsync-branch tests in this file.
     """
-    with patch("hpc_agent.infra.remote._have_rsync", return_value=True):
+    # After PR-3 the transport helpers (rsync_push / rsync_pull) live in
+    # ``hpc_agent.infra.transport`` and look up ``_have_rsync`` against
+    # that module. Patching the re-exported alias on ``remote`` alone
+    # would no longer reach the live call site, so we patch the source
+    # of truth in ``transport`` (the alias on ``remote`` is patched too
+    # so any future callers that reach in via the legacy attribute path
+    # also see the True).
+    with (
+        patch("hpc_agent.infra.transport._have_rsync", return_value=True),
+        patch("hpc_agent.infra.remote._have_rsync", return_value=True),
+    ):
         yield
 
 
