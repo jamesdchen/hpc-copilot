@@ -63,6 +63,8 @@ def test_claude_cli_invoker_builds_the_right_call(
         "claude",
         "-p",
         "--bare",
+        "--model",
+        "haiku",
         "--settings",
         '{"sandbox": {"enabled": false}}',
         "--append-system-prompt",

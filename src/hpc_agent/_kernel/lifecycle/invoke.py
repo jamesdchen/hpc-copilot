@@ -51,6 +51,13 @@ _MISSING_CREDENTIAL_REMEDIATION = (
     "CLAUDE_CODE_USE_VERTEX) in the environment before running `hpc-agent run`."
 )
 
+# The worker runs a deterministic execution sequence (rsync / qsub / canary),
+# not open-ended reasoning, and the spawn scaffold instructs it to escalate
+# (needs_resolution) rather than grind on anything it can't resolve. A small,
+# cheap model is therefore both sufficient and far cheaper per spawn than the
+# caller's interactive model.
+_WORKER_MODEL = "haiku"
+
 
 @dataclass(frozen=True)
 class RenderedPrompt:
@@ -132,6 +139,12 @@ class ClaudeCliInvoker:
                 self._executable,
                 "-p",
                 "--bare",
+                # Pin the worker to a small, cheap model: it executes a
+                # deterministic rsync / qsub / canary sequence and is instructed
+                # to escalate rather than reason hard, so a large model is wasted
+                # spend here.
+                "--model",
+                _WORKER_MODEL,
                 # Force the sandbox OFF for the worker regardless of the
                 # caller's global setting. The worker's entire job is to
                 # SSH / rsync to a cluster — outbound network the bubblewrap
