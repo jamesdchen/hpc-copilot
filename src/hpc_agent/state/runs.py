@@ -20,6 +20,7 @@ import os
 import re
 import warnings
 from collections import OrderedDict
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -560,6 +561,7 @@ def prune_orphan_sidecars(
     experiment_dir: Path,
     *,
     min_age_seconds: int = _PRUNE_ORPHAN_MIN_AGE_SECONDS,
+    exclude: Collection[str] | None = None,
 ) -> list[str]:
     """Delete every orphan sidecar under ``<exp>/.hpc/runs/``.
 
@@ -583,15 +585,25 @@ def prune_orphan_sidecars(
     the cluster jobs. Pass ``min_age_seconds=0`` to prune immediately
     (only safe when the caller can guarantee no concurrent
     ``submit_flow`` is mid-pipeline against the same experiment).
+
+    *exclude* names run_ids that must never be pruned regardless of age
+    or orphan status. ``submit_flow_batch`` passes the run_ids it is
+    about to submit (and their ``-canary`` siblings): those sidecars are
+    written jobless at Step 6d *before* the prune runs inside the lock,
+    so they look exactly like a prior failed batch's orphan and would
+    otherwise be deleted out from under the in-flight submit.
     """
     import time as _time
 
     if min_age_seconds < 0:
         raise errors.SpecInvalid("min_age_seconds must be non-negative")
+    protected = set(exclude or ())
     cutoff = _time.time() - float(min_age_seconds)
     deleted: list[str] = []
     for path in find_existing_runs(experiment_dir):
         run_id = path.stem
+        if run_id in protected:
+            continue
         if not is_orphan_sidecar(experiment_dir, run_id):
             continue
         if min_age_seconds > 0:

@@ -194,6 +194,13 @@ class TestDeployRuntime:
         assert "mkdir -p" in argvs[0][-1]
         assert ".hpc/templates" in argvs[0][-1]
         assert ".hpc/templates/common" in argvs[0][-1]
+        # Deployed hpc_agent/ must be a PEP 420 namespace package so it
+        # never shadows a pip-installed hpc_agent on the cluster: no
+        # __init__.py is created, and stale ones from old deploys are
+        # removed.
+        assert "touch" not in argvs[0][-1]
+        assert "rm -f" in argvs[0][-1]
+        assert "/p/hpc_agent/__init__.py" in argvs[0][-1]
 
         # Each scp call carries ``-o BatchMode=yes`` before src/dst so a
         # missing key fails fast instead of blocking on a password prompt.
