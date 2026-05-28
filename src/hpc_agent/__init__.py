@@ -52,7 +52,22 @@ __all__ = [
     "get_registry",
     "primitive",
     "register_primitives",
+    # Researcher-facing experiment API
+    "register_run",
 ]
+
+# Canonical researcher-facing symbols whose implementation lives in a
+# submodule but which ARE part of the documented root API (see
+# docs/reference/boundary-contract.md) — the ``@register_run`` decorator
+# users put on their experiment functions; ``hpc-wrap-entry-point``'s
+# SKILL.md documents ``from hpc_agent import register_run``. Resolved
+# lazily through ``__getattr__`` to dodge an import cycle: experiment_kit
+# submodules do ``from hpc_agent import errors`` at module load, so
+# eager-importing register_run at the top of this module would deadlock.
+# Unlike ``_MOVED``, no ``DeprecationWarning`` — this IS the current home.
+_LAZY_PUBLIC: dict[str, str] = {
+    "register_run": "hpc_agent.experiment_kit.register_run",
+}
 
 # Names moved out of the root namespace. The ``__getattr__`` shim below
 # resolves each one with a ``DeprecationWarning`` for one release;
@@ -131,6 +146,10 @@ def __getattr__(name: str) -> Any:
     emits a :class:`DeprecationWarning` pointing the caller at the
     canonical module path. Drop the shim in a future release.
     """
+    public_target = _LAZY_PUBLIC.get(name)
+    if public_target is not None:
+        module_path, _, attr = public_target.rpartition(".")
+        return getattr(importlib.import_module(module_path), attr)
     target = _MOVED.get(name)
     if target is None:
         raise AttributeError(f"module 'hpc_agent' has no attribute {name!r}")

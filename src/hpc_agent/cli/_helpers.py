@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
-from hpc_agent.infra.ssh_agent import agent_available
+from hpc_agent.infra.ssh_agent import agent_available, agent_detail
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
@@ -143,34 +143,31 @@ def _err(
 
 
 def _err_from_hpc(exc: errors.HpcError) -> int:
+    remediation = exc.remediation
+    # No hard pre-flight agent gate any more: ``ssh_run`` uses
+    # ``BatchMode=yes`` so a missing/usable-auth failure fails fast on its
+    # own (no hang), and a precheck would reject valid IdentityFile-based
+    # auth that needs no agent at all (submit-flow has always relied on
+    # this). Instead, when an SSH op DOES fail and no agent is reachable,
+    # append the agent state — the user keeps the actionable hint the old
+    # precheck gave without the false negative. ``agent_detail()`` also
+    # describes the Windows named-pipe agent (which never sets
+    # SSH_AUTH_SOCK).
+    if isinstance(exc, errors.SshUnreachable) and not agent_available():
+        hint = (
+            f"No SSH agent reachable ({agent_detail()}). If you authenticate "
+            "via an IdentityFile in ~/.ssh/config this is fine; otherwise load "
+            "a key — Unix/macOS: `ssh-add ~/.ssh/<key>` (and forward "
+            "SSH_AUTH_SOCK into spawned envs); Windows: `Start-Service "
+            "ssh-agent; ssh-add ~/.ssh/<key>`."
+        )
+        remediation = f"{remediation} {hint}" if remediation else hint
     return _err(
         error_code=exc.error_code,
         message=str(exc),
         category=exc.category,
         retry_safe=exc.retry_safe,
-        remediation=exc.remediation,
-    )
-
-
-def _require_ssh_agent() -> int | None:
-    # Cluster-touching subcommands hang silently when no agent is
-    # reachable — the most common default-empty-spawn-env failure mode
-    # for external orchestrators. Fail fast with a typed error instead
-    # of stalling on auth. On Windows, ``agent_available()`` also probes
-    # the OpenSSH named-pipe agent (which never sets SSH_AUTH_SOCK).
-    if agent_available():
-        return None
-    return _err_from_hpc(
-        errors.SshUnreachable(
-            "No SSH agent reachable; cannot reach the cluster.",
-            remediation=(
-                "Unix/macOS: forward SSH_AUTH_SOCK (and SSH_AGENT_PID) into the spawn "
-                "environment, then run `hpc-agent preflight` to verify. "
-                "Windows: ensure the ssh-agent service is running (`Start-Service ssh-agent`) "
-                "and a key is loaded (`ssh-add ~/.ssh/<your-key>`). "
-                "See docs/integrations/CONTRACT.md for the spawn env block."
-            ),
-        )
+        remediation=remediation,
     )
 
 

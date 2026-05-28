@@ -42,7 +42,6 @@ from hpc_agent.cli._helpers import (
     _err_from_hpc,
     _load_spec,
     _ok,
-    _require_ssh_agent,
     _validate_against_schema,
 )
 
@@ -357,10 +356,12 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
     if shape.handler is not None:
         return shape.handler(ns)
 
-    if shape.requires_ssh:
-        rc = _require_ssh_agent()
-        if rc is not None:
-            return rc
+    # No pre-flight agent gate: ``ssh_run`` uses ``BatchMode=yes`` (fails
+    # fast on missing auth, never hangs) and IdentityFile-based auth needs
+    # no agent. ``requires_ssh`` stays as declarative metadata (surfaced in
+    # the capabilities catalog + pinned by the requires-ssh consistency
+    # test); a real auth failure is enriched with agent state in
+    # ``_err_from_hpc``.
 
     try:
         kwargs = _build_kwargs(name, shape, ns, meta.func)

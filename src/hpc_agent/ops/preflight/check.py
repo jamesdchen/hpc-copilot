@@ -38,6 +38,23 @@ def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
     return {"name": name, "ok": ok, "detail": detail}
 
 
+def _placeholder_fields(entry: dict[str, Any]) -> list[str]:
+    """Keys in a cluster entry whose value still holds a ``<your_...>`` token.
+
+    The packaged ``clusters.yaml`` ships placeholders (``<your_user>``,
+    ``<your_scratch>``, ``<your_env>``, ``<your_account>``) the user must
+    replace. Left in, they fail at submit time with confusing cluster-side
+    errors (auth to ``<your_user>@host``, a scratch dir that doesn't exist,
+    ``conda activate <your_env>``). Catch them at preflight instead.
+    """
+    bad: list[str] = []
+    for key, val in entry.items():
+        candidates = val if isinstance(val, list) else [val]
+        if any(isinstance(v, str) and "<your_" in v for v in candidates):
+            bad.append(key)
+    return sorted(bad)
+
+
 @primitive(
     name="check-preflight",
     verb="validate",
@@ -198,6 +215,26 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
                             "verify connectivity from your network",
                         )
                     )
+
+            # Reject un-customized placeholders: a clusters.yaml entry still
+            # carrying <your_user> / <your_scratch> / <your_env> would pass
+            # the TCP probe but fail every task at submit time.
+            placeholders = _placeholder_fields(clusters[cluster])
+            if placeholders:
+                checks.append(
+                    _check(
+                        "cluster_config_customized",
+                        False,
+                        f"{cluster!r} still has placeholder value(s) in {placeholders} — "
+                        "replace the <your_...> tokens (username / scratch path / conda "
+                        "env / account) with your real values in clusters.yaml (or point "
+                        "HPC_CLUSTERS_CONFIG at a customized copy) before submitting.",
+                    )
+                )
+            else:
+                checks.append(
+                    _check("cluster_config_customized", True, "no placeholder values remain")
+                )
 
     all_ok = all(c["ok"] for c in checks)
     return {"all_ok": all_ok, "checks": checks}

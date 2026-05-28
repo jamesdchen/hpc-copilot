@@ -1,12 +1,17 @@
 """Contract: every SSH-touching primitive declares ``cli.requires_ssh``.
 
-The CLI dispatcher gates the ``SSH_AUTH_SOCK`` precondition based on
-``CliShape.requires_ssh``. A primitive whose body invokes
+``CliShape.requires_ssh`` is *declarative metadata*: it marks which
+primitives reach the cluster, is surfaced in the capabilities catalog,
+and documents intent. (It used to drive a hard pre-flight
+``SSH_AUTH_SOCK`` gate in the dispatcher; that gate was removed because
+``ssh_run`` uses ``BatchMode=yes`` — it fails fast on missing auth on
+its own — and the precheck rejected valid IdentityFile-based auth that
+needs no agent. A genuine auth failure is now enriched with agent
+state in ``_err_from_hpc`` instead.) This test keeps the flag honest:
+a primitive whose body invokes
 :func:`hpc_agent.infra.remote.ssh_run` / ``rsync_push`` / ``rsync_pull``
 (directly OR via the per-subject runner modules) but whose CLI
-declaration omits ``requires_ssh=True`` will silently bypass the gate
-and fail late with an opaque ``ssh: connect to host`` error instead of
-the surface's ``SshUnreachable`` envelope.
+declaration omits ``requires_ssh=True`` would mislead the catalog.
 
 The audit found this bypass for ``verify-canary``, ``cluster-reduce``,
 ``aggregate-flow``, and ``monitor-flow`` — each declares an
@@ -136,6 +141,6 @@ def test_ssh_touching_primitives_declare_requires_ssh(
 
     assert not offenders, (
         "Primitives touching SSH must declare cli=CliShape(..., requires_ssh=True) "
-        "so the dispatcher gates SSH_AUTH_SOCK before invoking them. Offenders:\n  "
-        + "\n  ".join(f"{n} ({why})" for n, why in offenders)
+        "so the capabilities catalog correctly marks them as cluster-touching. "
+        "Offenders:\n  " + "\n  ".join(f"{n} ({why})" for n, why in offenders)
     )

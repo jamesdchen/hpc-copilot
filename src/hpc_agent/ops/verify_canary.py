@@ -151,9 +151,11 @@ def verify_canary(
     * ``ok=True`` iff the canary exited 0, no known failure markers in
       stderr, and the expected output (if any) exists.
     * ``failure_kind`` is None on success; otherwise one of
-      ``"dispatcher_failed"`` / ``"import_error"`` / ``"traceback"`` /
-      ``"oom_killed"`` / ``"segfault"`` / ``"missing_output"`` /
-      ``"timeout"`` / ``"abandoned"``.
+      ``"dispatcher_failed"`` / ``"import_error"`` / ``"module_not_found"`` /
+      ``"traceback"`` / ``"oom_killed"`` / ``"segfault"`` /
+      ``"missing_output"`` / ``"reporter_unreachable"`` (every status poll
+      failed — broken cluster-side reporter) / ``"timeout"`` /
+      ``"abandoned"``.
     * ``details`` is a one-line human-readable summary the slash
       command can surface to the user above the raw stderr_tail.
     * ``stderr_tail`` is the last 50 lines of the canary's stderr
@@ -189,6 +191,8 @@ def verify_canary(
 
     deadline = time.monotonic() + int(wait_budget_sec)
     last_summary: dict[str, Any] = {}
+    last_poll_error: Exception | None = None
+    got_report = False
     while time.monotonic() < deadline:
         try:
             report = ssh_status_report(
@@ -200,9 +204,11 @@ def verify_canary(
                 log_dir=log_dir,
                 file_glob=file_glob,
             )
-        except (errors.RemoteCommandFailed, OSError):
+        except (errors.RemoteCommandFailed, OSError) as exc:
+            last_poll_error = exc
             time.sleep(int(poll_interval_sec))
             continue
+        got_report = True
         last_summary = dict(report.get("summary") or {})
         complete = int(last_summary.get("complete") or 0)
         failed = int(last_summary.get("failed") or 0)
@@ -215,6 +221,30 @@ def verify_canary(
             break
         time.sleep(int(poll_interval_sec))
     else:
+        # Distinguish a broken reporter (EVERY poll raised, we never got a
+        # single status read) from a genuine slow/stuck run (polls
+        # succeeded but the run never went terminal). A broken reporter
+        # must fail the canary LOUDLY with the real cause — otherwise it
+        # masquerades as a timeout, the agent retries, and the main array
+        # submits against a cluster whose results can't even be read. This
+        # is exactly the failure mode where 8 tasks die on a module/env
+        # error but the canary "passes" because verification couldn't run.
+        if not got_report and last_poll_error is not None:
+            return {
+                "ok": False,
+                "failure_kind": "reporter_unreachable",
+                "details": (
+                    f"canary {canary_run_id!r}: every status poll failed — the "
+                    f"cluster-side reporter never returned (last error: {last_poll_error}). "
+                    "The scheduler may have run the job, but the framework cannot read its "
+                    "result, so the canary CANNOT be trusted as passed. Common cause: "
+                    "hpc-agent not importable in the cluster's python (wrong/absent conda "
+                    "env) or a module-load failure in the job preamble. Fix the cluster env "
+                    "before submitting the main array."
+                ),
+                "stderr_tail": "",
+                "metrics_fingerprint": None,
+            }
         return {
             "ok": False,
             "failure_kind": "timeout",

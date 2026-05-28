@@ -7,6 +7,22 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.7.1 — 2026-05-27
+
+### Fixed — Windows + Hoffman2 live-run hardening
+
+Bugs surfaced by a real submit→monitor→aggregate run on UCLA Hoffman2 from a native-Windows Claude Code session (tracked in issue #135).
+
+- **`register_run` is importable from the package root.** `from hpc_agent import register_run` — the form the `hpc-wrap-entry-point` skill documents — now works (resolved lazily to avoid an import cycle). It was never exported.
+- **`~/.hpc-agent/clusters.yaml` user-level config tier.** Resolution is now explicit path > `HPC_CLUSTERS_CONFIG` > `~/.hpc-agent/clusters.yaml` > packaged default — one shared file instead of a per-repo copy.
+- **The spawned worker forces the sandbox off.** The submit/monitor/aggregate worker SSH/rsyncs to a cluster (network the bubblewrap sandbox blocks on Linux/macOS, and which native Windows can't sandbox at all — it warned and corrupted the JSON report contract). It now runs unsandboxed regardless of the caller's global setting.
+- **No hard SSH-agent precheck.** `status`/`aggregate` (and the dispatch-level gate) no longer hard-require a reachable agent before connecting — that blocked valid `IdentityFile` auth. `ssh_run` already uses `BatchMode=yes` (fails fast, no hang); a real auth failure is now enriched with agent state in the error remediation.
+- **Control-plane remote Python activates the cluster env (#135 item 3).** The status reporter and the combiner run directly on the login node via `ssh_run` and never sourced the job preamble, so they hit the login node's bare `python` (lacking the framework). They now `module load` + `conda activate` the run's resolved env.
+- **Stale Hoffman2 module default removed (#135 item 1).** Packaged `clusters.yaml` shipped `modules: [python/3.11.9]`, which isn't a valid modulefile on current Hoffman2 — every task failed. Default is now `modules: []` (provide Python via conda) with guidance.
+- **Preflight rejects un-customized `clusters.yaml` (#135 item 2).** A `cluster_config_customized` check fails when the entry still carries `<your_user>` / `<your_scratch>` / `<your_env>` placeholders, instead of failing every task at submit time.
+- **The canary fails loudly when the reporter is unreachable (#135 item 4).** A persistently-broken cluster-side reporter now yields `failure_kind="reporter_unreachable"` instead of masquerading as a `timeout`, so the main array isn't submitted against a cluster whose results can't be read.
+- **`interview` materializes `tasks.py` into `.hpc/` (#135 item 5).** Generator-mode `tasks.py` is written to the canonical `<campaign_dir>/.hpc/tasks.py` (what `deploy_runtime`, the dispatcher, `build-tasks-py` and `RepoLayout` all read) rather than the campaign root, where deploy never found it. `interview.json` stays at the root.
+
 ## 0.7.0 — 2026-05-27
 
 ### Breaking — Re-exports removed, back-compat shim deleted

@@ -3,7 +3,12 @@ hoffman2:
   user: <your_user>
   scheduler: sge
   scratch: <your_scratch>
-  modules: [python/3.11.9]
+  # Leave empty and provide Python via conda (conda_source + conda_envs
+  # below). Hoffman2's `module avail python` set changes over releases —
+  # pin a specific `python/X.Y.Z` here ONLY after confirming it exists on
+  # the compute nodes (`module avail python` on a login node). A stale
+  # pin fails every task with "Unable to locate a modulefile".
+  modules: []
   conda_source: /u/local/apps/anaconda3/2024.06/etc/profile.d/conda.sh
   conda_envs: [<your_env>]
   gpu_types: [a100, h200, a6000, h100, v100, rtx2080ti]

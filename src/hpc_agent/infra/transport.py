@@ -470,6 +470,7 @@ def run_combiner(
     run_id: str,
     force: bool = False,
     timeout: float | None = _DEFAULT,
+    remote_activation: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """Run the on-cluster combiner on the login node for a specific wave.
 
@@ -498,6 +499,7 @@ def run_combiner(
     run_id_q = shlex.quote(run_id)
     cmd = (
         f"cd {shlex.quote(remote_path)} && "
+        f"{remote_activation}"
         f"HPC_WAVE={wave} HPC_RUN_ID={run_id_q} "
         f"python3 .hpc/_hpc_combiner.py --wave {wave} --run-id {run_id_q}{force_flag}"
     )
@@ -514,6 +516,7 @@ def run_combiner_checked(
     run_id: str,
     force: bool = False,
     timeout: float | None = _DEFAULT,
+    remote_activation: str = "",
 ) -> tuple[bool, str, str]:
     """Run the combiner and return ``(ok, stdout, stderr)``.
 
@@ -529,6 +532,7 @@ def run_combiner_checked(
             wave=wave,
             run_id=run_id,
             force=force,
+            remote_activation=remote_activation,
         )
     else:
         result = run_combiner(
@@ -538,6 +542,7 @@ def run_combiner_checked(
             run_id=run_id,
             force=force,
             timeout=timeout,
+            remote_activation=remote_activation,
         )
     return (
         result.returncode == 0,

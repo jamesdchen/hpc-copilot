@@ -174,15 +174,25 @@ def test_resubmit_preempted_category_with_partial_marks_does_not_raise(
     )
 
 
-# ─── SSH fail-fast gate on cluster-touching subcommands ─────────────────────
+# ─── No SSH pre-flight gate (BatchMode fails fast; IdentityFile needs no agent) ─
 
 
 @pytest.mark.skipif(
     sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+    reason="_run_cli subprocess harness is Unix-only (same reason the old gate tests skipped)",
 )
-def test_ssh_gate_status_fails_fast_without_agent(tmp_path: Path) -> None:
-    """`status` must emit ssh_unreachable instead of hanging."""
+def test_no_ssh_precheck_status_reaches_journal(tmp_path: Path) -> None:
+    """status no longer hard-requires a reachable SSH agent.
+
+    The old behavior emitted ``ssh_unreachable`` (exit 2) from a pre-flight
+    agent check. That blocked valid IdentityFile-based auth (which needs no
+    agent), so the precheck was removed — ``ssh_run`` uses ``BatchMode=yes``
+    and fails fast at the real connection anyway. With no agent AND no
+    journal record, the command now reaches the journal lookup and reports
+    the missing record (journal_corrupt, exit 3) instead of short-circuiting
+    on the agent. (Verified directly: `hpc-agent status` with no record emits
+    a clean journal_corrupt envelope via main()'s HpcError catch.)
+    """
     env = _env_without_ssh_agent()
     env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
     rc, out, _ = _run_cli(
@@ -193,57 +203,53 @@ def test_ssh_gate_status_fails_fast_without_agent(tmp_path: Path) -> None:
         "x",
         env=env,
     )
-    assert rc == 2, "ssh_unreachable is category=network → exit 2"
     payload = _parse_envelope(out)
     assert payload["ok"] is False
-    assert payload["error_code"] == "ssh_unreachable"
-    assert payload["retry_safe"] is True
-    assert payload["category"] == "network"
-    assert "remediation" in payload
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
-def test_ssh_gate_aggregate_fails_fast_without_agent(tmp_path: Path) -> None:
-    env = _env_without_ssh_agent()
-    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
-    rc, out, _ = _run_cli(
-        "aggregate",
-        "--experiment-dir",
-        str(tmp_path),
-        "--run-id",
-        "x",
-        "--wave",
-        "0",
-        env=env,
+    assert payload["error_code"] == "journal_corrupt", (
+        "no agent precheck should fire; the journal lookup runs and reports "
+        f"the missing record. Got: {payload}"
     )
-    assert rc == 2
-    payload = _parse_envelope(out)
-    assert payload["error_code"] == "ssh_unreachable"
+    assert rc == 3  # journal_corrupt is category=internal
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
-def test_ssh_gate_reconcile_fails_fast_without_agent(tmp_path: Path) -> None:
-    env = _env_without_ssh_agent()
-    env["HPC_JOURNAL_DIR"] = str(tmp_path / "journal")
-    rc, out, _ = _run_cli(
-        "reconcile",
-        "--experiment-dir",
-        str(tmp_path),
-        "--run-id",
-        "x",
-        "--scheduler",
-        "sge",
-        env=env,
-    )
-    assert rc == 2
-    payload = _parse_envelope(out)
-    assert payload["error_code"] == "ssh_unreachable"
+def test_err_from_hpc_enriches_ssh_unreachable_without_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The removed pre-flight agent gate became post-failure enrichment: a
+    SshUnreachable with no reachable agent gets the agent-state hint
+    appended to its remediation, so the user keeps the actionable guidance
+    the old precheck gave — without it blocking valid IdentityFile auth."""
+    import hpc_agent.cli._helpers as helpers
+    from hpc_agent import errors
+
+    monkeypatch.setattr(helpers, "agent_available", lambda: False)
+    monkeypatch.setattr(helpers, "agent_detail", lambda: "SSH_AUTH_SOCK is not set")
+    captured: dict = {}
+    monkeypatch.setattr(helpers, "_emit", lambda payload: captured.update(payload))
+
+    rc = helpers._err_from_hpc(errors.SshUnreachable("connect failed"))
+
+    assert rc == 2  # network category → cluster-error exit code
+    assert captured["error_code"] == "ssh_unreachable"
+    assert "No SSH agent reachable" in captured["remediation"]
+    assert "IdentityFile" in captured["remediation"]
+
+
+def test_err_from_hpc_no_agent_hint_when_agent_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a reachable agent, an SshUnreachable failure has some other
+    cause — don't append the misleading 'no agent' hint."""
+    import hpc_agent.cli._helpers as helpers
+    from hpc_agent import errors
+
+    monkeypatch.setattr(helpers, "agent_available", lambda: True)
+    captured: dict = {}
+    monkeypatch.setattr(helpers, "_emit", lambda payload: captured.update(payload))
+
+    helpers._err_from_hpc(errors.SshUnreachable("connect failed"))
+
+    assert "No SSH agent reachable" not in (captured.get("remediation") or "")
 
 
 # ─── logs subcommand ──────────────────────────────────────────────────────

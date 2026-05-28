@@ -102,6 +102,17 @@ def record_status(
     so a caller can gate on "every task wrote real data" rather than just
     "every task wrote a file".
     """
+    # Activate the run's cluster env (conda/modules) for the control-plane
+    # reporter — it runs directly on the login node via ssh_run and would
+    # otherwise hit the bare login-node python that lacks the framework.
+    from hpc_agent.infra.clusters import remote_activation_for_sidecar
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        _sidecar = read_run_sidecar(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — missing/bad sidecar → bare python (unchanged)
+        _sidecar = {}
+
     report = _ssh_status_report(
         ssh_target=ssh_target,
         remote_path=remote_path,
@@ -110,6 +121,7 @@ def record_status(
         job_name=job_name,
         file_glob=file_glob,
         min_rows=min_rows,
+        remote_activation=remote_activation_for_sidecar(_sidecar),
     )
     summary = dict(report.get("summary", {}))
     summary["checked_at"] = utcnow_iso()

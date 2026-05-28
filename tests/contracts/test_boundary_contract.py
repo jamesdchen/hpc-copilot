@@ -49,6 +49,8 @@ ALLOWED_EXPORTS = frozenset(
         "get_registry",
         "primitive",
         "register_primitives",
+        # Researcher-facing experiment API
+        "register_run",
     }
 )
 

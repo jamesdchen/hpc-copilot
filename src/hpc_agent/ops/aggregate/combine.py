@@ -102,12 +102,24 @@ def combine_wave(
     mark the wave combined. Returns ``(ok, stdout, stderr)`` from
     :func:`run_combiner_checked`.
     """
+    # Activate the run's cluster env for the control-plane combiner — it
+    # runs directly on the login node via ssh_run and would otherwise hit
+    # the bare login-node python that lacks the framework.
+    from hpc_agent.infra.clusters import remote_activation_for_sidecar
+    from hpc_agent.state.runs import read_run_sidecar
+
+    try:
+        _sidecar = read_run_sidecar(experiment_dir, run_id)
+    except Exception:  # noqa: BLE001 — missing/bad sidecar → bare python (unchanged)
+        _sidecar = {}
+
     ok, stdout, stderr = transport.run_combiner_checked(
         ssh_target=ssh_target,
         remote_path=remote_path,
         wave=wave,
         run_id=run_id,
         force=force,
+        remote_activation=remote_activation_for_sidecar(_sidecar),
     )
 
     def _apply(record: RunRecord) -> None:

@@ -55,6 +55,15 @@ bind both.
   the installed distribution metadata. Falls back to
   `"0.0.0+unknown"` when running from a non-installed checkout.
 
+### Researcher-facing experiment API
+
+- `register_run` — decorator the experimenter puts on their entry-point
+  function so the framework can discover it by name (`discover_runs`).
+  Importable as `from hpc_agent import register_run` (resolved lazily
+  from `hpc_agent.experiment_kit` to avoid an import cycle). This is the
+  canonical Python entry-point shape — see
+  `slash_commands/skills/hpc-wrap-entry-point/SKILL.md`.
+
 ### Config & discovery
 
 - `load_clusters_config` — parse and return `hpc_agent/config/clusters.yaml`.
