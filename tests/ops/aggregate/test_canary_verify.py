@@ -192,3 +192,29 @@ def test_empty_canary_run_id_raises(tmp_path: Path) -> None:
 
     with pytest.raises(errors.SpecInvalid, match="canary_run_id"):
         verify_canary(tmp_path, canary_run_id="")
+
+
+def test_reporter_unreachable_when_every_poll_fails(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistently-broken cluster-side reporter (every poll raises) must
+    fail the canary as ``reporter_unreachable`` — not a silent pass, and not
+    a misleading ``timeout`` — so the main array never submits against a
+    cluster whose results can't be read (issue #135 item 4)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    # monotonic() runs once for the deadline, then per while-check. Cross the
+    # deadline right after the first failed poll.
+    ticks = iter([0.0, 1.0, 1e9, 1e9, 1e9])
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: next(ticks))
+    with mock.patch(
+        "hpc_agent.infra.cluster_status.ssh_status_report",
+        side_effect=errors.RemoteCommandFailed(
+            "status reporter failed (rc=1): /usr/bin/python: No module named ..."
+        ),
+    ):
+        result = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=30)
+    assert result["ok"] is False
+    assert result["failure_kind"] == "reporter_unreachable"
+    assert "reporter never returned" in result["details"]
