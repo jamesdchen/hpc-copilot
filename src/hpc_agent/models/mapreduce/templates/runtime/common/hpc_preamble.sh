@@ -229,3 +229,94 @@ if [ -n "${HPC_NFS_DATA_DIR:-}" ]; then
         ) 9>"$LOCAL_DATA_DIR/.staging.lock" || exit 2
     fi
 fi
+
+# --- Bounded dispatch retry + backoff (survival) ---
+# #161: the array path used to run the per-task command exactly once and
+# let the scheduler (or a wrapper) relaunch a hard failure in a tight,
+# uncapped loop — one task retried ~8,647 times in 12 min, burning 8
+# nodes and flooding scratch with empty `_wip_*_failed_*` dirs. This
+# helper bounds that blast radius:
+#
+#   * Cap at $HPC_MAX_ATTEMPTS attempts (default 3) with EXPONENTIAL
+#     backoff between tries ($HPC_RETRY_BACKOFF_SEC * 2^(n-1), default
+#     base 2s). A deterministic instant failure therefore aborts in a
+#     few seconds, NOT at walltime.
+#   * After the cap, write a TERMINAL failure marker under
+#     $RESULT_DIR/.hpc_failed/<run>.<task>.failed and exit non-zero so
+#     the task records as `failed` rather than looping.
+#   * Honor that marker on entry: a scheduler relaunch of an
+#     already-given-up (run, task) refuses to re-run — the cross-
+#     invocation half of the cap, so even an external resubmit loop is
+#     bounded.
+#   * Treat dispatcher exit code 3 (no per-task runner resolved — the
+#     `.hpc/cli.py`-missing self-recursion guard, #162) as TERMINAL: it
+#     is a deterministic scaffold error retrying cannot fix, so fail
+#     immediately without burning the remaining attempts.
+#
+# Overridable per-experiment via $HPC_MAX_ATTEMPTS / $HPC_RETRY_BACKOFF_SEC
+# in the spec's job_env. Set $HPC_MAX_ATTEMPTS=1 to disable retries.
+#
+# Runs ``$EXECUTOR ${EXTRA_ARGS:-}`` (the same command the templates ran
+# inline before) under ``time`` so the per-attempt wall-clock still lands
+# in the job log.
+
+# Dispatcher exit code signalling "no per-task runner resolved" — kept in
+# lock-step with ``_EXIT_NO_RUNNER`` in hpc_agent/models/mapreduce/dispatch.py.
+HPC_DISPATCH_EXIT_NO_RUNNER=3
+
+hpc_run_with_retry() {
+    local max_attempts="${HPC_MAX_ATTEMPTS:-3}"
+    local backoff_base="${HPC_RETRY_BACKOFF_SEC:-2}"
+    local task="${TASK_ID:-${HPC_TASK_ID:-0}}"
+    local run="${HPC_RUN_ID:-run}"
+    local fail_dir="${RESULT_DIR:-.}/.hpc_failed"
+    local fail_marker="${fail_dir}/${run}.${task}.failed"
+    local attempt=1
+    local rc=0
+    local sleep_for
+
+    # Cross-invocation cap: a prior invocation already gave up on this
+    # (run, task). Refuse to re-run so a scheduler relaunch can't loop.
+    if [ -f "$fail_marker" ]; then
+        echo "[hpc-agent] task ${task} already marked terminally failed; refusing to re-run" >&2
+        cat "$fail_marker" >&2 2>/dev/null || true
+        return 1
+    fi
+
+    while : ; do
+        echo "[hpc-agent] attempt ${attempt}/${max_attempts}: $EXECUTOR"
+        rc=0
+        # ``|| rc=$?`` neutralises ``set -e`` so a failed attempt routes
+        # into the retry logic instead of aborting the whole template.
+        time $EXECUTOR ${EXTRA_ARGS:-} || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            return 0
+        fi
+        if [ "$rc" -eq "$HPC_DISPATCH_EXIT_NO_RUNNER" ]; then
+            echo "[hpc-agent] terminal error (exit ${rc}: no per-task runner resolved); not retrying" >&2
+            break
+        fi
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            break
+        fi
+        # Exponential backoff: base * 2^(attempt-1). bash arithmetic.
+        sleep_for=$(( backoff_base * (2 ** (attempt - 1)) ))
+        echo "[hpc-agent] attempt ${attempt} failed (exit ${rc}); backing off ${sleep_for}s before retry" >&2
+        sleep "$sleep_for"
+        attempt=$(( attempt + 1 ))
+    done
+
+    # Cap reached (or terminal error) — record a terminal marker and fail.
+    mkdir -p "$fail_dir" 2>/dev/null || true
+    {
+        echo "run_id=${HPC_RUN_ID:-}"
+        echo "task_id=${task}"
+        echo "attempts=${attempt}"
+        echo "last_exit=${rc}"
+        echo "executor=${EXECUTOR}"
+        echo "host=$(hostname 2>/dev/null || echo unknown)"
+        echo "when=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    } > "$fail_marker" 2>/dev/null || true
+    echo "[hpc-agent] task ${task} failed after ${attempt} attempt(s) (exit ${rc}); wrote terminal marker ${fail_marker}" >&2
+    return "$rc"
+}

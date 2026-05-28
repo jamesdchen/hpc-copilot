@@ -30,10 +30,17 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
 __all__ = ["main"]
+
+# Number of trailing bytes of the executor's stderr we retain in memory
+# and write into the failure directory on a non-zero exit. Bounded so a
+# pathological executor that floods stderr can't blow up the dispatcher's
+# RSS; the tail is what a campus user needs to diagnose the crash.
+_STDERR_TAIL_BYTES = 64 * 1024
 
 # Default grace window in seconds. The scheduler typically sends SIGTERM
 # 30-60s before SIGKILL on preemption; we forward SIGINT to the executor
@@ -48,6 +55,14 @@ _DEFAULT_PREEMPT_GRACE_SEC = 25
 # of which signal the scheduler actually sent — preempted runs survive
 # as a clean, recognizable diagnostic instead of a noisy crash.
 _EXIT_PREEMPTED = 130
+
+# Exit code used when no valid per-task runner could be resolved — the
+# sidecar's executor is empty or would re-invoke the dispatcher itself
+# (the #162 self-recursion footgun). Distinct from the generic
+# user/config exit (1) and schema-mismatch exit (2) so the cluster-side
+# retry wrapper can treat it as terminal (a deterministic scaffold error
+# that retrying cannot fix) rather than a transient failure to back off.
+_EXIT_NO_RUNNER = 3
 
 # Sidecar schema versions this dispatcher accepts. Kept in sync with
 # ``SIDECAR_SCHEMA_VERSION`` in ``hpc_agent/state/runs.py``. Hardcoded
@@ -237,6 +252,106 @@ def _install_preemption_handler(*, sidecar_path, task_id, child_holder, grace_se
     signal.signal(signal.SIGTERM, _handler)
 
 
+def _executor_reinvokes_dispatcher(executor, *, dispatcher_path):
+    """True when *executor* would re-invoke this dispatcher itself.
+
+    Guards against the self-recursion footgun that burned 8 nodes live
+    (#162): when submit-flow ships a run sidecar whose ``executor`` was
+    synthesized from the job script's command (``python3
+    .hpc/_hpc_dispatch.py`` — the dispatcher) instead of a real per-task
+    command, the dispatcher resolves that and re-enters itself, which
+    resolves the same command, and so on — an instant self-recursion the
+    array template then retried in a tight loop.
+
+    The check is intentionally conservative: it matches on the
+    dispatcher's own basename (``_hpc_dispatch.py``, the deployed name)
+    anywhere in the resolved command string. A real per-task command runs
+    the user's script (``python train.py``, ``python3 -m <module>``); none
+    reference the dispatcher's filename, so this never false-positives on a
+    real runner. Substring (not exact) match because the command is a shell
+    string that may carry flags / redirections around the script path.
+    """
+    if not executor:
+        return False
+    self_name = Path(dispatcher_path).name  # e.g. _hpc_dispatch.py
+    candidates = {self_name}
+    # ``dispatch.py`` is the in-repo source name; the deployed copy is
+    # ``_hpc_dispatch.py``. Match both so a spec that points at either
+    # spelling is caught regardless of how it was assembled.
+    candidates.add("_hpc_dispatch.py")
+    candidates.add("dispatch.py")
+    return any(name in executor for name in candidates)
+
+
+def _pump_stderr(pipe, *, tail_buf, tail_lock, max_bytes):
+    """Relay the executor's stderr to ours while retaining a bounded tail.
+
+    Reads *pipe* line-by-line, writes each chunk straight through to the
+    dispatcher's own stderr (so the cluster's per-task job log keeps the
+    executor's diagnostics exactly as before this capture was added), and
+    appends to *tail_buf* under *tail_lock*, trimming to the last
+    *max_bytes*. The trimmed tail is what gets persisted into the failure
+    directory on a non-zero exit (#161 — failures used to leave EMPTY
+    ``_wip_*_failed_*`` dirs with no clue why).
+
+    Runs on a daemon thread so a wedged read can never block the
+    dispatcher's exit. Best-effort throughout: any I/O error while
+    relaying must not crash the dispatcher (the task's own exit code is
+    what matters), so the loop swallows OSErrors and returns.
+    """
+    try:
+        for raw in iter(pipe.readline, b""):
+            with contextlib.suppress(OSError, ValueError):
+                sys.stderr.buffer.write(raw)
+                sys.stderr.buffer.flush()
+            with tail_lock:
+                tail_buf.append(raw)
+                # Trim from the front so memory stays bounded under a
+                # chatty executor. Joining only to measure would be O(n^2)
+                # over many lines; instead drop whole leading chunks until
+                # the retained suffix is under the cap.
+                total = sum(len(c) for c in tail_buf)
+                while total > max_bytes and len(tail_buf) > 1:
+                    total -= len(tail_buf.pop(0))
+    except (OSError, ValueError):
+        # Pipe closed / already-closed during teardown — nothing to relay.
+        return
+
+
+def _write_failure_capture(wip_dir, *, task_id, returncode, executor, stderr_tail):
+    """Record why a dispatch failed into the WIP dir for forensics.
+
+    Writes ``_hpc_dispatch_error.log`` next to the preserved partial
+    output so the empty-failure-dir mystery (#161) becomes diagnosable:
+    the campus user (and the agent's failure-classifier) can read the
+    exit code, the exact per-task command, and the tail of the executor's
+    stderr without spelunking the scheduler's array-wide job log.
+
+    Best-effort: a write failure here must not change the dispatcher's
+    own exit code (the task already failed on its own merits).
+    """
+    try:
+        os.makedirs(wip_dir, exist_ok=True)
+        log_path = os.path.join(wip_dir, "_hpc_dispatch_error.log")
+        header = (
+            f"task_id={task_id}\n"
+            f"exit_code={returncode}\n"
+            f"executor={executor}\n"
+            f"when={_utcnow_iso()}\n"
+            "--- executor stderr (tail) ---\n"
+        ).encode()
+        with open(log_path, "wb") as fh:
+            fh.write(header)
+            fh.write(stderr_tail)
+            if stderr_tail and not stderr_tail.endswith(b"\n"):
+                fh.write(b"\n")
+    except OSError as exc:
+        print(
+            f"[dispatch] WARN: could not write failure capture in {wip_dir}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _format_result_dir(template, *, task_id, run_id, kwargs):
     """Render *template* using ``str.format`` with task/run identity + kwargs.
 
@@ -325,6 +440,32 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # --- Fail loud on a self-referential per-task runner ---
+    # The per-task command must NOT be the dispatcher itself. When a submit
+    # ships a run sidecar whose ``executor`` was synthesized from the job
+    # script's command (the dispatcher) instead of a real per-task command,
+    # the resolved command points back at ``_hpc_dispatch.py`` — running it
+    # re-enters this dispatcher in an infinite self-recursion that the array
+    # template then retries in a tight loop (the live #162 incident: ~8,647
+    # attempts in 12 min, 8 nodes burned). Abort with a clear, terminal
+    # error and a non-zero exit BEFORE spawning anything, so the template's
+    # retry guard records the task as failed instead of looping.
+    #
+    # Exit ``_EXIT_NO_RUNNER`` (3) is distinct from the generic user/config
+    # exit (1) and the schema-mismatch exit (2) so the cluster-side retry
+    # wrapper recognises "deterministic — do not bother retrying."
+    if _executor_reinvokes_dispatcher(executor, dispatcher_path=__file__):
+        print(
+            f"[dispatch] ERROR: the run sidecar's per-task executor ({executor!r}) "
+            "re-invokes the dispatcher itself — refusing to self-recurse. The sidecar "
+            "must carry the real per-task command (e.g. `python train.py --seed "
+            "$SEED`), not the job script's dispatcher command. submit-flow wrote a "
+            "sidecar whose `executor` was never set to a per-task command (Step 6d / "
+            "write_run_sidecar skipped). Re-submit with a real per-task executor.",
+            file=sys.stderr,
+        )
+        sys.exit(_EXIT_NO_RUNNER)
 
     # --- Resolve task kwargs ---
     try:
@@ -527,11 +668,44 @@ def main() -> None:
     # ``child_holder[0]`` assignment leaves the child unreachable by
     # the handler (its pgid is unknown to us); the handler logs and
     # exits, and cgroup teardown reaps the orphan.
+    #
+    # stderr is captured via a PIPE pumped by a daemon thread that relays
+    # every byte straight through to our own stderr (so the cluster job
+    # log is unchanged) AND retains a bounded tail. On a non-zero exit the
+    # tail is persisted into the failure dir (#161) so the loop is
+    # diagnosable instead of leaving an empty ``_wip_*_failed_*``. stdout
+    # stays inherited — capturing it too would buffer potentially large
+    # task output for no diagnostic gain.
     started_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     started_at_mono = time.monotonic()
-    child = subprocess.Popen(executor, shell=True, env=env, preexec_fn=os.setpgrp)
+    stderr_tail_buf: list[bytes] = []
+    stderr_tail_lock = threading.Lock()
+    child = subprocess.Popen(
+        executor,
+        shell=True,
+        env=env,
+        preexec_fn=os.setpgrp,
+        stderr=subprocess.PIPE,
+    )
     child_holder[0] = child
+    pump = threading.Thread(
+        target=_pump_stderr,
+        kwargs={
+            "pipe": child.stderr,
+            "tail_buf": stderr_tail_buf,
+            "tail_lock": stderr_tail_lock,
+            "max_bytes": _STDERR_TAIL_BYTES,
+        },
+        daemon=True,
+    )
+    pump.start()
     returncode = child.wait()
+    # Give the pump a brief window to drain any stderr still buffered in
+    # the pipe after the child exits. Bounded so a wedged reader can never
+    # stall the dispatcher's own exit — the tail is best-effort forensics.
+    pump.join(timeout=2.0)
+    with stderr_tail_lock:
+        stderr_tail = b"".join(stderr_tail_buf)[-_STDERR_TAIL_BYTES:]
     elapsed_sec = max(0, int(round(time.monotonic() - started_at_mono)))
     ended_at_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -581,6 +755,18 @@ def main() -> None:
         print(
             f"[dispatch] FAILED (exit {returncode}), partial output preserved in {wip_dir}",
             file=sys.stderr,
+        )
+        # Capture WHY into the failure dir. Before this, a failed dispatch
+        # left an empty ``_wip_*_failed_*`` with no clue (#161); now the
+        # exit code, the per-task command, and the tail of the executor's
+        # stderr land in ``_hpc_dispatch_error.log`` for the campus user
+        # and the agent's failure-classifier.
+        _write_failure_capture(
+            wip_dir,
+            task_id=task_id,
+            returncode=returncode,
+            executor=executor,
+            stderr_tail=stderr_tail,
         )
 
     # Write per-task runtime sidecar — feeds the warm-axis-picker via

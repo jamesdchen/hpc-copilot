@@ -192,12 +192,14 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
 
     * Sidecar already present (the normal flow — Step 6d wrote it with the
       full wave_map / config snapshot): no-op, we never overwrite it.
-    * Sidecar missing + ``spec.result_dir_template`` supplied: synthesize a
-      minimal-but-valid sidecar from the spec so the cluster can dispatch.
-    * Sidecar missing + no ``result_dir_template``: raise ``SpecInvalid`` —
-      fail fast locally rather than ship an empty ``runs/`` that dooms the
-      whole array. (A direct ``submit-flow --spec`` caller that wants
-      submit-flow to own the sidecar must pass ``result_dir_template``.)
+    * Sidecar missing + ``result_dir_template`` AND a real per-task executor
+      available: synthesize a minimal-but-valid sidecar from the spec.
+    * Sidecar missing + no ``result_dir_template`` **or** no real per-task
+      executor (only the job script's dispatcher command is available): raise
+      ``SpecInvalid`` — fail fast locally rather than ship an empty ``runs/``
+      OR a self-recursive sidecar that dooms the whole array (#148 / #162).
+      The caller must run write_run_sidecar first (Step 6d / wrap-entry-point)
+      with the real per-task command.
     """
     from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 
@@ -218,7 +220,23 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     from hpc_agent.infra.time import utcnow_iso
 
     job_env = spec.job_env or {}
-    executor = job_env.get("EXECUTOR") or "python3 .hpc/_hpc_dispatch.py"
+    # job_env["EXECUTOR"] is the *job-script* command — it runs the dispatcher
+    # (`python3 .hpc/_hpc_dispatch.py`), NOT a per-task command. Writing it into
+    # the sidecar's `executor` makes the dispatcher run itself: the #162 live
+    # incident (~8,647 retries, 8 nodes burned). There is no real per-task
+    # command to synthesize from here, so fail loud — the same posture as a
+    # missing result_dir_template above — rather than ship a structurally broken
+    # sidecar that the old `or "...dispatch.py"` default silently produced.
+    executor = job_env.get("EXECUTOR") or ""
+    if (not executor) or ("_hpc_dispatch.py" in executor) or ("dispatch.py" in executor):
+        raise errors.SpecInvalid(
+            f"per-run sidecar for run_id {spec.run_id!r} is missing and submit-flow "
+            f"cannot synthesize a valid one: the only available executor ({executor!r}) "
+            "is the job-script command (it runs the dispatcher), not a per-task command, "
+            "so synthesizing it would make the dispatcher run itself (#162). Run "
+            "write_run_sidecar first (Step 6d / wrap-entry-point) with the real per-task "
+            "command (e.g. `python train.py --seed $SEED`)."
+        )
     cmd_sha = job_env.get("HPC_CMD_SHA", "")
 
     # tasks_py_sha is provenance only (drift detection); compute it from the
