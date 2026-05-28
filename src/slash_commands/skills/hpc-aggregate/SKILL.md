@@ -73,7 +73,7 @@ If accumulated, return `needs_resolution` envelope. Caller resolves; re-invokes.
 ### 5. Hand off to the aggregate-flow worker
 
 ```bash
-hpc-agent run aggregate --fields-json '{"run_id": "<id>", "profile": "<p>", "stage": "<s>", "allow_partial": <bool>}'
+hpc-agent run --workflow aggregate --fields-json '{"run_id": "<id>", "profile": "<p>", "stage": "<s>", "allow_partial": <bool>}'
 ```
 
 Spawns a fresh-context bare worker that reads `worker_prompts/aggregate.md` — runs the combiner + reducer + summary pull + runtime-sample ingestion. Multi-step LLM-driven workflow, so worker is justified.

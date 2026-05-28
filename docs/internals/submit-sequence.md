@@ -17,7 +17,7 @@ User chat                   The slash               The skill              The b
                                                      load-context                                  
                                                      resolve fields                                
                                                      compose sub-skills                            
-                                                     ─→ Bash hpc-agent run submit  ──→ bare worker 
+                                                     ─→ Bash hpc-agent run --workflow submit ──→ bare worker 
                                                                                        reads worker_prompts/submit.md
                                                                                        execute deterministic sequence:
                                                                                           export-package
@@ -148,7 +148,7 @@ When ambiguities are empty, the skill assembles the final spec:
 ### Step 2.5: Hand off to the worker
 
 ```bash
-hpc-agent run submit --fields-json '<fields>'
+hpc-agent run --workflow submit --fields-json '<fields>'
 ```
 
 This is the execution boundary. The skill's job ends here; everything
@@ -156,7 +156,7 @@ below runs in a fresh-context `claude -p --bare` worker.
 
 ## Step 3: Bare worker executes (execution layer)
 
-`hpc-agent run submit` spawns a `claude -p --bare` worker.
+`hpc-agent run --workflow submit` spawns a `claude -p --bare` worker.
 `spawn_prompt._procedure_body` inlines the contents of
 `src/hpc_agent/_kernel/extension/worker_prompts/submit.md` into the
 worker's `cacheable_prefix`. The worker's context contains the worker

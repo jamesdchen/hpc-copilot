@@ -6,7 +6,7 @@ execution: inline
 category: agent-autonomous
 ---
 
-Agent-facing decision layer over the **[submit-flow](../../../../docs/primitives/submit-flow.md) workflow**. This skill is the *experiment-aware* decision surface: it walks the choice points an HPC submission requires (which cluster? which executor? which axis classification?) and resolves each one — from caller-supplied input, autonomous heuristics, or composed sub-skill. Once everything's resolved, it shells out to `hpc-agent run submit`, which spawns a fresh-context worker that runs `worker_prompts/submit.md` — the experiment-agnostic execution layer (rsync, qsub, canary, journal, scheduler verify).
+Agent-facing decision layer over the **[submit-flow](../../../../docs/primitives/submit-flow.md) workflow**. This skill is the *experiment-aware* decision surface: it walks the choice points an HPC submission requires (which cluster? which executor? which axis classification?) and resolves each one — from caller-supplied input, autonomous heuristics, or composed sub-skill. Once everything's resolved, it shells out to `hpc-agent run --workflow submit`, which spawns a fresh-context worker that runs `worker_prompts/submit.md` — the experiment-agnostic execution layer (rsync, qsub, canary, journal, scheduler verify).
 
 The slash `/submit-hpc` is the human-interview wrapper around this skill; an external autonomous agent (MARs experiment-runner, notebook driver) invokes this skill directly with whatever it pre-resolved.
 
@@ -146,7 +146,7 @@ Assemble every resolved value:
 ### 9. Hand off to the submit-flow worker
 
 ```bash
-hpc-agent run submit --fields-json '<fields>'
+hpc-agent run --workflow submit --fields-json '<fields>'
 ```
 
 Spawns a fresh-context bare worker that runs `worker_prompts/submit.md` (experiment-agnostic execution: rsync, qsub, canary, journal, scheduler verify). Returns its envelope.

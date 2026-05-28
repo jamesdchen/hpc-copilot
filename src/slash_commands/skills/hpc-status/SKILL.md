@@ -58,7 +58,7 @@ Single primitive call. Returns one envelope. No worker spawn. The caller's conte
 **If `wait_terminal == true` (blocking poll)**:
 
 ```bash
-hpc-agent run status --fields-json '{"run_id": "<id>", "wait_terminal": true}'
+hpc-agent run --workflow status --fields-json '{"run_id": "<id>", "wait_terminal": true}'
 ```
 
 Spawns a fresh-context bare worker that reads `worker_prompts/status.md`. The worker contains the poll loop (sacct queries every 60s, lifecycle transitions, sidecar updates) in its private context. Returns the final terminal envelope. The caller's context grows by ~1 KB regardless of how long the poll ran.
