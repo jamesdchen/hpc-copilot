@@ -178,6 +178,20 @@ class HPCBackend(abc.ABC):
         """Return the scheduler command for the given task range."""
         ...
 
+    def resource_flags(self, resources: Any) -> list[str]:
+        """Translate a resources object into scheduler command-line flags.
+
+        *resources* is a ``SubmitResources`` (or ``None``). The base
+        returns ``[]`` so a backend that hasn't opted in — and any call
+        with no resources set — emits no new flags, leaving the job
+        template directives and cluster defaults untouched. SGE / SLURM
+        override this. A command-line flag overrides the matching
+        ``#$``/``#SBATCH`` directive baked into the template, which is the
+        only way to vary a per-submission resource (SGE ``#$`` directives
+        cannot read env vars).
+        """
+        return []
+
     def _execute_command(
         self,
         cmd: list[str],

@@ -109,6 +109,32 @@ class TestBuildCommand:
         assert "--export" not in cmd
 
 
+class TestResourceFlags:
+    """SLURM resource asks → sbatch flags (#146). Opt-in per field."""
+
+    def _res(self, **kw):
+        from hpc_agent._wire.workflows.submit_flow import SubmitResources
+
+        return SubmitResources(**kw)
+
+    def test_none_and_empty_emit_no_flags(self, tmp_path):
+        backend = SlurmBackend(script=str(tmp_path / "j.sh"))
+        assert backend.resource_flags(None) == []
+        assert backend.resource_flags(self._res()) == []
+
+    def test_walltime_in_whole_minutes_rounded_up(self, tmp_path):
+        backend = SlurmBackend(script=str(tmp_path / "j.sh"))
+        assert backend.resource_flags(self._res(walltime_sec=7200)) == ["--time", "120"]
+        # 90s rounds up to 2 minutes (never truncates to 1).
+        assert backend.resource_flags(self._res(walltime_sec=90)) == ["--time", "2"]
+
+    def test_mem_and_cpus(self, tmp_path):
+        backend = SlurmBackend(script=str(tmp_path / "j.sh"))
+        flags = backend.resource_flags(self._res(mem_mb=4096, cpus=8))
+        assert flags[flags.index("--mem") + 1] == "4096M"
+        assert flags[flags.index("--cpus-per-task") + 1] == "8"
+
+
 # ---------------------------------------------------------------------------
 # _build_dependency_flag
 # ---------------------------------------------------------------------------

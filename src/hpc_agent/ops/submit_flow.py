@@ -178,6 +178,81 @@ def _push_and_deploy(
     deploy_runtime(ssh_target=ssh_target, remote_path=remote_path)
 
 
+def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
+    """Guarantee the cluster-required per-run sidecar exists before rsync.
+
+    The cluster dispatcher hard-requires ``.hpc/runs/<run_id>.json`` (it
+    reads ``executor`` + ``result_dir_template`` from it) — if it is
+    missing at rsync time, ``.hpc/runs/`` ships empty and every task fails
+    with ``run sidecar not found``. submit-flow therefore OWNS this
+    artifact instead of trusting a prior step (Step 6d / write_run_sidecar)
+    to have written it (#148 / #150).
+
+    Behaviour:
+
+    * Sidecar already present (the normal flow — Step 6d wrote it with the
+      full wave_map / config snapshot): no-op, we never overwrite it.
+    * Sidecar missing + ``spec.result_dir_template`` supplied: synthesize a
+      minimal-but-valid sidecar from the spec so the cluster can dispatch.
+    * Sidecar missing + no ``result_dir_template``: raise ``SpecInvalid`` —
+      fail fast locally rather than ship an empty ``runs/`` that dooms the
+      whole array. (A direct ``submit-flow --spec`` caller that wants
+      submit-flow to own the sidecar must pass ``result_dir_template``.)
+    """
+    from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
+
+    target = run_sidecar_path(experiment_dir, spec.run_id)
+    if target.is_file() and target.stat().st_size > 0:
+        return
+
+    if not spec.result_dir_template:
+        raise errors.SpecInvalid(
+            f"per-run sidecar for run_id {spec.run_id!r} is missing and the "
+            "spec carries no result_dir_template, so submit-flow cannot "
+            "synthesize the artifact the cluster dispatcher requires. Either "
+            "run write_run_sidecar first (Step 6d / wrap-entry-point) or pass "
+            "result_dir_template in the spec."
+        )
+
+    from hpc_agent import __version__ as _pkg_version
+    from hpc_agent.infra.time import utcnow_iso
+
+    job_env = spec.job_env or {}
+    executor = job_env.get("EXECUTOR") or "python3 .hpc/_hpc_dispatch.py"
+    cmd_sha = job_env.get("HPC_CMD_SHA", "")
+
+    # tasks_py_sha is provenance only (drift detection); compute it from the
+    # local tasks.py when present, else leave empty — the dispatcher does
+    # not require it.
+    tasks_py_sha = ""
+    tasks_py = experiment_dir / ".hpc" / "tasks.py"
+    if tasks_py.is_file():
+        from hpc_agent.state.run_sha import compute_tasks_py_sha
+
+        with contextlib.suppress(Exception):
+            tasks_py_sha = compute_tasks_py_sha(tasks_py)
+
+    resources = spec.resources.model_dump(exclude_none=True) if spec.resources else None
+
+    write_run_sidecar(
+        experiment_dir,
+        run_id=spec.run_id,
+        cmd_sha=cmd_sha,
+        hpc_agent_version=_pkg_version or "",
+        submitted_at=utcnow_iso(),
+        executor=executor,
+        result_dir_template=spec.result_dir_template,
+        task_count=int(spec.total_tasks),
+        tasks_py_sha=tasks_py_sha,
+        cluster=spec.cluster,
+        profile=spec.profile,
+        remote_path=spec.remote_path,
+        campaign_id=spec.campaign_id or None,
+        runtime=spec.runtime,
+        resources=resources or None,
+    )
+
+
 def _augment_job_env(
     *,
     job_env: dict[str, str],
@@ -222,6 +297,7 @@ def _make_single_array_submission(
     total_tasks: int,
     job_env: dict[str, str],
     cwd: Path,
+    resources: object = None,
 ) -> list[str]:
     """Submit one array of size ``total_tasks`` and return the job IDs.
 
@@ -229,10 +305,14 @@ def _make_single_array_submission(
     no batching). Wave-based submissions are out of scope for v1 of
     submit-flow; callers needing them should use the legacy interactive
     ``/submit-hpc`` path or extend this function with a ``plan`` input.
+
+    *resources* (a ``SubmitResources`` or ``None``) is translated by the
+    backend into scheduler resource flags; ``None``/empty emits none, so
+    the template directives apply unchanged.
     """
     backend._setup_log_dir()  # type: ignore[attr-defined]
     cmd = backend._build_command(  # type: ignore[attr-defined]
-        f"1-{total_tasks}", job_name, job_env
+        f"1-{total_tasks}", job_name, job_env, extra_flags=backend.resource_flags(resources)
     )
     result = backend._execute_command(cmd, job_env, cwd)  # type: ignore[attr-defined]
     if result.returncode != 0:
@@ -423,6 +503,7 @@ def _submit_one_spec(
                 total_tasks=1,
                 job_env=canary_env,
                 cwd=experiment_dir,
+                resources=spec.resources,
             )
             from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
@@ -448,6 +529,7 @@ def _submit_one_spec(
         total_tasks=spec.total_tasks,
         job_env=job_env_full,
         cwd=experiment_dir,
+        resources=spec.resources,
     )
     from hpc_agent._wire.actions.submit import SubmitSpec as _SubmitSpec
 
@@ -663,6 +745,14 @@ def _submit_flow_batch_locked(
         # results without firing rsync/deploy. ``# type: ignore`` would
         # otherwise be needed because mypy can't see the None elimination.
         return [r for r in results if r is not None]
+
+    # Guarantee the cluster-required per-run sidecar exists for every
+    # fresh spec BEFORE rsync — submit-flow owns this artifact rather than
+    # trusting a prior step to have written it. Missing + synthesizable →
+    # written here; missing + not synthesizable → fail fast locally
+    # (see _ensure_run_sidecar). #148 / #150.
+    for i in fresh_indices:
+        _ensure_run_sidecar(experiment_dir, specs[i])
 
     # Shared prelude: one ssh probe, one rsync, one deploy. This is the
     # whole point of the batch — collapse N × (probe + rsync + deploy)

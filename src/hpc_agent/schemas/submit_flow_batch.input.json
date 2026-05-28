@@ -196,6 +196,31 @@
           "default": null,
           "title": "Runtime"
         },
+        "resources": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubmitResources"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Scheduler resource asks (walltime/mem/cpus) emitted as qsub/sbatch flags. Null/empty = no resource flags; the job template directives and cluster defaults apply unchanged."
+        },
+        "result_dir_template": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-task result-dir template (e.g. 'results/{run_id}/task_{task_id}'). The cluster dispatcher hard-requires this (it reads it from the per-run sidecar). Supplying it lets submit-flow GUARANTEE the sidecar exists at rsync time — it synthesizes the sidecar from the spec when a prior step (write_run_sidecar / Step 6d) did not already write one, instead of shipping an empty .hpc/runs/ that dooms every cluster task. Null = rely on a pre-written sidecar.",
+          "title": "Result Dir Template"
+        },
         "rsync_excludes": {
           "anyOf": [
             {
@@ -238,6 +263,56 @@
         "job_env"
       ],
       "title": "submit-flow input spec",
+      "type": "object"
+    },
+    "SubmitResources": {
+      "additionalProperties": false,
+      "description": "Scheduler resource asks emitted as qsub/sbatch flags.\n\nFirst-class in the submit spec (#146): the planning/validation layer\nalready resolves and validates walltime against history + cluster\nceilings, but before this the submission layer had nowhere to put the\nresult, so the resolved walltime was silently dropped and the job ran\non the cluster default. Every field is optional and opt-in — an\nomitted/empty ``resources`` block emits NO new scheduler flags, so the\ntemplate directives (and the cluster default) apply exactly as before.\n\nThe backend translates each set field into its scheduler's flag:\n\n* ``walltime_sec`` → SGE ``-l h_rt=HH:MM:SS`` / SLURM ``--time=<min>``\n* ``mem_mb``       → SGE ``-l h_data=<mem>M`` / SLURM ``--mem=<mem>M``\n* ``cpus``         → SGE ``-pe shared <n>`` / SLURM ``--cpus-per-task=<n>``\n\nThese override the corresponding directive baked into the job\ntemplate (a command-line flag beats a ``#$``/``#SBATCH`` line), which\nis the only way to vary a per-submission resource since SGE ``#$``\ndirectives cannot read env vars.",
+      "properties": {
+        "walltime_sec": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wall-clock limit in seconds. SGE -l h_rt / SLURM --time.",
+          "title": "Walltime Sec"
+        },
+        "mem_mb": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Memory ask in MB. SGE -l h_data (per-slot) / SLURM --mem.",
+          "title": "Mem Mb"
+        },
+        "cpus": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "CPU cores. SGE -pe shared <n> / SLURM --cpus-per-task.",
+          "title": "Cpus"
+        }
+      },
+      "title": "submit resources",
       "type": "object"
     }
   }

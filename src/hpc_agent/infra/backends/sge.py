@@ -16,6 +16,18 @@ from hpc_agent import errors
 from hpc_agent.infra.backends import HPCBackend
 
 
+def _fmt_hms(total_seconds: int) -> str:
+    """Format *total_seconds* as ``HH:MM:SS`` for SGE ``-l h_rt``.
+
+    Hours are not zero-padded to two digits (SGE accepts >99h), so a
+    multi-day walltime still renders correctly.
+    """
+    seconds = max(0, int(total_seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 class SGEBackend(HPCBackend):
     # B5: capability metadata. SGE has no ``qsub --test-only``
     # equivalent so supports_test_only_eta stays False; the planner
@@ -178,6 +190,29 @@ class SGEBackend(HPCBackend):
             stress_cpu_load_frac=stress_cpu_load_frac,
             runner=runner,
         )
+
+    def resource_flags(self, resources: object) -> list[str]:
+        """Emit SGE ``-l h_rt`` / ``-l h_data`` / ``-pe shared`` for set asks.
+
+        Each is opt-in: only a non-None field produces a flag, so an empty
+        ``resources`` leaves the template's ``#$ -l`` directives in force.
+        ``-l h_data`` is the per-slot memory request convention these
+        templates already use; ``-pe shared <n>`` is the shared-memory
+        parallel environment for multi-core asks.
+        """
+        flags: list[str] = []
+        if resources is None:
+            return flags
+        walltime_sec = getattr(resources, "walltime_sec", None)
+        mem_mb = getattr(resources, "mem_mb", None)
+        cpus = getattr(resources, "cpus", None)
+        if walltime_sec:
+            flags += ["-l", f"h_rt={_fmt_hms(int(walltime_sec))}"]
+        if mem_mb:
+            flags += ["-l", f"h_data={int(mem_mb)}M"]
+        if cpus:
+            flags += ["-pe", "shared", str(int(cpus))]
+        return flags
 
     def _build_command(
         self,

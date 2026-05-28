@@ -206,6 +206,19 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
         "partial_ok": bool(partial_ok),
         "skip_preflight": bool(skip_preflight),
     }
+    if spec.result_dir_template is not None:
+        out["result_dir_template"] = spec.result_dir_template
+    resources = {
+        k: v
+        for k, v in (
+            ("walltime_sec", spec.walltime_sec),
+            ("mem_mb", spec.mem_mb),
+            ("cpus", spec.cpus),
+        )
+        if v is not None
+    }
+    if resources:
+        out["resources"] = resources
     if pass_env_keys is not None:
         out["pass_env_keys"] = list(pass_env_keys)
     if rsync_excludes is not None:
