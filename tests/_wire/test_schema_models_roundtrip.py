@@ -51,7 +51,7 @@ def _load_registry() -> list[tuple[Any, str, Path]]:
     Entries are ``(model_or_adapter, output_filename, schemas_dir)`` —
     the ``schemas_dir`` is per-entry because the script discovers across
     multiple authoring packages (core ``hpc_agent._wire`` + pro plugin
-    ``hpc_agent_pro._schema_models``) into different output directories.
+    ``hpc_agent_pro._wire``) into different output directories.
     """
     spec = importlib.util.spec_from_file_location("_build_schemas_for_test", BUILD_SCRIPT)
     assert spec is not None and spec.loader is not None

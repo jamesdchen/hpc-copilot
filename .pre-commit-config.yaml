@@ -58,9 +58,9 @@ repos:
         language: system
         pass_filenames: false
         # ``build_schemas.py`` walks ``hpc_agent._wire`` for core models and
-        # ``hpc_agent_pro._schema_models`` for the plugin's models — so the
+        # ``hpc_agent_pro._wire`` for the plugin's models — so the
         # hook fires whenever either package's Pydantic surface changes.
-        files: '^(src/hpc_agent/_wire/.*\.py|hpc-agent-pro/src/hpc_agent_pro/_schema_models/.*\.py)$'
+        files: '^(src/hpc_agent/_wire/.*\.py|hpc-agent-pro/src/hpc_agent_pro/_wire/.*\.py)$'
 
       - id: bake-operations-json
         name: regenerate baked operations.json (wheel-install fallback)

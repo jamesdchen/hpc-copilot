@@ -2,7 +2,7 @@
 
 The wire SoT is the JSON file (every external consumer reads it).
 The *authoring* SoT is the Pydantic model under
-``hpc_agent/_wire/`` (core) or ``hpc_agent_pro/_schema_models/``
+``hpc_agent/_wire/`` (core) or ``hpc_agent_pro/_wire/``
 (pro plugin). This script bridges the two: it
 calls ``model.model_json_schema()`` (or ``adapter.json_schema()``
 for root-array schemas) for every model auto-discovered under
@@ -23,7 +23,7 @@ Discovery rules
 ---------------
 
 For each non-private submodule of each registered authoring package
-(``hpc_agent._wire`` for core, ``hpc_agent_pro._schema_models`` for pro):
+(``hpc_agent._wire`` for core, ``hpc_agent_pro._wire`` for pro):
 
 1. Hardcoded mapping (``_NON_SUFFIX_MAPPING``) handles cross-cutting
    shapes whose names don't fit the suffix convention — the three
@@ -64,7 +64,7 @@ sys.path.insert(0, str(REPO_ROOT / "hpc-agent-pro" / "src"))
 from pydantic import BaseModel, TypeAdapter  # noqa: E402
 
 import hpc_agent._wire  # noqa: E402
-import hpc_agent_pro._schema_models  # noqa: E402
+import hpc_agent_pro._wire  # noqa: E402
 
 # Authoring packages and the directory their emitted JSON schemas land in.
 # Each package is walked independently; discovered names must be unique
@@ -76,7 +76,7 @@ _AUTHORING_PACKAGES: tuple[tuple[Any, Path], ...] = (
         REPO_ROOT / "src" / "hpc_agent" / "schemas",
     ),
     (
-        hpc_agent_pro._schema_models,
+        hpc_agent_pro._wire,
         REPO_ROOT / "hpc-agent-pro" / "src" / "hpc_agent_pro" / "schemas",
     ),
 )
