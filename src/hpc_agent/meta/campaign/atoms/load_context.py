@@ -41,22 +41,45 @@ _CONFIG_KEYS: tuple[str, ...] = (
 )
 
 
-def _next_step_hint(in_flight: list[dict[str, Any]], campaigns: list[dict[str, Any]]) -> str:
+def _is_onboarded(experiment_dir: Path) -> bool:
+    """True when the repo carries the dispatch contract a submit needs.
+
+    ``.hpc/tasks.py`` is the artifact ``submit-flow`` and the cluster-side
+    dispatcher require; its absence means the repo has never been
+    onboarded (``wrap-entry-point`` has not run). Mirrors the signal
+    ``hpc-agent setup``'s recommender uses to distinguish ``interview`` /
+    ``fresh`` from a ready-to-submit repo.
+    """
+    return (experiment_dir / ".hpc" / "tasks.py").is_file()
+
+
+def _next_step_hint(
+    in_flight: list[dict[str, Any]],
+    campaigns: list[dict[str, Any]],
+    *,
+    onboarded: bool,
+) -> str:
     """Coarse next-action hint from the in-flight set and known campaigns.
 
     - any in-flight run still in the ``monitor`` stage  -> ``monitor``
     - in-flight runs exist but all past monitoring      -> ``aggregate``
     - nothing in flight, a campaign exists              -> ``decide``
-    - nothing in flight, no campaign                    -> ``submit``
+    - nothing in flight, no campaign, repo onboarded    -> ``submit``
+    - nothing in flight, no campaign, NOT onboarded     -> ``onboard``
 
     ``decide`` distinguishes "a campaign finished an iteration and needs
     its next one chosen" from a cold ``submit`` of a fresh experiment.
+    ``onboard`` catches the un-onboarded repo (no ``.hpc/tasks.py``) so a
+    fresh-context agent is routed to ``wrap-entry-point`` instead of being
+    pointed at submission with nothing to submit.
 
     Advisory only: the skill still decides, but a fresh step gets a
     deterministic starting point instead of guessing from memory.
     """
     if not in_flight:
-        return "decide" if campaigns else "submit"
+        if campaigns:
+            return "decide"
+        return "submit" if onboarded else "onboard"
     if any(r.get("stage") == "monitor" for r in in_flight):
         return "monitor"
     return "aggregate"
@@ -104,6 +127,33 @@ def _build_delegate(
     from hpc_agent._kernel.extension.spawn_prompt import render_spawn_prompt
 
     exp = str(experiment_dir)
+    if hint == "onboard":
+        return {
+            "kind": "agent",
+            "step": "onboard",
+            "run_id": None,
+            "campaign_id": None,
+            "experiment_dir": exp,
+            "reason": (
+                "repo is not onboarded (no .hpc/tasks.py); run "
+                "wrap-entry-point to build the dispatch/resource contract "
+                "before any submission"
+            ),
+            # No SpawnRequest: onboarding is the ``wrap-entry-point`` /
+            # ``/wrap-entry-point-hpc`` interview, not one of the
+            # submit/status/aggregate/campaign workflows the spawn
+            # contract enumerates.
+            "spawn_request": None,
+            "prompt": (
+                f"This repo at {exp} is not onboarded — there is no "
+                ".hpc/tasks.py, so there is nothing to submit yet. Run "
+                "wrap-entry-point (slash command /wrap-entry-point-hpc) to "
+                "interview the entry point and generate the dispatch "
+                "contract (tasks.py + EXECUTOR/result_dir_template/run_id). "
+                "Do NOT hand-write tasks.py or reverse-engineer the "
+                "contract; onboard first, then submit."
+            ),
+        }
     if hint == "submit":
         return {
             "kind": "agent",
@@ -198,10 +248,14 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
     - ``in_flight`` — journal records still in flight, one row each.
     - ``campaigns`` — every campaign with a sidecar, plus its cursor
       iteration when a cursor file exists.
+    - ``needs_onboarding`` — ``True`` when the repo has no
+      ``.hpc/tasks.py`` (``wrap-entry-point`` has not run); callers
+      should route to onboarding before attempting a submit.
     - ``next_step_hint`` — ``submit`` / ``monitor`` / ``aggregate`` /
-      ``decide``, derived from the in-flight set and known campaigns
-      (``decide`` when a campaign is idle and awaiting its next
-      iteration).
+      ``decide`` / ``onboard``, derived from the in-flight set, known
+      campaigns, and onboarding state (``decide`` when a campaign is idle
+      and awaiting its next iteration; ``onboard`` when the repo has no
+      ``.hpc/tasks.py``).
     - ``delegate`` — the next step as a delegable unit of work
       (``kind`` ``cli``/``agent``, ``step``, ``run_id``,
       ``campaign_id``, ``prompt``, ``spawn_request``); consumed by an
@@ -299,12 +353,14 @@ def load_context(*, experiment_dir: Path) -> dict[str, Any]:
                 row["cursor_last_run_id"] = cursor.get("last_run_id") or None
         campaigns.append(row)
 
-    hint = _next_step_hint(in_flight, campaigns)
+    onboarded = _is_onboarded(experiment_dir)
+    hint = _next_step_hint(in_flight, campaigns, onboarded=onboarded)
     return {
         "experiment_dir": str(experiment_dir),
         "latest_run": latest_run,
         "in_flight": in_flight,
         "campaigns": campaigns,
+        "needs_onboarding": not onboarded,
         "next_step_hint": hint,
         "delegate": _build_delegate(experiment_dir, hint, in_flight, campaigns, latest_run),
         "warnings": warnings,

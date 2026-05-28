@@ -9,6 +9,7 @@
     "latest_run",
     "in_flight",
     "campaigns",
+    "needs_onboarding",
     "next_step_hint",
     "delegate",
     "warnings"
@@ -43,12 +44,17 @@
       "title": "Campaigns",
       "type": "array"
     },
+    "needs_onboarding": {
+      "title": "Needs Onboarding",
+      "type": "boolean"
+    },
     "next_step_hint": {
       "enum": [
         "submit",
         "monitor",
         "aggregate",
-        "decide"
+        "decide",
+        "onboard"
       ],
       "title": "Next Step Hint",
       "type": "string"

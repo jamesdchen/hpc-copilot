@@ -17,7 +17,78 @@ import os
 import sys
 import tempfile
 
-__all__ = ["_resolve_ssh_persist_interval", "_ssh_multiplex_opts"]
+__all__ = [
+    "_resolve_ssh_persist_interval",
+    "_rsync_rsh_env",
+    "_scp_binary",
+    "_ssh_binary",
+    "_ssh_multiplex_opts",
+]
+
+
+# Native Windows OpenSSH location. On Windows the agent's Bash tool is
+# usually Git Bash, whose ``/usr/bin/ssh`` (Git's bundled OpenSSH)
+# shadows the system binary on PATH. Git's ssh cannot reach the Windows
+# OpenSSH named-pipe ``ssh-agent`` (it wants a Unix ``SSH_AUTH_SOCK``
+# which Windows never sets), so key-based auth that works from
+# PowerShell fails silently from Git Bash. Prefer the native binary when
+# present so the ssh that actually runs can talk to the pipe agent that
+# ``infra.ssh_agent`` already detects.
+_WIN_OPENSSH_SSH = r"C:\Windows\System32\OpenSSH\ssh.exe"
+_WIN_OPENSSH_SCP = r"C:\Windows\System32\OpenSSH\scp.exe"
+
+
+def _resolve_binary(*, env_var: str, win_default: str, name: str) -> str:
+    """Resolve an ssh-family binary, preferring an explicit override then
+    (on Windows) the native OpenSSH executable, else the bare PATH name.
+
+    *env_var* (e.g. ``HPC_SSH_BINARY``) wins unconditionally when set so a
+    user can pin the binary on any platform. On Windows, when no override
+    is set, the native ``C:\\Windows\\System32\\OpenSSH`` executable is
+    used when it exists. Everywhere else (and when the native binary is
+    absent) the bare *name* is returned so normal PATH resolution applies
+    — preserving the existing Linux/macOS behaviour exactly.
+    """
+    override = os.environ.get(env_var)
+    if override:
+        return override
+    if sys.platform == "win32" and os.path.isfile(win_default):
+        return win_default
+    return name
+
+
+def _ssh_binary() -> str:
+    """Path/name of the ``ssh`` binary to invoke. See :func:`_resolve_binary`.
+
+    Override with ``HPC_SSH_BINARY``.
+    """
+    return _resolve_binary(env_var="HPC_SSH_BINARY", win_default=_WIN_OPENSSH_SSH, name="ssh")
+
+
+def _scp_binary() -> str:
+    """Path/name of the ``scp`` binary to invoke. See :func:`_resolve_binary`.
+
+    Override with ``HPC_SCP_BINARY``.
+    """
+    return _resolve_binary(env_var="HPC_SCP_BINARY", win_default=_WIN_OPENSSH_SCP, name="scp")
+
+
+def _rsync_rsh_env() -> dict[str, str]:
+    """Return env overrides pinning rsync's remote shell to :func:`_ssh_binary`.
+
+    rsync invokes its own ``ssh`` for the transport unless ``RSYNC_RSH``
+    (or ``-e``) says otherwise; on Windows that picks up Git Bash's ssh,
+    same as the bare call sites. Returns ``{"RSYNC_RSH": <ssh>}`` when a
+    non-default ssh binary should be used (explicit override, or native
+    Windows OpenSSH), else ``{}`` so PATH resolution is unchanged. Respects
+    a caller-set ``RSYNC_RSH`` by leaving it alone.
+    """
+    if os.environ.get("RSYNC_RSH"):
+        return {}
+    ssh = _ssh_binary()
+    if ssh == "ssh":
+        return {}
+    return {"RSYNC_RSH": ssh}
 
 
 # Default ControlPersist window. Tunable via ``HPC_SSH_PERSIST_INTERVAL``;
