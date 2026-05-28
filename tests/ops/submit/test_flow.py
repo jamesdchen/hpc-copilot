@@ -439,9 +439,7 @@ class TestSidecarGuarantee:
         with pytest.raises(errors.SpecInvalid, match="result_dir_template"):
             submit_flow_batch(tmp_path, spec=_batch([spec]))
 
-    def test_does_not_overwrite_existing_sidecar(
-        self, tmp_path: Any, _journal_home: Any
-    ) -> None:
+    def test_does_not_overwrite_existing_sidecar(self, tmp_path: Any, _journal_home: Any) -> None:
         from hpc_agent.ops import submit_flow as sf_module
         from hpc_agent.ops.submit_flow import submit_flow_batch
         from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar

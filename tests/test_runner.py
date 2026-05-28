@@ -164,9 +164,7 @@ def test_submit_and_record_finalizes_existing_sidecar_without_warning(
         ),
     )
     assert read_run_sidecar(experiment, run_id)["job_ids"] == ["12345678"]
-    missing_warnings = [
-        w for w in recwarn.list if "run sidecar" in str(w.message)
-    ]
+    missing_warnings = [w for w in recwarn.list if "run sidecar" in str(w.message)]
     assert missing_warnings == []
 
 
