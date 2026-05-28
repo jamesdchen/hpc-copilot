@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from hpc_agent.infra import remote, transport
+from hpc_agent.infra.ssh_options import _scp_binary, _ssh_binary
 
 
 @pytest.fixture(autouse=True)
@@ -195,8 +196,11 @@ class TestDeployRuntime:
 
         argvs = [c[0][0] for c in all_calls]
 
-        # ssh mkdir is first
-        assert argvs[0][0] == "ssh"
+        # ssh mkdir is first. The command resolves through _ssh_binary()
+        # (bare "ssh" on Linux/macOS; the native OpenSSH abs path on
+        # Windows, per #145), so assert against the resolver rather than a
+        # hardcoded name to stay platform-agnostic.
+        assert argvs[0][0] == _ssh_binary()
         assert "mkdir -p" in argvs[0][-1]
         assert ".hpc/templates" in argvs[0][-1]
         assert ".hpc/templates/common" in argvs[0][-1]
@@ -210,8 +214,10 @@ class TestDeployRuntime:
 
         # Each scp call carries ``-o BatchMode=yes`` before src/dst so a
         # missing key fails fast instead of blocking on a password prompt.
-        # Layout per call: ["scp", "-o", "BatchMode=yes", src, dst].
-        assert all(argv[:3] == ["scp", "-o", "BatchMode=yes"] for argv in argvs[1:]), [
+        # Layout per call: [scp, "-o", "BatchMode=yes", src, dst]. scp[0]
+        # resolves through _scp_binary() (bare "scp" on Linux/macOS; the
+        # native OpenSSH abs path on Windows, per #145).
+        assert all(argv[:3] == [_scp_binary(), "-o", "BatchMode=yes"] for argv in argvs[1:]), [
             argv[:3] for argv in argvs[1:]
         ]
 

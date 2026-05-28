@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 from hpc_agent.infra import transport
+from hpc_agent.infra.ssh_options import _scp_binary, _ssh_binary
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -79,7 +80,7 @@ def test_rsync_push_falls_back_to_tar_when_rsync_missing(tmp_path: Path) -> None
     assert "--exclude=__pycache__" in tar_cmd
     # ssh got spawned with the remote tar x command
     ssh_cmd = run_mock.call_args[0][0]
-    assert ssh_cmd[0] == "ssh"
+    assert ssh_cmd[0] == _ssh_binary()
     assert "u@h" in ssh_cmd
 
 
@@ -106,7 +107,7 @@ def _tar_fallback_remote_cmd(tmp_path: Path, *, exclude: list[str], delete: bool
             delete=delete,
         )
     ssh_cmd = run_mock.call_args[0][0]
-    assert ssh_cmd[0] == "ssh"
+    assert ssh_cmd[0] == _ssh_binary()
     return str(ssh_cmd[-1])
 
 
@@ -231,7 +232,7 @@ def test_rsync_pull_falls_back_to_scp_when_rsync_missing(tmp_path: Path) -> None
             local_dir=tmp_path / "out",
         )
     cmd = run_mock.call_args[0][0]
-    assert cmd[0] == "scp"
+    assert cmd[0] == _scp_binary()
     assert "-r" in cmd
     assert any("u@h:/r/_combiner/" in arg for arg in cmd)
     assert (tmp_path / "out").exists()
