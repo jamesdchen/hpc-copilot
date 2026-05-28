@@ -132,3 +132,20 @@ def test_agent_detail_windows_pipe_unreachable(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
     monkeypatch.setattr(ssh_agent.subprocess, "run", _stub_run(2))
     assert "unreachable" in ssh_agent.agent_detail()
+
+
+def test_agent_available_uses_resolved_ssh_add_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The named-pipe probe must invoke the *resolved* ssh-add binary, not
+    the bare name Git Bash would shadow with its own /usr/bin/ssh-add."""
+    monkeypatch.setattr(ssh_agent.sys, "platform", "win32")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setattr(ssh_agent, "_ssh_add_binary", lambda: "/native/ssh-add.exe")
+    seen: dict[str, Any] = {}
+
+    def _run(argv: Any, *args: Any, **kwargs: Any) -> Any:
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ssh_agent.subprocess, "run", _run)
+    assert ssh_agent.agent_available() is True
+    assert seen["argv"][0] == "/native/ssh-add.exe"

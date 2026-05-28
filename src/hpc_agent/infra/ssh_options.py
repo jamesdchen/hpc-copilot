@@ -21,6 +21,7 @@ __all__ = [
     "_resolve_ssh_persist_interval",
     "_rsync_rsh_env",
     "_scp_binary",
+    "_ssh_add_binary",
     "_ssh_binary",
     "_ssh_multiplex_opts",
 ]
@@ -36,6 +37,7 @@ __all__ = [
 # ``infra.ssh_agent`` already detects.
 _WIN_OPENSSH_SSH = r"C:\Windows\System32\OpenSSH\ssh.exe"
 _WIN_OPENSSH_SCP = r"C:\Windows\System32\OpenSSH\scp.exe"
+_WIN_OPENSSH_SSH_ADD = r"C:\Windows\System32\OpenSSH\ssh-add.exe"
 
 
 def _resolve_binary(*, env_var: str, win_default: str, name: str) -> str:
@@ -73,19 +75,42 @@ def _scp_binary() -> str:
     return _resolve_binary(env_var="HPC_SCP_BINARY", win_default=_WIN_OPENSSH_SCP, name="scp")
 
 
+def _ssh_add_binary() -> str:
+    """Path/name of the ``ssh-add`` binary to invoke. See :func:`_resolve_binary`.
+
+    Override with ``HPC_SSH_ADD_BINARY``. Mirrors :func:`_ssh_binary`: on
+    Windows the agent probe in :mod:`hpc_agent.infra.ssh_agent` must reach
+    the native OpenSSH named-pipe agent, but a bare ``ssh-add`` from Git
+    Bash resolves to Git's ``/usr/bin/ssh-add`` — which only knows
+    ``SSH_AUTH_SOCK`` (never set on Windows) and so reports a false
+    "agent unreachable". Preferring the native binary fixes that probe.
+    """
+    return _resolve_binary(
+        env_var="HPC_SSH_ADD_BINARY", win_default=_WIN_OPENSSH_SSH_ADD, name="ssh-add"
+    )
+
+
 def _rsync_rsh_env() -> dict[str, str]:
     """Return env overrides pinning rsync's remote shell to :func:`_ssh_binary`.
 
     rsync invokes its own ``ssh`` for the transport unless ``RSYNC_RSH``
     (or ``-e``) says otherwise; on Windows that picks up Git Bash's ssh,
-    same as the bare call sites. Returns ``{"RSYNC_RSH": <ssh>}`` when a
-    non-default ssh binary should be used (explicit override, or native
-    Windows OpenSSH), else ``{}`` so PATH resolution is unchanged. Respects
-    a caller-set ``RSYNC_RSH`` by leaving it alone.
+    same as the bare call sites. Returns ``{"RSYNC_RSH": <cmd>}`` when a
+    non-default remote shell should be used, else ``{}`` so PATH
+    resolution is unchanged. Respects a caller-set ``RSYNC_RSH`` by
+    leaving it alone.
+
+    On Windows the ``RSYNC_RSH`` command also carries the
+    :func:`_ssh_multiplex_opts` override (``-o ControlMaster=no -o
+    ControlPath=none``) so rsync's own ssh can't pick up the user's
+    ``~/.ssh/config`` multiplexing — which native Windows OpenSSH cannot
+    honour — any more than the bare ``ssh_run`` call site can.
     """
     if os.environ.get("RSYNC_RSH"):
         return {}
     ssh = _ssh_binary()
+    if sys.platform == "win32":
+        return {"RSYNC_RSH": " ".join([ssh, *_ssh_multiplex_opts()])}
     if ssh == "ssh":
         return {}
     return {"RSYNC_RSH": ssh}
@@ -115,10 +140,15 @@ def _ssh_multiplex_opts() -> list[str]:
     ``HPC_NO_SSH_MULTIPLEX=1``
         Opt out of multiplexing entirely (some clusters disallow
         multiplexed sessions, e.g. due to PAM-based session limits).
-        Multiplexing is also auto-disabled on Windows because the
-        ``ControlPath`` Unix socket isn't supported by native Windows
-        OpenSSH (``ssh.exe`` aborts with ``getsockname failed: Not a
-        socket``).
+        On Windows multiplexing can't work at all — native Windows
+        OpenSSH has no ``ControlPath`` Unix socket (``ssh.exe`` aborts
+        with ``getsockname failed: Not a socket``) — so instead of the
+        usual ``ControlMaster=auto`` we emit an explicit
+        ``ControlMaster=no`` / ``ControlPath=none`` override. Returning
+        ``[]`` would only drop our own flags, leaving a user's
+        ``~/.ssh/config`` ``ControlMaster`` (often a ``Host *`` stanza)
+        to bite; a command-line ``-o`` beats the config file.
+        ``HPC_NO_SSH_MULTIPLEX=1`` still short-circuits to ``[]`` first.
     ``HPC_SSH_PERSIST_INTERVAL``
         Override the ControlPersist window. The value is passed verbatim
         to OpenSSH, so any shape ``ssh_config(5)`` accepts works:
@@ -141,7 +171,12 @@ def _ssh_multiplex_opts() -> list[str]:
     if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
         return []
     if sys.platform == "win32":
-        return []
+        # Native Windows OpenSSH can't use a ControlPath Unix socket
+        # (getsockname failed: Not a socket). Returning [] would only omit
+        # OUR flags; a user's ~/.ssh/config ControlMaster would still bite.
+        # Emit an explicit override so the config directive can't take
+        # effect — a command-line -o beats the config file.
+        return ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     opts = [
         "-o",
