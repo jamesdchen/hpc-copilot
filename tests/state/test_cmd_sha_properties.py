@@ -32,7 +32,7 @@ from typing import Any
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from hpc_agent.state.runs import compute_cmd_sha
+from hpc_agent.state.run_sha import compute_cmd_sha
 
 
 class _FakeTasksModule:

@@ -25,15 +25,11 @@ from typing import Any
 
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
-from hpc_agent.state.run_sha import compute_cmd_sha, compute_tasks_py_sha
-from hpc_agent.state.wave_map import derive_wave_map as _maybe_derive_wave_map
+from hpc_agent.state.wave_map import derive_wave_map
 
 __all__ = [
     "MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION",
-    "_maybe_derive_wave_map",
-    "compute_cmd_sha",
-    "compute_tasks_py_sha",
     "find_existing_runs",
     "find_run_by_cmd_sha",
     "is_orphan_sidecar",
@@ -93,10 +89,7 @@ def run_sidecar_path(experiment_dir: Path, run_id: str) -> Path:
 
 
 # ``compute_cmd_sha`` and ``compute_tasks_py_sha`` live in
-# :mod:`hpc_agent.state.run_sha` so this module can stay focused on the
-# sidecar lifecycle. The names re-export above via the top-level
-# ``from hpc_agent.state.run_sha import ...``; ``__all__`` already lists
-# both names so star-imports keep working unchanged.
+# :mod:`hpc_agent.state.run_sha`. Callers import from there directly.
 
 
 # v2 first-class config-snapshot fields. All optional; absent keys are
@@ -183,11 +176,8 @@ _WARNED_VERSION_MISMATCH_CAP: int = 1024
 _warned_version_mismatch: OrderedDict[tuple[str, str], None] = OrderedDict()
 
 
-# ``_maybe_derive_wave_map`` lives in :mod:`hpc_agent.state.wave_map`
-# (under the public name ``derive_wave_map``) so this module can stay
-# focused on the sidecar lifecycle. The name is imported above under its
-# original underscore alias and re-listed in ``__all__`` below so callers
-# that pulled it off ``hpc_agent.state.runs`` keep working.
+# ``derive_wave_map`` lives in :mod:`hpc_agent.state.wave_map` and is
+# imported above for use by :func:`write_run_sidecar`.
 
 
 def write_run_sidecar(
@@ -261,7 +251,7 @@ def write_run_sidecar(
         "tasks_py_sha": tasks_py_sha,
     }
     if wave_map is None:
-        wave_map = _maybe_derive_wave_map(experiment_dir, task_count=int(task_count))
+        wave_map = derive_wave_map(experiment_dir, task_count=int(task_count))
     if wave_map is not None:
         sidecar["wave_map"] = {str(k): list(v) for k, v in wave_map.items()}
     if extra:

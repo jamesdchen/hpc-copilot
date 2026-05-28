@@ -196,7 +196,7 @@ The envelope's `data` carries `{headline, body, confirm_prompt}`. Surface `headl
 ```python
 from pathlib import Path
 from hpc_agent import RepoLayout, load_tasks_module
-from hpc_agent.state.runs import compute_cmd_sha
+from hpc_agent.state.run_sha import compute_cmd_sha
 
 experiment_dir = Path.cwd()
 layout = RepoLayout(experiment_dir)
@@ -230,7 +230,7 @@ Commit `.hpc/tasks.py` + `.hpc/cli.py`. No push — user controls upstream.
 ### 6c: Compute `cmd_sha`, check for resume
 
 ```python
-from hpc_agent.state.runs import compute_cmd_sha, compute_tasks_py_sha
+from hpc_agent.state.run_sha import compute_cmd_sha, compute_tasks_py_sha
 tasks = load_tasks_module(tp)
 cmd_sha = compute_cmd_sha(tasks)
 tasks_py_sha = compute_tasks_py_sha(tp)

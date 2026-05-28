@@ -61,23 +61,23 @@ __all__ = [
 # ``ALLOWED_EXPORTS`` allowlist in
 # ``tests/contracts/test_boundary_contract.py``.
 _MOVED: dict[str, str] = {
-    # Per-run sidecars → hpc_agent.state.runs
+    # Per-run sidecars → hpc_agent.state.runs / .run_sha
     "MAX_RUNS": "hpc_agent.state.runs.MAX_RUNS",
     "SIDECAR_SCHEMA_VERSION": "hpc_agent.state.runs.SIDECAR_SCHEMA_VERSION",
-    "compute_cmd_sha": "hpc_agent.state.runs.compute_cmd_sha",
-    "compute_tasks_py_sha": "hpc_agent.state.runs.compute_tasks_py_sha",
+    "compute_cmd_sha": "hpc_agent.state.run_sha.compute_cmd_sha",
+    "compute_tasks_py_sha": "hpc_agent.state.run_sha.compute_tasks_py_sha",
     "find_existing_runs": "hpc_agent.state.runs.find_existing_runs",
     "find_run_by_cmd_sha": "hpc_agent.state.runs.find_run_by_cmd_sha",
     "prune_old_runs": "hpc_agent.state.runs.prune_old_runs",
     "read_run_sidecar": "hpc_agent.state.runs.read_run_sidecar",
     "run_sidecar_path": "hpc_agent.state.runs.run_sidecar_path",
     "write_run_sidecar": "hpc_agent.state.runs.write_run_sidecar",
-    # Remote execution → hpc_agent.infra.remote
-    "deploy_runtime": "hpc_agent.infra.remote.deploy_runtime",
-    "rsync_pull": "hpc_agent.infra.remote.rsync_pull",
-    "rsync_push": "hpc_agent.infra.remote.rsync_push",
-    "run_combiner": "hpc_agent.infra.remote.run_combiner",
-    "run_combiner_checked": "hpc_agent.infra.remote.run_combiner_checked",
+    # Remote execution → hpc_agent.infra.remote / .transport
+    "deploy_runtime": "hpc_agent.infra.transport.deploy_runtime",
+    "rsync_pull": "hpc_agent.infra.transport.rsync_pull",
+    "rsync_push": "hpc_agent.infra.transport.rsync_push",
+    "run_combiner": "hpc_agent.infra.transport.run_combiner",
+    "run_combiner_checked": "hpc_agent.infra.transport.run_combiner_checked",
     "ssh_run": "hpc_agent.infra.remote.ssh_run",
     # Job status & results → hpc_agent.models.mapreduce.reduce.status
     "check_results": "hpc_agent.models.mapreduce.reduce.status.check_results",
