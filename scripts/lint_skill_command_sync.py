@@ -172,9 +172,7 @@ def _required_inputs(skill_body: str) -> set[str]:
     return required
 
 
-def _check_skill_frontmatter(
-    skill_id: str, skill_path: Path, errors: list[str]
-) -> str | None:
+def _check_skill_frontmatter(skill_id: str, skill_path: Path, errors: list[str]) -> str | None:
     """Validate a skill's `execution` and `category` frontmatter. Return
     the resolved `execution` value (`"inline"` / `"delegated"`) on
     success, or `None` if anything was wrong (errors appended)."""

@@ -162,9 +162,7 @@ def wrapper_executor_cmd(
     return f'python3 -c "{py}"'
 
 
-def _hash_frozen_configs(
-    campaign_dir: Path, frozen_configs: list[str]
-) -> dict[str, str]:
+def _hash_frozen_configs(campaign_dir: Path, frozen_configs: list[str]) -> dict[str, str]:
     """Resolve each path against *campaign_dir*, hash its bytes, derive a kwarg name.
 
     The kwarg name is ``<filename_stem>_sha`` — e.g. ``configs/exp_42.yaml``
@@ -187,15 +185,12 @@ def _hash_frozen_configs(
                 f"frozen_configs entry {rel!r} resolves outside campaign_dir"
             ) from exc
         if not path.is_file():
-            raise errors.SpecInvalid(
-                f"frozen_configs entry {rel!r} is not a file: {path}"
-            )
+            raise errors.SpecInvalid(f"frozen_configs entry {rel!r} is not a file: {path}")
         digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         key = _sha_kwarg_name(rel)
         if key in shas:
             raise errors.SpecInvalid(
-                f"frozen_configs: kwarg name {key!r} collides "
-                f"(two configs with the same stem)"
+                f"frozen_configs: kwarg name {key!r} collides (two configs with the same stem)"
             )
         shas[key] = digest
     return shas

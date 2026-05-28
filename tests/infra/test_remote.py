@@ -191,9 +191,9 @@ class TestDeployRuntime:
         # Each scp call carries ``-o BatchMode=yes`` before src/dst so a
         # missing key fails fast instead of blocking on a password prompt.
         # Layout per call: ["scp", "-o", "BatchMode=yes", src, dst].
-        assert all(
-            argv[:3] == ["scp", "-o", "BatchMode=yes"] for argv in argvs[1:]
-        ), [argv[:3] for argv in argvs[1:]]
+        assert all(argv[:3] == ["scp", "-o", "BatchMode=yes"] for argv in argvs[1:]), [
+            argv[:3] for argv in argvs[1:]
+        ]
 
         # Importable stub into hpc_agent/models/mapreduce/
         assert argvs[1][3].endswith("metrics_io.py")
@@ -217,12 +217,8 @@ class TestDeployRuntime:
 
         # Two shared preambles into .hpc/templates/common/
         common_dsts = {argv[4] for argv in argvs[8:10]}
-        assert any(
-            d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts
-        )
-        assert any(
-            d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts
-        )
+        assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts)
+        assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts)
 
         # Combiner is last
         assert argvs[10][3].endswith("combiner.py")

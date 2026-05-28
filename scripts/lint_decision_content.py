@@ -59,8 +59,7 @@ def extract_blocks(path: Path) -> dict[str, str]:
         normalised = "\n".join(line.rstrip() for line in content.splitlines())
         if tag in blocks:
             print(
-                f"ERROR: {path.relative_to(REPO_ROOT)} has duplicate "
-                f"decision-content:{tag} block",
+                f"ERROR: {path.relative_to(REPO_ROOT)} has duplicate decision-content:{tag} block",
                 file=sys.stderr,
             )
             sys.exit(1)

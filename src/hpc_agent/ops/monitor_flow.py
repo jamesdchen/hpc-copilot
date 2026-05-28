@@ -46,6 +46,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from hpc_agent import errors
@@ -60,8 +61,6 @@ from hpc_agent.ops.monitor.status import record_status
 from hpc_agent.state.journal import load_run
 from hpc_agent.state.run_record import runs_dir
 from hpc_agent.state.runs import read_run_sidecar
-
-from pathlib import Path
 
 __all__ = ["monitor_flow", "MonitorFlowResult"]
 
@@ -614,9 +613,8 @@ def monitor_flow(
             # COMPLETE return.
             complete_escalation: str | None = None
             if state.last_failed_waves:
-                complete_escalation = (
-                    "combine_failed_waves:waves="
-                    + ",".join(str(w) for w in state.last_failed_waves)
+                complete_escalation = "combine_failed_waves:waves=" + ",".join(
+                    str(w) for w in state.last_failed_waves
                 )
             return MonitorFlowResult(
                 run_id=run_id,

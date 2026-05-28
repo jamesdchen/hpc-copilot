@@ -335,9 +335,7 @@ def _journal_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
-def test_campaign_health_counts_complete_from_journal(
-    tmp_path: Path, _journal_home: Path
-) -> None:
+def test_campaign_health_counts_complete_from_journal(tmp_path: Path, _journal_home: Path) -> None:
     """Before the fix, ``sc.get("status")`` always returned None; the
     n_complete / n_failed counters never incremented and every
     campaign's health envelope reported 0 / 0 regardless of actual
@@ -351,17 +349,13 @@ def test_campaign_health_counts_complete_from_journal(
     _seed_run_with_status(tmp_path, run_id="r3", campaign_id="A", status="failed")
     _seed_run_with_status(tmp_path, run_id="r4", campaign_id="A", status="in_flight")
 
-    out = campaign_health(
-        experiment_dir=tmp_path, spec=CampaignHealthSpec(campaign_id="A")
-    )
+    out = campaign_health(experiment_dir=tmp_path, spec=CampaignHealthSpec(campaign_id="A"))
     assert out["n_runs"] == 4
     assert out["n_complete"] == 2
     assert out["n_failed"] == 1
 
 
-def test_campaign_replay_status_from_journal(
-    tmp_path: Path, _journal_home: Path
-) -> None:
+def test_campaign_replay_status_from_journal(tmp_path: Path, _journal_home: Path) -> None:
     """Before the fix, ``sidecar.get("status", "")`` returned "" for
     every iteration. The replay envelope now surfaces the journal
     RunRecord's status — pinning the join."""

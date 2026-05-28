@@ -220,11 +220,14 @@ def classify_axis_easy(source_path: Path, run_name: str) -> MatcherResult:
     tried.append(_PATTERN_EMA_SMOOTHING)
     ema_hit = _match_ema_smoothing(loop, carried)
     if ema_hit is not None:
-        kind, halo_expr, evidence = ema_hit
+        # ema_halo_expr is Optional: the unbounded β=1 branch returns None
+        # alongside kind="sequential" (no bounded halo). MatcherResult.halo_expr
+        # accepts None, so it propagates straight through.
+        ema_kind, ema_halo_expr, ema_evidence = ema_hit
         return MatcherResult(
-            kind=kind,
-            evidence=evidence,
-            halo_expr=halo_expr,
+            kind=ema_kind,
+            evidence=ema_evidence,
+            halo_expr=ema_halo_expr,
             tried=tuple(tried),
         )
 
@@ -250,9 +253,7 @@ def _read_source(path: Path) -> str | None:
         return None
 
 
-def _find_function(
-    tree: ast.Module, name: str
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+def _find_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Return the module-level function named *name*, or ``None``."""
     for node in tree.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
@@ -488,19 +489,13 @@ def _append_only_receivers(loop: ast.For | ast.While) -> set[str]:
             continue
         is_append_recv = False
         parent = parents.get(id(node))
-        if (
-            isinstance(parent, ast.Attribute)
-            and parent.attr == "append"
-            and parent.value is node
-        ):
+        if isinstance(parent, ast.Attribute) and parent.attr == "append" and parent.value is node:
             grandparent = parents.get(id(parent))
             if isinstance(grandparent, ast.Call) and grandparent.func is parent:
                 is_append_recv = True
         name_usages.setdefault(node.id, []).append(is_append_recv)
 
-    return {
-        name for name, usages in name_usages.items() if usages and all(usages)
-    }
+    return {name for name, usages in name_usages.items() if usages and all(usages)}
 
 
 def _parent_map(root: ast.AST) -> dict[int, ast.AST]:
@@ -542,10 +537,9 @@ def _match_stencil(
         # Reads: arr[i - K] in Load context.
         if isinstance(node.ctx, ast.Load):
             offset = _extract_lookback_offset(node.slice, loop_var)
-            if offset is not None and offset >= 1:
-                if max_offset is None or offset > max_offset:
-                    max_offset = offset
-                    matched_name = arr
+            if offset is not None and offset >= 1 and (max_offset is None or offset > max_offset):
+                max_offset = offset
+                matched_name = arr
 
     if max_offset is None:
         return None
@@ -577,10 +571,15 @@ def _match_stencil(
 def _extract_lookback_offset(slc: ast.AST, loop_var: str) -> int | None:
     """If *slc* is ``loop_var - K`` for literal K, return K; else None."""
     # Direct subscript like x[i - K] (slc is the expression, not a Slice).
-    if isinstance(slc, ast.BinOp) and isinstance(slc.op, ast.Sub):
-        if isinstance(slc.left, ast.Name) and slc.left.id == loop_var:
-            if isinstance(slc.right, ast.Constant) and isinstance(slc.right.value, int):
-                return slc.right.value
+    if (
+        isinstance(slc, ast.BinOp)
+        and isinstance(slc.op, ast.Sub)
+        and isinstance(slc.left, ast.Name)
+        and slc.left.id == loop_var
+        and isinstance(slc.right, ast.Constant)
+        and isinstance(slc.right.value, int)
+    ):
+        return slc.right.value
     return None
 
 
@@ -673,9 +672,7 @@ def _match_pandas_rolling(scope: ast.AST) -> tuple[str, str] | None:
         if not isinstance(rolling_call, ast.Call):
             continue
         rolling_callee = rolling_call.func
-        if not (
-            isinstance(rolling_callee, ast.Attribute) and rolling_callee.attr == "rolling"
-        ):
+        if not (isinstance(rolling_callee, ast.Attribute) and rolling_callee.attr == "rolling"):
             continue
         # Extract window argument (kwarg `window=` or first positional).
         window_expr: ast.expr | None = None
@@ -833,7 +830,4 @@ def _extract_state_coef(term: ast.expr, state_name: str):
 
 def _references(node: ast.expr, name: str) -> bool:
     """True if *node* references the Name *name* anywhere within."""
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Name) and sub.id == name:
-            return True
-    return False
+    return any(isinstance(sub, ast.Name) and sub.id == name for sub in ast.walk(node))

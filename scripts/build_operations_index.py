@@ -72,7 +72,8 @@ def render_row(op: dict) -> str:
     # ", ".join(side_effects) silently dropped them.
     sfx = summarize_side_effects(op.get("side_effects") or [])
     return (
-        f"| [`{name}`](../primitives/{name}.md) | {idem} | {sfx} | `{cli}` | `{py}` | {inp} | {out} |"
+        f"| [`{name}`](../primitives/{name}.md) | {idem} | {sfx} | "
+        f"`{cli}` | `{py}` | {inp} | {out} |"
     )
 
 

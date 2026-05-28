@@ -17,8 +17,7 @@ from __future__ import annotations
 import warnings
 
 warnings.warn(
-    "hpc_agent.incorporation.template has moved to hpc_agent.experiment_kit; "
-    "update your imports.",
+    "hpc_agent.incorporation.template has moved to hpc_agent.experiment_kit; update your imports.",
     DeprecationWarning,
     stacklevel=2,
 )

@@ -278,9 +278,7 @@ class TestAggregateFlowSpecMode:
         with pytest.raises(ValidationError, match="mode"):
             AggregateFlowSpec(run_id="r1", mode="bogus")  # type: ignore[arg-type]
 
-    def test_spec_mode_is_consumed_by_aggregate_flow(
-        self, journal_home, experiment
-    ) -> None:
+    def test_spec_mode_is_consumed_by_aggregate_flow(self, journal_home, experiment) -> None:
         """End-to-end: spec.mode threads into aggregate_flow without
         raising ``SpecInvalid``. The function previously rejected
         ``mode`` only via a runtime check on a kwarg the CLI never

@@ -375,10 +375,12 @@ def test_entry_point_frozen_configs_threaded_into_kwargs(tmp_path: Path) -> None
         },
         task_generator={
             "kind": "enumerated",
-            "params": {"items": [
-                {"config": "configs/exp_42.yaml", "seed": 0},
-                {"config": "configs/exp_42.yaml", "seed": 1},
-            ]},
+            "params": {
+                "items": [
+                    {"config": "configs/exp_42.yaml", "seed": 0},
+                    {"config": "configs/exp_42.yaml", "seed": 1},
+                ]
+            },
         },
     )
     result = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -407,7 +409,8 @@ def test_entry_point_yaml_edit_changes_cmd_sha(tmp_path: Path) -> None:
         intent = _minimal_intent(
             2,
             entry_point={
-                "kind": "shell_command", "run_name": "r",
+                "kind": "shell_command",
+                "run_name": "r",
                 "argv": ["python3", "main.py", "--config", "{config}"],
                 "signature": {"config": "str"},
                 "frozen_configs": ["configs/exp.yaml"],
@@ -434,7 +437,8 @@ def test_entry_point_argv_typo_fails_at_spec_validation(tmp_path: Path) -> None:
     intent = _minimal_intent(
         1,
         entry_point={
-            "kind": "shell_command", "run_name": "r",
+            "kind": "shell_command",
+            "run_name": "r",
             "argv": ["python3", "main.py", "--config", "{cnfig}"],  # typo
             "signature": {"config": "str"},
             "frozen_configs": [],
@@ -450,13 +454,15 @@ def test_entry_point_missing_frozen_config_rejected(tmp_path: Path) -> None:
     intent = _minimal_intent(
         1,
         entry_point={
-            "kind": "shell_command", "run_name": "r",
+            "kind": "shell_command",
+            "run_name": "r",
             "argv": ["python3", "main.py"],
             "signature": {},
             "frozen_configs": ["configs/does_not_exist.yaml"],
         },
         task_generator={
-            "kind": "enumerated", "params": {"items": [{"a": 1}]},
+            "kind": "enumerated",
+            "params": {"items": [{"a": 1}]},
         },
     )
     with pytest.raises(errors.SpecInvalid, match="is not a file"):
@@ -473,7 +479,8 @@ def test_entry_point_path_traversal_rejected(tmp_path: Path) -> None:
     intent = _minimal_intent(
         1,
         entry_point={
-            "kind": "shell_command", "run_name": "r",
+            "kind": "shell_command",
+            "run_name": "r",
             "argv": ["python3", "main.py"],
             "signature": {},
             "frozen_configs": ["../../etc/passwd"],
@@ -492,13 +499,15 @@ def test_entry_point_wrapper_is_importable_python(tmp_path: Path) -> None:
     intent = _minimal_intent(
         1,
         entry_point={
-            "kind": "shell_command", "run_name": "demo_run",
+            "kind": "shell_command",
+            "run_name": "demo_run",
             "argv": ["echo", "{message}"],
             "signature": {"message": "str"},
             "frozen_configs": [],
         },
         task_generator={
-            "kind": "enumerated", "params": {"items": [{"message": "hi"}]},
+            "kind": "enumerated",
+            "params": {"items": [{"message": "hi"}]},
         },
     )
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -518,7 +527,8 @@ def test_entry_point_argv_with_mixed_literal_and_placeholder(tmp_path: Path) -> 
     intent = _minimal_intent(
         1,
         entry_point={
-            "kind": "shell_command", "run_name": "r",
+            "kind": "shell_command",
+            "run_name": "r",
             "argv": ["python3", "main.py", "--seed={seed}"],
             "signature": {"seed": "int"},
             "frozen_configs": [],
@@ -602,13 +612,13 @@ def test_entry_point_python_module_rejects_missing_function(tmp_path: Path) -> N
 
 
 def test_entry_point_python_module_accepts_valid(tmp_path: Path) -> None:
-    """A python_module pointer to a real importable function is accepted; no wrapper materialized."""
+    """python_module pointer to an importable function: accepted; no wrapper."""
     (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         entry_point={"kind": "python_module", "module": "json", "function": "dumps"},
     )
-    result = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     assert not (tmp_path / ".hpc" / "wrappers").exists()
     doc = json.loads((tmp_path / "interview.json").read_text())
     assert doc["_materialized"]["entry_point"] == {
@@ -618,7 +628,9 @@ def test_entry_point_python_module_accepts_valid(tmp_path: Path) -> None:
     }
 
 
-def test_entry_point_shell_command_frozen_configs_without_generator_rejected(tmp_path: Path) -> None:
+def test_entry_point_shell_command_frozen_configs_without_generator_rejected(
+    tmp_path: Path,
+) -> None:
     """shell_command + frozen_configs requires task_generator; the framework
     can't safely edit a hand-written tasks.py to thread the shas."""
     _seed_yaml(tmp_path, "configs/exp_42.yaml", "lr: 1e-3\n")
@@ -653,7 +665,8 @@ def test_entry_point_shell_command_data_axis_hint_persisted(tmp_path: Path) -> N
             "data_axis_hint": {"kind": "independent"},
         },
         task_generator={
-            "kind": "enumerated", "params": {"items": [{"seed": 0}, {"seed": 1}]},
+            "kind": "enumerated",
+            "params": {"items": [{"seed": 0}, {"seed": 1}]},
         },
     )
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -676,7 +689,8 @@ def test_entry_point_shell_command_data_axis_hint_bounded_halo(tmp_path: Path) -
             },
         },
         task_generator={
-            "kind": "enumerated", "params": {"items": [{"window": 1}, {"window": 2}]},
+            "kind": "enumerated",
+            "params": {"items": [{"window": 1}, {"window": 2}]},
         },
     )
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -700,7 +714,8 @@ def test_entry_point_shell_command_executor_cmd_in_materialized(tmp_path: Path) 
             "signature": {"seed": "int"},
         },
         task_generator={
-            "kind": "enumerated", "params": {"items": [{"seed": 0}, {"seed": 1}]},
+            "kind": "enumerated",
+            "params": {"items": [{"seed": 0}, {"seed": 1}]},
         },
     )
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -765,7 +780,8 @@ def test_entry_point_shell_command_wrapper_is_idempotent(tmp_path: Path) -> None
             "signature": {"seed": "int"},
         },
         task_generator={
-            "kind": "enumerated", "params": {"items": [{"seed": 0}, {"seed": 1}]},
+            "kind": "enumerated",
+            "params": {"items": [{"seed": 0}, {"seed": 1}]},
         },
     )
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)

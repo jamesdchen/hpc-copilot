@@ -6,8 +6,25 @@ GPU selection, and array-batch dispatch driven by a user-written
 ``clusters.yaml``; experiment setup is conversational.
 """
 
+import importlib
+import importlib.util
+import warnings
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
+from hpc_agent._kernel.registry.primitive import (
+    PrimitiveMeta,
+    SideEffect,
+    get_meta,
+    get_registry,
+    primitive,
+    register_primitives,
+)
+from hpc_agent.infra.clusters import load_clusters_config
 
 try:
     __version__ = _pkg_version("hpc-agent")
@@ -102,24 +119,6 @@ _MOVED: dict[str, str] = {
     "write_metrics": "hpc_agent.models.mapreduce.metrics_io.write_metrics",
 }
 
-import importlib
-import importlib.util
-import warnings
-from pathlib import Path
-from types import ModuleType
-from typing import Any
-
-from hpc_agent._kernel.contract.layout import JournalLayout, RepoLayout
-from hpc_agent._kernel.registry.primitive import (
-    PrimitiveMeta,
-    SideEffect,
-    get_meta,
-    get_registry,
-    primitive,
-    register_primitives,
-)
-from hpc_agent.infra.clusters import load_clusters_config
-
 
 def __getattr__(name: str) -> Any:
     """Resolve a moved-out name from its canonical home.
@@ -136,7 +135,7 @@ def __getattr__(name: str) -> Any:
     if target is None:
         raise AttributeError(f"module 'hpc_agent' has no attribute {name!r}")
     warnings.warn(
-        f"{name!r} moved out of the hpc_agent root namespace; " f"import from {target} instead.",
+        f"{name!r} moved out of the hpc_agent root namespace; import from {target} instead.",
         DeprecationWarning,
         stacklevel=2,
     )

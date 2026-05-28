@@ -124,9 +124,7 @@ def test_prose_literal_values_validate_against_spec() -> None:
         rel = md_path.relative_to(REPO_ROOT).as_posix()
         for ln, field, value in _extract_field_values(text):
             specs = _KNOWN_LITERAL_FIELDS[field]
-            if not any(
-                _validates_against(model, base, field, value) for model, base in specs
-            ):
+            if not any(_validates_against(model, base, field, value) for model, base in specs):
                 model_names = ", ".join(m.__name__ for m, _ in specs)
                 failures.append(
                     f"  {rel}:{ln}: {field}={value!r} rejected by "
@@ -137,9 +135,7 @@ def test_prose_literal_values_validate_against_spec() -> None:
         raise AssertionError(
             "prose-prescribed literal values rejected by their Pydantic "
             "spec — the next caller that copies the prose will hard-fail "
-            "at the schema boundary:\n"
-            + "\n".join(failures)
-            + "\n\nFix options:\n"
+            "at the schema boundary:\n" + "\n".join(failures) + "\n\nFix options:\n"
             "  * If the prose is right, add the value to the spec's "
             "Literal[...].\n"
             "  * If the spec is right, fix the prose to use an "
