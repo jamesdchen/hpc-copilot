@@ -65,6 +65,38 @@ jobs:
         # the test set to measure executed-line coverage.
         run: pytest -q -m 'not slow' --cov=src/hpc_agent --cov-report=term-missing
 
+  test-windows:
+    # Signal-only Windows lane (ref #163): there is otherwise no Windows
+    # coverage in CI, so Windows-specific correctness only surfaces during
+    # live testing. This runs the same default test command as the Linux
+    # ``test`` job on windows-latest. It is intentionally non-blocking
+    # (``continue-on-error``) because ~86 tests are skipped on Windows and
+    # the suite may be red here until those skips are triaged (#163);
+    # making it required would block merges before that work is done.
+    name: test (windows)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          # Include uv.lock so a transitive-dep bump invalidates the
+          # cache; pyproject.toml alone misses lockfile-only changes.
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+      - name: Install package with dev extras
+        # Use bash (available on windows-latest) so the ``'.[dev]'``
+        # quoting and command semantics match the Linux job exactly
+        # rather than relying on the default pwsh shell.
+        shell: bash
+        run: pip install -e '.[dev]'
+      - name: Pytest (default)
+        shell: bash
+        run: pytest -q
+
   pro:
     # The hpc-agent-pro plugin package — built and tested independently
     # of the public package it extends. Lives in the same repo so this
