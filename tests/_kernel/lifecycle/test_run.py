@@ -17,12 +17,16 @@ class _StubInvoker:
 
     name = "stub"
 
-    def __init__(self, output: str, exit_code: int = 0) -> None:
+    def __init__(self, output: str, exit_code: int = 0, *, remediation: str | None = None) -> None:
         self._output = output
         self._exit_code = exit_code
+        self._remediation = remediation
 
     def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult:
         return InvocationResult(exit_code=self._exit_code, output=self._output)
+
+    def missing_credential_remediation(self) -> str | None:
+        return self._remediation
 
 
 def _use(monkeypatch: pytest.MonkeyPatch, stub: _StubInvoker) -> None:
@@ -55,6 +59,16 @@ def test_run_workflow_surfaces_a_worker_crash(
     # (HpcError) — not a SpawnContractError (which means a bad request).
     _use(monkeypatch, _StubInvoker("boom — no json here", exit_code=3))
     with pytest.raises(errors.HpcError, match="did not return a valid report"):
+        run_workflow(workflow="submit", experiment_dir=".", fields={})
+
+
+def test_run_workflow_blocks_when_worker_has_no_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A worker with no usable credential (e.g. an OAuth-only parent session)
+    # fails fast with a clear message before any spawn — not an opaque crash.
+    _use(monkeypatch, _StubInvoker("unused", remediation="set ANTHROPIC_API_KEY first"))
+    with pytest.raises(SpawnContractError, match="ANTHROPIC_API_KEY"):
         run_workflow(workflow="submit", experiment_dir=".", fields={})
 
 

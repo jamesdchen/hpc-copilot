@@ -30,6 +30,27 @@ from typing import Protocol
 
 from hpc_agent import errors
 
+# A headless ``claude -p --bare`` worker authenticates ONLY via an API key, a
+# gateway bearer token, or cloud-provider credentials in its environment. It
+# deliberately does NOT read a Claude Code OAuth/subscription login
+# (``~/.claude/.credentials.json`` or ``CLAUDE_CODE_OAUTH_TOKEN``) — ``--bare``
+# strips that path along with CLAUDE.md / hooks / MCP / skill discovery. So a
+# parent session logged in via OAuth would spawn a worker with no usable
+# credential; the orchestrator gates on this before spawning.
+_WORKER_CREDENTIAL_ENV_VARS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+)
+
+_MISSING_CREDENTIAL_REMEDIATION = (
+    "worker authentication unavailable: the headless `claude -p --bare` worker "
+    "cannot use a Claude Code OAuth/subscription login. Set ANTHROPIC_API_KEY "
+    "(or cloud-provider credentials such as CLAUDE_CODE_USE_BEDROCK / "
+    "CLAUDE_CODE_USE_VERTEX) in the environment before running `hpc-agent run`."
+)
+
 
 @dataclass(frozen=True)
 class RenderedPrompt:
@@ -79,6 +100,15 @@ class WorkerInvoker(Protocol):
     name: str
 
     def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult: ...
+
+    def missing_credential_remediation(self) -> str | None:
+        """Remediation text if the worker would spawn without a usable credential.
+
+        Returned *before* spawning so the orchestrator can fail fast with an
+        actionable message instead of letting the worker die with an opaque
+        "Not logged in". ``None`` means a usable credential is present.
+        """
+        ...
 
 
 class ClaudeCliInvoker:
@@ -130,6 +160,11 @@ class ClaudeCliInvoker:
             output=proc.stdout,
             stderr=getattr(proc, "stderr", None) or "",
         )
+
+    def missing_credential_remediation(self) -> str | None:
+        if any(os.environ.get(var) for var in _WORKER_CREDENTIAL_ENV_VARS):
+            return None
+        return _MISSING_CREDENTIAL_REMEDIATION
 
 
 _INVOKERS: dict[str, Callable[..., WorkerInvoker]] = {

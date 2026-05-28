@@ -163,3 +163,4 @@ Surface to the user:
 | Walltime exceeded | Exceeded time limit | Resubmit with longer walltime |
 | `ModuleNotFoundError` | Env not set up | Check modules and `conda_env` |
 | rsync/scp failure | SSH key issue | `ssh $SSH_TARGET hostname` first; verify `ssh-add -l` |
+| `worker authentication unavailable` / worker "Not logged in" | Session is OAuth/subscription; the `--bare` worker can't use it | `export ANTHROPIC_API_KEY=...` (or cloud creds) before launching Claude Code |

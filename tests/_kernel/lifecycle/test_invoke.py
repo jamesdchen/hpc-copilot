@@ -74,3 +74,27 @@ def test_claude_cli_invoker_builds_the_right_call(
 
 def test_rendered_prompt_joined() -> None:
     assert RenderedPrompt("A", "B").joined == "A\n\nB"
+
+
+def test_missing_credential_remediation_none_when_api_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-something")
+    assert ClaudeCliInvoker().missing_credential_remediation() is None
+
+
+def test_missing_credential_remediation_message_when_no_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An OAuth-only parent session: none of the API-key / bearer / cloud-provider
+    # env vars are set, so the bare worker has no usable credential.
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    msg = ClaudeCliInvoker().missing_credential_remediation()
+    assert msg is not None
+    assert "ANTHROPIC_API_KEY" in msg

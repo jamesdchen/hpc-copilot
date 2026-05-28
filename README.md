@@ -34,6 +34,19 @@ Once installed:
 - `/submit-hpc` — answer prompts about cluster, executor, grid params. The worker escalates with structured intent prompts (entry-point onboarding, axis classification) when it can't proceed; the in-chat agent walks the user through the escalation playbook and invokes the relevant skill with the resolved spec.
 - `/monitor-hpc` to monitor, `/aggregate-hpc` to collect results.
 
+### Authentication
+
+The workflow slash commands run their multi-step work in a fresh-context
+`claude -p --bare` worker. **That worker authenticates only via
+`ANTHROPIC_API_KEY` (or cloud-provider credentials) — it cannot use a Claude
+Code OAuth/subscription login.** If your session is OAuth-authenticated, export
+an API key before launching; otherwise the worker fails fast with a clear
+`worker authentication unavailable` error rather than an opaque "Not logged in":
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
 ### For agents and automation
 
 ```bash

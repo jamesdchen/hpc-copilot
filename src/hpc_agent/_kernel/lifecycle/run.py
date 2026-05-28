@@ -42,7 +42,15 @@ def run_workflow(
     prompt = validate_and_render_parts(
         {"workflow": workflow, "experiment_dir": experiment_dir, "fields": fields}
     )
-    invocation = get_invoker().invoke(prompt, cwd=Path(experiment_dir))
+    invoker = get_invoker()
+    # Fail fast with an actionable message when the worker would spawn without a
+    # usable credential (e.g. a parent session authenticated via OAuth, which
+    # the ``--bare`` child cannot use) instead of an opaque worker-side "Not
+    # logged in" surfacing later as a malformed-report crash.
+    remediation = invoker.missing_credential_remediation()
+    if remediation is not None:
+        raise SpawnContractError(remediation)
+    invocation = invoker.invoke(prompt, cwd=Path(experiment_dir))
     try:
         report = parse_worker_report(invocation.output, workflow=workflow)
     except SpawnContractError as exc:
