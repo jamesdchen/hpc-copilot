@@ -35,9 +35,7 @@ def _read_source(path: Path) -> str | None:
         return None
 
 
-def _find_function(
-    tree: ast.Module, name: str
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+def _find_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """Return the module-level function named *name*, or ``None``."""
     for node in tree.body:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
@@ -270,11 +268,7 @@ def _append_only_receivers(loop: ast.For | ast.While) -> set[str]:
             continue
         is_append_recv = False
         parent = parents.get(id(node))
-        if (
-            isinstance(parent, ast.Attribute)
-            and parent.attr == "append"
-            and parent.value is node
-        ):
+        if isinstance(parent, ast.Attribute) and parent.attr == "append" and parent.value is node:
             grandparent = parents.get(id(parent))
             if isinstance(grandparent, ast.Call) and grandparent.func is parent:
                 is_append_recv = True
