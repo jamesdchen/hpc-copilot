@@ -249,8 +249,22 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     if tasks_py.is_file():
         from hpc_agent.state.run_sha import compute_tasks_py_sha
 
-        with contextlib.suppress(Exception):
+        try:
             tasks_py_sha = compute_tasks_py_sha(tasks_py)
+        except OSError as exc:
+            # tasks_py_sha is the drift guard that flags in-place edits to
+            # tasks.py; an empty sha silently disables it for this run. A read
+            # error is the only expected failure — surface it (#165) rather than
+            # swallow; anything else is a bug in compute_tasks_py_sha and should
+            # propagate, not be masked by a broad suppress.
+            import warnings
+
+            warnings.warn(
+                f"could not compute tasks.py drift sha for run {spec.run_id!r} "
+                f"({exc}); its sidecar ships without it, disabling drift "
+                "detection for this run.",
+                stacklevel=2,
+            )
 
     resources = spec.resources.model_dump(exclude_none=True) if spec.resources else None
 

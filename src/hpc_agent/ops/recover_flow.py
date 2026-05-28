@@ -381,7 +381,10 @@ def resubmit_flow(
         # stale marker only makes a later replay resume to a no-op.
         from hpc_agent.state.journal import update_run_status as _update_run_status
 
-        with contextlib.suppress(Exception):
+        # Best-effort marker clear (a failed write only makes a later replay
+        # resume to a no-op), but narrow the catch so a programming error
+        # isn't masked along with the expected journal-write failures (#165).
+        with contextlib.suppress(OSError, errors.JournalCorrupt):
             _update_run_status(experiment_dir, run_id, pending_resubmit={})
 
     return ResubmitFlowResult(
