@@ -142,7 +142,7 @@ def test_cmd_run_inline_flag_renders_without_spawning(
     assert env["ok"] is True
     assert env["data"]["mode"] == "inline"
     assert env["data"]["workflow"] == "submit"
-    assert env["data"]["experiment_dir"] == "/exp"
+    assert env["data"]["experiment_dir"] == str(Path("/exp"))
     # The rendered prompt is the canonical procedure the worker would have run.
     assert "submit" in env["data"]["prompt"]
     assert env["data"]["prompt"].strip()
