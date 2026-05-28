@@ -365,12 +365,25 @@ def deploy_runtime(
     remote_path_q = shlex.quote(remote_path)
     pkg_dir = Path(__file__).parent.parent
 
+    # The deployed ``hpc_agent/`` is a PEP 420 namespace package — NO
+    # ``__init__.py`` anywhere in the tree. ``hpc_preamble.sh`` prepends
+    # ``$REPO_DIR`` to PYTHONPATH; if this directory had an ``__init__.py``
+    # it would bind ``hpc_agent`` to the two-module stub and *shadow* a
+    # real ``pip install``ed hpc_agent in the cluster env, breaking every
+    # import outside the stub (e.g. ``hpc_agent.experiment_kit``). As a
+    # namespace portion it instead merges with / yields to the installed
+    # regular package, so the install wins when present and the stub still
+    # resolves ``metrics_io`` + ``executor_cli`` when it isn't.
+    #
+    # ``rm -f`` clears stale ``__init__.py`` files left by pre-fix deploys
+    # (rsync's ``--delete`` excludes ``hpc_agent/`` so they would persist).
     ssh_run(
         f"mkdir -p {remote_path_q}/hpc_agent/models/mapreduce"
         f" {remote_path_q}/.hpc/templates"
         f" {remote_path_q}/.hpc/templates/common"
-        f" && touch {remote_path_q}/hpc_agent/__init__.py"
-        f" && touch {remote_path_q}/hpc_agent/models/mapreduce/__init__.py",
+        f" && rm -f {remote_path_q}/hpc_agent/__init__.py"
+        f" {remote_path_q}/hpc_agent/models/__init__.py"
+        f" {remote_path_q}/hpc_agent/models/mapreduce/__init__.py",
         ssh_target=ssh_target,
     )
 

@@ -534,6 +534,33 @@ def test_prune_orphan_sidecars_idempotent(_journal_home: Path, tmp_path: Path) -
     assert second == []
 
 
+def test_prune_orphan_sidecars_skips_excluded_runs(_journal_home: Path, tmp_path: Path) -> None:
+    """The run currently being submitted (and its canary) must survive
+    the prune. ``submit_flow_batch`` writes the jobless Step-6d sidecar
+    before calling prune inside the lock, so without ``exclude`` it looks
+    exactly like a prior batch's orphan and gets deleted out from under
+    the in-flight submit (regression for the 'sidecar not found' crash)."""
+    from hpc_agent.state.runs import prune_orphan_sidecars, run_sidecar_path
+
+    current = _common_required_kwargs(run_id="20260101-000000-current01")
+    canary = _common_required_kwargs(run_id="20260101-000000-current01-canary")
+    stale = _common_required_kwargs(run_id="20260101-000001-stale0002")
+    write_run_sidecar(tmp_path, **current)
+    write_run_sidecar(tmp_path, **canary)
+    write_run_sidecar(tmp_path, **stale)
+
+    deleted = prune_orphan_sidecars(
+        tmp_path,
+        min_age_seconds=0,
+        exclude={current["run_id"], canary["run_id"]},
+    )
+
+    assert deleted == [stale["run_id"]]
+    assert run_sidecar_path(tmp_path, current["run_id"]).is_file()
+    assert run_sidecar_path(tmp_path, canary["run_id"]).is_file()
+    assert not run_sidecar_path(tmp_path, stale["run_id"]).is_file()
+
+
 def test_find_run_by_cmd_sha_default_preserves_journal_wipe_recovery(
     _journal_home: Path, tmp_path: Path
 ) -> None:

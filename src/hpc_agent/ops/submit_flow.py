@@ -633,9 +633,18 @@ def _submit_flow_batch_locked(
     # PRIOR batches (which had to complete or fail before releasing the
     # lock). The default min_age_seconds guard is for ad-hoc invocations
     # that don't hold the lock and could race a concurrent submit.
+    #
+    # ``exclude`` protects the run_ids in THIS batch: the slash flow
+    # writes each run's sidecar jobless at Step 6d *before* calling
+    # submit_flow_batch, so those sidecars are present inside the lock
+    # and are indistinguishable (jobless + journal-less) from a prior
+    # failed batch's orphan. Without the exclude the prune would delete
+    # the very sidecars we're about to finalize post-qsub. The canary
+    # sibling (``{run_id}-canary``) is written the same way.
     from hpc_agent.state.runs import prune_orphan_sidecars
 
-    prune_orphan_sidecars(experiment_dir, min_age_seconds=0)
+    protected = {s.run_id for s in specs} | {f"{s.run_id}-canary" for s in specs}
+    prune_orphan_sidecars(experiment_dir, min_age_seconds=0, exclude=protected)
 
     # Single-target invariant: rsync + deploy can only target one place.
     targets = {(s.ssh_target, s.remote_path) for s in specs}
