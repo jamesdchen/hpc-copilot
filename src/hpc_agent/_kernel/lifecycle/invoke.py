@@ -16,13 +16,20 @@ mechanism is each invoker's private choice, so nothing is locked to
 Claude Code.**
 
 Selection precedence: an explicit name > the ``HPC_AGENT_INVOKER``
-environment variable > :data:`DEFAULT_INVOKER`.
+environment variable > auto-selection from the ambient credentials
+(:func:`_auto_select_invoker`): API-key / cloud-provider creds → the
+proven ``--bare`` ``claude-cli`` path; else a Claude Code OAuth
+credentials file on a supported OS → ``claude-cli-oauth``; else
+``claude-cli`` so its pre-spawn credential guard fires.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +64,61 @@ _MISSING_CREDENTIAL_REMEDIATION = (
 # cheap model is therefore both sufficient and far cheaper per spawn than the
 # caller's interactive model.
 _WORKER_MODEL = "haiku"
+
+# OAuth worker auth is unsupported on macOS: the Claude Code OAuth token lives
+# in the Keychain there, not a linkable credentials file, so there is nothing to
+# relocate into an ephemeral CLAUDE_CONFIG_DIR. Those users keep the API-key
+# requirement.
+_OAUTH_MACOS_REMEDIATION = (
+    "worker authentication unavailable: OAuth worker auth is unsupported on "
+    "macOS, where the Claude Code OAuth token lives in the Keychain rather than "
+    "a linkable credentials file. Set ANTHROPIC_API_KEY (or cloud-provider "
+    "credentials) before running `hpc-agent run` on macOS."
+)
+
+
+def _oauth_credentials_path() -> Path | None:
+    """Path to the live Claude Code OAuth credentials file, or ``None`` on macOS.
+
+    ``CLAUDE_CONFIG_DIR`` relocates the user-level config and the OAuth creds
+    with it; otherwise the file is ``~/.claude/.credentials.json``
+    (``%USERPROFILE%\\.claude\\.credentials.json`` on Windows, which
+    ``Path.home()`` resolves). On macOS the token is in the Keychain, not a
+    file — there is nothing to link, so this returns ``None`` and OAuth worker
+    auth is unsupported there.
+    """
+    if sys.platform == "darwin":
+        return None
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    base = Path(config_dir) if config_dir else Path.home() / ".claude"
+    return base / ".credentials.json"
+
+
+def _oauth_credentials_available() -> bool:
+    """True when a linkable OAuth credentials file exists on a supported OS."""
+    path = _oauth_credentials_path()
+    return path is not None and path.is_file()
+
+
+def _link_credentials(live: Path, link: Path) -> None:
+    """Point *link* at the live OAuth creds *live* inside the ephemeral dir.
+
+    Symlink rather than copy: a mid-session OAuth token refresh writes back to
+    the live file, and the worker must see that refreshed token (and a refresh
+    the worker writes through the link must reach the live file). Windows
+    symlinks need a privilege the process may lack, so fall back to a hardlink
+    (same volume, no privilege) and finally to a copy — which authenticates the
+    worker but loses the refresh write-through.
+    """
+    try:
+        os.symlink(live, link)
+        return
+    except (OSError, NotImplementedError):
+        pass
+    try:
+        os.link(live, link)
+    except OSError:
+        shutil.copy2(live, link)
 
 
 @dataclass(frozen=True)
@@ -180,8 +242,100 @@ class ClaudeCliInvoker:
         return _MISSING_CREDENTIAL_REMEDIATION
 
 
+class ClaudeCliOAuthInvoker:
+    """Runs the worker as a ``claude -p`` child authenticated by an OAuth login.
+
+    The ``--bare`` worker (:class:`ClaudeCliInvoker`) cannot read a Claude Code
+    OAuth/subscription login, so subscription users without an API key have no
+    way to run workers. This invoker drops ``--bare`` and instead points
+    ``CLAUDE_CONFIG_DIR`` at an ephemeral directory whose only content is the
+    live OAuth credentials file (linked in): that yields OAuth auth plus a
+    near-bare *user-level* context — no user CLAUDE.md / hooks / MCP / skill
+    discovery, because the ephemeral config dir holds none of those.
+
+    A non-``--bare`` ``claude`` still loads project ``.claude/`` from its
+    working directory, so the child runs in a clean temp directory rather than
+    the experiment dir; the worker takes ``experiment_dir`` from the prompt's
+    invocation context (see :func:`render_spawn_parts`), not the cwd. That
+    keeps a user repo's ``.claude/`` out of the worker's context and off its
+    stdout report.
+
+    Unsupported on macOS (the OAuth token is in the Keychain, not a file);
+    :meth:`missing_credential_remediation` returns a message there so the
+    pre-spawn guard in ``run_workflow`` fails fast.
+    """
+
+    name = "claude-cli-oauth"
+
+    def __init__(self, *, executable: str = "claude") -> None:
+        self._executable = executable
+
+    def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult:
+        # ``cwd`` (the experiment dir) is deliberately NOT the child's working
+        # directory: a non-``--bare`` ``claude`` loads project ``.claude/`` from
+        # its cwd, which would pollute the worker's context and corrupt the
+        # stdout report. The worker reads experiment_dir from the prompt itself.
+        creds = _oauth_credentials_path()
+        if creds is None or not creds.is_file():
+            # The pre-spawn guard normally catches this; mirror the remediation
+            # as a failed result so a direct caller still gets a clear message
+            # rather than an opaque subprocess "Not logged in".
+            return InvocationResult(
+                exit_code=1, output="", stderr=self.missing_credential_remediation() or ""
+            )
+        with (
+            tempfile.TemporaryDirectory(prefix="hpc-agent-oauth-cfg-") as config_dir,
+            tempfile.TemporaryDirectory(prefix="hpc-agent-oauth-cwd-") as clean_cwd,
+        ):
+            _link_credentials(creds, Path(config_dir) / ".credentials.json")
+            proc = subprocess.run(
+                [
+                    self._executable,
+                    "-p",
+                    # No ``--bare``: it strips the OAuth-credential path. The
+                    # relocated CLAUDE_CONFIG_DIR (below) holding only the linked
+                    # creds gives OAuth auth + a near-bare user-level context.
+                    "--model",
+                    _WORKER_MODEL,
+                    # Force the sandbox off for the same reason as the --bare
+                    # path: the worker SSH/rsyncs to a cluster (see
+                    # ClaudeCliInvoker.invoke).
+                    "--settings",
+                    '{"sandbox": {"enabled": false}}',
+                    "--append-system-prompt",
+                    prompt.cacheable_prefix,
+                    prompt.variable_suffix,
+                ],
+                cwd=clean_cwd,
+                env={**os.environ, "CLAUDE_CONFIG_DIR": config_dir},
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+        return InvocationResult(
+            exit_code=proc.returncode,
+            output=proc.stdout,
+            stderr=getattr(proc, "stderr", None) or "",
+        )
+
+    def missing_credential_remediation(self) -> str | None:
+        creds = _oauth_credentials_path()
+        if creds is None:  # unsupported OS (macOS Keychain)
+            return _OAUTH_MACOS_REMEDIATION
+        if creds.is_file():
+            return None
+        return (
+            "worker authentication unavailable: no Claude Code OAuth credentials "
+            f"found at {creds}. Log in with `claude` (or `claude setup-token`), "
+            "or set ANTHROPIC_API_KEY, before running `hpc-agent run`."
+        )
+
+
 _INVOKERS: dict[str, Callable[..., WorkerInvoker]] = {
     "claude-cli": ClaudeCliInvoker,
+    "claude-cli-oauth": ClaudeCliOAuthInvoker,
 }
 DEFAULT_INVOKER = "claude-cli"
 
@@ -196,9 +350,35 @@ def register_invoker(name: str, factory: Callable[..., WorkerInvoker]) -> None:
     _INVOKERS[name] = factory
 
 
+def _auto_select_invoker() -> str:
+    """Pick a worker invoker from the ambient credential state.
+
+    ``ANTHROPIC_API_KEY`` / cloud-provider creds present → the proven
+    ``--bare`` ``claude-cli`` path. Otherwise a Claude Code OAuth credentials
+    file on a supported OS → ``claude-cli-oauth``. Otherwise fall back to
+    ``claude-cli`` so its pre-spawn credential guard fires with an actionable
+    message rather than silently picking a path that cannot authenticate.
+    """
+    if any(os.environ.get(var) for var in _WORKER_CREDENTIAL_ENV_VARS):
+        return "claude-cli"
+    if _oauth_credentials_available():
+        return "claude-cli-oauth"
+    return DEFAULT_INVOKER
+
+
 def get_invoker(name: str | None = None) -> WorkerInvoker:
     """Resolve a :class:`WorkerInvoker` (see module docstring for precedence)."""
-    chosen = name or os.environ.get("HPC_AGENT_INVOKER") or DEFAULT_INVOKER
+    chosen = name or os.environ.get("HPC_AGENT_INVOKER") or _auto_select_invoker()
+    if chosen == "inline":
+        # "inline" is a valid HPC_AGENT_INVOKER value but not a spawning
+        # transport: it means the caller runs the procedure in its own context.
+        # `hpc-agent run` intercepts it before reaching here (see cli/spawn.py);
+        # any code path that needs to actually spawn a worker cannot honor it.
+        raise errors.SpecInvalid(
+            "HPC_AGENT_INVOKER='inline' selects in-context execution, which only "
+            "`hpc-agent run` supports; this path requires a spawning transport "
+            f"({sorted(_INVOKERS)})."
+        )
     factory = _INVOKERS.get(chosen)
     if factory is None:
         raise errors.SpecInvalid(

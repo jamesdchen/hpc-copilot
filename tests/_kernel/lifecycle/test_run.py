@@ -96,6 +96,7 @@ def test_cmd_run_success_envelope(
     from hpc_agent._wire.spawn_contract import WorkerReport
     from hpc_agent.cli.spawn import cmd_run
 
+    monkeypatch.delenv("HPC_AGENT_INVOKER", raising=False)
     report = WorkerReport(result={"run_id": "r1"}, anomalies="")
     # cmd_run does `from hpc_agent._kernel.lifecycle.run import run_workflow`
     # at call time, so patch the symbol there (its canonical home).
@@ -107,5 +108,72 @@ def test_cmd_run_success_envelope(
     assert rc == 0
     env = json.loads(capsys.readouterr().out.strip())
     assert env["ok"] is True
+    assert env["data"]["mode"] == "spawn"
     assert env["data"]["report"]["result"] == {"run_id": "r1"}
     assert env["data"]["worker_exit_code"] == 0
+
+
+def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make run_workflow explode so an inline test proves nothing spawned."""
+
+    def _boom(**kwargs: object) -> object:
+        raise AssertionError("inline mode must not call run_workflow / spawn a worker")
+
+    monkeypatch.setattr("hpc_agent._kernel.lifecycle.run.run_workflow", _boom)
+
+
+def test_cmd_run_inline_flag_renders_without_spawning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+    import json
+
+    from hpc_agent.cli.spawn import cmd_run
+
+    monkeypatch.delenv("HPC_AGENT_INVOKER", raising=False)
+    _no_spawn(monkeypatch)
+    rc = cmd_run(
+        argparse.Namespace(
+            workflow="submit", experiment_dir=Path("/exp"), fields_json="{}", inline=True
+        )
+    )
+    assert rc == 0
+    env = json.loads(capsys.readouterr().out.strip())
+    assert env["ok"] is True
+    assert env["data"]["mode"] == "inline"
+    assert env["data"]["workflow"] == "submit"
+    assert env["data"]["experiment_dir"] == "/exp"
+    # The rendered prompt is the canonical procedure the worker would have run.
+    assert "submit" in env["data"]["prompt"]
+    assert env["data"]["prompt"].strip()
+    assert "instructions" in env["data"]
+
+
+def test_cmd_run_inline_via_env(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+    import json
+
+    from hpc_agent.cli.spawn import cmd_run
+
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "inline")
+    _no_spawn(monkeypatch)
+    # No `inline` attr on the namespace — the env knob alone flips the mode.
+    rc = cmd_run(argparse.Namespace(workflow="status", experiment_dir=Path("."), fields_json="{}"))
+    assert rc == 0
+    env = json.loads(capsys.readouterr().out.strip())
+    assert env["data"]["mode"] == "inline"
+
+
+def test_cmd_run_inline_rejects_bad_fields_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Field validation runs before the inline branch, so bad JSON still fails fast.
+    import argparse
+
+    from hpc_agent.cli.spawn import cmd_run
+
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "inline")
+    rc = cmd_run(
+        argparse.Namespace(workflow="submit", experiment_dir=Path("."), fields_json="not-json")
+    )
+    assert rc == 1
