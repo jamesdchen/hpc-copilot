@@ -322,3 +322,42 @@ class TestSubmitFlowBatch:
         assert results[0].job_ids == ["already"]
         assert results[1].deduped is False and results[1].job_ids == ["new_r1"]
         assert results[2].deduped is False and results[2].job_ids == ["new_r2"]
+
+
+class TestKeepGeneratedShippable:
+    """submit-flow carves generated-but-needed paths back out of the rsync
+    excludes — the carve-out the submit worker prompt used to do by hand."""
+
+    def test_drops_generated_shippable_paths(self) -> None:
+        from hpc_agent.ops.submit_flow import _keep_generated_shippable
+
+        excludes = [
+            "__pycache__/",
+            "src/",
+            ".hpc/tasks.py",
+            ".hpc/cli.py",
+            ".hpc/.build-cache.json",
+            "results/",
+        ]
+        kept = _keep_generated_shippable(excludes)
+        # The generated package + dispatch files must ship — no longer excluded.
+        assert kept is not None
+        assert "src/" not in kept
+        assert ".hpc/tasks.py" not in kept
+        assert ".hpc/cli.py" not in kept
+        # ...but the local-only build cache and everything else stay excluded.
+        assert ".hpc/.build-cache.json" in kept
+        assert "__pycache__/" in kept
+        assert "results/" in kept
+
+    def test_normalises_surrounding_slashes(self) -> None:
+        from hpc_agent.ops.submit_flow import _keep_generated_shippable
+
+        # A leading or trailing slash on the .gitignore pattern still matches.
+        assert _keep_generated_shippable(["/src/", "src"]) == []
+
+    def test_none_and_empty_pass_through(self) -> None:
+        from hpc_agent.ops.submit_flow import _keep_generated_shippable
+
+        assert _keep_generated_shippable(None) is None
+        assert _keep_generated_shippable([]) == []

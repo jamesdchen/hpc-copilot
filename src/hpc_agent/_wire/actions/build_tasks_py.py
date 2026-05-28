@@ -67,9 +67,10 @@ class _DataAxisSpec(BaseModel):
     halo_expr: str | None = Field(
         default=None,
         description=(
-            "Required for kind='bounded_halo': a Python ARITHMETIC expression over the "
-            "`params` dict giving the warm-up row count, e.g. \"params['train_window'] * 48\". "
-            "Validated to arithmetic-only (no calls/attributes) before it is rendered."
+            "Required for kind='bounded_halo': a bare-name arithmetic expression over the "
+            'run\'s parameters giving the warm-up row count, e.g. "train_window * 48" — the '
+            "same form stored in axes.yaml. Validated to arithmetic-only (+ - * //, min/max; "
+            "no calls/attributes/subscripts) before it is rendered."
         ),
     )
     monoid: Literal["sum", "moments"] | None = Field(

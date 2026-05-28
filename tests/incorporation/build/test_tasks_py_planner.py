@@ -57,7 +57,7 @@ def test_planner_bounded_halo_renders_halo_fn(tmp_path: Path) -> None:
                 "kind": "bounded_halo",
                 "chunks": 4,
                 "series_length": 100,
-                "halo_expr": "params['w'] * 2",
+                "halo_expr": "w * 2",
             },
         ),
     )
@@ -150,7 +150,7 @@ def test_planner_tasks_py_carries_no_template_import(tmp_path: Path) -> None:
                 "kind": "bounded_halo",
                 "chunks": 3,
                 "series_length": 30,
-                "halo_expr": "params['w']",
+                "halo_expr": "w",
             },
         ),
     )
