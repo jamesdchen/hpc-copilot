@@ -48,6 +48,8 @@ EXPECTED_ALL: frozenset[str] = frozenset(
         "get_registry",
         "primitive",
         "register_primitives",
+        # Researcher-facing experiment API
+        "register_run",
     }
 )
 

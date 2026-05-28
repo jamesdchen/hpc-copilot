@@ -81,8 +81,9 @@ def test_interview_dispatch_resolves_campaign_dir(
     """
     campaign_dir = tmp_path / "camp"
     campaign_dir.mkdir()
-    # Minimal tasks.py with three tasks so total() == 3 matches intent.
-    tasks_py = campaign_dir / "tasks.py"
+    # Minimal tasks.py at the canonical .hpc/tasks.py so total() == 3.
+    tasks_py = campaign_dir / ".hpc" / "tasks.py"
+    tasks_py.parent.mkdir(parents=True, exist_ok=True)
     tasks_py.write_text(
         "_T = [{'i': 0}, {'i': 1}, {'i': 2}]\n"
         "def total() -> int: return len(_T)\n"

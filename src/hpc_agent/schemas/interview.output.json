@@ -14,7 +14,7 @@
   "additionalProperties": false,
   "properties": {
     "campaign_dir": {
-      "description": "Absolute path to the campaign workdir (where tasks.py and the persisted interview.json live).",
+      "description": "Absolute path to the campaign workdir. interview.json is written here at the root; generator-mode tasks.py is materialized into campaign_dir/.hpc/tasks.py (the canonical framework location deploy + the dispatcher read).",
       "title": "Campaign Dir",
       "type": "string"
     },
