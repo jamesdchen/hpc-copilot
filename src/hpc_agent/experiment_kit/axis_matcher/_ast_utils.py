@@ -288,7 +288,4 @@ def _parent_map(root: ast.AST) -> dict[int, ast.AST]:
 
 def _references(node: ast.expr, name: str) -> bool:
     """True if *node* references the Name *name* anywhere within."""
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Name) and sub.id == name:
-            return True
-    return False
+    return any(isinstance(sub, ast.Name) and sub.id == name for sub in ast.walk(node))

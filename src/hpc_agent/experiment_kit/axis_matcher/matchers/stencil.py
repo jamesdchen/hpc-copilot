@@ -43,10 +43,9 @@ def _match_stencil(
         # Reads: arr[i - K] in Load context.
         if isinstance(node.ctx, ast.Load):
             offset = _extract_lookback_offset(node.slice, loop_var)
-            if offset is not None and offset >= 1:
-                if max_offset is None or offset > max_offset:
-                    max_offset = offset
-                    matched_name = arr
+            if offset is not None and offset >= 1 and (max_offset is None or offset > max_offset):
+                max_offset = offset
+                matched_name = arr
 
     if max_offset is None:
         return None
@@ -78,8 +77,13 @@ def _match_stencil(
 def _extract_lookback_offset(slc: ast.AST, loop_var: str) -> int | None:
     """If *slc* is ``loop_var - K`` for literal K, return K; else None."""
     # Direct subscript like x[i - K] (slc is the expression, not a Slice).
-    if isinstance(slc, ast.BinOp) and isinstance(slc.op, ast.Sub):
-        if isinstance(slc.left, ast.Name) and slc.left.id == loop_var:
-            if isinstance(slc.right, ast.Constant) and isinstance(slc.right.value, int):
-                return slc.right.value
+    if (
+        isinstance(slc, ast.BinOp)
+        and isinstance(slc.op, ast.Sub)
+        and isinstance(slc.left, ast.Name)
+        and slc.left.id == loop_var
+        and isinstance(slc.right, ast.Constant)
+        and isinstance(slc.right.value, int)
+    ):
+        return slc.right.value
     return None
