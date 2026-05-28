@@ -102,6 +102,18 @@ class ClaudeCliInvoker:
                 self._executable,
                 "-p",
                 "--bare",
+                # Force the sandbox OFF for the worker regardless of the
+                # caller's global setting. The worker's entire job is to
+                # SSH / rsync to a cluster — outbound network the bubblewrap
+                # sandbox blocks on Linux/macOS, and which native Windows
+                # can't sandbox at all (it warns "Commands will run WITHOUT
+                # sandboxing" and degrades). A fresh-context worker does not
+                # inherit the interactive session's safety posture; passing
+                # this inline (argv element, not shell) avoids the warning
+                # corrupting the report contract and keeps behaviour
+                # deterministic across platforms.
+                "--settings",
+                '{"sandbox": {"enabled": false}}',
                 "--append-system-prompt",
                 prompt.cacheable_prefix,
                 prompt.variable_suffix,

@@ -57,10 +57,14 @@ def test_claude_cli_invoker_builds_the_right_call(
     assert result.output == "worker output"
     # The cacheable prefix is conveyed via --append-system-prompt (Claude
     # Code caches the system prompt); the variable suffix is the user prompt.
+    # The worker forces the sandbox off (it SSH/rsyncs to a cluster — network
+    # the sandbox blocks, and native Windows can't sandbox at all).
     assert seen["argv"] == [
         "claude",
         "-p",
         "--bare",
+        "--settings",
+        '{"sandbox": {"enabled": false}}',
         "--append-system-prompt",
         "PREFIX",
         "SUFFIX",
