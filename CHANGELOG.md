@@ -7,6 +7,24 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+## 0.7.0 — 2026-05-27
+
+### Breaking — Re-exports removed, back-compat shim deleted
+
+Three import-path changes that affect any code reaching into hpc-agent internals from the old paths.
+
+- **`infra/remote.py` re-exports removed.** PR #131 split the 1000+-line module into `infra/ssh_validation.py`, `infra/ssh_options.py`, and `infra/transport.py`, leaving re-exports back on `infra/remote.py` for backwards compatibility. PR #133 migrated every internal caller (host + `hpc-agent-pro` + tests) to the new paths and then deleted the re-exports. External callers using `from hpc_agent.infra.remote import rsync_push` (and similar for `rsync_pull`, `deploy_runtime`, `run_combiner`, `run_combiner_checked`, `validate_ssh_target`, `parse_remote_json`, `DEFAULT_RSYNC_EXCLUDES`) must update to `infra.transport` / `infra.ssh_validation`. `ssh_run` stays on `infra.remote`.
+- **`state/runs.py` re-exports removed.** Same pattern: PR #131 extracted `state/run_sha.py` (`compute_cmd_sha`, `compute_tasks_py_sha`) and `state/wave_map.py` (`derive_wave_map`). PR #133 deleted the re-exports. External callers using `from hpc_agent.state.runs import compute_cmd_sha` must update to `state.run_sha`.
+- **`hpc_agent.incorporation.template` back-compat shim deleted.** Was a re-export to `hpc_agent.experiment_kit` after the post-reorg cleanup; sat in place 2+ releases, firing a `DeprecationWarning` at every import (~13 per pytest run from pkgutil discovery). Removed in PR #132. External callers using `from hpc_agent.incorporation.template import <name>` must update to `from hpc_agent.experiment_kit import <name>`.
+
+### Changed — `hpc-agent-pro` module naming aligned with host
+
+The plugin's `_schema_models/` package was renamed to `_wire/` to match the host's post-Pydantic-migration name (PR #132). Internal change to the (unpublished) pro package only; no external impact. Includes the corresponding pyproject lint-ignore + pre-commit hook updates.
+
+### Improved — Windows pytest no longer drowns in pre-existing failures
+
+40 pre-existing Windows-platform test failures (bash preamble, fcntl concurrent writers, `os.setpgrp` / `termios` / signal, Unix symlinks, SSH-gate tests whose env-var assumption no longer holds after 0.6.1's `infra.ssh_agent` named-pipe support) are now marked `@pytest.mark.skipif(sys.platform == "win32", ...)`. Net delta on Windows: 37 failed + 3 errors → 0 failed + 0 errors, 40 new skips. Linux CI behaviour unchanged — the tests still run there.
+
 ## 0.6.1 — 2026-05-27
 
 ### Fixed — Windows compatibility
