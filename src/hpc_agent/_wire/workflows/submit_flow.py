@@ -10,7 +10,7 @@ follow-up to this canary.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hpc_agent._wire._shared import (
     BackendName,
@@ -147,6 +147,17 @@ class SubmitFlowSpec(BaseModel):
             "is good."
         ),
     )
+    canary_only: bool = Field(
+        default=False,
+        description=(
+            "Two-phase canary gate (#160): submit ONLY the canary, do NOT "
+            "launch the main array, and return main_launched=false. The caller "
+            "then verifies the canary (hpc-agent verify-canary) and re-invokes "
+            "submit-flow with canary=false to launch the main array only on "
+            "success — so a broken dispatch can't sail past the canary into the "
+            "full run. Requires canary=true."
+        ),
+    )
     campaign_id: CampaignId | None = Field(default=None)
     runtime: Runtime | None = Field(default=None)
     resources: SubmitResources | None = Field(
@@ -194,6 +205,14 @@ class SubmitFlowSpec(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _canary_only_requires_canary(self) -> SubmitFlowSpec:
+        if self.canary_only and not self.canary:
+            raise ValueError(
+                "canary_only=true requires canary=true (nothing to gate on otherwise)"
+            )
+        return self
+
 
 class SubmitFlowResult(BaseModel):
     """Shape of the ``data`` field on a successful ``submit-flow`` envelope."""
@@ -206,7 +225,14 @@ class SubmitFlowResult(BaseModel):
     # Output uses the loose run_id form (any string) so legacy
     # sidecars validate.
     run_id: RunIdLoose
-    job_ids: list[str] = Field(min_length=1)
+    job_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Scheduler IDs for the MAIN array. Empty when main_launched=false "
+            "(the canary-only gating phase): verify the canary, then re-invoke "
+            "submit-flow with canary=false to launch the main array."
+        ),
+    )
     total_tasks: int = Field(ge=1)
     deduped: bool = Field(
         description=(
@@ -218,9 +244,10 @@ class SubmitFlowResult(BaseModel):
     )
     canary_done: bool = Field(
         description=(
-            "True when a 1-task canary was submitted and verified "
-            "before the main array. False when canary was skipped "
-            "via spec.canary=false or when this is a deduped replay."
+            "True when a 1-task canary was *submitted* (not yet verified) — "
+            "verification is the caller's verify-canary step. False when the "
+            "canary was skipped via spec.canary=false or on a deduped replay. "
+            "Gate the main launch on verify-canary + main_launched, not on this."
         ),
     )
     canary_run_id: str | None = Field(
@@ -232,4 +259,12 @@ class SubmitFlowResult(BaseModel):
     canary_job_ids: list[str] | None = Field(
         default=None,
         description="Scheduler IDs for the canary. Null when canary skipped.",
+    )
+    main_launched: bool = Field(
+        default=True,
+        description=(
+            "True when the main array was submitted this call. False in the "
+            "canary-only gating phase (#160): only the canary went out; the "
+            "caller must verify it and re-invoke to launch the main array."
+        ),
     )

@@ -189,6 +189,12 @@
           "title": "Canary",
           "type": "boolean"
         },
+        "canary_only": {
+          "default": false,
+          "description": "Two-phase canary gate (#160): submit ONLY the canary, do NOT launch the main array, and return main_launched=false. The caller then verifies the canary (hpc-agent verify-canary) and re-invokes submit-flow with canary=false to launch the main array only on success — so a broken dispatch can't sail past the canary into the full run. Requires canary=true.",
+          "title": "Canary Only",
+          "type": "boolean"
+        },
         "campaign_id": {
           "anyOf": [
             {

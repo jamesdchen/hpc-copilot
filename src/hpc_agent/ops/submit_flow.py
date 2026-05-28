@@ -87,6 +87,7 @@ class SubmitFlowResult:
     canary_done: bool
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
+    main_launched: bool = True
 
     def to_envelope_data(self) -> dict[str, Any]:
         """Render to the shape pinned by ``schemas/submit_flow.output.json``."""
@@ -98,6 +99,7 @@ class SubmitFlowResult:
             "canary_done": self.canary_done,
             "canary_run_id": self.canary_run_id,
             "canary_job_ids": list(self.canary_job_ids) if self.canary_job_ids else None,
+            "main_launched": self.main_launched,
         }
 
 
@@ -268,6 +270,51 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         campaign_id=spec.campaign_id or None,
         runtime=spec.runtime,
         resources=resources or None,
+    )
+
+
+def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id: str) -> None:
+    """Ensure the canary's per-run sidecar exists by mirroring the main run's.
+
+    The dispatcher hard-requires ``.hpc/runs/<run_id>.json``; the canary uses
+    run_id ``<main>-canary``, which Step 6d never writes and
+    :func:`_ensure_run_sidecar` only covers for the main spec — so the canary
+    errored ``sidecar not found`` and the gate was a no-op (#160 / #162). Copy
+    the main sidecar's per-task executor + result_dir_template to the canary
+    path (``task_count=1``) so the canary dispatches the SAME command. No-op
+    when the canary sidecar already exists or the main one is unreadable.
+    """
+    from hpc_agent.infra.time import utcnow_iso
+    from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path, write_run_sidecar
+
+    target = run_sidecar_path(experiment_dir, canary_run_id)
+    if target.is_file() and target.stat().st_size > 0:
+        return
+    try:
+        main = read_run_sidecar(experiment_dir, main_run_id)
+    except Exception:  # noqa: BLE001 — best-effort mirror; a missing main is handled below
+        return
+    executor = main.get("executor")
+    result_dir_template = main.get("result_dir_template")
+    if not executor or not result_dir_template:
+        return  # main sidecar lacks the dispatch essentials; nothing to mirror
+    write_run_sidecar(
+        experiment_dir,
+        run_id=canary_run_id,
+        cmd_sha=str(main.get("cmd_sha", "")),
+        hpc_agent_version=str(main.get("hpc_agent_version", "")),
+        submitted_at=utcnow_iso(),
+        executor=str(executor),
+        result_dir_template=str(result_dir_template),
+        task_count=1,
+        tasks_py_sha=str(main.get("tasks_py_sha", "")),
+        wave_map={"0": [0]},
+        cluster=main.get("cluster"),
+        profile=main.get("profile"),
+        remote_path=main.get("remote_path"),
+        campaign_id=main.get("campaign_id") or None,
+        runtime=main.get("runtime"),
+        resources=main.get("resources") or None,
     )
 
 
@@ -512,6 +559,10 @@ def _submit_one_spec(
             canary_job_ids = list(existing_canary.job_ids)
             canary_done = True
         else:
+            # Mirror the main sidecar to <run_id>-canary.json so the canary
+            # dispatches the SAME per-task executor (#162a) — otherwise it
+            # errors 'sidecar not found' and the canary gate is a no-op (#160).
+            _mirror_canary_sidecar(experiment_dir, spec.run_id, canary_run_id)
             canary_env = dict(job_env_full)
             canary_env["HPC_RUN_ID"] = canary_run_id
             canary_env["HPC_TASK_COUNT"] = "1"
@@ -540,6 +591,22 @@ def _submit_one_spec(
                 ),
             )
             canary_done = True
+
+    if spec.canary_only:
+        # Two-phase canary gate (#160): the canary is submitted; do NOT launch
+        # the main array. The caller verifies the canary (verify-canary) and
+        # re-invokes submit-flow with canary=false to launch the main only on
+        # success — so a broken dispatch can't sail past the canary.
+        return SubmitFlowResult(
+            run_id=spec.run_id,
+            job_ids=[],
+            total_tasks=spec.total_tasks,
+            deduped=False,
+            canary_done=canary_done,
+            canary_run_id=canary_run_id,
+            canary_job_ids=canary_job_ids,
+            main_launched=False,
+        )
 
     job_ids = _make_single_array_submission(
         backend_obj,
