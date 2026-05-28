@@ -212,18 +212,15 @@ def record_interview(
         _materialize_tasks_py(generator, tasks_py, inject_kwargs=frozen_shas)
         artifacts.append(".hpc/tasks.py")
     else:
-        # Validate mode — the interview agent wrote tasks.py already. Prefer
-        # the canonical .hpc/tasks.py; accept a legacy campaign-root tasks.py
-        # (the pre-0.7.1 location) so hand-authored files keep validating.
-        hpc_tasks = campaign_dir / ".hpc" / "tasks.py"
-        root_tasks = campaign_dir / "tasks.py"
-        tasks_py = hpc_tasks if hpc_tasks.is_file() else root_tasks
+        # Validate mode — the interview agent already wrote the canonical
+        # .hpc/tasks.py. One location everywhere, matching deploy_runtime,
+        # the cluster dispatcher, build-tasks-py and RepoLayout.
+        tasks_py = campaign_dir / ".hpc" / "tasks.py"
         if not tasks_py.is_file():
             raise errors.SpecInvalid(
-                f"campaign_dir is missing tasks.py (looked in {hpc_tasks} and "
-                f"{root_tasks}). Either the interview agent must produce "
-                f"tasks.py before invoking this primitive, or "
-                f"intent.task_generator must specify a recipe."
+                f"campaign_dir is missing .hpc/tasks.py: {tasks_py}. Either the "
+                f"interview agent must produce .hpc/tasks.py before invoking this "
+                f"primitive, or intent.task_generator must specify a recipe."
             )
 
     from hpc_agent import compute_cmd_sha, load_tasks_module

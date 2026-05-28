@@ -60,6 +60,14 @@ def resolve(i): return _TASKS[i]
 """
 
 
+def _write_tasks(campaign_dir, src):
+    """Write the canonical .hpc/tasks.py (creating .hpc/); return the path."""
+    tasks = campaign_dir / ".hpc" / "tasks.py"
+    tasks.parent.mkdir(parents=True, exist_ok=True)
+    tasks.write_text(src)
+    return tasks
+
+
 def _minimal_intent(task_count: int, **overrides) -> dict:
     intent = {
         "goal": "spike test",
@@ -89,7 +97,7 @@ def test_round_trip_across_experiment_families(
 ) -> None:
     """The interview primitive accepts any dict-shaped tasks.py — no
     enumeration over hyperparameter-sweep / eval-grid / RL-rollout."""
-    (tmp_path / "tasks.py").write_text(tasks_src)
+    _write_tasks(tmp_path, tasks_src)
     intent = _minimal_intent(expected_count, task_kind="example-family")
 
     data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -108,10 +116,11 @@ def test_non_dict_tasks_py_fails_with_existing_contract_error(tmp_path: Path) ->
     pre-existing contract), the failure happens at compute_cmd_sha — surfaced
     as a TypeError. Locking this so that loosening the dict requirement later
     is a deliberate, multi-place change rather than an accident."""
-    (tmp_path / "tasks.py").write_text(
+    _write_tasks(
+        tmp_path,
         "_TASKS = [('a', 1), ('b', 2)]\n"
         "def total(): return len(_TASKS)\n"
-        "def resolve(i): return _TASKS[i]\n"
+        "def resolve(i): return _TASKS[i]\n",
     )
     with pytest.raises(TypeError, match="must return a dict"):
         record_interview(InterviewSpec.model_validate(_minimal_intent(2)), campaign_dir=tmp_path)
@@ -122,7 +131,7 @@ def test_non_dict_tasks_py_fails_with_existing_contract_error(tmp_path: Path) ->
 
 def test_interview_json_round_trips_intent_verbatim(tmp_path: Path) -> None:
     """Intent fields are persisted as-is (modulo the _materialized block)."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         task_kind="ml-hparam-sweep",
@@ -143,7 +152,7 @@ def test_interview_json_round_trips_intent_verbatim(tmp_path: Path) -> None:
 
 def test_meta_json_only_written_when_intent_supplies_relevant_fields(tmp_path: Path) -> None:
     """No cluster_target and no budget → no meta.json update."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     data = record_interview(InterviewSpec.model_validate(_minimal_intent(3)), campaign_dir=tmp_path)
     assert data["artifacts"] == ["interview.json"]
     assert not (tmp_path / "meta.json").exists()
@@ -151,7 +160,7 @@ def test_meta_json_only_written_when_intent_supplies_relevant_fields(tmp_path: P
 
 def test_meta_json_merge_preserves_existing_keys(tmp_path: Path) -> None:
     """Pre-existing meta.json keys win on conflict; total_tasks is overridden."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     (tmp_path / "meta.json").write_text(
         json.dumps(
             {
@@ -180,7 +189,7 @@ def test_meta_json_merge_preserves_existing_keys(tmp_path: Path) -> None:
 
 def test_task_count_mismatch_raises(tmp_path: Path) -> None:
     """Cross-check: intent.task_count must equal tasks.total()."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)  # 3 tasks
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)  # 3 tasks
     intent = _minimal_intent(99)  # operator says 99
     with pytest.raises(errors.SpecInvalid, match="task_count = 99 but tasks.total"):
         record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -189,14 +198,14 @@ def test_task_count_mismatch_raises(tmp_path: Path) -> None:
 
 
 def test_missing_tasks_py_raises(tmp_path: Path) -> None:
-    with pytest.raises(errors.SpecInvalid, match="missing tasks.py"):
+    with pytest.raises(errors.SpecInvalid, match="missing .hpc/tasks.py"):
         record_interview(InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path)
 
 
 def test_empty_tasks_py_raises(tmp_path: Path) -> None:
     """tasks.total() == 0 is rejected explicitly with a clear error rather
     than slipping through to a divide-by-zero downstream."""
-    (tmp_path / "tasks.py").write_text("def total(): return 0\ndef resolve(i): raise IndexError\n")
+    _write_tasks(tmp_path, "def total(): return 0\ndef resolve(i): raise IndexError\n")
     with pytest.raises(errors.SpecInvalid, match="no tasks to dispatch"):
         record_interview(InterviewSpec.model_validate(_minimal_intent(1)), campaign_dir=tmp_path)
 
@@ -299,7 +308,7 @@ def test_generator_count_mismatch_does_not_write_tasks_py(tmp_path: Path) -> Non
     )
     with pytest.raises(errors.SpecInvalid, match="recipe and stated count disagree"):
         record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
-    assert not (tmp_path / "tasks.py").exists()
+    assert not (tmp_path / ".hpc" / "tasks.py").exists()
     assert not (tmp_path / "interview.json").exists()
 
 
@@ -473,7 +482,7 @@ def test_entry_point_missing_frozen_config_rejected(tmp_path: Path) -> None:
         record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
     # Atomicity: no wrapper, no tasks.py left behind on the failed path.
     assert not (tmp_path / ".hpc" / "wrappers").exists()
-    assert not (tmp_path / "tasks.py").exists()
+    assert not (tmp_path / ".hpc" / "tasks.py").exists()
 
 
 def test_entry_point_path_traversal_rejected(tmp_path: Path) -> None:
@@ -548,7 +557,7 @@ def test_entry_point_argv_with_mixed_literal_and_placeholder(tmp_path: Path) -> 
 def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Path) -> None:
     """The register_run kind is a pure pointer — no wrapper file written.
     Existing tasks.py-or-hand-rolled flow applies."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     # Seed a discoverable @register_run function so the validator passes.
     nb = tmp_path / "notebooks"
     nb.mkdir()
@@ -576,7 +585,7 @@ def test_entry_point_register_run_kind_does_not_materialize_wrapper(tmp_path: Pa
 
 def test_entry_point_register_run_rejects_missing_run(tmp_path: Path) -> None:
     """A register_run pointer to a non-existent function is rejected at intake."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         entry_point={"kind": "register_run", "run_name": "ghost"},
@@ -587,7 +596,7 @@ def test_entry_point_register_run_rejects_missing_run(tmp_path: Path) -> None:
 
 def test_entry_point_python_module_rejects_missing_module(tmp_path: Path) -> None:
     """A python_module pointer that doesn't import is rejected at intake."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         entry_point={
@@ -602,7 +611,7 @@ def test_entry_point_python_module_rejects_missing_module(tmp_path: Path) -> Non
 
 def test_entry_point_python_module_rejects_missing_function(tmp_path: Path) -> None:
     """A python_module whose module imports but lacks the function is rejected."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         entry_point={
@@ -617,7 +626,7 @@ def test_entry_point_python_module_rejects_missing_function(tmp_path: Path) -> N
 
 def test_entry_point_python_module_accepts_valid(tmp_path: Path) -> None:
     """python_module pointer to an importable function: accepted; no wrapper."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         entry_point={"kind": "python_module", "module": "json", "function": "dumps"},
@@ -638,7 +647,7 @@ def test_entry_point_shell_command_frozen_configs_without_generator_rejected(
     """shell_command + frozen_configs requires task_generator; the framework
     can't safely edit a hand-written tasks.py to thread the shas."""
     _seed_yaml(tmp_path, "configs/exp_42.yaml", "lr: 1e-3\n")
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(
         3,
         entry_point={
@@ -840,7 +849,7 @@ def test_generator_then_validate_mode_picks_up_hand_edits(tmp_path: Path) -> Non
 
 def test_re_running_with_same_intent_overwrites_byte_equivalently(tmp_path: Path) -> None:
     """Modulo the _materialized.at timestamp, re-running is a no-op."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     intent = _minimal_intent(3, task_kind="ml-hparam-sweep")
 
     record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
@@ -873,7 +882,7 @@ def test_cli_help_lists_interview() -> None:
 
 
 def test_cli_emits_envelope(tmp_path: Path) -> None:
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     spec_path = tmp_path / "intent.json"
     spec_path.write_text(json.dumps(_minimal_intent(3, task_kind="smoke")))
 
@@ -887,7 +896,7 @@ def test_cli_emits_envelope(tmp_path: Path) -> None:
 
 def test_cli_schema_violation_maps_to_user_error(tmp_path: Path) -> None:
     """A spec missing required `produced_by` should fail with EXIT_USER_ERROR."""
-    (tmp_path / "tasks.py").write_text(_HPARAM_TASKS_PY)
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
     spec_path = tmp_path / "intent.json"
     spec_path.write_text(json.dumps({"goal": "x", "task_count": 3}))  # no produced_by
 
