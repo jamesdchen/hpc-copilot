@@ -212,16 +212,26 @@ def load_clusters_config(path: Path | None = None) -> dict[str, Any]:
     Searches (in order):
     1. Explicit *path* argument
     2. ``HPC_CLUSTERS_CONFIG`` env var (full path to a yaml file)
-    3. ``config/clusters.yaml`` shipped inside the ``hpc_agent`` package
+    3. ``~/.hpc-agent/clusters.yaml`` — user-level config shared across
+       every experiment repo (sibling of ``~/.hpc-agent/config.json``,
+       which ``recall`` already reads). Cluster connection details are
+       infrastructure, not per-experiment data, so the natural home is
+       one shared file rather than a per-repo copy. Used only when it
+       exists; otherwise falls through to the packaged default.
+    4. ``config/clusters.yaml`` shipped inside the ``hpc_agent`` package
     """
     if path is None:
         env_path = os.environ.get("HPC_CLUSTERS_CONFIG")
         if env_path:
             path = Path(env_path)
         else:
-            from hpc_agent import _PACKAGE_ROOT
+            user_path = Path("~/.hpc-agent/clusters.yaml").expanduser()
+            if user_path.is_file():
+                path = user_path
+            else:
+                from hpc_agent import _PACKAGE_ROOT
 
-            path = _PACKAGE_ROOT / "config" / "clusters.yaml"
+                path = _PACKAGE_ROOT / "config" / "clusters.yaml"
     with open(path, encoding="utf-8") as f:
         # yaml.safe_load returns None for an empty file; coerce to {} so
         # downstream `.get(...)` calls on the result don't AttributeError.
