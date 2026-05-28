@@ -151,6 +151,8 @@ hpc-agent run --workflow submit --fields-json '<fields>'
 
 Spawns a fresh-context bare worker that runs `worker_prompts/submit.md` (experiment-agnostic execution: rsync, qsub, canary, journal, scheduler verify). Returns its envelope.
 
+**Inline mode (`HPC_AGENT_INLINE=1`).** When the env knob is set, `hpc-agent run` does NOT spawn — its envelope carries `data.mode == "inline"` and `data.prompt`, the same canonical procedure the worker would have run. Execute that procedure yourself, now, in this session (you have full tools and credentials — do not spawn a worker or another agent), then return an envelope shaped exactly like the spawn path: `data.report` = the `{result, decisions, anomalies}` JSON the procedure produces, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline". This trades the worker's context isolation for no per-command spawn — the caller opted into that. When `data.mode == "spawn"` (the default), consume `data.report` from the spawned worker as before.
+
 ### 10. Propagate worker ambiguities (if any)
 
 The worker may surface its own mid-flight needs_resolution — e.g., `co_tenant_exclusion`, `submit_now_vs_wait`, `walltime_split_confirm`. The worker's envelope carries them in the same shape (`{error_code: "needs_resolution", data: {resolved, ambiguities}}`), each ambiguity with its own `safe_default`. Surface verbatim to this skill's caller; the same one-round-trip resolution contract applies.

@@ -78,6 +78,8 @@ hpc-agent run --workflow aggregate --fields-json '{"run_id": "<id>", "profile": 
 
 Spawns a fresh-context bare worker that reads `worker_prompts/aggregate.md` — runs the combiner + reducer + summary pull + runtime-sample ingestion. Multi-step LLM-driven workflow, so worker is justified.
 
+**Inline mode (`HPC_AGENT_INLINE=1`).** When set, `hpc-agent run` does NOT spawn: its envelope carries `data.mode == "inline"` and `data.prompt`, the canonical `worker_prompts/aggregate.md` procedure. Execute it yourself, in this session (do not spawn a worker), then return the spawn-shaped envelope: `data.report` = the procedure's `{result, decisions, anomalies}` JSON, `data.worker_exit_code` = 0, `data.mode` = "inline". The combiner/reducer transcript then lands in your context rather than a worker's — the trade the caller opted into. When `data.mode == "spawn"` (the default), consume `data.report` as before.
+
 ### 6. Return envelope
 
 ## Notes
