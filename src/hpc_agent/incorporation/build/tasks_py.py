@@ -14,7 +14,6 @@ re-deriving the framework contract from prose.
 
 from __future__ import annotations
 
-import ast
 import keyword
 import os
 from pathlib import Path
@@ -249,91 +248,35 @@ def _render_literal_tasks(tasks: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-# Halo expressions are rendered verbatim into ``lambda params: <expr>``;
-# constrain them to arithmetic over the ``params`` dict so a spec cannot
-# smuggle a call / import into the generated tasks.py (same threat the
-# ``_FlagSpec.type`` Literal hardening closed for flag type tokens).
-_HALO_ALLOWED_NODES: tuple[type[ast.AST], ...] = (
-    ast.Expression,
-    ast.BinOp,
-    ast.UnaryOp,
-    ast.Constant,
-    ast.Name,
-    ast.Load,
-    ast.Subscript,
-    ast.Add,
-    ast.Sub,
-    ast.Mult,
-    ast.Div,
-    ast.FloorDiv,
-    ast.Mod,
-    ast.Pow,
-    ast.USub,
-    ast.UAdd,
-)
-
-
-def _validate_halo_expr(expr: str) -> None:
-    """Raise :class:`errors.SpecInvalid` unless *expr* is arithmetic-only."""
-    from hpc_agent import errors
-
-    try:
-        tree = ast.parse(expr, mode="eval")
-    except SyntaxError as exc:
-        raise errors.SpecInvalid(f"halo_expr is not a valid Python expression: {expr!r}") from exc
-    for node in ast.walk(tree):
-        if not isinstance(node, _HALO_ALLOWED_NODES):
-            raise errors.SpecInvalid(
-                f"halo_expr must be plain arithmetic over the `params` dict "
-                f"(no {type(node).__name__}); got {expr!r}"
-            )
-
-
 def _build_data_axis(data_axis: dict[str, Any]) -> Any:
-    """Construct the live ``DataAxis`` object for a classified series axis.
+    """Construct the live ``DataAxis`` for a classified series axis.
 
-    Used at scaffold time (on the laptop, where ``hpc_agent.experiment_kit`` is
-    importable) to drive ``plan_tasks``; the resolved task list is then
-    baked into the generated file, so the *generated* ``tasks.py`` never
-    imports ``hpc_agent.experiment_kit``.
+    Delegates to :func:`hpc_agent.experiment_kit.axis_config.data_axis_from_config`
+    — the canonical (de)serializer — so the halo expression is the same
+    *bare-name* arithmetic form stored in ``axes.yaml`` (``train_window * 48``),
+    not a ``params['...']`` rewrite. Used at scaffold time (on the laptop,
+    where ``hpc_agent.experiment_kit`` is importable) to drive ``plan_tasks``;
+    the resolved task list is then baked into the generated file, so the
+    *generated* ``tasks.py`` never imports ``hpc_agent.experiment_kit``.
     """
-    from hpc_agent.experiment_kit import (
-        MOMENTS,
-        SUM,
-        Associative,
-        BoundedHalo,
-        Independent,
-        Sequential,
-    )
+    from hpc_agent.experiment_kit.axis_config import HaloExprError, data_axis_from_config
 
     kind = data_axis["kind"]
-    if kind == "independent":
-        return Independent()
-    if kind == "sequential":
-        return Sequential()
+    cfg: dict[str, Any] = {"kind": kind}
     if kind == "associative":
-        return Associative(SUM if data_axis.get("monoid") == "sum" else MOMENTS)
-    if kind == "bounded_halo":
+        cfg["monoid"] = data_axis.get("monoid")
+    elif kind == "bounded_halo":
         halo_expr = data_axis.get("halo_expr")
         if not halo_expr:
             raise errors.SpecInvalid("data_axis kind 'bounded_halo' requires 'halo_expr'")
-        _validate_halo_expr(halo_expr)
-        # ``halo_expr`` is AST-validated to arithmetic over ``params``;
-        # eval it with no builtins so it cannot reach anything else.
-        code = compile(halo_expr, "<halo_expr>", "eval")
-
-        def _halo_fn(params: dict[str, Any]) -> int:
-            try:
-                return int(eval(code, {"__builtins__": {}}, {"params": params}))
-            except Exception as exc:  # missing sweep key, bare name, /0, ...
-                raise errors.SpecInvalid(
-                    f"halo_expr {halo_expr!r} failed to evaluate for sweep "
-                    f"point {params!r}: {type(exc).__name__}: {exc}. "
-                    "Its `params[...]` keys must be sweep-axis names."
-                ) from exc
-
-        return BoundedHalo(_halo_fn)
-    raise errors.SpecInvalid(f"unknown data_axis kind {kind!r}")
+        cfg["halo"] = {"expr": halo_expr}
+    try:
+        return data_axis_from_config(cfg)
+    except HaloExprError as exc:
+        raise errors.SpecInvalid(
+            "halo_expr must be plain arithmetic over the run's parameters by bare "
+            f"name (+ - * //, min/max; no calls/attributes/subscripts): {exc}"
+        ) from exc
 
 
 def _provenance(data_axis: dict[str, Any]) -> str:

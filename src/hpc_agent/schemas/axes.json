@@ -95,12 +95,13 @@
       "description": "A classified :data:`~hpc_agent.experiment_kit.axis.DataAxis`, serialized.\n\nThe (de)serializer is :mod:`hpc_agent.experiment_kit.axis_config`.",
       "properties": {
         "kind": {
-          "description": "How the series axis is safe to split. 'independent': the loop body is a pure function of its row. 'associative': it accumulates an associative summary — also set `monoid`. 'bounded_halo': it depends on a bounded look-back window — also set `halo`. 'sequential': unbounded / order-dependent state, not splittable; the fail-safe default.",
+          "description": "How the series axis is safe to split. 'independent': the loop body is a pure function of its row. 'associative': it accumulates an associative summary — also set `monoid`. 'bounded_halo': it depends on a bounded look-back window — also set `halo`. 'sequential': unbounded / order-dependent state, not splittable; the fail-safe default. 'cartesian': there is no ordered series to split — a plain cartesian sweep (distinct from 'independent', which has a parallelizable series). Recorded only on a confident no-loop signal; anything ambiguous stays 'sequential'.",
           "enum": [
             "independent",
             "associative",
             "bounded_halo",
-            "sequential"
+            "sequential",
+            "cartesian"
           ],
           "title": "Kind",
           "type": "string"

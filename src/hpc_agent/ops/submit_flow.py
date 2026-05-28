@@ -127,6 +127,28 @@ def _preflight_probe(ssh_target: str, *, skip: bool) -> None:
         )
 
 
+# Paths a scaffolded ``.gitignore`` marks as generated but the cluster
+# node *needs*: the executor package built at Step 0 (``src/``) and the
+# dispatch contract (``.hpc/tasks.py`` / ``.hpc/cli.py``). A caller derives
+# rsync excludes from ``.gitignore``, so these would otherwise be stripped
+# from the deploy bundle. The carve-out lives here — not in caller prose —
+# so every submit path ships them. ``.hpc/.build-cache.json`` is NOT listed:
+# it stays excluded (a local-build artifact the node never reads).
+_GENERATED_SHIPPABLE: frozenset[str] = frozenset({"src", ".hpc/tasks.py", ".hpc/cli.py"})
+
+
+def _keep_generated_shippable(excludes: list[str] | None) -> list[str] | None:
+    """Drop excludes that would block shipping generated-but-needed files.
+
+    Normalises each pattern (strips surrounding ``/``) and removes any that
+    match a :data:`_GENERATED_SHIPPABLE` path, so a ``.gitignore``-derived
+    exclude list still deploys ``src/`` and the ``.hpc/`` dispatch files.
+    """
+    if not excludes:
+        return excludes
+    return [e for e in excludes if e.strip().strip("/") not in _GENERATED_SHIPPABLE]
+
+
 def _push_and_deploy(
     *,
     experiment_dir: Path,
@@ -146,7 +168,7 @@ def _push_and_deploy(
         ssh_target=ssh_target,
         remote_path=remote_path,
         local_path=experiment_dir,
-        exclude=rsync_excludes,
+        exclude=_keep_generated_shippable(rsync_excludes),
     )
     if push_result.returncode != 0:
         raise errors.RemoteCommandFailed(
