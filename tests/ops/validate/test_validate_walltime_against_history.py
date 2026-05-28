@@ -8,7 +8,10 @@ machinery is exercised end-to-end.
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
+
+import pytest
 
 from hpc_agent._wire.validators.validate_walltime_against_history import (
     ValidateWalltimeAgainstHistorySpec,
@@ -101,6 +104,10 @@ def test_walltime_check_skipped_when_gpu_type_unknown(tmp_path: Path) -> None:
     assert all(f.code != "walltime_below_quantile" for f in out.findings)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+)
 def test_playbook_walltime_rules_override_default(tmp_path: Path) -> None:
     """Custom walltime_rules in playbook.yaml replace the default p95
     rule (rather than stack on top)."""

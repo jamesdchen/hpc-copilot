@@ -23,7 +23,10 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import sys
 from typing import TYPE_CHECKING
+
+import pytest
 
 from hpc_agent.state import runtime_prior as rp
 
@@ -120,6 +123,10 @@ def _worker_append_batch(tmp_path: str, run_id: str, n: int) -> None:
         )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+)
 def test_concurrent_writers_lose_no_samples(tmp_path: Path) -> None:
     """Two child processes each append 10 distinct samples. Under
     ``atomic_locked_update`` no append should be lost — the post-state

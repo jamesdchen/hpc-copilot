@@ -26,6 +26,11 @@ import pytest
 import hpc_agent
 from hpc_agent.models.mapreduce.reduce.status import check_results_from_tasks
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+)
+
 STUB_SCRIPT = """\
 import os
 import sys

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import textwrap
 from typing import TYPE_CHECKING
 
@@ -30,10 +31,16 @@ _BASH = shutil.which("bash")
 _RSYNC = shutil.which("rsync")
 _MD5SUM = shutil.which("md5sum")
 
-pytestmark = pytest.mark.skipif(
-    not (_BASH and _MD5SUM),
-    reason="bash + md5sum required for preamble integration tests",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+    ),
+    pytest.mark.skipif(
+        not (_BASH and _MD5SUM),
+        reason="bash + md5sum required for preamble integration tests",
+    ),
+]
 needs_rsync = pytest.mark.skipif(not _RSYNC, reason="rsync required for staging integration test")
 
 

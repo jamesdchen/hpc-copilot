@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import warnings
 from typing import TYPE_CHECKING
@@ -191,6 +192,10 @@ def test_no_journal_dir_returns_none(journal_home, experiment):
     assert load_run(experiment, "nonexistent") is None
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Unix symlinks; needs admin on Windows",
+)
 def test_repo_hash_normalizes_symlinks(tmp_path):
     real = tmp_path / "real"
     real.mkdir()

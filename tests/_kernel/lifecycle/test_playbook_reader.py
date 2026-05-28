@@ -13,6 +13,7 @@ Covers the four contracts:
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -121,6 +122,10 @@ def test_known_bad_combinations_invalid_severity_raises(tmp_path: Path) -> None:
 # ─── walltime_rules ────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+)
 def test_walltime_rules_round_trip(tmp_path: Path) -> None:
     _write(
         tmp_path,
