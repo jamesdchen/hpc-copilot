@@ -6,7 +6,6 @@
   "type": "object",
   "required": [
     "run_id",
-    "job_ids",
     "total_tasks",
     "deduped",
     "verified"
@@ -19,7 +18,7 @@
       "type": "string"
     },
     "job_ids": {
-      "description": "Main array job ids from submit-flow.",
+      "description": "Main array job ids. EMPTY when the canary failed verification — the main array never launched (the #160 two-phase gate).",
       "items": {
         "type": "string"
       },
@@ -66,7 +65,7 @@
       "title": "Canary Job Ids"
     },
     "verified": {
-      "description": "True iff verify-canary returned ok=True. False on any canary-side failure AND when canary verification was skipped (no canary fired).",
+      "description": "True iff verify-canary returned ok=True — and ONLY then is the main array launched (#160). False on any canary-side failure (main never launches; job_ids empty) AND when verification was skipped (no canary fired / deduped replay).",
       "title": "Verified",
       "type": "boolean"
     },

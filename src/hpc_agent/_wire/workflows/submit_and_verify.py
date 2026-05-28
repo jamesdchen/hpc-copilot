@@ -84,7 +84,11 @@ class SubmitAndVerifyResult(BaseModel):
 
     run_id: str = Field(description="Main run id (mirrors submit-flow's run_id).")
     job_ids: list[str] = Field(
-        description="Main array job ids from submit-flow.",
+        default_factory=list,
+        description=(
+            "Main array job ids. EMPTY when the canary failed verification — "
+            "the main array never launched (the #160 two-phase gate)."
+        ),
     )
     total_tasks: int = Field(ge=1)
     deduped: bool = Field(
@@ -103,9 +107,10 @@ class SubmitAndVerifyResult(BaseModel):
     )
     verified: bool = Field(
         description=(
-            "True iff verify-canary returned ok=True. False on any "
-            "canary-side failure AND when canary verification was "
-            "skipped (no canary fired)."
+            "True iff verify-canary returned ok=True — and ONLY then is the "
+            "main array launched (#160). False on any canary-side failure (main "
+            "never launches; job_ids empty) AND when verification was skipped "
+            "(no canary fired / deduped replay)."
         ),
     )
     failure_kind: CanaryFailureKind | None = Field(
