@@ -168,6 +168,37 @@ def gpu_args() -> list[Flag]:
     ]
 
 
+# Fields that uniquely define a Flag. Used to coerce a Flag-shaped object
+# from a DIFFERENT module into THIS module's Flag — see _coerce_flag.
+_FLAG_FIELDS = ("name", "type", "default", "required", "choices", "help", "nargs", "action")
+
+
+def _coerce_flag(f: Any) -> Flag:
+    """Normalize one FLAGS entry to a local :class:`Flag` instance.
+
+    Accepts three shapes:
+
+    * a local ``Flag`` — returned as-is;
+    * a ``dict`` of Flag fields — splatted into ``Flag(**f)``;
+    * any object exposing the full set of Flag fields — a structurally
+      identical ``Flag`` defined in ANOTHER module (e.g. the inlined
+      ``.hpc/cli.py`` copy that runs on a stdlib-only cluster node).
+      ``isinstance`` is ``False`` across that class-identity gap, so a
+      bare type check rejected a perfectly valid entry with ``TypeError``
+      (#177). We rebuild a local ``Flag`` from its fields so the parser is
+      always built with this module's ``add_to``.
+
+    Anything else raises ``TypeError``.
+    """
+    if isinstance(f, Flag):
+        return f
+    if isinstance(f, dict):
+        return Flag(**f)
+    if all(hasattr(f, _attr) for _attr in _FLAG_FIELDS):
+        return Flag(**{_attr: getattr(f, _attr) for _attr in _FLAG_FIELDS})
+    raise TypeError(f"FLAGS entries must be Flag instances or dicts; got {type(f).__name__}")
+
+
 def build_parser_from_flags(
     flags: list[Flag] | list[dict[str, Any]],
     *,
@@ -175,18 +206,12 @@ def build_parser_from_flags(
 ) -> argparse.ArgumentParser:
     """Build an :class:`argparse.ArgumentParser` from a declarative flag list.
 
-    Each entry may be a :class:`Flag` instance (preferred) or a dict
-    with the same keys. The returned parser is ready to
+    Each entry may be a :class:`Flag` instance, a dict with the same keys,
+    or a structurally-identical ``Flag`` from another module (see
+    :func:`_coerce_flag`). The returned parser is ready to
     ``.parse_args(argv)``.
     """
     parser = argparse.ArgumentParser(description=description)
     for f in flags:
-        if isinstance(f, Flag):
-            f.add_to(parser)
-        elif isinstance(f, dict):
-            Flag(**f).add_to(parser)
-        else:
-            raise TypeError(
-                f"FLAGS entries must be Flag instances or dicts; got {type(f).__name__}"
-            )
+        _coerce_flag(f).add_to(parser)
     return parser

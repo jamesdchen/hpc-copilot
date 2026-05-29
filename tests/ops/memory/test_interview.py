@@ -899,3 +899,35 @@ def test_cli_schema_violation_maps_to_user_error(tmp_path: Path) -> None:
     payload = json.loads(out.strip().splitlines()[-1])
     assert payload["ok"] is False
     assert payload["error_code"] == "spec_invalid"
+
+
+# ─── #178: python_module entry resolves with campaign_dir on sys.path ───────
+
+
+def test_python_module_entry_resolves_via_campaign_dir(tmp_path: Path) -> None:
+    """A ``python_module`` entry importable on the cluster must not false-fail
+    local intake — ``campaign_dir`` is put on sys.path for the import (#178)."""
+    from hpc_agent.ops.memory.interview import _validate_python_module_entry
+
+    pkg = tmp_path / "executors"  # PEP 420 namespace package (no __init__.py)
+    pkg.mkdir(parents=True)
+    (pkg / "job.py").write_text("def main():\n    return None\n")
+
+    path_snapshot = list(sys.path)
+    module_snapshot = set(sys.modules)
+    try:
+        assert str(tmp_path.resolve()) not in sys.path  # the bug's precondition
+        # Previously raised spec_invalid ("module 'executors.job' does not import").
+        _validate_python_module_entry({"module": "executors.job", "function": "main"}, tmp_path)
+    finally:
+        sys.path[:] = path_snapshot
+        for mod in set(sys.modules) - module_snapshot:
+            sys.modules.pop(mod, None)
+
+
+def test_python_module_entry_still_rejects_genuinely_absent(tmp_path: Path) -> None:
+    """A truly-absent module still raises — the fix only adds the path (#178)."""
+    from hpc_agent.ops.memory.interview import _validate_python_module_entry
+
+    with pytest.raises(errors.SpecInvalid, match="does not import"):
+        _validate_python_module_entry({"module": "executors.nope", "function": "main"}, tmp_path)
