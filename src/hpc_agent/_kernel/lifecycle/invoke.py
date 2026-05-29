@@ -180,14 +180,69 @@ class WorkerInvoker(Protocol):
         ...
 
 
+def _run_claude_worker(
+    *,
+    executable: str,
+    mode_args: list[str],
+    prompt: RenderedPrompt,
+    cwd: str,
+    env: dict[str, str] | None = None,
+) -> InvocationResult:
+    """Spawn ``claude -p`` with the worker prompt kept OFF the command line.
+
+    Neither half of the prompt rides argv: the cacheable prefix (the rendered
+    worker procedure — tens of KB) is written to a temp file and passed via
+    ``--append-system-prompt-file``, and the variable suffix is fed on stdin
+    (``claude -p`` reads stdin when given no positional prompt). Windows
+    ``CreateProcessW`` caps the WHOLE command line at 32,767 characters and the
+    rendered submit prompt blows past it (#169); POSIX ``ARG_MAX`` is ~2 MB, but
+    the temp-file + stdin transport is identical on every platform, so it is
+    taken unconditionally — one code path the test suite exercises everywhere
+    rather than a Windows-only branch CI never runs.
+
+    The cacheable-prefix / variable-suffix split is preserved: the prefix is
+    still an *appended system prompt* (byte-identical across runs, so Claude
+    Code caches it) and the suffix is still the user message — only the
+    transport moves off argv, so prompt caching is unaffected.
+    """
+    with tempfile.TemporaryDirectory(prefix="hpc-agent-worker-prompt-") as prompt_dir:
+        system_prompt_file = Path(prompt_dir) / "append_system_prompt.txt"
+        system_prompt_file.write_text(prompt.cacheable_prefix, encoding="utf-8")
+        proc = subprocess.run(
+            [
+                executable,
+                "-p",
+                *mode_args,
+                "--append-system-prompt-file",
+                str(system_prompt_file),
+            ],
+            # The variable suffix is the user prompt; feeding it on stdin keeps
+            # it off argv alongside the system prompt (see the docstring).
+            input=prompt.variable_suffix,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    return InvocationResult(
+        exit_code=proc.returncode,
+        output=proc.stdout,
+        stderr=getattr(proc, "stderr", None) or "",
+    )
+
+
 class ClaudeCliInvoker:
     """Runs the worker as a fresh ``claude -p --bare`` child process.
 
-    The cacheable prefix is passed via ``--append-system-prompt`` so it
+    The cacheable prefix is passed via ``--append-system-prompt-file`` so it
     joins Claude Code's automatically-cached system prompt; the variable
-    suffix is the user prompt. ``--bare`` skips CLAUDE.md / hooks / MCP
-    discovery (it does not affect caching) so the worker's context is a
-    reproducible minimum.
+    suffix is fed on stdin as the user prompt. Both are kept off argv so the
+    rendered prompt can't overrun Windows' command-length limit (#169).
+    ``--bare`` skips CLAUDE.md / hooks / MCP discovery (it does not affect
+    caching) so the worker's context is a reproducible minimum.
     """
 
     name = "claude-cli"
@@ -196,10 +251,9 @@ class ClaudeCliInvoker:
         self._executable = executable
 
     def invoke(self, prompt: RenderedPrompt, *, cwd: Path) -> InvocationResult:
-        proc = subprocess.run(
-            [
-                self._executable,
-                "-p",
+        return _run_claude_worker(
+            executable=self._executable,
+            mode_args=[
                 "--bare",
                 # Pin the worker to a small, cheap model: it executes a
                 # deterministic rsync / qsub / canary sequence and is instructed
@@ -219,21 +273,9 @@ class ClaudeCliInvoker:
                 # deterministic across platforms.
                 "--settings",
                 '{"sandbox": {"enabled": false}}',
-                "--append-system-prompt",
-                prompt.cacheable_prefix,
-                prompt.variable_suffix,
             ],
+            prompt=prompt,
             cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        return InvocationResult(
-            exit_code=proc.returncode,
-            output=proc.stdout,
-            stderr=getattr(proc, "stderr", None) or "",
         )
 
     def missing_credential_remediation(self) -> str | None:
@@ -288,10 +330,9 @@ class ClaudeCliOAuthInvoker:
             tempfile.TemporaryDirectory(prefix="hpc-agent-oauth-cwd-") as clean_cwd,
         ):
             _link_credentials(creds, Path(config_dir) / ".credentials.json")
-            proc = subprocess.run(
-                [
-                    self._executable,
-                    "-p",
+            return _run_claude_worker(
+                executable=self._executable,
+                mode_args=[
                     # No ``--bare``: it strips the OAuth-credential path. The
                     # relocated CLAUDE_CONFIG_DIR (below) holding only the linked
                     # creds gives OAuth auth + a near-bare user-level context.
@@ -302,23 +343,11 @@ class ClaudeCliOAuthInvoker:
                     # ClaudeCliInvoker.invoke).
                     "--settings",
                     '{"sandbox": {"enabled": false}}',
-                    "--append-system-prompt",
-                    prompt.cacheable_prefix,
-                    prompt.variable_suffix,
                 ],
+                prompt=prompt,
                 cwd=clean_cwd,
                 env={**os.environ, "CLAUDE_CONFIG_DIR": config_dir},
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
             )
-        return InvocationResult(
-            exit_code=proc.returncode,
-            output=proc.stdout,
-            stderr=getattr(proc, "stderr", None) or "",
-        )
 
     def missing_credential_remediation(self) -> str | None:
         creds = _oauth_credentials_path()
