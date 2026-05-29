@@ -15,7 +15,9 @@ the classification):
 * ``experiment_dir_arg`` — inject ``--experiment-dir`` (default cwd).
 * ``dry_run_arg`` + ``dry_run_passthrough_keys`` — inject ``--dry-run``
   and short-circuit to a "what would run" envelope.
-* ``requires_ssh`` — gate the call via :func:`_require_ssh_agent`.
+* ``requires_ssh`` — declarative metadata (capabilities catalog +
+  consistency test); not a pre-flight gate (``ssh_run`` uses
+  ``BatchMode=yes`` and IdentityFile auth needs no agent).
 * ``args`` — per-primitive flag declarations (``CliArg``).
 * ``arg_pre`` — pre-call hook to transform args into kwargs
   (e.g. parse ``--extra-env "k=v,k=v"`` into a dict).
@@ -327,8 +329,10 @@ def dispatch_primitive(name: str, ns: argparse.Namespace) -> int:
        self-gate SSH when their cluster-touching branches run, so they
        can short-circuit local-only paths (dry-run, dedup) without
        paying the SSH gate.
-    3. If ``cli.requires_ssh`` → gate via :func:`_require_ssh_agent`
-       BEFORE building kwargs so a missing SSH_AUTH_SOCK fails fast.
+    3. ``cli.requires_ssh`` is declarative metadata only — NOT a
+       pre-flight gate. ``ssh_run`` uses ``BatchMode=yes`` (fails fast,
+       never hangs) and IdentityFile auth needs no agent; a real SSH
+       failure is enriched with agent state in :func:`_err_from_hpc`.
     4. Build kwargs (spec, experiment_dir, args, arg_pre).
     5. If ``--dry-run`` and ``dry_run_passthrough_keys`` → emit shape, exit.
     6. Call the primitive.

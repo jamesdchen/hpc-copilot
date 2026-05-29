@@ -21,8 +21,10 @@ This module fills that gap. It exercises three slices of the contract:
    appears verbatim in the CLI's error envelope when the documented
    trigger fires:
 
-   * ``ssh_unreachable`` — strip ``SSH_AUTH_SOCK`` so the fail-fast
-     gate raises ``SshUnreachable``.
+   * ``ssh_unreachable`` — a pre-flight ssh probe fails (mocked
+     non-zero ``ssh_run``) so ``submit-flow`` raises ``SshUnreachable``.
+     (The old missing-``SSH_AUTH_SOCK`` precheck was dropped — a real
+     SSH op now fails fast on its own; see the test below.)
    * ``spec_invalid`` — malformed JSON in ``--spec``.
    * ``cluster_unknown`` — name not present in ``clusters.yaml``.
    * ``remote_command_failed`` — mocked ``ssh_run`` returns non-zero;
@@ -232,36 +234,67 @@ def test_complex_job_env_round_trips_through_pydantic_model(tmp_path: Path) -> N
 # ─── 2. ERROR CODES ────────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="asserts the POSIX ssh-auth contract (missing SSH_AUTH_SOCK -> ssh_unreachable, "
-    "exit 2). Windows OpenSSH uses a named-pipe agent, not SSH_AUTH_SOCK, so that env var's "
-    "absence isn't 'unreachable' there; the gate returns exit 3 instead. Windows ssh-auth "
-    "detection is tracked under #156/#158.",
-)
-def test_error_code_ssh_unreachable_when_ssh_auth_sock_missing(tmp_path: Path) -> None:
-    """Cluster-touching subcommands must fail fast with
-    ``ssh_unreachable`` (exit 2) when ``SSH_AUTH_SOCK`` isn't in the
-    spawn env — per CONTRACT.md, integrators expect this exact code
-    instead of a stalled SSH handshake.
+def test_error_code_ssh_unreachable_on_failed_ssh_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ssh_unreachable`` is surfaced when a real SSH op fails — and the
+    envelope is enriched with the live agent state.
+
+    The contract once hard-required a reachable SSH agent: a *pre-flight*
+    gate raised ``ssh_unreachable`` whenever ``SSH_AUTH_SOCK`` was unset.
+    That false-negatived valid IdentityFile auth (which needs no agent at
+    all), so the precheck was dropped — ``ssh_run`` uses ``BatchMode=yes``
+    and fails fast at the real connection anyway. The contract error code is
+    unchanged (``ssh_unreachable`` → network, ``retry_safe: true``, exit 2),
+    but its trigger is now a *genuine* SSH failure: here ``submit-flow``'s
+    pre-flight probe gets a non-zero ``ssh_run`` and raises ``SshUnreachable``.
+    With no agent reachable, ``_err_from_hpc`` appends the agent-state
+    remediation, so the actionable hint the old precheck gave survives
+    without the false negative.
+
+    Driven in-process via :func:`cli.main` (same rationale as
+    ``remote_command_failed`` below): the ``HpcError → envelope`` translation
+    lives in ``main``'s ``try/except``, and patching the ``ssh_run`` seam +
+    ``agent_available`` makes the trigger deterministic on every platform
+    (so it no longer needs the Unix-only subprocess harness / Windows skip).
     """
-    # Deliberately no SSH_AUTH_SOCK — assert the fail-fast gate fires.
-    env = _spawn_env(HPC_JOURNAL_DIR=str(tmp_path / "journal"))
-    rc, out, _ = _run_cli(
-        "status",
-        "--experiment-dir",
-        str(tmp_path),
-        "--run-id",
-        "any_run_id",
-        env=env,
+    spec_path = tmp_path / "spec.json"
+    spec = _base_submit_flow_spec()
+    # result_dir_template + a real per-task EXECUTOR let submit-flow's
+    # write-first guard (#171) synthesize the per-run sidecar and proceed to
+    # the pre-flight probe — where the mocked ssh_run fails.
+    spec["result_dir_template"] = "results/{run_id}/task_{task_id}"
+    spec["job_env"] = {"EXECUTOR": "python train.py --seed $SEED"}
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    monkeypatch.setenv("HPC_JOURNAL_DIR", str(tmp_path / "journal"))
+
+    captured: list[dict] = []
+    # Non-zero probe → _preflight_probe raises SshUnreachable; submit_flow
+    # binds ssh_run by name (``from ... import ssh_run``) so patch it there.
+    fake_probe = _completed(
+        returncode=255, stderr="ssh: connect to host hoffman2 port 22: Connection refused"
     )
+    with (
+        patch("hpc_agent.ops.submit_flow.ssh_run", return_value=fake_probe),
+        patch("hpc_agent.cli._helpers.agent_available", return_value=False),
+        patch("hpc_agent.cli._helpers._emit", side_effect=captured.append),
+    ):
+        rc = _cli_main(
+            ["submit-flow", "--experiment-dir", str(tmp_path), "--spec", str(spec_path)]
+        )
+
     assert rc == 2, f"ssh_unreachable must exit 2 (network category); got {rc}"
-    envelope = _parse_envelope(out)
+    assert captured, "no envelope emitted"
+    envelope = captured[-1]
     assert envelope["ok"] is False
     assert envelope["error_code"] == "ssh_unreachable"
     assert envelope["category"] == "network"
     assert envelope["retry_safe"] is True
+    # Enrichment: a real ssh_unreachable with no agent reachable carries the
+    # agent-state hint appended to the base remediation (the dropped-precheck
+    # behavior — the helpful hint survives without the false negative).
     assert "remediation" in envelope
+    assert "No SSH agent reachable" in envelope["remediation"]
 
 
 def test_error_code_spec_invalid_on_malformed_json(tmp_path: Path) -> None:
