@@ -24,6 +24,7 @@ from typing import Any, Final
 from hpc_agent.infra.remote import (
     RSYNC_TIMEOUT_SEC,
     SSH_TIMEOUT_SEC,
+    _env_int,
     _truncate,
     _with_ssh_backoff,
     ssh_run,
@@ -34,6 +35,7 @@ from hpc_agent.infra.ssh_validation import validate_remote_path
 __all__ = [
     "DEFAULT_RSYNC_EXCLUDES",
     "MANDATORY_RSYNC_EXCLUDES",
+    "PROTECTED_OUTPUT_DIRS",
     "deploy_runtime",
     "rsync_pull",
     "rsync_push",
@@ -84,17 +86,41 @@ MANDATORY_RSYNC_EXCLUDES: list[str] = [
     "clusters.yaml",
 ]
 
+# Cluster-side RUN OUTPUT directories — written by the job on the compute
+# nodes, NOT part of the local deploy tree. A deploy push's ``--delete``
+# (rsync) or tar-fallback remote pre-clean must NEVER delete or even traverse
+# these (#173): deleting them destroys the user's results, and traversing a
+# crash-loop's debris (10^5+ ``_wip_*`` dirs under ``results/``) wedges the push
+# past its transfer timeout. Unioned into every push's exclude set (like
+# :data:`MANDATORY_RSYNC_EXCLUDES`) so an incomplete caller ``exclude`` can't
+# expose them. ``result_dir_template`` defaults to ``results/``; ``_combiner/``
+# holds the wave-combiner output. A non-default output dir must be added to the
+# caller's ``exclude``. Bare names (trailing slash documents "directory") so
+# rsync/tar/find match the dir at any depth.
+PROTECTED_OUTPUT_DIRS: list[str] = [
+    "results/",
+    "_combiner/",
+]
+
+# The remote ``--delete`` pre-clean (tar fallback) gets its OWN timeout,
+# distinct from — and shorter than — the (30-min) transfer timeout, so a
+# pathological clean fails loud fast instead of silently eating the transfer
+# budget and wedging the push (#173). Override via ``HPC_PRECLEAN_TIMEOUT_SEC``.
+PRECLEAN_TIMEOUT_SEC: Final[int] = _env_int("HPC_PRECLEAN_TIMEOUT_SEC", 300)
+
 
 def _effective_excludes(exclude: list[str] | None) -> list[str]:
-    """Resolve the exclude list, always enforcing :data:`MANDATORY_RSYNC_EXCLUDES`.
+    """Resolve the exclude list, always enforcing the mandatory patterns.
 
-    ``None`` selects :data:`DEFAULT_RSYNC_EXCLUDES`. The mandatory
-    credential-protecting patterns are appended (de-duplicated) so a
-    caller-supplied list can never re-expose ``clusters.yaml``.
+    ``None`` selects :data:`DEFAULT_RSYNC_EXCLUDES`. Two mandatory groups are
+    then appended (de-duplicated) so a caller-supplied list can never drop
+    them: :data:`MANDATORY_RSYNC_EXCLUDES` (the credential file
+    ``clusters.yaml`` — never ship) and :data:`PROTECTED_OUTPUT_DIRS` (cluster
+    run output — never ``--delete``/pre-clean; see #173).
     """
     base = DEFAULT_RSYNC_EXCLUDES if exclude is None else list(exclude)
     out = list(base)
-    for pat in MANDATORY_RSYNC_EXCLUDES:
+    for pat in (*MANDATORY_RSYNC_EXCLUDES, *PROTECTED_OUTPUT_DIRS):
         if pat not in out:
             out.append(pat)
     return out
@@ -148,6 +174,53 @@ def _remote_clean_cmd(remote_path: str, exclude: list[str]) -> str:
     return f"{find_cmd} -print0 | xargs -0 -r rm -rf --"
 
 
+def _remote_preclean(
+    *,
+    ssh_target: str,
+    remote_path: str,
+    exclude: list[str],
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the remote ``--delete`` pre-clean as its OWN bounded ssh call (#173).
+
+    Split out from the tar extract so the clean and the transfer carry DISTINCT
+    timeouts and DISTINCT failures. A pathological clean — e.g. a crash-loop's
+    debris tree under a path the prune set doesn't cover — now fails loud on its
+    own (short) timeout with an actionable message, instead of silently
+    consuming the (30-min) transfer budget and wedging the whole push.
+
+    The prune set (*exclude*, which always carries :data:`PROTECTED_OUTPUT_DIRS`)
+    keeps ``find`` from ever descending into ``results/`` — the actual
+    quarter-million-inode debris source — so a healthy clean touches only the
+    small deployed code/runtime tree.
+
+    Uses :func:`subprocess.run` directly (mirroring the extract leg below)
+    rather than :func:`ssh_run` so the timeout is enforced per this single
+    invocation. *remote_path* was already ``validate_remote_path``-d by the
+    caller and every interpolated value is ``shlex.quote``-d in
+    :func:`_remote_clean_cmd`.
+    """
+    quoted_remote = shlex.quote(remote_path)
+    clean_cmd = f"mkdir -p {quoted_remote} && {_remote_clean_cmd(remote_path, exclude)}"
+    ssh_cmd = [*ssh_argv("ssh"), ssh_target, clean_cmd]
+    try:
+        return subprocess.run(
+            ssh_cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"remote --delete pre-clean of {remote_path} on {ssh_target} timed out "
+            f"after {timeout}s, before the transfer could start. This usually means a "
+            "large debris tree (e.g. crash-loop WIP dirs under results/) under a path "
+            "the pre-clean still traverses. Clean it manually (e.g. "
+            f"`rm -rf {remote_path.rstrip('/')}/results/<run_id>`) or push with delete=False."
+        ) from exc
+
+
 def _tar_ssh_push(
     *,
     ssh_target: str,
@@ -171,7 +244,9 @@ def _tar_ssh_push(
     step (see :func:`_remote_clean_cmd`) removes everything under
     *remote_path* that the *exclude* set does not protect, before the
     fresh ``tar x`` extract — so stale files cannot survive a re-push.
-    The pre-clean and the extract run in a single ssh invocation.
+    The pre-clean runs as its OWN bounded ssh call ahead of the extract
+    (see :func:`_remote_preclean`) so it can't eat the transfer budget
+    (#173); the extract is then a clean ``mkdir -p && tar x``.
     """
     src_dir = str(local_path).rstrip("/\\")
 
@@ -181,16 +256,29 @@ def _tar_ssh_push(
         tar_excludes += [f"--exclude={pattern.rstrip('/')}"]
 
     tar_cmd = ["tar", "c", *tar_excludes, "-C", src_dir, "."]
-    # mkdir -> [pre-clean] -> extract, in one ssh invocation. ``tar x``
-    # consumes the archive piped into ssh's stdin; the optional
-    # pre-clean (delete=True) runs first and gives the fallback the
-    # same --delete semantics rsync would apply.
     quoted_remote = shlex.quote(remote_path)
-    remote_steps = [f"mkdir -p {quoted_remote}"]
+
+    # delete=True: run the remote pre-clean FIRST, in its own ssh call with a
+    # timeout distinct from (and shorter than) the transfer's, so a pathological
+    # clean fails loud fast instead of wedging the push (#173). A None timeout
+    # (caller disabled enforcement) propagates as unbounded; otherwise cap at
+    # PRECLEAN_TIMEOUT_SEC but never exceed the transfer timeout the caller set.
     if delete:
-        remote_steps.append(_remote_clean_cmd(remote_path, exclude))
-    remote_steps.append(f"tar x -C {quoted_remote}")
-    ssh_remote_cmd = " && ".join(remote_steps)
+        preclean_timeout = None if timeout is None else min(PRECLEAN_TIMEOUT_SEC, timeout)
+        preclean = _remote_preclean(
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            exclude=exclude,
+            timeout=preclean_timeout,
+        )
+        if preclean.returncode != 0:
+            # Pre-clean failed (a timeout already raised). Surface it as the push
+            # failure rather than extracting onto a half-cleaned tree.
+            return preclean
+
+    # Extract: ``mkdir -p`` (idempotent) + ``tar x``, fed by tar's stdout over
+    # the pipe into ssh's stdin.
+    ssh_remote_cmd = f"mkdir -p {quoted_remote} && tar x -C {quoted_remote}"
     ssh_cmd = [*ssh_argv("ssh"), ssh_target, ssh_remote_cmd]
 
     # tar's stderr goes to a temp file rather than a PIPE: it is only

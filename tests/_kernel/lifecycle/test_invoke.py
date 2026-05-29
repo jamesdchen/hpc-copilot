@@ -45,21 +45,34 @@ def test_get_invoker_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
         get_invoker()
 
 
-def test_claude_cli_invoker_builds_the_right_call(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    seen: dict[str, object] = {}
+def _capture_run(seen: dict[str, object]):
+    """A fake ``subprocess.run`` that records argv/cwd/env/stdin and, while the
+    temp dir still exists, the content of the ``--append-system-prompt-file``."""
 
     class _Proc:
         returncode = 0
         stdout = "worker output"
+        stderr = ""
 
     def _fake_run(argv: list[str], **kwargs: object) -> _Proc:
         seen["argv"] = argv
         seen["cwd"] = kwargs.get("cwd")
+        seen["env"] = kwargs.get("env")
+        seen["input"] = kwargs.get("input")
+        # The system-prompt temp file exists during the call (the TemporaryDirectory
+        # is cleaned up only after invoke() returns), so read it here.
+        idx = argv.index("--append-system-prompt-file") + 1
+        seen["system_prompt"] = Path(argv[idx]).read_text(encoding="utf-8")
         return _Proc()
 
-    monkeypatch.setattr(invoke_mod.subprocess, "run", _fake_run)
+    return _fake_run
+
+
+def test_claude_cli_invoker_builds_the_right_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _capture_run(seen))
 
     prompt = RenderedPrompt(cacheable_prefix="PREFIX", variable_suffix="SUFFIX")
     result = ClaudeCliInvoker().invoke(prompt, cwd=tmp_path)
@@ -67,11 +80,15 @@ def test_claude_cli_invoker_builds_the_right_call(
     assert isinstance(result, InvocationResult)
     assert result.exit_code == 0
     assert result.output == "worker output"
-    # The cacheable prefix is conveyed via --append-system-prompt (Claude
-    # Code caches the system prompt); the variable suffix is the user prompt.
-    # The worker forces the sandbox off (it SSH/rsyncs to a cluster — network
-    # the sandbox blocks, and native Windows can't sandbox at all).
-    assert seen["argv"] == [
+    # The cacheable prefix is conveyed via --append-system-prompt-file (Claude
+    # Code caches the system prompt); the variable suffix is fed on stdin as the
+    # user prompt. Both are kept OFF argv so the rendered prompt can't overrun
+    # Windows' 32K command-length limit (#169). The worker forces the sandbox off
+    # (it SSH/rsyncs to a cluster — network the sandbox blocks, and native
+    # Windows can't sandbox at all).
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[:-1] == [
         "claude",
         "-p",
         "--bare",
@@ -79,11 +96,38 @@ def test_claude_cli_invoker_builds_the_right_call(
         "haiku",
         "--settings",
         '{"sandbox": {"enabled": false}}',
-        "--append-system-prompt",
-        "PREFIX",
-        "SUFFIX",
+        "--append-system-prompt-file",
     ]
+    assert seen["system_prompt"] == "PREFIX"
+    assert seen["input"] == "SUFFIX"
     assert seen["cwd"] == str(tmp_path)
+
+
+def test_invoker_keeps_large_prompt_off_the_command_line(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # #169: native Windows' CreateProcessW caps the WHOLE command line at 32,767
+    # chars. The rendered submit worker prompt is tens of KB, so neither the
+    # cacheable prefix nor the variable suffix may ride argv — the prefix goes to
+    # a temp file (--append-system-prompt-file) and the suffix goes on stdin.
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _capture_run(seen))
+
+    big_prefix = "P" * 50_000
+    big_suffix = "S" * 50_000
+    ClaudeCliInvoker().invoke(
+        RenderedPrompt(cacheable_prefix=big_prefix, variable_suffix=big_suffix), cwd=tmp_path
+    )
+
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    # Every argv element stays tiny — nothing approaches the 32K limit.
+    assert max(len(a) for a in argv) < 1_000
+    assert big_prefix not in argv
+    assert big_suffix not in argv
+    # The content still reaches the worker, just off-argv.
+    assert seen["system_prompt"] == big_prefix
+    assert seen["input"] == big_suffix
 
 
 def test_rendered_prompt_joined() -> None:
@@ -186,19 +230,7 @@ def test_oauth_invoker_builds_the_right_call(
     )
 
     seen: dict[str, object] = {}
-
-    class _Proc:
-        returncode = 0
-        stdout = "worker output"
-        stderr = ""
-
-    def _fake_run(argv: list[str], **kwargs: object) -> _Proc:
-        seen["argv"] = argv
-        seen["cwd"] = kwargs.get("cwd")
-        seen["env"] = kwargs.get("env")
-        return _Proc()
-
-    monkeypatch.setattr(invoke_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(invoke_mod.subprocess, "run", _capture_run(seen))
 
     prompt = RenderedPrompt(cacheable_prefix="PREFIX", variable_suffix="SUFFIX")
     exp_dir = tmp_path / "exp"
@@ -208,18 +240,20 @@ def test_oauth_invoker_builds_the_right_call(
     assert result.exit_code == 0
     assert result.output == "worker output"
     # No --bare (it strips the OAuth-credential path); same model + sandbox-off +
-    # appended-prefix shape as the --bare path otherwise.
-    assert seen["argv"] == [
+    # off-argv prompt transport (system-prompt file + stdin) as the --bare path.
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[:-1] == [
         "claude",
         "-p",
         "--model",
         "haiku",
         "--settings",
         '{"sandbox": {"enabled": false}}',
-        "--append-system-prompt",
-        "PREFIX",
-        "SUFFIX",
+        "--append-system-prompt-file",
     ]
+    assert seen["system_prompt"] == "PREFIX"
+    assert seen["input"] == "SUFFIX"
     # The child is pointed at an ephemeral CLAUDE_CONFIG_DIR holding only the
     # linked creds, and runs in a clean cwd — NOT the experiment dir — so a user
     # repo's project .claude/ never loads into the worker.

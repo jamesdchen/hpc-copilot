@@ -231,6 +231,18 @@ Use [build-submit-spec](../../docs/primitives/build-submit-spec.md) to assemble 
 
 Write the per-run sidecar via `write_run_sidecar(..., wave_map=wave_map)`. Pass `None` for any v2 field that doesn't apply. **Don't pass `job_ids` here** — the sidecar is *pending* until `submit-flow` runs `update_run_sidecar_job_ids` after qsub returns.
 
+**`executor` MUST be the real per-task command** (e.g. `python train.py --seed $SEED` / `python3 .hpc/_hpc_dispatch.py`'s *resolved* target), NOT the job-script dispatcher command (`python3 .hpc/_hpc_dispatch.py`) itself — a dispatcher-as-executor sidecar makes the dispatcher run itself and the whole array self-recurses (#162).
+
+**Write-first is a hard precondition, not a manual unblock (#171).** `submit-flow` (Step 7-8) now *refuses* to run when the per-run sidecar is absent, or present but "pending" with an empty/dispatcher-only `executor` — it raises a `spec_invalid` telling you to write the sidecar first. So do this step; never skip it expecting `submit-flow` to synthesize one from the job-script command. Confirm it landed before building the submit-flow spec:
+
+```python
+from hpc_agent.state.runs import read_run_sidecar
+sc = read_run_sidecar(experiment_dir, run_id)  # raises FileNotFoundError if Step 6d was skipped
+assert sc["executor"] and "_hpc_dispatch.py" not in sc["executor"], (
+    "sidecar executor must be the real per-task command, not the dispatcher (#162/#171)"
+)
+```
+
 ## Step 6b: Pre-flight Gate (cached per cluster)
 
 Cache marker: `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` (TTL 24h). If marker exists, `all_ok=true`, < 24h old → log `preflight: cached <N>m ago — OK` and skip to Step 7.

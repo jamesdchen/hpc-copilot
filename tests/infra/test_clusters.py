@@ -12,7 +12,9 @@ import pytest
 
 from hpc_agent import errors
 from hpc_agent.infra.clusters import (
+    _COLD_START_WALLTIME_SEC,
     get_auto_daisy_chain,
+    get_default_walltime_sec,
     get_max_walltime_sec,
     get_walltime_arbitrage,
 )
@@ -89,3 +91,52 @@ class TestGetMaxWalltimeSec:
     def test_rejects_non_int(self, bad):
         with pytest.raises(errors.SpecInvalid, match="max_walltime_sec"):
             get_max_walltime_sec({"max_walltime_sec": bad})
+
+
+# ─── get_default_walltime_sec (cold-start fallback, #170) ────────────────────
+
+
+class TestGetDefaultWalltimeSec:
+    def test_absent_returns_conservative_floor(self):
+        # No prior, no operator override, no pro `read-runtime-prior` verb: the
+        # fallback MUST still resolve (#170) to the conservative built-in floor.
+        assert get_default_walltime_sec({}) == _COLD_START_WALLTIME_SEC
+
+    def test_explicit_value_used(self):
+        assert get_default_walltime_sec({"default_walltime_sec": 7200}) == 7200
+
+    def test_floor_clamped_to_max_walltime(self):
+        # A small-ceiling cluster never gets a cold-start ask above what its
+        # scheduler accepts — the floor is clamped to max_walltime_sec.
+        cfg = {"max_walltime_sec": 3600}
+        assert get_default_walltime_sec(cfg) == 3600
+
+    def test_explicit_value_clamped_to_max_walltime(self):
+        cfg = {"default_walltime_sec": 999999, "max_walltime_sec": 7200}
+        assert get_default_walltime_sec(cfg) == 7200
+
+    def test_rejects_zero(self):
+        with pytest.raises(errors.SpecInvalid, match="positive"):
+            get_default_walltime_sec({"default_walltime_sec": 0})
+
+    def test_rejects_negative(self):
+        with pytest.raises(errors.SpecInvalid, match="positive"):
+            get_default_walltime_sec({"default_walltime_sec": -1})
+
+    @pytest.mark.parametrize("bad", ["7200", 7200.0, True, False, [7200]])
+    def test_rejects_non_int(self, bad):
+        # None is NOT in this list: an absent key is the valid cold-start path.
+        with pytest.raises(errors.SpecInvalid, match="default_walltime_sec"):
+            get_default_walltime_sec({"default_walltime_sec": bad})
+
+    def test_demo_clusters_yaml_resolves_for_every_cluster(self):
+        # The shipped clusters.yaml has no default_walltime_sec (issue #170's
+        # second gap); the resolver must still produce a value for each stanza.
+        from hpc_agent.infra.clusters import load_clusters_config
+
+        clusters = load_clusters_config()
+        assert clusters  # sanity: the packaged config loaded
+        for name, cfg in clusters.items():
+            wt = get_default_walltime_sec(cfg)
+            assert wt > 0, name
+            assert wt <= get_max_walltime_sec(cfg), name

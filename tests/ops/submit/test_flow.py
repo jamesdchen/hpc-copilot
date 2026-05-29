@@ -439,6 +439,38 @@ class TestSidecarGuarantee:
         # No structurally broken sidecar was left behind.
         assert not run_sidecar_path(tmp_path, "rRecur").is_file()
 
+    @pytest.mark.parametrize("bad_executor", ["python3 .hpc/_hpc_dispatch.py", ""])
+    def test_refuses_present_but_pending_sidecar(
+        self, tmp_path: Any, _journal_home: Any, bad_executor: str
+    ) -> None:
+        """#171: a sidecar can be PRESENT but 'pending' — written with an empty
+        or dispatcher-only executor (Step 6d skipped / half-written). Presence
+        alone must NOT satisfy the guard: the cluster dispatcher would have
+        nothing to run, or would run itself (#162). submit-flow refuses with the
+        write-first error rather than shipping it — write-first is a hard
+        precondition the primitive owns, not a manual unblock step."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import write_run_sidecar
+
+        write_run_sidecar(
+            tmp_path,
+            run_id="rPending",
+            cmd_sha="x" * 64,
+            hpc_agent_version="0.7.4",
+            submitted_at="2026-01-01T00:00:00+00:00",
+            executor=bad_executor,  # pending: no real per-task command
+            result_dir_template="results/{run_id}/task_{task_id}",
+            task_count=4,
+            tasks_py_sha="y" * 64,
+        )
+        # The spec even carries a real executor, but the guard reads the EXISTING
+        # sidecar and never silently overwrites it (#148/#150) — it refuses.
+        spec = _spec("rPending")
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3, pytest.raises(errors.SpecInvalid, match="write_run_sidecar"):
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+
     def test_records_resources_on_synthesized_sidecar(
         self, tmp_path: Any, _journal_home: Any
     ) -> None:
