@@ -7,7 +7,6 @@ Shared subprocess + envelope helpers live in :mod:`._helpers`.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -19,20 +18,19 @@ from ._helpers import run_cli as _run_cli
 # ─── submit dry-run + dedup contract ───────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_submit_dry_run_does_not_touch_journal(tmp_path: Path) -> None:
     """--dry-run reports what would happen without writing to the journal."""
     spec = tmp_path / "spec.json"
     spec.write_text(json.dumps(SUBMIT_SPEC))
     journal = tmp_path / "journal"
-    env_with_journal = {"HPC_JOURNAL_DIR": str(journal), "PATH": ""}
-    # Need PATH for ssh-add etc., but not really for dry-run; pull from os.
     import os
 
-    env_with_journal["PATH"] = os.environ.get("PATH", "")
+    env_with_journal = {"HPC_JOURNAL_DIR": str(journal), "PATH": os.environ.get("PATH", "")}
+    # A Python subprocess on Windows needs SystemRoot/COMSPEC to spawn; no-op on POSIX.
+    for _var in ("SystemRoot", "COMSPEC", "USERPROFILE"):
+        _val = os.environ.get(_var)
+        if _val is not None:
+            env_with_journal[_var] = _val
     rc, out, _ = _run_cli(
         "submit",
         "--experiment-dir",

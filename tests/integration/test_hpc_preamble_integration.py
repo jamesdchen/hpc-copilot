@@ -34,7 +34,8 @@ _MD5SUM = shutil.which("md5sum")
 pytestmark = [
     pytest.mark.skipif(
         sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+        reason="preamble scripts require bash and POSIX utilities (md5sum, rsync) "
+        "that are not available on win32",
     ),
     pytest.mark.skipif(
         not (_BASH and _MD5SUM),

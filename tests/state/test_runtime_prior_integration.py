@@ -125,7 +125,9 @@ def _worker_append_batch(tmp_path: str, run_id: str, n: int) -> None:
 
 @pytest.mark.skipif(
     sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+    reason="no-lost-samples guarantee requires atomic_locked_update's fcntl.flock "
+    "serialisation, which degrades to a no-op on win32 — the invariant is "
+    "genuinely not made on Windows, same as test_concurrent_appenders",
 )
 def test_concurrent_writers_lose_no_samples(tmp_path: Path) -> None:
     """Two child processes each append 10 distinct samples. Under

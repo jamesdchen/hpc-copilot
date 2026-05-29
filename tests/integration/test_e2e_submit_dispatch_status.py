@@ -28,7 +28,8 @@ from hpc_agent.models.mapreduce.reduce.status import check_results_from_tasks
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+    reason="end-to-end integration test: spawns worker subprocesses via POSIX "
+    "subprocess dispatch and relies on POSIX path/env conventions throughout",
 )
 
 STUB_SCRIPT = """\
