@@ -204,3 +204,30 @@ def test_sample_n_tasks_caps_iteration(tmp_path: Path) -> None:
     out = validate_executor_signatures(tmp_path, spec=spec)
     # Only tasks 0-1 walked; the bad value at task 5 is NOT flagged.
     assert all(f.code != "literal_value_not_allowed" for f in out.findings)
+
+
+# ─── #178: experiment dir on sys.path during local intake ──────────────────
+
+
+def test_module_off_syspath_resolves_via_experiment_dir(tmp_path: Path) -> None:
+    """A module importable on the cluster (where ``$REPO_DIR`` is on
+    ``PYTHONPATH``) must NOT false-fail local intake just because the
+    experiment dir isn't on the ``hpc-agent`` console-script's sys.path (#178).
+
+    Uses a PEP 420 namespace package (no ``__init__.py``) reachable ONLY via
+    ``experiment_dir`` — the exact ``import executors.X`` shape from the bug.
+    """
+    pkg = tmp_path / "executors"
+    pkg.mkdir(parents=True)
+    (pkg / "ridge.py").write_text(
+        textwrap.dedent("""
+            def main(horizon: int, seed: int) -> None:
+                pass
+        """).strip()
+    )
+    _write_tasks_py(tmp_path, [{"horizon": 1, "seed": 42}])
+    assert str(tmp_path.resolve()) not in sys.path  # the bug's precondition
+    out = validate_executor_signatures(tmp_path, spec=_spec("executors.ridge"))
+    codes = {f.code for f in out.findings}
+    assert "executor_module_import_error" not in codes
+    assert out.findings == []  # clean signature → fully validated, not skipped

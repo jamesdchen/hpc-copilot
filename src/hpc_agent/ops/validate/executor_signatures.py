@@ -17,7 +17,6 @@ Skips silently (info finding) if the executor module fails to import
 
 from __future__ import annotations
 
-import importlib
 import inspect
 from typing import TYPE_CHECKING, Literal, get_args, get_origin
 
@@ -94,8 +93,14 @@ def validate_executor_signatures(
         )
         return ValidateExecutorSignaturesResult(findings=findings)
 
+    from hpc_agent.infra.executor_import import import_executor_module
+
     try:
-        executor_mod = importlib.import_module(spec.executor_module)
+        # Import with experiment_dir on sys.path so a module that resolves
+        # on the cluster (where $REPO_DIR is on PYTHONPATH) also resolves
+        # during local intake — otherwise a valid ``executors.X`` would
+        # false-fail with executor_module_import_error (#178).
+        executor_mod = import_executor_module(spec.executor_module, experiment_dir)
     except Exception as exc:  # noqa: BLE001
         findings.append(
             ValidatorFinding(

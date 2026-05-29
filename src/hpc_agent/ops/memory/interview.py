@@ -180,7 +180,7 @@ def record_interview(
         elif kind == "python_module":
             # Validate the module/function imports; surface the same spec_invalid
             # the rest of the interview uses so a typo is loud at intake.
-            _validate_python_module_entry(ep)
+            _validate_python_module_entry(ep, campaign_dir)
             entry_point_materialized = {
                 "kind": "python_module",
                 "module": ep["module"],
@@ -332,19 +332,26 @@ from __future__ import annotations
 '''
 
 
-def _validate_python_module_entry(ep: Mapping[str, Any]) -> None:
+def _validate_python_module_entry(ep: Mapping[str, Any], campaign_dir: Path) -> None:
     """Confirm ``module`` imports and ``function`` exists on it.
 
     Catches the typo / packaging mistake at intake. Without this the
     failure would land much later — during cluster-side dispatch — as
     an opaque ``ImportError`` in a per-task log.
+
+    The import runs with *campaign_dir* prepended to ``sys.path`` so a
+    ``python_module`` entry that resolves on the cluster — where
+    ``hpc_preamble.sh`` puts ``$REPO_DIR`` on ``PYTHONPATH`` — also
+    resolves during local intake. Without it a valid ``executors.X``
+    false-fails here because the ``hpc-agent`` console-script's path does
+    not include the experiment dir (#178).
     """
-    import importlib
+    from hpc_agent.infra.executor_import import import_executor_module
 
     module = ep["module"]
     function = ep.get("function", "main")
     try:
-        mod = importlib.import_module(module)
+        mod = import_executor_module(module, campaign_dir)
     except ImportError as exc:
         raise errors.SpecInvalid(
             f"python_module.entry_point: module {module!r} does not import "
