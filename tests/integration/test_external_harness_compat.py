@@ -279,9 +279,7 @@ def test_error_code_ssh_unreachable_on_failed_ssh_probe(
         patch("hpc_agent.cli._helpers.agent_available", return_value=False),
         patch("hpc_agent.cli._helpers._emit", side_effect=captured.append),
     ):
-        rc = _cli_main(
-            ["submit-flow", "--experiment-dir", str(tmp_path), "--spec", str(spec_path)]
-        )
+        rc = _cli_main(["submit-flow", "--experiment-dir", str(tmp_path), "--spec", str(spec_path)])
 
     assert rc == 2, f"ssh_unreachable must exit 2 (network category); got {rc}"
     assert captured, "no envelope emitted"

@@ -129,9 +129,7 @@ def verify_submitted(experiment_dir: Path, *, run_id: str) -> dict[str, Any]:
             f"queue ({missing}) — already terminal, or never landed. Verify intent."
         )
     else:
-        details = (
-            f"run {run_id!r}: all {len(healthy)} job(s) queued/running, none in error/held."
-        )
+        details = f"run {run_id!r}: all {len(healthy)} job(s) queued/running, none in error/held."
 
     return {
         "ok": ok,

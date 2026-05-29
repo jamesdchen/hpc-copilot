@@ -23,8 +23,7 @@ class VerifySubmittedResult(BaseModel):
     states: dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "job_id -> raw scheduler state token "
-            "(e.g. SGE 'Eqw'/'r', SLURM 'RUNNING'/'PENDING')."
+            "job_id -> raw scheduler state token (e.g. SGE 'Eqw'/'r', SLURM 'RUNNING'/'PENDING')."
         ),
     )
     healthy: list[str] = Field(
