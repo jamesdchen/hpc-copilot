@@ -14,7 +14,7 @@ The slash `/submit-hpc` is the human-interview wrapper around this skill; an ext
 
 - **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
-- **Don't override the invoker default.** Hand off with the plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker. Reach for `--inline` / `HPC_AGENT_INVOKER=inline` only when the *user* opted in — never to dodge a "worker-auth risk": if `ANTHROPIC_API_KEY` is set (or a Claude Code OAuth creds file exists) the default `--bare` worker authenticates; if neither is present, escalate rather than silently switching modes. Inline trades away the worker's context isolation — that's the user's call, not a default.
+- **Don't override the invoker default.** Hand off with the plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker. Reach for `--inline` / `HPC_AGENT_INVOKER=inline` only when the *user* opted in — never to dodge a "worker-auth risk": if `ANTHROPIC_API_KEY` is set (or a Claude Code OAuth creds file exists) the default `--bare` worker authenticates; if neither is present, escalate rather than silently switching modes. Inline trades away the worker's context isolation — that's the user's call, not a default. This is now enforced: `hpc-agent run` **refuses** an agent-supplied `--inline` when a spawning worker can authenticate (only `HPC_AGENT_INVOKER=inline` opts in then), so a refusal there is by design — use the default spawn or escalate, don't work around it.
 
 ## Inputs
 

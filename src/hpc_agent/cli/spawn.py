@@ -5,7 +5,9 @@ validates fields, renders the canonical worker prompt, invokes a
 fresh-context ``claude -p`` worker, and emits its parsed report. Its
 ``--inline`` mode (also ``HPC_AGENT_INVOKER=inline``) skips the spawn and
 returns the rendered procedure for the calling agent to run in its own
-context.
+context. The agent-reachable ``--inline`` flag is refused when a spawning
+worker can authenticate — inline is then a user opt-in via
+``HPC_AGENT_INVOKER=inline``, not an agent default (#155).
 
 This is a Tier 3 verb: a CLI-only orchestrator with no ``@primitive``
 backing — it lives outside the registry-driven dispatcher
@@ -37,9 +39,18 @@ _INVOKER_ENV = "HPC_AGENT_INVOKER"
 _INLINE_INVOKER = "inline"
 
 
-def _inline_requested(args: argparse.Namespace) -> bool:
-    if getattr(args, "inline", False):
-        return True
+def _inline_via_flag(args: argparse.Namespace) -> bool:
+    """The agent-reachable ``--inline`` flag was passed."""
+    return bool(getattr(args, "inline", False))
+
+
+def _inline_via_env() -> bool:
+    """The user set ``HPC_AGENT_INVOKER=inline`` in the environment.
+
+    This is the deliberate, unconditional opt-in: a shell-level signal the
+    in-session agent does not set for itself. Unlike the ``--inline`` flag it is
+    never refused by the worker-available guard in :func:`cmd_run` (#155).
+    """
     return os.environ.get(_INVOKER_ENV, "").strip().lower() == _INLINE_INVOKER
 
 
@@ -56,11 +67,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     under ``data.prompt`` with ``data.mode == "inline"``, so the calling agent
     runs the procedure itself in its own context instead of forking a fresh
     ``claude -p`` worker per command.
+
+    The agent-reachable ``--inline`` flag is REFUSED when a spawning worker can
+    authenticate (:func:`worker_credentials_available`) and the user has not set
+    ``HPC_AGENT_INVOKER=inline``: inline trades away the worker's context
+    isolation and is a user opt-in, not something an agent should synthesize
+    around an unfounded worker-auth worry (#155). The env var stays the
+    unconditional opt-in.
     """
     from hpc_agent._kernel.extension.spawn_prompt import (
         SpawnContractError,
         validate_and_render_parts,
     )
+    from hpc_agent._kernel.lifecycle.invoke import worker_credentials_available
     from hpc_agent._kernel.lifecycle.run import run_workflow
 
     try:
@@ -79,7 +98,30 @@ def cmd_run(args: argparse.Namespace) -> int:
             category="user",
             retry_safe=False,
         )
-    if _inline_requested(args):
+    flag_inline = _inline_via_flag(args)
+    env_inline = _inline_via_env()
+    if flag_inline and not env_inline and worker_credentials_available():
+        # Hard guard (#155): the agent-reachable ``--inline`` FLAG must not let a
+        # caller synthesize an inline run when a spawning worker can authenticate.
+        # The default isolated worker is correct; inline trades away its context
+        # isolation and is a USER opt-in. ``HPC_AGENT_INVOKER=inline`` (a shell
+        # signal the agent doesn't set) stays the unconditional opt-in; the flag
+        # alone is refused so an agent can't route around an available worker on
+        # an unfounded worker-auth worry (the recurrence that reopened #155).
+        return _err(
+            error_code="spec_invalid",
+            message=(
+                "--inline not honored: a spawning worker can authenticate "
+                "(ANTHROPIC_API_KEY / cloud creds or a Claude Code OAuth login is "
+                "present), so the default isolated worker works. Inline trades away "
+                "that isolation and is a user opt-in, not an agent default. Drop "
+                "--inline to use the default spawn, or set HPC_AGENT_INVOKER=inline "
+                "to deliberately force inline."
+            ),
+            category="user",
+            retry_safe=False,
+        )
+    if flag_inline or env_inline:
         try:
             prompt = validate_and_render_parts(
                 {
@@ -178,8 +220,11 @@ def register(sub: argparse._SubParsersAction) -> None:
         help=(
             "Do not spawn a fresh `claude -p` worker; render the workflow "
             "procedure and return it under `data.prompt` (mode=inline) so the "
-            "calling agent runs it in its own context. Trades context isolation "
-            "for no per-command spawn. Also selected by HPC_AGENT_INVOKER=inline."
+            "calling agent runs it in its own context, trading context isolation "
+            "for no per-command spawn. REFUSED when a spawning worker can "
+            "authenticate (ANTHROPIC_API_KEY / cloud creds or a Claude Code OAuth "
+            "login): inline is then a user opt-in via HPC_AGENT_INVOKER=inline, "
+            "not an agent default (#155)."
         ),
     )
     p_run.set_defaults(func=cmd_run)

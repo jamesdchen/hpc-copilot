@@ -100,6 +100,25 @@ def _oauth_credentials_available() -> bool:
     return path is not None and path.is_file()
 
 
+def worker_credentials_available() -> bool:
+    """True when a spawned worker would have a usable credential.
+
+    Mirrors the affirmative branches of :func:`_auto_select_invoker`: API-key /
+    cloud-provider creds in the environment (→ the ``--bare`` claude-cli worker)
+    or a Claude Code OAuth credentials file on a supported OS (→
+    ``claude-cli-oauth``). Returns ``False`` only when NEITHER is present — the
+    fall-through case where any spawn would fail its pre-spawn credential guard.
+
+    ``hpc-agent run`` uses this to refuse an agent-supplied ``--inline`` when a
+    real worker is available: inline trades away the worker's context isolation
+    and is a user opt-in, not something an agent should synthesize around an
+    (unfounded) worker-auth worry (#155).
+    """
+    if any(os.environ.get(var) for var in _WORKER_CREDENTIAL_ENV_VARS):
+        return True
+    return _oauth_credentials_available()
+
+
 def _link_credentials(live: Path, link: Path) -> None:
     """Point *link* at the live OAuth creds *live* inside the ephemeral dir.
 
