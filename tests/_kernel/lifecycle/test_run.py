@@ -184,3 +184,57 @@ def test_cmd_run_inline_rejects_bad_fields_json(monkeypatch: pytest.MonkeyPatch)
         argparse.Namespace(workflow="submit", experiment_dir=Path("."), fields_json="not-json")
     )
     assert rc == 1
+
+
+def test_cmd_run_reads_fields_from_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """--fields-file is read + parsed — the Windows escape-hatch for inline
+    JSON that a shell quoting layer would mangle (backslash paths)."""
+    import argparse
+    import json
+
+    from hpc_agent.cli.spawn import cmd_run
+
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "inline")
+    _no_spawn(monkeypatch)
+    fields_file = tmp_path / "fields.json"
+    fields_file.write_text("{}", encoding="utf-8")
+    rc = cmd_run(
+        argparse.Namespace(
+            workflow="submit",
+            experiment_dir=Path("."),
+            fields_json="{}",
+            fields_file=str(fields_file),
+        )
+    )
+    assert rc == 0
+    env = json.loads(capsys.readouterr().out.strip())
+    assert env["data"]["mode"] == "inline"
+
+
+def test_cmd_run_fields_file_wins_and_labels_errors(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """--fields-file takes precedence over --fields-json, and a malformed file
+    fails fast with a message naming the file source (not --fields-json)."""
+    import argparse
+    import json
+
+    from hpc_agent.cli.spawn import cmd_run
+
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "inline")
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not valid", encoding="utf-8")
+    rc = cmd_run(
+        argparse.Namespace(
+            workflow="submit",
+            experiment_dir=Path("."),
+            fields_json="{}",  # valid, but the file wins → the file's bad JSON surfaces
+            fields_file=str(bad),
+        )
+    )
+    assert rc == 1
+    env = json.loads(capsys.readouterr().out.strip())
+    assert env["error_code"] == "spec_invalid"
+    assert "--fields-file" in env["message"]

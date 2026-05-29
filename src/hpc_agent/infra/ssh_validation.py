@@ -21,6 +21,7 @@ from hpc_agent.errors import RemoteCommandFailed
 __all__ = [
     "parse_remote_json",
     "validate_remote_path",
+    "validate_remote_path_under_scratch",
     "validate_ssh_target",
 ]
 
@@ -61,6 +62,48 @@ def validate_remote_path(remote_path: str) -> str:
     if bad:
         raise errors.SpecInvalid(
             f"remote_path contains disallowed characters {bad!r}: {remote_path!r}"
+        )
+    return remote_path
+
+
+def validate_remote_path_under_scratch(remote_path: str, scratch: str) -> str:
+    """Refuse a *remote_path* that is the cluster scratch root or shallower (#184).
+
+    The cluster's ``scratch`` value (from ``clusters.yaml``) is the parent
+    directory under which each experiment gets its own subtree. When a caller
+    sets ``remote_path`` to ``scratch`` itself (no project-name component), a
+    deploy's ``--delete`` pre-clean walks **every sibling project** under
+    ``scratch`` and only ``PROTECTED_OUTPUT_DIRS`` (``results/`` / ``_combiner/``
+    / ``hpc_agent/``) inside each survives — the rest is eligible for unlink.
+    The live #184 incident hit the 30-min transfer timeout mid-traversal; the
+    next attempt would have completed the deletion.
+
+    This validator runs *after* :func:`validate_remote_path`'s shape check and
+    raises :class:`errors.SpecInvalid` when:
+
+    * the path equals ``scratch`` (rstrip-equivalent), or
+    * the path does not start with ``scratch + "/"`` — i.e. it is not strictly
+      under the scratch root.
+
+    *scratch* must already be a validated absolute path from ``clusters.yaml``;
+    an empty *scratch* is a no-op (the cluster has no scratch declaration to
+    enforce against, e.g. local-only clusters).
+    """
+    validate_remote_path(remote_path)
+    if not scratch:
+        return remote_path
+    scratch_clean = scratch.rstrip("/")
+    rp_clean = remote_path.rstrip("/")
+    if rp_clean == scratch_clean:
+        raise errors.SpecInvalid(
+            f"remote_path equals the cluster scratch root ({scratch!r}). A deploy "
+            f"--delete pre-clean would walk every sibling project under it. Use a "
+            f"per-experiment subdirectory: e.g. {scratch_clean}/<repo_name>."
+        )
+    if not rp_clean.startswith(scratch_clean + "/"):
+        raise errors.SpecInvalid(
+            f"remote_path {remote_path!r} is not strictly below the cluster scratch "
+            f"root {scratch!r}. Use a path of the form {scratch_clean}/<repo_name>."
         )
     return remote_path
 

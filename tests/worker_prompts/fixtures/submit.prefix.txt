@@ -17,6 +17,25 @@ Agent-facing composition over the **[submit-flow](../../docs/primitives/submit-f
 
 Throughout this procedure, "invoke <primitive>" means call the primitive's `backed_by.cli` or `backed_by.python` entry point; see `docs/primitives/<name>.md` for the full contract. For envelope/exit-code shapes see `docs/reference/cli-spec.md`.
 
+## Reporting conventions
+
+Two fields on the worker report carry observations back to the caller — they are NOT interchangeable:
+
+- **`decisions`** is the **strict enumerated record** of which judgement points this workflow reached. For the **submit** workflow there are exactly seven allowed `point` IDs — any other value is rejected by `parse_worker_report`:
+  - `entry_path` (backed by `suggest-setup-action`)
+  - `prior_run` (backed by `find-prior-run`)
+  - `axis_class` (backed by `classify-axis`)
+  - `throughput_plan` (backed by `plan-throughput`)
+  - `canary` (backed by `verify-canary`)
+  - `preflight` (backed by `check-preflight`)
+  - `validate_campaign` (backed by `validate-campaign`)
+
+  Each entry is `{point, outcome, why}` — `outcome` is a short tag describing what happened at that point (e.g. `unclassified`, `setup_required`, `fail`, `dispatcher_failed`), `why` is a free-form one-liner.
+
+- **`anomalies`** is a **free-form multi-line string** for everything else: stop conditions that don't correspond to an enumerated point, magnitude warnings, deduped notices, raw `stderr` tails, held-job details, missing-flag callouts. Anything you'd want the caller to see that isn't one of the seven points goes here.
+
+When in doubt, prefer `anomalies`. **Do not invent new `decisions` point IDs** (`setup_action`, `environment`, `setup_required`, `mature_repo_needs_interview`, etc.) — the envelope is rejected and the run reports as broken even when the cluster work succeeded.
+
 ## Setup
 
 **Load context first.** Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign / cluster state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
@@ -89,7 +108,7 @@ HAS_MAIN=$([ -f main.py ] || [ -f src/main.py ] && echo yes || echo no)
 HAS_REGISTER_RUN=$(grep -rl '@register_run' notebooks/ src/ 2>/dev/null | head -1 && echo yes || echo no)
 ```
 
-If `HAS_MAIN=yes` and `HAS_REGISTER_RUN=no` (or empty): the experiment has a shell entry point but no `@register_run` declaration the worker can pick up. Record `mature_repo_needs_interview` in `decisions` with `reason: "main.py present, no @register_run; ask the user to add @register_run to their entry-point function (two-line edit: import + decorator), or run /wrap-entry-point-hpc for guided setup, then re-invoke"` and stop. Direct decoration is the cheap path — a two-line edit on the function `main.py` ultimately calls; `/wrap-entry-point-hpc` is the guided path that walks the user through that edit and falls back to wrapper materialization only when direct decoration isn't possible.
+If `HAS_MAIN=yes` and `HAS_REGISTER_RUN=no` (or empty): the experiment has a shell entry point but no `@register_run` declaration the worker can pick up. Record this in `anomalies` (prefix the line `mature_repo_needs_interview: main.py present, no @register_run; ask the user to add @register_run to their entry-point function (two-line edit: import + decorator), or run /wrap-entry-point-hpc for guided setup, then re-invoke`) and stop. Direct decoration is the cheap path — a two-line edit on the function `main.py` ultimately calls; `/wrap-entry-point-hpc` is the guided path that walks the user through that edit and falls back to wrapper materialization only when direct decoration isn't possible.
 
 Otherwise (no mature-repo signals): the rest of the procedure runs unchanged (the notebook-discovery default).
 
@@ -120,7 +139,7 @@ Map flag set per contract:
 - **New-contract** (`info.has_compute_function == true`): if `.hpc/tasks.py` exists, read `FLAGS[<module>]` for the per-executor flag list. If first submit, capture intended flags during Step 6b interview.
 - **Old-contract** (`info.has_main_guard` only): run `python3 <info.path> --help` to map the CLI interface.
 
-If `discover_executors` returns empty, scaffolding requires an interactive sub-interview which a headless worker cannot run — record the boundary in `decisions` and stop for the caller to handle.
+If `discover_executors` returns empty, scaffolding requires an interactive sub-interview which a headless worker cannot run — record the boundary in `anomalies` and stop for the caller to handle.
 
 ## Step 2: Parse user intent
 
@@ -140,7 +159,7 @@ The task list lives in user-written `.hpc/tasks.py` (`total()` + `resolve(task_i
 - **`executors.<run_name>` present AND its `run_signature_sha` matches the picked run's current `run_signature_sha`** (Step 1) → the verdict is valid:
   - `data_axis.kind == "cartesian"` → no ordered series to split; build a **plain cartesian** `tasks.py` (Step 6b, **omit** `data_axis` from the spec).
   - `independent` / `associative` / `bounded_halo` / `sequential` → planner-driven; thread the `data_axis` block into Step 6b's `build-tasks-py` spec verbatim.
-- **No entry, or the `run_signature_sha` drifted** → unresolved. **Do NOT read the executor's code to infer an axis, and do NOT default to a cartesian grid** — a wrong "no series" guess silently mishandles a stateful series and returns plausible-but-wrong numbers. Record `axis_unclassified` in `decisions` (run name + current `run_signature_sha`) and **stop**; the caller runs `hpc-classify-axis`, writes the verdict to `axes.yaml`, and re-invokes this workflow.
+- **No entry, or the `run_signature_sha` drifted** → unresolved. **Do NOT read the executor's code to infer an axis, and do NOT default to a cartesian grid** — a wrong "no series" guess silently mishandles a stateful series and returns plausible-but-wrong numbers. Record an `axis_class` decision with outcome `unclassified` (put `run_name=<name>, run_signature_sha=<sha>` in `why`) and **stop**; the caller runs `hpc-classify-axis`, writes the verdict to `axes.yaml`, and re-invokes this workflow.
 
 The distinction that makes this safe: a *recorded* `cartesian` verdict means the caller's matcher **confidently** found no ordered series; an *absent* verdict means "not yet resolved → escalate." The worker never conflates the two.
 
@@ -150,7 +169,7 @@ The distinction that makes this safe: a *recorded* `cartesian` verdict means the
 
 Before scaffolding a planner-driven `tasks.py`, prove the classification on a fixture: `hpc_agent.experiment_kit.check_elision` (or `assert_elision_equivalent`) runs the experiment once whole and once split N ways and asserts the results agree. If it fails, the axis is misclassified — widen the halo or fall back to `Sequential()`. This gate is what makes the inference safe: a misclassified axis produces a job that runs fine and returns plausible-but-wrong numbers, and nothing else catches it. Do not skip it, and recommend the experiment repo wire `assert_elision_equivalent` into its CI as a required check.
 
-If the projected task count exceeds `constraints.max_tasks` or ~1000, record a `magnitude_warning` in `decisions` / `anomalies` so the caller can confirm with the user before proceeding.
+If the projected task count exceeds `constraints.max_tasks` or ~1000, record a `magnitude_warning` in `anomalies` so the caller can confirm with the user before proceeding.
 
 ## Step 4: Auto-Configure Environment
 
@@ -162,7 +181,7 @@ Resolve in order: cluster (from `fields` or `data.latest_run`); `SSH_TARGET` + `
 | `sklearn`/`xgboost`/`lightgbm` | CPU/ML | Load python modules |
 | `numpy`/`pandas` only | CPU/lightweight | Load python modules |
 
-For DL executors with `conda_envs` listed in `clusters.yaml` → record the candidates as a `decisions` entry for the caller to confirm with the user; the caller re-invokes with the picked env in `fields`. Resource defaults: CPU/ML 1×16G×4h; GPU/DL 4×16G×6h×2gpu (gpu_type=first in cluster's `gpu_types`).
+For DL executors with `conda_envs` listed in `clusters.yaml` → record the candidates in `anomalies` for the caller to confirm with the user; the caller re-invokes with the picked env in `fields`. Resource defaults: CPU/ML 1×16G×4h; GPU/DL 4×16G×6h×2gpu (gpu_type=first in cluster's `gpu_types`).
 
 Build rsync excludes from `.gitignore` patterns + the standard set (`__pycache__/`, `*.pyc`, `.git/`, `.claude/`, `.mypy_cache/`) + result directories. You don't need to special-case the generated package: `submit-flow` carves `src/`, `.hpc/tasks.py`, and `.hpc/cli.py` back out of the exclude list itself — the cluster node needs them (`src/` is the executor package built at Step 0; `tasks.py`/`cli.py` are the dispatch contract) — while keeping `.hpc/.build-cache.json` excluded. `.hpc/` otherwise rides rsync (the cluster also needs the in-flight `runs/<run_id>.json`); `submit-flow` protects the framework-deployed `.hpc/` files from `--delete` (see [submit-flow.md](../../docs/primitives/submit-flow.md)).
 
@@ -237,7 +256,7 @@ hpc-agent find-prior-run --experiment-dir . --cmd-sha "$CMD_SHA"
 
 Branch on envelope's `{found, is_orphan}`:
 - `found=False` → fresh; continue to 6d.
-- `found=True, is_orphan=False` → real prior. Record in `decisions` and surface to the caller — only the user can choose resume-vs-fresh.
+- `found=True, is_orphan=False` → real prior. Record a `prior_run` decision with outcome `found` (put the `run_id` in `why`) and surface to the caller — only the user can choose resume-vs-fresh.
 - `found=True, is_orphan=True` → half-baked sidecar. Suggest `prune-orphan-sidecars` or proceed and let `submit_flow_batch`'s auto-prune handle it.
 
 ### 6d: Write sidecar + build submit-flow spec
@@ -262,7 +281,7 @@ assert sc["executor"] and "_hpc_dispatch.py" not in sc["executor"], (
 
 Cache marker: `~/.claude/hpc/<repo_hash>/preflight-<cluster>.json` (TTL 24h). If marker exists, `all_ok=true`, < 24h old → log `preflight: cached <N>m ago — OK` and skip to Step 7.
 
-Otherwise invoke [check-preflight](../../docs/primitives/check-preflight.md) with `--cluster <name>`. On `data.all_ok == true`: write/update marker, continue. On any check failure: do NOT write marker, record `setup_required` in `decisions` with the failing checks verbatim and stop — the user fixes their environment with `hpc-agent setup --cluster <name>` and the caller re-invokes.
+Otherwise invoke [check-preflight](../../docs/primitives/check-preflight.md) with `--cluster <name>`. On `data.all_ok == true`: write/update marker, continue. On any check failure: do NOT write marker, record a `preflight` decision with outcome `setup_required`, put the failing checks verbatim in `anomalies`, and stop — the user fixes their environment with `hpc-agent setup --cluster <name>` and the caller re-invokes.
 
 ## Step 6c: Pre-submit campaign validation
 
@@ -275,7 +294,7 @@ hpc-agent validate-campaign --spec validate_campaign.input.json --experiment-dir
 Branch on `data.overall`:
 - `pass` → proceed.
 - `warn` → record warnings in `anomalies`; proceed.
-- `fail` → do NOT proceed. Record the `error`-severity findings with `code`/`message`/`suggested_fix` in `decisions` and stop. **No `--force` flag by design** — the caller edits `.hpc/playbook.yaml` if a rule is wrong, then re-invokes.
+- `fail` → do NOT proceed. Record a `validate_campaign` decision with outcome `fail`, put the `error`-severity findings (`code`/`message`/`suggested_fix` verbatim) in `anomalies`, and stop. **No `--force` flag by design** — the caller edits `.hpc/playbook.yaml` if a rule is wrong, then re-invokes.
 
 ## Step 7-8: Invoke `submit-flow` (two-phase canary gate)
 
@@ -302,7 +321,7 @@ Branch on `data.overall`:
 hpc-agent submit-flow --spec spec.json --experiment-dir .
 ```
 
-- `data.deduped: true` → the main run already ran; original jobs are live. Record `deduped` in `decisions`; switch to the status workflow. Do NOT re-submit.
+- `data.deduped: true` → the main run already ran; original jobs are live. Record this in `anomalies` (`deduped: <run_id>`); switch to the status workflow. Do NOT re-submit.
 - `data.deduped: false` → fresh. `data.main_launched` is **false** (only the canary went out). Capture `data.canary_run_id` / `data.canary_job_ids`.
 - Error envelopes: branch by `error_code` per submit-flow's contract.
 
@@ -312,7 +331,7 @@ hpc-agent submit-flow --spec spec.json --experiment-dir .
 hpc-agent verify-canary --experiment-dir . --canary-run-id "$CANARY_RUN_ID" --expect-output "results/seed_42/metrics.json"
 ```
 
-- `ok=False` → record `stderr_tail` verbatim and the `failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`) in `decisions`, then **stop. The main array never launches.**
+- `ok=False` → record a `canary` decision with outcome set to the `failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`), put `stderr_tail` verbatim in `anomalies`, then **stop. The main array never launches.**
 - `ok=True` → proceed to Phase 2.
 
 **Phase 2 — launch the main array** (only after a verified canary): re-invoke `submit-flow` with the SAME spec but `"canary": false` and `"canary_only": false` (the canary already ran):
@@ -335,7 +354,7 @@ It reads the run's job_ids from the journal, queries per-job scheduler state ove
 
 Branch:
 - `ok=True` → every submitted job is queued/running, none in error/held → proceed.
-- `ok=False` → record the `error`/`held` job IDs, `states`, and `details` verbatim in `decisions`, then stop. Do NOT run Step 9 or Step 10.
+- `ok=False` → record the `error`/`held` job IDs, `states`, and `details` verbatim in `anomalies`, then stop. Do NOT run Step 9 or Step 10.
 
 `missing` (submitted IDs absent from the queue right after submit) is suspicious — surface it too. See the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md); the failure-mode table below maps a bad state (e.g. `Eqw`) to its fix.
 
@@ -361,7 +380,7 @@ When Step 8b finds a job in a failed state, or a later check surfaces task failu
 | rsync / scp transfer failure | SSH key issue | Verify `ssh $SSH_TARGET hostname` first |
 | `--<flag>` not recognized | The executor does not accept that argument | Check `--help`; the flag must be in the executor's `FLAGS` / CLI |
 
-If the requested run names a CLI flag the executor does not accept, record it in `decisions` and stop before submitting — a missing flag fails every task in the array.
+If the requested run names a CLI flag the executor does not accept, record it in `anomalies` and stop before submitting — a missing flag fails every task in the array.
 
 ## Notes
 

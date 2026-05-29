@@ -82,19 +82,37 @@ def cmd_run(args: argparse.Namespace) -> int:
     from hpc_agent._kernel.lifecycle.invoke import worker_credentials_available
     from hpc_agent._kernel.lifecycle.run import run_workflow
 
+    # --fields-file wins over inline --fields-json: reading the JSON from a file
+    # sidesteps the shell-quoting layers that mangle inline backslash paths on
+    # Windows (a collapsed `\\`->`\` yields invalid JSON escapes like `\U`).
+    fields_file = getattr(args, "fields_file", None)
+    source_label = "--fields-json"
+    raw_fields = args.fields_json
+    if fields_file:
+        source_label = f"--fields-file {fields_file}"
+        try:
+            with open(fields_file, encoding="utf-8") as fh:
+                raw_fields = fh.read()
+        except OSError as exc:
+            return _err(
+                error_code="spec_invalid",
+                message=f"--fields-file could not be read: {exc}",
+                category="user",
+                retry_safe=False,
+            )
     try:
-        fields = json.loads(args.fields_json)
+        fields = json.loads(raw_fields)
     except json.JSONDecodeError as exc:
         return _err(
             error_code="spec_invalid",
-            message=f"--fields-json is not valid JSON: {exc}",
+            message=f"{source_label} is not valid JSON: {exc}",
             category="user",
             retry_safe=False,
         )
     if not isinstance(fields, dict):
         return _err(
             error_code="spec_invalid",
-            message="--fields-json must be a JSON object",
+            message=f"{source_label} must be a JSON object",
             category="user",
             retry_safe=False,
         )
@@ -212,6 +230,17 @@ def register(sub: argparse._SubParsersAction) -> None:
         help=(
             "Inline JSON object of the invocation's resolved fields "
             "(interview answers). Default: '{}'."
+        ),
+    )
+    p_run.add_argument(
+        "--fields-file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a file holding the fields JSON object. Takes precedence "
+            "over --fields-json. Use this to avoid shell-escaping inline JSON "
+            "(notably Windows backslash paths, which a quoting layer can mangle "
+            "into invalid JSON escapes)."
         ),
     )
     p_run.add_argument(

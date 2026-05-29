@@ -168,6 +168,19 @@ def build_submit_spec(*, spec: BuildSubmitSpecInput) -> dict[str, Any]:
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
 
+    # #184: refuse remote_path == cluster scratch root (or shallower). The
+    # cluster's scratch is the *parent* dir under which each experiment lives;
+    # taking it verbatim made a deploy --delete pre-clean walk every sibling
+    # project. Validator no-ops when scratch is undeclared.
+    from hpc_agent.infra.clusters import load_clusters_config
+    from hpc_agent.infra.ssh_validation import validate_remote_path_under_scratch
+
+    try:
+        cluster_scratch = (load_clusters_config().get(cluster) or {}).get("scratch") or ""
+    except (OSError, ValueError):
+        cluster_scratch = ""
+    validate_remote_path_under_scratch(remote_path, cluster_scratch)
+
     job_name = job_name or profile
     if script is None:
         script = _DEFAULT_SCRIPTS[(backend, bool(is_gpu))]

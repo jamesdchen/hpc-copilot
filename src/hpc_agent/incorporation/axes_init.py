@@ -118,7 +118,7 @@ def axes_init(
 
     Returns ``{axes_path, axes, homogeneous_axes, wrote, reason}``.
     """
-    from hpc_agent.state.axes import axes_path, write_axes
+    from hpc_agent.state.axes import axes_path, read_axes, write_axes
 
     target = axes_path(experiment_dir)
     if target.exists() and not force:
@@ -141,11 +141,24 @@ def axes_init(
             ),
         }
 
+    # axes-init owns the `axes` / `homogeneous_axes` hints, but the v2
+    # `executors` block is the classified-DataAxis record written by
+    # classify-axis. A --force re-init must NOT silently drop it (else the
+    # classification is lost whenever no re-classify follows), so round-trip
+    # the existing executors block through the rewrite.
+    existing_executors: dict[str, Any] | None = None
+    if target.exists():
+        try:
+            existing_executors = (read_axes(experiment_dir) or {}).get("executors")
+        except (FileNotFoundError, OSError, ValueError):
+            existing_executors = None
+
     try:
         written = write_axes(
             experiment_dir,
             axes=axes,
             homogeneous_axes=list(homogeneous_axes) if homogeneous_axes is not None else None,
+            executors=existing_executors,
         )
     except ValueError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
