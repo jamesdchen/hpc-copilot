@@ -5,7 +5,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
-## Unreleased
+## 0.8.0 — 2026-05-29
 
 ### Added — Inline mode can delegate to a subagent when the harness has one
 
