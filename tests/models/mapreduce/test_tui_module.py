@@ -19,10 +19,6 @@ import sys
 import pytest
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_module_imports_without_rich(monkeypatch):
     # Ensure rich is not cached from a previous test, and hide it.
     monkeypatch.setitem(sys.modules, "rich", None)
@@ -35,10 +31,6 @@ def test_module_imports_without_rich(monkeypatch):
     assert hasattr(mod, "run_tui")
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_format_elapsed():
     from hpc_agent.models.mapreduce.reduce.tui import _fmt_elapsed
 
@@ -48,10 +40,6 @@ def test_format_elapsed():
     assert _fmt_elapsed(3700) == "1h01m40s"
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_failing_tail_builds_from_err_logs(tmp_path):
     from hpc_agent.models.mapreduce.reduce.tui import _failing_tail
 
@@ -75,10 +63,6 @@ def test_failing_tail_builds_from_err_logs(tmp_path):
     assert dict(tail)["3"] == ""
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_classify_failures_buckets_logs(tmp_path):
     from hpc_agent.models.mapreduce.reduce.tui import _classify_failures
 
@@ -100,10 +84,6 @@ def test_classify_failures_buckets_logs(tmp_path):
     assert buckets.get("unknown") == 1
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_run_tui_errors_cleanly_when_rich_missing(monkeypatch, tmp_path, capsys):
     # Simulate rich being unavailable: make `import rich...` raise.
     real_import = builtins.__import__

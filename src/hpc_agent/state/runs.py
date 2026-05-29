@@ -368,7 +368,7 @@ def read_run_sidecar(experiment_dir: Path, run_id: str) -> dict:
         _pkg_version: str | None
         try:
             from hpc_agent import __version__ as _pkg_version
-        except Exception:  # noqa: BLE001 — never let a circular fail the read
+        except ImportError:  # circular/missing import → skip the observability warning
             _pkg_version = None
         if _pkg_version and sidecar_version != _pkg_version:
             key = (run_id, sidecar_version)
@@ -488,7 +488,12 @@ def is_orphan_sidecar(experiment_dir: Path, run_id: str) -> bool:
     # Journal-side signal: did submit_and_record run to completion?
     try:
         record = load_run(experiment_dir, run_id)
-    except Exception:  # noqa: BLE001 — journal corruption == treat as orphan
+    except (OSError, errors.JournalCorrupt):
+        # Corrupt/unreadable journal record == treat as orphan. load_run
+        # already returns None for the routine missing/torn-file cases, so
+        # narrowing here means a *programming* error propagates (fail loud)
+        # rather than silently flipping a live run to "orphan" — which the
+        # prune primitive would then delete.
         record = None
 
     sidecar_committed = bool(sidecar_job_ids)

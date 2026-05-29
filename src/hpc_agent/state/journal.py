@@ -187,7 +187,7 @@ def _refresh_index_entry(
         fresh_status = status
         try:
             payload = _read_run(run_path)
-        except Exception:  # noqa: BLE001 — fall back to caller-supplied value
+        except OSError:  # transient read failure → fall back to caller-supplied value
             payload = None
         if isinstance(payload, dict):
             payload_status = payload.get("status")

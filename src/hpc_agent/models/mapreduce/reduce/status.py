@@ -586,6 +586,13 @@ def _main() -> int:
     import argparse
     import sys
 
+    from hpc_agent.models.mapreduce._guard import assert_canonical_import
+
+    # #159: fail loud with a clear, actionable message if a stale/shadowing
+    # hpc_agent (e.g. a ~/.local install or a namespace shadow) won the import,
+    # instead of emitting wrong results or dying with an opaque error later.
+    assert_canonical_import()
+
     parser = argparse.ArgumentParser(
         description="Emit a JSON status report for a run.",
     )

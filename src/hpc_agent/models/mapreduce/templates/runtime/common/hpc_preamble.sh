@@ -66,7 +66,38 @@ fi
 cd "$REPO_DIR"
 # .hpc/ on PYTHONPATH so `python -m cli` resolves the dispatcher
 # generated at .hpc/cli.py by /submit-hpc Step 6.
-export PYTHONPATH="$REPO_DIR:$REPO_DIR/.hpc:${PYTHONPATH:-}"
+#
+# #159 PYTHONPATH hygiene: an *inherited* PYTHONPATH can carry a stale or Py2
+# ``hpc_agent`` (an ancient ``pip install --user``, a leftover deploy stub)
+# that would shadow the conda env's install — the opaque ``bad magic number`` /
+# wrong-version failure that killed the cluster-side reporter. Drop any
+# inherited entry that itself contains an ``hpc_agent`` package; keep the
+# user's other deps. REPO_DIR + REPO_DIR/.hpc stay first so the dispatcher and
+# tasks.py still resolve. (PYTHONDONTWRITEBYTECODE, set below, stops fresh
+# wrong-interpreter .pyc files accreting in the first place.)
+_hpc_kept_pp=""
+if [ -n "${PYTHONPATH:-}" ]; then
+    _hpc_old_ifs="$IFS"
+    IFS=":"
+    for _hpc_pp_entry in $PYTHONPATH; do
+        [ -z "$_hpc_pp_entry" ] && continue
+        if [ -e "$_hpc_pp_entry/hpc_agent/__init__.py" ] \
+            || [ -e "$_hpc_pp_entry/hpc_agent/__init__.pyc" ] \
+            || [ -d "$_hpc_pp_entry/hpc_agent/__pycache__" ]; then
+            echo "[hpc-agent] dropping inherited PYTHONPATH entry that would shadow hpc_agent: $_hpc_pp_entry" >&2
+            continue
+        fi
+        if [ -z "$_hpc_kept_pp" ]; then
+            _hpc_kept_pp="$_hpc_pp_entry"
+        else
+            _hpc_kept_pp="${_hpc_kept_pp}:${_hpc_pp_entry}"
+        fi
+    done
+    IFS="$_hpc_old_ifs"
+    unset _hpc_old_ifs _hpc_pp_entry
+fi
+export PYTHONPATH="$REPO_DIR:$REPO_DIR/.hpc${_hpc_kept_pp:+:$_hpc_kept_pp}"
+unset _hpc_kept_pp
 
 # --- Runtime (uv) ---
 # Opt-in via HPC_RUNTIME=uv. Sync the project's uv-managed venv before
