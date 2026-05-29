@@ -89,7 +89,7 @@ class TestIdempotencySkip:
 
     @pytest.mark.skipif(
         sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+        reason="executor uses POSIX shell command (touch) — genuinely Unix-only",
     )
     def test_does_not_skip_on_zero_byte_metrics_json(self, tmp_path, monkeypatch):
         """A 0-byte metrics.json (e.g. crashed mid-write) must NOT
@@ -119,7 +119,7 @@ class TestIdempotencySkip:
 
     @pytest.mark.skipif(
         sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+        reason="executor uses POSIX shell command (touch) — genuinely Unix-only",
     )
     def test_does_not_skip_when_result_dir_missing(self, tmp_path, monkeypatch):
         """No prior result_dir means a fresh task — executor runs."""

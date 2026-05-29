@@ -117,7 +117,9 @@ class TestWrongSchemaVersion:
 class TestPipelineHappyPath:
     @pytest.mark.skipif(
         sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+        reason="_run() bakes in a POSIX-only PATH (/usr/bin:/bin:/usr/local/bin) and "
+        "the default executor uses POSIX single-quote shell quoting; both are "
+        "genuine test-harness constraints tied to the cluster execution model",
     )
     def test_v1_layout_dispatches_cleanly(self, tmp_path: Path) -> None:
         dispatch = _stub_layout(tmp_path, schema_version=1)
