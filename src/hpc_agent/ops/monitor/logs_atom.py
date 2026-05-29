@@ -138,7 +138,7 @@ def fetch_logs(
     # Cluster-side scheduler.
     try:
         clusters = load_clusters_config()
-    except Exception:  # noqa: BLE001 — config errors fall through to user-error path
+    except OSError:  # unreadable config → empty; a missing scheduler then fails loud below
         clusters = {}
     scheduler = (clusters.get(record.cluster) or {}).get("scheduler")
     if not scheduler:

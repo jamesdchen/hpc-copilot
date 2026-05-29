@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.actions.build_tasks_py import BuildTasksPyInput
@@ -380,7 +382,7 @@ def _build_tasks_py_arg_pre(ns: Any) -> dict[str, Any]:
         raw["force"] = True
     try:
         spec = BuildTasksPyInput.model_validate(raw)
-    except Exception as exc:  # noqa: BLE001 — pydantic.ValidationError
+    except ValidationError as exc:
         raise errors.SpecInvalid(str(exc)) from exc
     return {"spec": spec}
 

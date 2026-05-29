@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 from typing import TYPE_CHECKING
 
 from hpc_agent import errors
@@ -110,7 +111,7 @@ def record_status(
 
     try:
         _sidecar = read_run_sidecar(experiment_dir, run_id)
-    except Exception:  # noqa: BLE001 — missing/bad sidecar → bare python (unchanged)
+    except (OSError, json.JSONDecodeError):  # missing/bad sidecar → bare python; a bug propagates
         _sidecar = {}
 
     report = _ssh_status_report(
