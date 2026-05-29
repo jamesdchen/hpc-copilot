@@ -680,12 +680,19 @@ def main() -> None:
     started_at_mono = time.monotonic()
     stderr_tail_buf: list[bytes] = []
     stderr_tail_lock = threading.Lock()
+    # preexec_fn is POSIX-only and ``os.setpgrp`` does not exist on Windows.
+    # The dispatcher is deployed to and runs on the cluster (Linux), so this
+    # guard is a no-op there; it only keeps local dispatch / the Windows test
+    # lane (#163) from AttributeError-ing on ``os.setpgrp``.
+    popen_kwargs: dict = {}
+    if hasattr(os, "setpgrp"):
+        popen_kwargs["preexec_fn"] = os.setpgrp
     child = subprocess.Popen(
         executor,
         shell=True,
         env=env,
-        preexec_fn=os.setpgrp,
         stderr=subprocess.PIPE,
+        **popen_kwargs,
     )
     child_holder[0] = child
     pump = threading.Thread(

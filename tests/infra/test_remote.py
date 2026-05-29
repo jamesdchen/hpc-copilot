@@ -221,34 +221,38 @@ class TestDeployRuntime:
             argv[:3] for argv in argvs[1:]
         ]
 
+        # src/dst are the final two argv elements. We index from the end
+        # rather than a fixed [3]/[4] because Windows injects extra options
+        # (``-o ControlMaster=no -o ControlPath=none``, per #154/#158) ahead
+        # of src, shifting positional indices. Tail indexing is platform-agnostic.
         # Importable stub into hpc_agent/models/mapreduce/
-        assert argvs[1][3].endswith("metrics_io.py")
-        assert argvs[1][4].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
+        assert argvs[1][-2].endswith("metrics_io.py")
+        assert argvs[1][-1].endswith(":/p/hpc_agent/models/mapreduce/metrics_io.py")
 
         # executor_cli stub into hpc_agent/ (so tasks.py top-level
         # ``from hpc_agent.executor_cli import ...`` resolves on cluster).
-        assert argvs[2][3].endswith("executor_cli.py")
-        assert argvs[2][4].endswith(":/p/hpc_agent/executor_cli.py")
+        assert argvs[2][-2].endswith("executor_cli.py")
+        assert argvs[2][-1].endswith(":/p/hpc_agent/executor_cli.py")
 
         # Framework executor into .hpc/
-        assert argvs[3][3].endswith("dispatch.py")
-        assert argvs[3][4].endswith(":/p/.hpc/_hpc_dispatch.py")
+        assert argvs[3][-2].endswith("dispatch.py")
+        assert argvs[3][-1].endswith(":/p/.hpc/_hpc_dispatch.py")
 
         # Four templates into .hpc/templates/
-        template_dsts = {argv[4] for argv in argvs[4:8]}
+        template_dsts = {argv[-1] for argv in argvs[4:8]}
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.sh") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/cpu_array.slurm") for d in template_dsts)
         assert any(d.endswith(":/p/.hpc/templates/gpu_array.slurm") for d in template_dsts)
 
         # Two shared preambles into .hpc/templates/common/
-        common_dsts = {argv[4] for argv in argvs[8:10]}
+        common_dsts = {argv[-1] for argv in argvs[8:10]}
         assert any(d.endswith(":/p/.hpc/templates/common/hpc_preamble.sh") for d in common_dsts)
         assert any(d.endswith(":/p/.hpc/templates/common/gpu_preamble.sh") for d in common_dsts)
 
         # Combiner is last
-        assert argvs[10][3].endswith("combiner.py")
-        assert argvs[10][4].endswith(":/p/.hpc/_hpc_combiner.py")
+        assert argvs[10][-2].endswith("combiner.py")
+        assert argvs[10][-1].endswith(":/p/.hpc/_hpc_combiner.py")
 
 
 # ---------------------------------------------------------------------------
