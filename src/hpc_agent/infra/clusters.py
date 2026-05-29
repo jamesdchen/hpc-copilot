@@ -117,6 +117,16 @@ class ClusterConfig(BaseModel):
     max_walltime_sec: int = Field(
         default=86400, gt=0, description="Cluster's hard walltime ceiling in seconds."
     )
+    default_walltime_sec: int | None = Field(
+        default=None,
+        description=(
+            "Cold-start walltime ask in seconds, used on the very first submit "
+            "when no runtime prior exists yet (the pro `read-runtime-prior` verb, "
+            "which would otherwise supply it, is absent on a core install). When "
+            "unset the resolver falls back to a conservative built-in default, "
+            "clamped to max_walltime_sec — see get_default_walltime_sec."
+        ),
+    )
     max_node_mem_mb: int | None = Field(
         default=None, description="Largest single-node memory ask the scheduler will accept."
     )
@@ -481,3 +491,52 @@ def get_max_walltime_sec(
     if raw <= 0:
         raise errors.SpecInvalid(f"max_walltime_sec must be positive, got {raw}")
     return int(raw)
+
+
+# Conservative cold-start walltime (seconds) used when a cluster declares no
+# ``default_walltime_sec`` and no runtime prior exists yet. 4h matches the
+# CPU/ML resource default in the submit procedure and errs long on purpose:
+# under-asking gets the job killed at the walltime ceiling (the whole run
+# wasted), while over-asking only costs a little queue priority. The canary and
+# first real run establish a prior fast, after which the planner takes over.
+_COLD_START_WALLTIME_SEC = 14400
+
+
+def get_default_walltime_sec(
+    cluster_config: dict[str, Any],
+    *,
+    floor: int = _COLD_START_WALLTIME_SEC,
+) -> int:
+    """Resolve the cold-start walltime (seconds) — ALWAYS returns a usable value.
+
+    The submit procedure auto-resolves walltime from runtime priors via the
+    pro-only ``read-runtime-prior`` verb. On a core install that verb is absent,
+    and on the very first submit there is no prior anyway, so the procedure
+    falls back here. This MUST always resolve (#170): a fallback that can't
+    resolve stalls the whole submit on an optional pro feature.
+
+    Resolution order:
+
+    1. ``clusters.<name>.default_walltime_sec`` when set — the operator's
+       explicit cold-start ask (validated: positive int).
+    2. otherwise *floor* (a conservative built-in default), clamped to the
+       cluster's ``max_walltime_sec`` so a small-ceiling cluster never gets a
+       cold-start ask above what its scheduler will accept.
+
+    Either way the result is clamped to ``max_walltime_sec``.
+
+    Schema validation: rejects non-int / non-positive ``default_walltime_sec``.
+    """
+    ceiling = get_max_walltime_sec(cluster_config)
+    raw = cluster_config.get("default_walltime_sec")
+    if raw is None:
+        # No explicit cold-start ask: clamp the conservative floor to the
+        # cluster ceiling (a 1h-max test cluster must not get a 4h default).
+        return min(floor, ceiling)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise errors.SpecInvalid(
+            f"default_walltime_sec must be a positive int, got {raw!r} ({type(raw).__name__})"
+        )
+    if raw <= 0:
+        raise errors.SpecInvalid(f"default_walltime_sec must be positive, got {raw}")
+    return min(int(raw), ceiling)
