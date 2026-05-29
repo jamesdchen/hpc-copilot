@@ -6,7 +6,6 @@
   "type": "object",
   "required": [
     "run_id",
-    "job_ids",
     "total_tasks",
     "deduped",
     "canary_done"
@@ -18,10 +17,10 @@
       "type": "string"
     },
     "job_ids": {
+      "description": "Scheduler IDs for the MAIN array. Empty when main_launched=false (the canary-only gating phase): verify the canary, then re-invoke submit-flow with canary=false to launch the main array.",
       "items": {
         "type": "string"
       },
-      "minItems": 1,
       "title": "Job Ids",
       "type": "array"
     },
@@ -36,7 +35,7 @@
       "type": "boolean"
     },
     "canary_done": {
-      "description": "True when a 1-task canary was submitted and verified before the main array. False when canary was skipped via spec.canary=false or when this is a deduped replay.",
+      "description": "True when a 1-task canary was *submitted* (not yet verified) — verification is the caller's verify-canary step. False when the canary was skipped via spec.canary=false or on a deduped replay. Gate the main launch on verify-canary + main_launched, not on this.",
       "title": "Canary Done",
       "type": "boolean"
     },
@@ -68,6 +67,12 @@
       "default": null,
       "description": "Scheduler IDs for the canary. Null when canary skipped.",
       "title": "Canary Job Ids"
+    },
+    "main_launched": {
+      "default": true,
+      "description": "True when the main array was submitted this call. False in the canary-only gating phase (#160): only the canary went out; the caller must verify it and re-invoke to launch the main array.",
+      "title": "Main Launched",
+      "type": "boolean"
     }
   }
 }

@@ -124,6 +124,55 @@ class SGEBackend(HPCBackend):
         return alive
 
     @staticmethod
+    def build_scheduler_state_cmd(job_ids: list[str]) -> str:
+        """Shell command whose stdout lets :meth:`parse_scheduler_states` map
+        each job id to its raw SGE state token.
+
+        Reuses ``qstat -u $USER`` (same as :meth:`build_alive_check_cmd`),
+        whose output already carries the per-job state column — no extra
+        cluster round-trip. ``|| true`` keeps rc 0 on an empty queue so the
+        SSH transport guard doesn't mistake it for a connectivity failure.
+        """
+        if not job_ids:
+            return "true"
+        return 'qstat -u "$USER" 2>/dev/null || true'
+
+    @staticmethod
+    def parse_scheduler_states(stdout: str, job_ids: list[str]) -> dict[str, str]:
+        """Map each requested job id present in ``qstat -u $USER`` output to
+        its raw state token (5th column), e.g. ``r``, ``qw``, ``Eqw``, ``hqw``.
+
+        Ids absent from the output are omitted — the caller treats a missing
+        id as gone (terminal), distinct from present-but-error.
+        """
+        states: dict[str, str] = {}
+        wanted = {str(j) for j in job_ids}
+        for line in stdout.splitlines():
+            cols = line.split()
+            if len(cols) < 5:
+                continue
+            jid = cols[0].strip()
+            if not jid or not jid[0].isdigit() or jid not in wanted:
+                continue  # header / separator / unrelated job
+            states[jid] = cols[4].strip()
+        return states
+
+    @staticmethod
+    def classify_scheduler_state(state: str) -> str:
+        """Bucket a raw SGE state token into ``alive`` / ``error`` / ``held``.
+
+        SGE error states carry an uppercase ``E`` (``Eqw``, ``Er``); a held
+        job carries an ``h`` (``hqw``, ``hRwq``). Everything else known to the
+        queue (``r``, ``qw``, ``t``, ``Rr``, ``dr`` …) is alive.
+        """
+        s = state.strip()
+        if "E" in s:
+            return "error"
+        if "h" in s:
+            return "held"
+        return "alive"
+
+    @staticmethod
     def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Cluster-side stderr path for SGE.
 

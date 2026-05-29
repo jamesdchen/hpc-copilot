@@ -2,11 +2,13 @@
 
 Native Windows OpenSSH does not support the ``ControlPath`` Unix socket
 that connection multiplexing relies on — ``ssh.exe`` aborts with
-``getsockname failed: Not a socket`` the moment we emit ``ControlMaster``.
-We auto-disable multiplexing on ``win32`` so users don't have to discover
-``HPC_NO_SSH_MULTIPLEX=1`` first.
+``getsockname failed: Not a socket`` the moment ``ControlMaster`` is in
+effect. On ``win32`` we therefore emit an explicit ``ControlMaster=no`` /
+``ControlPath=none`` override rather than just omitting our own flags:
+omitting them would still leave a user's ``~/.ssh/config`` ``ControlMaster``
+to bite. ``HPC_NO_SSH_MULTIPLEX=1`` still short-circuits to ``[]`` first.
 
-The second test pins the ``/tmp`` fallback fix: when ``XDG_RUNTIME_DIR``
+The tempfile test pins the ``/tmp`` fallback fix: when ``XDG_RUNTIME_DIR``
 is unset, the ``ControlPath`` must derive from :func:`tempfile.gettempdir`
 rather than a hardcoded ``/tmp``.
 """
@@ -36,11 +38,26 @@ def _control_path_values(opts: list[str]) -> list[str]:
     ]
 
 
-def test_ssh_multiplex_disabled_on_windows(monkeypatch):
-    # On win32 the function must short-circuit to an empty opts list so
-    # ssh.exe never sees ControlMaster/ControlPath and never trips the
-    # ``getsockname failed: Not a socket`` failure path.
+def test_ssh_multiplex_override_on_windows(monkeypatch):
+    # On win32 the function must emit an explicit ControlMaster=no /
+    # ControlPath=none override. Returning [] would only omit OUR flags; a
+    # user's ~/.ssh/config ControlMaster would still drive ssh.exe into the
+    # ``getsockname failed: Not a socket`` failure. A command-line -o beats
+    # the config file, so the override neutralises it.
     monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+    assert ssh_options._ssh_multiplex_opts() == [
+        "-o",
+        "ControlMaster=no",
+        "-o",
+        "ControlPath=none",
+    ]
+
+
+def test_ssh_multiplex_env_optout_wins_on_windows(monkeypatch):
+    # HPC_NO_SSH_MULTIPLEX=1 is checked before the platform branch, so the
+    # explicit opt-out still yields [] even on win32.
+    monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+    monkeypatch.setenv("HPC_NO_SSH_MULTIPLEX", "1")
     assert ssh_options._ssh_multiplex_opts() == []
 
 
@@ -67,7 +84,7 @@ def test_ssh_multiplex_uses_tempfile_fallback(monkeypatch):
 @pytest.fixture(autouse=True)
 def _clear_binary_overrides(monkeypatch):
     """Each binary-resolution test starts from a clean env."""
-    for var in ("HPC_SSH_BINARY", "HPC_SCP_BINARY", "RSYNC_RSH"):
+    for var in ("HPC_SSH_BINARY", "HPC_SCP_BINARY", "HPC_SSH_ADD_BINARY", "RSYNC_RSH"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -96,7 +113,12 @@ def test_windows_prefers_native_openssh_when_present(monkeypatch):
     monkeypatch.setattr(ssh_options.os.path, "isfile", lambda p: True)
     assert ssh_options._ssh_binary() == ssh_options._WIN_OPENSSH_SSH
     assert ssh_options._scp_binary() == ssh_options._WIN_OPENSSH_SCP
-    assert ssh_options._rsync_rsh_env() == {"RSYNC_RSH": ssh_options._WIN_OPENSSH_SSH}
+    assert ssh_options._ssh_add_binary() == ssh_options._WIN_OPENSSH_SSH_ADD
+    # On Windows the RSYNC_RSH command carries the multiplex override too,
+    # so rsync's own ssh can't pick up the user's ssh-config ControlMaster.
+    assert ssh_options._rsync_rsh_env() == {
+        "RSYNC_RSH": f"{ssh_options._WIN_OPENSSH_SSH} -o ControlMaster=no -o ControlPath=none"
+    }
 
 
 def test_windows_falls_back_to_path_when_native_absent(monkeypatch):
@@ -106,6 +128,12 @@ def test_windows_falls_back_to_path_when_native_absent(monkeypatch):
     monkeypatch.setattr(ssh_options.os.path, "isfile", lambda p: False)
     assert ssh_options._ssh_binary() == "ssh"
     assert ssh_options._scp_binary() == "scp"
+    assert ssh_options._ssh_add_binary() == "ssh-add"
+    # Even with the bare name, Windows rsync still gets the multiplex
+    # override so it can't honour the user's ssh-config ControlMaster.
+    assert ssh_options._rsync_rsh_env() == {
+        "RSYNC_RSH": "ssh -o ControlMaster=no -o ControlPath=none"
+    }
 
 
 def test_rsync_rsh_respects_caller_set_value(monkeypatch):
@@ -114,3 +142,23 @@ def test_rsync_rsh_respects_caller_set_value(monkeypatch):
     monkeypatch.setenv("RSYNC_RSH", "ssh -v")
     # A caller who already pinned RSYNC_RSH wins; we don't clobber it.
     assert ssh_options._rsync_rsh_env() == {}
+
+
+def test_ssh_add_binary_defaults_to_bare_name_on_posix(monkeypatch):
+    # On Linux/macOS, bare PATH resolution — no behaviour change.
+    monkeypatch.setattr(ssh_options.sys, "platform", "linux")
+    assert ssh_options._ssh_add_binary() == "ssh-add"
+
+
+def test_ssh_add_binary_override_wins_on_any_platform(monkeypatch):
+    monkeypatch.setattr(ssh_options.sys, "platform", "linux")
+    monkeypatch.setenv("HPC_SSH_ADD_BINARY", "/opt/openssh/bin/ssh-add")
+    assert ssh_options._ssh_add_binary() == "/opt/openssh/bin/ssh-add"
+
+
+def test_ssh_add_binary_prefers_native_openssh_on_windows(monkeypatch):
+    # The ssh-add analog of native ssh/scp resolution: reach the
+    # named-pipe agent instead of Git Bash's /usr/bin/ssh-add.
+    monkeypatch.setattr(ssh_options.sys, "platform", "win32")
+    monkeypatch.setattr(ssh_options.os.path, "isfile", lambda p: True)
+    assert ssh_options._ssh_add_binary() == ssh_options._WIN_OPENSSH_SSH_ADD

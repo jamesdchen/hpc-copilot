@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -49,10 +48,6 @@ def _scaffold(
 
 
 class TestDispatchAtomicOutput:
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_successful_task_promotes_output(self, tmp_path, monkeypatch):
         # The dispatcher uses HPC_TASKS_PATH override to find tasks.py
         # outside cwd; we point it at the .hpc/ we set up under tmp_path.
@@ -86,10 +81,6 @@ class TestDispatchAtomicOutput:
         assert (result_dir / "results_task_1.csv").read_text().strip() == "hello"
         assert not (result_dir / "_wip_1").exists()
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_failed_task_preserves_wip(self, tmp_path, monkeypatch):
         result_root = tmp_path / "results"
         hpc = _scaffold(
@@ -115,10 +106,6 @@ class TestDispatchAtomicOutput:
 
 
 class TestDispatchStaleWipRetry:
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_stale_wip_renamed_on_retry(self, tmp_path, monkeypatch):
         result_root = tmp_path / "results"
         result_root.mkdir()
@@ -214,10 +201,6 @@ class TestCheckResultsIgnoresWip:
 
 
 class TestKwargNamespaceOnly:
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_default_exports_both_forms(self, tmp_path, monkeypatch):
         """Without HPC_KW_NAMESPACE_ONLY, executor sees both HPC_KW_X and X."""
         result_root = tmp_path / "results"
@@ -245,10 +228,6 @@ class TestKwargNamespaceOnly:
         assert (out_dir / "kw_form.txt").read_text().strip() == "5"
         assert (out_dir / "bare_form.txt").read_text().strip() == "5"
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_namespace_only_skips_bare_form(self, tmp_path, monkeypatch):
         """With HPC_KW_NAMESPACE_ONLY=1, bare-uppercase HORIZON is NOT exported."""
         result_root = tmp_path / "results"
@@ -301,10 +280,6 @@ class TestIdempotencyBypass:
         # Executor must NOT have run.
         assert not (result_root / "0" / "marker.txt").exists()
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_force_rerun_bypasses_skip(self, tmp_path, monkeypatch):
         """HPC_FORCE_RERUN=1 runs the executor even with metrics.json present."""
         result_root = tmp_path / "results"
@@ -326,10 +301,6 @@ class TestIdempotencyBypass:
         assert exc_info.value.code == 0
         assert (result_root / "0" / "marker.txt").read_text().strip() == "RAN"
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_cmd_sha_mismatch_bypasses_skip(self, tmp_path, monkeypatch):
         """A stamped .hpc_cmd_sha that disagrees with the sidecar forces re-run."""
         result_root = tmp_path / "results"
@@ -379,10 +350,6 @@ class TestIdempotencyBypass:
         assert exc_info.value.code == 0
         assert not (result_dir / "marker.txt").exists()
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-    )
     def test_successful_run_stamps_cmd_sha(self, tmp_path, monkeypatch):
         """A fresh successful run writes .hpc_cmd_sha next to the result files."""
         result_root = tmp_path / "results"
@@ -403,3 +370,138 @@ class TestIdempotencyBypass:
         marker = result_root / "0" / ".hpc_cmd_sha"
         assert marker.is_file()
         assert marker.read_text() == "deadbeef" * 8
+
+
+def test_exit_no_runner_constant_in_lockstep_with_preamble() -> None:
+    """The dispatcher's no-runner exit code is consumed by the template's
+    retry helper as a TERMINAL code (``HPC_DISPATCH_EXIT_NO_RUNNER`` in
+    hpc_preamble.sh). Pin the value so a change here without updating the
+    shell side gets caught."""
+    assert dispatch._EXIT_NO_RUNNER == 3
+
+
+class TestDispatchFailsLoudOnSelfRecursion:
+    """#162: when the run sidecar's per-task ``executor`` would re-invoke the
+    dispatcher itself (submit-flow synthesized it from the job-script command
+    instead of a real per-task command), the dispatcher must ABORT with a
+    clear error + exit 3 BEFORE spawning anything — never self-recurse."""
+
+    @pytest.mark.parametrize(
+        "bad_executor",
+        [
+            "python3 .hpc/_hpc_dispatch.py",
+            "python3 /abs/path/.hpc/_hpc_dispatch.py --flag x",
+            "python3 dispatch.py",
+        ],
+    )
+    def test_self_referential_executor_exits_3(self, tmp_path, monkeypatch, bad_executor):
+        result_root = tmp_path / "results"
+        sentinel = tmp_path / "should_never_run.flag"
+        # The executor string itself would create a sentinel if it were
+        # ever shell-run; the abort must happen before any spawn.
+        hpc = _scaffold(
+            tmp_path,
+            executor=bad_executor,
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        # Distinct terminal exit code (not the generic 1 / schema 2).
+        assert exc_info.value.code == 3
+        assert not sentinel.exists()
+        # No WIP dir should have been created — we aborted before exec.
+        assert not (result_root / "0" / "_wip_0").exists()
+
+    def test_clear_error_message_on_stderr(self, tmp_path, monkeypatch, capsys):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor="python3 .hpc/_hpc_dispatch.py",
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit):
+            dispatch.main()
+        err = capsys.readouterr().err
+        assert "re-invokes the dispatcher" in err
+        assert "per-task" in err
+
+    def test_valid_cli_py_executor_is_not_flagged(self, tmp_path, monkeypatch):
+        """A legitimate ``.hpc/cli.py`` per-task command must NOT trip the
+        self-recursion guard — only the dispatcher's own filename does."""
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo ok > "$RESULT_DIR/out.txt"',  # stands in for cli.py
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+
+
+class TestDispatchFailureCapture:
+    """#161: a failed dispatch must record WHY into the failure dir
+    instead of leaving an EMPTY ``_wip_*_failed_*``."""
+
+    def test_stderr_captured_into_wip_on_failure(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            # Emit a recognizable line to stderr, then fail.
+            executor='echo "BOOM: kaboom traceback line" >&2 && exit 7',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 7
+
+        log = result_root / "0" / "_wip_0" / "_hpc_dispatch_error.log"
+        assert log.is_file(), "failure capture log not written"
+        text = log.read_text()
+        assert "exit_code=7" in text
+        assert "BOOM: kaboom traceback line" in text
+        # The captured command must be recorded for diagnosis.
+        assert "exit 7" in text
+
+    def test_no_capture_log_on_success(self, tmp_path, monkeypatch):
+        result_root = tmp_path / "results"
+        hpc = _scaffold(
+            tmp_path,
+            executor='echo "noise" >&2 && echo done > "$RESULT_DIR/out.txt"',
+            result_dir_template=str(result_root / "{task_id}"),
+            kwargs_per_task=[{}],
+        )
+        monkeypatch.setenv("HPC_TASK_ID", "0")
+        monkeypatch.setenv("HPC_RUN_ID", "test_run")
+        monkeypatch.setenv("HPC_TASKS_PATH", str(hpc / "tasks.py"))
+        monkeypatch.setattr(dispatch, "__file__", str(hpc / "_hpc_dispatch.py"), raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            dispatch.main()
+        assert exc_info.value.code == 0
+        # On success the WIP dir is removed entirely; no capture log lingers.
+        assert not (result_root / "0" / "_wip_0").exists()

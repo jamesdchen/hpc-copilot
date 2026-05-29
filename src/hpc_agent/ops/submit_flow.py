@@ -87,6 +87,7 @@ class SubmitFlowResult:
     canary_done: bool
     canary_run_id: str | None = None
     canary_job_ids: list[str] | None = None
+    main_launched: bool = True
 
     def to_envelope_data(self) -> dict[str, Any]:
         """Render to the shape pinned by ``schemas/submit_flow.output.json``."""
@@ -98,6 +99,7 @@ class SubmitFlowResult:
             "canary_done": self.canary_done,
             "canary_run_id": self.canary_run_id,
             "canary_job_ids": list(self.canary_job_ids) if self.canary_job_ids else None,
+            "main_launched": self.main_launched,
         }
 
 
@@ -192,12 +194,14 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
 
     * Sidecar already present (the normal flow — Step 6d wrote it with the
       full wave_map / config snapshot): no-op, we never overwrite it.
-    * Sidecar missing + ``spec.result_dir_template`` supplied: synthesize a
-      minimal-but-valid sidecar from the spec so the cluster can dispatch.
-    * Sidecar missing + no ``result_dir_template``: raise ``SpecInvalid`` —
-      fail fast locally rather than ship an empty ``runs/`` that dooms the
-      whole array. (A direct ``submit-flow --spec`` caller that wants
-      submit-flow to own the sidecar must pass ``result_dir_template``.)
+    * Sidecar missing + ``result_dir_template`` AND a real per-task executor
+      available: synthesize a minimal-but-valid sidecar from the spec.
+    * Sidecar missing + no ``result_dir_template`` **or** no real per-task
+      executor (only the job script's dispatcher command is available): raise
+      ``SpecInvalid`` — fail fast locally rather than ship an empty ``runs/``
+      OR a self-recursive sidecar that dooms the whole array (#148 / #162).
+      The caller must run write_run_sidecar first (Step 6d / wrap-entry-point)
+      with the real per-task command.
     """
     from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 
@@ -218,7 +222,23 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     from hpc_agent.infra.time import utcnow_iso
 
     job_env = spec.job_env or {}
-    executor = job_env.get("EXECUTOR") or "python3 .hpc/_hpc_dispatch.py"
+    # job_env["EXECUTOR"] is the *job-script* command — it runs the dispatcher
+    # (`python3 .hpc/_hpc_dispatch.py`), NOT a per-task command. Writing it into
+    # the sidecar's `executor` makes the dispatcher run itself: the #162 live
+    # incident (~8,647 retries, 8 nodes burned). There is no real per-task
+    # command to synthesize from here, so fail loud — the same posture as a
+    # missing result_dir_template above — rather than ship a structurally broken
+    # sidecar that the old `or "...dispatch.py"` default silently produced.
+    executor = job_env.get("EXECUTOR") or ""
+    if (not executor) or ("_hpc_dispatch.py" in executor) or ("dispatch.py" in executor):
+        raise errors.SpecInvalid(
+            f"per-run sidecar for run_id {spec.run_id!r} is missing and submit-flow "
+            f"cannot synthesize a valid one: the only available executor ({executor!r}) "
+            "is the job-script command (it runs the dispatcher), not a per-task command, "
+            "so synthesizing it would make the dispatcher run itself (#162). Run "
+            "write_run_sidecar first (Step 6d / wrap-entry-point) with the real per-task "
+            "command (e.g. `python train.py --seed $SEED`)."
+        )
     cmd_sha = job_env.get("HPC_CMD_SHA", "")
 
     # tasks_py_sha is provenance only (drift detection); compute it from the
@@ -229,8 +249,22 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     if tasks_py.is_file():
         from hpc_agent.state.run_sha import compute_tasks_py_sha
 
-        with contextlib.suppress(Exception):
+        try:
             tasks_py_sha = compute_tasks_py_sha(tasks_py)
+        except OSError as exc:
+            # tasks_py_sha is the drift guard that flags in-place edits to
+            # tasks.py; an empty sha silently disables it for this run. A read
+            # error is the only expected failure — surface it (#165) rather than
+            # swallow; anything else is a bug in compute_tasks_py_sha and should
+            # propagate, not be masked by a broad suppress.
+            import warnings
+
+            warnings.warn(
+                f"could not compute tasks.py drift sha for run {spec.run_id!r} "
+                f"({exc}); its sidecar ships without it, disabling drift "
+                "detection for this run.",
+                stacklevel=2,
+            )
 
     resources = spec.resources.model_dump(exclude_none=True) if spec.resources else None
 
@@ -250,6 +284,51 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
         campaign_id=spec.campaign_id or None,
         runtime=spec.runtime,
         resources=resources or None,
+    )
+
+
+def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id: str) -> None:
+    """Ensure the canary's per-run sidecar exists by mirroring the main run's.
+
+    The dispatcher hard-requires ``.hpc/runs/<run_id>.json``; the canary uses
+    run_id ``<main>-canary``, which Step 6d never writes and
+    :func:`_ensure_run_sidecar` only covers for the main spec — so the canary
+    errored ``sidecar not found`` and the gate was a no-op (#160 / #162). Copy
+    the main sidecar's per-task executor + result_dir_template to the canary
+    path (``task_count=1``) so the canary dispatches the SAME command. No-op
+    when the canary sidecar already exists or the main one is unreadable.
+    """
+    from hpc_agent.infra.time import utcnow_iso
+    from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path, write_run_sidecar
+
+    target = run_sidecar_path(experiment_dir, canary_run_id)
+    if target.is_file() and target.stat().st_size > 0:
+        return
+    try:
+        main = read_run_sidecar(experiment_dir, main_run_id)
+    except Exception:  # noqa: BLE001 — best-effort mirror; a missing main is handled below
+        return
+    executor = main.get("executor")
+    result_dir_template = main.get("result_dir_template")
+    if not executor or not result_dir_template:
+        return  # main sidecar lacks the dispatch essentials; nothing to mirror
+    write_run_sidecar(
+        experiment_dir,
+        run_id=canary_run_id,
+        cmd_sha=str(main.get("cmd_sha", "")),
+        hpc_agent_version=str(main.get("hpc_agent_version", "")),
+        submitted_at=utcnow_iso(),
+        executor=str(executor),
+        result_dir_template=str(result_dir_template),
+        task_count=1,
+        tasks_py_sha=str(main.get("tasks_py_sha", "")),
+        wave_map={"0": [0]},
+        cluster=main.get("cluster"),
+        profile=main.get("profile"),
+        remote_path=main.get("remote_path"),
+        campaign_id=main.get("campaign_id") or None,
+        runtime=main.get("runtime"),
+        resources=main.get("resources") or None,
     )
 
 
@@ -494,6 +573,10 @@ def _submit_one_spec(
             canary_job_ids = list(existing_canary.job_ids)
             canary_done = True
         else:
+            # Mirror the main sidecar to <run_id>-canary.json so the canary
+            # dispatches the SAME per-task executor (#162a) — otherwise it
+            # errors 'sidecar not found' and the canary gate is a no-op (#160).
+            _mirror_canary_sidecar(experiment_dir, spec.run_id, canary_run_id)
             canary_env = dict(job_env_full)
             canary_env["HPC_RUN_ID"] = canary_run_id
             canary_env["HPC_TASK_COUNT"] = "1"
@@ -522,6 +605,22 @@ def _submit_one_spec(
                 ),
             )
             canary_done = True
+
+    if spec.canary_only:
+        # Two-phase canary gate (#160): the canary is submitted; do NOT launch
+        # the main array. The caller verifies the canary (verify-canary) and
+        # re-invokes submit-flow with canary=false to launch the main only on
+        # success — so a broken dispatch can't sail past the canary.
+        return SubmitFlowResult(
+            run_id=spec.run_id,
+            job_ids=[],
+            total_tasks=spec.total_tasks,
+            deduped=False,
+            canary_done=canary_done,
+            canary_run_id=canary_run_id,
+            canary_job_ids=canary_job_ids,
+            main_launched=False,
+        )
 
     job_ids = _make_single_array_submission(
         backend_obj,

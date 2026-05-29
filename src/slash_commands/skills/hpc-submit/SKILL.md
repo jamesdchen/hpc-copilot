@@ -14,6 +14,7 @@ The slash `/submit-hpc` is the human-interview wrapper around this skill; an ext
 
 - **Batch independent tool calls** into one parallel message — multiple reads, greps, or `hpc-agent describe`/`--help` lookups with no data dependency should not run serially.
 - **Be terse.** Lead with the action or result; skip filler ("Let me…", "I'll go ahead and…") and trailing restatements of what tool output already shows.
+- **Don't override the invoker default.** Hand off with the plain `hpc-agent run --workflow …` and let `_auto_select_invoker` pick the worker. Reach for `--inline` / `HPC_AGENT_INVOKER=inline` only when the *user* opted in — never to dodge a "worker-auth risk": if `ANTHROPIC_API_KEY` is set (or a Claude Code OAuth creds file exists) the default `--bare` worker authenticates; if neither is present, escalate rather than silently switching modes. Inline trades away the worker's context isolation — that's the user's call, not a default.
 
 ## Inputs
 
@@ -156,7 +157,7 @@ hpc-agent run --workflow submit --fields-json '<fields>'
 
 Spawns a fresh-context bare worker that runs `worker_prompts/submit.md` (experiment-agnostic execution: rsync, qsub, canary, journal, scheduler verify). Returns its envelope.
 
-**Inline mode (`HPC_AGENT_INVOKER=inline`).** When the env knob is set, `hpc-agent run` does NOT spawn — its envelope carries `data.mode == "inline"` and `data.prompt`, the same canonical procedure the worker would have run. Execute that procedure yourself, now, in this session (you have full tools and credentials — do not spawn a worker or another agent), then return an envelope shaped exactly like the spawn path: `data.report` = the `{result, decisions, anomalies}` JSON the procedure produces, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline". This trades the worker's context isolation for no per-command spawn — the caller opted into that. When `data.mode == "spawn"` (the default), consume `data.report` from the spawned worker as before.
+**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When the env knob is set, `hpc-agent run` does NOT spawn — its envelope carries `data.mode == "inline"` and `data.prompt`, the same canonical procedure the worker would have run. Execute that procedure yourself, now, in this session (you have full tools and credentials — do not spawn a worker or another agent), then return an envelope shaped exactly like the spawn path: `data.report` = the `{result, decisions, anomalies}` JSON the procedure produces, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline". This trades the worker's context isolation for no per-command spawn — the caller opted into that. When `data.mode == "spawn"` (the default), consume `data.report` from the spawned worker as before.
 
 ### 10. Propagate worker ambiguities (if any)
 

@@ -169,6 +169,55 @@ def test_surfaces_failure_kind_from_verify(tmp_path: Path) -> None:
     assert "RuntimeError" in result.verify_result.stderr_tail
 
 
+def test_canary_failure_does_not_launch_main(tmp_path: Path) -> None:
+    """#160 gate: a failed canary means the main array is NEVER submitted —
+    submit_flow is called once (Phase 1, canary only) and job_ids is empty."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    with (
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.submit_flow",
+            return_value=_submit_envelope(canary=True),
+        ) as m_submit,
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.verify_canary",
+            return_value=_verify_envelope(ok=False, failure_kind="dispatcher_failed"),
+        ),
+    ):
+        result = submit_and_verify(tmp_path, spec=_spec(canary=True))
+
+    assert m_submit.call_count == 1  # Phase 2 (the main array) never ran
+    assert result.verified is False
+    assert result.failure_kind == "dispatcher_failed"
+    assert result.job_ids == []  # main never launched
+
+
+def test_main_launches_only_after_verified_canary(tmp_path: Path) -> None:
+    """#160 gate: Phase 1 submits canary_only; Phase 2 (the main array) runs
+    only after the canary verifies, with canary disabled on the second call."""
+    from hpc_agent.ops.submit_and_verify import submit_and_verify
+
+    with (
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.submit_flow",
+            return_value=_submit_envelope(canary=True),
+        ) as m_submit,
+        mock.patch(
+            "hpc_agent.ops.submit_and_verify.verify_canary",
+            return_value=_verify_envelope(ok=True),
+        ),
+    ):
+        result = submit_and_verify(tmp_path, spec=_spec(canary=True))
+
+    assert m_submit.call_count == 2
+    first = m_submit.call_args_list[0].kwargs["spec"]
+    second = m_submit.call_args_list[1].kwargs["spec"]
+    assert first.canary is True and first.canary_only is True  # Phase 1: canary only
+    assert second.canary is False  # Phase 2: main array, no second canary
+    assert result.verified is True
+    assert result.job_ids == ["12345"]
+
+
 def test_composes_metadata_resolves_to_both_workflows() -> None:
     """Mechanism check: the registry's composes graph has both atoms."""
     from hpc_agent._kernel.registry.primitive import (

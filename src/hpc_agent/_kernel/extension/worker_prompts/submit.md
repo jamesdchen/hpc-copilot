@@ -250,9 +250,9 @@ Branch on `data.overall`:
 - `warn` → record warnings in `anomalies`; proceed.
 - `fail` → do NOT proceed. Record the `error`-severity findings with `code`/`message`/`suggested_fix` in `decisions` and stop. **No `--force` flag by design** — the caller edits `.hpc/playbook.yaml` if a rule is wrong, then re-invokes.
 
-## Step 7-8: Invoke `submit-flow`
+## Step 7-8: Invoke `submit-flow` (two-phase canary gate)
 
-Steps 7 (rsync), 7b (canary), 8 (qsub), 10 (record) are ONE CLI call. Spec shape (matches `schemas/submit_flow.input.json`):
+`submit-flow` runs preflight + rsync + deploy + qsub + journal-record. To make canary **success** gate the main array (#160), drive it in TWO phases — the main array NEVER launches until the canary is verified. Spec shape (matches `schemas/submit_flow.input.json`):
 
 ```json
 {
@@ -262,47 +262,55 @@ Steps 7 (rsync), 7b (canary), 8 (qsub), 10 (record) are ONE CLI call. Spec shape
   "backend": "sge", "script": ".hpc/templates/cpu_array.sh",
   "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
   "pass_env_keys": [...],
-  "canary": true, "campaign_id": "<slug>", "runtime": "uv",
+  "canary": true, "canary_only": true, "campaign_id": "<slug>", "runtime": "uv",
   "skip_preflight": true
 }
 ```
 
 `skip_preflight: true` is correct — Step 6b just ran. For GPU jobs: `script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.slurm` (SLURM).
 
+**Phase 1 — submit the canary only** (`canary_only: true`): preflight + rsync + deploy + the 1-task canary, but NOT the main array.
+
 ```bash
 hpc-agent submit-flow --spec spec.json --experiment-dir .
 ```
 
-- `data.deduped: true` → original cluster jobs running. Record `deduped` in `decisions`; the caller switches to the status workflow.
-- `data.deduped: false` → fresh. Capture `data.run_id`/`job_ids`/`canary_job_ids`.
+- `data.deduped: true` → the main run already ran; original jobs are live. Record `deduped` in `decisions`; switch to the status workflow. Do NOT re-submit.
+- `data.deduped: false` → fresh. `data.main_launched` is **false** (only the canary went out). Capture `data.canary_run_id` / `data.canary_job_ids`.
 - Error envelopes: branch by `error_code` per submit-flow's contract.
 
-### Canary verification (route through `verify-canary`)
-
-When `data.canary_done: true`:
+**Verify the canary — this is the gate** (route through `verify-canary`):
 
 ```bash
 hpc-agent verify-canary --experiment-dir . --canary-run-id "$CANARY_RUN_ID" --expect-output "results/seed_42/metrics.json"
 ```
 
-Branch:
-- `ok=True` → continue to main array submit.
-- `ok=False` → record `stderr_tail` verbatim and the `failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`) in `decisions`, stop.
+- `ok=False` → record `stderr_tail` verbatim and the `failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`) in `decisions`, then **stop. The main array never launches.**
+- `ok=True` → proceed to Phase 2.
+
+**Phase 2 — launch the main array** (only after a verified canary): re-invoke `submit-flow` with the SAME spec but `"canary": false` and `"canary_only": false` (the canary already ran):
+
+```bash
+hpc-agent submit-flow --spec spec_main.json --experiment-dir .
+```
+
+Capture `data.run_id` / `data.job_ids` (`data.main_launched` is now true).
 
 ## Step 8b: Verify the array is queued/running
 
-`qsub`/`sbatch` returning a job ID is necessary but not sufficient. Confirm each returned job ID is alive on the cluster BEFORE reporting success:
+`qsub`/`sbatch` returning a job ID is necessary but not sufficient — an SGE array can land in `Eqw` (error) and a SLURM job can be held, both of which a plain alive-check still reports as "present." Confirm the submitted jobs landed cleanly with a verb (never raw `ssh qstat`):
 
 ```bash
-# SLURM
-ssh $SSH_TARGET 'squeue -j '"$JOB_IDS"' -h -o "%i %T %r"; sacct -j '"$JOB_IDS"' -n -P -o JobID,State,Reason 2>&1 | head'
-# SGE
-ssh $SSH_TARGET 'qstat -j '"$JOB_IDS"' 2>&1 | head -40; qstat -u '"$USER"' | awk "NR>2"'
+hpc-agent verify-submitted --experiment-dir . --run-id "$RUN_ID"
 ```
 
-Classify each job ID as **healthy** (proceed) or **failed** (abort) per the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md). A wave-2+ job pending on a dependency is healthy.
+It reads the run's job_ids from the journal, queries per-job scheduler state over SSH, and returns `{ok, states, healthy, error, held, missing, details}`. A wave-2+ job pending on a dependency reports as healthy.
 
-On a failed state: record the scheduler reason verbatim and the bad job ID in `decisions`, stop. Do not run Step 9 or Step 10.
+Branch:
+- `ok=True` → every submitted job is queued/running, none in error/held → proceed.
+- `ok=False` → record the `error`/`held` job IDs, `states`, and `details` verbatim in `decisions`, then stop. Do NOT run Step 9 or Step 10.
+
+`missing` (submitted IDs absent from the queue right after submit) is suspicious — surface it too. See the state taxonomy in [scheduler-states.md](../../docs/reference/scheduler-states.md); the failure-mode table below maps a bad state (e.g. `Eqw`) to its fix.
 
 ## Step 9-10: Cache + report
 

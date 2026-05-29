@@ -1,25 +1,24 @@
-"""``submit-and-verify``: workflow composing submit-flow + verify-canary.
+"""``submit-and-verify``: two-phase canary gate over submit-flow + verify-canary.
 
-One call instead of /submit-hpc then /verify-canary. Submits a run
-plus its 1-task canary, then waits for the canary to land terminal
-before returning so the caller branches once on ``verified``.
+One call instead of /submit-hpc then /verify-canary. The canary is a GATE
+(#160): submit the 1-task canary FIRST (``canary_only``), verify it lands and
+produces output, and launch the main array ONLY on success — so a broken
+dispatch never reaches the full run.
 
 This is a workflow-composes-workflow primitive: ``submit-flow`` and
-``verify-canary`` are both workflow-verb primitives in their own
-right; ``submit-and-verify`` chains them under one envelope. The
-chain is finite and blocking (no monitor-polling shape), so the
-composition is honest — the body always calls both halves in order.
+``verify-canary`` are both workflow-verb primitives in their own right;
+``submit-and-verify`` chains them under one envelope.
 
-Three short-circuit paths:
+Paths:
 
-* ``spec.submit.canary=False`` — the submit half doesn't fire a
-  canary, so there's nothing to verify. Return with
-  ``verified=False`` and ``verify_result=None``.
-* ``submit-flow`` returns ``deduped=True`` (journal already had the
-  run) — no fresh canary was submitted; do not pull a stale verify
-  off an old canary. Same shape as above.
-* The submit half succeeded and a fresh canary is in flight — call
-  ``verify-canary`` and pass the envelope through.
+* ``spec.submit.canary=False`` — no canary, so the main array submits directly
+  and there's nothing to verify. ``verified=False``, ``verify_result=None``.
+* Phase 1 ``submit-flow`` returns ``deduped=True`` (the run already exists) —
+  no fresh canary; pass the submit result through without a stale verify.
+* Canary verified → Phase 2 launches the main array; ``verified=True`` with the
+  main ``job_ids``.
+* Canary FAILED → the main array never launches; ``verified=False``,
+  ``failure_kind`` set, and ``job_ids`` empty.
 """
 
 from __future__ import annotations
@@ -77,47 +76,100 @@ def submit_and_verify(
     *,
     spec: SubmitAndVerifySpec,
 ) -> SubmitAndVerifyResult:
-    """Run ``submit-flow`` then ``verify-canary`` and return one envelope."""
-    submit_result = submit_flow(experiment_dir, spec=spec.submit)
+    """Two-phase canary gate (#160): submit the canary, verify it, then launch
+    the main array ONLY on a verified canary — never before.
 
-    if not spec.submit.canary or submit_result.canary_run_id is None:
+    Phase 1 submits the canary alone (``canary_only=True``); on a verified
+    canary, Phase 2 submits the main array (``canary=False``). A failed canary
+    returns ``verified=False`` with empty ``job_ids`` — the main NEVER launches.
+    """
+    base = spec.submit
+
+    # No canary requested → submit the main array directly; nothing to gate.
+    if not base.canary:
+        result = submit_flow(experiment_dir, spec=base)
         return SubmitAndVerifyResult(
-            run_id=submit_result.run_id,
-            job_ids=list(submit_result.job_ids),
-            total_tasks=submit_result.total_tasks,
-            deduped=submit_result.deduped,
-            canary_run_id=submit_result.canary_run_id,
+            run_id=result.run_id,
+            job_ids=list(result.job_ids),
+            total_tasks=result.total_tasks,
+            deduped=result.deduped,
+            canary_run_id=result.canary_run_id,
+            canary_job_ids=(list(result.canary_job_ids) if result.canary_job_ids else None),
+            verified=False,
+            failure_kind=None,
+            verify_result=None,
+        )
+
+    # Phase 1 — submit ONLY the canary; the main array does NOT launch yet.
+    canary_submit = submit_flow(
+        experiment_dir, spec=base.model_copy(update={"canary": True, "canary_only": True})
+    )
+
+    # Deduped (the run already exists) or no canary landed → don't gate; pass
+    # the submit result through without pulling a stale verify.
+    if canary_submit.deduped or canary_submit.canary_run_id is None:
+        return SubmitAndVerifyResult(
+            run_id=canary_submit.run_id,
+            job_ids=list(canary_submit.job_ids),
+            total_tasks=canary_submit.total_tasks,
+            deduped=canary_submit.deduped,
+            canary_run_id=canary_submit.canary_run_id,
             canary_job_ids=(
-                list(submit_result.canary_job_ids) if submit_result.canary_job_ids else None
+                list(canary_submit.canary_job_ids) if canary_submit.canary_job_ids else None
             ),
             verified=False,
             failure_kind=None,
             verify_result=None,
         )
 
-    verify_envelope = verify_canary(
-        experiment_dir,
-        canary_run_id=submit_result.canary_run_id,
-        expect_output=spec.expect_output,
-        fingerprint=spec.fingerprint,
-        poll_interval_sec=spec.poll_interval_sec,
-        wait_budget_sec=spec.wait_budget_sec,
-        log_dir=spec.log_dir,
-        file_glob=spec.file_glob,
+    # Verify the canary — THE GATE.
+    verify_result = VerifyCanaryResult.model_validate(
+        verify_canary(
+            experiment_dir,
+            canary_run_id=canary_submit.canary_run_id,
+            expect_output=spec.expect_output,
+            fingerprint=spec.fingerprint,
+            poll_interval_sec=spec.poll_interval_sec,
+            wait_budget_sec=spec.wait_budget_sec,
+            log_dir=spec.log_dir,
+            file_glob=spec.file_glob,
+        )
+    )
+    canary_job_ids = (
+        list(canary_submit.canary_job_ids) if canary_submit.canary_job_ids else None
     )
 
-    verify_result = VerifyCanaryResult.model_validate(verify_envelope)
+    if not verify_result.ok:
+        # Canary failed → refuse to launch the main array (#160). job_ids is
+        # empty: the main never went out.
+        return SubmitAndVerifyResult(
+            run_id=canary_submit.run_id,
+            job_ids=[],
+            total_tasks=canary_submit.total_tasks,
+            deduped=False,
+            canary_run_id=canary_submit.canary_run_id,
+            canary_job_ids=canary_job_ids,
+            verified=False,
+            failure_kind=verify_result.failure_kind,
+            verify_result=verify_result,
+        )
 
-    return SubmitAndVerifyResult(
-        run_id=submit_result.run_id,
-        job_ids=list(submit_result.job_ids),
-        total_tasks=submit_result.total_tasks,
-        deduped=submit_result.deduped,
-        canary_run_id=submit_result.canary_run_id,
-        canary_job_ids=(
-            list(submit_result.canary_job_ids) if submit_result.canary_job_ids else None
+    # Phase 2 — canary verified → launch the main array (the canary already ran;
+    # skip the redundant preflight Phase 1 just performed).
+    main_submit = submit_flow(
+        experiment_dir,
+        spec=base.model_copy(
+            update={"canary": False, "canary_only": False, "skip_preflight": True}
         ),
-        verified=verify_result.ok,
-        failure_kind=verify_result.failure_kind,
+    )
+    return SubmitAndVerifyResult(
+        run_id=main_submit.run_id,
+        job_ids=list(main_submit.job_ids),
+        total_tasks=main_submit.total_tasks,
+        deduped=main_submit.deduped,
+        canary_run_id=canary_submit.canary_run_id,
+        canary_job_ids=canary_job_ids,
+        verified=True,
+        failure_kind=None,
         verify_result=verify_result,
     )

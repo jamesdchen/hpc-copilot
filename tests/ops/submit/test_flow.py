@@ -135,11 +135,14 @@ def _spec(run_id: str, **overrides: Any):
         total_tasks=4,
         backend="sge",
         script="run.sh",
-        job_env={},
+        # A real per-task executor so submit-flow can synthesize a valid sidecar
+        # when Step 6d was skipped. (#162: it must REFUSE to synthesize one whose
+        # executor is the dispatcher command — covered in TestSidecarGuarantee.)
+        job_env={"EXECUTOR": "python run.py"},
         canary=False,
-        # submit-flow now guarantees the per-run sidecar at rsync time; a
-        # result_dir_template lets it synthesize one when Step 6d was
-        # skipped (these tests submit without pre-writing a sidecar).
+        # submit-flow guarantees the per-run sidecar at rsync time; a
+        # result_dir_template + a real executor let it synthesize one when
+        # Step 6d was skipped (these tests submit without pre-writing a sidecar).
         result_dir_template="results/{run_id}/task_{task_id}",
     )
     base.update(overrides)
@@ -401,7 +404,7 @@ class TestSidecarGuarantee:
 
         spec = _spec(
             "rX",
-            job_env={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_CMD_SHA": "abcd1234"},
+            job_env={"EXECUTOR": "python run.py --task $HPC_TASK_ID", "HPC_CMD_SHA": "abcd1234"},
         )
         assert not run_sidecar_path(tmp_path, "rX").is_file()
         p1, p2, p3 = _mock_prelude_and_submit(sf_module)
@@ -410,8 +413,31 @@ class TestSidecarGuarantee:
         # submit-flow wrote the sidecar from the spec before rsync.
         sc = read_run_sidecar(tmp_path, "rX")
         assert sc["result_dir_template"] == "results/{run_id}/task_{task_id}"
-        assert sc["executor"] == "python3 .hpc/_hpc_dispatch.py"
+        assert sc["executor"] == "python run.py --task $HPC_TASK_ID"
         assert sc["task_count"] == 4
+
+    def test_fails_loud_when_synthesized_executor_would_self_recurse(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """#162: job_env['EXECUTOR'] is the job-script command (it runs the
+        dispatcher), not a per-task command. submit-flow must NOT synthesize a
+        sidecar whose `executor` re-invokes the dispatcher — it fails loud so the
+        array never launches into the instant self-recursion that burned 8 nodes
+        live. Either a correct sidecar or a clean local failure, never a broken
+        artifact."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import submit_flow_batch
+        from hpc_agent.state.runs import run_sidecar_path
+
+        spec = _spec(
+            "rRecur",
+            job_env={"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_CMD_SHA": "abcd1234"},
+        )
+        p1, p2, p3 = _mock_prelude_and_submit(sf_module)
+        with p1, p2, p3, pytest.raises(errors.SpecInvalid, match="dispatcher"):
+            submit_flow_batch(tmp_path, spec=_batch([spec]))
+        # No structurally broken sidecar was left behind.
+        assert not run_sidecar_path(tmp_path, "rRecur").is_file()
 
     def test_records_resources_on_synthesized_sidecar(
         self, tmp_path: Any, _journal_home: Any

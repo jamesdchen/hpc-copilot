@@ -127,6 +127,31 @@ class HPCBackend(abc.ABC):
         raise NotImplementedError("backend does not implement parse_alive_output")
 
     @staticmethod
+    def build_scheduler_state_cmd(job_ids: list[str]) -> str:
+        """Shell command whose stdout pairs each job id with its raw scheduler
+        state (consumed by :meth:`parse_scheduler_states`).
+
+        Distinct from :meth:`build_alive_check_cmd`: the alive-check answers
+        only "still in the queue?", whereas this surfaces the *state* so a
+        post-submit check can tell a healthy ``running``/``pending`` job from
+        an error/held one (SGE ``Eqw``, a held SLURM job) — the question
+        ``verify-submitted`` answers.
+        """
+        raise NotImplementedError("backend does not implement build_scheduler_state_cmd")
+
+    @staticmethod
+    def parse_scheduler_states(stdout: str, job_ids: list[str]) -> dict[str, str]:
+        """Map each requested job id present in *stdout* to its raw scheduler
+        state token (SGE ``Eqw`` / SLURM ``FAILED`` …). Ids absent from the
+        output are omitted — the caller treats a missing id as gone."""
+        raise NotImplementedError("backend does not implement parse_scheduler_states")
+
+    @staticmethod
+    def classify_scheduler_state(state: str) -> str:
+        """Bucket a raw scheduler state token into ``alive`` / ``error`` / ``held``."""
+        raise NotImplementedError("backend does not implement classify_scheduler_state")
+
+    @staticmethod
     def stderr_log_path(remote_path: str, job_name: str, job_id: str, task_id: int) -> str:
         """Return the cluster-side path to a single task's stderr log.
 

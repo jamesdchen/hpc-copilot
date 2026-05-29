@@ -32,6 +32,7 @@ from hpc_agent._kernel.registry.primitive import primitive
 from hpc_agent.cli._dispatch import CliArg, CliShape
 from hpc_agent.infra.clusters import load_clusters_config
 from hpc_agent.infra.ssh_agent import agent_available, agent_detail
+from hpc_agent.infra.ssh_options import _ssh_add_binary
 
 
 def _check(name: str, ok: bool, detail: str = "") -> dict[str, Any]:
@@ -108,7 +109,7 @@ def check_preflight(*, cluster: str | None = None) -> dict[str, Any]:
         # Unix path: env-var is the signal — verify a key is actually loaded.
         try:
             agent = subprocess.run(
-                ["ssh-add", "-l"],
+                [_ssh_add_binary(), "-l"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

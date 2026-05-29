@@ -413,6 +413,19 @@
   },
   {
     "agent_facing": true,
+    "cli": "hpc-agent verify-submitted [--experiment-dir <dir>] --run-id <run_id>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "verify-submitted",
+    "output_schema": "verify_submitted.output.json",
+    "python": "hpc_agent.ops.verify_submitted.verify_submitted",
+    "side_effects": [
+      "ssh"
+    ],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
     "cli": "hpc-agent axes-init [--experiment-dir <dir>] [--axes <axes>] [--homogeneous-axes <homogeneous_axes>] [--force]",
     "idempotent": true,
     "input_schema": null,

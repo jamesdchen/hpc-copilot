@@ -88,6 +88,6 @@ echo "============================================"
 # user's tasks.py call hpc_agent.models.mapreduce.reduce.history.prior() to learn what
 # prior iterations of the same campaign produced.
 export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR GPU_COUNT HPC_GPU_TYPE
-time $EXECUTOR ${EXTRA_ARGS:-}
+hpc_run_with_retry
 
 echo "Job finished."

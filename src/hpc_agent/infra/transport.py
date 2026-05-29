@@ -28,7 +28,7 @@ from hpc_agent.infra.remote import (
     _with_ssh_backoff,
     ssh_run,
 )
-from hpc_agent.infra.ssh_options import _rsync_rsh_env, _scp_binary, _ssh_binary
+from hpc_agent.infra.ssh_options import ssh_argv, ssh_env
 from hpc_agent.infra.ssh_validation import validate_remote_path
 
 __all__ = [
@@ -191,7 +191,7 @@ def _tar_ssh_push(
         remote_steps.append(_remote_clean_cmd(remote_path, exclude))
     remote_steps.append(f"tar x -C {quoted_remote}")
     ssh_remote_cmd = " && ".join(remote_steps)
-    ssh_cmd = [_ssh_binary(), "-o", "BatchMode=yes", ssh_target, ssh_remote_cmd]
+    ssh_cmd = [*ssh_argv("ssh"), ssh_target, ssh_remote_cmd]
 
     # tar's stderr goes to a temp file rather than a PIPE: it is only
     # read after ``ssh`` exits, and a PIPE that fills its ~64 KB kernel
@@ -263,7 +263,7 @@ def _scp_pull(
     dst_path.mkdir(parents=True, exist_ok=True)
     dst = str(dst_path)
 
-    scp_cmd = [_scp_binary(), "-r", "-o", "BatchMode=yes", src, dst]
+    scp_cmd = [*ssh_argv("scp", extra_opts=["-r"]), src, dst]
     try:
         return subprocess.run(
             scp_cmd,
@@ -353,7 +353,7 @@ def rsync_push(
     if delete:
         flags.append("--delete")
 
-    rsync_env = {**os.environ, **_rsync_rsh_env()}
+    rsync_env = {**os.environ, **ssh_env()}
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:
@@ -425,7 +425,17 @@ def deploy_runtime(
         f" {remote_path_q}/.hpc/templates/common"
         f" && rm -f {remote_path_q}/hpc_agent/__init__.py"
         f" {remote_path_q}/hpc_agent/models/__init__.py"
-        f" {remote_path_q}/hpc_agent/models/mapreduce/__init__.py",
+        f" {remote_path_q}/hpc_agent/models/mapreduce/__init__.py"
+        # Purge stale compiled artifacts in the deployed tree. A Py2.7
+        # ``__init__.pyc`` left *beside* the (now-absent) ``__init__.py`` is
+        # imported directly by Py3 as the package init -> ``bad magic
+        # number``, shadowing the conda install and killing every
+        # cluster-side verb. rsync ``--delete`` excludes ``hpc_agent/`` (see
+        # DEFAULT_RSYNC_EXCLUDES) so nothing else ever cleans this dir; the
+        # ``.py`` removal above doesn't touch ``.pyc`` / ``__pycache__``.
+        f" && find {remote_path_q}/hpc_agent -name '*.pyc' -delete"
+        f" && find {remote_path_q}/hpc_agent -depth -type d -name __pycache__"
+        f" -exec rm -rf {{}} +",
         ssh_target=ssh_target,
     )
 
@@ -435,10 +445,10 @@ def deploy_runtime(
         def _run() -> subprocess.CompletedProcess[str]:
             try:
                 return subprocess.run(
-                    # ``-o BatchMode=yes`` fails fast on missing
-                    # credentials instead of blocking on a password
-                    # prompt — matches ``_scp_pull`` and ``ssh_run``.
-                    [_scp_binary(), "-o", "BatchMode=yes", str(src), dst],
+                    # ssh_argv("scp") = [<scp>, -o BatchMode=yes, *override];
+                    # BatchMode fails fast on a missing key instead of hanging
+                    # on a prompt — matches _scp_pull and ssh_run.
+                    [*ssh_argv("scp"), str(src), dst],
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -678,7 +688,7 @@ def rsync_pull(
             filter_flags += [f"--include={pattern}"]
         filter_flags += ["--exclude=*"]
 
-    rsync_env = {**os.environ, **_rsync_rsh_env()}
+    rsync_env = {**os.environ, **ssh_env()}
 
     def _run() -> subprocess.CompletedProcess[str]:
         try:

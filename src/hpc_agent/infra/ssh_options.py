@@ -16,13 +16,18 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from collections.abc import Iterable
 
 __all__ = [
     "_resolve_ssh_persist_interval",
     "_rsync_rsh_env",
     "_scp_binary",
+    "_ssh_add_binary",
     "_ssh_binary",
+    "_ssh_config_override_opts",
     "_ssh_multiplex_opts",
+    "ssh_argv",
+    "ssh_env",
 ]
 
 
@@ -36,6 +41,7 @@ __all__ = [
 # ``infra.ssh_agent`` already detects.
 _WIN_OPENSSH_SSH = r"C:\Windows\System32\OpenSSH\ssh.exe"
 _WIN_OPENSSH_SCP = r"C:\Windows\System32\OpenSSH\scp.exe"
+_WIN_OPENSSH_SSH_ADD = r"C:\Windows\System32\OpenSSH\ssh-add.exe"
 
 
 def _resolve_binary(*, env_var: str, win_default: str, name: str) -> str:
@@ -73,19 +79,42 @@ def _scp_binary() -> str:
     return _resolve_binary(env_var="HPC_SCP_BINARY", win_default=_WIN_OPENSSH_SCP, name="scp")
 
 
+def _ssh_add_binary() -> str:
+    """Path/name of the ``ssh-add`` binary to invoke. See :func:`_resolve_binary`.
+
+    Override with ``HPC_SSH_ADD_BINARY``. Mirrors :func:`_ssh_binary`: on
+    Windows the agent probe in :mod:`hpc_agent.infra.ssh_agent` must reach
+    the native OpenSSH named-pipe agent, but a bare ``ssh-add`` from Git
+    Bash resolves to Git's ``/usr/bin/ssh-add`` — which only knows
+    ``SSH_AUTH_SOCK`` (never set on Windows) and so reports a false
+    "agent unreachable". Preferring the native binary fixes that probe.
+    """
+    return _resolve_binary(
+        env_var="HPC_SSH_ADD_BINARY", win_default=_WIN_OPENSSH_SSH_ADD, name="ssh-add"
+    )
+
+
 def _rsync_rsh_env() -> dict[str, str]:
     """Return env overrides pinning rsync's remote shell to :func:`_ssh_binary`.
 
     rsync invokes its own ``ssh`` for the transport unless ``RSYNC_RSH``
     (or ``-e``) says otherwise; on Windows that picks up Git Bash's ssh,
-    same as the bare call sites. Returns ``{"RSYNC_RSH": <ssh>}`` when a
-    non-default ssh binary should be used (explicit override, or native
-    Windows OpenSSH), else ``{}`` so PATH resolution is unchanged. Respects
-    a caller-set ``RSYNC_RSH`` by leaving it alone.
+    same as the bare call sites. Returns ``{"RSYNC_RSH": <cmd>}`` when a
+    non-default remote shell should be used, else ``{}`` so PATH
+    resolution is unchanged. Respects a caller-set ``RSYNC_RSH`` by
+    leaving it alone.
+
+    On Windows the ``RSYNC_RSH`` command also carries the
+    :func:`_ssh_multiplex_opts` override (``-o ControlMaster=no -o
+    ControlPath=none``) so rsync's own ssh can't pick up the user's
+    ``~/.ssh/config`` multiplexing — which native Windows OpenSSH cannot
+    honour — any more than the bare ``ssh_run`` call site can.
     """
     if os.environ.get("RSYNC_RSH"):
         return {}
     ssh = _ssh_binary()
+    if sys.platform == "win32":
+        return {"RSYNC_RSH": " ".join([ssh, *_ssh_multiplex_opts()])}
     if ssh == "ssh":
         return {}
     return {"RSYNC_RSH": ssh}
@@ -102,6 +131,25 @@ _DEFAULT_SSH_PERSIST_INTERVAL = "10m"
 _DISALLOWED_PERSIST_CHARS = " \t\n\r;|&`$<>\"'\\*?!()=/"
 
 
+def _ssh_config_override_opts() -> list[str]:
+    """SSH ``-o`` options that neutralise a user's ssh-config multiplexing on
+    Windows; ``[]`` on POSIX.
+
+    Native Windows OpenSSH can't use a ``ControlPath`` Unix socket
+    (``getsockname failed: Not a socket``). For one-shot transfers (scp, the
+    tar-fallback push) we don't want to *be* a multiplex master — but we must
+    still stop the user's ``~/.ssh/config`` (often a ``Host *`` ``ControlMaster``
+    stanza) from forcing multiplexing, since a command-line ``-o`` beats the
+    config file. On POSIX nothing is needed. ``HPC_NO_SSH_MULTIPLEX=1`` disables
+    it everywhere. This is the transfer-sized subset of :func:`_ssh_multiplex_opts`.
+    """
+    if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
+        return []
+    if sys.platform == "win32":
+        return ["-o", "ControlMaster=no", "-o", "ControlPath=none"]
+    return []
+
+
 def _ssh_multiplex_opts() -> list[str]:
     """Return SSH options that enable connection multiplexing.
 
@@ -115,10 +163,15 @@ def _ssh_multiplex_opts() -> list[str]:
     ``HPC_NO_SSH_MULTIPLEX=1``
         Opt out of multiplexing entirely (some clusters disallow
         multiplexed sessions, e.g. due to PAM-based session limits).
-        Multiplexing is also auto-disabled on Windows because the
-        ``ControlPath`` Unix socket isn't supported by native Windows
-        OpenSSH (``ssh.exe`` aborts with ``getsockname failed: Not a
-        socket``).
+        On Windows multiplexing can't work at all — native Windows
+        OpenSSH has no ``ControlPath`` Unix socket (``ssh.exe`` aborts
+        with ``getsockname failed: Not a socket``) — so instead of the
+        usual ``ControlMaster=auto`` we emit an explicit
+        ``ControlMaster=no`` / ``ControlPath=none`` override. Returning
+        ``[]`` would only drop our own flags, leaving a user's
+        ``~/.ssh/config`` ``ControlMaster`` (often a ``Host *`` stanza)
+        to bite; a command-line ``-o`` beats the config file.
+        ``HPC_NO_SSH_MULTIPLEX=1`` still short-circuits to ``[]`` first.
     ``HPC_SSH_PERSIST_INTERVAL``
         Override the ControlPersist window. The value is passed verbatim
         to OpenSSH, so any shape ``ssh_config(5)`` accepts works:
@@ -141,7 +194,12 @@ def _ssh_multiplex_opts() -> list[str]:
     if os.environ.get("HPC_NO_SSH_MULTIPLEX") == "1":
         return []
     if sys.platform == "win32":
-        return []
+        # Native Windows OpenSSH can't use a ControlPath Unix socket
+        # (getsockname failed: Not a socket), so instead of POSIX
+        # multiplexing emit the explicit ControlMaster=no/ControlPath=none
+        # override (see _ssh_config_override_opts) — returning [] would only
+        # omit OUR flags and let a user's ~/.ssh/config ControlMaster bite.
+        return _ssh_config_override_opts()
     runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     opts = [
         "-o",
@@ -181,3 +239,48 @@ def _resolve_ssh_persist_interval() -> str | None:
     if raw.lower() == "no":
         return None
     return raw
+
+
+def ssh_argv(kind: str, *, extra_opts: Iterable[str] = ()) -> list[str]:
+    """Leading argv (resolved binary + platform-correct options) for an
+    ssh-family command of *kind* — the single seam for ssh invocation.
+
+    Owns both binary resolution (native Windows OpenSSH / ``HPC_*_BINARY``
+    override / bare PATH name) and option assembly, so no call site can get
+    either wrong — the regression class behind #145 / #154 / #156. Callers
+    append only the per-invocation positionals (ssh target + remote command,
+    scp src + dst, ``ssh-add -l``) via *extra_opts* and/or by extending the
+    returned list.
+
+    * ``"ssh"`` — command channel (``ssh_run``, the tar-fallback push):
+      ``[<ssh>, -o BatchMode=yes, *_ssh_multiplex_opts()]``. ``BatchMode``
+      fails fast on a missing key instead of hanging on a prompt;
+      :func:`_ssh_multiplex_opts` reuses one connection on POSIX and applies
+      the ControlMaster override on Windows.
+    * ``"scp"`` — one-shot transfer: ``[<scp>, -o BatchMode=yes,
+      *_ssh_config_override_opts()]``. A transfer needn't be a multiplex
+      master, but on Windows it still must neutralise the user's ssh-config
+      ControlMaster, so it gets the override only (nothing on POSIX).
+    * ``"ssh-add"`` — local agent probe, no remote host: ``[<ssh-add>]``
+      (no BatchMode, no multiplexing).
+
+    rsync is env-based, not argv-based — see :func:`ssh_env`.
+    """
+    if kind == "ssh":
+        return [_ssh_binary(), "-o", "BatchMode=yes", *_ssh_multiplex_opts(), *extra_opts]
+    if kind == "scp":
+        return [_scp_binary(), "-o", "BatchMode=yes", *_ssh_config_override_opts(), *extra_opts]
+    if kind == "ssh-add":
+        return [_ssh_add_binary(), *extra_opts]
+    raise ValueError(f"unknown ssh-family kind {kind!r}; expected 'ssh', 'scp', or 'ssh-add'")
+
+
+def ssh_env() -> dict[str, str]:
+    """Env overrides for a subprocess that spawns its *own* ssh (rsync).
+
+    rsync runs the bare ``rsync`` binary but invokes its own ssh for the
+    transport; :func:`_rsync_rsh_env` pins that to the resolved binary and, on
+    Windows, the multiplex override — the env-var twin of what :func:`ssh_argv`
+    splices into an argv. Merge into ``os.environ`` for the rsync subprocess.
+    """
+    return _rsync_rsh_env()

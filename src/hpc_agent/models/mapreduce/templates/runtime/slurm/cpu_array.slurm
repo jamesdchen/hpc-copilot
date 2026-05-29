@@ -83,6 +83,6 @@ echo "============================================"
 # closed-loop campaign — and lets the user's tasks.py call
 # hpc_agent.models.mapreduce.reduce.history.prior() for the campaign's history.
 export TASK_ID HPC_TASK_ID HPC_RUN_ID HPC_CAMPAIGN_ID RESULT_DIR
-time $EXECUTOR ${EXTRA_ARGS:-}
+hpc_run_with_retry
 
 echo "Job finished."
