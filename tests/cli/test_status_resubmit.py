@@ -7,7 +7,6 @@ Shared subprocess + envelope helpers live in :mod:`._helpers`.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -177,10 +176,6 @@ def test_resubmit_preempted_category_with_partial_marks_does_not_raise(
 # ─── No SSH pre-flight gate (BatchMode fails fast; IdentityFile needs no agent) ─
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="_run_cli subprocess harness is Unix-only (same reason the old gate tests skipped)",
-)
 def test_no_ssh_precheck_status_reaches_journal(tmp_path: Path) -> None:
     """status no longer hard-requires a reachable SSH agent.
 

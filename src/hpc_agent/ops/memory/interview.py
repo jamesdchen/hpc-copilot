@@ -160,7 +160,11 @@ def record_interview(
                 frozen_configs=ep.get("frozen_configs", []),
             )
             frozen_shas = dict(result.frozen_shas)
-            wrapper_rel = str(result.wrapper_path.relative_to(campaign_dir))
+            # Cluster-bound path: it's rsynced to and resolved on the Linux
+            # cluster, so it must be POSIX no matter the authoring OS. str() on
+            # a Windows Path emits backslashes, which the cluster-side dispatcher
+            # (and the artifacts manifest) would then fail to resolve.
+            wrapper_rel = result.wrapper_path.relative_to(campaign_dir).as_posix()
             artifacts.append(wrapper_rel)
             entry_point_materialized = {
                 "kind": "shell_command",

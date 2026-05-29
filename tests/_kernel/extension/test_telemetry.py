@@ -70,7 +70,10 @@ def test_monitor_jsonl_appends(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(
     sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+    reason="the no-torn-lines guarantee is provided by advisory_flock, which by "
+    "design degrades to a no-op without fcntl (Windows) — the A9 invariant this "
+    "asserts is genuinely not made on win32, so this is a legitimate skip, not a "
+    "latent test bug",
 )
 def test_concurrent_appenders_produce_no_torn_lines(tmp_path: Path) -> None:
     """A9 invariant: two threads appending 200 records each should

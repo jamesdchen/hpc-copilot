@@ -338,10 +338,6 @@ def _seed_yaml(campaign_dir: Path, rel: str, body: str) -> Path:
     return p
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_entry_point_shell_command_writes_wrapper_with_register_run(tmp_path: Path) -> None:
     """A shell_command entry_point materializes ``.hpc/wrappers/<name>.py``
     decorated with @register_run, with the declared signature plus
@@ -714,10 +710,6 @@ def test_entry_point_shell_command_data_axis_hint_bounded_halo(tmp_path: Path) -
     }
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_entry_point_shell_command_executor_cmd_in_materialized(tmp_path: Path) -> None:
     """_materialized.entry_point.executor_cmd is the shell command callers
     (slash commands, submit-flow orchestrators) feed into submit-flow's
@@ -749,7 +741,9 @@ def test_entry_point_shell_command_executor_cmd_in_materialized(tmp_path: Path) 
 
 @pytest.mark.skipif(
     sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
+    reason="runs the cluster-contract executor_cmd locally: needs python3 and echo "
+    "as real PATH binaries plus POSIX shell quoting (the Linux cluster's runtime, "
+    "absent on win32) — the materialized executor_cmd itself is now cross-platform",
 )
 def test_entry_point_shell_command_executor_cmd_actually_invokes_wrapper(tmp_path: Path) -> None:
     """End-to-end: the executor_cmd persisted to interview.json, when run with

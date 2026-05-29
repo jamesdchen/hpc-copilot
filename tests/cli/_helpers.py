@@ -21,11 +21,22 @@ def env_without_ssh_agent() -> dict[str, str]:
     journal lookup isn't what fails first."""
     import os
 
-    return {
+    env = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.environ.get("HOME", ""),
         # No SSH_AUTH_SOCK on purpose.
     }
+    # A Python subprocess on Windows needs SystemRoot/COMSPEC to even start,
+    # and resolves the home dir from USERPROFILE (not HOME). Carry them when
+    # present so this deliberately-stripped env doesn't fail to *spawn* on
+    # win32 for reasons unrelated to the SSH gate under test. No-op on POSIX
+    # (these vars aren't set there) → the Linux env stays byte-identical.
+    # Mirrors the _spawn_env helper added for #163/#166.
+    for _var in ("SystemRoot", "COMSPEC", "USERPROFILE"):
+        _val = os.environ.get(_var)
+        if _val is not None:
+            env[_var] = _val
+    return env
 
 
 def run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, str]:

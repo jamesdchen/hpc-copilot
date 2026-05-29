@@ -7,7 +7,6 @@ Shared subprocess + envelope helpers live in :mod:`._helpers`.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -401,10 +400,6 @@ def test_aggregate_writes_sidecar_when_expect_output_set(tmp_path: Path, monkeyp
     assert payload["data"]["provenance_sidecar"] == "/exp/results/_provenance.json"
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_ssh_gate_does_not_block_local_only_subcommands(tmp_path: Path) -> None:
     """`capabilities`, `clusters list`, `submit --dry-run`, and `submit`
     (journal-only) must not be gated by SSH_AUTH_SOCK."""
