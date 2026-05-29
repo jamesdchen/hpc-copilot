@@ -90,6 +90,23 @@ def _run_cli(*args: str, env: dict[str, str] | None = None) -> tuple[int, str, s
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def _spawn_env(**extra: str) -> dict[str, str]:
+    """A deliberately-minimal subprocess env that still launches Python.
+
+    These tests strip the env down to assert the SSH fail-fast gate (no
+    ``SSH_AUTH_SOCK``). On Windows the interpreter additionally needs
+    ``SystemRoot``/``COMSPEC`` to start at all, so carry those when present —
+    a no-op on POSIX, where they're absent.
+    """
+    base = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
+    for _var in ("SystemRoot", "COMSPEC", "SystemDrive", "PATHEXT", "TEMP", "TMP"):
+        _val = os.environ.get(_var)
+        if _val is not None:
+            base[_var] = _val
+    base.update(extra)
+    return base
+
+
 def _parse_envelope(stdout: str) -> dict:
     """Parse the single-line JSON envelope (per the CLI contract)."""
     lines = [ln for ln in stdout.strip().splitlines() if ln.strip()]
@@ -138,10 +155,6 @@ _ENV_ROUNDTRIP_VALUES: dict[str, str] = {
 }
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_submit_flow_dry_run_preserves_complex_job_env(tmp_path: Path) -> None:
     """End-to-end CLI invocation: ``submit-flow --dry-run`` must accept
     every shape in :data:`_ENV_ROUNDTRIP_VALUES` and the spec file
@@ -161,11 +174,7 @@ def test_submit_flow_dry_run_preserves_complex_job_env(tmp_path: Path) -> None:
     spec["job_env"] = dict(_ENV_ROUNDTRIP_VALUES)
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
 
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "HPC_JOURNAL_DIR": str(tmp_path / "journal"),
-    }
+    env = _spawn_env(HPC_JOURNAL_DIR=str(tmp_path / "journal"))
     rc, out, err = _run_cli(
         "submit-flow",
         "--experiment-dir",
@@ -210,22 +219,14 @@ def test_complex_job_env_round_trips_through_pydantic_model(tmp_path: Path) -> N
 # ─── 2. ERROR CODES ────────────────────────────────────────────────────────
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_error_code_ssh_unreachable_when_ssh_auth_sock_missing(tmp_path: Path) -> None:
     """Cluster-touching subcommands must fail fast with
     ``ssh_unreachable`` (exit 2) when ``SSH_AUTH_SOCK`` isn't in the
     spawn env — per CONTRACT.md, integrators expect this exact code
     instead of a stalled SSH handshake.
     """
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "HPC_JOURNAL_DIR": str(tmp_path / "journal"),
-        # Deliberately no SSH_AUTH_SOCK.
-    }
+    # Deliberately no SSH_AUTH_SOCK — assert the fail-fast gate fires.
+    env = _spawn_env(HPC_JOURNAL_DIR=str(tmp_path / "journal"))
     rc, out, _ = _run_cli(
         "status",
         "--experiment-dir",
@@ -243,10 +244,6 @@ def test_error_code_ssh_unreachable_when_ssh_auth_sock_missing(tmp_path: Path) -
     assert "remediation" in envelope
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_error_code_spec_invalid_on_malformed_json(tmp_path: Path) -> None:
     """A ``--spec`` file that is not parseable JSON must surface as
     ``spec_invalid`` (exit 1, user category) — not as an internal
@@ -254,11 +251,7 @@ def test_error_code_spec_invalid_on_malformed_json(tmp_path: Path) -> None:
     """
     spec = tmp_path / "bad.json"
     spec.write_text("{this is not valid json", encoding="utf-8")
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "HPC_JOURNAL_DIR": str(tmp_path / "journal"),
-    }
+    env = _spawn_env(HPC_JOURNAL_DIR=str(tmp_path / "journal"))
     rc, out, _ = _run_cli(
         "submit",
         "--experiment-dir",
@@ -276,19 +269,12 @@ def test_error_code_spec_invalid_on_malformed_json(tmp_path: Path) -> None:
     assert envelope["retry_safe"] is False
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pre-existing Windows platform failure (Unix-only stdlib or shell)",
-)
 def test_error_code_cluster_unknown_for_undefined_cluster(tmp_path: Path) -> None:
     """``clusters describe <unknown>`` is the canonical
     ``cluster_unknown`` trigger — exit 1, ``ClusterUnknown``-shaped
     envelope with the remediation pointing to ``clusters list``.
     """
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-    }
+    env = _spawn_env()
     rc, out, _ = _run_cli(
         "clusters",
         "describe",
