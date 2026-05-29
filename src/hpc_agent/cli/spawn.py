@@ -4,10 +4,12 @@ Houses the ``run`` subcommand: the code-orchestrated entrypoint that
 validates fields, renders the canonical worker prompt, invokes a
 fresh-context ``claude -p`` worker, and emits its parsed report. Its
 ``--inline`` mode (also ``HPC_AGENT_INVOKER=inline``) skips the spawn and
-returns the rendered procedure for the calling agent to run in its own
-context. The agent-reachable ``--inline`` flag is refused when a spawning
-worker can authenticate — inline is then a user opt-in via
-``HPC_AGENT_INVOKER=inline``, not an agent default (#155).
+returns the rendered procedure for the calling agent to run in-session —
+delegating to a single subagent when its harness exposes one (which
+recovers the worker's context isolation), otherwise in its own context.
+The agent-reachable ``--inline`` flag is refused when a spawning worker can
+authenticate — inline is then a user opt-in via ``HPC_AGENT_INVOKER=inline``,
+not an agent default (#155).
 
 This is a Tier 3 verb: a CLI-only orchestrator with no ``@primitive``
 backing — it lives outside the registry-driven dispatcher
@@ -65,8 +67,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     In *inline* mode (``--inline`` / ``HPC_AGENT_INVOKER=inline``) it does NOT spawn:
     it renders the same canonical worker prompt and returns it in the envelope
     under ``data.prompt`` with ``data.mode == "inline"``, so the calling agent
-    runs the procedure itself in its own context instead of forking a fresh
-    ``claude -p`` worker per command.
+    runs the procedure in-session — handing it to a single subagent when its
+    harness exposes one (recovering the worker's context isolation), else in its
+    own context — instead of forking a fresh ``claude -p`` worker per command.
 
     The agent-reachable ``--inline`` flag is REFUSED when a spawning worker can
     authenticate (:func:`worker_credentials_available`) and the user has not set
@@ -155,8 +158,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 category="user",
                 retry_safe=False,
             )
-        # No worker is spawned: hand the rendered procedure back for the calling
-        # agent to run in-context and produce the worker report itself.
+        # No `claude -p` worker is spawned: hand the rendered procedure back for
+        # the calling agent to run in-session — delegating to one subagent when it
+        # has that capability, else in its own context — and produce the report.
         _ok(
             {
                 "mode": "inline",
@@ -164,11 +168,25 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "experiment_dir": str(args.experiment_dir),
                 "prompt": prompt,
                 "instructions": (
-                    "Inline mode: no worker was spawned. Execute the procedure in "
-                    "`prompt` yourself, in this session (you have full tools and "
-                    "credentials — do not spawn a worker or another agent), then "
-                    "produce the worker report it asks for: a single JSON object "
-                    '{"result": ..., "decisions": [...], "anomalies": "..."}.'
+                    "Inline mode: no `claude -p` worker was spawned. Produce the "
+                    "worker report the procedure in `prompt` asks for — a single "
+                    'JSON object {"result": ..., "decisions": [...], '
+                    '"anomalies": "..."}. How you run it depends on your '
+                    "capability:\n"
+                    "- If you have a subagent-spawning tool (Claude Code's `Agent` "
+                    "tool — formerly `Task` — or your harness's equivalent), prefer "
+                    "it: dispatch exactly ONE subagent with `prompt` as its entire "
+                    "task and return the JSON object it produces. That keeps the "
+                    "procedure's verbose execution (rsync, qsub, scheduler dumps) "
+                    "out of your context — recovering the isolation the default "
+                    "worker spawn would have given. The subagent is the leaf: it "
+                    "runs every step itself and spawns nothing further.\n"
+                    "- If you have no subagent capability, run the procedure "
+                    "yourself in this session (you have full tools and "
+                    "credentials).\n"
+                    "Either path stays in this session — do NOT start a fresh "
+                    "`claude -p`/CLI worker or re-invoke `hpc-agent run`; inline "
+                    "deliberately skips that spawn."
                 ),
             },
             idempotent=False,
@@ -249,11 +267,12 @@ def register(sub: argparse._SubParsersAction) -> None:
         help=(
             "Do not spawn a fresh `claude -p` worker; render the workflow "
             "procedure and return it under `data.prompt` (mode=inline) so the "
-            "calling agent runs it in its own context, trading context isolation "
-            "for no per-command spawn. REFUSED when a spawning worker can "
-            "authenticate (ANTHROPIC_API_KEY / cloud creds or a Claude Code OAuth "
-            "login): inline is then a user opt-in via HPC_AGENT_INVOKER=inline, "
-            "not an agent default (#155)."
+            "calling agent runs it in-session — delegating to one subagent when it "
+            "has that capability (recovering context isolation), else in its own "
+            "context. REFUSED when a spawning worker can authenticate "
+            "(ANTHROPIC_API_KEY / cloud creds or a Claude Code OAuth login): "
+            "inline is then a user opt-in via HPC_AGENT_INVOKER=inline, not an "
+            "agent default (#155)."
         ),
     )
     p_run.set_defaults(func=cmd_run)

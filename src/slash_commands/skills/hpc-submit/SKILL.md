@@ -1,7 +1,7 @@
 ---
 name: hpc-submit
 description: "Decide all HPC submission inputs (cluster, entry_point, data_axis, homogeneous_axes, frozen_configs, task_generator, walltime, gpu_type) and hand off to the submit-flow worker. Walks every resolution step, accumulates ambiguities into a single envelope, never early-returns on the first miss. Callers (slash for human dialogs, autonomous agent applying safe_defaults) resolve the entire list in one re-invocation. Composes hpc-classify-axis / hpc-wrap-entry-point / hpc-build-executor for sub-decisions."
-allowed-tools: Bash Read Write Skill
+allowed-tools: Bash Read Write Skill Agent
 execution: inline
 category: agent-autonomous
 ---
@@ -162,7 +162,7 @@ hpc-agent run --workflow submit --fields-json '<fields>'
 
 Spawns a fresh-context bare worker that runs `worker_prompts/submit.md` (experiment-agnostic execution: rsync, qsub, canary, journal, scheduler verify). Returns its envelope.
 
-**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When the env knob is set, `hpc-agent run` does NOT spawn — its envelope carries `data.mode == "inline"` and `data.prompt`, the same canonical procedure the worker would have run. Execute that procedure yourself, now, in this session (you have full tools and credentials — do not spawn a worker or another agent), then return an envelope shaped exactly like the spawn path: `data.report` = the `{result, decisions, anomalies}` JSON the procedure produces, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline". This trades the worker's context isolation for no per-command spawn — the caller opted into that. When `data.mode == "spawn"` (the default), consume `data.report` from the spawned worker as before.
+**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When the env knob is set, `hpc-agent run` does NOT spawn a `claude -p` worker — its envelope carries `data.mode == "inline"`, `data.prompt` (the same canonical procedure the worker would have run), and `data.instructions`. Produce the `{result, decisions, anomalies}` worker report by running that procedure, then return an envelope shaped exactly like the spawn path: `data.report` = that JSON, `data.worker_exit_code` = 0 (non-zero only if a step blocked you), `data.mode` = "inline". **How you run it is capability-gated:** if you have a subagent-spawning tool (Claude Code's `Agent` tool — formerly `Task` — or your harness's equivalent), dispatch exactly ONE subagent with `data.prompt` as its whole task and return the report it produces — that keeps the rsync/qsub transcript out of your context, recovering the isolation inline would otherwise trade away. If you have no such tool, run the procedure yourself in this session (full tools + credentials). Either path stays in-session — do NOT start another `claude -p` worker or re-invoke `hpc-agent run`, and the subagent (when used) is the leaf: it runs every step and spawns nothing further. When `data.mode == "spawn"` (the default), consume `data.report` from the spawned worker as before.
 
 ### 10. Propagate worker ambiguities (if any)
 
