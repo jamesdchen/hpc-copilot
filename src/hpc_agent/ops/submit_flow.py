@@ -940,12 +940,20 @@ def _submit_flow_batch_locked(
     ssh_target, remote_path = next(iter(targets))
     _validate_ssh_target(ssh_target)
     _preflight_probe(ssh_target, skip=skip_preflight)
-    _push_and_deploy(
-        experiment_dir=experiment_dir,
-        ssh_target=ssh_target,
-        remote_path=remote_path,
-        rsync_excludes=rsync_excludes,
-    )
+    # #185: Phase 2 of submit.md's two-phase canary gate re-invokes
+    # submit-flow with the same target right after Phase 1 deployed —
+    # the rsync+deploy is a no-op in normal use, but still pays the SSH
+    # handshake + file-list walk. Skip the prelude when EVERY fresh spec
+    # asserts ``skip_rsync_deploy``; if any spec withholds the assertion,
+    # run the prelude (mixed batches are conservative).
+    skip_prelude_io = all(specs[i].skip_rsync_deploy for i in fresh_indices)
+    if not skip_prelude_io:
+        _push_and_deploy(
+            experiment_dir=experiment_dir,
+            ssh_target=ssh_target,
+            remote_path=remote_path,
+            rsync_excludes=rsync_excludes,
+        )
 
     # Per-spec submission work.
     #

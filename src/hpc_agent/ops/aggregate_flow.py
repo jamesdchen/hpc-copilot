@@ -326,6 +326,19 @@ def aggregate_flow(
     # is regenerated from AggregateFlowSpec).
     run_id = spec.run_id
     output_dir = spec.output_dir
+    # #188: aggregate-flow appends ``_combiner/`` to output_dir for the pulled
+    # wave partials; the cluster combiner appends another ``_combiner/`` of its
+    # own. If the caller's output_dir already ENDS in ``_combiner``, the joined
+    # path becomes ``<...>/_combiner/_combiner/wave_*.json`` and the consumer
+    # (verify-aggregation-complete, the local reducer) silently sees zero
+    # partials. Refuse at intake rather than nest.
+    if output_dir is not None and Path(output_dir).name == "_combiner":
+        raise errors.SpecInvalid(
+            f"output_dir basename is '_combiner' ({output_dir!r}); aggregate-flow "
+            "would nest the wave partials at '<output_dir>/_combiner/wave_*.json', "
+            "producing '_combiner/_combiner/' on disk. Use a parent directory or "
+            "different name (default: <experiment_dir>/_aggregated/<run_id>)."
+        )
     ensure_all_combined = spec.ensure_all_combined
     combiner_max_retries = spec.combiner_max_retries
     pull_summaries = spec.pull_summaries

@@ -191,6 +191,17 @@ class SubmitFlowSpec(BaseModel):
             "saves one SSH probe). Use with caution."
         ),
     )
+    skip_rsync_deploy: bool = Field(
+        default=False,
+        description=(
+            "Skip the shared rsync+deploy prelude. Use ONLY when an earlier "
+            "submit-flow call to the same (ssh_target, remote_path) has just "
+            "completed and the local tree hasn't changed since — typical "
+            "Phase 2 of submit.md's two-phase canary gate. submit-flow trusts "
+            "the caller: a stale assertion leaves the cluster with whatever "
+            "code the previous deploy shipped (#185)."
+        ),
+    )
     partial_ok: bool = Field(
         default=False,
         description=(
@@ -208,9 +219,7 @@ class SubmitFlowSpec(BaseModel):
     @model_validator(mode="after")
     def _canary_only_requires_canary(self) -> SubmitFlowSpec:
         if self.canary_only and not self.canary:
-            raise ValueError(
-                "canary_only=true requires canary=true (nothing to gate on otherwise)"
-            )
+            raise ValueError("canary_only=true requires canary=true (nothing to gate on otherwise)")
         return self
 
 

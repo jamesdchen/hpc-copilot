@@ -319,7 +319,7 @@ hpc-agent verify-canary --experiment-dir . --canary-run-id "$CANARY_RUN_ID" --ex
 - `ok=False` → record a `canary` decision with outcome set to the `failure_kind` (`dispatcher_failed`/`import_error`/`oom_killed`/`missing_output`/`timeout`), put `stderr_tail` verbatim in `anomalies`, then **stop. The main array never launches.**
 - `ok=True` → proceed to Phase 2.
 
-**Phase 2 — launch the main array** (only after a verified canary): re-invoke `submit-flow` with the SAME spec but `"canary": false` and `"canary_only": false` (the canary already ran):
+**Phase 2 — launch the main array** (only after a verified canary): re-invoke `submit-flow` with the SAME spec but `"canary": false`, `"canary_only": false`, **and `"skip_rsync_deploy": true`** (the canary's Phase 1 just deployed the code; the local tree hasn't changed since, so the rsync+deploy would be a no-op — #185). Keep `"skip_preflight": true` as in Phase 1.
 
 ```bash
 hpc-agent submit-flow --spec spec_main.json --experiment-dir .

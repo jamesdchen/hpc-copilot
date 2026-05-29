@@ -247,6 +247,63 @@ class TestSubmitFlowBatch:
         assert all(r.deduped for r in results)
         assert [r.run_id for r in results] == ["r0", "r1"]
 
+    def test_skip_rsync_deploy_skips_push_and_deploy(
+        self, tmp_path: Any, _journal_home: Any
+    ) -> None:
+        """#185: when every fresh spec asserts ``skip_rsync_deploy``, the
+        prelude's rsync+deploy is skipped (Phase 2 of submit.md's two-phase
+        canary gate — Phase 1 just deployed the same target)."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        specs = [_spec(f"r{i}", skip_rsync_deploy=True) for i in range(3)]
+        with (
+            mock.patch.object(sf_module, "_preflight_probe") as preflight,
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"job_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            submit_flow_batch(tmp_path, spec=_batch(specs))
+
+        # Preflight is governed by its own flag; only the rsync+deploy half
+        # is skipped by skip_rsync_deploy.
+        assert preflight.call_count == 1
+        assert push_deploy.call_count == 0
+        assert submit_one.call_count == 3
+
+    def test_mixed_skip_rsync_deploy_runs_prelude(self, tmp_path: Any, _journal_home: Any) -> None:
+        """#185: a mixed batch (some specs assert skip_rsync_deploy, some
+        don't) runs the prelude — the conservative posture protects whichever
+        spec withheld the assertion."""
+        from hpc_agent.ops import submit_flow as sf_module
+        from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+
+        specs = [
+            _spec("r0", skip_rsync_deploy=True),
+            _spec("r1", skip_rsync_deploy=False),
+        ]
+        with (
+            mock.patch.object(sf_module, "_preflight_probe"),
+            mock.patch.object(sf_module, "_push_and_deploy") as push_deploy,
+            mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+        ):
+            submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+                run_id=spec.run_id,
+                job_ids=[f"job_{spec.run_id}"],
+                total_tasks=spec.total_tasks,
+                deduped=False,
+                canary_done=False,
+            )
+            submit_flow_batch(tmp_path, spec=_batch(specs))
+
+        assert push_deploy.call_count == 1
+
     def test_auto_prunes_orphan_sidecars_at_start(self, tmp_path: Any, _journal_home: Any) -> None:
         """Half-baked sidecars from a prior failed batch are silently swept
         before the next batch starts — no manual /prune-orphan-sidecars call."""

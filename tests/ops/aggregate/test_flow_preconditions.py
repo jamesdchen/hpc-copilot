@@ -95,3 +95,31 @@ def test_aggregate_flow_allows_terminal_run_past_gate(journal_home, experiment):
     with pytest.raises(errors.HpcError) as exc_info:
         aggregate_flow(experiment, spec=AggregateFlowSpec(run_id=_RUN_ID))
     assert not isinstance(exc_info.value, errors.PreconditionFailed)
+
+
+def test_aggregate_flow_refuses_output_dir_basename_combiner(experiment):
+    """#188: output_dir whose basename is ``_combiner`` would nest the wave
+    partials at ``_combiner/_combiner/wave_*.json`` (aggregate-flow + the
+    cluster combiner both append ``_combiner/`` independently). Fail at intake."""
+    bad = str(experiment / "_combiner")
+    with pytest.raises(errors.SpecInvalid, match="basename is '_combiner'"):
+        aggregate_flow(
+            experiment,
+            spec=AggregateFlowSpec(run_id=_RUN_ID, output_dir=bad),
+        )
+
+
+def test_aggregate_flow_accepts_normal_output_dir(experiment, journal_home):
+    """Sanity: a normal output_dir (NOT ending in ``_combiner``) passes the
+    #188 guard. Any later error proves the guard didn't false-trip."""
+    upsert_run(experiment, _record(status="complete"))
+    good = str(experiment / "_aggregated" / _RUN_ID)
+    # Anything but SpecInvalid("basename is '_combiner'") proves the guard
+    # let a clean spec through; the call will still error later on the
+    # incomplete test scaffolding, that's fine.
+    with pytest.raises(errors.HpcError) as exc_info:
+        aggregate_flow(
+            experiment,
+            spec=AggregateFlowSpec(run_id=_RUN_ID, output_dir=good),
+        )
+    assert "basename is '_combiner'" not in str(exc_info.value)
