@@ -174,8 +174,10 @@ def verify_canary(
 
     from hpc_agent.infra.cluster_logs import fetch_task_logs
     from hpc_agent.infra.cluster_status import ssh_status_report
+    from hpc_agent.infra.clusters import remote_activation_for_sidecar
     from hpc_agent.ops.aggregate.runner import verify_combiner_artifact
     from hpc_agent.state.journal import load_run
+    from hpc_agent.state.runs import read_run_sidecar
 
     record = load_run(experiment_dir, canary_run_id)
     if record is None:
@@ -188,6 +190,20 @@ def verify_canary(
             f"canary run_id={canary_run_id!r} has total_tasks={record.total_tasks}; "
             "a canary must have at least 1 task"
         )
+
+    # The control-plane status reporter runs on the login node via ssh —
+    # it needs the run's conda activation, else it falls to the bare
+    # login-node python that lacks ``hpc_agent``, every poll raises, and
+    # the loop reports ``reporter_unreachable`` instead of the canary's
+    # real status (#176). Derive the activation from the canary's sidecar
+    # (cluster + resolved env) exactly as ``ops/monitor/status.py`` does
+    # for the normal status path. Best-effort: an unreadable sidecar
+    # yields ``""`` → bare python (the unchanged fallback).
+    try:
+        _canary_sidecar = read_run_sidecar(experiment_dir, canary_run_id)
+    except (OSError, ValueError):
+        _canary_sidecar = {}
+    remote_activation = remote_activation_for_sidecar(_canary_sidecar)
 
     deadline = time.monotonic() + int(wait_budget_sec)
     last_summary: dict[str, Any] = {}
@@ -203,6 +219,7 @@ def verify_canary(
                 job_name=record.job_name,
                 log_dir=log_dir,
                 file_glob=file_glob,
+                remote_activation=remote_activation,
             )
         except (errors.RemoteCommandFailed, OSError) as exc:
             last_poll_error = exc

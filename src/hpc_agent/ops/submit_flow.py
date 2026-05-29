@@ -393,6 +393,11 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
         campaign_id=main.get("campaign_id") or None,
         runtime=main.get("runtime"),
         resources=main.get("resources") or None,
+        # Carry the env snapshot so the canary's control-plane status
+        # reporter activates the SAME conda env as the main run — that is
+        # the activation verify-canary derives from this sidecar (#176).
+        env=main.get("env") or None,
+        env_group=main.get("env_group") or None,
     )
 
 
@@ -916,6 +921,17 @@ def _submit_flow_batch_locked(
     # (see _ensure_run_sidecar). #148 / #150.
     for i in fresh_indices:
         _ensure_run_sidecar(experiment_dir, specs[i])
+        # The canary dispatches the SAME per-task command as the main run,
+        # so its sidecar (``<run_id>-canary.json``) must ALSO exist on disk
+        # before the shared rsync below — otherwise it never ships to the
+        # cluster and every canary task dies ``sidecar_not_found`` (#175).
+        # Mirror it here, in the pre-rsync prelude, so it rides the same
+        # rsync as the main sidecar. ``_submit_one_spec`` keeps its own
+        # ``_mirror_canary_sidecar`` call as an idempotent guard — that one
+        # runs post-rsync (too late to reach the cluster) and early-returns
+        # once this sidecar exists. (``canary_only`` requires ``canary``.)
+        if specs[i].canary:
+            _mirror_canary_sidecar(experiment_dir, specs[i].run_id, f"{specs[i].run_id}-canary")
 
     # Shared prelude: one ssh probe, one rsync, one deploy. This is the
     # whole point of the batch — collapse N × (probe + rsync + deploy)

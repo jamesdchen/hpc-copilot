@@ -218,3 +218,53 @@ def test_reporter_unreachable_when_every_poll_fails(
     assert result["ok"] is False
     assert result["failure_kind"] == "reporter_unreachable"
     assert "reporter never returned" in result["details"]
+
+
+def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_home: Path) -> None:
+    """#176: the status reporter runs on the login node via ssh, so it needs the
+    run's conda activation — otherwise it falls to bare login python, every poll
+    raises, and the loop masks the real status as ``reporter_unreachable``.
+
+    The activation is derived from the canary sidecar (cluster + resolved env),
+    exactly like ``ops/monitor/status.py`` does for the normal status path.
+    Before the fix the kwarg was omitted, so the reporter got ``""``.
+    """
+    from hpc_agent.infra.clusters import remote_activation_for_sidecar
+    from hpc_agent.ops.verify_canary import verify_canary
+    from hpc_agent.state.runs import read_run_sidecar, write_run_sidecar
+
+    _seed_canary(tmp_path)  # journal record (cluster=hoffman2)
+    # Canary sidecar carries cluster + resolved conda env (mirrored from main, #175).
+    write_run_sidecar(
+        tmp_path,
+        run_id="r1-canary",
+        cmd_sha="",
+        hpc_agent_version="",
+        submitted_at="2026-01-01T00:00:00+00:00",
+        executor="python run.py",
+        result_dir_template="results/{task_id}",
+        task_count=1,
+        tasks_py_sha="",
+        cluster="hoffman2",
+        env={"conda_env": "hpc-pi"},
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_status(**kwargs):
+        captured["remote_activation"] = kwargs.get("remote_activation")
+        return {"summary": {"complete": 1, "running": 0, "pending": 0, "failed": 0}}
+
+    with (
+        mock.patch("hpc_agent.infra.cluster_status.ssh_status_report", side_effect=_fake_status),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] ok\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=10)
+
+    assert out["ok"] is True
+    expected = remote_activation_for_sidecar(read_run_sidecar(tmp_path, "r1-canary"))
+    assert captured["remote_activation"] == expected
+    assert captured["remote_activation"]  # non-empty — the #176 regression
+    assert "conda activate hpc-pi" in captured["remote_activation"]

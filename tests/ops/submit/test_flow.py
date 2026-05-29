@@ -561,3 +561,43 @@ class TestResourceFlagPlumbing:
         assert ids == ["42"]
         # The backend's resource_flags output flowed into _build_command.
         assert captured["extra_flags"] == ["-l", "h_rt=3600"]
+
+
+def test_canary_sidecar_mirrored_before_rsync(tmp_path: Any, _journal_home: Any) -> None:
+    """#175: the canary sidecar must exist on disk BEFORE ``_push_and_deploy``
+    so it rides the SAME rsync as the main sidecar — otherwise it never reaches
+    the cluster and every canary task dies ``sidecar_not_found``.
+
+    ``_submit_one_spec`` (which used to be the ONLY place the canary sidecar was
+    written) is mocked out here, so the sidecar can only be present at deploy
+    time if the pre-rsync prelude mirrored it.
+    """
+    from hpc_agent.ops import submit_flow as sf_module
+    from hpc_agent.ops.submit_flow import SubmitFlowResult, submit_flow_batch
+    from hpc_agent.state.runs import read_run_sidecar, run_sidecar_path
+
+    spec = _spec("rC", canary=True)  # _spec carries a real per-task EXECUTOR
+    seen: dict[str, bool] = {}
+
+    def _capture_at_deploy(*, experiment_dir, ssh_target, remote_path, rsync_excludes):
+        seen["canary_on_disk"] = run_sidecar_path(experiment_dir, "rC-canary").is_file()
+
+    with (
+        mock.patch.object(sf_module, "_preflight_probe"),
+        mock.patch.object(sf_module, "_push_and_deploy", side_effect=_capture_at_deploy),
+        mock.patch.object(sf_module, "_submit_one_spec") as submit_one,
+    ):
+        submit_one.side_effect = lambda *, experiment_dir, spec: SubmitFlowResult(
+            run_id=spec.run_id,
+            job_ids=["j"],
+            total_tasks=spec.total_tasks,
+            deduped=False,
+            canary_done=True,
+        )
+        submit_flow_batch(tmp_path, spec=_batch([spec]))
+
+    assert seen.get("canary_on_disk") is True
+    # And it mirrors the main run's per-task command, scoped to a single task.
+    csc = read_run_sidecar(tmp_path, "rC-canary")
+    assert csc["task_count"] == 1
+    assert csc["executor"] == "python run.py"
