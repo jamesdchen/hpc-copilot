@@ -150,9 +150,14 @@ def wrapper_executor_cmd(
     # HPC_KW_* env vars, then call compute(args). The dispatcher's bare-
     # form env exports (NAME alongside HPC_KW_NAME) aren't used here — the
     # HPC_KW_* namespace is the stable contract.
+    #
+    # rel.as_posix(): this command runs on the Linux cluster, so the embedded
+    # path must use forward slashes even when the campaign was authored on
+    # Windows (str(WindowsPath) would bake in backslashes that break the
+    # cluster-side os.path.join lookup).
     py = (
         "import argparse,importlib.util,os,sys;"
-        f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {str(rel)!r});"
+        f"_p=os.path.join(os.environ.get('REPO_DIR','.'), {rel.as_posix()!r});"
         "_s=importlib.util.spec_from_file_location('_hpc_wrapper',_p);"
         "_m=importlib.util.module_from_spec(_s);_s.loader.exec_module(_m);"
         "_n=argparse.Namespace(**{k[len('HPC_KW_'):].lower():v "
