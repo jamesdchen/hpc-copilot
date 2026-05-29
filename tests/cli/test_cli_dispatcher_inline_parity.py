@@ -86,7 +86,7 @@ def test_get_parser_dispatch_path_with_real_flag(tmp_path) -> None:
         "def total(): return 1\n"
         "def resolve(i): return {'horizon': 1}\n"
     )
-    (tmp_path / "cli.py").write_text(_DISPATCHER_PATH.read_text(encoding="utf-8"))
+    (tmp_path / "cli.py").write_text(_DISPATCHER_PATH.read_text(encoding="utf-8"), encoding="utf-8")
     # Load the COPY so its sibling tasks.py (the one above) is what it reads.
     mod = _load_module_from(tmp_path / "cli.py", "cli_copy_under_test")
     parser = mod.get_parser("src.m")

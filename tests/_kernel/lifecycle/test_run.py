@@ -131,6 +131,13 @@ def test_cmd_run_inline_flag_renders_without_spawning(
     from hpc_agent.cli.spawn import cmd_run
 
     monkeypatch.delenv("HPC_AGENT_INVOKER", raising=False)
+    # The #155 guard refuses an agent-supplied --inline when a spawning worker
+    # could authenticate; this test exercises the no-worker fallback where
+    # --inline IS the only path, so pin that precondition (otherwise the result
+    # leaks the ambient ANTHROPIC_API_KEY / OAuth login of the host).
+    monkeypatch.setattr(
+        "hpc_agent._kernel.lifecycle.invoke.worker_credentials_available", lambda: False
+    )
     _no_spawn(monkeypatch)
     rc = cmd_run(
         argparse.Namespace(

@@ -54,7 +54,9 @@ def parse_envelope(stdout: str) -> dict:
     """Parse the single-line JSON envelope from stdout. Asserts shape."""
     lines = [line for line in stdout.strip().splitlines() if line.strip()]
     assert len(lines) == 1, f"expected exactly one stdout line; got {len(lines)}"
-    return json.loads(lines[0])
+    obj = json.loads(lines[0])
+    assert isinstance(obj, dict), f"envelope must be a JSON object; got {type(obj).__name__}"
+    return obj
 
 
 SUBMIT_SPEC: dict = {
