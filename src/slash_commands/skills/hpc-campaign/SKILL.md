@@ -1,7 +1,7 @@
 ---
 name: hpc-campaign
 description: "Drive one tick of a closed-loop campaign — the per-iteration submit-flow → monitor-flow → aggregate-flow loop whose tasks.py adapts to prior results. Composes hpc-submit / hpc-status / hpc-aggregate for the per-phase mechanics; interprets validate-campaign findings; accumulates ambiguities into a single envelope."
-allowed-tools: Bash Read Skill
+allowed-tools: Bash Read Skill Agent
 execution: inline
 category: agent-autonomous
 ---

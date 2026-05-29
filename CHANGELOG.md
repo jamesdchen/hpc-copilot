@@ -7,6 +7,12 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Inline mode can delegate to a subagent when the harness has one
+
+The `hpc-agent run --inline` / `HPC_AGENT_INVOKER=inline` branch (the user opt-in that skips the fresh-context `claude -p` worker) now tells the calling agent to **delegate the rendered procedure to a single subagent when it has that capability** — Claude Code's `Agent` tool (formerly `Task`), or any harness equivalent — instead of always running it in the agent's own context. Dispatching the procedure into one isolated subagent recovers the context isolation the worker spawn would have given, without a second process or separate credentials.
+
+The capability is gated, not assumed: the subagent path is taken only when such a tool is actually available, and a harness without one (a bare API caller, a notebook driver, the headless worker itself) falls back to the existing in-context execution — never erroring on a tool it lacks. The default (non-inline) transport is unchanged: it still forks a `claude -p` worker, and the #155 guard still refuses an agent-supplied `--inline` when a spawning worker can authenticate. The `Agent` tool was added to the `allowed-tools` of the `hpc-submit` / `hpc-status` / `hpc-aggregate` / `hpc-campaign` skills so Claude Code grants it; the addition is a no-op on harnesses that don't provide it. (Anthropic's new Dynamic Workflows feature was considered and deliberately not used here: it targets large subagent fan-out, is surface/plan-gated with no capability probe, and isn't reliably present across the harnesses hpc-agent supports — the plain, capability-gated subagent primitive is the portable fit for a single-procedure delegation.)
+
 ## 0.7.1 — 2026-05-27
 
 ### Fixed — Windows + Hoffman2 live-run hardening

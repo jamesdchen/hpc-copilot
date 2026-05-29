@@ -126,3 +126,43 @@ def test_worker_credentials_available_reads_env_and_oauth(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(invoke, "_oauth_credentials_available", lambda: True)
     assert invoke.worker_credentials_available() is True
+
+
+def test_inline_instructions_offer_capability_gated_subagent(tmp_path, monkeypatch, capsys):
+    """Inline mode must tell the agent it MAY delegate the procedure to ONE
+    subagent when it has that capability, and to run in-context otherwise —
+    never to re-spawn a `claude -p` worker. The prose is the contract here, and
+    prose directives on this path have regressed before (the #155 guard), so it
+    is pinned.
+    """
+    from hpc_agent.cli import spawn
+
+    # Drive inline via the env opt-in so the #155 worker-available guard is
+    # bypassed without needing to mock credentials; the instructions text is
+    # static, so stub the (heavy) prompt render.
+    monkeypatch.setenv("HPC_AGENT_INVOKER", "inline")
+    monkeypatch.setattr(
+        "hpc_agent._kernel.extension.spawn_prompt.validate_and_render_parts",
+        lambda _: types.SimpleNamespace(joined="PROMPT-BODY"),
+    )
+    rc = spawn.cmd_run(_args(tmp_path, inline=False))
+    env = _envelope(capsys)
+    assert rc == 0
+    assert env["data"]["mode"] == "inline"
+
+    instr = env["data"]["instructions"]
+    low = instr.lower()
+    # Capability-gated subagent delegation, named by tool token (and its former
+    # name, so a cross-version agent recognizes either).
+    assert "subagent" in low
+    assert "`agent` tool" in low
+    assert "task" in low
+    # Exactly one subagent, and it is a leaf (no further nesting).
+    assert "one subagent" in low
+    # A real in-context fallback when no such tool exists — inline is not
+    # subsumed by the subagent path.
+    assert "no subagent capability" in low
+    # Must not route back into a spawning transport.
+    assert "hpc-agent run" in instr
+    # The worker-report contract is still stated verbatim.
+    assert "result" in instr and "decisions" in instr and "anomalies" in instr

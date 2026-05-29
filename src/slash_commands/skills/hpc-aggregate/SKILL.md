@@ -1,7 +1,7 @@
 ---
 name: hpc-aggregate
 description: "Aggregate finished HPC runs into a final metrics envelope. Walks resolution steps, accumulates ambiguities into a single envelope, refuses to auto-mask integrity issues. Composes the aggregate-flow worker for the combiner + reducer pipeline."
-allowed-tools: Bash Read Skill
+allowed-tools: Bash Read Skill Agent
 execution: inline
 category: agent-autonomous
 ---
@@ -84,7 +84,7 @@ hpc-agent run --workflow aggregate --fields-json '{"run_id": "<id>", "profile": 
 
 Spawns a fresh-context bare worker that reads `worker_prompts/aggregate.md` — runs the combiner + reducer + summary pull + runtime-sample ingestion. Multi-step LLM-driven workflow, so worker is justified.
 
-**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When set, `hpc-agent run` does NOT spawn: its envelope carries `data.mode == "inline"` and `data.prompt`, the canonical `worker_prompts/aggregate.md` procedure. Execute it yourself, in this session (do not spawn a worker), then return the spawn-shaped envelope: `data.report` = the procedure's `{result, decisions, anomalies}` JSON, `data.worker_exit_code` = 0, `data.mode` = "inline". The combiner/reducer transcript then lands in your context rather than a worker's — the trade the caller opted into. When `data.mode == "spawn"` (the default), consume `data.report` as before.
+**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When set, `hpc-agent run` does NOT spawn a `claude -p` worker: its envelope carries `data.mode == "inline"`, `data.prompt` (the canonical `worker_prompts/aggregate.md` procedure), and `data.instructions`. Produce the procedure's `{result, decisions, anomalies}` JSON, then return the spawn-shaped envelope: `data.report` = that JSON, `data.worker_exit_code` = 0, `data.mode` = "inline". **How you run it is capability-gated:** if you have a subagent-spawning tool (Claude Code's `Agent` tool — formerly `Task` — or equivalent), dispatch exactly ONE subagent with `data.prompt` as its whole task and return its report — the combiner/reducer transcript then lands in the subagent's context, recovering the isolation inline would otherwise trade away. If you have no such tool, run the procedure yourself in this session. Either path stays in-session — don't start another `claude -p` worker or re-invoke `hpc-agent run`; the subagent (when used) is the leaf. When `data.mode == "spawn"` (the default), consume `data.report` as before.
 
 ### 6. Return envelope
 

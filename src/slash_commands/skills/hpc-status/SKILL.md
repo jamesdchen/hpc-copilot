@@ -1,7 +1,7 @@
 ---
 name: hpc-status
 description: "Poll an in-flight HPC run's status and decide what to do about it — wait, resubmit failed tasks, mark terminal. Walks resolution steps, accumulates ambiguities into a single envelope. Branches on wait_terminal: snapshot calls the status primitive directly (no worker spawn); blocking poll hands off to the bare worker for context-isolated polling."
-allowed-tools: Bash Read Skill
+allowed-tools: Bash Read Skill Agent
 execution: inline
 category: agent-autonomous
 ---
@@ -69,7 +69,7 @@ hpc-agent run --workflow status --fields-json '{"run_id": "<id>", "wait_terminal
 
 Spawns a fresh-context bare worker that reads `worker_prompts/status.md`. The worker contains the poll loop (sacct queries every 60s, lifecycle transitions, sidecar updates) in its private context. Returns the final terminal envelope. The caller's context grows by ~1 KB regardless of how long the poll ran.
 
-**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When set, `hpc-agent run` does NOT spawn: its envelope carries `data.mode == "inline"` and `data.prompt`, the canonical `worker_prompts/status.md` procedure. Run that poll loop yourself, in this session (do not spawn a worker), then return the spawn-shaped envelope: `data.report` = the procedure's `{result, decisions, anomalies}` JSON, `data.worker_exit_code` = 0, `data.mode` = "inline". The poll transcript then lands in your context rather than a worker's — the trade the caller opted into. When `data.mode == "spawn"` (the default), consume `data.report` as before.
+**Inline mode (`HPC_AGENT_INVOKER=inline`).** **Never select this yourself** — it's a *user* opt-in (see *Execution style*); the default spawn runs this exact procedure *with* context isolation. When set, `hpc-agent run` does NOT spawn a `claude -p` worker: its envelope carries `data.mode == "inline"`, `data.prompt` (the canonical `worker_prompts/status.md` procedure), and `data.instructions`. Produce the procedure's `{result, decisions, anomalies}` JSON, then return the spawn-shaped envelope: `data.report` = that JSON, `data.worker_exit_code` = 0, `data.mode` = "inline". **How you run it is capability-gated:** if you have a subagent-spawning tool (Claude Code's `Agent` tool — formerly `Task` — or equivalent), dispatch exactly ONE subagent with `data.prompt` as its whole task and return its report — the poll loop's transcript then lands in the subagent's context, recovering the isolation inline would otherwise trade away. If you have no such tool, run the poll loop yourself in this session. Either path stays in-session — don't start another `claude -p` worker or re-invoke `hpc-agent run`; the subagent (when used) is the leaf. When `data.mode == "spawn"` (the default), consume `data.report` as before.
 
 This split saves the worker-spawn overhead on the common single-call case while preserving context isolation on the multi-step case. The principle: **a workflow skill hands off to a bare worker when (and only when) the workflow has more than one LLM-driven step.**
 
