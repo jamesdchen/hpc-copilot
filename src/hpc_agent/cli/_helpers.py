@@ -2,7 +2,7 @@
 
 This module is the **public adapter contract** for both host-internal CLI
 modules (``hpc_agent.cli.*``) and external plugins. Plugins import these
-symbols (``_ok``, ``_err``, ``_load_spec``, ``_require_ssh_agent``, …)
+symbols (``_ok``, ``_err``, ``_load_spec``, ``_err_from_hpc``, …)
 to build their own CLI subcommands — see ``hpc-agent-pro``'s
 ``register_cli`` for the pattern. The underscore prefix is historical;
 **these are the extension SDK and rename will require a release**.
@@ -10,9 +10,9 @@ to build their own CLI subcommands — see ``hpc-agent-pro``'s
 The helpers split into two boundaries that frame every cmd_*:
 
 * **Input boundary** — ``_load_spec``, ``_validate_against_schema``,
-  ``_require_ssh_agent``, ``_add_experiment_dir`` /
-  ``_add_run_id`` / ``_add_spec_and_dry_run``. argparse args + JSON spec
-  files → validated Python kwargs.
+  ``_add_experiment_dir`` / ``_add_run_id`` /
+  ``_add_spec_and_dry_run``. argparse args + JSON spec files →
+  validated Python kwargs.
 * **Output boundary** — ``_emit``, ``_ok``, ``_err``, ``_err_from_hpc``,
   ``EXIT_OK`` / ``EXIT_USER_ERROR`` / ``EXIT_CLUSTER_ERROR`` /
   ``EXIT_INTERNAL``. Primitive return value → JSON envelope on stdout.

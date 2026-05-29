@@ -14,7 +14,7 @@ set of env vars from its own shell:
 
 | Caller-side env var | What it does |
 |---|---|
-| `SSH_AUTH_SOCK` | Path to the ssh-agent socket. Cluster-touching subcommands fail fast with `error_code: "ssh_unreachable"` (exit 2) when missing — they do not hang on auth. |
+| `SSH_AUTH_SOCK` | Path to the ssh-agent socket. Forward it if you authenticate via ssh-agent; IdentityFile auth (`~/.ssh/config`) needs no agent. There's no pre-flight gate — `ssh_run` uses `BatchMode=yes`, so a genuine auth/connection failure fails fast as `error_code: "ssh_unreachable"` (exit 2, no hang), and when no agent is reachable that envelope's `remediation` is enriched with the agent state. |
 | `SSH_AGENT_PID` | Companion to `SSH_AUTH_SOCK`. Forward both. |
 | `HPC_JOURNAL_DIR` | Per-harness journal root (defaults to `~/.claude/hpc/`). Set to an isolated path (e.g. `~/.<harness>/hpc/<run_id>/`) so concurrent harness runs don't share state, and so the integrator's journal doesn't collide with an interactive Claude Code session against the same repo. |
 | `HPC_CLUSTERS_CONFIG` | Optional override of `clusters.yaml`. Useful when the harness ships its own cluster catalog rather than the package default. |
