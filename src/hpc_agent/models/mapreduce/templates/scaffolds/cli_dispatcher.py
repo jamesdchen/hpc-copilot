@@ -42,9 +42,10 @@ from typing import Any
 # ``executor_cli.py`` module to the cluster, which would widen the
 # remote runtime footprint.
 #
-# Keep this in lock-step with hpc_agent.executor_cli.{Flag,
-# build_parser_from_flags}; ``tests/test_executor_cli_inline_parity.py``
-# (or equivalent) should AST-compare the two when added.
+# Keep this in lock-step with hpc_agent.executor_cli.{Flag, _coerce_flag,
+# build_parser_from_flags}; parity is enforced by
+# ``tests/cli/test_cli_dispatcher_inline_parity.py`` (an AST compare of
+# the shared nodes plus a cross-class round-trip).
 
 
 @dataclass(frozen=True)
@@ -84,22 +85,52 @@ class Flag:
         parser.add_argument(cli_flag, **kwargs)
 
 
+# Fields that uniquely define a Flag. Used to coerce a Flag-shaped object
+# from a DIFFERENT module into THIS module's Flag — see _coerce_flag.
+_FLAG_FIELDS = ("name", "type", "default", "required", "choices", "help", "nargs", "action")
+
+
+def _coerce_flag(f: Any) -> Flag:
+    """Normalize one FLAGS entry to a local :class:`Flag` instance.
+
+    Accepts three shapes:
+
+    * a local ``Flag`` — returned as-is;
+    * a ``dict`` of Flag fields — splatted into ``Flag(**f)``;
+    * any object exposing the full set of Flag fields — a structurally
+      identical ``Flag`` defined in ANOTHER module (the installed
+      ``hpc_agent.executor_cli.Flag`` that the auto-generated ``tasks.py``
+      builds via ``flag(...)``). ``isinstance`` is ``False`` across that
+      class-identity gap, so a bare type check rejected a perfectly valid
+      entry with ``TypeError`` (#177). We rebuild a local ``Flag`` from its
+      fields so the parser is always built with this module's ``add_to``.
+
+    Anything else raises ``TypeError``.
+    """
+    if isinstance(f, Flag):
+        return f
+    if isinstance(f, dict):
+        return Flag(**f)
+    if all(hasattr(f, _attr) for _attr in _FLAG_FIELDS):
+        return Flag(**{_attr: getattr(f, _attr) for _attr in _FLAG_FIELDS})
+    raise TypeError(f"FLAGS entries must be Flag instances or dicts; got {type(f).__name__}")
+
+
 def build_parser_from_flags(
     flags: list[Flag] | list[dict[str, Any]],
     *,
     description: str = "",
 ) -> argparse.ArgumentParser:
-    """Build an argparse parser from a declarative flag list (inlined)."""
+    """Build an :class:`argparse.ArgumentParser` from a declarative flag list.
+
+    Each entry may be a :class:`Flag` instance, a dict with the same keys,
+    or a structurally-identical ``Flag`` from another module (see
+    :func:`_coerce_flag`). The returned parser is ready to
+    ``.parse_args(argv)``.
+    """
     parser = argparse.ArgumentParser(description=description)
     for f in flags:
-        if isinstance(f, Flag):
-            f.add_to(parser)
-        elif isinstance(f, dict):
-            Flag(**f).add_to(parser)
-        else:
-            raise TypeError(
-                f"FLAGS entries must be Flag instances or dicts; got {type(f).__name__}"
-            )
+        _coerce_flag(f).add_to(parser)
     return parser
 
 
