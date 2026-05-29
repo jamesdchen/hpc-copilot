@@ -99,7 +99,20 @@ def _spawn_env(**extra: str) -> dict[str, str]:
     a no-op on POSIX, where they're absent.
     """
     base = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
-    for _var in ("SystemRoot", "COMSPEC", "SystemDrive", "PATHEXT", "TEMP", "TMP"):
+    # Windows ignores $HOME for Path.home() (used at import time in
+    # state.run_record): it resolves USERPROFILE, then HOMEDRIVE+HOMEPATH.
+    # Carry them so the interpreter can start; absent on POSIX, so a no-op there.
+    for _var in (
+        "SystemRoot",
+        "COMSPEC",
+        "SystemDrive",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ):
         _val = os.environ.get(_var)
         if _val is not None:
             base[_var] = _val
@@ -219,6 +232,13 @@ def test_complex_job_env_round_trips_through_pydantic_model(tmp_path: Path) -> N
 # ─── 2. ERROR CODES ────────────────────────────────────────────────────────
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="asserts the POSIX ssh-auth contract (missing SSH_AUTH_SOCK -> ssh_unreachable, "
+    "exit 2). Windows OpenSSH uses a named-pipe agent, not SSH_AUTH_SOCK, so that env var's "
+    "absence isn't 'unreachable' there; the gate returns exit 3 instead. Windows ssh-auth "
+    "detection is tracked under #156/#158.",
+)
 def test_error_code_ssh_unreachable_when_ssh_auth_sock_missing(tmp_path: Path) -> None:
     """Cluster-touching subcommands must fail fast with
     ``ssh_unreachable`` (exit 2) when ``SSH_AUTH_SOCK`` isn't in the

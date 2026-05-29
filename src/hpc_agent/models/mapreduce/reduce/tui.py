@@ -36,10 +36,26 @@ import os
 import select
 import subprocess
 import sys
-import termios
 import time
-import tty
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+# termios/tty drive raw-terminal keypress mode and exist only on POSIX. The
+# module must still *import* on Windows (the design contract — see the
+# test_module_imports_without_rich check), so import them optionally and fall
+# through to a no-op keypress reader when they're absent. Under TYPE_CHECKING
+# we import them unconditionally so mypy keeps the precise typeshed stubs.
+if TYPE_CHECKING:
+    import termios
+    import tty
+else:
+    try:
+        import termios
+        import tty
+    except ImportError:  # pragma: no cover - exercised only on non-POSIX
+        termios = None
+        tty = None
+
 from pathlib import Path
 from typing import Any
 
@@ -311,6 +327,8 @@ class _RawStdin:
         except (ValueError, OSError):
             return self
         if not os.isatty(fd):
+            return self
+        if termios is None or tty is None:  # non-POSIX: no raw mode, stay a no-op
             return self
         self._fd = fd
         try:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import textwrap
 from typing import TYPE_CHECKING
 
@@ -33,7 +34,12 @@ PREAMBLE = (
 
 _BASH = shutil.which("bash")
 
-pytestmark = pytest.mark.skipif(not _BASH, reason="bash required for retry integration tests")
+pytestmark = pytest.mark.skipif(
+    not _BASH or sys.platform == "win32",
+    reason="POSIX-shell integration: drives hpc_preamble.sh's retry loop through a real "
+    "bash subprocess with executable .sh runners and host-path interpolation. The cluster "
+    "preamble is verified on Linux; the harness isn't Windows path/exec-safe (#163).",
+)
 
 
 def _run_retry(

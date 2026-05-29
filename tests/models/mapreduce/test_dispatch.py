@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -20,6 +21,19 @@ from tests.conftest import make_sidecar_json, write_hpc_tasks
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# The dispatcher launches the per-task executor via subprocess with
+# shell=True — that's /bin/sh on the cluster (the only place it runs). Tests
+# that actually spawn an executor feed POSIX-shell command strings ($VAR,
+# &&, redirection), which Windows cmd.exe can't interpret. The dispatcher
+# itself is platform-correct; only these spawn-path tests are POSIX-bound.
+# (Tests that exit before spawning — validation, idempotency skips — run
+# everywhere and are deliberately left unmarked.) See #163.
+_posix_shell_executor = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="executor runs through shell=True (cmd.exe on Windows); POSIX-shell "
+    "executor strings need /bin/sh as on the cluster (#163)",
+)
 
 
 def _scaffold(
@@ -47,6 +61,7 @@ def _scaffold(
     return hpc
 
 
+@_posix_shell_executor
 class TestDispatchAtomicOutput:
     def test_successful_task_promotes_output(self, tmp_path, monkeypatch):
         # The dispatcher uses HPC_TASKS_PATH override to find tasks.py
@@ -105,6 +120,7 @@ class TestDispatchAtomicOutput:
         assert not (result_root / "0" / "out.csv").exists()
 
 
+@_posix_shell_executor
 class TestDispatchStaleWipRetry:
     def test_stale_wip_renamed_on_retry(self, tmp_path, monkeypatch):
         result_root = tmp_path / "results"
@@ -200,6 +216,7 @@ class TestCheckResultsIgnoresWip:
         assert len(results) == 1
 
 
+@_posix_shell_executor
 class TestKwargNamespaceOnly:
     def test_default_exports_both_forms(self, tmp_path, monkeypatch):
         """Without HPC_KW_NAMESPACE_ONLY, executor sees both HPC_KW_X and X."""
@@ -280,6 +297,7 @@ class TestIdempotencyBypass:
         # Executor must NOT have run.
         assert not (result_root / "0" / "marker.txt").exists()
 
+    @_posix_shell_executor
     def test_force_rerun_bypasses_skip(self, tmp_path, monkeypatch):
         """HPC_FORCE_RERUN=1 runs the executor even with metrics.json present."""
         result_root = tmp_path / "results"
@@ -301,6 +319,7 @@ class TestIdempotencyBypass:
         assert exc_info.value.code == 0
         assert (result_root / "0" / "marker.txt").read_text().strip() == "RAN"
 
+    @_posix_shell_executor
     def test_cmd_sha_mismatch_bypasses_skip(self, tmp_path, monkeypatch):
         """A stamped .hpc_cmd_sha that disagrees with the sidecar forces re-run."""
         result_root = tmp_path / "results"
@@ -350,6 +369,7 @@ class TestIdempotencyBypass:
         assert exc_info.value.code == 0
         assert not (result_dir / "marker.txt").exists()
 
+    @_posix_shell_executor
     def test_successful_run_stamps_cmd_sha(self, tmp_path, monkeypatch):
         """A fresh successful run writes .hpc_cmd_sha next to the result files."""
         result_root = tmp_path / "results"
@@ -437,6 +457,7 @@ class TestDispatchFailsLoudOnSelfRecursion:
         assert "re-invokes the dispatcher" in err
         assert "per-task" in err
 
+    @_posix_shell_executor
     def test_valid_cli_py_executor_is_not_flagged(self, tmp_path, monkeypatch):
         """A legitimate ``.hpc/cli.py`` per-task command must NOT trip the
         self-recursion guard — only the dispatcher's own filename does."""
@@ -487,6 +508,7 @@ class TestDispatchFailureCapture:
         # The captured command must be recorded for diagnosis.
         assert "exit 7" in text
 
+    @_posix_shell_executor
     def test_no_capture_log_on_success(self, tmp_path, monkeypatch):
         result_root = tmp_path / "results"
         hpc = _scaffold(
