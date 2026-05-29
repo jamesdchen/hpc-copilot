@@ -180,6 +180,37 @@ def _push_and_deploy(
     deploy_runtime(ssh_target=ssh_target, remote_path=remote_path)
 
 
+def _is_runnable_executor(executor: str | None) -> bool:
+    """True when *executor* is a real per-task command, not the dispatcher/empty.
+
+    A sidecar's ``executor`` must be the REAL per-task command (e.g.
+    ``python train.py --seed $SEED``). ``job_env["EXECUTOR"]``, by contrast, is
+    the *job-script* command — it runs the dispatcher
+    (``python3 .hpc/_hpc_dispatch.py``), which then reads the sidecar to find the
+    per-task command. So a sidecar whose ``executor`` is empty or itself the
+    dispatcher is "pending with no executor": shipping it makes the dispatcher
+    run itself and the array self-recurses (#162).
+    """
+    if not executor:
+        return False
+    return ("_hpc_dispatch.py" not in executor) and ("dispatch.py" not in executor)
+
+
+def _write_first_error(run_id: str, *, detail: str) -> errors.SpecInvalid:
+    """The actionable 'write the sidecar first' error (#171 / #150 / #162).
+
+    A single phrasing so the absent-and-unsynthesizable, present-but-pending,
+    and dispatcher-only-executor paths all surface the same actionable unblock
+    instead of three near-identical ad-hoc messages.
+    """
+    return errors.SpecInvalid(
+        f"per-run sidecar for run_id {run_id!r} {detail} Write the per-run sidecar "
+        "first — Step 6d / write_run_sidecar (or /wrap-entry-point) — with the real "
+        "per-task command (e.g. `python train.py --seed $SEED`), then re-invoke "
+        "submit-flow."
+    )
+
+
 def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     """Guarantee the cluster-required per-run sidecar exists before rsync.
 
@@ -192,22 +223,54 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
 
     Behaviour:
 
-    * Sidecar already present (the normal flow — Step 6d wrote it with the
-      full wave_map / config snapshot): no-op, we never overwrite it.
+    * Sidecar already present AND it carries a real per-task ``executor`` (the
+      normal flow — Step 6d wrote it with the full wave_map / config snapshot):
+      no-op, we never overwrite it.
+    * Sidecar present but "pending" — empty / dispatcher-only / unreadable
+      ``executor`` (Step 6d skipped or half-written): raise ``SpecInvalid``.
+      Presence alone does NOT satisfy the guard (#171); shipping such a sidecar
+      gives the dispatcher nothing to run, or makes it run itself (#162).
     * Sidecar missing + ``result_dir_template`` AND a real per-task executor
       available: synthesize a minimal-but-valid sidecar from the spec.
     * Sidecar missing + no ``result_dir_template`` **or** no real per-task
       executor (only the job script's dispatcher command is available): raise
       ``SpecInvalid`` — fail fast locally rather than ship an empty ``runs/``
       OR a self-recursive sidecar that dooms the whole array (#148 / #162).
-      The caller must run write_run_sidecar first (Step 6d / wrap-entry-point)
-      with the real per-task command.
+
+    Every refuse-path raises the SAME actionable error (:func:`_write_first_error`):
+    write the per-run sidecar first (Step 6d / write_run_sidecar) with the real
+    per-task command. Write-first is thus a hard precondition the primitive
+    owns, not a manual unblock step (#171 / #150).
     """
+    import json
+
     from hpc_agent.state.runs import run_sidecar_path, write_run_sidecar
 
     target = run_sidecar_path(experiment_dir, spec.run_id)
     if target.is_file() and target.stat().st_size > 0:
-        return
+        # A sidecar file exists — but presence alone is NOT enough (#171).
+        # Enforce write-first: it must carry a REAL per-task executor. A
+        # "pending" sidecar with an empty / dispatcher-only executor (Step 6d
+        # skipped or half-written) would ship and leave the dispatcher with
+        # nothing to run, or make it run itself (#162). Read only the executor
+        # field via raw JSON: forward-compatible (a future sidecar version with
+        # a real executor is still accepted — the cluster does its own version
+        # check) and an unreadable/corrupt file falls through to the refuse path.
+        try:
+            existing_executor = json.loads(target.read_text(encoding="utf-8")).get("executor")
+        except (OSError, ValueError, AttributeError):
+            existing_executor = None
+        if _is_runnable_executor(existing_executor):
+            return
+        raise _write_first_error(
+            spec.run_id,
+            detail=(
+                f"exists but carries no real per-task executor (found "
+                f"{existing_executor!r} — empty, the dispatcher command, or "
+                "unreadable), so the cluster dispatcher would have nothing to run "
+                "or would run itself (#162)."
+            ),
+        )
 
     if not spec.result_dir_template:
         raise errors.SpecInvalid(
@@ -230,14 +293,15 @@ def _ensure_run_sidecar(experiment_dir: Path, spec: SubmitFlowSpec) -> None:
     # missing result_dir_template above — rather than ship a structurally broken
     # sidecar that the old `or "...dispatch.py"` default silently produced.
     executor = job_env.get("EXECUTOR") or ""
-    if (not executor) or ("_hpc_dispatch.py" in executor) or ("dispatch.py" in executor):
-        raise errors.SpecInvalid(
-            f"per-run sidecar for run_id {spec.run_id!r} is missing and submit-flow "
-            f"cannot synthesize a valid one: the only available executor ({executor!r}) "
-            "is the job-script command (it runs the dispatcher), not a per-task command, "
-            "so synthesizing it would make the dispatcher run itself (#162). Run "
-            "write_run_sidecar first (Step 6d / wrap-entry-point) with the real per-task "
-            "command (e.g. `python train.py --seed $SEED`)."
+    if not _is_runnable_executor(executor):
+        raise _write_first_error(
+            spec.run_id,
+            detail=(
+                f"is missing and submit-flow cannot synthesize a valid one: the only "
+                f"available executor ({executor!r}) is the job-script command (it runs "
+                "the dispatcher), not a per-task command, so synthesizing it would make "
+                "the dispatcher run itself (#162)."
+            ),
         )
     cmd_sha = job_env.get("HPC_CMD_SHA", "")
 
