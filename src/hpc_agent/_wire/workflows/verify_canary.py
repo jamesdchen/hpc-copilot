@@ -14,6 +14,13 @@ CanaryFailureKind = Literal[
     "oom_killed",
     "segfault",
     "missing_output",
+    # Every status poll failed — broken cluster-side reporter (the job may have
+    # run but its result can't be read, so the canary can't be trusted).
+    "reporter_unreachable",
+    # The job left the scheduler queue without recording a completion and no
+    # stderr marker explains why — resolved fast instead of riding the full
+    # wait budget (#193).
+    "completed_unknown",
     "timeout",
     "abandoned",
 ]

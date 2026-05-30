@@ -154,8 +154,10 @@ def verify_canary(
       ``"dispatcher_failed"`` / ``"import_error"`` / ``"module_not_found"`` /
       ``"traceback"`` / ``"oom_killed"`` / ``"segfault"`` /
       ``"missing_output"`` / ``"reporter_unreachable"`` (every status poll
-      failed — broken cluster-side reporter) / ``"timeout"`` /
-      ``"abandoned"``.
+      failed — broken cluster-side reporter) / ``"completed_unknown"`` (the
+      job left the scheduler queue without recording a completion and no
+      stderr marker explains why — resolved fast instead of timing out) /
+      ``"timeout"`` / ``"abandoned"``.
     * ``details`` is a one-line human-readable summary the slash
       command can surface to the user above the raw stderr_tail.
     * ``stderr_tail`` is the last 50 lines of the canary's stderr
@@ -209,6 +211,17 @@ def verify_canary(
     last_summary: dict[str, Any] = {}
     last_poll_error: Exception | None = None
     got_report = False
+    # A vanished canary (finished/failed fast and left the scheduler queue
+    # before we polled) shows an all-zero LIVE summary: no result file yet
+    # (complete=0), and the scheduler no longer lists the job so it adds
+    # nothing to running/pending/failed. That is NOT terminal on its own —
+    # it also describes the transient window right after qsub, before the
+    # scheduler registers the array. So we require the all-zero state to
+    # PERSIST across consecutive polls before declaring the job gone, rather
+    # than riding the full wait_budget_sec polling an absent job (#193).
+    vanished_polls = 0
+    _VANISHED_POLLS_TO_TERMINAL = 2
+    job_vanished = False
     while time.monotonic() < deadline:
         try:
             report = ssh_status_report(
@@ -231,11 +244,25 @@ def verify_canary(
         failed = int(last_summary.get("failed") or 0)
         running = int(last_summary.get("running") or 0)
         pending = int(last_summary.get("pending") or 0)
+        unknown = int(last_summary.get("unknown") or 0)
         # Terminal: complete == total OR (failed > 0 and no running/pending).
         if complete >= int(record.total_tasks) and record.total_tasks > 0:
             break
         if failed > 0 and running == 0 and pending == 0:
             break
+        # Job absent from the scheduler's live view: nothing complete, nothing
+        # failed, nothing queued/running, nothing in the unknown bucket. Count
+        # consecutive such polls; once it persists, the canary finished (or
+        # died) and left the queue — break fast as ``completed_unknown`` rather
+        # than time out. The stderr scan below still runs, so a real failure
+        # marker (OOM, traceback) is preferred over the bland unknown verdict.
+        if complete == 0 and failed == 0 and running == 0 and pending == 0 and unknown == 0:
+            vanished_polls += 1
+            if vanished_polls >= _VANISHED_POLLS_TO_TERMINAL:
+                job_vanished = True
+                break
+        else:
+            vanished_polls = 0
         time.sleep(int(poll_interval_sec))
     else:
         # Distinguish a broken reporter (EVERY poll raised, we never got a
@@ -319,6 +346,28 @@ def verify_canary(
                 "stderr_tail": stderr_tail,
                 "metrics_fingerprint": None,
             }
+
+    # The canary left the scheduler queue without ever recording a completion
+    # and no stderr marker explains why (#193). We can't trust it as passed —
+    # something ended the job (a fast non-zero exit that cleared the queue, a
+    # scheduler kill, a vanished array) — but we also resolved it in seconds
+    # instead of riding the full wait budget. Fail with ``completed_unknown``
+    # so the two-phase gate refuses the main array and the agent investigates,
+    # rather than the old behaviour of reporting ``timeout`` after 30 minutes.
+    if job_vanished and int(last_summary.get("complete") or 0) < int(record.total_tasks):
+        return {
+            "ok": False,
+            "failure_kind": "completed_unknown",
+            "details": (
+                f"canary {canary_run_id!r} left the scheduler queue without "
+                "recording a completion and no stderr marker explains why — it "
+                "finished or was killed too fast to observe. Refusing to pass the "
+                "canary; inspect the job log / scheduler accounting before "
+                f"submitting the main array (last summary: {last_summary})."
+            ),
+            "stderr_tail": stderr_tail,
+            "metrics_fingerprint": None,
+        }
 
     # Optional output verification.
     if expect_output:

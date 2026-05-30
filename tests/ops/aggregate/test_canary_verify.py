@@ -220,6 +220,103 @@ def test_reporter_unreachable_when_every_poll_fails(
     assert "reporter never returned" in result["details"]
 
 
+def test_vanished_canary_resolves_completed_unknown_fast(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A canary that finished/failed fast and left the scheduler queue shows an
+    all-zero live summary. Once that persists across polls, verify-canary must
+    resolve it as ``completed_unknown`` FAST (#193) — not ride the full wait
+    budget to ``timeout``. The deadline is far away (1e9), so reaching a verdict
+    proves the fast-path break, not a timeout."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    # monotonic() never crosses the deadline — if the loop didn't break on the
+    # persistent all-zero summary it would spin forever (StopIteration), so a
+    # clean verdict is the assertion that the fast break fired.
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: 0.0)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            # Job absent from the scheduler: every live bucket zero.
+            return_value={
+                "summary": {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+            },
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            # No stderr marker — the bland "left the queue" case.
+            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["ok"] is False
+    assert out["failure_kind"] == "completed_unknown"
+    assert "left the scheduler queue" in out["details"]
+
+
+def test_transient_all_zero_then_progress_does_not_false_trigger(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single all-zero poll right after qsub (scheduler hasn't registered the
+    array yet) must NOT be read as vanished — the counter resets on the next
+    poll that shows progress, and the canary completes normally (#193)."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: 0.0)
+    summaries = iter(
+        [
+            # poll 1: transient all-zero (pre-registration window)
+            {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0},
+            # poll 2: now pending — resets the vanished counter
+            {"complete": 0, "running": 0, "pending": 1, "failed": 0, "unknown": 0},
+            # poll 3: complete → normal terminal
+            {"complete": 1, "running": 0, "pending": 0, "failed": 0, "unknown": 0},
+        ]
+    )
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            side_effect=lambda **_: {"summary": next(summaries)},
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "[dispatch] task_id=0 run_id=r1\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["ok"] is True
+    assert out["failure_kind"] is None
+
+
+def test_vanished_canary_with_stderr_marker_prefers_the_marker(
+    tmp_path: Path, journal_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the job vanished AND its stderr carries a real failure marker, the
+    specific marker (oom_killed, traceback, ...) wins over the bland
+    ``completed_unknown`` verdict — the scan runs after the fast break."""
+    from hpc_agent.ops.verify_canary import verify_canary
+
+    _seed_canary(tmp_path)
+    monkeypatch.setattr("hpc_agent.ops.verify_canary.time.monotonic", lambda: 0.0)
+    with (
+        mock.patch(
+            "hpc_agent.infra.cluster_status.ssh_status_report",
+            return_value={
+                "summary": {"complete": 0, "running": 0, "pending": 0, "failed": 0, "unknown": 0}
+            },
+        ),
+        mock.patch(
+            "hpc_agent.infra.cluster_logs.fetch_task_logs",
+            return_value=[{"task_id": 0, "content": "Out of memory: kill process\n"}],
+        ),
+    ):
+        out = verify_canary(tmp_path, canary_run_id="r1-canary", wait_budget_sec=1800)
+    assert out["ok"] is False
+    assert out["failure_kind"] == "oom_killed"
+
+
 def test_passes_remote_activation_from_canary_sidecar(tmp_path: Path, journal_home: Path) -> None:
     """#176: the status reporter runs on the login node via ssh, so it needs the
     run's conda activation — otherwise it falls to bare login python, every poll
