@@ -30,7 +30,8 @@ error_codes:
   category: cluster
   retry_safe: false
 backed_by:
-  cli: hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]
+  cli: hpc-agent aggregate-flow [--spec <path>] [--experiment-dir <dir>] [--dry-run]
+    [--run-id <run_id>]
   python: hpc_agent.ops.aggregate_flow.aggregate_flow
 ---
 

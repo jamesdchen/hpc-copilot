@@ -197,17 +197,34 @@ def _is_runnable_executor(executor: str | None) -> bool:
 
 
 def _write_first_error(run_id: str, *, detail: str) -> errors.SpecInvalid:
-    """The actionable 'write the sidecar first' error (#171 / #150 / #162).
+    """The actionable 'write the sidecar first' error (#171 / #150 / #162 / #200).
 
     A single phrasing so the absent-and-unsynthesizable, present-but-pending,
     and dispatcher-only-executor paths all surface the same actionable unblock
     instead of three near-identical ad-hoc messages.
+
+    The message names CLI verbs (not Python functions) — agents previously
+    introspected ``hpc_agent.state.runs.write_run_sidecar``'s signature to
+    satisfy the guard because the only documented path was a Python call
+    (#200). Three concrete unblock paths the agent can act on directly:
+
+      (a) ``hpc-agent write-run-sidecar --spec <file>``  — direct write
+      (b) Populate ``result_dir_template`` + a real per-task ``EXECUTOR``
+          in the SubmitFlowSpec ``job_env`` — submit-flow synthesizes
+      (c) Re-run ``/wrap-entry-point``  — full rescaffold
+
+    Path (b) only fires when the sidecar is *missing*; a *pending* sidecar
+    (present but with empty / dispatcher-only executor) needs (a) or (c).
     """
     return errors.SpecInvalid(
-        f"per-run sidecar for run_id {run_id!r} {detail} Write the per-run sidecar "
-        "first — Step 6d / write_run_sidecar (or /wrap-entry-point) — with the real "
-        "per-task command (e.g. `python train.py --seed $SEED`), then re-invoke "
-        "submit-flow."
+        f"per-run sidecar for run_id {run_id!r} {detail} "
+        "Three ways to unblock: "
+        "(a) `hpc-agent write-run-sidecar --spec <file>` to write it directly "
+        "with the real per-task command (e.g. `python train.py --seed $SEED`); "
+        "(b) re-submit with a SubmitFlowSpec carrying `result_dir_template` "
+        "AND a real per-task `EXECUTOR` in `job_env` — submit-flow synthesizes "
+        "the sidecar (only works when the sidecar is missing, not pending); "
+        "(c) re-run `/wrap-entry-point` for a full rescaffold."
     )
 
 

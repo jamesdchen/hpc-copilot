@@ -60,6 +60,18 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
    hpc-agent aggregate-flow --spec spec.json --experiment-dir .
    ```
 
+   **Shortcut** — when every other field is at its default (the
+   defaults shown above ARE the defaults), drop the spec file and pass
+   `--run-id` instead:
+
+   ```bash
+   hpc-agent aggregate-flow --run-id <run_id> --experiment-dir .
+   ```
+
+   `--run-id` and `--spec` are mutually exclusive. Use `--spec` when
+   you need to override any field (e.g. `pull_summaries: true`,
+   `mode: "combiner-only"`, `min_rows: 1`).
+
 6. **Parse the envelope** per the atom's `outputs:` contract: `aggregated_metrics` is the cross-wave reduced dict (keyed by run_id or grid-point); `combiner_dir_local` is where the partials landed; `summaries_dir_local` is set when `pull_summaries=true`; `waves_combined_this_call` reports which waves the atom combined this invocation (vs already-combined entering the call).
 
 7. **Verify framework-knowable invariants** before reporting to the caller. **Required precondition:** `$COMBINER_DIR_LOCAL` must already hold the directory `aggregate-flow` returned in step 6's envelope (`combiner_dir_local`). If `aggregate-flow` errored (step 9 branched first), or step 6 didn't populate `combiner_dir_local`, **STOP** — record the missing/erroring `aggregate-flow` context in `anomalies` and report. Do NOT invoke `verify-aggregation-complete` with an empty / unset `--combiner-dir` — that's a guaranteed false negative, not a verification. Invoke [verify-aggregation-complete](../../docs/primitives/verify-aggregation-complete.md):

@@ -525,7 +525,9 @@ class TestSidecarGuarantee:
         # sidecar and never silently overwrites it (#148/#150) — it refuses.
         spec = _spec("rPending")
         p1, p2, p3 = _mock_prelude_and_submit(sf_module)
-        with p1, p2, p3, pytest.raises(errors.SpecInvalid, match="write_run_sidecar"):
+        # #200: the actionable message names CLI verbs ('write-run-sidecar')
+        # instead of Python internals ('write_run_sidecar'). Match the CLI form.
+        with p1, p2, p3, pytest.raises(errors.SpecInvalid, match="write-run-sidecar"):
             submit_flow_batch(tmp_path, spec=_batch([spec]))
 
     def test_records_resources_on_synthesized_sidecar(

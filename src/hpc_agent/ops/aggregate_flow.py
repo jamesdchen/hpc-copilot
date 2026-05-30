@@ -54,7 +54,7 @@ from typing import Any
 from hpc_agent import errors
 from hpc_agent._kernel.registry.primitive import SideEffect, primitive
 from hpc_agent._wire.workflows.aggregate_flow import AggregateFlowSpec
-from hpc_agent.cli._dispatch import CliShape, SchemaRef
+from hpc_agent.cli._dispatch import CliArg, CliShape, SchemaRef
 from hpc_agent.infra.ssh_validation import validate_ssh_target
 from hpc_agent.infra.transport import rsync_pull
 from hpc_agent.models.mapreduce.reduce.metrics import collect_wave_errors, reduce_partials
@@ -255,6 +255,48 @@ def _combine_missing(
     return combined_now, failures
 
 
+def _aggregate_flow_arg_pre(ns: Any) -> dict[str, Any]:
+    """Resolve ``--spec`` vs ``--run-id`` shortcut for ``aggregate-flow``.
+
+    The canonical authoring path is ``--spec <file>``; ``--run-id <id>``
+    is a 1-field shortcut for the common case where every other
+    ``AggregateFlowSpec`` field is at its default. Mutually exclusive:
+    passing both is ambiguous (a JSON spec is a superset, but silently
+    preferring one would mask a caller bug); passing neither leaves the
+    primitive uninvocable.
+
+    The dispatcher pre-loads ``--spec`` and stores it under ``kwargs["spec"]``
+    (or ``None`` when omitted, since ``spec_required=False`` here). This hook
+    runs after that, so returning ``{"spec": ...}`` overrides the dispatcher's
+    value with the synthesized one.
+    """
+    spec_path = getattr(ns, "spec", None)
+    run_id = getattr(ns, "run_id", None)
+    if spec_path is not None and run_id is not None:
+        raise errors.SpecInvalid(
+            "aggregate-flow: pass either --spec <file> or --run-id <id>, "
+            "not both (ambiguous — pick one)."
+        )
+    if spec_path is None and run_id is None:
+        raise errors.SpecInvalid(
+            "aggregate-flow requires either --spec <file> (full JSON "
+            "AggregateFlowSpec) or --run-id <id> (1-field shortcut when "
+            "every other field is at its default)."
+        )
+    if spec_path is None:
+        # --run-id shortcut: synthesize a minimal spec. ``run_id`` was
+        # asserted non-None above, but pydantic also re-validates the
+        # string against the RunIdStrict pattern — surface that as
+        # SpecInvalid like every other spec-validation error path.
+        assert run_id is not None  # narrowing: guarded by the both-None branch
+        try:
+            return {"spec": AggregateFlowSpec(run_id=str(run_id))}
+        except Exception as exc:  # noqa: BLE001 — pydantic ValidationError shape
+            raise errors.SpecInvalid(str(exc)) from exc
+    # --spec path: dispatcher already loaded and validated it; nothing to add.
+    return {}
+
+
 @primitive(
     name="aggregate-flow",
     verb="workflow",
@@ -286,10 +328,26 @@ def _combine_missing(
         spec_arg=True,
         spec_model=AggregateFlowSpec,
         schema_ref=SchemaRef(input="aggregate_flow"),
+        spec_required=False,  # --run-id is the alternative; arg_pre enforces XOR.
         experiment_dir_arg=True,
         requires_ssh=True,
         dry_run_arg=True,
         dry_run_passthrough_keys=("run_id", "ensure_all_combined", "pull_summaries", "output_dir"),
+        args=(
+            CliArg(
+                "--run-id",
+                type=str,
+                default=None,
+                help=(
+                    'Shortcut for the 1-field spec {"run_id": <id>}. Mutually '
+                    "exclusive with --spec. Use --spec when overriding any other "
+                    "AggregateFlowSpec field (output_dir, ensure_all_combined, "
+                    "combiner_max_retries, pull_summaries, summary_glob, "
+                    "results_subdir, min_rows, mode)."
+                ),
+            ),
+        ),
+        arg_pre=_aggregate_flow_arg_pre,
     ),
     agent_facing=True,
 )

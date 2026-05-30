@@ -195,7 +195,7 @@ def cli_to_invocation_string(name: str, cli: Any) -> str | None:
         parts.append(cli.group)
     parts.append(_leaf_verb(name, cli))
     if cli.spec_arg:
-        parts.append("--spec <path>")
+        parts.append("--spec <path>" if cli.spec_required else "[--spec <path>]")
     if cli.experiment_dir_arg:
         parts.append("[--experiment-dir <dir>]")
     if cli.dry_run_arg:
@@ -262,12 +262,22 @@ def _filter_to_signature(kwargs: dict[str, Any], func: Any) -> dict[str, Any]:
 
 
 def _load_and_model_validate_spec(name: str, shape: CliShape, ns: argparse.Namespace) -> Any:
-    """Load ``--spec`` from disk, optionally schema-validate, optionally model_validate."""
+    """Load ``--spec`` from disk, optionally schema-validate, optionally model_validate.
+
+    When ``spec_required=False`` and no ``--spec`` was supplied, returns
+    ``None`` (rather than raising) so the primitive's ``arg_pre`` hook can
+    synthesize the spec from other flags (e.g. ``aggregate-flow``'s
+    ``--run-id`` shortcut). The hook is responsible for diagnosing the
+    "neither" case with an actionable message.
+    """
     spec_path: Path | None = getattr(ns, "spec", None)
     schema_name = shape.schema_ref.input if shape.schema_ref else None
     raw = _load_spec(spec_path, schema_name=None)
-    if not raw and shape.spec_required:
-        raise errors.SpecInvalid(f"--spec is required for `{name}`")
+    if not raw:
+        if shape.spec_required:
+            raise errors.SpecInvalid(f"--spec is required for `{name}`")
+        # Optional-spec primitive with no --spec: let arg_pre synthesize.
+        return None
     if not isinstance(raw, dict):
         raise errors.SpecInvalid(
             f"--spec for `{name}` must be a JSON object; got {type(raw).__name__}"

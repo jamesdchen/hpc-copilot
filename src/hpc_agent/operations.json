@@ -97,6 +97,19 @@
     "verb": "mutate"
   },
   {
+    "agent_facing": true,
+    "cli": "hpc-agent write-run-sidecar --spec <path> [--experiment-dir <dir>]",
+    "idempotent": true,
+    "input_schema": "write_run_sidecar.input.json",
+    "name": "write-run-sidecar",
+    "output_schema": null,
+    "python": "hpc_agent.ops.write_run_sidecar.write_run_sidecar",
+    "side_effects": [
+      "file_write"
+    ],
+    "verb": "mutate"
+  },
+  {
     "agent_facing": false,
     "cli": "hpc-agent campaign advance [--experiment-dir <dir>] --campaign-id <campaign_id> [--max-iters <max_iters>] [--metric <metric>] [--target <target>] [--direction <direction>] [--plateau-window <plateau_window>] [--plateau-tolerance <plateau_tolerance>] [--plateau-mode <plateau_mode>] [--max-jobs <max_jobs>] [--max-tasks <max_tasks>] [--max-walltime-sec <max_walltime_sec>]",
     "idempotent": true,
@@ -214,6 +227,17 @@
     "name": "clusters-list",
     "output_schema": "clusters_list.output.json",
     "python": "hpc_agent.ops.clusters.list.list_clusters",
+    "side_effects": [],
+    "verb": "query"
+  },
+  {
+    "agent_facing": true,
+    "cli": "hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>",
+    "idempotent": true,
+    "input_schema": null,
+    "name": "compute-run-id",
+    "output_schema": null,
+    "python": "hpc_agent.incorporation.build.compute_run_id.compute_run_id",
     "side_effects": [],
     "verb": "query"
   },
@@ -648,7 +672,7 @@
   },
   {
     "agent_facing": true,
-    "cli": "hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]",
+    "cli": "hpc-agent aggregate-flow [--spec <path>] [--experiment-dir <dir>] [--dry-run] [--run-id <run_id>]",
     "idempotent": true,
     "input_schema": "aggregate_flow.input.json",
     "name": "aggregate-flow",

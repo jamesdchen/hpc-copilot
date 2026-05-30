@@ -4,7 +4,7 @@
 
 Auto-generated from `hpc-agent capabilities`. Run `uv run python scripts/build_operations_index.py` after editing any primitive frontmatter; the script subprocess-calls the CLI and parses the same JSON envelope an external agent would get at runtime, so this page is provably in sync with runtime introspection.
 
-**61 operations total**: 54 primitive atoms + 7 workflow atoms.
+**63 operations total**: 56 primitive atoms + 7 workflow atoms.
 
 ## How to read this page
 
@@ -14,7 +14,7 @@ Every operation in `hpc-agent` is a CLI atom or a Python-only primitive that emi
 
 **Discoverability**: `hpc-agent capabilities` returns this same catalog at runtime in `data.operations`. Agents that don't have access to this page can introspect the framework via that subprocess call.
 
-## `query` (29)
+## `query` (30)
 
 Read-only, no side effects. Freely composable; cacheable.
 
@@ -31,6 +31,7 @@ Read-only, no side effects. Freely composable; cacheable.
 | [`classify-axis-easy`](../primitives/classify-axis-easy.md) | ✓ | _none_ | `hpc-agent classify-axis-easy --source-path <source_path> --run-name <run_name>` | `hpc_agent.incorporation.classify_axis_easy.classify_axis_easy` | — | — |
 | [`clusters-describe`](../primitives/clusters-describe.md) | ✓ | _none_ | `hpc-agent clusters describe <name> [--strict]` | `hpc_agent.ops.clusters.describe.describe_cluster` | — | `hpc_agent/schemas/clusters_describe.output.json` |
 | [`clusters-list`](../primitives/clusters-list.md) | ✓ | _none_ | `hpc-agent clusters list` | `hpc_agent.ops.clusters.list.list_clusters` | — | `hpc_agent/schemas/clusters_list.output.json` |
+| [`compute-run-id`](../primitives/compute-run-id.md) | ✓ | _none_ | `hpc-agent compute-run-id [--experiment-dir <dir>] --run-name <run_name>` | `hpc_agent.incorporation.build.compute_run_id.compute_run_id` | — | — |
 | [`decide-monitor-arm`](../primitives/decide-monitor-arm.md) | ✓ | _none_ | `hpc-agent decide-monitor-arm --spec <path>` | `hpc_agent.ops.monitor.arm.decide_monitor_arm` | `hpc_agent/schemas/decide_monitor_arm.input.json` | `hpc_agent/schemas/decide_monitor_arm.output.json` |
 | [`describe`](../primitives/describe.md) | ✓ | _none_ | `hpc-agent describe <name>` | `hpc_agent.cli.setup.describe` | — | — |
 | [`discover-executors`](../primitives/discover-executors.md) | ✓ | _none_ | `hpc-agent discover [--experiment-dir <dir>] [--search-dirs <search_dirs>]` | `hpc_agent.state.discover.discover_executors` | — | `hpc_agent/schemas/discover.output.json` |
@@ -63,7 +64,7 @@ Read + binary health check. Same composability as `query`.
 | [`validate-stochastic-marker`](../primitives/validate-stochastic-marker.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.ops.validate.stochastic_marker.validate_stochastic_marker` | `hpc_agent/schemas/validate_stochastic_marker.input.json` | `hpc_agent/schemas/validate_stochastic_marker.output.json` |
 | [`validate-walltime-against-history`](../primitives/validate-walltime-against-history.md) | ✓ | _none_ | `_(Python-only)_` | `hpc_agent.ops.validate.walltime_against_history.validate_walltime_against_history` | `hpc_agent/schemas/validate_walltime_against_history.input.json` | `hpc_agent/schemas/validate_walltime_against_history.output.json` |
 
-## `mutate` (7)
+## `mutate` (8)
 
 Writes to journal / sidecar. Need flock + idempotency-key consideration.
 
@@ -76,6 +77,7 @@ Writes to journal / sidecar. Need flock + idempotency-key consideration.
 | [`reconcile-journal`](../primitives/reconcile-journal.md) | ✓ | ssh; writes-journal | `hpc-agent reconcile [--experiment-dir <dir>] --run-id <run_id> --scheduler <scheduler>` | `hpc_agent.ops.monitor.reconcile.reconcile` | — | `hpc_agent/schemas/reconcile.output.json` |
 | [`resubmit-failed`](../primitives/resubmit-failed.md) | ✓ | scheduler-submit; writes-journal | `hpc-agent resubmit [--experiment-dir <dir>] --run-id <run_id> --spec <spec>` | `hpc_agent.ops.recover.runner.resubmit_failed` | `hpc_agent/schemas/resubmit.input.json` | — |
 | [`update-run-constraints`](../primitives/update-run-constraints.md) | ✓ | ssh | `_(Python-only)_` | `hpc_agent.ops.monitor.update_constraints.update_run_constraints` | `hpc_agent/schemas/update_run_constraints.input.json` | `hpc_agent/schemas/update_run_constraints.output.json` |
+| [`write-run-sidecar`](../primitives/write-run-sidecar.md) | ✓ | file_write | `hpc-agent write-run-sidecar --spec <path> [--experiment-dir <dir>]` | `hpc_agent.ops.write_run_sidecar.write_run_sidecar` | `hpc_agent/schemas/write_run_sidecar.input.json` | — |
 
 ## `submit` (1)
 
@@ -109,7 +111,7 @@ End-to-end pipelines composing other primitives. Same envelope shape as primitiv
 
 | Operation | Idempotent | Side effects | CLI | Python | Input schema | Output schema |
 |---|---|---|---|---|---|---|
-| [`aggregate-flow`](../primitives/aggregate-flow.md) | ✓ | ssh; sync-pull; writes-journal | `hpc-agent aggregate-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.ops.aggregate_flow.aggregate_flow` | `hpc_agent/schemas/aggregate_flow.input.json` | `hpc_agent/schemas/aggregate_flow.output.json` |
+| [`aggregate-flow`](../primitives/aggregate-flow.md) | ✓ | ssh; sync-pull; writes-journal | `hpc-agent aggregate-flow [--spec <path>] [--experiment-dir <dir>] [--dry-run] [--run-id <run_id>]` | `hpc_agent.ops.aggregate_flow.aggregate_flow` | `hpc_agent/schemas/aggregate_flow.input.json` | `hpc_agent/schemas/aggregate_flow.output.json` |
 | [`monitor-flow`](../primitives/monitor-flow.md) | ✓ | ssh; writes-journal | `hpc-agent monitor-flow --spec <path> [--experiment-dir <dir>] [--dry-run]` | `hpc_agent.ops.monitor_flow.monitor_flow` | `hpc_agent/schemas/monitor_flow.input.json` | `hpc_agent/schemas/monitor_flow.output.json` |
 | [`submit-and-verify`](../primitives/submit-and-verify.md) | ✓ | scheduler-submit; ssh | `hpc-agent submit-and-verify --spec <path> [--experiment-dir <dir>]` | `hpc_agent.ops.submit_and_verify.submit_and_verify` | `hpc_agent/schemas/submit_and_verify.input.json` | `hpc_agent/schemas/submit_and_verify.output.json` |
 | [`submit-flow`](../primitives/submit-flow.md) | ✓ | scheduler-submit; sync-push; writes-journal | `hpc-agent submit-flow --spec <path> [--experiment-dir <dir>] [--dry-run] [--partial-ok]` | `hpc_agent.ops.submit_flow.submit_flow` | `hpc_agent/schemas/submit_flow.input.json` | `hpc_agent/schemas/submit_flow.output.json` |

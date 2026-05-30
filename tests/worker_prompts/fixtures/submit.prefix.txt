@@ -241,14 +241,13 @@ shutil.copy(_PACKAGE_ROOT / "models" / "mapreduce" / "templates" / "scaffolds" /
 
 Commit `.hpc/tasks.py` + `.hpc/cli.py`. No push — user controls upstream.
 
-### 6c: Compute `cmd_sha`, check for resume
+### 6c: Compute `cmd_sha` + `run_id`, check for resume
 
-```python
-from hpc_agent.state.run_sha import compute_cmd_sha, compute_tasks_py_sha
-tasks = load_tasks_module(tp)
-cmd_sha = compute_cmd_sha(tasks)
-tasks_py_sha = compute_tasks_py_sha(tp)
+```bash
+hpc-agent compute-run-id --experiment-dir . --run-name "<run_name>"
 ```
+
+Returns `{run_id, cmd_sha}`. `run_id` is `<run_name>-<sha[:8]>`; `cmd_sha` is the full 64-char hex used by `find-prior-run` and threaded into the spec at Step 6d. Replaces the prior `compute_cmd_sha(load_tasks_module(tp))` Python call — the agent never imports `hpc_agent.state.run_sha` directly.
 
 ```bash
 hpc-agent find-prior-run --experiment-dir . --cmd-sha "$CMD_SHA"
@@ -263,9 +262,15 @@ Branch on envelope's `{found, is_orphan}`:
 
 Use [build-submit-spec](../../docs/primitives/build-submit-spec.md) to assemble the spec — synthesizes `EXECUTOR`/`HPC_RUN_ID`/`HPC_CMD_SHA`/`HPC_TASK_COUNT`/`REPO_DIR`/`MODULES`/`CONDA_SOURCE`/`CONDA_ENV`/`HPC_RUNTIME`/`HPC_CAMPAIGN_ID`, picks the canonical script path from `(backend, is_gpu)`, validates against `schemas/submit_flow.input.json`.
 
-Write the per-run sidecar via `write_run_sidecar(..., wave_map=wave_map)`. Pass `None` for any v2 field that doesn't apply. **Don't pass `job_ids` here** — the sidecar is *pending* until `submit-flow` runs `update_run_sidecar_job_ids` after qsub returns.
+Write the per-run sidecar via:
 
-**`executor` MUST be the real per-task command** (e.g. `python train.py --seed $SEED` / `python3 .hpc/_hpc_dispatch.py`'s *resolved* target), NOT the job-script dispatcher command (`python3 .hpc/_hpc_dispatch.py`) itself — a dispatcher-as-executor sidecar makes the dispatcher run itself and the whole array self-recurses (#162).
+```bash
+hpc-agent write-run-sidecar --experiment-dir . --spec <file>
+```
+
+The spec is a `WriteRunSidecarInput` JSON (see `schemas/write_run_sidecar.input.json`). Pass `null` for any v2 field that doesn't apply. **Don't pass `job_ids`** — the sidecar is *pending* until `submit-flow` runs `update_run_sidecar_job_ids` after qsub returns. The primitive auto-stamps `submitted_at` and `hpc_agent_version`; the agent never sets them.
+
+**`executor` MUST be the real per-task command** (e.g. `python train.py --seed $SEED` / `python3 .hpc/_hpc_dispatch.py`'s *resolved* target), NOT the job-script dispatcher command (`python3 .hpc/_hpc_dispatch.py`) itself — a dispatcher-as-executor sidecar makes the dispatcher run itself and the whole array self-recurses (#162). `write-run-sidecar` refuses dispatcher-shaped values at intake.
 
 **Write-first is a hard precondition, not a manual unblock (#171).** `submit-flow` (Step 7-8) now *refuses* to run when the per-run sidecar is absent, or present but "pending" with an empty/dispatcher-only `executor` — it raises a `spec_invalid` telling you to write the sidecar first. So do this step; never skip it expecting `submit-flow` to synthesize one from the job-script command. Confirm it landed before building the submit-flow spec:
 

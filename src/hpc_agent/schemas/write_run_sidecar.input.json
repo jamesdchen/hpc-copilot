@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/jamesdchen/hpc-agent/schemas/write_run_sidecar.input.json",
+  "title": "write-run-sidecar input",
+  "description": "Resolved fields written into ``.hpc/runs/<run_id>.json``.\n\nAll ``v2 config-snapshot`` fields are optional at the call site but\nevery successful ``/submit`` should populate the ones that apply so\ndownstream commands can rebuild full context without consulting any\nexternal config file (same convention as the underlying function's\ndocstring).",
+  "type": "object",
+  "required": [
+    "run_id",
+    "cmd_sha",
+    "executor",
+    "result_dir_template",
+    "task_count"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {
+      "pattern": "^[A-Za-z0-9._\\-]+$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "cmd_sha": {
+      "pattern": "^[0-9a-f]{8,64}$",
+      "title": "Cmd Sha",
+      "type": "string"
+    },
+    "executor": {
+      "minLength": 1,
+      "title": "Executor",
+      "type": "string"
+    },
+    "result_dir_template": {
+      "minLength": 1,
+      "title": "Result Dir Template",
+      "type": "string"
+    },
+    "task_count": {
+      "minimum": 1,
+      "title": "Task Count",
+      "type": "integer"
+    },
+    "tasks_py_sha": {
+      "default": "",
+      "pattern": "^([0-9a-f]{64})?$",
+      "title": "Tasks Py Sha",
+      "type": "string"
+    },
+    "wave_map": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Wave Map"
+    },
+    "extra": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Extra"
+    },
+    "cluster": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cluster"
+    },
+    "profile": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Profile"
+    },
+    "campaign_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9._\\-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Campaign Id"
+    },
+    "project": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Project"
+    },
+    "remote_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Remote Path"
+    },
+    "resources": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resources"
+    },
+    "env": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Env"
+    },
+    "env_group": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Env Group"
+    },
+    "constraints": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Constraints"
+    },
+    "gpu_fallback": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Gpu Fallback"
+    },
+    "max_retries": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Max Retries"
+    },
+    "runtime": {
+      "anyOf": [
+        {
+          "const": "uv",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runtime"
+    },
+    "auto_retry": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Auto Retry"
+    },
+    "aggregate_defaults": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Aggregate Defaults"
+    },
+    "results": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Results"
+    },
+    "job_ids": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Job Ids"
+    }
+  }
+}
