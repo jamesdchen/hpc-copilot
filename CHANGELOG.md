@@ -7,6 +7,10 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Onboarding grants the bare worker the `hpc-agent` CLI permission (#190)
+
+A spawned `claude -p --bare` worker runs headlessly with no human to approve permission prompts, so without an allow rule Claude Code's auto-mode classifier blocked its first `hpc-agent ...` Bash call and the default worker path silently degraded for every new install (the inline-subagent fallback masked it). `hpc-agent interview` (onboarding) now writes/merges a **project-scoped `<campaign_dir>/.claude/settings.json`** granting `Bash(hpc-agent:*)` — Claude Code merges it on top of the user-global config, so anyone launching `claude` from the experiment dir gets the grant with zero manual config and no global mutation. The merge is idempotent and non-destructive: an existing settings.json keeps every other key and allow entry; the rule is appended (deduped) and only reported as a written artifact when newly added. The README documents the user-global equivalent for `claude` launched outside an experiment dir. (`pip`/`uv` are deliberately never made to mutate `~/.claude/settings.json` — not portable, and hostile even where supported.)
+
 ### Fixed — Two silent-canary failure modes refused at intake (#191, #192)
 
 Both surfaced on the inline-subagent submit path, where a worker-constructed fields-file handed `submit-flow` a structurally-broken spec the cluster "succeeded" on in milliseconds — the canary passed and the main array fired the same no-op qsub.
