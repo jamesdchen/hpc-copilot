@@ -152,9 +152,13 @@ def test_inline_instructions_route_to_pinned_subagent_then_fall_back(tmp_path, m
 
     # Structured routing hint — a harness dispatches off this without parsing
     # prose. The model pin rides with the named definition; the field mirrors it.
+    from hpc_agent._kernel.lifecycle.invoke import _WORKER_MODEL
+
     sub = env["data"]["subagent"]
     assert sub["preferred_name"] == "hpc-worker"
-    assert sub["model"] == "haiku"
+    # The envelope's model hint is the SAME source of truth as the claude -p
+    # worker's model (invoke._WORKER_MODEL) — not a second copy of "haiku".
+    assert sub["model"] == _WORKER_MODEL
     assert sub["task"] == env["data"]["prompt"]
 
     instr = env["data"]["instructions"]
@@ -178,3 +182,25 @@ def test_inline_instructions_route_to_pinned_subagent_then_fall_back(tmp_path, m
     assert "isolation ceiling" in low
     assert "sandbox" in low and "claude.md" in low
     assert "environment" in low
+
+
+def test_worker_subagent_frontmatter_model_matches_the_invoker_model() -> None:
+    """The haiku pin lives in three places that MUST agree: the claude -p worker
+    (invoke._WORKER_MODEL), the inline envelope hint (read from that constant),
+    and hpc-worker.md's `model:` frontmatter. The frontmatter can't import the
+    constant, so pin the parity here — otherwise the spawn and subagent paths
+    could silently drift to different models.
+    """
+    import re
+    from importlib.resources import files
+
+    from hpc_agent._kernel.lifecycle.invoke import _WORKER_MODEL
+
+    body = (files("slash_commands") / "agents" / "hpc-worker.md").read_text(encoding="utf-8")
+    m = re.search(r"^model:\s*(\S+)\s*$", body, re.MULTILINE)
+    assert m is not None, "hpc-worker.md is missing a `model:` frontmatter line"
+    assert m.group(1) == _WORKER_MODEL, (
+        f"hpc-worker.md pins model={m.group(1)!r} but the worker model is "
+        f"{_WORKER_MODEL!r} (invoke._WORKER_MODEL) — keep them identical so the "
+        "inline subagent and the claude -p worker run the same model."
+    )
