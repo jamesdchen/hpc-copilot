@@ -128,12 +128,12 @@ def test_worker_credentials_available_reads_env_and_oauth(monkeypatch):
     assert invoke.worker_credentials_available() is True
 
 
-def test_inline_instructions_offer_capability_gated_subagent(tmp_path, monkeypatch, capsys):
-    """Inline mode must tell the agent it MAY delegate the procedure to ONE
-    subagent when it has that capability, and to run in-context otherwise —
-    never to re-spawn a `claude -p` worker. The prose is the contract here, and
-    prose directives on this path have regressed before (the #155 guard), so it
-    is pinned.
+def test_inline_instructions_route_to_pinned_subagent_then_fall_back(tmp_path, monkeypatch, capsys):
+    """Inline mode must offer a three-tier capability ladder: the haiku-pinned
+    named subagent `hpc-worker` first, a generic subagent (model-hinted) next,
+    in-context last — and never re-spawn a `claude -p` worker. The prose +
+    structured `subagent` hint are the cross-harness contract, and directives on
+    this path have regressed before (the #155 guard), so they are pinned.
     """
     from hpc_agent.cli import spawn
 
@@ -150,19 +150,25 @@ def test_inline_instructions_offer_capability_gated_subagent(tmp_path, monkeypat
     assert rc == 0
     assert env["data"]["mode"] == "inline"
 
+    # Structured routing hint — a harness dispatches off this without parsing
+    # prose. The model pin rides with the named definition; the field mirrors it.
+    sub = env["data"]["subagent"]
+    assert sub["preferred_name"] == "hpc-worker"
+    assert sub["model"] == "haiku"
+    assert sub["task"] == env["data"]["prompt"]
+
     instr = env["data"]["instructions"]
     low = instr.lower()
-    # Capability-gated subagent delegation, named by tool token (and its former
-    # name, so a cross-version agent recognizes either).
-    assert "subagent" in low
-    assert "`agent` tool" in low
-    assert "task" in low
-    # Exactly one subagent, and it is a leaf (no further nesting).
-    assert "one subagent" in low
-    # A real in-context fallback when no such tool exists — inline is not
-    # subsumed by the subagent path.
-    assert "no subagent capability" in low
-    # Must not route back into a spawning transport.
+    # Tier 1: the pinned named subagent, named explicitly.
+    assert "hpc-worker" in low
+    # The pin is enforced by the harness from the definition — don't override.
+    assert "haiku" in low or "small, cheap model" in low
+    # Tier 2: generic subagent tool, by current + former token.
+    assert "`agent` tool" in low and "task" in low
+    # Tier 3: a real in-context fallback — inline is NOT subsumed by the subagent path.
+    assert "yourself in this session" in low
+    # The subagent (when used) is the leaf; must not route back into a spawn.
+    assert "leaf" in low
     assert "hpc-agent run" in instr
     # The worker-report contract is still stated verbatim.
     assert "result" in instr and "decisions" in instr and "anomalies" in instr

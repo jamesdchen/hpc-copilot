@@ -15,7 +15,9 @@ exit_codes:
 
 ## Purpose
 
-Pip-install entry point: copy the bundled slash commands + skills shipped in the `hpc-agent` wheel into `~/.claude/commands/` and `~/.claude/skills/` so Claude Code can pick them up. Idempotent — re-running overwrites in place.
+Pip-install entry point: copy the bundled slash commands, skills, and named subagent definitions shipped in the `hpc-agent` wheel into `~/.claude/commands/`, `~/.claude/skills/`, and `~/.claude/agents/` so Claude Code can pick them up. Idempotent — re-running overwrites in place.
+
+The installed agents include **`hpc-worker`** — a subagent pinned to a small, cheap model (`model: haiku` in its own frontmatter) that inline mode (`HPC_AGENT_INVOKER=inline`) dispatches the rendered workflow procedure to. Because the pin rides with the definition, the harness enforces it regardless of the caller's model; a harness without subagent support simply runs the procedure in-context instead.
 
 ## Compose with
 

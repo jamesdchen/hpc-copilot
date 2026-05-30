@@ -7,6 +7,12 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Added — Inline subagent is pinned to a small model via a shipped definition
+
+Inline mode now routes to a **named, model-pinned subagent** rather than an ad-hoc one. A new `hpc-worker` subagent definition (`model: haiku` in its own frontmatter) ships in the package and installs to `~/.claude/agents/hpc-worker.md` via `hpc-agent install-commands`. The inline envelope's `data.instructions` directs the caller to dispatch to `hpc-worker` first; because the model pin rides with the definition, the harness enforces it regardless of the caller's model — a true pin, not a prose suggestion. The envelope also gains a structured `data.subagent` hint (`{preferred_name, model, task}`) so a harness can route programmatically without parsing prose.
+
+The capability ladder degrades gracefully: `hpc-worker` (pinned) → a generic `Agent`-tool subagent (model-hinted to haiku where the tool allows a per-call model) → in-context. `install-commands` (and `install_agent_assets`) now copy an `agents/` asset tree alongside `commands/` + `skills/` and report `agents_installed` in their result; plugins can overlay their own `agents/` the same way. The model pin mirrors the `claude -p` worker's `_WORKER_MODEL` (haiku), so cost/latency match across the spawn and inline paths — though note the inline subagent inherits the caller's session sandbox/environment, so it is not as environment-controlled as the `--bare` spawn (the subagent definition records a sandbox-block escalation caveat).
+
 ### Added — Inline mode can delegate to a subagent when the harness has one
 
 The `hpc-agent run --inline` / `HPC_AGENT_INVOKER=inline` branch (the user opt-in that skips the fresh-context `claude -p` worker) now tells the calling agent to **delegate the rendered procedure to a single subagent when it has that capability** — Claude Code's `Agent` tool (formerly `Task`), or any harness equivalent — instead of always running it in the agent's own context. Dispatching the procedure into one isolated subagent recovers the context isolation the worker spawn would have given, without a second process or separate credentials.

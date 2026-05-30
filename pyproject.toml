@@ -84,6 +84,7 @@ hpc_agent = [
 slash_commands = [
     "commands/*.md",
     "skills/*/SKILL.md",
+    "agents/*.md",
 ]
 
 [tool.pytest.ini_options]

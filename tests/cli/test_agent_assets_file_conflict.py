@@ -50,3 +50,30 @@ def test_install_succeeds_when_skills_dir_already_exists(tmp_path: Path) -> None
     assert result["claude_dir"] == str(tmp_path)
     assert len(result["skills_installed"]) > 0
     assert (tmp_path / "skills").is_dir()
+
+
+def test_install_fails_clearly_when_agents_path_is_file(tmp_path: Path) -> None:
+    """A file at ``<claude>/agents`` surfaces a clear FileExistsError."""
+    (tmp_path / "agents").write_bytes(b"")
+
+    with pytest.raises(FileExistsError) as excinfo:
+        install_agent_assets(claude_dir=tmp_path)
+
+    msg = str(excinfo.value)
+    assert "agents" in msg
+    assert "not a directory" in msg
+
+
+def test_install_ships_the_haiku_pinned_worker_subagent(tmp_path: Path) -> None:
+    """The haiku-pinned ``hpc-worker`` subagent definition installs into
+    ``<claude>/agents/`` with its model pin intact — that pin riding with the
+    definition is what makes inline mode's model choice harness-enforced."""
+    result = install_agent_assets(claude_dir=tmp_path)
+
+    assert "hpc-worker" in result["agents_installed"]
+    worker = tmp_path / "agents" / "hpc-worker.md"
+    assert worker.is_file()
+    body = worker.read_text(encoding="utf-8")
+    # The pin must survive the copy verbatim — the harness reads it from here.
+    assert "model: haiku" in body
+    assert "name: hpc-worker" in body
