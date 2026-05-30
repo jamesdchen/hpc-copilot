@@ -130,6 +130,17 @@ For each `configs/*.yaml` in `ambiguity.candidates`:
 Treat configs/<name>.yaml as a frozen experiment config?  [Y / n / different file]
 ```
 
+### Dialog: `uncovered_param`
+
+The executor requires a param you didn't sweep, and it has no default — every task would crash without a value. For each name in `ambiguity.context.required_no_default`:
+
+```
+Executor `<run_name>` takes `--<param>` but you didn't declare it as an axis.
+Use a fixed value for every task?  [<safe_default if any, else "(no default — please provide)">]
+```
+
+Collect the answers into `{<param>: <value>}` and pass them as the resolved `uncovered_param`. (To sweep it instead, the user restates `/submit-hpc` with `<param>=[...]` as an axis.)
+
 ### Dialog: `task_generator`
 
 The skill refused — this can't be auto-invented. Ask the user:

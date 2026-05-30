@@ -256,6 +256,65 @@ def test_generator_cartesian_product(tmp_path: Path) -> None:
     assert set(data["preview"]["first"]) == {"lr", "batch_size"}
 
 
+# ─── #195: fixed (non-axis) params baked into every task ────────────────────
+
+
+def test_fixed_params_baked_into_every_resolve(tmp_path: Path) -> None:
+    """A required executor param the user didn't sweep (e.g. ``samples``) is
+    declared as fixed_params and lands in EVERY task's kwargs — so the cluster
+    exports HPC_KW_SAMPLES and the executor command is complete (#195)."""
+    intent = _minimal_intent(
+        3,
+        task_generator={"kind": "cartesian_product", "params": {"axes": {"seed": [0, 1, 2]}}},
+        entry_point={
+            "kind": "shell_command",
+            "run_name": "monte_carlo_pi",
+            "argv": ["python3", "mc.py", "--seed", "{seed}", "--samples", "{samples}"],
+            "signature": {"seed": "int", "samples": "int"},
+            "fixed_params": {"samples": 10000},
+        },
+    )
+    data = record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+    # Baked into every task; the axis varies, the fixed value is constant, and
+    # the int type is preserved (not stringified) through repr().
+    assert data["preview"]["first"] == {"seed": 0, "samples": 10000}
+    assert data["preview"]["last"] == {"seed": 2, "samples": 10000}
+
+
+def test_fixed_params_requires_task_generator(tmp_path: Path) -> None:
+    """Like frozen_configs, fixed_params can only be threaded into a
+    framework-materialized tasks.py — refuse it on a hand-written one."""
+    _write_tasks(tmp_path, _HPARAM_TASKS_PY)
+    intent = _minimal_intent(
+        3,
+        entry_point={
+            "kind": "register_run",
+            "run_name": "run",
+            "fixed_params": {"samples": 10000},
+        },
+    )
+    with pytest.raises(errors.SpecInvalid, match="fixed_params requires task_generator"):
+        record_interview(InterviewSpec.model_validate(intent), campaign_dir=tmp_path)
+
+
+def test_fixed_params_rejects_non_identifier_key() -> None:
+    """fixed_params become kwargs on resolve(i); keys must be identifiers."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="fixed_params"):
+        InterviewSpec.model_validate(
+            _minimal_intent(
+                1,
+                task_generator={"kind": "cartesian_product", "params": {"axes": {"seed": [0]}}},
+                entry_point={
+                    "kind": "register_run",
+                    "run_name": "run",
+                    "fixed_params": {"not a valid name": 1},
+                },
+            )
+        )
+
+
 def test_generator_items_x_seeds(tmp_path: Path) -> None:
     """Cross items × seeds; seed key on items is overwritten by the cross."""
     intent = _minimal_intent(

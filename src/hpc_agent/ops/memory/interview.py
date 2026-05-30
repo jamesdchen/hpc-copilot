@@ -130,10 +130,25 @@ def record_interview(
     # (if shell_command). All entry-point validation happens BEFORE any
     # tasks.py write so a bad spec leaves no residue.
     frozen_shas: dict[str, str] = {}
+    # Fixed (non-axis) params declared on the entry point (#195). Baked into
+    # every materialized task's kwargs alongside the frozen-config shas, so a
+    # required executor param the user didn't sweep is still supplied per task.
+    fixed_params: dict[str, Any] = {}
     entry_point_materialized: dict[str, Any] | None = None
     if "entry_point" in intent:
         ep = intent["entry_point"]
         kind = ep["kind"]
+        # Every entry kind may carry fixed_params; like frozen_configs they are
+        # threaded into kwargs only on a materialized tasks.py, so they require
+        # task_generator (we can't safely edit a hand-written tasks.py).
+        fixed_params = dict(ep.get("fixed_params") or {})
+        if fixed_params and "task_generator" not in intent:
+            raise errors.SpecInvalid(
+                "entry_point.fixed_params requires task_generator; a hand-written "
+                "tasks.py must include the constant kwargs itself. Either add "
+                "task_generator to the intent or thread the fixed params through "
+                "your own tasks.resolve() return dict."
+            )
         if kind == "shell_command":
             # Reject ``frozen_configs`` without ``task_generator``. The framework
             # threads ``<stem>_sha`` into kwargs only on materialized tasks.py;
@@ -215,7 +230,12 @@ def record_interview(
         # cluster dispatcher, build-tasks-py and RepoLayout all read.
         # interview.json + frozen_configs stay at the campaign_dir root.
         tasks_py = RepoLayout(campaign_dir).tasks
-        _materialize_tasks_py(generator, tasks_py, inject_kwargs=frozen_shas)
+        # Both the fixed (non-axis) params (#195) and the frozen-config shas are
+        # constant-per-task kwargs threaded via the same _INJECT seam. On a key
+        # collision the frozen sha wins (identity must not be overridden) —
+        # hence fixed_params first, frozen_shas last.
+        inject_kwargs = {**fixed_params, **frozen_shas}
+        _materialize_tasks_py(generator, tasks_py, inject_kwargs=inject_kwargs)
         artifacts.append(".hpc/tasks.py")
     else:
         # Validate mode — the interview agent already wrote the canonical
@@ -473,15 +493,17 @@ def _materialize_tasks_py(
     generator: Mapping[str, Any],
     path,
     *,
-    inject_kwargs: Mapping[str, str] | None = None,
+    inject_kwargs: Mapping[str, Any] | None = None,
 ) -> None:
     """Write tasks.py from the recipe. Caller has already cross-checked count.
 
     ``inject_kwargs`` is merged into every materialized task's kwargs as
-    constant string fields. Used by the interview to thread frozen-config
-    shas (``<basename>_sha``) so ``cmd_sha`` covers them. Renders as a
-    static dict in the generated file so resolve() returns the merged
-    dict without per-call work.
+    constant fields. Two callers feed it: frozen-config shas
+    (``<basename>_sha`` strings, so ``cmd_sha`` covers them) and fixed
+    (non-axis) executor params (#195 — e.g. ``{"samples": 10000}``, which
+    may be int / float / bool / str). Renders as a static ``_INJECT`` dict
+    via ``repr()`` so resolve() returns the merged dict without per-call
+    work; ``repr`` round-trips every JSON scalar correctly.
     """
     kind = generator["kind"]
     params = generator["params"]

@@ -652,6 +652,12 @@
           "minLength": 1,
           "title": "Run Name",
           "type": "string"
+        },
+        "fixed_params": {
+          "additionalProperties": true,
+          "description": "Constant (non-axis) kwargs the executor requires but that do not vary per task — e.g. {'samples': 10000} when only 'seed' is a sweep axis. Each is baked into every materialized task's kwargs (resolve(i)), so the cluster exports HPC_KW_<param> and the executor command is complete. Keys must be valid Python identifiers; values are JSON scalars. A swept axis of the same name wins (the axis value is per-task; this is the constant fallback). Requires task_generator — a hand-written tasks.py must include the constants itself. Resolves #195: a required signature param left uncovered.",
+          "title": "Fixed Params",
+          "type": "object"
         }
       },
       "required": [
@@ -719,6 +725,12 @@
           ],
           "default": null,
           "description": "Pre-declared series-axis classification. classify-axis cannot introspect a shell-out body, so when the experimenter knows the classification they declare it here. The interview persists it to ``interview.json._materialized.entry_point.data_axis`` so classify-axis records it directly. Omit when you want the interactive classification interview."
+        },
+        "fixed_params": {
+          "additionalProperties": true,
+          "description": "Constant (non-axis) kwargs the executor requires but that do not vary per task — e.g. {'samples': 10000} when only 'seed' is a sweep axis. Each is baked into every materialized task's kwargs (resolve(i)), so the cluster exports HPC_KW_<param> and the executor command is complete. Keys must be valid Python identifiers; values are JSON scalars. A swept axis of the same name wins (the axis value is per-task; this is the constant fallback). Requires task_generator — a hand-written tasks.py must include the constants itself. Resolves #195: a required signature param left uncovered.",
+          "title": "Fixed Params",
+          "type": "object"
         }
       },
       "required": [
