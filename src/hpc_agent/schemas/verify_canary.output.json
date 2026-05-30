@@ -26,6 +26,8 @@
             "oom_killed",
             "segfault",
             "missing_output",
+            "reporter_unreachable",
+            "completed_unknown",
             "timeout",
             "abandoned"
           ],

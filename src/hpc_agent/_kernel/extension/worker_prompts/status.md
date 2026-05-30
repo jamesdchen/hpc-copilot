@@ -5,6 +5,22 @@ Agent-facing composition over two primitives that share the same observation sur
 
 Both write the same journal `last_status` and the same `.monitor.jsonl` tick log; they're interchangeable views of the same operation.
 
+## Reporting conventions
+
+Two fields on the worker report carry observations back to the caller — they are NOT interchangeable:
+
+- **`decisions`** is the **strict enumerated record** of which judgement points this workflow reached. For the **status** workflow there are exactly four allowed `point` IDs — any other value is rejected by `parse_worker_report`:
+  - `surface` (snapshot vs wait-until-terminal)
+  - `lifecycle_dispatch` (backed by `poll-run-status` — the branch on `lifecycle_state`)
+  - `resubmit` (backed by `resubmit-failed`)
+  - `monitor_cadence` (backed by `decide-monitor-arm`)
+
+  Each entry is `{point, outcome, why}` — `outcome` is a short tag describing what happened at that point (e.g. `complete`, `failed_nonrecoverable`, `resubmitted`), `why` is a free-form one-liner.
+
+- **`anomalies`** is a **free-form multi-line string** for everything else: raw `stderr` tails, the specific failure category, reconcile findings, no-cancel notes — anything that isn't one of the four points.
+
+When in doubt, prefer `anomalies`. **Do not invent new `decisions` point IDs** (`failed`, `executor_crash`, `abandoned`, etc. are *outcomes* or *categories*, not points) — the envelope is rejected and the run reports as broken even when the work succeeded.
+
 ## Step 0: Load context (run this first, every time)
 
 Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
@@ -27,7 +43,7 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 
 4. **Decide next action** based on `lifecycle_state`:
    - `complete` — terminal; the caller proceeds to final aggregation via the aggregate workflow.
-   - `failed` — record in `decisions`; the caller may invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) (if recoverable) or [reconcile-journal](../../docs/primitives/reconcile-journal.md).
+   - `failed` — record a `lifecycle_dispatch` decision with outcome `failed` (the failure detail goes in `why` / `anomalies`); the caller may invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) (if recoverable) or [reconcile-journal](../../docs/primitives/reconcile-journal.md).
    - `abandoned` — recorded jobs no longer exist on the scheduler. Invoke [reconcile-journal](../../docs/primitives/reconcile-journal.md) to confirm.
    - `in_flight` (poll-run-status only) — caller waits and re-polls later.
    - `timeout` (monitor-flow only) — budget elapsed; cluster jobs continue; caller can re-invoke `monitor-flow` to keep watching.
@@ -43,7 +59,7 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 When `lifecycle_state == "failed"` with `failed_task_ids` non-empty:
 
 1. Read the failed tasks' stderr tails via `poll-run-status` (the cluster-side reporter surfaces them in `data.tasks[<id>].err_log_path` for any task in `failed`/`unknown`).
-2. Classify the failure via [failures](../../docs/primitives/failures.md). Recoverable categories (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the matching category. Non-recoverable (`spec_invalid`, `executor_crash`) → record in `decisions` and stop.
+2. Classify the failure via [failures](../../docs/primitives/failures.md). Recoverable categories (`oom_killed`, `cluster_timeout`, `node_failure`, `preempted`) → invoke [resubmit-failed](../../docs/primitives/resubmit-failed.md) with the matching category, then record a `resubmit` decision (outcome `resubmitted`). Non-recoverable (`spec_invalid`, `executor_crash`) → record a `resubmit` decision with outcome `non_recoverable` (the category + stderr go in `why` / `anomalies`) and stop.
 3. The auto-retry resolver in [resubmit-failed](../../docs/primitives/resubmit-failed.md) reads the run sidecar's `auto_retry` block to decide whether the resubmit is allowed (per-category `max_attempts`).
 
 ## Polling cadence (poll-run-status, manual loops)

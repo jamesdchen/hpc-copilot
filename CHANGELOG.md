@@ -5,6 +5,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 on the wire surface enumerated in
 [`docs/integrations/CONTRACT.md`](docs/integrations/CONTRACT.md).
 
+## Unreleased
+
+### Fixed — verify-canary resolves a vanished canary fast instead of timing out (#193)
+
+A canary that finished or failed fast and left the scheduler queue before the first status poll showed an all-zero *live* summary (nothing complete/failed/running/pending/unknown). The poll loop had no terminal condition for that, so it rode the full `wait_budget_sec` (30 min default) and reported `timeout` — a 30-minute agent-loop stall on a job that was already gone. The loop now detects the all-zero summary and, once it **persists** across consecutive polls (so the transient pre-registration window right after qsub doesn't false-trigger), breaks out and returns `failure_kind="completed_unknown"` (`ok=False`, so the two-phase gate still refuses the main array). The stderr scan still runs first, so a real marker (oom_killed, traceback) wins over the bland verdict. Unchanged: a genuinely slow/queued canary still waits to `timeout`; a persistently-broken reporter still surfaces `reporter_unreachable`. The `CanaryFailureKind` wire enum gained `completed_unknown` (and `reporter_unreachable`, which the code already returned but the `Literal` omitted); `verify_canary.output.json` regenerated.
+
+### Fixed — status/aggregate/campaign worker reports survive validation (#194)
+
+`parse_worker_report` rejects a worker envelope whose `decisions` entries carry a `point` outside `DECISION_POINTS[workflow]` — even when the workflow succeeded. #183 fixed this for the **submit** worker prompt; this completes the audit for the other three. Each of `status.md` / `aggregate.md` / `campaign.md` gained a **Reporting conventions** section enumerating its allowed point IDs and the strict-`decisions` / free-form-`anomalies` split, and every "record X in `decisions`" instruction was rewritten to use an allowed point ID with a descriptive `outcome` (e.g. aggregate's `unexpected_tasks_present` → a `completeness` decision with outcome `unexpected_tasks`; campaign's `stochastic_marker_missing` finding code → a `stochastic_marker` decision with outcome `missing`), routing free-form detail to `anomalies`. A new prose lint (`test_decisions_point_ids_are_in_the_allowlist`) scans every worker prompt and fails CI if a recorded point ID isn't in that workflow's allowlist — turning the class from "caught in a live demo" into "caught by CI". Worker-prompt snapshot fixtures regenerated.
+
 ## 0.8.0 — 2026-05-29
 
 ### Fixed — Non-axis required executor params are now resolved + gated (#195)
