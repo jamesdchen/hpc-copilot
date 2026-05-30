@@ -527,3 +527,38 @@ class TestDispatchFailureCapture:
         assert exc_info.value.code == 0
         # On success the WIP dir is removed entirely; no capture log lingers.
         assert not (result_root / "0" / "_wip_0").exists()
+
+
+# ─── #195 part C: dispatcher warns on unset $HPC_KW_* references ─────────────
+
+
+def test_warn_unset_kwarg_refs_flags_missing(capsys: pytest.CaptureFixture[str]) -> None:
+    """A command referencing $HPC_KW_SAMPLES with no such kwarg exported is
+    flagged (it would expand to empty and fail the task — #195)."""
+    executor = "python3 mc.py --seed $HPC_KW_SEED --samples $HPC_KW_SAMPLES"
+    env = {"HPC_KW_SEED": "0"}  # SAMPLES never exported
+    missing = dispatch._warn_unset_kwarg_refs(executor, env)
+    assert missing == ["HPC_KW_SAMPLES"]
+    err = capsys.readouterr().err
+    assert "HPC_KW_SAMPLES" in err
+    assert "samples" in err  # names the kwarg + the #195 remediation
+    assert "#195" in err
+
+
+def test_warn_unset_kwarg_refs_brace_form(capsys: pytest.CaptureFixture[str]) -> None:
+    """The ``${HPC_KW_X}`` brace form is matched too."""
+    missing = dispatch._warn_unset_kwarg_refs("run --x ${HPC_KW_FOO}", {})
+    assert missing == ["HPC_KW_FOO"]
+
+
+def test_warn_unset_kwarg_refs_silent_when_all_present() -> None:
+    """Every referenced HPC_KW_* is exported → no findings, no warning."""
+    executor = "python3 mc.py --seed $HPC_KW_SEED --samples $HPC_KW_SAMPLES"
+    env = {"HPC_KW_SEED": "0", "HPC_KW_SAMPLES": "10000"}
+    assert dispatch._warn_unset_kwarg_refs(executor, env) == []
+
+
+def test_warn_unset_kwarg_refs_ignores_bare_env_vars() -> None:
+    """Only the framework-owned HPC_KW_ namespace is checked — a bare $HOME or
+    $SAMPLES reference is left alone (can't tell it from a real env var)."""
+    assert dispatch._warn_unset_kwarg_refs("run --home $HOME --s $SAMPLES", {}) == []

@@ -25,6 +25,7 @@ import datetime
 import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -281,6 +282,47 @@ def _executor_reinvokes_dispatcher(executor, *, dispatcher_path):
     candidates.add("_hpc_dispatch.py")
     candidates.add("dispatch.py")
     return any(name in executor for name in candidates)
+
+
+# Match ``$HPC_KW_FOO`` and ``${HPC_KW_FOO}`` references in a shell command.
+# Restricted to the HPC_KW_ namespace on purpose: the bare-uppercase legacy
+# exports collide with real environment vars ($HOME, $PATH, ...), so a bare
+# ``$SAMPLES`` reference can't be reliably told apart from a genuine env var the
+# user expects to inherit. The HPC_KW_ prefix is framework-owned and unambiguous.
+_HPC_KW_REF_RE = re.compile(r"\$\{?(HPC_KW_[A-Za-z0-9_]+)\}?")
+
+
+def _warn_unset_kwarg_refs(executor, env):
+    """Warn (stderr) about ``$HPC_KW_*`` refs in *executor* not set in *env*.
+
+    Defense-in-depth for #195: the static ``validate-executor-signatures`` gate
+    refuses a spec whose tasks.resolve() leaves a required signature param
+    uncovered, but it can only see the executor *function's* signature. An
+    executor command template that references ``$HPC_KW_X`` directly — for a
+    param outside the introspectable signature — slips past that gate. Here, at
+    the dispatch site, we know the exact command string AND the exact exported
+    env, so we can diff them: any ``$HPC_KW_*`` the command references but the
+    kwargs never produced expands to empty and silently corrupts the run (the
+    argparse "expected one argument" / empty-flag failure mode from #195).
+
+    Warn rather than abort: the canary (one task) surfaces the empty-expansion
+    failure loudly enough, and a hard abort here could false-positive on a
+    template that legitimately guards an optional ``${HPC_KW_X:-default}`` (the
+    ``:-`` default form still matches the bare name but is in fact safe). The
+    warning rides the cluster job log so a post-mortem names the exact var.
+    """
+    referenced = set(_HPC_KW_REF_RE.findall(executor or ""))
+    missing = sorted(name for name in referenced if name not in env)
+    for name in missing:
+        kwarg = name[len("HPC_KW_") :].lower()
+        print(
+            f"[dispatch] WARN: executor command references ${name} but no "
+            f"{kwarg!r} kwarg was exported — it will expand to empty and the "
+            f"command may fail (e.g. argparse 'expected one argument'). Cover "
+            f"{kwarg!r} as a sweep axis or entry_point.fixed_params (#195).",
+            file=sys.stderr,
+        )
+    return missing
 
 
 def _pump_stderr(pipe, *, tail_buf, tail_lock, max_bytes):
@@ -652,6 +694,11 @@ def main() -> None:
         env[f"HPC_KW_{key.upper()}"] = s
         if not namespace_only:
             env[key.upper()] = s
+
+    # Defense-in-depth for #195: warn if the command references an HPC_KW_* var
+    # the kwargs never produced (would expand to empty and fail the task). The
+    # env is fully built above, so this is the authoritative diff point.
+    _warn_unset_kwarg_refs(executor, env)
 
     print(f"[dispatch] task_id={task_id} run_id={run_id} result_dir={result_dir}")
     print(f"[dispatch] cmd={executor}")
