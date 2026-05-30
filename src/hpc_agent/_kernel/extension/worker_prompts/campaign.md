@@ -1,5 +1,23 @@
 Closed-loop campaigns let an experiment's `tasks.py` adapt iteration-by-iteration based on prior results. The framework provides two things — a `campaign_id` tag on every submit (carried by [submit-flow](../../docs/primitives/submit-flow.md)) and the [campaign-status](../../docs/primitives/campaign-status.md) accessor (called from inside `tasks.py`). The "loop" is repeated `submit-flow → monitor-flow → aggregate-flow` triplets sharing the same `campaign_id` slug — workflow-atom composition with no agent in the per-iteration critical path. Strategies (Optuna, RandomSearch, walk-forward, PBT) live as Python libraries the user imports in their own `tasks.py`. The framework ships **zero** strategy code.
 
+## Reporting conventions
+
+Two fields on the worker report carry observations back to the caller — they are NOT interchangeable:
+
+- **`decisions`** is the **strict enumerated record** of which judgement points this workflow reached. For the **campaign** workflow there are exactly six allowed `point` IDs — any other value is rejected by `parse_worker_report`:
+  - `path` (manual grid vs strategy-driven)
+  - `stochastic_marker` (backed by `validate-stochastic-marker`)
+  - `decide` (backed by `campaign-advance`)
+  - `convergence` (backed by `campaign-converged`)
+  - `budget` (backed by `campaign-budget`)
+  - `concurrency` (how many iterations in flight)
+
+  Each entry is `{point, outcome, why}` — `outcome` is a short tag (e.g. `missing`, `converged`, `exhausted`), `why` is a free-form one-liner.
+
+- **`anomalies`** is a **free-form multi-line string** for everything else: the finding `code`, the colliding iteration's `cmd_sha`, a `suggested_fix`, raw evidence — anything that isn't one of the six points.
+
+When in doubt, prefer `anomalies`. **Do not invent new `decisions` point IDs** (`stochastic_marker_missing` is the finding *code*, not the point `stochastic_marker`) — the envelope is rejected and the run reports as broken even when the work succeeded.
+
 ## Step 0: Load context (run this first, every time)
 
 Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for campaign state. Never rely on conversational memory or shell variables — a context compaction, a network drop, or a session restart erases them; the on-disk state does not. This is what makes campaign resume trivial.
@@ -49,7 +67,7 @@ hpc-agent validate-campaign --spec validate_campaign.input.json --experiment-dir
 Spec must include `{"campaign_id": "<slug>", "expected_cmd_sha": "<cmd_sha>", ...}`. Branch on `data.overall`:
 
 - `pass` / `warn` → proceed to `submit-flow`.
-- `fail` → STOP. Record the `validate-stochastic-marker` finding (`code: stochastic_marker_missing`) in `decisions` with the prior iteration whose `cmd_sha` collides and the `suggested_fix` (add `_optuna_trial_number` (or equivalent) to `tasks.resolve()`'s output). There is no `--force`; the dedup would be silent, so the gate is hard by design.
+- `fail` → STOP. Record a `stochastic_marker` decision with outcome `missing`, and put the `validate-stochastic-marker` finding (`code: stochastic_marker_missing`), the prior iteration whose `cmd_sha` collides, and the `suggested_fix` (add `_optuna_trial_number` (or equivalent) to `tasks.resolve()`'s output) in `anomalies` / `why`. There is no `--force`; the dedup would be silent, so the gate is hard by design.
 
 ## Inspection
 

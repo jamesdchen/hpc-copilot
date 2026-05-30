@@ -15,6 +15,22 @@ The procedure below is the canonical sequence to follow. Read it with these stan
 === BEGIN aggregate PROCEDURE ===
 Agent-facing composition over the **[aggregate-flow](../../docs/primitives/aggregate-flow.md) workflow atom** (ensure every wave is combined → rsync `_combiner/` partials locally → `reduce_partials` to produce the final aggregated metrics dict → optionally pull per-task summary files). For per-wave granularity (e.g. invoke combiner on a single wave during a stalled run), invoke the [combine-wave](../../docs/primitives/combine-wave.md) primitive directly. Idempotent on success per wave; failure is retry-safe via `combiner_max_retries`.
 
+## Reporting conventions
+
+Two fields on the worker report carry observations back to the caller — they are NOT interchangeable:
+
+- **`decisions`** is the **strict enumerated record** of which judgement points this workflow reached. For the **aggregate** workflow there are exactly four allowed `point` IDs — any other value is rejected by `parse_worker_report`:
+  - `mode` (backed by `aggregate-flow` — auto / combiner-only)
+  - `partial_handling` (proceed on incomplete waves or not)
+  - `completeness` (backed by `verify-aggregation-complete`)
+  - `reduce_locality` (where the reduce ran)
+
+  Each entry is `{point, outcome, why}` — `outcome` is a short tag (e.g. `unexpected_tasks`, `partial`, `manual_pending`), `why` is a free-form one-liner.
+
+- **`anomalies`** is a **free-form multi-line string** for everything else: the specific violation lists (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`), failed-wave ids, raw evidence — anything that isn't one of the four points.
+
+When in doubt, prefer `anomalies`. **Do not invent new `decisions` point IDs** (`unexpected_tasks_present`, `partial_aggregate`, `manual_aggregate_pending` are *outcomes*, not points) — the envelope is rejected and the run reports as broken even when the aggregation succeeded.
+
 ## Step 0: Load context (run this first, every time)
 
 Run `hpc-agent load-context --experiment-dir .` and treat its `data` as the ONLY source of truth for run / campaign state. Never rely on conversational memory or shell variables — a context compaction or a session restart erases them; the on-disk state does not.
@@ -72,13 +88,13 @@ If a value you need is absent here, derive it from the run sidecar on disk — n
 
    The envelope's `data` carries `{ok, all_waves_combined, missing_waves, all_tasks_present, missing_tasks, unexpected_tasks, provenance_present, ...}`. Branch:
    - `ok=True` → proceed to interpretation.
-   - `ok=False` → record the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) in `decisions` before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — record it as `unexpected_tasks_present` in `decisions`, never paper over.
+   - `ok=False` → record a `completeness` decision with outcome `failed` and put the specific violations (`missing_waves` / `missing_tasks` / `unexpected_tasks` / `provenance_present`) in `anomalies` before any user-facing framing. `unexpected_tasks` in particular is a cross-run contamination red flag — record it as a `completeness` decision with outcome `unexpected_tasks` (the ids go in `anomalies`), never paper over.
 
-8. **On `escalation_reason` non-null** in the aggregate-flow envelope, the atom completed with at least one wave failing `combiner_max_retries`. Inspect `failed_waves`; the partial `aggregated_metrics` is what DID combine. Record `partial_aggregate` in `decisions` with the failed-wave list; the caller decides whether the partial result is acceptable, or invokes [combine-wave](../../docs/primitives/combine-wave.md) directly with `force=true` for the failed waves.
+8. **On `escalation_reason` non-null** in the aggregate-flow envelope, the atom completed with at least one wave failing `combiner_max_retries`. Inspect `failed_waves`; the partial `aggregated_metrics` is what DID combine. Record a `partial_handling` decision with outcome `partial` (put the failed-wave list in `anomalies` / `why`); the caller decides whether the partial result is acceptable, or invokes [combine-wave](../../docs/primitives/combine-wave.md) directly with `force=true` for the failed waves.
 
 9. **On error envelopes**, branch by `error_code` per the atom's frontmatter (`journal_corrupt` / `spec_invalid` / `ssh_unreachable` / `remote_command_failed`).
 
-10. **Profile-specific aggregate command**: when the per-run sidecar's `aggregate_defaults.aggregate_cmd` is set and `mode != "auto"` skipped it, the atom already ran the user-defined cluster-side command. When `mode == "combiner-only"` was forced and the caller still wants the cluster-side command, record `manual_aggregate_pending` in `decisions` — it's an arbitrary user-defined command that the framework doesn't introspect.
+10. **Profile-specific aggregate command**: when the per-run sidecar's `aggregate_defaults.aggregate_cmd` is set and `mode != "auto"` skipped it, the atom already ran the user-defined cluster-side command. When `mode == "combiner-only"` was forced and the caller still wants the cluster-side command, record a `mode` decision with outcome `manual_pending` (note the pending command in `anomalies`) — it's an arbitrary user-defined command that the framework doesn't introspect.
 
 ## Reduce where the data lives
 
