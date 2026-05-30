@@ -140,7 +140,7 @@
             }
           ],
           "default": null,
-          "description": "SGE-only: which job_env keys to forward via qsub -v. Null = forward every key in job_env. Ignored for SLURM (slurm forwards everything in job_env automatically via --export ALL,...).",
+          "description": "SGE-only: which job_env keys to forward via qsub -v. Null (or omit) = forward every key in job_env; pass a list to restrict to those keys. An EMPTY list is refused — it would forward zero vars and produce a broken job. Ignored for SLURM (slurm forwards everything in job_env automatically via --export ALL,...).",
           "title": "Pass Env Keys"
         },
         "slurm_account": {

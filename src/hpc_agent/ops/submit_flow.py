@@ -401,6 +401,36 @@ def _mirror_canary_sidecar(experiment_dir: Path, main_run_id: str, canary_run_id
     )
 
 
+def _ensure_job_script_executor(run_id: str, job_env: dict[str, str]) -> None:
+    """Refuse a submission whose job-script ``EXECUTOR`` is empty/missing (#191).
+
+    ``job_env["EXECUTOR"]`` is the *job-script* command — it runs the dispatcher
+    (``python3 .hpc/_hpc_dispatch.py``), which then reads the sidecar for the
+    per-task command. If it is absent or ``""``, the cluster job runs
+    ``time $EXECUTOR`` with no command: it prints ``0.000`` and exits 0 in
+    milliseconds, the canary "succeeds", and the main array fires the same
+    broken qsub — every task exits cleanly having done nothing (the #162 class).
+
+    This validates *non-emptiness only*, deliberately NOT runnability: unlike
+    the sidecar's per-task ``executor`` (guarded by :func:`_is_runnable_executor`,
+    which rejects the dispatcher command), the job-script ``EXECUTOR`` is
+    *supposed* to be that dispatcher command. The cluster-side templates also
+    fence ``$EXECUTOR`` with ``: "${EXECUTOR:?...}"`` as defense-in-depth; this
+    intake guard fails faster and clearer than a vanished canary's stderr.
+    """
+    executor = (job_env or {}).get("EXECUTOR") or ""
+    if not executor.strip():
+        raise errors.SpecInvalid(
+            f"job_env['EXECUTOR'] is missing or empty for run_id {run_id!r}. The "
+            "job-script EXECUTOR is the dispatcher command (typically "
+            "'python3 .hpc/_hpc_dispatch.py'); an empty value makes the cluster job "
+            "run `time` with no command and exit 0 instantly — the canary would "
+            "'succeed' and the main array would fire the same broken qsub. Pass "
+            "EXECUTOR through build-submit-spec (which defaults it) or set "
+            "job_env['EXECUTOR'] explicitly in the fields-file."
+        )
+
+
 def _augment_job_env(
     *,
     job_env: dict[str, str],
@@ -616,6 +646,9 @@ def _submit_one_spec(
         campaign_id=spec.campaign_id,
         cluster=spec.cluster,
     )
+    # Refuse an empty/missing job-script EXECUTOR before anything is qsub'd —
+    # the augmented dict is what actually ships to the scheduler (#191).
+    _ensure_job_script_executor(spec.run_id, job_env_full)
     backend_obj = build_remote_backend(
         backend_name=spec.backend,
         script=spec.script,

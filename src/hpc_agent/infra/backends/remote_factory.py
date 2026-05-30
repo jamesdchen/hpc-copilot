@@ -51,7 +51,14 @@ def build_remote_backend(
         return ssh_run(cmd, ssh_target=ssh_target)
 
     if backend_name == "sge":
-        keys = pass_env_keys if pass_env_keys is not None else job_env_keys
+        # `[]`/`()` and `None` are EQUIVALENT here: both mean "forward every
+        # job_env key". A truthiness test (not just `is not None`) is
+        # load-bearing — `[] is not None` is True, so the old check let an
+        # explicit empty list strip every var from qsub -v, shipping a job with
+        # $EXECUTOR/$CONDA_ENV/$REPO_DIR all unset (#192). The wire layer now
+        # also refuses `[]` at construction, so this is defense-in-depth for any
+        # caller that bypasses the spec validator.
+        keys = pass_env_keys if pass_env_keys else job_env_keys
         return RemoteSGEBackend(
             script=script,
             ssh_run=ssh,

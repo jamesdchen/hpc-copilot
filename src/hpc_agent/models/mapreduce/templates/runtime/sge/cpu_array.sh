@@ -7,6 +7,7 @@
 # below catch the "task -1" dispatch failure mode.
 set -eo pipefail
 : "${SGE_TASK_ID:?SGE_TASK_ID is not set; refusing to dispatch task -1}"
+: "${EXECUTOR:?EXECUTOR is not set; refusing to dispatch (would run \`time\` with no command and exit 0 silently — see hpc-agent #191/#192)}"
 
 # ==============================================================
 # SGE CPU Array Job Template (hpc-agent)

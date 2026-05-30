@@ -135,9 +135,7 @@ def submit_and_verify(
             file_glob=spec.file_glob,
         )
     )
-    canary_job_ids = (
-        list(canary_submit.canary_job_ids) if canary_submit.canary_job_ids else None
-    )
+    canary_job_ids = list(canary_submit.canary_job_ids) if canary_submit.canary_job_ids else None
 
     if not verify_result.ok:
         # Canary failed → refuse to launch the main array (#160). job_ids is

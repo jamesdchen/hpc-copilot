@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from hpc_agent.cli import aggregate as agg_mod
 from hpc_agent.cli._helpers import EXIT_INTERNAL
 from hpc_agent.cli.aggregate import cmd_aggregate

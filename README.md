@@ -47,6 +47,17 @@ an API key before launching; otherwise the worker fails fast with a clear
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+**Permissions:** the bare worker is headless — it can't answer a permission
+prompt. It needs an allow rule for the `hpc-agent` CLI. `hpc-agent interview`
+(onboarding) writes a project-scoped `<experiment-dir>/.claude/settings.json`
+granting `Bash(hpc-agent:*)`, so launching `claude` from the experiment dir
+just works. If you launch `claude` from elsewhere, add the rule to your
+user-global `~/.claude/settings.json`:
+
+```json
+{ "permissions": { "allow": ["Bash(hpc-agent:*)"] } }
+```
+
 ### For agents and automation
 
 ```bash

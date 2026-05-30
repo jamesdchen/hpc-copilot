@@ -33,12 +33,7 @@ def _wire(monkeypatch, *, record, scheduler: str, ssh_stdout: str = "", ssh_rc: 
 
 def test_flags_sge_eqw_as_error(monkeypatch, tmp_path) -> None:
     record = SimpleNamespace(job_ids=["100", "101"], ssh_target="u@h", cluster="hoffman2")
-    qstat = (
-        "job-ID prior name user state x\n"
-        "----\n"
-        "100 0.5 j u Eqw x\n"
-        "101 0.5 j u r x\n"
-    )
+    qstat = "job-ID prior name user state x\n----\n100 0.5 j u Eqw x\n101 0.5 j u r x\n"
     _wire(monkeypatch, record=record, scheduler="sge", ssh_stdout=qstat)
     out = verify_submitted(tmp_path, run_id="r1")
     assert out["ok"] is False

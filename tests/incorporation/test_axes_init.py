@@ -76,7 +76,7 @@ def test_force_preserves_executors_block(tmp_path: Path) -> None:
                 "data_axis": {"kind": "independent"},
                 "classified_by": "agent",
                 "classified_at": "2026-05-29T20:41:50.853297+00:00",
-                "run_signature_sha": "50bee76198a1b583ea7184499a8f8c9a911436692c815663acc00089e6838c8f",
+                "run_signature_sha": "50bee76198a1b583ea7184499a8f8c9a911436692c815663acc00089e6838c8f",  # noqa: E501
             }
         },
     )

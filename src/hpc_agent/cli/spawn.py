@@ -40,6 +40,16 @@ from hpc_agent.cli._helpers import (
 _INVOKER_ENV = "HPC_AGENT_INVOKER"
 _INLINE_INVOKER = "inline"
 
+# The named subagent inline mode routes to. Its definition
+# (src/slash_commands/agents/hpc-worker.md, installed to ~/.claude/agents/ by
+# `hpc-agent install-commands`) carries ``model:`` in its own frontmatter, so
+# the harness enforces the pin regardless of the caller's model — the pin rides
+# with the definition, not the call site. The model hint surfaced in the
+# envelope (for a harness dispatching an ad-hoc subagent with a per-call model)
+# is read from invoke._WORKER_MODEL at call time — NOT a second copy of the
+# string — so the spawn and inline paths can never disagree on the worker model.
+_WORKER_SUBAGENT = "hpc-worker"
+
 
 def _inline_via_flag(args: argparse.Namespace) -> bool:
     """The agent-reachable ``--inline`` flag was passed."""
@@ -82,7 +92,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         SpawnContractError,
         validate_and_render_parts,
     )
-    from hpc_agent._kernel.lifecycle.invoke import worker_credentials_available
+    from hpc_agent._kernel.lifecycle.invoke import (
+        _WORKER_MODEL,
+        worker_credentials_available,
+    )
     from hpc_agent._kernel.lifecycle.run import run_workflow
 
     # --fields-file wins over inline --fields-json: reading the JSON from a file
@@ -167,26 +180,55 @@ def cmd_run(args: argparse.Namespace) -> int:
                 "workflow": args.workflow,
                 "experiment_dir": str(args.experiment_dir),
                 "prompt": prompt,
+                # Structured routing hint so a harness can dispatch without
+                # parsing the prose: the named subagent carries the model pin
+                # (model: haiku) in its own definition, so the harness enforces
+                # it regardless of the caller's model. `hpc-agent
+                # install-commands` ships it to ~/.claude/agents/hpc-worker.md.
+                "subagent": {
+                    "preferred_name": _WORKER_SUBAGENT,
+                    "model": _WORKER_MODEL,
+                    "task": prompt,
+                },
                 "instructions": (
                     "Inline mode: no `claude -p` worker was spawned. Produce the "
                     "worker report the procedure in `prompt` asks for — a single "
                     'JSON object {"result": ..., "decisions": [...], '
                     '"anomalies": "..."}. How you run it depends on your '
-                    "capability:\n"
-                    "- If you have a subagent-spawning tool (Claude Code's `Agent` "
-                    "tool — formerly `Task` — or your harness's equivalent), prefer "
-                    "it: dispatch exactly ONE subagent with `prompt` as its entire "
-                    "task and return the JSON object it produces. That keeps the "
-                    "procedure's verbose execution (rsync, qsub, scheduler dumps) "
-                    "out of your context — recovering the isolation the default "
-                    "worker spawn would have given. The subagent is the leaf: it "
-                    "runs every step itself and spawns nothing further.\n"
-                    "- If you have no subagent capability, run the procedure "
-                    "yourself in this session (you have full tools and "
-                    "credentials).\n"
-                    "Either path stays in this session — do NOT start a fresh "
-                    "`claude -p`/CLI worker or re-invoke `hpc-agent run`; inline "
-                    "deliberately skips that spawn."
+                    "capability, in this order:\n"
+                    f"- If a named subagent `{_WORKER_SUBAGENT}` is available "
+                    "(Claude Code installs it from this package via `hpc-agent "
+                    "install-commands`), dispatch exactly ONE subagent of that "
+                    "type with `prompt` as its entire task and return the JSON "
+                    f"object it produces. `{_WORKER_SUBAGENT}` is pinned to a "
+                    "small, cheap model in its own definition — the harness "
+                    "enforces that pin, so do not override its model. This keeps "
+                    "the procedure's verbose execution (rsync, qsub, scheduler "
+                    "dumps) out of your context, recovering the isolation the "
+                    "default worker spawn would have given.\n"
+                    "- Else if you have a generic subagent-spawning tool (Claude "
+                    "Code's `Agent` tool — formerly `Task` — or your harness's "
+                    "equivalent), dispatch ONE subagent with `prompt` as its "
+                    f"task; pin it to `{_WORKER_MODEL}` if your tool lets you "
+                    "choose a model (the procedure is a deterministic sequence, "
+                    "not open-ended reasoning).\n"
+                    "- Else run the procedure yourself in this session (you have "
+                    "full tools and credentials).\n"
+                    "The subagent (when used) is the leaf: it runs every step "
+                    "itself and spawns nothing further. Either path stays in this "
+                    "session — do NOT start a fresh `claude -p`/CLI worker or "
+                    "re-invoke `hpc-agent run`; inline deliberately skips that "
+                    "spawn.\n"
+                    "Isolation ceiling: a subagent recovers *context* isolation "
+                    "(the procedure's transcript stays out of your context) but "
+                    "NOT *environment* isolation — it shares this session's "
+                    "sandbox posture and auto-loads project CLAUDE.md, unlike the "
+                    "default `--bare` `claude -p` spawn, which forces the sandbox "
+                    "off and strips CLAUDE.md for a reproducible-minimum context. "
+                    "If you need that stronger isolation (e.g. a sandboxed session "
+                    "would block the cluster SSH, or project memory must not color "
+                    "the run), the default spawn — drop `HPC_AGENT_INVOKER=inline` "
+                    "— is the right tool, not inline."
                 ),
             },
             idempotent=False,
