@@ -236,7 +236,7 @@ class SubmitFlowSpec(BaseModel):
             raise ValueError(
                 "pass_env_keys=[] forwards zero env vars to qsub and produces a "
                 "broken job (every $EXECUTOR / $CONDA_ENV / $REPO_DIR unset, so the "
-                "cluster runs `time \"\"` and exits 0 instantly). Omit the field "
+                'cluster runs `time ""` and exits 0 instantly). Omit the field '
                 "(or pass null) to forward ALL keys from job_env; pass a non-empty "
                 "list to restrict to those keys."
             )
