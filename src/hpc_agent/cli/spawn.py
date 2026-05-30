@@ -217,7 +217,17 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "itself and spawns nothing further. Either path stays in this "
                     "session — do NOT start a fresh `claude -p`/CLI worker or "
                     "re-invoke `hpc-agent run`; inline deliberately skips that "
-                    "spawn."
+                    "spawn.\n"
+                    "Isolation ceiling: a subagent recovers *context* isolation "
+                    "(the procedure's transcript stays out of your context) but "
+                    "NOT *environment* isolation — it shares this session's "
+                    "sandbox posture and auto-loads project CLAUDE.md, unlike the "
+                    "default `--bare` `claude -p` spawn, which forces the sandbox "
+                    "off and strips CLAUDE.md for a reproducible-minimum context. "
+                    "If you need that stronger isolation (e.g. a sandboxed session "
+                    "would block the cluster SSH, or project memory must not color "
+                    "the run), the default spawn — drop `HPC_AGENT_INVOKER=inline` "
+                    "— is the right tool, not inline."
                 ),
             },
             idempotent=False,

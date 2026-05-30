@@ -172,3 +172,9 @@ def test_inline_instructions_route_to_pinned_subagent_then_fall_back(tmp_path, m
     assert "hpc-agent run" in instr
     # The worker-report contract is still stated verbatim.
     assert "result" in instr and "decisions" in instr and "anomalies" in instr
+    # Isolation ceiling (option 3): the prose must NOT over-promise — it names
+    # that a subagent recovers context but not environment isolation (sandbox /
+    # CLAUDE.md), and points a user who needs the latter at the default spawn.
+    assert "isolation ceiling" in low
+    assert "sandbox" in low and "claude.md" in low
+    assert "environment" in low
