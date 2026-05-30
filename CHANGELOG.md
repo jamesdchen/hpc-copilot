@@ -7,6 +7,15 @@ on the wire surface enumerated in
 
 ## Unreleased
 
+### Fixed — Two silent-canary failure modes refused at intake (#191, #192)
+
+Both surfaced on the inline-subagent submit path, where a worker-constructed fields-file handed `submit-flow` a structurally-broken spec the cluster "succeeded" on in milliseconds — the canary passed and the main array fired the same no-op qsub.
+
+- **#192 (root cause): `pass_env_keys=[]` forwarded zero env vars to qsub.** `infra/backends/remote_factory.py` used `pass_env_keys if pass_env_keys is not None else job_env_keys`, and `[] is not None` is `True`, so an explicit empty list stripped *every* var (`$EXECUTOR`/`$CONDA_ENV`/`$REPO_DIR`) on the way to `qsub -v` — even a correctly-set `EXECUTOR`. Now `[]`/`()` and `None` are equivalent ("forward all") at the factory, and `SubmitFlowSpec` **refuses `pass_env_keys=[]` at construction** with an actionable message (omit / `null` = forward all; a non-empty list restricts). `[]` is the natural-feeling JSON "no override", so this footgun was waiting for the first agent-built spec to hit it.
+- **#191 (defense-in-depth): empty `job_env["EXECUTOR"]` shipped silently.** `submit-flow` now refuses an empty/missing job-script `EXECUTOR` at intake (`_ensure_job_script_executor`, before any qsub) — non-emptiness only, deliberately *not* runnability, since the job-script EXECUTOR is *supposed* to be the dispatcher command (unlike the sidecar's per-task executor). All four array templates (`sge/{cpu,gpu}_array.sh`, `slurm/{cpu,gpu}_array.slurm`) also fence `$EXECUTOR` with `: "${EXECUTOR:?...}"` so a job reaching the node with EXECUTOR unset fails loudly instead of running `time` with no command and exiting 0.
+
+The submit worker prompt's Step 6d spec sketch now shows `"pass_env_keys": null` (was `[...]`) with explicit notes on both footguns; schemas + the submit worker-prompt fixture regenerated. Same "intake refuses structurally broken specs" family as #171 / #184 / #186.
+
 ### Added — Inline subagent is pinned to a small model via a shipped definition
 
 Inline mode now routes to a **named, model-pinned subagent** rather than an ad-hoc one. A new `hpc-worker` subagent definition (`model: haiku` in its own frontmatter) ships in the package and installs to `~/.claude/agents/hpc-worker.md` via `hpc-agent install-commands`. The inline envelope's `data.instructions` directs the caller to dispatch to `hpc-worker` first; because the model pin rides with the definition, the harness enforces it regardless of the caller's model — a true pin, not a prose suggestion. The envelope also gains a structured `data.subagent` hint (`{preferred_name, model, task}`) so a harness can route programmatically without parsing prose.

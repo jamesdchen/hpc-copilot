@@ -307,11 +307,15 @@ Branch on `data.overall`:
   "run_id": "<run_id from 6d>", "total_tasks": <tasks.total()>,
   "backend": "sge", "script": ".hpc/templates/cpu_array.sh",
   "job_env": {"EXECUTOR": "python3 .hpc/_hpc_dispatch.py", "HPC_RUN_ID": "...", ...},
-  "pass_env_keys": [...],
+  "pass_env_keys": null,
   "canary": true, "canary_only": true, "campaign_id": "<slug>", "runtime": "uv",
   "skip_preflight": true
 }
 ```
+
+`job_env["EXECUTOR"]` is **mandatory and non-empty** — it is the dispatcher command (`python3 .hpc/_hpc_dispatch.py`). Never ship `""` or omit it: the cluster would run `time` with no command and exit 0 in milliseconds, the canary would "succeed", and the main array would fire the same no-op qsub (#191). `build-submit-spec` defaults it; if you hand-craft the fields-file, set it explicitly.
+
+`pass_env_keys` is `null` (or omit it) to forward **every** `job_env` key via `qsub -v` — that is what you almost always want. A **non-empty** list restricts to those keys. **Never `[]`** — an empty list forwards *zero* vars (every `$EXECUTOR`/`$CONDA_ENV`/`$REPO_DIR` unset), producing the same broken job; submit-flow now refuses `[]` at intake (#192).
 
 `skip_preflight: true` is correct — Step 6b just ran. For GPU jobs: `script: ".hpc/templates/gpu_array.sh"` (SGE) or `gpu_array.slurm` (SLURM).
 

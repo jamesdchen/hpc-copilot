@@ -114,7 +114,9 @@ class SubmitFlowSpec(BaseModel):
         default=None,
         description=(
             "SGE-only: which job_env keys to forward via qsub -v. "
-            "Null = forward every key in job_env. Ignored for SLURM "
+            "Null (or omit) = forward every key in job_env; pass a list to "
+            "restrict to those keys. An EMPTY list is refused — it would "
+            "forward zero vars and produce a broken job. Ignored for SLURM "
             "(slurm forwards everything in job_env automatically via "
             "--export ALL,...)."
         ),
@@ -220,6 +222,24 @@ class SubmitFlowSpec(BaseModel):
     def _canary_only_requires_canary(self) -> SubmitFlowSpec:
         if self.canary_only and not self.canary:
             raise ValueError("canary_only=true requires canary=true (nothing to gate on otherwise)")
+        return self
+
+    @model_validator(mode="after")
+    def _no_empty_pass_env_keys(self) -> SubmitFlowSpec:
+        # `[]` is the natural-feeling JSON default for "no override", but it is
+        # the WORST interpretation here: it forwards zero vars to qsub -v, so
+        # every $EXECUTOR/$CONDA_ENV/$REPO_DIR is unset on the cluster and the
+        # job runs `time ""` and exits 0 in milliseconds (#192). "Forward all"
+        # is spelled `null`/omit, not `[]`. Refuse the empty list at intake with
+        # an actionable message rather than let it sail to a vanished canary.
+        if self.pass_env_keys is not None and len(self.pass_env_keys) == 0:
+            raise ValueError(
+                "pass_env_keys=[] forwards zero env vars to qsub and produces a "
+                "broken job (every $EXECUTOR / $CONDA_ENV / $REPO_DIR unset, so the "
+                "cluster runs `time \"\"` and exits 0 instantly). Omit the field "
+                "(or pass null) to forward ALL keys from job_env; pass a non-empty "
+                "list to restrict to those keys."
+            )
         return self
 
 
